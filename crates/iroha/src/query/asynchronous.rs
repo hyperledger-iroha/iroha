@@ -44,9 +44,7 @@ impl AccountClient {
         send_and_decode(builder, decode_singular_query_response)
             .await?
             .try_into()
-            .map_err(|error| {
-                QueryError::Other(eyre!("unexpected singular query output: {error:?}"))
-            })
+            .map_err(|error| QueryError::UnexpectedOutput(format!("{error:?}")))
     }
 
     /// Build an account-authorized iterable query; import [`AsyncQueryBuilderExt`] to execute it.
@@ -82,13 +80,10 @@ fn unpack_batch(
     head: ClientQueryRequestHead,
     response: QueryOutput,
 ) -> (QueryOutputBatchBoxTuple, Option<QueryCursor>) {
-    let (batch, _remaining, _has_more, cursor) = response.into_parts_with_count_mode();
+    let (batch, remaining_items, has_more, cursor) = response.into_parts_with_count_mode();
     (
         batch,
-        cursor.map(|cursor| QueryCursor {
-            request_head: head,
-            cursor,
-        }),
+        QueryCursor::after(head, remaining_items, has_more, cursor),
     )
 }
 
@@ -96,6 +91,8 @@ fn unpack_batch(
 ///
 /// A failed or cancelled continuation is terminal: its cursor is consumed before I/O.
 /// Empty batches are followed iteratively without trusting advertised remote row counts.
+/// When the node reports more rows without a continuation cursor, every delivered row
+/// is yielded and the stream then ends with [`QueryError::Truncated`].
 #[derive(Debug)]
 pub struct QueryStream<T: HasTypedBatchIter> {
     batch: T::TypedBatchIter,
@@ -110,6 +107,22 @@ impl<T: HasTypedBatchIter> QueryStream<T> {
         })
     }
 
+    /// Rows not yet yielded: exact after the last batch, or when the node
+    /// reported its remaining count; `None` while the total is unknown.
+    pub fn remaining_items(&self) -> Option<u64> {
+        let buffered = u64::try_from(self.batch.len()).unwrap_or(u64::MAX);
+        self.cursor.as_ref().map_or(Some(buffered), |cursor| {
+            cursor
+                .remaining_items()
+                .map(|remaining| remaining.saturating_add(buffered))
+        })
+    }
+
+    /// Whether the node holds rows beyond the delivered batches, including a truncated result.
+    pub const fn has_more(&self) -> bool {
+        self.cursor.is_some()
+    }
+
     /// Read the next row, continuing asynchronously when the current batch is exhausted.
     ///
     /// An error ends this result stream; subsequent calls return `None`.
@@ -118,10 +131,10 @@ impl<T: HasTypedBatchIter> QueryStream<T> {
             if let Some(item) = self.batch.next() {
                 return Some(Ok(item));
             }
-            let QueryCursor {
-                request_head,
-                cursor,
-            } = self.cursor.take()?;
+            let (request_head, cursor) = match self.cursor.take()?.into_continuation() {
+                Ok(continuation) => continuation,
+                Err(truncated) => return Some(Err(truncated)),
+            };
             let next = async {
                 let body = request_head.sign_and_encode(QueryRequest::Continue(cursor))?;
                 let response = send_and_decode(

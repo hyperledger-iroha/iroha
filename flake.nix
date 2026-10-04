@@ -80,7 +80,6 @@
         binaries ? allBinaries, # package/binary targets to build
         name ? "iroha", # resulting derivation name
         features ? [], # additional feature list forwarded to cargo
-        cudaTrustedKeySha256 ? null, # independently reviewed public build input
         ...
       } @ args: let
         systemTriple = (lib.systems.elaborate system).config;
@@ -88,13 +87,7 @@
         isCross = systemTriple != targetTriple;
         includesDaemon = builtins.any (binary: binary.package == "irohad") binaries;
         needsCuda = includesDaemon && (lib.hasInfix "-linux-" targetTriple || lib.hasInfix "-windows-" targetTriple);
-        releaseFeatures = lib.unique (features ++ lib.optional needsCuda "irohad/ivm-cuda");
-        checkedCudaKey = if !needsCuda then "" else
-          if builtins.isString cudaTrustedKeySha256
-             && builtins.match "[0-9a-f]{64}" cudaTrustedKeySha256 != null
-             && cudaTrustedKeySha256 != "0000000000000000000000000000000000000000000000000000000000000000"
-          then cudaTrustedKeySha256
-          else throw "Linux shipping requires reviewed cudaTrustedKeySha256; no CUDA private key belongs in Nix";
+        releaseFeatures = lib.unique features;
         toolchainHost = fenix'.stable;
         toolchainTarget =
           fenix'.targets.${targetTriple}.stable;
@@ -157,8 +150,12 @@
             ++ builtins.concatMap (target: ["-p" target.package "--bin" target.binary]) binaries
             ++ (if releaseFeatures == [] then [] else ["--features" (builtins.concatStringsSep "," releaseFeatures)]);
 
-          IVM_CUDA_PTX_MODE = "bundled";
-          IVM_CUDA_TRUSTED_KEY_SHA256 = checkedCudaKey;
+          # Inventory only: Rust owns source approval and signed bundle admission.
+          preBuild = lib.optionalString needsCuda ''
+            for input in aes.ptx bitonic_sort.ptx bn254.ptx poseidon.ptx sha256.ptx sha256_leaves.ptx sha256_pairs_reduce.ptx sha3.ptx signature.ptx vector.ptx provenance.v1 provenance.v1.pub provenance.v1.sig; do
+              test -f "crates/ivm/cuda/''${input}" && test ! -L "crates/ivm/cuda/''${input}" || exit 1
+            done
+          '';
           CARGO_BUILD_TARGET = targetTriple;
 
           CC =

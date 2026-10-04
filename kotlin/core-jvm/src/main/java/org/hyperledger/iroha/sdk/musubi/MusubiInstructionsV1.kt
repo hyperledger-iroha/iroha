@@ -168,6 +168,77 @@ object MusubiInstructionsV1 {
         }
     }
 
+    /** Assert an authority's complete current pin inventory under a fresh challenge and native floor. */
+    class CheckMusubiPinOutboxV1(
+        @JvmField val networkId: NetworkId,
+        @JvmField val pinAuthority: String,
+        sessionId: ByteArray,
+        inventoryDigest: ByteArray,
+        challenge: ByteArray,
+        @JvmField val floor: MusubiPinOutboxCheckFloorV1,
+        @JvmField val expected: MusubiPinOutboxCheckExpectationV1,
+    ) {
+        private val pinAuthorityPayload = TransferWirePayloadEncoder.encodeAccountIdPayload(
+            requireCanonicalI105Address(pinAuthority, "checkPinOutbox.pinAuthority"),
+        )
+        private val sessionId = checkedPinOutboxBytes(sessionId, "session ID")
+        private val inventoryDigest = checkedPinOutboxBytes(inventoryDigest, "inventory digest")
+        private val challenge = checkedPinOutboxBytes(challenge, "challenge")
+
+        init {
+            if (expected is MusubiPinOutboxCheckExpectationV1.Present) {
+                val row = expected.row
+                require(row.networkId == networkId &&
+                    TransferWirePayloadEncoder.encodeAccountIdPayload(row.pinAuthority)
+                        .contentEquals(pinAuthorityPayload) &&
+                    row.sessionId().contentEquals(this.sessionId) &&
+                    row.inventoryDigest().contentEquals(this.inventoryDigest)) {
+                    "Musubi pin-outbox expected row differs from the signed outer binding"
+                }
+            }
+            require(concreteFrame().size <= 4096) { "Musubi pin-outbox Check exceeds its frame bound" }
+        }
+
+        /** Return the canonical headerless Rust payload. */
+        fun barePayload(): ByteArray = encodeBare {
+            encodeField(it) { field -> field.writeBytes(networkId.bytes()) }
+            encodeField(it) { field -> field.writeBytes(pinAuthorityPayload) }
+            encodeField(it) { field -> field.writeBytes(sessionId) }
+            encodeField(it) { field -> field.writeBytes(inventoryDigest) }
+            encodeField(it) { field -> field.writeBytes(challenge) }
+            encodeField(it) { field ->
+                encodeField(field) { nested -> encodeU64(nested, floor.height) }
+                encodeField(field) { nested -> nested.writeBytes(floor.blockHash()) }
+                encodeField(field) { nested ->
+                    encodeField(nested) { hash -> hash.writeBytes(floor.contextId()) }
+                }
+            }
+            encodeField(it) { field ->
+                when (val value = expected) {
+                    MusubiPinOutboxCheckExpectationV1.Absent -> field.writeUInt(0, 32)
+                    is MusubiPinOutboxCheckExpectationV1.Present -> {
+                        field.writeUInt(1, 32)
+                        encodeField(field) { nested -> encodePinOutboxHighWater(nested, value.row) }
+                    }
+                }
+            }
+        }
+
+        /** Return the concrete schema-bound Norito frame registered by core. */
+        fun concreteFrame(): ByteArray = frame(SCHEMA_NAME, barePayload())
+
+        /** Return the native instruction; only original signed execution authenticates its assertion. */
+        fun toInstructionBox(): InstructionBox = InstructionBox.fromWirePayload(WIRE_ID, concreteFrame())
+
+        companion object {
+            /** Sole first-release native registry identifier. */
+            const val WIRE_ID: String = "iroha.musubi.v1.pin_outbox.check"
+
+            /** Canonical concrete Norito schema identity. */
+            const val SCHEMA_NAME: String = "iroha_data_model::isi::musubi::CheckMusubiPinOutboxV1"
+        }
+    }
+
     /** Register one immutable provider proof for later location-set commitments. */
     class RegisterMusubiProviderBundleAttestationV1(
         @JvmField val attestation: MusubiProviderBundleVerificationAttestationV1,
@@ -990,6 +1061,19 @@ private fun encodeField(
     encoder.writeBytes(payload)
 }
 
+private fun encodePinOutboxHighWater(encoder: NoritoEncoder, row: MusubiPinOutboxHighWaterV1) {
+    encodeField(encoder) { field -> field.writeUInt(row.version.toLong(), 8) }
+    encodeField(encoder) { field -> field.writeBytes(row.networkId.bytes()) }
+    encodeField(encoder) { field ->
+        field.writeBytes(TransferWirePayloadEncoder.encodeAccountIdPayload(row.pinAuthority))
+    }
+    encodeField(encoder) { field -> field.writeBytes(row.sessionId()) }
+    encodeField(encoder) { field -> encodeU64(field, row.revision) }
+    encodeField(encoder) { field -> field.writeBytes(row.inventoryDigest()) }
+    encodeField(encoder) { field -> encodeU64(field, row.recordedAtHeight) }
+    encodeField(encoder) { field -> field.writeBytes(row.transactionHash()) }
+}
+
 private fun encodePackageId(encoder: NoritoEncoder, packageId: MusubiPackageIdV1) {
     encodeField(encoder) { field -> encodeDataSpaceId(field, packageId.homeDataspace) }
     encodeField(encoder) { field -> encodePackageScope(field, packageId.scope) }
@@ -1237,6 +1321,7 @@ private fun encodeProviderCompletionAuthority(
     authority: MusubiProviderIngestCompletionAuthorityV1,
 ) {
     encodeField(encoder) { field -> field.writeBytes(authority.providerOwnerPayload) }
+    encodeField(encoder) { field -> field.writeBytes(authority.completionSignerPayload) }
     encodeField(encoder) { field -> encodeProviderSignerPolicy(field, authority.signerPolicy) }
 }
 

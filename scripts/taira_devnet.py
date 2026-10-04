@@ -949,15 +949,11 @@ def submitted_transaction_hash(completed: subprocess.CompletedProcess[str]) -> s
     ):
         fail("signed ping transaction receipt violates the exact V1 schema")
     _validate_fee_quote_v1(payload["fee_quote"], "signed ping receipt.fee_quote")
+    # The receipt hash is the raw lowercase hex accepted by `iroha tx status --hash`.
     value = payload["hash"]
-    match = (
-        re.fullmatch(r"hash:([0-9a-f]{63}[13579bdf])#[0-9A-F]{4}", value)
-        if isinstance(value, str)
-        else None
-    )
-    if match is None or not is_canonical_iroha_hash_hex(match.group(1)):
+    if not is_canonical_iroha_hash_hex(value):
         fail("signed ping returned an invalid transaction hash")
-    return match.group(1)
+    return value
 
 
 def require_applied_transaction(

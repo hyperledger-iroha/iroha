@@ -1444,13 +1444,10 @@ pub mod tests {
             let mut prefix = iroha_core::sumeragi::certified_chain::CertifiedPrefix::new(
                 fixture.manifest.chain_id(),
                 chain.network_id(),
-                Arc::clone(chain.committed(1).block()),
+                chain.committed(1).block().clone(),
             )
             .unwrap();
-            let (_, genesis) = prefix
-                .push(Arc::clone(committed.block()))
-                .unwrap()
-                .into_parts();
+            let (_, genesis) = prefix.push(committed.block().clone()).unwrap().into_parts();
             assert!(genesis.is_some());
         }
     }
@@ -4653,7 +4650,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .da_proof_policies()
             .expect("expected genesis to embed configured DA proof policies");
         let aliases: Vec<_> = bundle
-            .policies
+            .policies()
             .iter()
             .map(|policy| policy.alias.as_str())
             .collect();

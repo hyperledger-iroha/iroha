@@ -1,11 +1,11 @@
 //! Concrete daemon-owned assembly of the private Musubi publication protocol core.
 //!
 //! The factory reopens the original replay journal, seed custody, and durable clock before
-//! constructing the service. A deployment supplies the runtime signer, admitted provider-advert
-//! cache, provider-mutation, and private TLS ingress boundaries. Stock startup injects no factory.
-// TODO: Bind the selected paid-pin account to a funded runtime transaction signer and current
-// State governance/pricing, then install the provider-admission/coordination owner before a
-// production installer activates this factory.
+//! constructing the service. Stock startup selects the complete configured installation and
+//! supplies its runtime signer, original provider inventory, fresh native discovery, paid-pin
+//! coordination and private TLS ingress boundaries.
+// TODO: Qualify the installed listener and complete three-provider paid publication/recovery
+// path on a current four-validator network and each supported native operating system.
 use super::{
     MusubiPublicationAuthenticatedProviderReadbackV1,
     MusubiPublicationFinalizedArchiveRegistrationReaderV1,
@@ -18,22 +18,40 @@ use iroha_config::parameters::actual::MusubiPublicationPaidPinPolicy;
 use iroha_data_model::{NetworkId, account::AccountId, sorafs::capacity::ProviderId};
 use iroha_musubi_service::{
     DurableMusubiPublicationServiceClockV1, DurableMusubiPublicationServiceJournalLimitsV1,
-    MusubiPublicationPrivateServiceV1, MusubiPublicationServiceConfigurationV1,
+    MusubiPublicationPrivateServiceV1, MusubiPublicationServiceBackendErrorV1,
+    MusubiPublicationServiceClockV1, MusubiPublicationServiceConfigurationV1,
     MusubiSeedIngressReceiptSigningProviderV1, MusubiStorageCoordinationBackendV1,
 };
 use iroha_storage_client::musubi_archive_fetch::AuthenticatedMusubiArchiveFetchClientV1;
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
+
+// Both adapters hold the sole native clock lease. A sample releases the mutex before the
+// caller performs signatures, Queue admission, provider I/O or HTTP.
+#[derive(Clone)]
+struct SharedPublicationClock(Arc<Mutex<DurableMusubiPublicationServiceClockV1>>);
+impl MusubiPublicationServiceClockV1 for SharedPublicationClock {
+    fn current_time_ms(&mut self) -> Result<u64, MusubiPublicationServiceBackendErrorV1> {
+        self.0
+            .lock()
+            .map_err(|_| MusubiPublicationServiceBackendErrorV1::Retryable)?
+            .current_time_ms()
+    }
+}
 
 /// Non-secret local paths, bounds, and public identity for one injected publication service.
 ///
 /// A deployment must derive these values from `iroha_config` and explicitly initialize the
-/// journal and durable clock at provisioning time. Ordinary startup only reopens them.
+/// journal, seed-owner marker, and durable clock in native private custody at provisioning time.
+/// Ordinary startup only reopens these initialized owners; a missing marker is not repaired.
 pub struct MusubiPublicationPrivateLocalFactorySettingsV1 {
     /// Exact public service identity and timing limits.
     pub service: MusubiPublicationServiceConfigurationV1,
     /// Initialized durable replay-journal directory.
     pub journal_root: PathBuf,
-    /// Private exact-CAR seed staging directory.
+    /// Initialized private exact-CAR seed staging directory.
     pub seed_root: PathBuf,
     /// Initialized durable clock-floor directory.
     pub clock_root: PathBuf,
@@ -110,6 +128,7 @@ pub trait MusubiPublicationPrivateStorageBuilderV1: Send + 'static {
         finalized_reader: MusubiPublicationFinalizedArchiveRegistrationReaderV1,
         finalized_seed: MusubiPublicationFinalizedSeedReadCapabilityV1,
         paid_pin: MusubiPublicationPaidPinPolicy,
+        clock: Box<dyn MusubiPublicationServiceClockV1>,
     ) -> Result<
         Box<dyn MusubiStorageCoordinationBackendV1>,
         MusubiPublicationPrivateServiceFactoryErrorV1,
@@ -199,6 +218,7 @@ impl MusubiPublicationPrivateServiceFactoryV1 for MusubiPublicationPrivateLocalF
             .map_err(|_| MusubiPublicationPrivateServiceFactoryErrorV1::Unavailable)?;
         let clock = DurableMusubiPublicationServiceClockV1::open_system(&settings.clock_root)
             .map_err(|_| MusubiPublicationPrivateServiceFactoryErrorV1::Unavailable)?;
+        let clock = SharedPublicationClock(Arc::new(Mutex::new(clock)));
         let (journal, seed, finalized_reader) = custody.into_parts();
         let (shared_seed, finalized_seed) =
             SharedSeedStagingBackendV1::share(seed, finalized_reader.clone());
@@ -209,6 +229,7 @@ impl MusubiPublicationPrivateServiceFactoryV1 for MusubiPublicationPrivateLocalF
             finalized_reader.clone(),
             finalized_seed,
             settings.paid_pin.clone(),
+            Box::new(clock.clone()),
         )?;
         let storage = Box::new(FinalizedRegistrationCheckedStorageBackendV1::new(
             finalized_reader,
@@ -352,5 +373,49 @@ mod tests {
             ),
             Err(MusubiPublicationPrivateServiceFactoryErrorV1::Unqualified),
         ));
+    }
+}
+
+#[cfg(test)]
+mod shared_clock_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    struct Source(Arc<AtomicU64>);
+    impl MusubiPublicationServiceClockV1 for Source {
+        fn current_time_ms(&mut self) -> Result<u64, MusubiPublicationServiceBackendErrorV1> {
+            Ok(self.0.load(Ordering::SeqCst))
+        }
+    }
+    #[test]
+    fn both_adapters_share_one_durable_floor_and_hold_one_lock_until_last_drop() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("clock");
+        let owner = iroha_fs::PrivateDirectory::open_or_create(&path).unwrap();
+        let value = Arc::new(AtomicU64::new(100));
+        let clock = DurableMusubiPublicationServiceClockV1::initialize(
+            owner.path(),
+            Box::new(Source(Arc::clone(&value))),
+        )
+        .unwrap();
+        let mut service = SharedPublicationClock(Arc::new(Mutex::new(clock)));
+        let mut backend = service.clone();
+        value.store(200, Ordering::SeqCst);
+        assert_eq!(service.current_time_ms().unwrap(), 200);
+        value.store(300, Ordering::SeqCst);
+        assert_eq!(backend.current_time_ms().unwrap(), 300);
+        assert_eq!(service.0.lock().unwrap().durable_floor_ms(), 300);
+        drop(service);
+        assert!(
+            DurableMusubiPublicationServiceClockV1::open(
+                owner.path(),
+                Box::new(Source(Arc::clone(&value)))
+            )
+            .is_err()
+        );
+        drop(backend);
+        let reopened =
+            DurableMusubiPublicationServiceClockV1::open(owner.path(), Box::new(Source(value)))
+                .unwrap();
+        assert_eq!(reopened.durable_floor_ms(), 300);
     }
 }

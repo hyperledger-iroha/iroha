@@ -132,29 +132,70 @@ fn required_on_device(index: usize) {
         "required Metal unavailable: {:?}",
         metal_last_error_message()
     );
-    assert!(
-        metal_merkle_cost_profile().is_some(),
-        "required isolated Metal Merkle cost calibration did not qualify"
-    );
+    let rehash_context = Sha256Context::production();
+    let rehash_baseline = sha256_cpu::context::Sha256Baseline::capture(rehash_context)
+        .expect("original CPU baseline for required retained update");
+    let rehash_geometry = metal_merkle_cost_rehash::Geometry::new(8_192 * 32, 32, 8_192)
+        .expect("bounded exact retained geometry");
+    metal_receipts::timing::report(
+        "Rehash",
+        metal_runtime::current_health()
+            .expect("original physical owner for retained update")
+            .identity(),
+        rehash_geometry,
+        rehash_baseline,
+        || {
+            metal_merkle_cost_rehash::calibrate(
+                rehash_geometry,
+                rehash_baseline,
+                rehash_context,
+                Instant::now(),
+            )
+        },
+    )
+    .expect("required isolated complete retained update calibration");
     assert!(
         with_metal_state_try(|ctx| Some(ctx.ed25519_signature.is_some())).unwrap_or(false),
         "required Ed25519 pipeline failed startup qualification"
     );
     let queue_identity = with_metal_state(|state| Retained::as_ptr(&state.queue) as usize)
         .expect("qualified process queue");
+    let physical_identity = metal_runtime::current_health()
+        .expect("original qualified physical owner")
+        .identity();
+    let observation_deadline = Instant::now() + Duration::from_secs(3);
+    let start_workers = std::sync::Barrier::new(4);
     std::thread::scope(|scope| {
         let workers: Vec<_> = (0..4)
             .map(|_| {
+                let start_workers = &start_workers;
                 scope.spawn(move || {
-                    metal_runtime::with_device_for_qualification(index, || {
-                        with_metal_state(|state| Retained::as_ptr(&state.queue) as usize)
+                    start_workers.wait();
+                    // Both record acquisition and eligibility deliberately decline
+                    // immediately on registry contention. Required observations
+                    // may wait within this shared deadline; production never does.
+                    metal_qualification_wait::observe_until(observation_deadline, || {
+                        metal_runtime::with_device_for_qualification(index, || {
+                            with_metal_state(|state| {
+                                (
+                                    Retained::as_ptr(&state.queue) as usize,
+                                    metal_runtime::current_health()
+                                        .expect("worker retains its exact physical owner")
+                                        .identity(),
+                                )
+                            })
+                        })
+                        .flatten()
                     })
-                    .flatten()
                 })
             })
             .collect();
         for worker in workers {
-            assert_eq!(worker.join().expect("Metal worker"), Some(queue_identity));
+            assert_eq!(
+                worker.join().expect("Metal worker"),
+                Some((queue_identity, physical_identity)),
+                "every worker must observe the original queue and physical owner before the deadline"
+            );
         }
     });
     assert_eq!(
@@ -205,7 +246,7 @@ fn required_on_device(index: usize) {
             (metal_sha256_compress(&mut state, &block), state)
         });
         require_dispatch(MetalKernel::Sha256Leaves, Some(vec![digest; size]), || {
-            metal_sha256_leaves(&vec![block; size])
+            metal_sha256_leaves(&vec![block; size]).map(|output| output.as_slice().to_vec())
         });
         let leaves = vec![digest; size.max(2)];
         let mut level = leaves.clone();
@@ -300,7 +341,7 @@ fn required_on_device(index: usize) {
         });
     }
     let before_empty = MetalKernel::ALL.map(metal_completed_dispatches);
-    assert_eq!(metal_sha256_leaves(&[]), Some(vec![]));
+    assert!(metal_sha256_leaves(&[]).unwrap().is_empty());
     assert_eq!(metal_sha256_pairs_reduce(&[]), None);
     assert_eq!(metal_sha256_pairs_reduce(&[digest]), Some(digest));
     assert!(metal_aesenc_batch_into(&[], [0; 16], &mut []));

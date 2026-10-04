@@ -80,6 +80,11 @@ fn prepared_cell_matches_direct_commit_without_changing_existing_readers() {
 
 #[test]
 fn prepared_cell_identity_and_cleanup_remain_owned_through_aggregate_unlock() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     use std::{
         future::Future,
         pin::Pin,
@@ -100,7 +105,10 @@ fn prepared_cell_identity_and_cleanup_remain_owned_through_aggregate_unlock() {
             .0,
         Err(PublicationPreparationError::Busy(_))
     ));
-    let mut wait = first.blocks_released.observe().wait_for_release();
+    let mut wait = first
+        .blocks_released
+        .observe()
+        .wait_for_release(&mut release_registration_1);
     let mut context = Context::from_waker(Waker::noop());
     assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
     let a = a.publish();
@@ -346,6 +354,12 @@ fn dropping_preparation_releases_writers_before_installation_capacity() {
 
 #[test]
 fn cell_release_wakes_follow_both_values_identity_and_physical_unlocks() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_2 = crate::release_test_support::registration(&release_budget);
+
     use std::{
         future::Future,
         pin::Pin,
@@ -373,9 +387,22 @@ fn cell_release_wakes_follow_both_values_identity_and_physical_unlocks() {
             self.wakes.fetch_add(1, Ordering::SeqCst);
         }
     }
-    fn check(probe: Arc<Probe>, publish: impl FnOnce()) {
-        let mut current = probe.cell.blocks_released.observe().wait_for_release();
-        let mut undo = probe.cell.revert_released.observe().wait_for_release();
+    fn check(
+        probe: Arc<Probe>,
+        registration_1: &mut iroha_allocation::release::ReleaseRegistration,
+        registration_2: &mut iroha_allocation::release::ReleaseRegistration,
+        publish: impl FnOnce(),
+    ) {
+        let mut current = probe
+            .cell
+            .blocks_released
+            .observe()
+            .wait_for_release(registration_1);
+        let mut undo = probe
+            .cell
+            .revert_released
+            .observe()
+            .wait_for_release(registration_2);
         let waker = Waker::from(Arc::clone(&probe));
         for wait in [&mut current, &mut undo] {
             assert!(
@@ -416,7 +443,12 @@ fn cell_release_wakes_follow_both_values_identity_and_physical_unlocks() {
             });
             if finish == 2 {
                 let replacement = cell.current_replacement();
-                check(probe, || replacement.publish(30));
+                check(
+                    probe,
+                    &mut release_registration_1,
+                    &mut release_registration_2,
+                    || replacement.publish(30),
+                );
             } else {
                 let mut block = cell.block();
                 if dirty {
@@ -424,11 +456,21 @@ fn cell_release_wakes_follow_both_values_identity_and_physical_unlocks() {
                 }
                 if finish == 1 {
                     let prepared = prepare(detach(block), &cell);
-                    check(probe, || {
-                        prepared.publish();
-                    });
+                    check(
+                        probe,
+                        &mut release_registration_1,
+                        &mut release_registration_2,
+                        || {
+                            prepared.publish();
+                        },
+                    );
                 } else {
-                    check(probe, || block.commit());
+                    check(
+                        probe,
+                        &mut release_registration_1,
+                        &mut release_registration_2,
+                        || block.commit(),
+                    );
                 }
             }
         }
@@ -502,6 +544,11 @@ fn unchanged_cell_cleanup_panic_preserves_published_pair_and_healthy_contention(
 
 #[test]
 fn cell_abort_retains_original_notifications_until_the_entire_aggregate_unlocks() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     use std::{
         future::Future,
         pin::Pin,
@@ -522,7 +569,10 @@ fn cell_abort_retains_original_notifications_until_the_entire_aggregate_unlocks(
             .0,
         Err(PublicationPreparationError::Busy(_))
     ));
-    let mut wait = first.blocks_released.observe().wait_for_release();
+    let mut wait = first
+        .blocks_released
+        .observe()
+        .wait_for_release(&mut release_registration_1);
     let mut context = Context::from_waker(Waker::noop());
     assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
     let a = a.abort();

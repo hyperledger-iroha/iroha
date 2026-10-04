@@ -1,10 +1,13 @@
+//! Native rANS artifact generation, runtime admission, and bundled-codec controls.
+
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::streaming::{
-    EntropyMode,
+    BundleTableError, EntropyMode,
     chunk::BaselineDecoder,
     codec::{
         BaselineEncoder, BaselineEncoderConfig, FrameDimensions, RawFrame, default_bundle_tables,
     },
+    load_bundle_tables_from_toml,
 };
 use std::{
     fs,
@@ -62,6 +65,9 @@ fn verify_tables_detects_tampering() {
         good_path.to_str().expect("utf8 tables path"),
     ]);
     verify_good.assert().success();
+    let runtime_tables = load_bundle_tables_from_toml(&good_path)
+        .expect("native producer output must pass the runtime loader");
+    assert_eq!(runtime_tables.max_width(), 4);
     let mut tampered = fs::read_to_string(&good_path).expect("tables text");
     assert!(
         tampered.contains("bundle_width"),
@@ -78,6 +84,10 @@ fn verify_tables_detects_tampering() {
         tampered_path.to_str().expect("utf8 tampered path"),
     ]);
     verify_bad.assert().failure();
+    assert!(matches!(
+        load_bundle_tables_from_toml(&tampered_path),
+        Err(BundleTableError::ChecksumMismatch)
+    ));
 }
 #[test]
 fn bundled_tables_enable_roundtrip() {

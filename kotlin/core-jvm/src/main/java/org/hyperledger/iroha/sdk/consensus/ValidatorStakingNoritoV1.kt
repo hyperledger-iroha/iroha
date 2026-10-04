@@ -4,6 +4,8 @@
 package org.hyperledger.iroha.sdk.consensus
 
 import java.math.BigInteger
+import org.hyperledger.iroha.sdk.address.decodeCompactPublicKeyPayload
+import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
@@ -71,7 +73,8 @@ object ValidatorStakingNoritoV1 {
         val version: Int = u16(0)
         val networkId: NetworkId = network(1)
         val generation: Long = u64(2)
-        val validators: List<ValidatorKeys> = vector(3, 31, ValidatorKeys::decode)
+        private val validatorValues: List<ValidatorKeys> = vector(3, 31, ValidatorKeys::decode)
+        val validators: List<ValidatorKeys> get() = validatorValues.toList()
 
         init {
             require(version == 1) { "unsupported authority-generation version" }
@@ -216,9 +219,10 @@ object ValidatorStakingNoritoV1 {
     /** Signed public dealer commitment and knowledge proof. */
     class DkgDealerCommitment private constructor(payload: ByteArray) : Record(payload, 4) {
         val dealerIndex: Int = u16(0)
-        val coefficientCommitments: List<Bytes> = vector(1, 32) { bytes ->
+        private val coefficientValues: List<Bytes> = vector(1, 32) { bytes ->
             decodeFixedByteArray(bytes, 96)
         }
+        val coefficientCommitments: List<Bytes> get() = coefficientValues.toList()
         val constantTermProof: DkgConstantProof = DkgConstantProof.decode(fields[2])
         val signature: Bytes = raw(3)
 
@@ -242,13 +246,18 @@ object ValidatorStakingNoritoV1 {
         val session: DkgSession = DkgSession.decode(fields[0])
         val generatorH: Bytes = fixed(1, 96)
         val generatorV: Bytes = fixed(2, 96)
-        val dealerCommitments: List<DkgDealerCommitment> =
+        private val dealerValues: List<DkgDealerCommitment> =
             vector(3, 31, DkgDealerCommitment::decode)
-        val recipientKeys: List<DkgRecipientKey> = vector(4, 31, DkgRecipientKey::decode)
-        val encryptedShares: List<DkgEncryptedShare> = vector(5, 31 * 31, DkgEncryptedShare::decode)
-        val shareAcceptances: List<DkgShareAcceptance> =
+        val dealerCommitments: List<DkgDealerCommitment> get() = dealerValues.toList()
+        private val recipientValues: List<DkgRecipientKey> = vector(4, 31, DkgRecipientKey::decode)
+        val recipientKeys: List<DkgRecipientKey> get() = recipientValues.toList()
+        private val encryptedValues: List<DkgEncryptedShare> = vector(5, 31 * 31, DkgEncryptedShare::decode)
+        val encryptedShares: List<DkgEncryptedShare> get() = encryptedValues.toList()
+        private val acceptanceValues: List<DkgShareAcceptance> =
             vector(6, 31 * 31, DkgShareAcceptance::decode)
-        val qualifiedDealers: List<Int> = vector(7, 31) { decodeUInt(it, 16).toInt() }
+        val shareAcceptances: List<DkgShareAcceptance> get() = acceptanceValues.toList()
+        private val qualifiedValues: List<Int> = vector(7, 31) { decodeUInt(it, 16).toInt() }
+        val qualifiedDealers: List<Int> get() = qualifiedValues.toList()
         val eventHash: Bytes = fixed(8, 32)
         val finalizedAtHeight: Long = u64(9)
 
@@ -395,7 +404,8 @@ object ValidatorStakingNoritoV1 {
     class CommitteeTransition private constructor(payload: ByteArray) : Record(payload, 4) {
         val preparation: CommitteePreparation = CommitteePreparation.decode(fields[0])
         val credentials: CommitteeCredentials? = option(1, CommitteeCredentials::decode)
-        val readiness: List<SeatReadiness> = vector(2, 31, SeatReadiness::decode)
+        private val readinessValues: List<SeatReadiness> = vector(2, 31, SeatReadiness::decode)
+        val readiness: List<SeatReadiness> get() = readinessValues.toList()
         val outcome: EpochAuthorization? = option(3, EpochAuthorization::decode)
 
         companion object {
@@ -460,32 +470,133 @@ object ValidatorStakingNoritoV1 {
         }
     }
 
-    /** One exact operation-specific monetary precondition. */
-    class MonetaryPrecondition private constructor(payload: ByteArray) {
-        private val encoded = payload.copyOf()
-        val kind: Kind
-        val activationHeight: Long
-        val binding: Bytes?
-        val slashableExposure: Quantity?
+    /** Exact peer identity bound by a bond, using the existing native public-key admission.
+     * Possession and retained validator-tenure authority remain native execution checks.
+     */
+    class PeerId private constructor(payload: ByteArray) : Record(payload, 1) {
+        val algorithm: SigningAlgorithm
+        val publicKey: Bytes
 
         init {
-            val (tag, value) = decodeVariant(encoded)
-            kind = Kind.entries.firstOrNull { it.tag == tag }
-                ?: throw IllegalArgumentException("unknown staking monetary precondition")
-            val fields = decodeFields(value, if (kind == Kind.REGISTRATION) 1 else 2)
-            activationHeight = decodeUInt(fields[0], 64)
-            binding = if (kind == Kind.BOND || kind == Kind.UNBOND) Bytes(fields[1]) else null
-            slashableExposure = if (kind == Kind.SLASH) Quantity.decode(fields[1]) else null
+            val key = vector(0, 8_259) {
+                require(it.size == 1) { "non-canonical peer public-key byte" }
+                it.single()
+            }.toByteArray()
+            require(key.isNotEmpty()) { "peer public key is empty" }
+            algorithm = SigningAlgorithm.fromBridgeCode(key[0].toInt() and 0xff)
+            val admitted = requireNotNull(decodeCompactPublicKeyPayload(key)) {
+                "invalid peer public key"
+            }
+            publicKey = Bytes(admitted.keyBytes)
         }
 
-        fun encode(): ByteArray = encoded.copyOf()
+        companion object {
+            @JvmStatic
+            fun decode(payload: ByteArray): PeerId = PeerId(payload)
+        }
+    }
+
+    /** Exact new-validator eligibility boundary. */
+    class MonetaryRegistration private constructor(payload: ByteArray) : Record(payload, 1) {
+        val activationHeight: Long = u64(0)
+
+        companion object {
+            @JvmStatic
+            fun decode(payload: ByteArray): MonetaryRegistration = MonetaryRegistration(payload)
+        }
+    }
+
+    /** Exact validator tenure and peer observed by an additional stake operation. */
+    class MonetaryBond private constructor(payload: ByteArray) : Record(payload, 2) {
+        val activationHeight: Long = u64(0)
+        val peerId: PeerId = PeerId.decode(fields[1])
+
+        companion object {
+            @JvmStatic
+            fun decode(payload: ByteArray): MonetaryBond = MonetaryBond(payload)
+        }
+    }
+
+    /** Exact retained withdrawal request, including Rust Hash's marked 32-byte encoding. */
+    class MonetaryUnbond private constructor(payload: ByteArray) : Record(payload, 2) {
+        val activationHeight: Long = u64(0)
+        val requestHash: Bytes = fixed(1, 32)
+
+        init {
+            require(requestHash.bytes()[31].toInt() and 1 == 1) {
+                "withdrawal request hash lacks the Iroha marker"
+            }
+        }
+
+        companion object {
+            @JvmStatic
+            fun decode(payload: ByteArray): MonetaryUnbond = MonetaryUnbond(payload)
+        }
+    }
+
+    /** Exact tenure and complete eligible custody exposure before a privileged slash. */
+    class MonetarySlash private constructor(payload: ByteArray) : Record(payload, 2) {
+        val activationHeight: Long = u64(0)
+        val slashableExposure: Quantity = Quantity.decode(fields[1])
+
+        companion object {
+            @JvmStatic
+            fun decode(payload: ByteArray): MonetarySlash = MonetarySlash(payload)
+        }
+    }
+
+    /** Signed operation-specific staking precondition. Each variant owns its exact Rust layout. */
+    sealed class MonetaryPrecondition {
+        abstract val activationHeight: Long
+        abstract val kind: Kind
+        protected abstract val value: Record
+
+        class Registration(val registration: MonetaryRegistration) : MonetaryPrecondition() {
+            override val activationHeight: Long get() = registration.activationHeight
+            override val kind: Kind get() = Kind.REGISTRATION
+            override val value: Record get() = registration
+        }
+        class Bond(val bond: MonetaryBond) : MonetaryPrecondition() {
+            override val activationHeight: Long get() = bond.activationHeight
+            override val kind: Kind get() = Kind.BOND
+            override val value: Record get() = bond
+        }
+        class Unbond(val unbond: MonetaryUnbond) : MonetaryPrecondition() {
+            override val activationHeight: Long get() = unbond.activationHeight
+            override val kind: Kind get() = Kind.UNBOND
+            override val value: Record get() = unbond
+        }
+        class Slash(val slash: MonetarySlash) : MonetaryPrecondition() {
+            override val activationHeight: Long get() = slash.activationHeight
+            override val kind: Kind get() = Kind.SLASH
+            override val value: Record get() = slash
+        }
+
+        fun encode(): ByteArray = NoritoEncoder(FLAGS).apply {
+            writeUInt(kind.tag, 32)
+            val payload = value.encode()
+            writeLength(payload.size.toLong(), true)
+            writeBytes(payload)
+        }.toByteArray()
 
         enum class Kind(val tag: Long) {
             REGISTRATION(0), BOND(1), UNBOND(2), SLASH(3),
         }
 
         companion object {
-            fun decode(payload: ByteArray): MonetaryPrecondition = MonetaryPrecondition(payload)
+            @JvmStatic
+            fun decode(payload: ByteArray): MonetaryPrecondition {
+                val (tag, value) = decodeVariant(payload)
+                val decoded = when (tag) {
+                    0L -> Registration(MonetaryRegistration.decode(value))
+                    1L -> Bond(MonetaryBond.decode(value))
+                    2L -> Unbond(MonetaryUnbond.decode(value))
+                    3L -> Slash(MonetarySlash.decode(value))
+                    else -> throw IllegalArgumentException("unknown staking monetary precondition")
+                }
+                require(decoded.encode().contentEquals(payload)) { "non-canonical staking precondition length" }
+                return decoded
+            }
         }
     }
 
@@ -508,7 +619,7 @@ object ValidatorStakingNoritoV1 {
                 1L -> NetworkId.fromBytes(scope.second)
                 else -> throw IllegalArgumentException("unknown staking monetary scope")
             }
-            require(validUntilHeight > 0 && amount.mantissa.signum() > 0) {
+            require(validUntilHeight != 0L && amount.mantissa.signum() > 0) {
                 "invalid staking monetary plan"
             }
             require(sourceAsset.definition == destinationAsset.definition &&
@@ -520,6 +631,175 @@ object ValidatorStakingNoritoV1 {
         companion object {
             fun decode(payload: ByteArray): MonetaryPlan = MonetaryPlan(payload)
         }
+    }
+
+    /** Retained reward-processing cursor, including a valid completed epoch zero. */
+    class RewardClaimState private constructor(payload: ByteArray) : Record(payload, 1) {
+        val throughEpoch: Long? = option(0) { decodeUInt(it, 64) }
+
+        companion object {
+            @JvmStatic
+            fun decode(payload: ByteArray): RewardClaimState = RewardClaimState(payload)
+        }
+    }
+
+    /** Exact immutable reward record selected by a signed claim. */
+    class RewardRecordRef private constructor(payload: ByteArray) : Record(payload, 2) {
+        val epoch: Long = u64(0)
+        val recordHash: Bytes = fixed(1, 32)
+
+        companion object {
+            @JvmStatic
+            fun decode(payload: ByteArray): RewardRecordRef = RewardRecordRef(payload)
+        }
+    }
+
+    /** One exact reward custody source, previous accrual and signed payout. */
+    class RewardClaimSource private constructor(payload: ByteArray) : Record(payload, 4) {
+        val sourceAsset: AssetId = AssetId.decode(fields[0])
+        val destinationAsset: AssetId = AssetId.decode(fields[1])
+        val expectedAccrued: Quantity? = option(2, Quantity::decode)
+        val payout: Quantity = Quantity.decode(fields[3])
+
+        init {
+            require(sourceAsset.definition == destinationAsset.definition &&
+                sourceAsset.scopeDataspace == destinationAsset.scopeDataspace &&
+                expectedAccrued?.mantissa?.signum() != 0) {
+                "invalid reward source asset or prior accrual"
+            }
+        }
+
+        companion object {
+            @JvmStatic
+            fun decode(payload: ByteArray): RewardClaimSource = RewardClaimSource(payload)
+        }
+    }
+
+    /** Independently accrued fee reward payment bound to its custody and receipt sequence.
+     * Native execution authenticates beneficiary ownership and the signing recipient.
+     */
+    class FeeRewardClaim private constructor(payload: ByteArray) : Record(payload, 7) {
+        val lifecycleSeal: Bytes = fixed(0, 32)
+        val beneficiaryId: Bytes = raw(1)
+        val beneficiaryRevision: Long = u64(2)
+        val sourceAsset: AssetId = AssetId.decode(fields[3])
+        val destinationAsset: AssetId = AssetId.decode(fields[4])
+        val amount: Quantity = Quantity.decode(fields[5])
+        val expectedClaimSequence: Long = u64(6)
+
+        init {
+            require(lifecycleSeal.bytes().any { it.toInt() != 0 } &&
+                beneficiaryId.bytes().isNotEmpty() && amount.mantissa.signum() > 0 &&
+                sourceAsset.scopeDataspace == null && destinationAsset.scopeDataspace == null &&
+                sourceAsset.definition == destinationAsset.definition) {
+                "invalid fee reward claim custody or amount"
+            }
+        }
+
+        companion object {
+            @JvmStatic
+            fun decode(payload: ByteArray): FeeRewardClaim = FeeRewardClaim(payload)
+        }
+    }
+
+    /** Bounded reward plan with an explicit optional fee reward payment.
+     * Sources retain Rust AssetId order; native execution authenticates the signer and ledger preconditions.
+     */
+    class RewardClaimPlan private constructor(payload: ByteArray) : Record(payload, 6) {
+        val networkScope: NetworkId?
+        val validUntilHeight: Long = u64(1)
+        val expectedState: RewardClaimState? = option(2, RewardClaimState::decode)
+        private val recordValues = vector(3, 64, RewardRecordRef::decode)
+        val records: List<RewardRecordRef> get() = recordValues.toMutableList()
+        private val sourceValues = vector(4, 64, RewardClaimSource::decode)
+        val sources: List<RewardClaimSource> get() = sourceValues.toMutableList()
+        val feeClaim: FeeRewardClaim? = option(5, FeeRewardClaim::decode)
+
+        init {
+            val scope = variant(0)
+            networkScope = when (scope.first) {
+                0L -> {
+                    require(fields[0].size == 4) { "genesis monetary scope must be a unit variant" }
+                    null
+                }
+                1L -> NetworkId.fromBytes(scope.second)
+                else -> throw IllegalArgumentException("unknown staking monetary scope")
+            }
+            require(validUntilHeight != 0L) { "reward plan expiry must be positive" }
+            var previous = expectedState?.throughEpoch
+            for (reward in recordValues) {
+                val prior = previous
+                require(prior == null || unsigned(prior) < unsigned(reward.epoch)) {
+                    "reward epochs must advance the retained cursor"
+                }
+                previous = reward.epoch
+            }
+            var previousSource: AssetId? = null
+            val recipient = sourceValues.firstOrNull()?.destinationAsset?.account
+                ?: feeClaim?.destinationAsset?.account
+            for (source in sourceValues) {
+                require(previousSource == null || assetPrecedes(previousSource, source.sourceAsset)) {
+                    "reward sources must use strict AssetId order"
+                }
+                require(source.destinationAsset.account == recipient) {
+                    "reward plan changes recipient"
+                }
+                previousSource = source.sourceAsset
+            }
+            require(feeClaim == null || feeClaim.destinationAsset.account == recipient) {
+                "fee reward claim changes recipient"
+            }
+        }
+
+        companion object {
+            @JvmStatic
+            fun decode(payload: ByteArray): RewardClaimPlan = RewardClaimPlan(payload)
+        }
+    }
+
+    // AccountId orders controller fields, not their variable-length Norito frames.
+    // Integer order components use big endian; public keys use algorithm then key bytes.
+    private fun accountOrderKey(payload: ByteArray): List<ByteArray> {
+        val (tag, body) = decodeVariant(payload)
+        return when (tag) {
+            0L -> listOf(byteArrayOf(0), publicKeyOrderKey(body))
+            1L -> {
+                val policy = decodeFields(body, 3)
+                val version = decodeUInt(policy[0], 8)
+                val threshold = decodeUInt(policy[1], 16)
+                require(version == 1L && threshold > 0) { "invalid multisig ordering fields" }
+                val members = decodeVector(policy[2], 65535) { bytes ->
+                    val member = decodeFields(bytes, 2)
+                    val weight = decodeUInt(member[1], 16)
+                    listOf(publicKeyOrderKey(member[0]), byteArrayOf((weight shr 8).toByte(), weight.toByte()))
+                }
+                listOf(byteArrayOf(1), byteArrayOf(version.toByte()),
+                    byteArrayOf((threshold shr 8).toByte(), threshold.toByte())) + members.flatten()
+            }
+            else -> throw IllegalArgumentException("unknown account controller")
+        }
+    }
+
+    private fun publicKeyOrderKey(payload: ByteArray): ByteArray {
+        val decoder = NoritoDecoder(payload, FLAGS)
+        val count = decoder.readUInt(64)
+        require(count in 2..65536) { "invalid public key ordering bytes" }
+        return decodeFixedByteArray(decoder.readBytes(decoder.remaining()), count.toInt()).bytes()
+    }
+
+    private fun assetPrecedes(left: AssetId, right: AssetId): Boolean {
+        val leftAccount = accountOrderKey(left.account.bytes())
+        val rightAccount = accountOrderKey(right.account.bytes())
+        for (index in 0 until minOf(leftAccount.size, rightAccount.size)) {
+            val compared = compareBytes(leftAccount[index], rightAccount[index])
+            if (compared != 0) return compared < 0
+        }
+        if (leftAccount.size != rightAccount.size) return leftAccount.size < rightAccount.size
+        val definition = compareBytes(left.definition.bytes(), right.definition.bytes())
+        if (definition != 0) return definition < 0
+        val lhs = left.scopeDataspace
+        val rhs = right.scopeDataspace
+        return if (lhs == null) rhs != null else rhs != null && unsigned(lhs) < unsigned(rhs)
     }
 
     /** Validator rebind with mandatory replacement-peer consent. */
@@ -549,11 +829,11 @@ object ValidatorStakingNoritoV1 {
     }
 
     private fun compareBytes(left: ByteArray, right: ByteArray): Int {
-        for (index in left.indices) {
+        for (index in 0 until minOf(left.size, right.size)) {
             val comparison = (left[index].toInt() and 0xff).compareTo(right[index].toInt() and 0xff)
             if (comparison != 0) return comparison
         }
-        return 0
+        return left.size.compareTo(right.size)
     }
 
     private fun decodeFields(payload: ByteArray, count: Int): List<ByteArray> {

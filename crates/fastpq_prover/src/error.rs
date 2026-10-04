@@ -30,6 +30,18 @@ pub enum Error {
         /// Public allocation site, never private witness content.
         context: &'static str,
     },
+    /// The original finite allocation pool could not admit a checked demand.
+    #[error(transparent)]
+    AllocationAdmission(#[from] iroha_allocation::AllocationRefusal),
+    /// The original prepaid reservation lacks the checked component demand.
+    #[error(transparent)]
+    AllocationReservation(#[from] iroha_allocation::InsufficientReservation),
+    /// An exact prepaid backing allocation could not be constructed.
+    #[error(transparent)]
+    AllocationBacking(#[from] iroha_allocation::PrepaidBufferError),
+    /// Allocation custody belongs to a different original pool.
+    #[error("FASTPQ allocation custody belongs to another pool")]
+    AllocationForeignPool,
     /// Batch parameter does not match the prover configuration.
     #[error("parameter mismatch: expected `{expected}`, got `{actual}`")]
     ParameterMismatch {

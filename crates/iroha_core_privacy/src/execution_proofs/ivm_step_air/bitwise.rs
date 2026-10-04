@@ -11,7 +11,7 @@ fn selected_bit(left: F, right: F, is_and: F, is_or: F, is_xor: F) -> F {
 }
 
 pub(super) fn append_residues(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     result_digits: &[F],
     sources: Sources<'_>,
     selectors: [F; 3],

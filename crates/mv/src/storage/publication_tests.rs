@@ -30,6 +30,12 @@ fn block_identity_binds_original_owner_predecessor_and_mode_without_reading_valu
 
 #[test]
 fn preparation_retains_readers_and_identity_and_published_cleanup_spans_the_aggregate() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_2 = crate::release_test_support::registration(&release_budget);
+
     use std::{
         future::Future,
         pin::Pin,
@@ -97,8 +103,14 @@ fn preparation_retains_readers_and_identity_and_published_cleanup_spans_the_aggr
             .0,
         Err(PublicationPreparationError::Busy(_))
     ));
-    let mut writer_wait = first.blocks_released.observe().wait_for_release();
-    let mut reader_wait = first.blocks.observe_reader_release().wait_for_release();
+    let mut writer_wait = first
+        .blocks_released
+        .observe()
+        .wait_for_release(&mut release_registration_1);
+    let mut reader_wait = first
+        .blocks
+        .observe_reader_release()
+        .wait_for_release(&mut release_registration_2);
     assert!(Pin::new(&mut writer_wait).poll(&mut context).is_pending());
     assert!(Pin::new(&mut reader_wait).poll(&mut context).is_pending());
     let a = a.publish();
@@ -490,6 +502,11 @@ fn original_map_and_undo_survive_both_busy_writers_abort_and_publication_without
 
 #[test]
 fn changed_raw_map_generation_refuses_original_owner_before_any_installation() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     use std::{
         future::Future,
         task::{Context, Waker},
@@ -499,7 +516,12 @@ fn changed_raw_map_generation_refuses_original_owner_before_any_installation() {
     candidate.insert(1, 11);
     let journal = detach(candidate);
     let original = journal.blocks.get(&1).unwrap() as *const _;
-    let mut released = std::pin::pin!(target.blocks_released.observe().wait_for_release());
+    let mut released = std::pin::pin!(
+        target
+            .blocks_released
+            .observe()
+            .wait_for_release(&mut release_registration_1)
+    );
     assert!(
         released
             .as_mut()
@@ -541,6 +563,11 @@ fn changed_raw_map_generation_refuses_original_owner_before_any_installation() {
 
 #[test]
 fn changed_raw_undo_generation_refuses_original_pair_even_after_value_aba() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     use std::{
         future::Future,
         task::{Context, Waker},
@@ -552,7 +579,12 @@ fn changed_raw_undo_generation_refuses_original_pair_even_after_value_aba() {
         let journal = detach(candidate);
         let current = journal.blocks.get(&1).unwrap() as *const _;
         let undo = journal.revert.get(&1).unwrap().as_ref().unwrap() as *const _;
-        let mut released = std::pin::pin!(target.revert_released.observe().wait_for_release());
+        let mut released = std::pin::pin!(
+            target
+                .revert_released
+                .observe()
+                .wait_for_release(&mut release_registration_1)
+        );
         assert!(
             released
                 .as_mut()
@@ -607,6 +639,11 @@ fn changed_raw_undo_generation_refuses_original_pair_even_after_value_aba() {
 
 #[test]
 fn pair_release_wake_observes_both_roots_and_rotated_identity_without_held_writers() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     use std::{
         future::Future,
         pin::Pin,
@@ -654,7 +691,10 @@ fn pair_release_wake_observes_both_roots_and_rotated_identity_without_held_write
             if dirty {
                 block.insert(1, 20);
             }
-            let mut wait = storage.blocks_released.observe().wait_for_release();
+            let mut wait = storage
+                .blocks_released
+                .observe()
+                .wait_for_release(&mut release_registration_1);
             let probe = Arc::new(Probe {
                 storage: Arc::clone(&storage),
                 predecessor,
@@ -676,7 +716,10 @@ fn pair_release_wake_observes_both_roots_and_rotated_identity_without_held_write
                 let publish = detached
                     .try_prepare_publication(&storage, |_, _| Ok::<_, ()>(()))
                     .unwrap_or_else(|_| panic!("same original generation"));
-                wait = storage.blocks_released.observe().wait_for_release();
+                wait = storage
+                    .blocks_released
+                    .observe()
+                    .wait_for_release(&mut release_registration_1);
                 assert!(
                     Pin::new(&mut wait)
                         .poll(&mut Context::from_waker(&waker))
@@ -698,6 +741,12 @@ fn pair_release_wake_observes_both_roots_and_rotated_identity_without_held_write
 
 #[test]
 fn direct_insert_retirement_panic_preserves_published_identity_and_healthy_contention() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_2 = crate::release_test_support::registration(&release_budget);
+
     use std::{
         future::Future,
         panic::{AssertUnwindSafe, catch_unwind},
@@ -772,7 +821,11 @@ fn direct_insert_retirement_panic_preserves_published_identity_and_healthy_conte
             (value as *const Payload, value.instance)
         };
         let observation = target.blocks_released.observe();
-        let mut released = std::pin::pin!(observation.clone().wait_for_release());
+        let mut released = std::pin::pin!(
+            observation
+                .clone()
+                .wait_for_release(&mut release_registration_1)
+        );
         let count = Arc::new(Count(AtomicUsize::new(0)));
         let waker = Waker::from(Arc::clone(&count));
         assert!(
@@ -837,7 +890,7 @@ fn direct_insert_retirement_panic_preserves_published_identity_and_healthy_conte
             .expect("original current writer is held");
         drop(_cleanup);
         assert_eq!(error, PublicationPreparationError::Busy(expected.clone()));
-        let mut retry_wait = std::pin::pin!(expected.wait_for_release());
+        let mut retry_wait = std::pin::pin!(expected.wait_for_release(&mut release_registration_2));
         assert!(
             retry_wait
                 .as_mut()
@@ -872,6 +925,12 @@ fn executing_block_abandonment_releases_both_writers_and_preserves_actual_poison
 }
 
 fn pair_abandonment_releases_both_writers(prepare_first: bool) {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_2 = crate::release_test_support::registration(&release_budget);
+
     use std::future::Future;
     use std::task::{Context, Wake, Waker};
     #[derive(Clone, Debug)]
@@ -940,8 +999,18 @@ fn pair_abandonment_releases_both_writers(prepare_first: bool) {
         });
         let waker = Waker::from(Arc::clone(&probe));
         let mut context = Context::from_waker(&waker);
-        let mut undo = std::pin::pin!(target.revert_released.observe().wait_for_release());
-        let mut current = std::pin::pin!(target.blocks_released.observe().wait_for_release());
+        let mut undo = std::pin::pin!(
+            target
+                .revert_released
+                .observe()
+                .wait_for_release(&mut release_registration_1)
+        );
+        let mut current = std::pin::pin!(
+            target
+                .blocks_released
+                .observe()
+                .wait_for_release(&mut release_registration_2)
+        );
         assert!(undo.as_mut().poll(&mut context).is_pending());
         assert!(current.as_mut().poll(&mut context).is_pending());
         if mode == 2 || mode == 3 {
@@ -986,6 +1055,12 @@ fn pair_abandonment_releases_both_writers(prepare_first: bool) {
 
 #[test]
 fn replacement_opening_panic_releases_both_original_writers_before_notifying() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_2 = crate::release_test_support::registration(&release_budget);
+
     use std::{
         future::Future,
         task::{Context, Wake, Waker},
@@ -1042,8 +1117,18 @@ fn replacement_opening_panic_releases_both_original_writers_before_notifying() {
     });
     let waker = Waker::from(Arc::clone(&probe));
     let mut context = Context::from_waker(&waker);
-    let mut undo = std::pin::pin!(target.revert_released.observe().wait_for_release());
-    let mut current = std::pin::pin!(target.blocks_released.observe().wait_for_release());
+    let mut undo = std::pin::pin!(
+        target
+            .revert_released
+            .observe()
+            .wait_for_release(&mut release_registration_1)
+    );
+    let mut current = std::pin::pin!(
+        target
+            .blocks_released
+            .observe()
+            .wait_for_release(&mut release_registration_2)
+    );
     assert!(undo.as_mut().poll(&mut context).is_pending());
     assert!(current.as_mut().poll(&mut context).is_pending());
     fail_copy.store(true, Ordering::SeqCst);
@@ -1077,6 +1162,12 @@ fn replacement_opening_panic_releases_both_original_writers_before_notifying() {
 
 #[test]
 fn map_abort_retains_original_notifications_until_the_entire_aggregate_unlocks() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_2 = crate::release_test_support::registration(&release_budget);
+
     use std::{
         future::Future,
         pin::Pin,
@@ -1144,8 +1235,14 @@ fn map_abort_retains_original_notifications_until_the_entire_aggregate_unlocks()
             .0,
         Err(PublicationPreparationError::Busy(_))
     ));
-    let mut writer_wait = first.blocks_released.observe().wait_for_release();
-    let mut reader_wait = first.blocks.observe_reader_release().wait_for_release();
+    let mut writer_wait = first
+        .blocks_released
+        .observe()
+        .wait_for_release(&mut release_registration_1);
+    let mut reader_wait = first
+        .blocks
+        .observe_reader_release()
+        .wait_for_release(&mut release_registration_2);
     assert!(Pin::new(&mut writer_wait).poll(&mut context).is_pending());
     assert!(Pin::new(&mut reader_wait).poll(&mut context).is_pending());
     let a = a.abort();
@@ -1165,6 +1262,11 @@ fn map_abort_retains_original_notifications_until_the_entire_aggregate_unlocks()
 
 #[test]
 fn acquired_map_refusal_never_fabricates_foreign_or_busy_release() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     use std::{
         future::Future,
         pin::Pin,
@@ -1174,7 +1276,10 @@ fn acquired_map_refusal_never_fabricates_foreign_or_busy_release() {
     let foreign: Storage<u64, u64> = [(1, 10)].into_iter().collect();
     let owned = foreign.blocks.write().detach();
     let pointer = owned.get(&1).map(std::ptr::from_ref);
-    let mut wait = target.blocks_released.observe().wait_for_release();
+    let mut wait = target
+        .blocks_released
+        .observe()
+        .wait_for_release(&mut release_registration_1);
     let (owned, error, cleanup) =
         physical::acquire_owned_writer(&target.blocks, &target.blocks_released, owned)
             .err()
@@ -1219,6 +1324,12 @@ fn acquired_map_refusal_never_fabricates_foreign_or_busy_release() {
 
 #[test]
 fn stale_map_pair_refusal_defers_actual_releases_through_enclosing_fence() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_2 = crate::release_test_support::registration(&release_budget);
+
     use std::{
         future::Future,
         pin::Pin,
@@ -1262,8 +1373,14 @@ fn stale_map_pair_refusal_defers_actual_releases_through_enclosing_fence() {
                     writer.commit();
                 }
                 let mut observed = [
-                    target.revert_released.observe().wait_for_release(),
-                    target.blocks_released.observe().wait_for_release(),
+                    target
+                        .revert_released
+                        .observe()
+                        .wait_for_release(&mut release_registration_1),
+                    target
+                        .blocks_released
+                        .observe()
+                        .wait_for_release(&mut release_registration_2),
                 ];
                 for wait in &mut observed {
                     assert!(

@@ -8,12 +8,12 @@ use super::*;
 mod source;
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::transaction::Executable;
+use iroha_fs::{FileIdentity, FileSnapshot, PrivateDirectory, PublishMode};
 use sorafs_node::ProviderIngestSealedCheckpointRecordV1;
 use source::NativeAssignedSourceV1;
 use std::{
-    fs::{self, File, OpenOptions},
-    io::{Read as _, Write as _},
-    os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
+    fs::File,
+    io::Read as _,
     path::{Path, PathBuf},
     sync::OnceLock,
 };
@@ -24,11 +24,13 @@ pub(crate) struct NativeProducerV1 {
     resolver: Arc<NativeResolverV1>,
     checkpoint: Arc<NativeCheckpointV1>,
     source: Arc<NativeAssignedSourceV1>,
+    attestation: Option<super::native_attestation::NativeAttestationV1>,
 }
 impl NativeProducerV1 {
     pub(crate) fn prepare(
         config: &SorafsProviderIngestRuntime,
         provider: ProviderId,
+        network_id: NetworkId,
         data_dir: &Path,
     ) -> Result<Self> {
         let path = config
@@ -55,21 +57,30 @@ impl NativeProducerV1 {
         if canonical.as_str() != text || key.public_key() != &config.completion_signer_public_key {
             bail!("native completion credential does not match the configured public binding");
         }
-        if config.finalized_archive.retention_authority.is_some()
-            || config.provider_attestation_journal.is_some()
-        {
-            bail!(
-                "native completion custody does not provide external archive retention or Musubi attestation services"
-            );
+        if config.finalized_archive.retention_authority.is_some() {
+            bail!("native completion custody does not provide external archive retention");
         }
         let resolver = Arc::new(NativeResolverV1 {
             config: config.clone(),
             provider,
             key: Arc::new(key),
             state: Arc::new(OnceLock::new()),
-            owner: AccountId::new(config.completion_signer_public_key.clone()),
+            completion_signer: AccountId::new(config.completion_signer_public_key.clone()),
         });
+        let attestation = config
+            .provider_attestation_journal
+            .as_ref()
+            .map(|journal| {
+                super::native_attestation::NativeAttestationV1::open(
+                    data_dir,
+                    network_id,
+                    Arc::clone(&resolver),
+                    journal,
+                )
+            })
+            .transpose()?;
         Ok(Self {
+            attestation,
             resolver: Arc::clone(&resolver),
             checkpoint: Arc::new(NativeCheckpointV1 {
                 handle: config.checkpoint_store_handle.clone(),
@@ -77,7 +88,7 @@ impl NativeProducerV1 {
                 root: data_dir.join("provider-ingest-native-authority"),
                 maximum: config.outbox.checkpoint_max_bytes.0,
                 gate: Mutex::new(()),
-                lock: OnceLock::new(),
+                custody: OnceLock::new(),
             }),
             source: Arc::new(NativeAssignedSourceV1::new(resolver)?),
         })
@@ -87,6 +98,9 @@ impl NativeProducerV1 {
             .state
             .set(state)
             .map_err(|_| eyre::eyre!("native completion State was already bound"))
+    }
+    pub(crate) fn attestation(&self) -> Option<&super::native_attestation::NativeAttestationV1> {
+        self.attestation.as_ref()
     }
     pub(crate) async fn preflight(
         &self,
@@ -104,41 +118,41 @@ impl NativeProducerV1 {
 }
 
 #[derive(Clone)]
-struct NativeResolverV1 {
-    config: SorafsProviderIngestRuntime,
-    provider: ProviderId,
-    key: Arc<KeyPair>,
-    owner: AccountId,
-    state: Arc<OnceLock<Arc<State>>>,
+pub(super) struct NativeResolverV1 {
+    pub(super) config: SorafsProviderIngestRuntime,
+    pub(super) provider: ProviderId,
+    pub(super) key: Arc<KeyPair>,
+    pub(super) completion_signer: AccountId,
+    pub(super) state: Arc<OnceLock<Arc<State>>>,
 }
 impl NativeResolverV1 {
-    fn state(&self) -> std::result::Result<&Arc<State>, ProviderIngestCompletionSignerErrorV1> {
+    pub(super) fn state(
+        &self,
+    ) -> std::result::Result<&Arc<State>, ProviderIngestCompletionSignerErrorV1> {
         self.state
             .get()
             .ok_or(ProviderIngestCompletionSignerErrorV1::Unavailable)
     }
-    fn eligible(&self, world: &impl iroha_core::state::WorldReadOnly) -> bool {
-        let permission = |permission: &iroha_data_model::permission::Permission| {
-            permission.name() == "CanCompleteSorafsReplicationOrder"
-                && permission.payload().get().as_str() == "null"
-        };
-        let permitted = world
-            .account_permissions()
-            .get(&self.owner)
-            .is_some_and(|permissions| permissions.iter().any(permission))
-            || world
-                .account_roles_iter(&self.owner)
-                .filter_map(|id| world.roles().get(id))
-                .any(|role| role.permissions().any(permission));
-        permitted
-            && world.provider_owners().get(&self.provider) == Some(&self.owner)
+    pub(super) fn eligible(
+        &self,
+        world: &impl iroha_core::state::WorldReadOnly,
+        expected: &ProviderIngestCompletionAuthorityV1,
+    ) -> bool {
+        expected.is_valid()
+            && world.accounts().get(&expected.provider_owner).is_some()
+            && world.accounts().get(&expected.completion_signer).is_some()
+            && expected.completion_signer == self.completion_signer
+            && expected.signer_policy == self.config.completion_signer_policy
+            && world.provider_owners().get(&self.provider) == Some(&expected.provider_owner)
             && world
                 .provider_ingest_completion_authorities()
                 .get(&self.provider)
-                .is_some_and(|authority| {
-                    authority.provider_owner == self.owner
-                        && authority.signer_policy == self.config.completion_signer_policy
-                })
+                == Some(expected)
+            && iroha_core::query::provider_ingest_source::has_provider_completion_permission_v1(
+                world,
+                &self.completion_signer,
+                self.provider,
+            )
     }
     fn check_context(
         &self,
@@ -146,13 +160,13 @@ impl NativeResolverV1 {
     ) -> std::result::Result<(), ProviderIngestCompletionSignerErrorV1> {
         let rejected = ProviderIngestCompletionSignerErrorV1::Rejected;
         if !context.is_valid()
-            || context.provider_owner != self.owner
-            || context.signer_policy != self.config.completion_signer_policy
+            || context.expected_authority.completion_signer != self.completion_signer
+            || context.expected_authority.signer_policy != self.config.completion_signer_policy
         {
             return Err(rejected);
         }
         let view = self.state()?.view();
-        if !self.eligible(view.world()) {
+        if !self.eligible(view.world(), &context.expected_authority) {
             return Err(rejected);
         }
         iroha_core::query::signer_finality::verify_signer_finality_v1(
@@ -163,6 +177,12 @@ impl NativeResolverV1 {
         .map_err(|_| rejected)?;
         let finalized_now = view
             .latest_block()
+            .map_err(|error| match error {
+                iroha_core::execution_attempt::ExecutionAttemptError::Deferred(_) => {
+                    ProviderIngestCompletionSignerErrorV1::Unavailable
+                }
+                iroha_core::execution_attempt::ExecutionAttemptError::Rejected(_) => rejected,
+            })?
             .ok_or(rejected)?
             .header()
             .creation_time()
@@ -191,7 +211,9 @@ impl NativeResolverV1 {
         }
         let state = self.state()?;
         let view = state.view();
-        if !self.eligible(view.world()) || payload.network_id() != Some(state.network_id_ref()) {
+        if !self.eligible(view.world(), &context.expected_authority)
+            || payload.network_id() != Some(state.network_id_ref())
+        {
             return Err(rejected);
         }
         iroha_core::query::signer_finality::verify_signer_finality_v1(
@@ -202,6 +224,12 @@ impl NativeResolverV1 {
         .map_err(|_| rejected)?;
         let finalized_now = view
             .latest_block()
+            .map_err(|error| match error {
+                iroha_core::execution_attempt::ExecutionAttemptError::Deferred(_) => {
+                    ProviderIngestCompletionSignerErrorV1::Unavailable
+                }
+                iroha_core::execution_attempt::ExecutionAttemptError::Rejected(_) => rejected,
+            })?
             .ok_or(rejected)?
             .header()
             .creation_time()
@@ -257,7 +285,7 @@ impl NativeResolverV1 {
         .map_err(|_| rejected)?;
         let request = ProviderIngestCompletionPayloadRequestV1 {
             authorization,
-            provider_owner: self.owner.clone(),
+            provider_owner: authority.provider_owner.clone(),
             expected_authority: authority.clone(),
             expected_assignment_revision: context.expected_assignment_revision,
             network_id: *state.network_id_ref(),
@@ -339,7 +367,7 @@ impl ProviderIngestCompletionSignerV1 for NativeSignerV1 {
         &self.resolver.config.completion_signer_handle
     }
     fn authority(&self) -> &AccountId {
-        &self.resolver.owner
+        &self.resolver.completion_signer
     }
     fn qualification(
         &self,
@@ -359,7 +387,10 @@ impl ProviderIngestCompletionSignerV1 for NativeSignerV1 {
         ProviderIngestCompletionSignerErrorV1,
     > {
         let view = self.resolver.state()?.view();
-        if !self.resolver.eligible(view.world()) {
+        if !self
+            .resolver
+            .eligible(view.world(), &self.context.expected_authority)
+        {
             return Err(ProviderIngestCompletionSignerErrorV1::Rejected);
         }
         Ok(self.signer_policy())
@@ -391,104 +422,119 @@ struct NativeCheckpointV1 {
     root: PathBuf,
     maximum: u64,
     gate: Mutex<()>,
-    lock: OnceLock<File>,
+    custody: OnceLock<NativeCheckpointCustodyV1>,
 }
 impl fmt::Debug for NativeCheckpointV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("NativeCheckpointV1").finish_non_exhaustive()
     }
 }
+/// Retained native namespace and single-writer custody. This is not ledger finality authority.
+struct NativeCheckpointCustodyV1 {
+    directory: PrivateDirectory,
+    lock: File,
+    identity: FileIdentity,
+}
+impl NativeCheckpointCustodyV1 {
+    fn revalidate(&self) -> io::Result<()> {
+        self.directory.revalidate()?;
+        let retained = FileSnapshot::private_journal(&self.lock)?;
+        if self.lock.metadata()?.len() != 0 || FileIdentity::of(&self.lock)? != self.identity {
+            return Err(io::Error::other("native checkpoint lock changed"));
+        }
+        let named = self.directory.open_read("lock")?;
+        if FileIdentity::of(&named)? != self.identity
+            || FileSnapshot::private_journal(&named)? != retained
+        {
+            return Err(io::Error::other("native checkpoint lock changed"));
+        }
+        // Only native private regular files can coexist with the authority. Staging leftovers
+        // are inert; they never become a checkpoint or reset the CAS lineage.
+        self.directory.visit_private_files(128, |_, _| Ok(()))?;
+        self.directory.revalidate()
+    }
+}
 impl NativeCheckpointV1 {
-    fn open(&self) -> std::result::Result<(), ProviderIngestCheckpointExternalErrorV1> {
+    // The caller holds gate across acquisition, read, native publication and final revalidation.
+    fn open(
+        &self,
+    ) -> std::result::Result<&NativeCheckpointCustodyV1, ProviderIngestCheckpointExternalErrorV1>
+    {
         let rejected = ProviderIngestCheckpointExternalErrorV1::Rejected;
-        if self.lock.get().is_none() {
-            match fs::create_dir(&self.root) {
-                Ok(()) => {
-                    fs::set_permissions(&self.root, fs::Permissions::from_mode(0o700))
-                        .map_err(|_| rejected)?;
-                    File::open(self.root.parent().ok_or(rejected)?)
-                        .and_then(|file| file.sync_all())
-                        .map_err(|_| rejected)?;
-                }
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(_) => return Err(ProviderIngestCheckpointExternalErrorV1::Unavailable),
-            }
-            let metadata = fs::symlink_metadata(&self.root).map_err(|_| rejected)?;
-            if !metadata.is_dir()
-                || metadata.file_type().is_symlink()
-                || metadata.mode() & 0o077 != 0
-                || metadata.uid() != rustix::process::geteuid().as_raw()
-            {
-                return Err(rejected);
-            }
-            let lock = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .mode(0o600)
-                .custom_flags(
-                    (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits() as i32,
-                )
-                .open(self.root.join("lock"))
-                .map_err(|_| rejected)?;
-            let metadata = lock.metadata().map_err(|_| rejected)?;
-            if !metadata.is_file() || metadata.nlink() != 1 || metadata.mode() & 0o077 != 0 {
-                return Err(rejected);
-            }
-            rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive)
+        if self.custody.get().is_none() {
+            let directory = PrivateDirectory::open_or_create(&self.root).map_err(|_| rejected)?;
+            let lock = directory
+                .open_ownership_lock("lock")
                 .map_err(|_| ProviderIngestCheckpointExternalErrorV1::Unavailable)?;
-            self.lock.set(lock).map_err(|_| rejected)?;
+            if lock.metadata().map_err(|_| rejected)?.len() != 0 {
+                return Err(rejected);
+            }
+            FileSnapshot::private_journal(&lock).map_err(|_| rejected)?;
+            lock.try_lock()
+                .map_err(|_| ProviderIngestCheckpointExternalErrorV1::Unavailable)?;
+            let identity = FileIdentity::of(&lock).map_err(|_| rejected)?;
+            let custody = NativeCheckpointCustodyV1 {
+                directory,
+                lock,
+                identity,
+            };
+            custody.revalidate().map_err(|_| rejected)?;
+            self.custody.set(custody).map_err(|_| rejected)?;
         }
-        let lock = self
-            .lock
-            .get()
-            .ok_or(rejected)?
-            .metadata()
-            .map_err(|_| rejected)?;
-        let named = fs::symlink_metadata(self.root.join("lock")).map_err(|_| rejected)?;
-        if lock.dev() != named.dev() || lock.ino() != named.ino() || named.nlink() != 1 {
-            return Err(rejected);
-        }
-        Ok(())
+        let custody = self.custody.get().ok_or(rejected)?;
+        custody.revalidate().map_err(|_| rejected)?;
+        Ok(custody)
     }
     fn read(
         &self,
+        custody: &NativeCheckpointCustodyV1,
     ) -> std::result::Result<
         Option<ProviderIngestSealedCheckpointRecordV1>,
         ProviderIngestCheckpointExternalErrorV1,
     > {
         let rejected = ProviderIngestCheckpointExternalErrorV1::Rejected;
-        let mut file = match OpenOptions::new()
-            .read(true)
-            .custom_flags(
-                (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits() as i32,
-            )
-            .open(self.root.join("checkpoint.to"))
-        {
+        // Shared native open admits a no-follow regular descriptor before any data read.
+        // Unix opens nonblocking; Windows rejects reparse points and retains sharing custody.
+        let mut file = match custody.directory.open_read("checkpoint.to") {
             Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                custody.revalidate().map_err(|_| rejected)?;
+                return Ok(None);
+            }
             Err(_) => return Err(rejected),
         };
-        let metadata = file.metadata().map_err(|_| rejected)?;
+        let before = FileSnapshot::of(&file, true).map_err(|_| rejected)?;
         let maximum = self.maximum.checked_add(4096).ok_or(rejected)?;
-        if !metadata.is_file()
-            || metadata.nlink() != 1
-            || metadata.mode() & 0o077 != 0
-            || metadata.len() > maximum
+        let length = file.metadata().map_err(|_| rejected)?.len();
+        if length > maximum {
+            return Err(rejected);
+        }
+        let length = usize::try_from(length).map_err(|_| rejected)?;
+        let mut bytes = Zeroizing::new(Vec::new());
+        bytes
+            .try_reserve_exact(length)
+            .map_err(|_| ProviderIngestCheckpointExternalErrorV1::Unavailable)?;
+        bytes.resize(length, 0);
+        file.read_exact(&mut bytes).map_err(|_| rejected)?;
+        let mut extra = [0];
+        if file.read(&mut extra).map_err(|_| rejected)? != 0
+            || FileSnapshot::of(&file, true).map_err(|_| rejected)? != before
         {
             return Err(rejected);
         }
-        let mut bytes = Vec::new();
-        std::io::Read::by_ref(&mut file)
-            .take(maximum + 1)
-            .read_to_end(&mut bytes)
+        let named = custody
+            .directory
+            .open_read("checkpoint.to")
             .map_err(|_| rejected)?;
-        if bytes.len() as u64 > maximum {
+        if FileSnapshot::of(&named, true).map_err(|_| rejected)? != before {
             return Err(rejected);
         }
-        ProviderIngestSealedCheckpointRecordV1::from_canonical_bytes(&bytes, self.maximum)
-            .map(Some)
-            .map_err(|_| rejected)
+        custody.revalidate().map_err(|_| rejected)?;
+        let record =
+            ProviderIngestSealedCheckpointRecordV1::from_canonical_bytes(&bytes, self.maximum)
+                .map_err(|_| rejected)?;
+        custody.revalidate().map_err(|_| rejected)?;
+        Ok(Some(record))
     }
 }
 impl ProviderIngestCheckpointRuntimeV1 for NativeCheckpointV1 {
@@ -513,8 +559,8 @@ impl ProviderIngestCheckpointRuntimeV1 for NativeCheckpointV1 {
             .gate
             .lock()
             .map_err(|_| ProviderIngestCheckpointExternalErrorV1::Unavailable)?;
-        self.open()?;
-        self.read()
+        let custody = self.open()?;
+        self.read(custody)
     }
     fn compare_and_swap_latest(
         &self,
@@ -526,9 +572,9 @@ impl ProviderIngestCheckpointRuntimeV1 for NativeCheckpointV1 {
             .gate
             .lock()
             .map_err(|_| ProviderIngestCheckpointExternalErrorV1::Unavailable)?;
-        self.open()?;
+        let custody = self.open()?;
         next.validate(self.maximum).map_err(|_| rejected)?;
-        let current = self.read()?;
+        let current = self.read(custody)?;
         if current.as_ref().map(|value| value.revision) != expected
             || next.predecessor_revision != expected
             || next.predecessor_checkpoint_digest
@@ -544,41 +590,16 @@ impl ProviderIngestCheckpointRuntimeV1 for NativeCheckpointV1 {
         let bytes = next
             .to_canonical_bytes(self.maximum)
             .map_err(|_| rejected)?;
-        let temporary = self.root.join("checkpoint.pending");
-        match fs::symlink_metadata(&temporary) {
-            Ok(metadata) => {
-                if !metadata.is_file()
-                    || metadata.file_type().is_symlink()
-                    || metadata.nlink() != 1
-                    || metadata.uid() != rustix::process::geteuid().as_raw()
-                    || metadata.mode() & 0o077 != 0
-                {
-                    return Err(rejected);
-                }
-                fs::remove_file(&temporary).map_err(|_| rejected)?;
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(_) => return Err(rejected),
-        }
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(
-                (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits() as i32,
-            )
-            .open(&temporary)
-            .map_err(|_| rejected)?;
-        if file.metadata().map_err(|_| rejected)?.nlink() != 1 {
-            return Err(rejected);
-        }
-        file.write_all(&bytes)
-            .and_then(|()| file.sync_all())
-            .map_err(|_| ProviderIngestCheckpointExternalErrorV1::Unavailable)?;
-        fs::rename(&temporary, self.root.join("checkpoint.to"))
+        custody.revalidate().map_err(|_| rejected)?;
+        // Shared publication owns private exclusive staging, exact destination admission,
+        // atomic native replacement and parent durability. Any returned failure can follow
+        // publication, so the caller must retain its original intent and reconcile.
+        custody
+            .directory
+            .write_atomic("checkpoint.to", &bytes, PublishMode::Replace)
             .map_err(|_| ProviderIngestCheckpointExternalErrorV1::Ambiguous)?;
-        File::open(&self.root)
-            .and_then(|file| file.sync_all())
+        custody
+            .revalidate()
             .map_err(|_| ProviderIngestCheckpointExternalErrorV1::Ambiguous)?;
         Ok(())
     }
@@ -587,3 +608,9 @@ impl ProviderIngestCheckpointRuntimeV1 for NativeCheckpointV1 {
 #[cfg(test)]
 #[path = "native_software_tests.rs"]
 mod tests;
+
+/// Host UTC is a lease/admission bound, never a finality or external rollback witness.
+pub(super) fn native_now_unix_ms()
+-> std::result::Result<u64, MusubiProviderAttestationSignerErrorV1> {
+    source::now().map_err(|_| MusubiProviderAttestationSignerErrorV1::Unavailable)
+}

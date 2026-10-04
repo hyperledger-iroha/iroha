@@ -116,7 +116,8 @@ public sealed class PetalDecodedFrame
         bool mirrored,
         PetalLaneResult? p,
         PetalLaneResult? k,
-        PetalLaneResult? d)
+        PetalLaneResult? d,
+        int? inferredCorner)
     {
         Homography = homography;
         Rotation = rotation;
@@ -124,6 +125,7 @@ public sealed class PetalDecodedFrame
         P = p;
         K = k;
         D = d;
+        InferredCorner = inferredCorner;
     }
 
     /// <summary>Canvas-to-pixel homography that was used.</summary>
@@ -143,6 +145,14 @@ public sealed class PetalDecodedFrame
 
     /// <summary>Lane <c>D</c> result.</summary>
     public PetalLaneResult? D { get; }
+
+    /// <summary>
+    /// The corner finder that was hidden (by a finger, a glare or the edge of the frame) and
+    /// inferred from the other three, as its canonical index: 0 top-left, 1 top-right,
+    /// 2 bottom-right, 3 bottom-left of the upright code; <see langword="null"/> when all four
+    /// blossoms were seen.
+    /// </summary>
+    public int? InferredCorner { get; }
 
     /// <summary>Number of lanes that decoded.</summary>
     public int LanesOk => (P is null ? 0 : 1) + (K is null ? 0 : 1) + (D is null ? 0 : 1);
@@ -216,13 +226,21 @@ public readonly struct PetalDecodeResult
 /// </summary>
 /// <remarks>
 /// <para>
-/// The decoder locates the four finders, derives a homography for each
-/// orientation hypothesis (four rotations, optionally mirrored), picks the
-/// orientation whose ring gates line up and whose lane <c>D</c> codeword checks
-/// out, then reads the tiles and dots. Every tile is classified jointly: its
-/// 8×8 sample patch is compared against the 32 hypotheses (polarity × glyph)
-/// and the best match wins, so the katakana and the light/dark bit help each
-/// other. Cells the decoder is unsure about become Reed–Solomon erasures.
+/// The decoder locates the corner finders, derives a homography for each
+/// orientation hypothesis (four rotations, optionally mirrored), ranks the
+/// hypotheses by how well the ring gates and the <c>天</c> silhouette line up,
+/// takes the first whose lane <c>D</c> (or else a tile lane) codeword checks
+/// out, then reads the tiles and dots. When one blossom is hidden, its corner is
+/// inferred from the other three and moved to where the dotted rings line up
+/// best; <see cref="PetalDecodedFrame.InferredCorner"/> reports it. Every tile is
+/// classified jointly: its 8×8 sample patch is compared against the 32
+/// hypotheses (polarity × glyph) and the best match wins, so the katakana and the
+/// light/dark bit help each other. Cells the decoder is unsure about become
+/// Reed–Solomon erasures.
+/// </para>
+/// <para>
+/// <see cref="Track"/> reads the next camera frame by following the pose of the
+/// previous one, which skips the finder search.
 /// </para>
 /// <para>
 /// The tile <em>level read</em> judges every patch against the light and dark
@@ -279,6 +297,7 @@ public static class PetalDecoder
     private static readonly double[] ReferenceSin = new double[8];
     private static readonly double[] TileOffsets = [-0.25, -0.25, 0.25, -0.25, -0.25, 0.25, 0.25, 0.25];
     private static readonly bool[] Mirrorings = [false, true];
+    private static readonly PetalPoint[] EmptyCells = BuildEmptyCells();
 
     static PetalDecoder()
     {
@@ -291,6 +310,13 @@ public static class PetalDecoder
     }
 
     /// <summary>Decodes one camera frame.</summary>
+    /// <remarks>
+    /// Tries the finder candidates of <see cref="PetalLocator.Candidates"/> in order and returns
+    /// the first that reads. For each, the orientation hypotheses (four quarter turns,
+    /// optionally mirrored) are ranked by the ring gates plus the <c>天</c>; lane <c>D</c> is
+    /// tried under the best three whose gate score is at least 0.2, then the tile lanes under
+    /// the best four.
+    /// </remarks>
     /// <param name="image">The luma plane.</param>
     /// <param name="options">Decoder options; <see cref="PetalDecodeOptions.Default"/> when omitted.</param>
     /// <returns>
@@ -304,48 +330,135 @@ public static class PetalDecoder
         options ??= PetalDecodeOptions.Default;
         if (!Supported(image, options))
             return PetalDecodeResult.Fail(PetalDecodeError.UnsupportedImage);
-        var finders = PetalLocator.Locate(image);
-        if (finders is null)
-            return PetalDecodeResult.Fail(PetalDecodeError.NoFinders);
-        var scored = new List<Scored>(8);
-        foreach (var (rotation, mirrored, h) in HypothesesFor(finders, options.TryMirrored))
+        var located = false;
+        foreach (var set in PetalLocator.Candidates(image))
         {
-            var reference = ReferenceLevels(image, h);
-            if (reference is null)
+            located = true;
+            if (DecodeCandidate(image, options, set) is { } frame)
+                return PetalDecodeResult.Ok(frame);
+        }
+
+        return PetalDecodeResult.Fail(located ? PetalDecodeError.NoOrientation : PetalDecodeError.NoFinders);
+    }
+
+    /// <summary>
+    /// Follows a code from the previous frame that decoded, without searching the whole image
+    /// for finders (the most expensive part of <see cref="Decode"/>).
+    /// </summary>
+    /// <remarks>
+    /// Each corner finder seen in the previous frame is re-found near where the previous pose
+    /// puts it (see <see cref="PetalLocator.Follow"/>); the mean movement of those predicts the
+    /// rest. A corner inferred in the previous frame counts as seen again only when its blossom
+    /// is re-found within a quarter diameter of that prediction (so a thumb beside it does not
+    /// count). When exactly one corner is missing it is placed at the prediction and refined
+    /// against the rings like an inferred corner. The orientation is kept from the previous
+    /// frame.
+    /// </remarks>
+    /// <param name="image">The luma plane of the next camera frame.</param>
+    /// <param name="previous">The last frame that decoded.</param>
+    /// <param name="options">Decoder options; <see cref="PetalDecodeOptions.Default"/> when omitted.</param>
+    /// <returns>
+    /// The frame, or <see langword="null"/> when the image is unusable, the previous pose is
+    /// broken, two corners are lost or no lane decodes; the caller then runs <see cref="Decode"/>.
+    /// </returns>
+    public static PetalDecodedFrame? Track(PetalLuma image, PetalDecodedFrame previous, PetalDecodeOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        ArgumentNullException.ThrowIfNull(previous);
+        options ??= PetalDecodeOptions.Default;
+        // a frame naming a corner that does not exist is refused like a broken pose
+        if (!Supported(image, options) || previous.InferredCorner is { } named && (uint)named > 3)
+            return null;
+        var h0 = previous.Homography;
+        Span<PetalFinder> expected = stackalloc PetalFinder[4];
+        double shortSide = Math.Min(image.Width, image.Height);
+        for (var i = 0; i < 4; i++)
+        {
+            var center = PetalLayout.FinderCenterTable[i];
+            var (cx, cy) = (center.X, center.Y);
+            h0.Apply(cx, cy, out var x, out var y);
+            var size = PetalMath.Max(
+                ProjectedLength(h0, cx - 60.0, cy, cx + 60.0, cy),
+                ProjectedLength(h0, cx, cy - 60.0, cx, cy + 60.0));
+            expected[i] = new PetalFinder(x, y, size);
+        }
+
+        foreach (var f in expected)
+        {
+            if (!(double.IsFinite(f.X) && double.IsFinite(f.Y) && double.IsFinite(f.Size)) || f.Size > shortSide)
+                return null;
+        }
+
+        var previouslyInferred = previous.InferredCorner ?? -1;
+        Span<PetalFinder> found = stackalloc PetalFinder[4];
+        Span<bool> seen = stackalloc bool[4];
+        for (var i = 0; i < 4; i++)
+        {
+            if (i != previouslyInferred && PetalLocator.Follow(image, expected[i]) is { } f)
+            {
+                found[i] = f;
+                seen[i] = true;
+            }
+        }
+
+        // the mean movement of the corners that were followed predicts the others
+        var (sumX, sumY, followed) = (PetalMath.SumIdentity, PetalMath.SumIdentity, 0);
+        for (var i = 0; i < 4; i++)
+        {
+            if (!seen[i])
                 continue;
-            var score = GateScore(image, h, reference.Value);
-            var candidate = new Scored(score, rotation, mirrored, h, reference.Value);
-            // Stable descending insertion (Rust `sort_by` with `b.total_cmp(a)`).
-            var at = scored.Count;
-            while (at > 0 && PetalMath.TotalCompare(score, scored[at - 1].Score) > 0)
-                at--;
-            scored.Insert(at, candidate);
+            sumX += found[i].X - expected[i].X;
+            sumY += found[i].Y - expected[i].Y;
+            followed++;
         }
 
-        // 1. the ring beacon is the cheapest and strongest orientation check
-        for (var i = 0; i < Math.Min(3, scored.Count); i++)
+        if (followed < 3)
+            return null;
+        var (shiftX, shiftY) = (sumX / followed, sumY / followed);
+        // a corner that was hidden is seen again only when its blossom is found right where
+        // the others say it is (a bright thumb beside it must not count)
+        if (previouslyInferred >= 0)
         {
-            var s = scored[i];
-            if (s.Score < 0.2)
-                break;
-            if (ReadLaneD(image, s.Homography, s.Reference) is { } d)
-                return PetalDecodeResult.Ok(Finish(image, options, s, d));
+            var at = Predicted(expected[previouslyInferred], shiftX, shiftY);
+            if (PetalLocator.Follow(image, at) is { } f
+                && Math.Sqrt((f.X - at.X) * (f.X - at.X) + (f.Y - at.Y) * (f.Y - at.Y)) <= 0.25 * at.Size)
+            {
+                found[previouslyInferred] = f;
+                seen[previouslyInferred] = true;
+            }
         }
 
-        // 2. fall back to the tile lanes under the most promising orientations
+        int? inferred = null;
+        for (var i = 0; i < 4; i++)
+        {
+            if (seen[i])
+                continue;
+            if (inferred is not null)
+                return null;
+            inferred = i;
+        }
+
+        var corners = found.ToArray();
+        if (inferred is { } m)
+        {
+            corners[m] = Predicted(expected[m], shiftX, shiftY);
+            corners = RefineInferredCorner(image, corners, m);
+        }
+
+        Span<PetalPoint> points = stackalloc PetalPoint[4];
+        for (var i = 0; i < 4; i++)
+            points[i] = new PetalPoint(corners[i].X, corners[i].Y);
+        if (PetalHomography.FromPoints(PetalLayout.FinderCenterTable, points) is not { } h)
+            return null;
+        if (ReferenceLevels(image, h, inferred) is not { } reference)
+            return null;
+        var d = ReadLaneD(image, h, reference);
         using var patches = PooledValues.Rent(PatchValues);
-        for (var i = 0; i < Math.Min(4, scored.Count); i++)
-        {
-            var s = scored[i];
-            SamplePatches(image, s.Homography, patches.Span);
-            var (p, k) = ReadTileLanes(patches.Span, s.Reference, options.TemplateSigmas);
-            if (p is null && k is null)
-                continue;
-            var d = ReadLaneD(image, s.Homography, s.Reference);
-            return PetalDecodeResult.Ok(new PetalDecodedFrame(s.Homography, s.Rotation, s.Mirrored, p, k, d));
-        }
-
-        return PetalDecodeResult.Fail(PetalDecodeError.NoOrientation);
+        SamplePatches(image, h, patches.Span);
+        var (p, k) = ReadTileLanes(patches.Span, reference, options.TemplateSigmas);
+        if (p is null && k is null && d is null)
+            return null;
+        return new PetalDecodedFrame(h, previous.Rotation, previous.Mirrored, p, k, d, inferred);
     }
 
     /// <summary>Reads all lanes with a known canvas-to-pixel homography (no finder search).</summary>
@@ -366,23 +479,33 @@ public static class PetalDecoder
         options ??= PetalDecodeOptions.Default;
         if (!Supported(image, options))
             return null;
-        var reference = ReferenceLevels(image, homography);
+        var reference = ReferenceLevels(image, homography, null);
         if (reference is null)
             return null;
-        return Finish(image, options, new Scored(0.0, 0, false, homography, reference.Value), null);
+        return Finish(image, options, 0, false, homography, reference.Value, null, null);
     }
 
     /// <summary>Builds the cells a decoder believes it saw, for diagnostics.</summary>
+    /// <remarks>
+    /// Tiles are taken from the level read (the one that judges against the finder levels),
+    /// even for a frame whose lanes were rescued by the normalised read. The levels of a corner
+    /// the frame inferred are extrapolated as in the decoder.
+    /// </remarks>
     /// <param name="image">The luma plane the frame was decoded from.</param>
     /// <param name="frame">The decoded frame.</param>
     /// <param name="options">Decoder options; <see cref="PetalDecodeOptions.Default"/> when omitted.</param>
-    /// <returns>The observed cells, or <see langword="null"/> when the reference levels are too weak.</returns>
+    /// <returns>
+    /// The observed cells, or <see langword="null"/> when the image is unusable or the reference
+    /// levels are too weak.
+    /// </returns>
     public static PetalFrameCells? ObservedCells(PetalLuma image, PetalDecodedFrame frame, PetalDecodeOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(image);
         ArgumentNullException.ThrowIfNull(frame);
         options ??= PetalDecodeOptions.Default;
-        var reference = ReferenceLevels(image, frame.Homography);
+        if (!Supported(image, options))
+            return null;
+        var reference = ReferenceLevels(image, frame.Homography, frame.InferredCorner);
         if (reference is null)
             return null;
         using var patches = PooledValues.Rent(PatchValues);
@@ -393,17 +516,26 @@ public static class PetalDecoder
         return PetalFrameCells.FromWords(p, k, d);
     }
 
-    /// <summary>Mean squared tile-match error, a quick image-quality indicator.</summary>
+    /// <summary>Mean squared tile-match error of the level read, a quick image-quality indicator.</summary>
+    /// <remarks>
+    /// It can be large for a frame whose lanes were rescued by the normalised read, which is the
+    /// point: the finder levels did not describe that picture.
+    /// </remarks>
     /// <param name="image">The luma plane the frame was decoded from.</param>
     /// <param name="frame">The decoded frame.</param>
     /// <param name="options">Decoder options; <see cref="PetalDecodeOptions.Default"/> when omitted.</param>
-    /// <returns>The mean error, or <see langword="null"/> when the reference levels are too weak.</returns>
+    /// <returns>
+    /// The mean error, or <see langword="null"/> when the image is unusable or the reference
+    /// levels are too weak.
+    /// </returns>
     public static double? TileMatchError(PetalLuma image, PetalDecodedFrame frame, PetalDecodeOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(image);
         ArgumentNullException.ThrowIfNull(frame);
         options ??= PetalDecodeOptions.Default;
-        var reference = ReferenceLevels(image, frame.Homography);
+        if (!Supported(image, options))
+            return null;
+        var reference = ReferenceLevels(image, frame.Homography, frame.InferredCorner);
         if (reference is null)
             return null;
         using var patches = PooledValues.Rent(PatchValues);
@@ -426,22 +558,222 @@ public static class PetalDecoder
     private static PetalDecodedFrame Finish(
         PetalLuma image,
         PetalDecodeOptions options,
-        in Scored hypothesis,
-        PetalLaneResult? d)
+        int rotation,
+        bool mirrored,
+        in PetalHomography h,
+        in Reference reference,
+        PetalLaneResult? d,
+        int? inferredCorner)
     {
-        d ??= ReadLaneD(image, hypothesis.Homography, hypothesis.Reference);
+        d ??= ReadLaneD(image, h, reference);
         using var patches = PooledValues.Rent(PatchValues);
-        SamplePatches(image, hypothesis.Homography, patches.Span);
-        var (p, k) = ReadTileLanes(patches.Span, hypothesis.Reference, options.TemplateSigmas);
-        return new PetalDecodedFrame(hypothesis.Homography, hypothesis.Rotation, hypothesis.Mirrored, p, k, d);
+        SamplePatches(image, h, patches.Span);
+        var (p, k) = ReadTileLanes(patches.Span, reference, options.TemplateSigmas);
+        return new PetalDecodedFrame(h, rotation, mirrored, p, k, d, inferredCorner);
     }
 
-    private static List<(int Rotation, bool Mirrored, PetalHomography Homography)> HypothesesFor(
+    /// <summary>
+    /// One finder candidate: refines an inferred corner against the rings, ranks the
+    /// orientation hypotheses by gate score plus <c>天</c> score, then tries lane <c>D</c> under
+    /// the best three whose gate score is at least 0.2 and the tile lanes under the best four.
+    /// </summary>
+    private static PetalDecodedFrame? DecodeCandidate(PetalLuma image, PetalDecodeOptions options, PetalFinderSet set)
+    {
+        var corners = set.Inferred is { } index
+            ? RefineInferredCorner(image, set.CornerArray, index)
+            : set.CornerArray;
+        var scored = new List<Scored>(8);
+        foreach (var (rotation, mirrored, h) in HypothesesFor(corners, options.TryMirrored))
+        {
+            int? inferred = set.Inferred is { } corner ? CanonicalCorner(corner, rotation, mirrored) : null;
+            if (ReferenceLevels(image, h, inferred) is not { } reference)
+                continue;
+            var gate = GateScore(image, h, reference);
+            var mask = MaskScore(image, h, reference);
+            var candidate = new Scored(gate, mask, rotation, mirrored, h, reference, inferred);
+            // Stable descending insertion by gate + mask (Rust `sort_by` with `b.total_cmp(a)`).
+            var key = gate + mask;
+            var at = scored.Count;
+            while (at > 0 && PetalMath.TotalCompare(key, scored[at - 1].Gate + scored[at - 1].Mask) > 0)
+                at--;
+            scored.Insert(at, candidate);
+        }
+
+        // 1. the ring beacon is the cheapest and strongest orientation check
+        for (var i = 0; i < Math.Min(3, scored.Count); i++)
+        {
+            var s = scored[i];
+            // the order is no longer by gate score, so a weak gate skips only this hypothesis
+            if (s.Gate < 0.2)
+                continue;
+            if (ReadLaneD(image, s.Homography, s.Reference) is { } d)
+                return Finish(image, options, s.Rotation, s.Mirrored, s.Homography, s.Reference, d, s.InferredCorner);
+        }
+
+        // 2. fall back to the tile lanes under the most promising orientations
+        using var patches = PooledValues.Rent(PatchValues);
+        for (var i = 0; i < Math.Min(4, scored.Count); i++)
+        {
+            var s = scored[i];
+            SamplePatches(image, s.Homography, patches.Span);
+            var (p, k) = ReadTileLanes(patches.Span, s.Reference, options.TemplateSigmas);
+            if (p is null && k is null)
+                continue;
+            var d = ReadLaneD(image, s.Homography, s.Reference);
+            return new PetalDecodedFrame(s.Homography, s.Rotation, s.Mirrored, p, k, d, s.InferredCorner);
+        }
+
+        return null;
+    }
+
+    /// <summary>Canonical index of the corner at <paramref name="index"/> of a finder quad under one orientation hypothesis.</summary>
+    internal static int CanonicalCorner(int index, int rotation, bool mirrored) =>
+        mirrored ? (rotation + 4 - index) % 4 : (index + 4 - rotation) % 4;
+
+    /// <summary>The length of the image of the canvas segment from <c>(x0, y0)</c> to <c>(x1, y1)</c>.</summary>
+    private static double ProjectedLength(in PetalHomography h, double x0, double y0, double x1, double y1)
+    {
+        h.Apply(x0, y0, out var ax, out var ay);
+        h.Apply(x1, y1, out var bx, out var by);
+        return Math.Sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by));
+    }
+
+    private static PetalFinder Predicted(PetalFinder expected, double shiftX, double shiftY) =>
+        new(expected.X + shiftX, expected.Y + shiftY, expected.Size);
+
+    /// <summary>
+    /// The brightness summed over all ring slots under the pose that maps the canonical corners
+    /// onto <paramref name="corners"/> (in quad order).
+    /// </summary>
+    /// <remarks>
+    /// The slots form the same set of points under every quarter turn and mirror of the canvas
+    /// (80, 92 and 104 are multiples of four), so the value does not depend on the orientation.
+    /// </remarks>
+    internal static double? RingBrightness(PetalLuma image, ReadOnlySpan<PetalPoint> corners)
+    {
+        if (PetalHomography.FromPoints(PetalLayout.FinderCenterTable, corners) is not { } h)
+            return null;
+        var sum = PetalMath.SumIdentity;
+        for (var flat = 0; flat < PetalLayout.TotalSlots; flat++)
+        {
+            var center = PetalLayout.SlotCenterFlat(flat);
+            sum += DotSamples(image, h, center.X, center.Y, 3.5);
+        }
+
+        return sum;
+    }
+
+    /// <summary>
+    /// Moves an inferred corner to where the three dotted rings line up best: a 13 × 13 search
+    /// in steps of 2 % of the mean leg around the parallelogram estimate, then a 9 × 9 search
+    /// in steps of 0.5 % around the best point.
+    /// </summary>
+    /// <remarks>
+    /// The rings fix the geometry only; the orientation is decided afterwards by the gates and
+    /// the <c>天</c>. A candidate replaces the best point only when it is strictly brighter.
+    /// </remarks>
+    internal static PetalFinder[] RefineInferredCorner(PetalLuma image, PetalFinder[] corners, int inferred)
+    {
+        Span<PetalPoint> points = stackalloc PetalPoint[4];
+        for (var i = 0; i < 4; i++)
+            points[i] = new PetalPoint(corners[i].X, corners[i].Y);
+        var start = points[inferred];
+        var leg = 0.5 * (Distance(points[(inferred + 1) % 4], start) + Distance(points[(inferred + 3) % 4], start));
+        var bestBrightness = double.MinValue;
+        var best = start;
+        SearchRings(image, points, inferred, start, 0.02 * leg, 6, ref bestBrightness, ref best);
+        SearchRings(image, points, inferred, best, 0.005 * leg, 4, ref bestBrightness, ref best);
+        var refined = (PetalFinder[])corners.Clone();
+        refined[inferred] = new PetalFinder(best.X, best.Y, corners[inferred].Size);
+        return refined;
+    }
+
+    private static double Distance(PetalPoint point, PetalPoint start) =>
+        Math.Sqrt((point.X - start.X) * (point.X - start.X) + (point.Y - start.Y) * (point.Y - start.Y));
+
+    /// <summary>One grid of <see cref="RefineInferredCorner"/>: <c>dy</c> outer, <c>dx</c> inner.</summary>
+    private static void SearchRings(
+        PetalLuma image,
+        Span<PetalPoint> points,
+        int inferred,
+        PetalPoint centre,
+        double step,
+        int reach,
+        ref double bestBrightness,
+        ref PetalPoint best)
+    {
+        for (var dy = -reach; dy <= reach; dy++)
+        {
+            for (var dx = -reach; dx <= reach; dx++)
+            {
+                var candidate = new PetalPoint(centre.X + dx * step, centre.Y + dy * step);
+                points[inferred] = candidate;
+                if (RingBrightness(image, points) is { } brightness && brightness > bestBrightness)
+                {
+                    bestBrightness = brightness;
+                    best = candidate;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// How well the <c>天</c> lines up: the mean normalised level over the tiles (each sampled at
+    /// five points across the tile, so a glyph stroke at the centre does not decide it) minus
+    /// the mean over the empty lattice cells.
+    /// </summary>
+    /// <remarks>
+    /// The mask is symmetric left to right but not top to bottom, so this tells the four quarter
+    /// turns apart even when the ring gates are damaged.
+    /// </remarks>
+    internal static double MaskScore(PetalLuma image, in PetalHomography h, in Reference reference)
+    {
+        var tiles = PetalMath.SumIdentity;
+        for (var tile = 0; tile < PetalLayout.TileCount; tile++)
+        {
+            var center = PetalLayout.TileCenterUnchecked(tile);
+            tiles += MaskLevel(image, h, reference, center.X, center.Y);
+        }
+
+        var empty = PetalMath.SumIdentity;
+        foreach (var cell in EmptyCells)
+            empty += MaskLevel(image, h, reference, cell.X, cell.Y);
+        return tiles / PetalLayout.TileCount - empty / EmptyCells.Length;
+    }
+
+    private static double MaskLevel(PetalLuma image, in PetalHomography h, in Reference reference, double x, double y)
+    {
+        reference.At(x, y, out var lit, out var dark);
+        return (DotSamples(image, h, x, y, 8.0) - dark) / (lit - dark);
+    }
+
+    /// <summary>Centres of the lattice cells outside the <c>天</c> mask (no tile is ever drawn there), row-major.</summary>
+    private static PetalPoint[] BuildEmptyCells()
+    {
+        var cells = new List<PetalPoint>();
+        for (var row = 0; row < PetalLayout.TileGrid; row++)
+        {
+            var line = PetalLayout.Mask[row];
+            for (var column = 0; column < line.Length; column++)
+            {
+                if (line[column] != '#')
+                {
+                    cells.Add(new PetalPoint(
+                        PetalLayout.TileOrigin + PetalLayout.TilePitch * (column + 0.5),
+                        PetalLayout.TileOrigin + PetalLayout.TilePitch * (row + 0.5)));
+                }
+            }
+        }
+
+        return cells.ToArray();
+    }
+
+    /// <summary>The orientation hypotheses of a finder quad: four quarter turns, then (optionally) four mirrored ones.</summary>
+    internal static List<(int Rotation, bool Mirrored, PetalHomography Homography)> HypothesesFor(
         PetalFinder[] finders,
         bool tryMirrored)
     {
-        var canonical = new PetalPoint[4];
-        PetalLayout.FinderCenterTable.CopyTo(canonical);
+        var canonical = PetalLayout.FinderCenterTable;
         var output = new List<(int, bool, PetalHomography)>(8);
         Span<PetalPoint> destination = stackalloc PetalPoint[4];
         foreach (var mirrored in Mirrorings)
@@ -480,11 +812,26 @@ public static class PetalDecoder
         return sum / 5.0;
     }
 
-    internal static Reference? ReferenceLevels(PetalLuma image, in PetalHomography h)
+    /// <summary>
+    /// Light and dark levels at the four corners: the solid blossom core, and the black canvas
+    /// 100 units inward of it.
+    /// </summary>
+    /// <remarks>
+    /// An <paramref name="inferred"/> corner (canonical index) was not seen, so its levels are
+    /// extrapolated from the other three by the parallelogram rule and kept within their range.
+    /// </remarks>
+    /// <returns>
+    /// The levels, or <see langword="null"/> when a seen corner has less than 12 levels of
+    /// contrast or a non-finite one (only a broken pose produces that).
+    /// </returns>
+    internal static Reference? ReferenceLevels(PetalLuma image, in PetalHomography h, int? inferred)
     {
+        var missing = inferred is { } m && (uint)m < 4 ? m : -1;
         var reference = new Reference();
         for (var i = 0; i < 4; i++)
         {
+            if (i == missing)
+                continue;
             var center = PetalLayout.FinderCenterTable[i];
             var (cx, cy) = (center.X, center.Y);
             // the blossom is solid out to radius 24 around its centre
@@ -501,9 +848,19 @@ public static class PetalDecoder
             var a = DotSamples(image, h, cx + sx * 100.0, cy, 5.0);
             var b = DotSamples(image, h, cx, cy + sy * 100.0, 5.0);
             var dark = 0.5 * (a + b);
-            if (lit - dark < 12.0)
+            // also refuses NaN levels, which only a non-finite pose can produce
+            if (!double.IsFinite(lit - dark) || lit - dark < 12.0)
                 return null;
             reference.Set(i, lit, dark);
+        }
+
+        if (missing >= 0)
+        {
+            reference.Extrapolate(missing);
+            // uneven light can push the estimates past each other; an inferred corner
+            // needs the same contrast as a seen one
+            if (reference.Lit(missing) - reference.Dark(missing) < 12.0)
+                return null;
         }
 
         return reference;
@@ -984,12 +1341,15 @@ public static class PetalDecoder
         double GlyphMargin,
         double Error);
 
+    /// <summary>One orientation hypothesis: gate score, <c>天</c> score, orientation, pose, levels and inferred corner.</summary>
     private readonly record struct Scored(
-        double Score,
+        double Gate,
+        double Mask,
         int Rotation,
         bool Mirrored,
         PetalHomography Homography,
-        Reference Reference);
+        Reference Reference,
+        int? InferredCorner);
 
     /// <summary>A pooled scratch array of doubles that goes back to the pool when disposed.</summary>
     private readonly struct PooledValues : IDisposable
@@ -1042,6 +1402,36 @@ public static class PetalDecoder
             }
         }
 
+        /// <summary>
+        /// Fills in the levels of corner <paramref name="missing"/> from the other three by the
+        /// parallelogram rule (neighbours minus the opposite corner), kept within their range.
+        /// </summary>
+        public void Extrapolate(int missing)
+        {
+            var (n1, opposite, n2) = ((missing + 1) % 4, (missing + 2) % 4, (missing + 3) % 4);
+            var lit = Extrapolated(Lit(n1), Lit(opposite), Lit(n2));
+            var dark = Extrapolated(Dark(n1), Dark(opposite), Dark(n2));
+            Set(missing, lit, dark);
+        }
+
+        /// <summary>The light level measured (or extrapolated) at corner <paramref name="corner"/>.</summary>
+        public readonly double Lit(int corner) => corner switch
+        {
+            0 => lit0,
+            1 => lit1,
+            2 => lit2,
+            _ => lit3,
+        };
+
+        /// <summary>The dark level measured (or extrapolated) at corner <paramref name="corner"/>.</summary>
+        public readonly double Dark(int corner) => corner switch
+        {
+            0 => dark0,
+            1 => dark1,
+            2 => dark2,
+            _ => dark3,
+        };
+
         /// <summary>Bilinear interpolation over the canvas of the four corner estimates.</summary>
         public readonly void At(double x, double y, out double lit, out double dark)
         {
@@ -1056,6 +1446,17 @@ public static class PetalDecoder
             var top = c0 * (1.0 - u) + c1 * u;
             var bottom = c3 * (1.0 - u) + c2 * u;
             return top * (1.0 - v) + bottom * v;
+        }
+
+        /// <summary><c>(a + b − opposite)</c> clamped to the range of the three (Rust <c>f64::clamp</c>).</summary>
+        private static double Extrapolated(double a, double opposite, double b)
+        {
+            var low = PetalMath.Min(PetalMath.Min(a, opposite), b);
+            var high = PetalMath.Max(PetalMath.Max(a, opposite), b);
+            var value = a + b - opposite;
+            if (value < low)
+                return low;
+            return value > high ? high : value;
         }
     }
 }

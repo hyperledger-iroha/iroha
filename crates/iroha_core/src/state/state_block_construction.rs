@@ -168,14 +168,14 @@ impl State {
                 .into_fields();
             let block = StateBlock::from_fields(StateBlockFields {
                 local_storage_refusal: None,
-                ivm_refunds: pipeline_ivm_prepared_cache
+                _ivm_refunds: pipeline_ivm_prepared_cache
                     .as_ref()
                     .expect("prepared State input")
                     .execution_budget()
                     .deferred_refund_batch(),
                 state_ref: self,
-                read_releases: StateViewReleases::new(self),
-                da_rewind_releases,
+                _read_releases: StateViewReleases::new(self),
+                _da_rewind_releases: da_rewind_releases,
                 canonical_runtime: block_field::BlockField::new(canonical_runtime),
                 native_execution_tip: block_field::BlockField::new(native_execution_tip),
                 block_hashes: block_hash_field::BlockHashField::new(block_hashes),

@@ -313,33 +313,26 @@ def test_submit_zk_ballot_v1_rejects_invalid_hex_hints() -> None:
         )
 
 
-def test_list_subscription_plans_encodes_params() -> None:
+def test_subscription_plans_use_the_collection_contract() -> None:
     session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "items": [
-                    {
-                        "plan_id": "plan#subs",
-                        "plan": {"provider": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6", "pricing": {"kind": "fixed"}},
-                    }
-                ],
-                "total": 1,
-            }
-        )
-    )
+    provider = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
+    session.queue(StubResponse(payload={
+        "items": [{"id": "plan#subs", "provider": provider, "billing": {}, "pricing": {"kind": "fixed"}}],
+        "next_cursor": "next-plan", "total": 1,
+    }))
     client = ToriiClient("http://node.test", session=session)
-
-    page = client.list_subscription_plans(provider="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6", limit=10, offset=5)
-
+    page = client.subscription_plans.list(filter=f'provider = "{provider}"', limit=10, include_total=True)
     assert page.total == 1
-    assert page.items[0].plan_id == "plan#subs"
-    assert page.items[0].plan["provider"] == "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
-    assert session.calls[0]["params"] == {
-        "provider": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-        "limit": 10,
-        "offset": 5,
-    }
+    assert page.next_cursor == "next-plan"
+    assert page.items[0]["id"] == "plan#subs"
+    assert page.items[0]["provider"] == provider
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"].endswith("/v1/subscriptions/plans/query")
+    body = json.loads(call["data"])
+    assert body["filter"] == f'provider = "{provider}"'
+    assert body["limit"] == 10
+    assert body["include_total"] is True
 
 
 def test_create_subscription_plan_posts_payload() -> None:
@@ -370,50 +363,32 @@ def test_create_subscription_plan_posts_payload() -> None:
     assert payload["plan"]["provider"] == "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
 
 
-def test_list_subscriptions_encodes_params() -> None:
+def test_subscriptions_use_flat_collection_rows_and_cursor_paging() -> None:
     session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "items": [
-                    {
-                        "subscription_id": "sub-1$subscriptions",
-                        "subscription": {"status": "active"},
-                        "invoice": {"amount": "120"},
-                        "plan": {"provider": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"},
-                    }
-                ],
-                "total": 1,
-            }
-        )
-    )
+    session.queue(StubResponse(payload={
+        "items": [{"id": "sub-1$subscriptions", "status": "active", "owned_by": CANONICAL_OWNER,
+                   "invoice": {"amount": "120"}, "plan": {"provider": CANONICAL_OWNER}}],
+        "next_cursor": "next-subscription",
+    }))
+    session.queue(StubResponse(payload={"items": [], "next_cursor": None}))
     client = ToriiClient("http://node.test", session=session)
-
-    page = client.list_subscriptions(
-        owned_by="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-        provider="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-        status="ACTIVE",
-        limit=25,
-        offset=0,
-    )
-
-    assert page.total == 1
-    assert page.items[0].subscription_id == "sub-1$subscriptions"
-    assert page.items[0].subscription["status"] == "active"
-    assert session.calls[0]["params"] == {
-        "owned_by": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-        "provider": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-        "status": "active",
-        "limit": 25,
-        "offset": 0,
-    }
+    rows = list(client.subscriptions.iter(filter='status = "active"', limit=25))
+    assert rows[0]["id"] == "sub-1$subscriptions"
+    assert rows[0]["status"] == "active"
+    assert rows[0]["invoice"]["amount"] == "120"
+    assert len(session.calls) == 2
+    for call in session.calls:
+        assert call["method"] == "POST"
+        assert call["url"].endswith("/v1/subscriptions/query")
+    assert json.loads(session.calls[1]["data"])["cursor"] == "next-subscription"
 
 
-def test_list_subscriptions_rejects_invalid_status() -> None:
-    client = ToriiClient("http://node.test", session=RecordingSession())
-
-    with pytest.raises(ValueError, match="subscriptions.status"):
-        client.list_subscriptions(status="unknown")
+def test_subscriptions_reject_removed_paging_params() -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+    with pytest.raises(TypeError):
+        client.subscriptions.list(offset=0)
+    assert session.calls == []
 
 
 def test_create_subscription_posts_payload() -> None:

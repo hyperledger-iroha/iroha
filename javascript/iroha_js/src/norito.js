@@ -55,6 +55,7 @@ import {
   parseStrictGovernanceInstructionJson,
 } from "./noritoGovernanceBoundary.js";
 import { computeHashLiteralCrc } from "./hashLiteralCrc.js";
+import { createNoritoStakingCodecs } from "./noritoStakingCodecs.js";
 import { createNoritoNftMarketCodecs, NFT_MARKET_INSTRUCTION_NAMES_V1, NFT_MARKET_INSTRUCTION_WIRE_IDS_V1 } from "./noritoNftMarketCodecs.js";
 import {createNoritoGameCodecs} from './noritoGameCodecs.js';
 import { GAME_INSTRUCTION_NAMES_V1, GAME_INSTRUCTION_WIRE_IDS_V1, gameValueMaximumBytesV1 } from './noritoGameRegistry.js';
@@ -1252,8 +1253,8 @@ export function noritoEncodeMultisigProposeRequest(request, networkPrefix) {
 }
 
 // Declared Norito frame identities of the native retail fee types.
-const RETAIL_FEE_QUOTE_REQUEST_V1_SCHEMA_HASH = Buffer.from("535a1db30ba036a8f35944ab5567877900", HEX_ENCODING);
-const RETAIL_FEE_ASSESSMENT_V1_SCHEMA_HASH = Buffer.from("72ca99de9d49cae6dfc07a2a628eb91800", HEX_ENCODING);
+const RETAIL_FEE_QUOTE_REQUEST_V1_SCHEMA_HASH = Buffer.from("535a1db30ba036a8f35944ab55678779", HEX_ENCODING);
+const RETAIL_FEE_ASSESSMENT_V1_SCHEMA_HASH = Buffer.from("72ca99de9d49cae6dfc07a2a628eb918", HEX_ENCODING);
 const RETAIL_FEE_ASSESSMENT_MARKER_PREFIX_V1 = "iroha:retail_fee:assessment:v1:";
 const RETAIL_FEE_PAYMENT_INTENT_DOMAIN_V1 = "iroha.retail_fee.payment_intent.v1\0";
 const RETAIL_FEE_ASSESSMENT_MARKER_MAX_BYTES_V1 = 4096;
@@ -1313,7 +1314,8 @@ function encodeRetailFeeAssessmentValue(value) {
   const assessment = normalizeRetailFeeAssessment(value);
   const context = "RetailFeeAssessmentV1";
   assertExactObjectKeys(assessment, RETAIL_FEE_ASSESSMENT_FIELDS_V1, context);
-  const hash = (name) => encodeFixedByteArrayArchiveValue(
+  // Derived Rust struct [u8; 32] fields are raw fixed bytes, not generic array archives.
+  const hash = (name) => encodeFixedBytesValue(
     Buffer.from(assessment[name], HEX_ENCODING), 32, `${context}.${name}`);
   return encodeStructValue([
     [encodeExactRetailFeeAccountIdValue(assessment.account_id, `${context}.account_id`)],
@@ -1395,7 +1397,7 @@ export function decodeRetailFeeAssessmentMarkerMessage(message) {
   const assessment = withNoritoCompactLengths(() => {
     const fields = decodeStructFields(frame.payload, "RetailFeeAssessmentV1", names);
     const hash = (name) => Buffer.from(
-      decodeFixedByteArrayArchiveValue(fields[name], 32, name),
+      decodeFixedBytesValue(fields[name], 32, name),
     ).toString(HEX_ENCODING).toUpperCase();
     const result = {
       account_id: decodeAccountIdValue(fields.account_id, "account_id"),
@@ -3442,6 +3444,12 @@ function encodeConstVecU8Value(bytes) {
 function decodeConstVecU8Value(payload, context) {
   const reader = new BufferReader(payload, context, noritoLengthFlags);
   const count = bigintToSafeNumber(reader.readU64LE("count"), `${context}.count`);
+  // Every element needs its field length and one byte. Reject impossible
+  // source geometry before reserving from an attacker-controlled count.
+  const minimumElementBytes = (noritoLengthFlags & COMPACT_LEN_FLAG) !== 0 ? 2 : 9;
+  if (count > Math.floor((reader.buffer.length - reader.offset) / minimumElementBytes)) {
+    rejectError(`${context} count exceeds its encoded byte geometry`);
+  }
   const bytes = Buffer.allocUnsafe(count);
   for (let index = 0; index < count; index += 1) {
     const item = readNoritoField(reader, `item${index}`);
@@ -3977,6 +3985,59 @@ const [encodeContractManifestSignaturePayloadValue, , , encodeManifestProvenance
   encodeU8Value, isPlainObject, parsePublicKeyLiteral,
   publicKeyLiteralFromParts, readNoritoField,
 );
+const stakingCodecsV1 = /* @__PURE__ */ createNoritoStakingCodecs({
+  encodeU32Value, decodeU32Value, encodeBoolValue, decodeBoolValue,
+  encodeStructValue, decodeStructFields, encodeNoritoVec, decodeNoritoVec,
+  encodeEnumTagValue, encodeOptionValue, decodeOptionValue,
+  encodeU16Value, decodeU16Value, encodeU64Value, decodeU64Value,
+  encodeFixedBytesValue, decodeFixedBytesValue, encodeEscrowIdValue, decodeEscrowIdValue,
+  encodeAccountIdValue, decodeAccountIdValue, encodeAssetDefinitionIdValue, decodeAssetDefinitionIdValue,
+  encodePublicKeyValue, decodePublicKeyValue, parsePublicKeyLiteral, publicKeyLiteralFromParts,
+  decodeConstVecU8Value, encodeQuantityValue, decodeQuantityValue,
+});
+const STAKING_VALUE_NAMES = new Set(["MonetaryPlan", "RewardClaimPlan", "AuthorityGeneration", "EpochAuthorization", "PreparationRequest", "Preparation"]);
+/** Encode a canonical staking plan or authority record. This does not authenticate state. */
+export function encodeValidatorStakingValueV1(name, value) {
+  if (!STAKING_VALUE_NAMES.has(name)) throw new TypeError("unknown staking value type");
+  return withNoritoCompactLengths(() => stakingCodecsV1.encode(name, value));
+}
+/** Decode the sole compact layout and reject noncanonical or trailing bytes. */
+export function decodeValidatorStakingValueV1(name, payload) {
+  if (!STAKING_VALUE_NAMES.has(name)) throw new TypeError("unknown staking value type");
+  const bytes = toBuffer(payload);
+  return withNoritoCompactLengths(() => {
+    const value = stakingCodecsV1.decode(name, bytes);
+    if (!stakingCodecsV1.encode(name, value).equals(bytes)) throw new TypeError("staking value is not byte-canonical");
+    return value;
+  });
+}
+const STAKING_PREPARATION_FRAMES_V1 = Object.freeze({
+  PreparationRequest: ["iroha_data_model::nexus::staking_preparation::PublicLanePreparationRequestV1", 64 * 1024],
+  Preparation: ["iroha_data_model::nexus::staking_preparation::PublicLanePreparationV1", 256 * 1024],
+});
+/** Exact canonical observation frames, never finality or execution proofs. */
+export function encodeValidatorStakingPreparationFrameV1(name, value) {
+  if (!Object.hasOwn(STAKING_PREPARATION_FRAMES_V1, name)) throw new TypeError("unknown staking preparation frame");
+  const [schema, limit] = STAKING_PREPARATION_FRAMES_V1[name];
+  const payload = encodeValidatorStakingValueV1(name, value);
+  if (payload.length > limit - 40) throw new RangeError("staking preparation frame exceeds its byte bound");
+  return frameNoritoPayload(payload, schemaHashForTypeName(schema), COMPACT_LEN_FLAG, 0);
+}
+/** Reject retired layouts, alternate schemas, trailing bytes and oversized bodies. */
+export function decodeValidatorStakingPreparationFrameV1(name, input) {
+  if (!Object.hasOwn(STAKING_PREPARATION_FRAMES_V1, name)) throw new TypeError("unknown staking preparation frame");
+  const [schema, limit] = STAKING_PREPARATION_FRAMES_V1[name], bytes = toBuffer(input);
+  if (bytes.length > limit) throw new RangeError("staking preparation frame exceeds its byte bound");
+  const frame = validateNoritoFrame(bytes, { expectedTypeName: schema, expectedPaddingLength: 0, requireNonEmptyPayload: true });
+  if (frame.flags !== COMPACT_LEN_FLAG) throw new TypeError("staking preparation requires the canonical compact layout");
+  const value = decodeValidatorStakingValueV1(name, frame.payload);
+  if (!encodeValidatorStakingPreparationFrameV1(name, value).equals(bytes)) throw new TypeError("staking preparation frame is not byte-canonical");
+  return value;
+}
+/** Check exact request, network, pinned Global XOR, effects and balance-set binding. */
+export function validateValidatorStakingPreparationV1(prepared, request, networkId, xorDefinition) {
+  return withNoritoCompactLengths(() => stakingCodecsV1.validatePreparation(prepared, request, networkId, xorDefinition));
+}
 const nftMarketCodecsV1 = /* @__PURE__ */ createNoritoNftMarketCodecs({
   encodeStructValue, decodeStructFields, encodeEscrowIdValue, decodeEscrowIdValue,
   encodeNftIdValue, decodeNftIdValue, encodeAccountIdValue, decodeAccountIdValue,

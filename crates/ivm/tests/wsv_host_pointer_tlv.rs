@@ -30,7 +30,7 @@ fn make_asset_tlv(asset: &AssetDefinitionId) -> Vec<u8> {
     make_tlv(PointerType::AssetDefinitionId as u16, &buf)
 }
 fn make_quantity_tlv(amount: impl Into<Quantity>) -> Vec<u8> {
-    ivm::numeric_tlv::encode_quantity(&amount.into()).expect("encode quantity pointer envelope")
+    ivm_abi::numeric_tlv::encode_quantity(&amount.into()).expect("encode quantity pointer envelope")
 }
 fn make_dataspace_tlv(dataspace: DataSpaceId) -> Vec<u8> {
     let buf = to_bytes(&dataspace).expect("encode DataSpaceId into Norito");

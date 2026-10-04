@@ -661,8 +661,11 @@ fn archive_registration_replay_requires_the_exact_original_receipt() {
         iroha_model_base::chain::ChainId::from("archive-replay-test"),
         iroha_data_model::NetworkId::from_genesis_hash(genesis_hash),
     );
-    kura.store_block(std::sync::Arc::new(genesis))
-        .expect("retain the exact genesis body advertised by archive replay state");
+    kura.store_block(
+        iroha_data_model::block::SharedSignedBlock::try_new(genesis, &state.ivm_execution_budget())
+            .expect("admit signed genesis block control"),
+    )
+    .expect("retain the exact genesis body advertised by archive replay state");
     {
         let mut block_hashes = state.block_hashes.block();
         block_hashes.push_for_tests(genesis_hash);
@@ -1204,12 +1207,18 @@ fn archive_location_replay_fixture(
     let provider_keypair =
         KeyPair::try_from_seed(vec![seed.wrapping_add(14); 32], Algorithm::Ed25519)
             .expect("fixture provider keypair");
-    let provider_owner = AccountId::new(provider_keypair.public_key().clone());
+    let provider_signer = AccountId::new(provider_keypair.public_key().clone());
+    let provider_owner = account(seed.wrapping_add(20));
+    assert_ne!(
+        provider_owner, provider_signer,
+        "owner and completion signer are independent"
+    );
     let provider_id =
         iroha_data_model::sorafs::capacity::ProviderId::new([seed.wrapping_add(15); 32]);
     let completion_authority =
         iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionAuthorityV1::new(
             provider_owner.clone(),
+            provider_signer.clone(),
             iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
                 policy_id: [seed.wrapping_add(16); 32],
                 revision: 1,
@@ -1220,7 +1229,7 @@ fn archive_location_replay_fixture(
     let binding = MusubiProviderBundleVerificationBindingV1 {
         network_id: archive.staging_receipt.payload.binding.network_id,
         provider_id,
-        completed_by: provider_owner.clone(),
+        completed_by: provider_signer.clone(),
         completion_authority,
         replication_order: order,
         assignment_revision: 1,
@@ -1317,7 +1326,7 @@ fn archive_location_replay_fixture(
             provider_completions: vec![
                 iroha_data_model::sorafs::pin_registry::ReplicationOrderCompletionRecord {
                     provider_id,
-                    completed_by: provider_owner.clone(),
+                    completed_by: provider_signer.clone(),
                     completion_epoch: binding.completion_epoch,
                     assignment_revision: binding.assignment_revision,
                     completion_authority: binding.completion_authority.clone(),
@@ -1529,7 +1538,10 @@ fn archive_replay_genesis_at(creation_time_ms: u64) -> iroha_data_model::block::
             .expect("sign the retained result-bearing genesis"),
     );
     genesis
-        .replace_signatures(std::collections::BTreeSet::from([signature]))
+        .replace_signatures(
+            iroha_data_model::block::BlockSignatures::try_from_iter([signature])
+                .expect("at most 31 block signatures"),
+        )
         .expect("install exact retained genesis signature");
     assert_eq!(
         genesis.header().creation_time(),
@@ -1565,8 +1577,11 @@ fn archive_location_replay_state(world: World) -> State {
         iroha_model_base::chain::ChainId::from("retention-test"),
         iroha_data_model::NetworkId::from_genesis_hash(archive_location_genesis_header().hash()),
     );
-    kura.store_block(std::sync::Arc::new(genesis))
-        .expect("retain the exact genesis body before advertising committed height");
+    kura.store_block(
+        iroha_data_model::block::SharedSignedBlock::try_new(genesis, &state.ivm_execution_budget())
+            .expect("admit signed genesis block control"),
+    )
+    .expect("retain the exact genesis body before advertising committed height");
     {
         let mut block_hashes = state.block_hashes.block();
         block_hashes.push_for_tests(genesis_hash);
@@ -2001,7 +2016,7 @@ fn exact_archive_location_replay_rejects_an_invalid_stored_attestation_signature
                 .musubi_provider_bundle_attestations
                 .insert(attestation_key, record);
         },
-        "approval is not a provider-owner key",
+        "approval is not a completion-signer key",
     );
 }
 #[test]

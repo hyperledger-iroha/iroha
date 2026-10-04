@@ -40,8 +40,11 @@ which takes precedence over `*/*`. That range's `q` value is the effective
 quality, including `q=0`; a wildcard cannot re-enable a representation that an
 exact range forbids. Torii then compares effective quality, followed by
 specificity. An equal explicit preference selects Norito. A wildcard-only tie
-uses the endpoint default; typed Torii endpoints default to Norito. Missing
-`Accept` also uses the endpoint default. Invalid or out-of-range quality values,
+and a missing `Accept` select JSON, the default representation, so ordinary
+HTTP clients (curl, browsers, `fetch`, Go, Java and Rust HTTP stacks) read JSON
+without negotiating; Norito clients request `application/x-norito`
+explicitly. Error responses use the representation the success response would
+have used. Invalid or out-of-range quality values,
 duplicate `q` parameters, quality values with more than three fractional
 digits, or a request that permits neither representation return
 `406 Not Acceptable`. Repeated `Accept` field lines are combined in wire order
@@ -64,16 +67,15 @@ ordinary response `Content-Type`.
 Unsafe commands are rejected with `406` before their handler runs, so an
 unacceptable response preference can never produce a hidden state change.
 
-The following examples are normative for typed endpoints whose default is
-Norito:
+The following examples are normative for typed endpoints:
 
 | `Accept` | Result |
 | --- | --- |
-| omitted | `application/x-norito` |
+| omitted | `application/json` |
 | `application/json, application/x-norito` | `application/x-norito` (equal explicit preference) |
 | `application/json;q=0.8, */*;q=0.9` | `application/x-norito` (JSON's exact range fixes its quality at 0.8) |
 | `application/x-norito;q=0, */*;q=1` | `application/json` (the exact zero forbids Norito) |
-| `application/*;q=0.7` | `application/x-norito` (wildcard-only tie uses the endpoint default) |
+| `application/*;q=0.7` | `application/json` (a wildcard-only tie uses the JSON default) |
 | `application/vnd.api+json` | `406`; Torii emits `application/json`, not the requested vendor representation |
 | `image/png` | `406` with a JSON `ErrorEnvelope` whose code is `response_not_acceptable` |
 
@@ -99,11 +101,16 @@ preflight remains bodyless and does not require `Content-Type`.
 
 Structured query DTOs accept an absent query as an empty object. A present
 query is limited to 64 KiB and 64 unique, non-empty `key=value` pairs; empty
-segments, additional literal `=` separators, and duplicate decoded keys return
-`400 request_query_invalid`. Components have one canonical HTML-form spelling:
-spaces are `+`, literal plus signs and non-literal bytes use uppercase percent
-escapes, and literal bytes must not be escaped. Decoded keys and values must be
-exact UTF-8 without control characters. Scalar coercion recognizes only
+segments and duplicate decoded keys return `400 request_query_invalid`, and a
+type mismatch names the offending parameter. Components use ordinary RFC 3986
+/ HTML-form encoding: `+` and `%20` are both spaces, escapes may use either
+hexadecimal case and may escape any byte, and a value may contain `=` after the
+first separator. Spaces, control characters and non-ASCII bytes must be
+percent-encoded. Decoded keys and values must be UTF-8 without control
+characters. Duplicate detection, caching and request signatures all operate on
+the decoded pairs, so alternate spellings of one component are the same
+request. Collection endpoints decode their controls as described in
+[collection queries](collection_queries.md). Scalar coercion recognizes only
 lowercase `null`, `true`, `false`, and canonical base-10 integers; aliases,
 whitespace, floats, and exponents remain strings. Only explicitly documented
 protocol parsers may define different or repeated-key semantics.
@@ -605,6 +612,11 @@ The following are mandatory release gates; a failure blocks publication:
 3. Adversarial route tests cover known retired spellings, trailing and duplicate
    slashes, case changes, percent-encoded separators and dot segments, wildcard
    capture, wrong methods, and framework redirects.
+   The proof-record route permits canonical `%2F` only within its single typed
+   `ProofId` parameter for slash-delimited backend labels; decoded empty or dot
+   components, backslashes, nested escapes, and noncanonical encodings remain
+   rejected. The decoded identifier uses the `ProofId` display spelling; data
+   colons may remain literal or use the existing component encoder's `%3A`.
 4. JSON/Norito golden vectors and structural-schema guards, negotiation and
    typed-error tests, offline idempotency/lifecycle tests, cursor
    snapshot/authorization/lifetime tests, and streaming establishment/lag/

@@ -21,6 +21,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised on Python <3.11
 FOUNDATIONAL_DEPENDENCIES = frozenset(
     {
         "iroha_core",
+        "iroha_core_privacy",
         "iroha_core_zk",
         "iroha_crypto",
         "iroha_data_model",
@@ -64,6 +65,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "application": ("rand", "json", "ecc-batch", "bfv-accel", "pqc"),
         "bfv-accel": (),
         "bls": (
+            "dep:arrayvec",
             "dep:ark-serialize",
             "dep:blst",
             "dep:blstrs",
@@ -204,6 +206,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "zk-verify-batch": ("dep:iroha_zkp_halo2", "app_api"),
     },
     "irohad_lib": {"default": ("daemon", "iroha_core/simd"),
+ "mutation-testing": (),
  "daemon": ("telemetry",
             "schema-endpoint",
             "gost",
@@ -220,7 +223,6 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
                "iroha_core/telemetry",
                "iroha_torii/telemetry"),
  "expensive-telemetry": ("telemetry", "iroha_core/expensive-telemetry"),
- "ivm-cuda": ("ivm/cuda",),
  "gost": ("iroha_core/gost",
           "iroha_crypto/gost",
           "iroha_data_model/gost",
@@ -289,6 +291,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "ivm": {
         "default": ("metal",),
+        "cuda": ("dep:cust", "iroha_accel/cuda"),
         "metal": (
             "dep:objc2-metal",
             "dep:objc2",
@@ -341,7 +344,6 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
  "external-software-signer-bin": ("daemon",),
  "dev-tools": ("daemon", "zk-stark", "irohad_lib/dev-tools"),
  "accel-metal": ("fastpq-gpu", "irohad_lib/accel-metal"),
- "ivm-cuda": ("irohad_lib/ivm-cuda",),
  "accel-cuda": ("fastpq-gpu", "irohad_lib/accel-cuda"),
  "test-network-private-settlement-route-control": ("irohad_lib/test-network-private-settlement-route-control",),
  "test-network-parliament-signers": ("irohad_lib/test-network-parliament-signers",),
@@ -364,7 +366,6 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
  "bridge": ("iroha_cli_lib/bridge",),
  "offline-visual-codecs": ("iroha_cli_lib/offline-visual-codecs",),
  "dev-tools": ("cli",),
- "ids_projection": ("iroha_cli_lib/ids_projection",),
  "cli_integration_harness": ("iroha_cli_lib/cli_integration_harness",)},
     "iroha_core_privacy": {"default": ("zk-stark", "simd"),
  "zk-stark": (),
@@ -390,18 +391,18 @@ CONTEXTUAL_SHIPPING_FEATURES: dict[str, tuple[str, ...]] = {
     "iroha_core": ("expensive-telemetry",),
     "iroha_core_zk": (),
     "iroha_torii": (),
-    "irohad_lib": ("ivm-cuda",),
+    "irohad_lib": (),
     "iroha_cli_lib": (),
     "iroha": (),
     "iroha_config": (),
     "iroha_genesis": (),
     "iroha_telemetry": ("event-exporter", "metric-instrumentation", "sm"),
-    "ivm": (),
+    "ivm": ("cuda",),
     "iroha_primitives": (),
     "iroha_kagami": (),
     "iroha_zkp_halo2": (),
 
-    "irohad": ("ivm-cuda",),
+    "irohad": (),
     "iroha_cli": (),
     "iroha_core_privacy": (),
     "iroha_core_timed_ovn": (),
@@ -444,7 +445,6 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
         "bench",
         "dev-tools",
         "fault_injection",
-        "ids_projection",
         "test-fixtures",
         "trybuild-tests",
     ),
@@ -454,7 +454,6 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
  "dev-tools",
  "fastpq-gpu",
  "halo2-dev-tests",
- "ids_projection",
  "iroha-core-tests",
  "mutation-testing",
  "privacy-release-evidence",
@@ -489,6 +488,7 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
  "dev-telemetry",
  "dev-tools",
  "fastpq-gpu",
+ "mutation-testing",
  "profiling-endpoint",
  "sm-ffi-openssl",
  "telegram-alerts",
@@ -496,10 +496,9 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
  "test-network-parliament-signers",
  "test-network-private-settlement-route-control",
  "zk-stark"),
-    "iroha_cli_lib": ("cli_integration_harness", "ids_projection"),
+    "iroha_cli_lib": ("cli_integration_harness",),
     "iroha": (
         "dev-tools",
-        "ids_projection",
         "test-fixtures",
         "test-network-private-settlement-evidence",
         "tls-native",
@@ -515,7 +514,6 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
     "ivm": (
         "beep",
         "bench",
-        "cuda",
         "cuda-hardware-tests",
         "dev-tools",
         "ivm_vrf_tests",
@@ -527,7 +525,7 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
     "iroha_zkp_halo2": ("bench", "schema-structural"),
 
     "irohad": ("accel-cuda", "accel-metal", "beep", "dev-telemetry", "dev-tools", "external-software-signer-bin", "fastpq-gpu", "profiling-endpoint", "sm-ffi-openssl", "telegram-alerts", "test-network-disposable-broker", "test-network-parliament-signers", "test-network-private-settlement-route-control", "zk-stark"),
-    "iroha_cli": ("cli_integration_harness", "dev-tools", "ids_projection"),
+    "iroha_cli": ("cli_integration_harness", "dev-tools"),
     "iroha_core_privacy": ("privacy-release-evidence", "test-utils"),
     "iroha_core_timed_ovn": ("test-utils",),
 }
@@ -540,7 +538,6 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
 NONSHIPPING_EXPLICIT_OPT_IN_DEPENDENCY_ALLOWLIST: tuple[
     tuple[str, str, str], ...
 ] = (
-    ("executor_custom_data_model", "iroha_data_model", "fault_injection"),
     ("xtask", "iroha", "test-fixtures"),
     ("xtask", "iroha_torii", "profiling"),
     ("xtask", "iroha_torii", "ws_integration_tests"),
@@ -886,6 +883,18 @@ def _check_mandatory_native_dependency(document: dict[str, Any], manifest_path: 
     return []
 
 
+def _check_mandatory_daemon_cuda(document: dict[str, Any], manifest_path: Path) -> list[str]:
+    """Keep daemon CUDA on the single mandatory Linux/Windows dependency row."""
+    scope = 'cfg(any(target_os = "linux", target_os = "windows"))'
+    targets = document.get("target", {})
+    if (document.get("dependencies", {}).get("ivm") != {"workspace": True}
+            or targets.get(scope, {}).get("dependencies", {}).get("ivm") != {"workspace": True, "features": ["cuda"]}
+            or any("ivm" in value.get("dependencies", {}) for key, value in targets.items() if key != scope)
+            or "ivm-cuda" in document.get("features", {})):
+        return [f"{manifest_path}: mandatory daemon CUDA requires the exact Linux/Windows target dependency"]
+    return []
+
+
 def _check_expected_features(
     document: dict[str, Any], manifest_path: Path
 ) -> list[str]:
@@ -896,6 +905,8 @@ def _check_expected_features(
         return []
 
     errors: list[str] = []
+    if package_name == "irohad_lib":
+        errors.extend(_check_mandatory_daemon_cuda(document, manifest_path))
     if package_name == "iroha":
         errors.extend(_check_mandatory_native_dependency(document, manifest_path))
     if package_name == "iroha_data_model":

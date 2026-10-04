@@ -1,5 +1,8 @@
 const fn operation_decode_policy(operation: u16) -> DecodeResourcePolicyV1 {
     match operation {
+        OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1
+        | OPERATION_GLOBAL_BEACON_CAPABILITY_ATTEST_V1
+        | OPERATION_GLOBAL_BEACON_SEAT_READINESS_V1 => GLOBAL_BEACON_DECODE_POLICY_V1,
         OPERATION_STREAM_TOKEN_SIGN_V1
         | OPERATION_STREAM_TOKEN_RECOVER_V1
         | OPERATION_STREAM_TOKEN_OBSERVE_V1
@@ -410,19 +413,18 @@ const fn operation_is_known(operation: u16) -> bool {
 fn provider_ingest_signer_context_from_wire(
     context: &ProviderIngestSignerRequestContextWireV1,
 ) -> Result<sorafs_node::ProviderIngestCompletionSignerResolutionContextV1, BrokerError> {
-    validate_provider_ingest_account_canonical_bytes(&context.provider_owner)?;
-    let owner = decode_canonical::<iroha_data_model::account::AccountId>(
-        &context.provider_owner,
-        MAX_PROVIDER_INGEST_ACCOUNT_BYTES_V1,
+    let authority = decode_canonical::<
+        iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionAuthorityV1,
+    >(
+        &context.expected_authority,
+        MAX_PROVIDER_INGEST_AUTHORITY_BYTES_V1,
     )?;
+    for account in [&authority.provider_owner, &authority.completion_signer] {
+        let canonical = encode_canonical(account, MAX_PROVIDER_INGEST_ACCOUNT_BYTES_V1)?;
+        validate_provider_ingest_account_canonical_bytes(&canonical)?;
+    }
     let context = sorafs_node::ProviderIngestCompletionSignerResolutionContextV1::new(
-        owner,
-        iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
-            policy_id: context.signer_policy_id,
-            revision: context.signer_policy_revision,
-            predecessor_digest: context.signer_policy_predecessor_digest,
-            policy_digest: context.signer_policy_digest,
-        },
+        authority,
         context.expected_assignment_revision,
         sorafs_node::ProviderIngestFinalizedCursorV1 {
             height: context.finalized_height,
@@ -450,16 +452,12 @@ fn provider_ingest_signer_context_to_wire(
     if !context.is_valid() {
         return Err(BrokerError::Rejected);
     }
-    let provider_owner = encode_canonical(
-        &context.provider_owner,
-        MAX_PROVIDER_INGEST_ACCOUNT_BYTES_V1,
+    let expected_authority = encode_canonical(
+        &context.expected_authority,
+        MAX_PROVIDER_INGEST_AUTHORITY_BYTES_V1,
     )?;
     Ok(ProviderIngestSignerRequestContextWireV1 {
-        provider_owner,
-        signer_policy_id: context.signer_policy.policy_id,
-        signer_policy_revision: context.signer_policy.revision,
-        signer_policy_predecessor_digest: context.signer_policy.predecessor_digest,
-        signer_policy_digest: context.signer_policy.policy_digest,
+        expected_authority,
         expected_assignment_revision: context.expected_assignment_revision,
         finalized_height: context.finalized_cursor.height,
         finalized_block_hash: context.finalized_cursor.block_hash,
@@ -494,7 +492,7 @@ fn ensure_provider_ingest_completion_payload_context(
     if !context.is_valid() {
         return Err(BrokerError::Rejected);
     }
-    if payload.authority() != &context.provider_owner {
+    if payload.authority() != &context.expected_authority.completion_signer {
         return Err(BrokerError::BindingMismatch);
     }
     let iroha_data_model::transaction::Executable::Instructions(instructions) =
@@ -521,8 +519,7 @@ fn ensure_provider_ingest_completion_payload_context(
     {
         return Err(BrokerError::Rejected);
     }
-    if authority.provider_owner != context.provider_owner
-        || authority.signer_policy != context.signer_policy
+    if authority != &context.expected_authority
         || *completion.expected_assignment_revision() != context.expected_assignment_revision
         || anchor.height != context.finalized_cursor.height
         || anchor.block_hash != context.finalized_cursor.block_hash
@@ -563,8 +560,8 @@ fn decode_provider_ingest_sign_operation(
     let expected = provider_ingest_expected_signer_binding(&request.binding)?;
     if !expected
         .qualification
-        .matches_authority(&context.provider_owner)
-        || expected.qualification.signer_policy != context.signer_policy
+        .matches_authority(&context.expected_authority.completion_signer)
+        || expected.qualification.signer_policy != context.expected_authority.signer_policy
     {
         return Err(BrokerError::BindingMismatch);
     }
@@ -1015,6 +1012,42 @@ fn verify_evidence_viewer_ed25519_signature(
         .map_err(|_| BrokerError::Rejected)
 }
 
+fn beacon_session_error(
+    error: iroha_core::beacon::GlobalThresholdBeaconSessionError,
+) -> BrokerError {
+    use iroha_allocation::{
+        ChargedBufferError, ChargedBufferFromChargeError, PrepaidBufferError, PrepaidSharedError,
+    };
+    use iroha_core::beacon::GlobalThresholdBeaconSessionError as Error;
+    use iroha_crypto::{PublicKeyAllocationError, SignatureAllocationError};
+    match error {
+        Error::Invalid(_) => BrokerError::Rejected,
+        Error::Admission(_)
+        | Error::DecodeResource(_)
+        | Error::Buffer(PrepaidBufferError::Allocation(ChargedBufferError::Admission(_)))
+        | Error::Buffer(PrepaidBufferError::Allocation(ChargedBufferError::Allocator { .. }))
+        | Error::Shared(PrepaidSharedError::Allocator { .. })
+        | Error::PublicKey(PublicKeyAllocationError::Allocation(
+            ChargedBufferFromChargeError::Allocator { .. },
+        ))
+        | Error::Signature(SignatureAllocationError::Allocation(
+            ChargedBufferFromChargeError::Allocator { .. },
+        )) => BrokerError::Unavailable,
+        // Impossible ownership/geometry differences are local protocol faults,
+        // never completed user rejection or a fabricated capacity release.
+        _ => BrokerError::Protocol,
+    }
+}
+
+fn retain_operation_beacon_session(
+    record: &iroha_data_model::consensus::GlobalThresholdBeaconKeySessionV1,
+    binding: &iroha_core::beacon::GlobalThresholdBeaconSessionBindingV1,
+) -> Result<iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1, BrokerError> {
+    current_decode_resource_admission()
+        .ok_or(BrokerError::Unavailable)?
+        .retain_beacon_session(record, binding)
+}
+
 fn global_beacon_aggregator_from_sign_request(
     request: &GlobalBeaconPartialSignRequestWireV1,
     session_network_id: &NetworkId,
@@ -1028,11 +1061,7 @@ fn global_beacon_aggregator_from_sign_request(
         roster_hash: request.session.roster_hash,
         transcript_hash: request.session.transcript_hash,
     };
-    let session = iroha_core::beacon::validate_global_threshold_beacon_session_v1(
-        request.session.clone(),
-        &binding,
-    )
-    .map_err(|_| BrokerError::Rejected)?;
+    let session = retain_operation_beacon_session(&request.session, &binding)?;
     iroha_core::beacon::GlobalThresholdBeaconPulseAggregatorV1::new(
         session,
         request.height,
@@ -1052,9 +1081,10 @@ fn decode_global_beacon_partial_sign_request(
     ),
     BrokerError,
 > {
-    let request = decode_canonical::<GlobalBeaconPartialSignRequestWireV1>(
+    let request = decode_canonical_with_policy::<GlobalBeaconPartialSignRequestWireV1>(
         payload,
         MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+        GLOBAL_BEACON_DECODE_POLICY_V1,
     )?;
     let aggregator = global_beacon_aggregator_from_sign_request(&request, session_network_id)?;
     Ok((request, aggregator))
@@ -1070,9 +1100,10 @@ fn decode_global_beacon_seat_readiness_request(
     ),
     BrokerError,
 > {
-    let request = decode_canonical::<GlobalBeaconSeatReadinessRequestWireV1>(
+    let request = decode_canonical_with_policy::<GlobalBeaconSeatReadinessRequestWireV1>(
         payload,
         MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+        GLOBAL_BEACON_DECODE_POLICY_V1,
     )?;
     if request.session.network_id != *session_network_id {
         return Err(BrokerError::BindingMismatch);
@@ -1083,11 +1114,7 @@ fn decode_global_beacon_seat_readiness_request(
         roster_hash: request.session.roster_hash,
         transcript_hash: request.session.transcript_hash,
     };
-    let session = iroha_core::beacon::validate_global_threshold_beacon_session_v1(
-        request.session.clone(),
-        &binding,
-    )
-    .map_err(|_| BrokerError::Rejected)?;
+    let session = retain_operation_beacon_session(&request.session, &binding)?;
     iroha_core::beacon::seat_readiness::global_threshold_beacon_seat_readiness_challenge_v1(
         &session,
         &request.authority,
@@ -1182,9 +1209,10 @@ fn decode_global_beacon_capability_attest_request(
     ),
     BrokerError,
 > {
-    let request = decode_canonical::<GlobalBeaconCapabilityAttestRequestWireV1>(
+    let request = decode_canonical_with_policy::<GlobalBeaconCapabilityAttestRequestWireV1>(
         payload,
         MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+        GLOBAL_BEACON_DECODE_POLICY_V1,
     )?;
     if request.session.network_id != *session_network_id {
         return Err(BrokerError::BindingMismatch);
@@ -1195,11 +1223,7 @@ fn decode_global_beacon_capability_attest_request(
         roster_hash: request.session.roster_hash,
         transcript_hash: request.session.transcript_hash,
     };
-    let session = iroha_core::beacon::validate_global_threshold_beacon_session_v1(
-        request.session.clone(),
-        &binding,
-    )
-    .map_err(|_| BrokerError::Rejected)?;
+    let session = retain_operation_beacon_session(&request.session, &binding)?;
     iroha_core::beacon::GlobalThresholdBeaconPartialSigningCapabilityV1::for_validated_session(
         &session,
         request.signer_index,
@@ -1249,7 +1273,8 @@ fn validate_operation_response(
     response: &OperationResponseV1,
     session_network_id: &NetworkId,
 ) -> Result<(), BrokerError> {
-    validate_operation_response_envelope(request, response)?;
+    validate_operation_response_envelope(request, response)
+        .map_err(|error| error.service_error())?;
     match response.status {
         STATUS_OK_V1
         | STATUS_REJECTED_V1
@@ -1270,7 +1295,8 @@ fn validate_operation_response_for_client(
     response: &OperationResponseV1,
     session_network_id: &NetworkId,
 ) -> Result<(), BrokerError> {
-    validate_operation_response_envelope(request, response)?;
+    validate_operation_response_envelope(request, response)
+        .map_err(|error| error.service_error())?;
     let threshold_typed_caller = matches!(
         (request.binding.slot, request.operation),
         (slot, OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1 | OPERATION_GLOBAL_BEACON_SEAT_READINESS_V1)
@@ -1313,7 +1339,7 @@ fn validate_operation_response_for_client(
 fn validate_operation_response_envelope(
     request: &OperationRequestV1,
     response: &OperationResponseV1,
-) -> Result<(), BrokerError> {
+) -> Result<(), CanonicalAttemptErrorV1> {
     if response.session_id != request.session_id
         || response.request_id != request.request_id
         || response.request_digest != request.request_digest
@@ -1323,7 +1349,7 @@ fn validate_operation_response_envelope(
         || response.payload_digest != request.payload_digest
         || operation_result_digest(&response.result) != response.result_digest
     {
-        return Err(BrokerError::Protocol);
+        return Err(BrokerError::Protocol.into());
     }
     let fields = OperationResponseFieldsV1 {
         session_id: response.session_id,
@@ -1338,7 +1364,7 @@ fn validate_operation_response_envelope(
         result_len: u64::try_from(response.result.len()).map_err(|_| BrokerError::Protocol)?,
     };
     if operation_response_digest(&fields)? != response.response_digest {
-        return Err(BrokerError::Protocol);
+        return Err(BrokerError::Protocol.into());
     }
     if !matches!(
         response.status,
@@ -1349,7 +1375,7 @@ fn validate_operation_response_envelope(
             | STATUS_AMBIGUOUS_V1
             | STATUS_UNAVAILABLE_V1
     ) {
-        return Err(BrokerError::Protocol);
+        return Err(BrokerError::Protocol.into());
     }
     Ok(())
 }
@@ -3052,15 +3078,15 @@ pub(super) fn resolve(
 /// Serve the exact stock catalog on one validated production endpoint.
 pub(super) fn serve(
     bindings: &IrohaRuntimeProviderBindingsV1,
-    endpoint_path: &iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath,
+    policy: &iroha_config::parameters::actual::RuntimeProviderBroker,
     backends: RuntimeProviderBrokerBackendsV1,
 ) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
-    platform::serve(bindings, endpoint_path, backends)
+    platform::serve(bindings, policy, backends)
 }
 /// Serve the stock catalog with a fallible readiness publication.
 pub(super) fn serve_with_fallible_readiness<R>(
     bindings: &IrohaRuntimeProviderBindingsV1,
-    endpoint_path: &iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath,
+    policy: &iroha_config::parameters::actual::RuntimeProviderBroker,
     backends: RuntimeProviderBrokerBackendsV1,
     lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
     on_ready: R,
@@ -3068,5 +3094,5 @@ pub(super) fn serve_with_fallible_readiness<R>(
 where
     R: FnOnce() -> Result<(), RuntimeProviderBrokerReadinessErrorV1>,
 {
-    platform::serve_with_fallible_readiness(bindings, endpoint_path, backends, lifecycle, on_ready)
+    platform::serve_with_fallible_readiness(bindings, policy, backends, lifecycle, on_ready)
 }

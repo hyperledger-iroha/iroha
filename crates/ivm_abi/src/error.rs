@@ -71,15 +71,15 @@ pub enum HostOutputResource {
     Bytes,
 }
 /// Source location mapped from compiler-emitted debug metadata.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VmSourceLocation {
-    pub function: Option<String>,
-    pub path: Option<String>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VmSourceLocation<'a> {
+    pub function: Option<&'a str>,
+    pub path: Option<&'a str>,
     pub line: Option<u32>,
     pub column: Option<u32>,
 }
 /// Budget-related execution snapshot captured at trap time.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VmBudgetSnapshot {
     pub gas_limit: u64,
     pub gas_remaining: u64,
@@ -90,29 +90,35 @@ pub struct VmBudgetSnapshot {
     pub stack_bytes_used: u64,
 }
 /// Additional execution context captured at trap time.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VmExecutionContext {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VmExecutionContext<'a> {
     pub entrypoint_pc: Option<u64>,
-    pub current_function: Option<String>,
+    pub current_function: Option<&'a str>,
     pub opcode: Option<u16>,
     pub syscall: Option<u32>,
     pub predecoded_loaded: bool,
     pub predecoded_hit: Option<bool>,
 }
-/// Structured runtime diagnostic emitted as a side channel when execution traps.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VmExecutionDiagnostic {
+/// Borrowed semantic-trap context; rendering also requires the original returned [`VMError`].
+///
+/// Text borrows the VM's retained source metadata. This view owns no error or allocation
+/// and cannot outlive or permit replacement of that metadata. Local refusals have no view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VmExecutionDiagnostic<'a> {
     pub trap_kind: VmTrapKind,
-    pub message: String,
     pub pc: u64,
-    pub source: Option<VmSourceLocation>,
+    pub source: Option<VmSourceLocation<'a>>,
     pub budget: VmBudgetSnapshot,
-    pub context: VmExecutionContext,
+    pub context: VmExecutionContext<'a>,
 }
 /// Local inability to complete an execution attempt. This is never a protocol
 /// rejection or a deterministic VM fault and deliberately has no wire codec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionDeferral {
+    /// Original host custody or an immutable construction plan was inconsistent.
+    /// Execution rolls back without fees or rejection; the native owner must halt
+    /// for recovery rather than retry, quarantine or certify this local result.
+    LocalInvariantViolation,
     /// The host allocator could not supply the requested physical storage.
     AllocationUnavailable,
     /// The local active execution memory admission owner has no capacity.
@@ -120,13 +126,28 @@ pub enum ExecutionDeferral {
     /// Governed verifier artifacts are not loaded or require an authenticated reload.
     /// This local availability condition cannot become a transaction rejection.
     VerifierArtifactsUnavailable,
+    /// Original local committed execution history is missing, corrupt, or not readable.
+    /// This is never evidence that the signed transaction was rejected.
+    CanonicalHistoryUnavailable,
+    /// A bounded native ancestry read exhausted its local source-work or byte allowance.
+    /// No allocator wake source is implied by this independent read limit.
+    CanonicalHistoryCapacity,
+    /// The local trace owner no longer matches its admitted invocation or storage scope.
+    /// Retry with a coherent owner; this does not establish a guest or protocol fault.
+    TraceOwnerUnavailable,
 }
 impl fmt::Display for ExecutionDeferral {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            Self::LocalInvariantViolation => "local original execution custody invariant violated",
             Self::AllocationUnavailable => "local allocation unavailable",
             Self::ActiveMemoryCapacity => "local active execution memory capacity unavailable",
             Self::VerifierArtifactsUnavailable => "local governed verifier artifacts unavailable",
+            Self::CanonicalHistoryUnavailable => "local canonical execution history unavailable",
+            Self::CanonicalHistoryCapacity => {
+                "local canonical execution history read capacity unavailable"
+            }
+            Self::TraceOwnerUnavailable => "local execution trace owner unavailable",
         })
     }
 }
@@ -134,7 +155,8 @@ impl StdError for ExecutionDeferral {}
 /// VM errors.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum VMError {
-    /// Abandon and retry this local attempt without retaining a transaction result.
+    /// Abandon this local attempt without retaining a transaction result; the
+    /// native host distinguishes retryable local pressure from recovery-only custody failure.
     ExecutionDeferred(ExecutionDeferral),
     /// Original active allocation refusal, including its exact pool's release observation.
     /// This local owner is never a metered guest fault or a wire rejection.
@@ -215,7 +237,7 @@ pub enum VMError {
     },
     ExceededMaxCycles,
     InvalidMetadata,
-    /// The fixed header declares a version outside the first-release 1.0/1.1 surface.
+    /// The fixed header declares a version outside the sole first-release 1.1 surface.
     UnsupportedProgramVersion {
         /// Declared major version.
         major: u8,
@@ -513,9 +535,118 @@ impl StdError for VMError {
     }
 }
 
+/// Preserve a local operational refusal when mapping a deterministic decode fault.
+///
+/// The complete original error carries its finite pool/release observation.
+/// Converting it to malformed input would make transaction validity depend on
+/// local resource pressure. Semantic failures retain the caller's existing map.
+pub fn preserve_execution_deferral(error: VMError, malformed: VMError) -> VMError {
+    if error.execution_deferral().is_some() {
+        error
+    } else {
+        malformed
+    }
+}
+
+// Numeric pointer faults have one canonical conversion for all ABI producers and runtime consumers.
+impl From<iroha_primitives::numeric_abi::NumericAbiError> for VMError {
+    fn from(error: iroha_primitives::numeric_abi::NumericAbiError) -> Self {
+        use iroha_primitives::numeric_abi::NumericAbiError;
+        let fault = match error {
+            NumericAbiError::SchemaMismatch => PointerAbiFaultV1::SchemaMismatch,
+            NumericAbiError::NonCanonicalMantissa
+            | NumericAbiError::NonCanonicalDecimal
+            | NumericAbiError::MantissaOverflow
+            | NumericAbiError::InvalidScale
+            | NumericAbiError::NegativeQuantity => PointerAbiFaultV1::NonCanonical,
+            NumericAbiError::FrameTooLarge => PointerAbiFaultV1::OversizedLength,
+            NumericAbiError::FrameTooShort
+            | NumericAbiError::InvalidHeader
+            | NumericAbiError::CompressionNotAllowed
+            | NumericAbiError::LayoutFlagsNotAllowed
+            | NumericAbiError::LengthMismatch
+            | NumericAbiError::Norito(_) => PointerAbiFaultV1::MalformedFrame,
+        };
+        VMError::PointerAbiFault(fault)
+    }
+}
+
+#[cfg(test)]
+mod numeric_abi_error_tests {
+    use super::{PointerAbiFaultV1, VMError};
+    use iroha_primitives::numeric_abi::NumericAbiError;
+
+    #[test]
+    fn every_numeric_frame_error_maps_to_its_stable_pointer_fault() {
+        use NumericAbiError::*;
+        use PointerAbiFaultV1::{MalformedFrame, NonCanonical, OversizedLength};
+
+        let cases = [
+            (FrameTooShort, MalformedFrame),
+            (FrameTooLarge, OversizedLength),
+            (InvalidHeader, MalformedFrame),
+            (SchemaMismatch, PointerAbiFaultV1::SchemaMismatch),
+            (CompressionNotAllowed, MalformedFrame),
+            (LayoutFlagsNotAllowed, MalformedFrame),
+            (LengthMismatch, MalformedFrame),
+            (MantissaOverflow, NonCanonical),
+            (NonCanonicalMantissa, NonCanonical),
+            (InvalidScale, NonCanonical),
+            (NonCanonicalDecimal, NonCanonical),
+            (NegativeQuantity, NonCanonical),
+            (Norito("invalid checksum".into()), MalformedFrame),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(
+                VMError::from(error.clone()),
+                VMError::PointerAbiFault(expected),
+                "numeric frame error {error:?} changed its pointer fault"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod execution_deferral_tests {
-    use super::{ExecutionDeferral, VMError};
+    use super::{ExecutionDeferral, VMError, preserve_execution_deferral};
+
+    #[test]
+    fn decode_mapping_keeps_complete_operational_errors_and_existing_semantic_faults() {
+        let budget = iroha_allocation::AllocationBudget::new(1);
+        let occupied = budget.try_reserve_bytes(1).unwrap();
+        let refusal = budget.try_reserve_bytes(1).unwrap_err();
+        let error = VMError::AllocationDeferred(refusal);
+        assert_eq!(
+            preserve_execution_deferral(error.clone(), VMError::NoritoInvalid),
+            error
+        );
+        for reason in [
+            ExecutionDeferral::LocalInvariantViolation,
+            ExecutionDeferral::AllocationUnavailable,
+            ExecutionDeferral::ActiveMemoryCapacity,
+            ExecutionDeferral::VerifierArtifactsUnavailable,
+            ExecutionDeferral::TraceOwnerUnavailable,
+        ] {
+            let error = VMError::ExecutionDeferred(reason);
+            assert_eq!(
+                preserve_execution_deferral(error.clone(), VMError::DecodeError),
+                error
+            );
+        }
+        let wrapped = VMError::Metered {
+            gas: 17,
+            source: Box::new(error),
+        };
+        assert_eq!(
+            preserve_execution_deferral(wrapped.clone(), VMError::DecodeError),
+            wrapped
+        );
+        assert_eq!(
+            preserve_execution_deferral(VMError::MemoryOutOfBounds, VMError::NoritoInvalid),
+            VMError::NoritoInvalid
+        );
+        drop(occupied);
+    }
 
     #[test]
     fn contract_abort_preserves_authenticated_text_and_identity_through_metering() {
@@ -598,5 +729,45 @@ mod execution_deferral_tests {
             original.split_metered(),
             (None, VMError::ExecutionDeferred(reason))
         );
+    }
+    #[test]
+    fn canonical_history_deferrals_cannot_be_metered_as_vm_faults() {
+        for reason in [
+            ExecutionDeferral::CanonicalHistoryUnavailable,
+            ExecutionDeferral::CanonicalHistoryCapacity,
+        ] {
+            let original = VMError::ExecutionDeferred(reason);
+            assert_eq!(VMError::metered(777, original.clone()), original);
+            assert_eq!(original.execution_deferral(), Some(reason));
+            assert_eq!(
+                original.split_metered(),
+                (None, VMError::ExecutionDeferred(reason))
+            );
+        }
+    }
+
+    #[test]
+    fn trace_owner_mismatch_remains_local_through_nested_metering() {
+        let reason = ExecutionDeferral::TraceOwnerUnavailable;
+        assert_eq!(
+            reason.to_string(),
+            "local execution trace owner unavailable"
+        );
+        let original = VMError::ExecutionDeferred(reason);
+        let nested = VMError::Metered {
+            gas: 17,
+            source: Box::new(VMError::Metered {
+                gas: 91,
+                source: Box::new(original.clone()),
+            }),
+        };
+        assert_eq!(nested.execution_deferral(), Some(reason));
+        assert_eq!(nested.metered_gas(), None);
+        assert_eq!(VMError::metered(123, nested.clone()), original);
+        assert_eq!(
+            preserve_execution_deferral(nested.clone(), VMError::DecodeError),
+            nested
+        );
+        assert_eq!(nested.split_metered(), (None, original));
     }
 }

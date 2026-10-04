@@ -1,8 +1,6 @@
 #![cfg(feature = "app_api")]
 use crate::{Error, JsonBody, data_dir};
 use axum::{http::StatusCode, response::IntoResponse};
-#[cfg(test)]
-use iroha_core::state::StateReadOnly as _;
 use iroha_core::state::{State as CoreState, WorldReadOnly};
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -2048,7 +2046,7 @@ fn locate_instruction_box(
             work,
             iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work),
         )
-        .map_err(|error| conversion_error(error.to_string()))?;
+        .map_err(crate::canonical_history::query_attempt_error)?;
     let mut instruction = None;
     let mut matched = false;
     for (source_hash, signed, _) in crate::canonical_history::signed_calls(carrier.block())
@@ -2933,7 +2931,6 @@ mod tests {
     }
     use crate::test_utils::TestDataDirGuard;
     use iroha_core::{
-        block::{BlockBuilder, ValidBlock},
         kura::Kura,
         query::store::LiveQueryStore,
         smartcontracts::Execute,

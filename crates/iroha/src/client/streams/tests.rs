@@ -392,14 +392,25 @@ async fn policy_backpressure_and_missing_close_preserve_disposition() {
             .subscribe([filter()])
             .await
             .unwrap();
-        assert_eq!(
-            stream.next().await.unwrap().unwrap_err(),
-            Error::StreamClosed {
-                operation: EVENTS_OPERATION,
-                code,
-                reason: "peer diagnostic".to_owned()
-            }
-        );
+        {
+            let actual_error = stream.next().await.unwrap().unwrap_err();
+            let Error::StreamClosed {
+                operation: actual_operation,
+                code: actual_code,
+                reason: actual_reason,
+            } = &actual_error
+            else {
+                panic!("unexpected SDK error: {actual_error:?}");
+            };
+            assert_eq!(
+                (actual_operation, actual_code, actual_reason,),
+                (
+                    &(EVENTS_OPERATION),
+                    &(code),
+                    &("peer diagnostic".to_owned()),
+                )
+            );
+        };
         assert!(stream.next().await.is_none());
     }
     let mut transport = TestTransport::new([]);
@@ -425,12 +436,16 @@ async fn close_timeout_drops_the_owned_connection() {
         .subscribe([filter()])
         .await
         .unwrap();
-    assert_eq!(
-        stream.close().await,
-        Err(Error::Timeout {
-            operation: EVENTS_OPERATION
-        })
-    );
+    {
+        let actual_error = (stream.close().await).expect_err("operation must fail");
+        let Error::Timeout {
+            operation: actual_operation,
+        } = &actual_error
+        else {
+            panic!("unexpected SDK error: {actual_error:?}");
+        };
+        assert_eq!((actual_operation,), (&(EVENTS_OPERATION),));
+    };
     assert_eq!(transport.observed.drops.load(Ordering::SeqCst), 1);
 }
 
@@ -446,18 +461,28 @@ fn blocking_stream_reuses_runtime_and_distinguishes_wait_timeout_from_eof() {
         stream.recv(Some(Duration::from_millis(5))).unwrap(),
         Some(event())
     );
-    assert_eq!(
-        stream.recv(Some(Duration::from_millis(5))),
-        Err(Error::Timeout {
-            operation: "stream.receive"
-        })
-    );
-    assert_eq!(
-        stream.recv(Some(Duration::from_millis(5))),
-        Err(Error::Timeout {
-            operation: "stream.receive"
-        })
-    );
+    {
+        let actual_error =
+            (stream.recv(Some(Duration::from_millis(5)))).expect_err("operation must fail");
+        let Error::Timeout {
+            operation: actual_operation,
+        } = &actual_error
+        else {
+            panic!("unexpected SDK error: {actual_error:?}");
+        };
+        assert_eq!((actual_operation,), (&("stream.receive"),));
+    };
+    {
+        let actual_error =
+            (stream.recv(Some(Duration::from_millis(5)))).expect_err("operation must fail");
+        let Error::Timeout {
+            operation: actual_operation,
+        } = &actual_error
+        else {
+            panic!("unexpected SDK error: {actual_error:?}");
+        };
+        assert_eq!((actual_operation,), (&("stream.receive"),));
+    };
     stream.close().unwrap();
     assert_eq!(transport.observed.requests.lock().unwrap().len(), 1);
     assert_eq!(transport.observed.closes.load(Ordering::SeqCst), 1);
@@ -805,13 +830,17 @@ async fn binary_decode_and_bounds_failures_keep_exact_message_bytes() {
         assert_eq!(stream.last_message_bytes(), None);
         let error = stream.next().await.unwrap().unwrap_err();
         if actual > 8 {
-            assert_eq!(
-                error,
-                Error::ResponseTooLarge {
-                    maximum: 8,
-                    actual: Some(actual),
-                }
-            );
+            {
+                let actual_error = error;
+                let Error::ResponseTooLarge {
+                    maximum: actual_maximum,
+                    actual: actual_actual,
+                } = &actual_error
+                else {
+                    panic!("unexpected SDK error: {actual_error:?}");
+                };
+                assert_eq!((actual_maximum, actual_actual,), (&(8), &(Some(actual)),));
+            };
         } else {
             assert!(matches!(
                 error,
@@ -889,12 +918,17 @@ fn blocking_message_bytes_preserve_receive_timeouts_and_clear_transport_errors()
     assert_eq!(first.last_message_bytes(), None);
     assert_eq!(first.recv(None).unwrap(), Some(event()));
     assert_eq!(first.last_message_bytes(), Some(actual));
-    assert_eq!(
-        first.recv(Some(Duration::from_millis(5))),
-        Err(Error::Timeout {
-            operation: "stream.receive"
-        })
-    );
+    {
+        let actual_error =
+            (first.recv(Some(Duration::from_millis(5)))).expect_err("operation must fail");
+        let Error::Timeout {
+            operation: actual_operation,
+        } = &actual_error
+        else {
+            panic!("unexpected SDK error: {actual_error:?}");
+        };
+        assert_eq!((actual_operation,), (&("stream.receive"),));
+    };
     assert_eq!(first.last_message_bytes(), Some(actual));
 
     transport.frames.lock().unwrap().extend([

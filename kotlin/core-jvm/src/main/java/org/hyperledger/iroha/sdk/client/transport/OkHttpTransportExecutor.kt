@@ -125,10 +125,20 @@ class OkHttpTransportExecutor private constructor(
         val call: Call
         try {
             val selected = if (request.replayPolicy == RequestReplayPolicy.ONE_SHOT) oneShotClient else client
-            call = selected.newCall(buildRequest(request))
-            request.timeout?.let { timeout ->
-                require(!timeout.isNegative) { "timeout must be non-negative" }
-                call.timeout().timeout(timeout.toNanos(), TimeUnit.NANOSECONDS)
+            val timeout = request.timeout
+            require(timeout == null || !timeout.isNegative) { "timeout must be non-negative" }
+            if (streaming) {
+                // A stream has no total lifetime: the request timeout bounds the idle gap between
+                // bytes instead, which must exceed Torii's 15 s SSE heartbeat.
+                val idle = timeout ?: DEFAULT_STREAM_IDLE_TIMEOUT
+                call = selected.newBuilder()
+                    .readTimeout(idle.toMillis(), TimeUnit.MILLISECONDS)
+                    .callTimeout(0, TimeUnit.MILLISECONDS)
+                    .build()
+                    .newCall(buildRequest(request))
+            } else {
+                call = selected.newCall(buildRequest(request))
+                timeout?.let { call.timeout().timeout(it.toNanos(), TimeUnit.NANOSECONDS) }
             }
         } catch (failure: Exception) {
             future.completeExceptionally(failure)
@@ -243,6 +253,10 @@ class OkHttpTransportExecutor private constructor(
     companion object {
         /** Maximum decoded buffered body, in bytes (64 MiB). */
         const val DEFAULT_MAXIMUM_RESPONSE_BYTES: Long = 64L * 1024L * 1024L
+
+        /** Idle gap allowed between bytes of a streaming response (three Torii SSE heartbeats). */
+        @JvmField
+        val DEFAULT_STREAM_IDLE_TIMEOUT: Duration = Duration.ofSeconds(45)
 
         /** Create an owned HTTP adapter. A supplied scheduling executor remains borrowed. */
         @JvmStatic

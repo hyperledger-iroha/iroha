@@ -152,7 +152,9 @@ fn arithmetic_auxiliary_factory_rejects_missing_phase_and_other_adapters() {
 fn arithmetic_auxiliary_bound_terminals_and_batches_match_checked_raw_streams() {
     for seed in [71, 79] {
         let before = counts_v1();
-        let mut base = p256_main_base_source_fixture_for_test_v1().unwrap();
+        let fixture = p256_main_canonical_materials_for_test_v1().unwrap();
+        let mut base =
+            P256MainBaseSourceV1::from_materials_v1(&fixture.materials, fixture.selection).unwrap();
         let token = super::tests::main_post_base_v1(seed);
         let mut bound = base.bind_v1(token).unwrap();
         assert_eq!(counts_v1().0, before.0 + P256_X5S1_SIGNATURES_V1);
@@ -162,15 +164,17 @@ fn arithmetic_auxiliary_bound_terminals_and_batches_match_checked_raw_streams() 
             let registration =
                 P256MainRegistrationV1::new_v1(signature, P256MainAdapterV1::Arithmetic, 0)
                     .unwrap();
-            let owner = bound
-                .signature_v1(registration)
-                .unwrap()
-                .arithmetic
-                .as_ref()
-                .unwrap();
+            // Independently materialize the original wide rows from the same
+            // canonical witness. Keep only this signature's clearing raw oracle;
+            // the bound source under test retains its compact representation.
+            let oracle = P256MainArithmeticGuardV1(Some(
+                fixture.materials[signature]
+                    .build_arithmetic_trace_v1()
+                    .unwrap(),
+            ));
             let reference = P256ArithmeticAggregateAuxStreamV1::new_v1(
                 registration.role_v1(),
-                owner.trace_v1(),
+                oracle.as_ref_v1().unwrap(),
                 token.p256_scalar(),
                 token.p256_arithmetic_copy(),
             )
@@ -207,7 +211,7 @@ fn arithmetic_auxiliary_bound_terminals_and_batches_match_checked_raw_streams() 
                 );
                 let mut reference = P256ArithmeticAggregateAuxStreamV1::new_v1(
                     registration.role_v1(),
-                    owner.trace_v1(),
+                    oracle.as_ref_v1().unwrap(),
                     token.p256_scalar(),
                     token.p256_arithmetic_copy(),
                 )
@@ -351,7 +355,7 @@ fn selected_projection_stream_v1<'a>(
     let token = super::tests::main_post_base_v1(97);
     P256ArithmeticAggregateAuxStreamV1 {
         rows: P256ArithmeticAggregateRowsV1 {
-            trace,
+            trace: P256ArithmeticRowsStorageV1::Raw(trace),
             fixed: Cow::Borrowed(fixed),
         },
         scalar_challenges: token.p256_scalar(),

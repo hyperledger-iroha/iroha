@@ -2,6 +2,9 @@
 mod parliament_rekey;
 
 use crate::{
+    execution_attempt::{
+        ExecutionAttemptError as Attempt, json_decode_attempt_error, norito_decode_attempt_error,
+    },
     smartcontracts::Execute,
     smartcontracts::isi::domain::isi::ensure_controller_capabilities,
     state::{
@@ -48,8 +51,21 @@ const MULTISIG_APPROVAL_OUTCOME_STATE: &str = "approval-outcome";
 const MULTISIG_SIGNATORY_INDEX_STATE: &str = "signatory";
 const MULTISIG_SIGNATORY: &str = "MULTISIG_SIGNATORY";
 const DOMAINLESS_NAMESPACE: &str = "domainless";
-const MAX_MULTISIG_DEFERRED_EXECUTION_DEPTH: usize = 64;
+pub(crate) const MAX_MULTISIG_DEFERRED_EXECUTION_DEPTH: usize = 64;
 type MultisigDeferredExecutionId = (AccountId, HashOf<Vec<InstructionBox>>);
+
+/// Retain the original JSON or binary refusal while classifying a custom multisig instruction.
+pub(crate) fn multisig_instruction_decode_attempt<E>(
+    error: norito::Error,
+    rejected: impl FnOnce(norito::Error) -> E,
+) -> Attempt<E> {
+    match error {
+        norito::Error::Json(error) => {
+            json_decode_attempt_error(error, |error| rejected(norito::Error::Json(error)))
+        }
+        error => norito_decode_attempt_error(error, rejected),
+    }
+}
 static MULTISIG_CREATED_VIA_KEY: LazyLock<Name> = LazyLock::new(|| {
     "iroha:created_via"
         .parse()
@@ -93,22 +109,27 @@ pub fn execute_multisig_instruction(
 /// Return the concrete instructions a live multisig approval can execute.
 ///
 /// This read-only projection is used by non-bypassable deferred-execution admission. Missing,
-/// expired, terminal, or malformed proposals cannot execute instructions and therefore resolve to
-/// `None`.
+/// expired or terminal proposals resolve to `None`. Malformed state rejects deterministically;
+/// an unfinished local read retains its original decoder refusal.
 pub(crate) fn live_proposal_instructions_for_approval(
     state_transaction: &StateTransaction<'_, '_>,
     approve: &MultisigApprove,
-) -> Option<(AccountId, Vec<InstructionBox>)> {
-    let proposal = proposal_state(
+) -> Result<Option<(AccountId, Vec<InstructionBox>)>, Attempt<ValidationFail>> {
+    let proposal = match proposal_state_attempt(
         state_transaction,
         &approve.account,
         &approve.instructions_hash,
-    )
-    .ok()?;
+    ) {
+        Ok(proposal) => proposal,
+        Err(Attempt::Rejected(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))) => {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
     if now_ms(state_transaction) >= proposal.expires_at_ms || proposal.is_relayed == Some(true) {
-        return None;
+        return Ok(None);
     }
-    Some((proposal.multisig_account_id, proposal.instructions))
+    Ok(Some((proposal.multisig_account_id, proposal.instructions)))
 }
 pub(crate) fn is_reserved_multisig_metadata_key(key: &Name) -> bool {
     let literal = key.as_ref();
@@ -999,8 +1020,8 @@ pub(crate) fn replace_account_controller(
         if !key.as_ref().starts_with(prefix.as_ref()) {
             break;
         }
-        let proposal = norito::decode_from_bytes::<MultisigProposalState>(value)
-            .map_err(multisig_state_decode_error)
+        let proposal = decode_proposal_state_at_key(key, value)
+            .map_err(|error| retain_multisig_read_attempt(state_transaction, error))
             .map_err(map_validation_fail)?;
         if proposal.is_relayed != Some(true) {
             return Err(InstructionExecutionError::InvalidParameter(
@@ -1946,35 +1967,36 @@ fn execute_propose(
             "not qualified to propose multisig".to_owned(),
         ));
     }
-    match proposal_state(state_transaction, &multisig_account, &instructions_hash) {
-        Ok(existing) if now_ms(state_transaction) < existing.expires_at_ms => {
-            iroha_logger::warn!(
-                proposer = %proposer,
-                multisig_account = %multisig_account,
-                instructions_hash = %instructions_hash,
-                now_ms = now_ms(state_transaction),
-                expires_at_ms = existing.expires_at_ms,
-                "multisig propose rejected as duplicate active proposal"
-            );
-            return Err(ValidationFail::NotPermitted(
-                "multisig proposal duplicates".to_owned(),
-            ));
-        }
-        Ok(_) => {}
-        Err(ValidationFail::QueryFailed(QueryExecutionFail::NotFound)) => {}
-        Err(err) => {
-            iroha_logger::error!(
-                proposer = %proposer,
-                multisig_account = %multisig_account,
-                instructions_hash = %instructions_hash,
-                error = ?err,
-                "multisig propose failed while checking existing proposal state"
-            );
-            return Err(err);
-        }
-    }
+    let existing_proposal =
+        match proposal_state(state_transaction, &multisig_account, &instructions_hash) {
+            Ok(existing) if now_ms(state_transaction) < existing.expires_at_ms => {
+                iroha_logger::warn!(
+                    proposer = %proposer,
+                    multisig_account = %multisig_account,
+                    instructions_hash = %instructions_hash,
+                    now_ms = now_ms(state_transaction),
+                    expires_at_ms = existing.expires_at_ms,
+                    "multisig propose rejected as duplicate active proposal"
+                );
+                return Err(ValidationFail::NotPermitted(
+                    "multisig proposal duplicates".to_owned(),
+                ));
+            }
+            Ok(_) => true,
+            Err(ValidationFail::QueryFailed(QueryExecutionFail::NotFound)) => false,
+            Err(err) => {
+                iroha_logger::error!(
+                    proposer = %proposer,
+                    multisig_account = %multisig_account,
+                    instructions_hash = %instructions_hash,
+                    error = ?err,
+                    "multisig propose failed while checking existing proposal state"
+                );
+                return Err(err);
+            }
+        };
     let now_ms = now_ms(state_transaction);
-    if proposal_state(state_transaction, &multisig_account, &instructions_hash).is_ok() {
+    if existing_proposal {
         if let Err(err) = prune_expired(
             state_transaction,
             &multisig_account,
@@ -2152,25 +2174,31 @@ fn execute_approve(
         );
         return Err(err);
     }
-    let Ok(mut proposal_state) =
-        proposal_state(state_transaction, &multisig_account, &instructions_hash)
-    else {
-        store_multisig_approval_outcome(
-            state_transaction,
-            &instruction.account,
-            &multisig_account,
-            &instructions_hash,
-            MultisigApprovalOutcomeStatusV1::NotExecuted,
-        )?;
-        let log = Log::new(
-            Level::INFO,
-            format!(
-                "multisig proposal expired:\naccount: {multisig_account}\ninstructions hash: {instructions_hash}"
-            ),
-        );
-        return log
-            .execute(&multisig_account, state_transaction)
-            .map_err(ValidationFail::InstructionFailed);
+    let mut proposal_state = match proposal_state(
+        state_transaction,
+        &multisig_account,
+        &instructions_hash,
+    ) {
+        Ok(proposal) => proposal,
+        Err(ValidationFail::QueryFailed(QueryExecutionFail::NotFound)) => {
+            store_multisig_approval_outcome(
+                state_transaction,
+                &instruction.account,
+                &multisig_account,
+                &instructions_hash,
+                MultisigApprovalOutcomeStatusV1::NotExecuted,
+            )?;
+            let log = Log::new(
+                Level::INFO,
+                format!(
+                    "multisig proposal expired:\naccount: {multisig_account}\ninstructions hash: {instructions_hash}"
+                ),
+            );
+            return log
+                .execute(&multisig_account, state_transaction)
+                .map_err(ValidationFail::InstructionFailed);
+        }
+        Err(error) => return Err(error),
     };
     if let Some(true) = proposal_state.is_relayed {
         store_multisig_approval_outcome(
@@ -2465,8 +2493,9 @@ fn prune_expired_with_guard(
             return Ok(());
         }
         for instruction in &proposal_state.instructions {
-            if let Ok(MultisigInstructionBox::Approve(approve)) =
-                MultisigInstructionBox::try_from(instruction)
+            if let Some(MultisigInstructionBox::Approve(approve)) =
+                proposal_instruction_attempt(instruction)
+                    .map_err(|error| retain_multisig_read_attempt(state_transaction, error))?
             {
                 prune_expired_with_guard(
                     state_transaction,
@@ -2966,8 +2995,9 @@ fn load_multisig_account_state_optional(
     let Some(bytes) = state_transaction.world.smart_contract_state.get(&key) else {
         return Ok(None);
     };
-    let state = norito::decode_from_bytes::<MultisigAccountState>(bytes)
-        .map_err(multisig_state_decode_error)?;
+    let state = norito::decode_from_bytes::<MultisigAccountState>(bytes).map_err(|error| {
+        retain_multisig_read_attempt(state_transaction, multisig_decode_attempt(error))
+    })?;
     if state.account_id != resolved_account {
         return Err(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
             format!(
@@ -3163,14 +3193,117 @@ fn proposal_state(
     multisig_account: &AccountId,
     instructions_hash: &HashOf<Vec<InstructionBox>>,
 ) -> Result<MultisigProposalState, ValidationFail> {
+    proposal_state_attempt(state_transaction, multisig_account, instructions_hash)
+        .map_err(|error| retain_multisig_read_attempt(state_transaction, error))
+}
+
+fn retain_multisig_read_attempt(
+    state_transaction: &StateTransaction<'_, '_>,
+    error: Attempt<ValidationFail>,
+) -> ValidationFail {
+    match error {
+        Attempt::Rejected(error) => error,
+        Attempt::Deferred(reason) => state_transaction.world.defer_execution(reason),
+    }
+}
+
+fn multisig_decode_attempt(error: norito::Error) -> Attempt<ValidationFail> {
+    if cfg!(all(test, sumeragi_core_mutation = "HC67")) {
+        return Attempt::Rejected(multisig_state_decode_error(error));
+    }
+    norito_decode_attempt_error(error, multisig_state_decode_error)
+}
+
+fn proposal_state_attempt(
+    state_transaction: &StateTransaction<'_, '_>,
+    multisig_account: &AccountId,
+    instructions_hash: &HashOf<Vec<InstructionBox>>,
+) -> Result<MultisigProposalState, Attempt<ValidationFail>> {
     let resolved_account = resolve_signatory_account(state_transaction, multisig_account)?;
-    let key = multisig_proposal_state_key(&resolved_account, instructions_hash);
-    let bytes = state_transaction
-        .world
-        .smart_contract_state
-        .get(&key)
-        .ok_or(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))?;
-    norito::decode_from_bytes::<MultisigProposalState>(bytes).map_err(multisig_state_decode_error)
+    read_proposal_state(
+        &state_transaction.world,
+        &resolved_account,
+        instructions_hash,
+    )?
+    .ok_or_else(|| ValidationFail::QueryFailed(QueryExecutionFail::NotFound).into())
+}
+
+/// Read the exact authenticated proposal used by execution and queue admission.
+///
+/// Only a missing physical row is `None`. A retained body must reproduce the hash that the
+/// signatories approved; malformed bindings reject, while unfinished local reads remain deferred.
+pub(crate) fn read_proposal_state<W: WorldReadOnly>(
+    world: &W,
+    account: &AccountId,
+    instructions_hash: &HashOf<Vec<InstructionBox>>,
+) -> Result<Option<MultisigProposalState>, Attempt<ValidationFail>> {
+    let key = multisig_proposal_state_key(account, instructions_hash);
+    let Some(bytes) = world.smart_contract_state().get(&key) else {
+        return Ok(None);
+    };
+    let proposal = decode_proposal_state_at_key(&key, bytes)?;
+    if proposal.multisig_account_id != *account || proposal.instructions_hash != *instructions_hash
+    {
+        return Err(invalid_proposal_binding().into());
+    }
+    Ok(Some(proposal))
+}
+
+fn invalid_proposal_binding() -> ValidationFail {
+    ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
+        "native multisig proposal does not match its exact account and instruction-hash key or approved body"
+            .into(),
+    ))
+}
+
+fn decode_proposal_state_at_key(
+    key: &StatePath,
+    bytes: &[u8],
+) -> Result<MultisigProposalState, Attempt<ValidationFail>> {
+    let proposal = norito::decode_from_bytes::<MultisigProposalState>(bytes)
+        .map_err(multisig_decode_attempt)?;
+    // Stream the existing V1 hash domain, retaining original serializer refusal. Never buffer
+    // a second encoded proposal or rewrite an inconsistent row to fit its lookup key.
+    let hash = HashOf::try_new(&proposal.instructions)
+        .map_err(|error| multisig_instruction_decode_attempt(error, multisig_state_encode_error))?;
+    if !cfg!(all(test, sumeragi_core_mutation = "HC68"))
+        && (proposal.instructions_hash != hash
+            || *key != multisig_proposal_state_key(&proposal.multisig_account_id, &hash))
+    {
+        return Err(invalid_proposal_binding().into());
+    }
+    Ok(proposal)
+}
+
+/// Validate retained native proposal rows before a restored World can become visible.
+pub(crate) fn validate_persisted_proposals<W: WorldReadOnly>(
+    world: &W,
+) -> Result<(), Attempt<ValidationFail>> {
+    let prefix: StatePath = "multisig/proposal/".parse().expect("constant state prefix");
+    for (key, bytes) in world.smart_contract_state().range(prefix.clone()..) {
+        if !key.as_ref().starts_with(prefix.as_ref()) {
+            break;
+        }
+        decode_proposal_state_at_key(key, bytes)?;
+    }
+    Ok(())
+}
+
+fn proposal_instruction_attempt(
+    instruction: &InstructionBox,
+) -> Result<Option<MultisigInstructionBox>, Attempt<ValidationFail>> {
+    match MultisigInstructionBox::try_from(instruction) {
+        Ok(instruction) => Ok(Some(instruction)),
+        Err(error) => match multisig_instruction_decode_attempt(error, multisig_state_decode_error)
+        {
+            Attempt::Deferred(reason) if !cfg!(all(test, sumeragi_core_mutation = "HC69")) => {
+                Err(Attempt::Deferred(reason))
+            }
+            // Non-multisig instructions are valid proposal contents. Only a completed decode
+            // can determine that; an original local refusal cannot become a nonmatch.
+            _ => Ok(None),
+        },
+    }
 }
 fn proposal_state_value(proposal_state: &MultisigProposalState) -> MultisigProposalValue {
     MultisigProposalValue::new(
@@ -3181,15 +3314,16 @@ fn proposal_state_value(proposal_state: &MultisigProposalState) -> MultisigPropo
         proposal_state.is_relayed,
     )
 }
-fn proposal_is_cancel_wrapper(proposal_state: &MultisigProposalState) -> bool {
-    matches!(
-        proposal_state.instructions.as_slice(),
-        [instruction]
-            if matches!(
-                MultisigInstructionBox::try_from(instruction),
-                Ok(MultisigInstructionBox::Cancel(_))
-            )
-    )
+fn proposal_is_cancel_wrapper(
+    proposal_state: &MultisigProposalState,
+) -> Result<bool, Attempt<ValidationFail>> {
+    let [instruction] = proposal_state.instructions.as_slice() else {
+        return Ok(false);
+    };
+    Ok(matches!(
+        proposal_instruction_attempt(instruction)?,
+        Some(MultisigInstructionBox::Cancel(_))
+    ))
 }
 fn maybe_store_terminal_proposal_state(
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -3197,7 +3331,10 @@ fn maybe_store_terminal_proposal_state(
     status: MultisigProposalTerminalStatus,
     entrypoint_account: &AccountId,
 ) -> Result<(), ValidationFail> {
-    if proposal_state.is_relayed.is_some() || proposal_is_cancel_wrapper(proposal_state) {
+    if proposal_state.is_relayed.is_some()
+        || proposal_is_cancel_wrapper(proposal_state)
+            .map_err(|error| retain_multisig_read_attempt(state_transaction, error))?
+    {
         return Ok(());
     }
     let terminal_state = MultisigProposalTerminalState::new(
@@ -3249,8 +3386,19 @@ fn move_multisig_proposals(
         if !key.as_ref().starts_with(prefix_literal.as_str()) {
             break;
         }
-        let state = norito::decode_from_bytes::<MultisigProposalState>(value)
-            .map_err(multisig_state_decode_error)?;
+        let state = decode_proposal_state_at_key(key, value)
+            .map_err(|error| retain_multisig_read_attempt(state_transaction, error))?;
+        let new_key = multisig_proposal_state_key(new_account, &state.instructions_hash);
+        if state_transaction
+            .world
+            .smart_contract_state
+            .get(&new_key)
+            .is_some()
+        {
+            return Err(ValidationFail::NotPermitted(
+                "multisig rekey cannot overwrite an existing destination proposal".into(),
+            ));
+        }
         entries.push((key.clone(), state));
     }
     for (old_key, mut proposal_state) in entries {
@@ -3286,8 +3434,8 @@ pub(crate) fn invalidate_outstanding_proposals(
         if !key.as_ref().starts_with(prefix_literal.as_str()) {
             break;
         }
-        let state = norito::decode_from_bytes::<MultisigProposalState>(value)
-            .map_err(multisig_state_decode_error)?;
+        let state = decode_proposal_state_at_key(key, value)
+            .map_err(|error| retain_multisig_read_attempt(state_transaction, error))?;
         if state.is_relayed != Some(true) {
             proposals.push(state);
         }
@@ -3387,6 +3535,7 @@ fn map_validation_fail(err: ValidationFail) -> InstructionExecutionError {
 #[cfg(test)]
 mod tests {
     mod cancellation;
+    mod proposal_attempt;
     use super::*;
     use crate::{
         executor::Executor,
@@ -3819,7 +3968,6 @@ mod tests {
         assert_eq!(
             get_name_record(
                 tx.world(),
-                tx.world().dataspace_catalog(),
                 SnsNamespace::Dataspace,
                 "sbp",
                 tx.block_unix_timestamp_ms(),
@@ -3831,7 +3979,6 @@ mod tests {
         assert_eq!(
             get_name_record(
                 tx.world(),
-                tx.world().dataspace_catalog(),
                 SnsNamespace::Domain,
                 &hbl_domain.to_string(),
                 tx.block_unix_timestamp_ms(),
@@ -3954,7 +4101,6 @@ mod tests {
         .expect("signer2 approval executes FI registration batch");
         let lease = get_name_record(
             tx.world(),
-            &tx.nexus.dataspace_catalog,
             SnsNamespace::AccountAlias,
             "clear-orbit-3941@hbl.sbp",
             0,
@@ -8449,31 +8595,45 @@ seiyaku TriggerDispatch {
         .expect("store cyclic proposal state");
         let cycle_error = prune_expired(&mut tx, &multisig_id, &cycle_hash, &multisig_id)
             .expect_err("cyclic expiry traversal must fail closed");
-        assert!(matches!(cycle_error, ValidationFail::NotPermitted(_)));
-        let chain_hashes: Vec<_> = (0..=MAX_MULTISIG_DEFERRED_EXECUTION_DEPTH)
-            .map(|depth| {
-                HashOf::new(&vec![InstructionBox::from(Log::new(
-                    Level::INFO,
-                    format!("expiry-depth-{depth}"),
-                ))])
-            })
-            .collect();
-        for pair in chain_hashes.windows(2) {
+        assert_eq!(
+            cycle_error,
+            invalid_proposal_binding(),
+            "a fabricated hash cycle fails its content binding before traversal"
+        );
+        // Build from the leaf upward: every physical row binds its actual child approval.
+        let mut child = None;
+        for depth in (0..=MAX_MULTISIG_DEFERRED_EXECUTION_DEPTH).rev() {
+            let instructions = child.map_or_else(
+                || {
+                    vec![InstructionBox::from(Log::new(
+                        Level::INFO,
+                        format!("expiry-depth-{depth}"),
+                    ))]
+                },
+                |hash| {
+                    vec![InstructionBox::from(MultisigApprove::new(
+                        multisig_id.clone(),
+                        hash,
+                    ))]
+                },
+            );
+            let hash = HashOf::new(&instructions);
             store_multisig_proposal_state(
                 &mut tx,
                 &MultisigProposalState::new(
                     multisig_id.clone(),
-                    pair[0],
-                    vec![MultisigApprove::new(multisig_id.clone(), pair[1]).into()],
+                    hash,
+                    instructions,
                     0,
                     0,
                     BTreeSet::new(),
                     None,
                 ),
             )
-            .expect("store deep proposal state");
+            .expect("store exact deep proposal state");
+            child = Some(hash);
         }
-        let depth_error = prune_expired(&mut tx, &multisig_id, &chain_hashes[0], &multisig_id)
+        let depth_error = prune_expired(&mut tx, &multisig_id, &child.unwrap(), &multisig_id)
             .expect_err("expiry traversal beyond the deterministic depth bound must fail");
         assert_eq!(depth_error, ValidationFail::TooComplex);
     }

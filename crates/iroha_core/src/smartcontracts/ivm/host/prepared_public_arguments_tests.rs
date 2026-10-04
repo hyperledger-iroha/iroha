@@ -27,7 +27,7 @@ seiyaku PreparedArguments {
         .find(|entrypoint| entrypoint.name == "invoke")
         .and_then(|entrypoint| entrypoint.argument_schema.as_ref())
         .expect("argument schema");
-    let canonical = ivm::encode_argument_record_from_json(
+    let canonical = ivm_abi::arguments::encode_argument_record_from_json(
         schema,
         &Json::from(norito::json!({"count": "7", "label": "ready"})),
     )

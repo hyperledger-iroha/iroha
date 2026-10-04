@@ -99,7 +99,9 @@ fn execution_history_admits_each_actual_source_before_read() {
             .executed_block(NonZeroUsize::MIN, |_, _| {
                 attempts += 1;
                 if attempts == 2 {
-                    Err(iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded)
+                    Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                        ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                    ))
                 } else {
                     Ok(())
                 }
@@ -171,6 +173,76 @@ fn restore_reauthenticates_native_current_and_undo_and_rejects_claim_substitutio
             )
             .is_err()
     );
+}
+
+#[test]
+fn restore_rebuilds_sparse_history_checkpoints_from_verified_snapshot_prefix() {
+    use crate::kura::history_checkpoints::HISTORY_CHECKPOINT_INTERVAL;
+
+    let mut chain = chain();
+    let checkpoint_height = HISTORY_CHECKPOINT_INTERVAL;
+    let tip_height = checkpoint_height + 2;
+    for _ in 1..tip_height {
+        chain.commit(Vec::new());
+    }
+    let checkpoint = checkpoint_of(record(&chain.committed(checkpoint_height)));
+    let target_height = checkpoint_height - 1;
+    let target_hash = chain.committed(target_height).block_hash();
+    let claim = snapshot_claim(chain.state());
+    let view = chain.state().view();
+    let hashes: Vec<_> = view.block_hashes().iter().copied().collect();
+    let checkpoints = chain.kura().history_checkpoints();
+    // A restart has the authenticated journal and decoded snapshot, but no
+    // node-local checkpoints retained from the original executions.
+    checkpoints.clear();
+    assert!(checkpoints.candidates(1, tip_height).is_empty());
+    let restored = claim
+        .restore(
+            &chain.state().ivm_execution_budget(),
+            view.chain_id(),
+            view.network_id(),
+            &hashes,
+            chain.kura(),
+        )
+        .unwrap();
+    assert_eq!(*restored.view().get(), view.native_execution_tip());
+    assert_eq!(
+        *restored.predecessor_view().get(),
+        *view.native_execution_tip_predecessor.get()
+    );
+    assert_eq!(checkpoints.sparse_len(), 1);
+    assert_eq!(
+        checkpoints.recent_len(),
+        0,
+        "restore retains only sparse identities"
+    );
+    assert_eq!(
+        checkpoints.candidates(1, tip_height),
+        [(checkpoint_height, checkpoint)]
+    );
+
+    let target = NonZeroUsize::new(usize::try_from(target_height).unwrap()).unwrap();
+    let mut source_reads = 0;
+    let mut visited = Vec::new();
+    view.canonical_history()
+        .visit_executed_backwards_from_checkpoints(
+            target,
+            target,
+            |count, _| {
+                source_reads += count;
+                Ok(())
+            },
+            |block| {
+                visited.push(block.block_hash());
+                Ok(core::ops::ControlFlow::Continue(()))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        source_reads, 2,
+        "the restored checkpoint bounds the cold read"
+    );
+    assert_eq!(visited, [target_hash]);
 }
 
 #[test]

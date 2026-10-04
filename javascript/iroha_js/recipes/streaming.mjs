@@ -6,24 +6,26 @@
  * - subscribe to pipeline transaction events with a deterministic filter,
  * - make the live-only, no-replay reconnect semantics explicit,
  * - honour Ctrl+C / SIGTERM via `AbortController`, and
- * - surface pipeline statuses with `extractPipelineStatusKind`.
+ * - read the typed payloads (`category`, `event`, `status`, rejection codes).
  *
  * Environment variables:
  * - TORII_URL — Torii endpoint (default: http://127.0.0.1:8080)
  * - TORII_API_TOKEN / TORII_AUTH_TOKEN — optional headers
- * - PIPELINE_STATUS — diagnostic SSE event filter only (default: Committed)
- * - STREAM_FILTER_JSON — override the SSE filter JSON
+ * - PIPELINE_STATUS — transaction status to match: Queued, Expired, Approved
+ *   or Rejected (default: Approved)
+ * - STREAM_FILTER — override the filter with collection-query text such as
+ *   `tx_status in ["Approved", "Rejected"] and tx_dataspace_id = 0`
  * - STREAM_MAX_EVENTS — stop after N events (0 = run indefinitely, default: 10)
  */
 import process from "node:process";
 
-import { ToriiClient, extractPipelineStatusKind } from "@iroha/iroha-js";
+import { Filter, ToriiClient, field } from "@iroha/iroha-js";
 
 const toriiUrl = process.env.TORII_URL ?? "http://127.0.0.1:8080";
 const apiToken = process.env.TORII_API_TOKEN;
 const authToken = process.env.TORII_AUTH_TOKEN;
-const customFilter = process.env.STREAM_FILTER_JSON;
-const statusKind = process.env.PIPELINE_STATUS ?? "Committed";
+const customFilter = process.env.STREAM_FILTER;
+const statusKind = process.env.PIPELINE_STATUS ?? "Approved";
 const maxEventsEnv = process.env.STREAM_MAX_EVENTS ?? "10";
 
 function resolveMaxEvents(value) {
@@ -35,28 +37,9 @@ function resolveMaxEvents(value) {
 }
 
 function buildFilter() {
-  if (customFilter) {
-    try {
-      const parsed = JSON.parse(customFilter);
-      if (parsed == null || typeof parsed !== "object") {
-        throw new TypeError("STREAM_FILTER_JSON must decode to an object");
-      }
-      return parsed;
-    } catch (error) {
-      throw new Error(
-        `failed to parse STREAM_FILTER_JSON: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-  }
-  return {
-    Pipeline: {
-      Transaction: {
-        status: statusKind,
-      },
-    },
-  };
+  // Parsing locally reports syntax errors with their line and column before
+  // connecting; Torii applies the same grammar to event fields.
+  return customFilter ? Filter.parse(customFilter) : field("tx_status").eq(statusKind);
 }
 
 async function main() {
@@ -72,7 +55,7 @@ async function main() {
   process.once("SIGTERM", () => controller.abort());
 
   console.log("Connecting to Torii:", toriiUrl);
-  console.log("Streaming filter:", JSON.stringify(filter));
+  console.log("Streaming filter:", filter.toString());
   console.log("This endpoint is live-only; reconnects can have a gap and do not replay events.");
   if (!Number.isFinite(maxEvents)) {
     console.log("Running until interrupted…");
@@ -87,19 +70,21 @@ async function main() {
       signal: controller.signal,
     })) {
       const stamp = new Date().toISOString();
-      console.log(`\n[${stamp}] event=${event.event ?? "message"} id=${event.id ?? "∅"}`);
-      if (event.retry != null) {
-        console.log(`  retry: ${event.retry}ms`);
+      if (event.event === "stream_error") {
+        // Terminal: the live stream lost events and cannot replay them.
+        console.warn(`\n[${stamp}] stream gap: ${event.data.code} — ${event.data.message}`);
+        break;
       }
-      if (event.data == null) {
-        console.log("  (no data payload)");
-      } else {
-        console.log("  payload:", JSON.stringify(event.data, null, 2));
-        const status = extractPipelineStatusKind(event.data);
-        if (status) {
-          console.log(`  pipeline_status: ${status}`);
+      const { data } = event;
+      console.log(`\n[${stamp}] ${data.category}/${data.event}${data.status ? ` ${data.status}` : ""}`);
+      if (data.event === "Transaction") {
+        console.log(`  hash: ${data.hash} block_height: ${data.block_height ?? "∅"}`);
+        if (data.status === "Rejected") {
+          console.log(`  rejection: ${data.rejection_code} — ${data.rejection_reason}`);
         }
       }
+      // Heights and ids beyond Number.MAX_SAFE_INTEGER arrive as bigint.
+      console.log("  payload:", JSON.stringify(data, (_key, value) => (typeof value === "bigint" ? value.toString() : value)));
       seen += 1;
       if (Number.isFinite(maxEvents) && seen >= maxEvents) {
         break;

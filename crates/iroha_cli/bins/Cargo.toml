@@ -26,7 +26,6 @@ cli = []
 bridge = ["iroha_cli_lib/bridge"]
 offline-visual-codecs = ["iroha_cli_lib/offline-visual-codecs"]
 dev-tools = ["cli"]
-ids_projection = ["iroha_cli_lib/ids_projection"]
 cli_integration_harness = ["iroha_cli_lib/cli_integration_harness"]
 
 [[bin]]

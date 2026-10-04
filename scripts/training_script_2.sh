@@ -664,13 +664,13 @@ resolve_multisig_account_by_spec() {
   local expected_spec_json="$2"
   local accounts_json=""
   accounts_json="$(retry_list_json "multisig account discovery" 3 1 \
-    "$IROHA_BIN" --config "$cfg" account list all --verbose)" || return 1
+    "$IROHA_BIN" --config "$cfg" --output-format json account list --all)" || return 1
   ACCOUNTS_PAYLOAD="$accounts_json" EXPECTED_SPEC_JSON="$expected_spec_json" python3 - <<'PY'
 import json
 import os
 import sys
 
-accounts = json.loads(os.environ["ACCOUNTS_PAYLOAD"])
+accounts = json.loads(os.environ["ACCOUNTS_PAYLOAD"])["items"]
 expected = json.loads(os.environ["EXPECTED_SPEC_JSON"])
 matches = []
 for account in accounts:
@@ -793,16 +793,11 @@ print(data["i105"]["value"])
 PY
 }
 
-read_domain() {
-  read_toml_string "domain" "$1"
-}
-
 generate_client_configs() {
   local base_config="$1"
   local out_dir="$2"
-  local domain="$3"
-  local seed_material="$4"
-  local names_csv="$5"
+  local seed_material="$3"
+  local names_csv="$4"
   local seed_hex
   seed_hex="$(python3 - "$seed_material" <<'PY'
 import hashlib
@@ -814,7 +809,6 @@ PY
   "$KAGAMI_BIN" advanced client-configs \
     --base-config "$base_config" \
     --out-dir "$out_dir" \
-    --domain "$domain" \
     --seed-hex "$seed_hex" \
     --names "$names_csv"
 }
@@ -1121,7 +1115,6 @@ for run in $(seq 1 "$RUNS"); do
   fi
 
   client_cfg="$run_dir/client.toml"
-  domain="$(read_domain "$client_cfg")"
   sender_pub="$(read_public_key "$client_cfg")"
   sender_account="$(public_key_to_i105 "$sender_pub")"
   asset_def="$TRAINING_ASSET_DEFINITION_ID"
@@ -1141,7 +1134,7 @@ for run in $(seq 1 "$RUNS"); do
     mkdir -p "$clients_dir"
     client_seed_material="${SEED}-clients-${run}"
     client_names="recipient,sig1,sig2,sig3,multisig"
-    if ! generate_client_configs "$client_cfg" "$clients_dir" "$domain" "$client_seed_material" "$client_names"; then
+    if ! generate_client_configs "$client_cfg" "$clients_dir" "$client_seed_material" "$client_names"; then
       echo "[run $run] kagami client-configs failed" >&2
       stop_localnet "$run_dir"
       cleanup_run_dir=""
@@ -1244,7 +1237,7 @@ for run in $(seq 1 "$RUNS"); do
   propose_output=""
   instructions_hash=""
   if propose_output="$(retry_cmd_output "multisig propose" 3 2 bash -c \
-    "echo '\"congratulations\"' | \"$IROHA_BIN\" --machine --config \"$sig1_cfg\" -o --output-format json account meta set --id \"$multisig_account\" --key success_marker | \"$IROHA_BIN\" --machine --config \"$sig1_cfg\" --output-format text ledger multisig propose --account \"$multisig_account\"")"; then
+    "echo '\"congratulations\"' | \"$IROHA_BIN\" --machine --config \"$sig1_cfg\" --emit-instructions --output-format json account meta set --id \"$multisig_account\" --key success_marker | \"$IROHA_BIN\" --machine --config \"$sig1_cfg\" --output-format text ledger multisig propose --account \"$multisig_account\"")"; then
     instructions_hash="$(printf '%s\n' "$propose_output" | sed -n 's/^instructions_hash: //p' | head -n 1)"
     if [[ -z "$instructions_hash" ]]; then
       echo "[run $run] failed to parse multisig instructions hash" >&2

@@ -9,7 +9,7 @@
 //! each register when zero–knowledge mode is active.  Vector operations no
 //! longer use a dedicated register file – instead groups of the general
 //! registers are interpreted as vectors.  This module implements that design.
-use crate::zk::{RegEvent, with_reg_logger};
+use crate::zk::{RegEvent, record_register_event};
 use crate::{VMError, error::ExecutionDeferral, parallel::REGISTER_COUNT};
 use iroha_allocation::{AllocationBudget, AllocationCharge};
 use iroha_crypto::{CompactMerkleProof, Hash, HashOf, MerkleProof, MerkleTree};
@@ -19,6 +19,8 @@ use std::{
     alloc::Layout,
     sync::atomic::{AtomicBool, Ordering},
 };
+mod fixed_path;
+pub use fixed_path::REGISTER_MERKLE_PATH_DEPTH;
 pub struct Registers {
     /// 256 general purpose 64-bit registers. `r0` is hardwired to zero.
     gpr: [u64; 256],
@@ -204,17 +206,17 @@ impl Registers {
     pub fn get(&self, idx: usize) -> u64 {
         debug_assert!(idx < 256);
         let val = self.gpr[idx];
-        with_reg_logger(|log| {
+        record_register_event(|| {
             let (root, path) = self
                 .merkle_root_and_path(idx)
                 .expect("register access already validated the index");
-            log.record(RegEvent::Read {
+            RegEvent::Read {
                 index: idx,
                 value: val,
                 tag: self.tags[idx],
                 path,
                 root,
-            });
+            }
         });
         val
     }
@@ -225,7 +227,7 @@ impl Registers {
         if idx != 0 {
             self.gpr[idx] = value;
             let was_dirty = self.dirty.swap(true, Ordering::AcqRel);
-            with_reg_logger(|log| {
+            record_register_event(|| {
                 if !was_dirty {
                     self.tree.get_mut().update_hashed_leaf_sha256(
                         idx,
@@ -236,13 +238,13 @@ impl Registers {
                 let (root, path) = self
                     .merkle_root_and_path(idx)
                     .expect("register access already validated the index");
-                log.record(RegEvent::Write {
+                RegEvent::Write {
                     index: idx,
                     value,
                     tag: self.tags[idx],
                     path,
                     root,
-                });
+                }
             });
         }
     }
@@ -259,7 +261,7 @@ impl Registers {
         if idx != 0 {
             self.tags[idx] = value;
             let was_dirty = self.dirty.swap(true, Ordering::AcqRel);
-            with_reg_logger(|log| {
+            record_register_event(|| {
                 if !was_dirty {
                     self.tree
                         .get_mut()
@@ -269,13 +271,13 @@ impl Registers {
                 let (root, path) = self
                     .merkle_root_and_path(idx)
                     .expect("register access already validated the index");
-                log.record(RegEvent::Write {
+                RegEvent::Write {
                     index: idx,
                     value: self.gpr[idx],
                     tag: value,
                     path,
                     root,
-                });
+                }
             });
         }
     }
@@ -290,17 +292,17 @@ impl Registers {
         if idx == 0 {
             return;
         }
-        with_reg_logger(|log| {
+        record_register_event(|| {
             let (root, path) = self
                 .merkle_root_and_path(idx)
                 .expect("register access already validated the index");
-            log.record(RegEvent::Write {
+            RegEvent::Write {
                 index: idx,
                 value: self.gpr[idx],
                 tag: self.tags[idx],
                 path,
                 root,
-            });
+            }
         });
     }
     /// Zero every private register before clearing its privacy tag.
@@ -337,45 +339,6 @@ impl Registers {
         self.ensure_built_and_lock()
             .root()
             .expect("tree has at least one leaf")
-    }
-    /// Merkle authentication path for register `idx`.
-    ///
-    /// # Errors
-    /// Returns [`VMError::RegisterOutOfBounds`] when `idx` is not a register index.
-    #[inline]
-    pub fn merkle_path(&self, idx: usize) -> Result<Vec<[u8; 32]>, VMError> {
-        let leaf_index = register_leaf_index(idx)?;
-        let proof = self
-            .ensure_built_and_lock()
-            .get_proof(leaf_index)
-            .expect("validated register index exists in the fixed register tree");
-        Ok(proof
-            .into_audit_path()
-            .into_iter()
-            .map(|opt| opt.map(|h| *h.as_ref()).unwrap_or([0u8; 32]))
-            .collect())
-    }
-    /// Combined helper: return both the typed Merkle root and authentication
-    /// path for `idx`. Performs at most one rebuild and borrows the tree once.
-    ///
-    /// # Errors
-    /// Returns [`VMError::RegisterOutOfBounds`] when `idx` is not a register index.
-    #[inline]
-    pub fn merkle_root_and_path(
-        &self,
-        idx: usize,
-    ) -> Result<(HashOf<MerkleTree<[u8; 32]>>, Vec<[u8; 32]>), VMError> {
-        let leaf_index = register_leaf_index(idx)?;
-        let tree = self.ensure_built_and_lock();
-        let root = tree.root().expect("tree has at least one leaf");
-        let path = tree
-            .get_proof(leaf_index)
-            .expect("validated register index exists in the fixed register tree")
-            .into_audit_path()
-            .into_iter()
-            .map(|opt| opt.map(|h| *h.as_ref()).unwrap_or([0u8; 32]))
-            .collect();
-        Ok((root, path))
     }
     /// Build a compact Merkle proof for the register at `idx`.
     ///
@@ -555,10 +518,10 @@ mod tests {
         regs.set(2, 91);
         regs.set_tag(2, true);
         regs.set(7, 55);
-        let log = std::sync::Arc::new(parking_lot::Mutex::new(crate::zk::RegLog::default()));
-        let guard = crate::zk::RegLoggerGuard::install(Some(std::sync::Arc::clone(&log)));
+        let log = crate::zk::SharedRegLog::try_new(None).expect("test logger allocation");
+        let guard = crate::zk::RegLoggerGuard::install(Some(log.clone()));
         regs.scrub_private();
-        assert!(log.lock().events.is_empty());
+        assert!(log.lock().as_slice().is_empty());
         drop(guard);
         let mut expected = Registers::new();
         expected.set(7, 55);
@@ -598,9 +561,10 @@ mod tests {
     #[test]
     fn logged_writes_update_only_the_changed_merkle_leaf() {
         let mut regs = Registers::new();
-        let log = std::sync::Arc::new(parking_lot::Mutex::new(crate::zk::RegLog::default()));
+        let log = crate::zk::SharedRegLog::try_new(None).expect("test logger allocation");
         reset_register_leaf_digest_count();
-        let guard = crate::zk::RegLoggerGuard::install(Some(std::sync::Arc::clone(&log)));
+        let guard = crate::zk::RegLoggerGuard::install(Some(log.clone()));
+        let batch = crate::zk::RegEventBatch::begin(2).unwrap();
 
         regs.set(7, 42);
         assert_eq!(register_leaf_digest_count(), 1);
@@ -610,12 +574,13 @@ mod tests {
         regs.set_tag(7, true);
         assert_eq!(register_leaf_digest_count(), 1);
         let after_tag = canonical_root_and_path(&regs, 7);
+        drop(batch);
         drop(guard);
 
         let log = log.lock();
-        assert_eq!(log.events.len(), 2);
-        assert_logged_event_matches(&log.events[0], &after_set);
-        assert_logged_event_matches(&log.events[1], &after_tag);
+        assert_eq!(log.as_slice().len(), 2);
+        assert_logged_event_matches(&log.as_slice()[0], &after_set);
+        assert_logged_event_matches(&log.as_slice()[1], &after_tag);
         assert_eq!(regs.merkle_root(), after_tag.0);
     }
     #[test]
@@ -676,6 +641,6 @@ mod tests {
         };
 
         assert_eq!(logged_root, &expected.0);
-        assert_eq!(logged_path, &expected.1);
+        assert_eq!(logged_path.as_slice(), expected.1.as_slice());
     }
 }

@@ -3684,7 +3684,6 @@ fn read_owner_only_bounded(path: &Path) -> Result<Vec<u8>> {
 
 fn coordinator_client_config(client: &Client) -> Result<Vec<u8>> {
     let client = client.client();
-    let domain = iroha_model_base::domain::DomainId::try_new("default", "universal")?;
     let private_key = iroha_crypto::ExposedPrivateKey(client.key_pair().private_key().clone());
     let mut root = Table::new();
     root.insert(
@@ -3704,7 +3703,10 @@ fn coordinator_client_config(client: &Client) -> Result<Vec<u8>> {
         TomlValue::Integer(i64::try_from(client.torii_request_timeout().as_millis())?),
     );
     let mut account = Table::new();
-    account.insert("domain".to_owned(), TomlValue::String(domain.to_string()));
+    account.insert(
+        "chain_discriminant".to_owned(),
+        TomlValue::Integer(i64::from(client.account_chain_discriminant())),
+    );
     account.insert(
         "public_key".to_owned(),
         TomlValue::String(client.key_pair().public_key().to_string()),
@@ -5583,7 +5585,10 @@ fn observe_idempotent_finalized_retry(
 ) -> Result<FaultStateSnapshotV1> {
     let before = wait_for_converged_fault_state_snapshot(network, "before-finalized-retry")?;
     let fee_before = sponsor_nexus_fee_balance(sponsor)?;
-    let observed_height = sponsor.client().get_privacy_capabilities()?.committed_height;
+    let observed_height = sponsor
+        .client()
+        .get_privacy_capabilities()?
+        .committed_height;
     ensure!(
         observed_height >= receipt.finalized_height
             && observed_height >= manifest.authority_context_height
@@ -5625,7 +5630,9 @@ fn finalized_retry_acknowledgment_rejects_wrong_identity_or_height() {
         carrier_id,
         accepted_at_height: 10,
     };
-    assert!(ensure_finalized_retry_acknowledgment(&expected, bundle_id, carrier_id, 10, 11).is_ok());
+    assert!(
+        ensure_finalized_retry_acknowledgment(&expected, bundle_id, carrier_id, 10, 11).is_ok()
+    );
     for changed in [
         iroha::client::PrivateSettlementBundleSubmitResponseV1 {
             bundle_id: Hash::new(b"substituted bundle"),
@@ -5648,7 +5655,9 @@ fn finalized_retry_acknowledgment_rejects_wrong_identity_or_height() {
             ..expected
         },
     ] {
-        assert!(ensure_finalized_retry_acknowledgment(&changed, bundle_id, carrier_id, 10, 11).is_err());
+        assert!(
+            ensure_finalized_retry_acknowledgment(&changed, bundle_id, carrier_id, 10, 11).is_err()
+        );
     }
     let overflow = iroha::client::PrivateSettlementBundleSubmitResponseV1 {
         accepted_at_height: u64::MAX,
@@ -8222,6 +8231,8 @@ fn certified_native_history_from_proofs(
         (1..=MAX_NATIVE_HISTORY_HEIGHT).contains(&height),
         "native history exceeds the bounded diagnostic corridor"
     );
+    // All independently fetched carriers retain controls in this one bounded inspection pool.
+    let budget = iroha_core::state::AllocationBudget::new(32 * 1024 * 1024);
     let mut verifier = None;
     let mut certified = Vec::new();
     for at in 1..=height {
@@ -8235,7 +8246,9 @@ fn certified_native_history_from_proofs(
             "native history proof differs from requested height"
         );
         proof.decode_checked()?;
-        let block = iroha::data_model::block::decode_versioned_signed_block(&proof.block_wire)?;
+        let block = iroha::data_model::block::decode_framed_signed_block(&proof.block_wire)?;
+        let block = iroha::data_model::block::SharedSignedBlock::try_new(block, &budget)
+            .map_err(|(_, error)| error)?;
         if at == 1 {
             ensure!(
                 block.canonical_resultless_proposal()?.encode_wire()?
@@ -8245,15 +8258,13 @@ fn certified_native_history_from_proofs(
                 "peer substituted the independently signed genesis"
             );
             verifier = Some(iroha_core::sumeragi::certified_chain::CertifiedPrefix::new(
-                chain_id,
-                network_id,
-                Arc::new(block),
+                chain_id, network_id, block,
             )?);
         } else {
             let step = verifier
                 .as_mut()
                 .expect("original genesis authenticated first")
-                .push(Arc::new(block))?;
+                .push(block)?;
             certified.push(step.into_parts().0);
         }
     }
@@ -8535,7 +8546,7 @@ fn validate_transparent_native_receipt(
         receipt.entrypoint_hash == transaction.hash_as_entrypoint(),
         "native carrier does not bind the original settlement transaction"
     );
-    let block = iroha_data_model::block::decode_versioned_signed_block(&receipt.block_wire)?;
+    let block = iroha_data_model::block::decode_framed_signed_block(&receipt.block_wire)?;
     ensure!(
         block.header() == receipt.block_header
             && block
@@ -8688,10 +8699,7 @@ fn release_client_context_preserves_carrier_authority_and_preparation_errors() -
         (
             "account".to_owned(),
             TomlValue::Table(Table::from_iter([
-                (
-                    "domain".to_owned(),
-                    TomlValue::String("default.universal".to_owned()),
-                ),
+                ("chain_discriminant".to_owned(), TomlValue::Integer(753)),
                 (
                     "public_key".to_owned(),
                     TomlValue::String(key_pair.public_key().to_string()),
@@ -8874,8 +8882,9 @@ fn run_real_process_transparent_control_benchmark(
     // Rejected results may be recorded in canonical history. Their exact
     // typed failure was authenticated on every peer above; no applied replay is accepted.
 
-    let signed_rs16_da_observations =
-        owner.verify_signed_rs16_finality(carrier.height().get())?.observations;
+    let signed_rs16_da_observations = owner
+        .verify_signed_rs16_finality(carrier.height().get())?
+        .observations;
     ensure!(
         signed_rs16_da_observations >= request.minimum_signed_rs16_da_observations,
         "signed RS16 finality observations are incomplete"
@@ -9952,8 +9961,9 @@ fn run_real_process_private_benchmark(
         atomicity_observations.len() == network.all_peers().count(),
         "private benchmark atomicity observer omitted a validator or committee observer"
     );
-    let signed_rs16_da_observations =
-        owner.verify_signed_rs16_finality(receipt.finalized_height)?.observations;
+    let signed_rs16_da_observations = owner
+        .verify_signed_rs16_finality(receipt.finalized_height)?
+        .observations;
     ensure!(
         signed_rs16_da_observations >= request.minimum_signed_rs16_da_observations,
         "signed RS16 finality observations are incomplete"

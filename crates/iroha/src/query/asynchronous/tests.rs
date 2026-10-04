@@ -360,3 +360,73 @@ async fn compatibility_failure_uses_async_probe_and_never_submits_the_query() {
     assert_eq!(requests.len(), 1);
     assert_ne!(requests[0].url.path(), "/query");
 }
+
+fn truncated_batch(names: &[&str], remaining_items: Option<u64>) -> Reply {
+    let Reply::Response(fixture) = batch(names, None) else {
+        unreachable!("batch fixtures are responses")
+    };
+    let QueryResponse::Iterable(mut output) =
+        norito::decode_from_bytes::<QueryResponse>(fixture.body()).expect("fixture response")
+    else {
+        unreachable!("batch fixtures are iterable")
+    };
+    // Ephemeral cursor mode: more rows exist, but no continuation is offered.
+    output.has_more = true;
+    output.remaining_items = remaining_items;
+    response(&QueryResponse::Iterable(output))
+}
+
+#[tokio::test]
+async fn truncated_results_yield_delivered_rows_then_fail_explicitly() {
+    let (client, transport) = account(vec![truncated_batch(&["wonderland", "garden"], Some(3))]);
+    let mut stream = client
+        .query(FindDomains)
+        .execute()
+        .await
+        .expect("first batch");
+    assert!(stream.has_more());
+    assert_eq!(stream.remaining_items(), Some(5));
+    assert!(stream.next().await.expect("first row").is_ok());
+    assert_eq!(stream.remaining_items(), Some(4));
+    assert!(stream.next().await.expect("second row").is_ok());
+    assert!(matches!(
+        stream.next().await,
+        Some(Err(QueryError::Truncated {
+            remaining_items: Some(3)
+        }))
+    ));
+    assert!(stream.next().await.is_none(), "truncation ends the stream");
+    assert!(!stream.has_more());
+    assert_eq!(
+        transport.requests.lock().expect("requests").len(),
+        1,
+        "truncation never sends a continuation"
+    );
+
+    let (client, _) = account(vec![truncated_batch(&["wonderland"], None)]);
+    assert!(matches!(
+        client.query(FindDomains).execute_all().await,
+        Err(QueryError::Truncated {
+            remaining_items: None
+        })
+    ));
+}
+
+#[tokio::test]
+async fn complete_streams_report_exact_remaining_rows() {
+    let (client, _) = account(vec![batch(&["wonderland"], Some(1)), batch(&[], None)]);
+    let mut stream = client
+        .query(FindDomains)
+        .execute()
+        .await
+        .expect("first batch");
+    assert!(stream.has_more());
+    assert_eq!(
+        stream.remaining_items(),
+        None,
+        "the fixture does not promise exact remote counts"
+    );
+    assert!(stream.next().await.expect("row").is_ok());
+    assert!(stream.next().await.is_none());
+    assert_eq!(stream.remaining_items(), Some(0));
+}

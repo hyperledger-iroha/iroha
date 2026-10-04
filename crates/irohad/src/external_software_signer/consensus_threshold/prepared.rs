@@ -14,7 +14,7 @@ pub struct RuntimePreparedGlobalBeaconCredentialV1 {
     /// Public inventory digest to install with the matching provider revision.
     pub policy_digest: [u8; 32],
     /// Canonical secret credential containing every retained share and the exact pending share.
-    pub credential: Zeroizing<Vec<u8>>,
+    pub credential: SecretConsensusThresholdCredentialV1,
 }
 
 /// Build a restart credential by appending one exact prepared target share.
@@ -37,9 +37,63 @@ pub fn prepare_global_beacon_transition_credential_v1(
     revision: u64,
     transition: &ValidatorCommitteeTransitionV1,
     local_validator: &PeerId,
-    pending: RuntimeGlobalBeaconShareProvisioningV1,
+    pending: &RuntimeGlobalBeaconShareProvisioningV1,
+    budget: &AllocationBudget,
 ) -> Result<RuntimePreparedGlobalBeaconCredentialV1, RuntimeConsensusThresholdSignerCredentialErrorV1>
 {
+    use RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected;
+    let retained = retained
+        .map(|(bytes, configured)| {
+            if configured.handle() != handle
+                || configured.revision().is_none_or(|old| revision <= old)
+            {
+                return Err(Rejected);
+            }
+            decode_global_beacon_credential_shares_v1(
+                bytes,
+                &transition.preparation.network_id,
+                configured,
+                budget,
+            )
+            .map(|shares| (shares, configured))
+        })
+        .transpose()?;
+    prepare_global_beacon_transition_from_retained_v1(
+        retained
+            .as_ref()
+            .map(|(shares, binding)| (shares.as_slice(), *binding)),
+        handle,
+        revision,
+        transition,
+        local_validator,
+        pending,
+        budget,
+    )
+}
+
+/// Shared append path retaining the caller's already admitted current inventory.
+pub(super) fn prepare_global_beacon_transition_from_retained_v1(
+    retained: Option<(
+        &[RuntimeGlobalBeaconShareProvisioningV1],
+        &IrohaRuntimeProviderBindingV1,
+    )>,
+    handle: &str,
+    revision: u64,
+    transition: &ValidatorCommitteeTransitionV1,
+    local_validator: &PeerId,
+    pending: &RuntimeGlobalBeaconShareProvisioningV1,
+    budget: &AllocationBudget,
+) -> Result<RuntimePreparedGlobalBeaconCredentialV1, RuntimeConsensusThresholdSignerCredentialErrorV1>
+{
+    if !pending.belongs_to(budget)
+        || retained
+            .as_ref()
+            .is_some_and(|(entries, _)| entries.iter().any(|entry| !entry.belongs_to(budget)))
+    {
+        return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Session(
+            GlobalThresholdBeaconSessionError::ForeignReservation,
+        ));
+    }
     use RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected;
     transition.validate().map_err(|_| Rejected)?;
     if transition.outcome.is_some() {
@@ -55,12 +109,13 @@ pub fn prepare_global_beacon_transition_credential_v1(
         .and_then(|index| u16::try_from(index).ok())
         .and_then(|index| index.checked_add(1))
         .ok_or(Rejected)?;
-    let peers = transition
-        .preparation
-        .committee
-        .iter()
-        .map(|seat| seat.validator.clone())
-        .collect::<Vec<_>>();
+    let peers = || {
+        transition
+            .preparation
+            .committee
+            .iter()
+            .map(|seat| &seat.validator)
+    };
     let pending_session = pending.public_session();
     let dkg_session = &pending_session.adaptive_dkg.session;
     let preparation_cutoff = transition
@@ -81,38 +136,45 @@ pub fn prepare_global_beacon_transition_credential_v1(
         || dkg_session.start_height <= transition.preparation.selection_height
         || pending_session.adaptive_dkg.finalized_at_height >= preparation_cutoff
         || pending_session.roster_hash
-            != iroha_core::beacon::global_threshold_beacon_roster_hash_v1(&peers)
-        || usize::from(pending_session.committee_size) != peers.len()
+            != iroha_core::beacon::global_threshold_beacon_roster_hash_iter_v1(peers())
+        || usize::from(pending_session.committee_size) != transition.preparation.committee.len()
     {
         return Err(Rejected);
     }
-    let mut provisioning = Vec::new();
-    if let Some((bytes, configured)) = retained {
+    if let Some((retained, configured)) = &retained {
         if configured.handle() != handle || configured.revision().is_none_or(|old| revision <= old)
         {
             return Err(Rejected);
         }
-        // Core validates the complete canonical envelope, public policy and every actual held
-        // share before handing out its zeroizing secret owners for the new complete envelope.
-        let retained = decode_global_beacon_credential_shares_v1(bytes, &network_id, configured)?;
+        // The caller admitted this complete inventory once; canonical encoding borrows
+        // these exact sealed owners alongside the same-pool pending session.
         if retained
             .iter()
             .any(|entry| entry.public_session().session_id == pending_session.session_id)
         {
             return Err(Rejected);
         }
-        provisioning.extend(retained);
     }
-    provisioning.push(pending);
-    let policy_digest =
-        global_beacon_partial_signer_inventory_digest_v1(network_id, &provisioning)?;
-    let credential = encode_global_beacon_partial_signer_credential_v1(
+    let inventory = || {
+        retained
+            .iter()
+            .flat_map(|(shares, _)| shares.iter())
+            .chain(std::iter::once(pending))
+    };
+    let policy_digest = global_beacon_partial_signer_inventory_digest_v1(network_id, inventory())?;
+    let mut prepared = PreparedGlobalBeaconCredentialV1::new(
         network_id,
         handle,
         revision,
         policy_digest,
-        provisioning,
+        inventory().map(|share| (share.authenticated_session(), share.signer_index())),
+        budget,
     )?;
+    encode_global_beacon_partial_signer_credential_v1(
+        &mut prepared,
+        inventory().map(RuntimeGlobalBeaconShareProvisioningV1::credential_source),
+    )?;
+    let credential = prepared.into_credential().map_err(|(_, error)| error)?;
     Ok(RuntimePreparedGlobalBeaconCredentialV1 {
         revision,
         policy_digest,

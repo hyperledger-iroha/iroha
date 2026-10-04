@@ -6,9 +6,11 @@
 //! Credentials use the shared Unix/Windows retained-handle custody reader. This provider does not
 //! own the separate token issuer's bounded native receipt journal or its signing authority.
 use super::*;
+use crate::native_check_binding::{CheckTermination, complete_binding, complete_check};
 use iroha_config::parameters::actual::SorafsStreamTokenGatewayNativeConfig;
 use iroha_core::{
     query::stream_token_gateway::observation::{
+        StreamTokenGatewayCheckAttemptFailureV1, StreamTokenGatewayCheckBindingFailureV1,
         StreamTokenGatewayCheckExpectedV1 as Expected,
         StreamTokenGatewayCheckReadbackV1 as VerifiedReadback,
         StreamTokenGatewayCheckSelectorV1 as Selector,
@@ -168,13 +170,14 @@ impl NativeGateway {
         let signed = self
             .transactions
             .sign(prepared.instruction(), true, deadline)?;
-        let pending = prepared
-            .bind_signed_transaction(signed.clone())
-            .map_err(observation_error)?;
-        self.transactions.submit_and_wait(&signed, deadline)?;
-        let verified = pending
-            .verify_finalized(|| self.time())
-            .map_err(observation_error)?;
+        let pending =
+            complete_binding(prepared.bind_signed_transaction(signed)).map_err(binding_error)?;
+        self.transactions
+            .submit_and_wait(pending.signed_transaction(), pending.deadline())?;
+        let verified = complete_check(pending.verify_finalized(|| self.time()), |failure| {
+            failure.into_pending().verify_finalized(|| self.time())
+        })
+        .map_err(verification_error)?;
         self.check_deadline(deadline)?;
         Ok(verified)
     }
@@ -271,14 +274,20 @@ impl StreamTokenGatewayAdmissionProviderV1 for NativeGateway {
         deadline: Instant,
     ) -> Result<Record, Error> {
         let proof = self.checked(Selector::Serving(request.clone()), deadline)?;
-        if !matches!(proof.readback(), VerifiedReadback::Serving(value) if value.record == record) {
-            return Err(Error::SubstitutedOutcome);
-        }
-        // The memory-only publication lease encloses only this immediate handoff. It does not
-        // span later HTTP transport, and no queue, disk, network or callback work occurs here.
-        proof
-            .consume_for_serving(request, || self.time(), |accepted| accepted)
-            .map_err(observation_error)
+        // Every freshly verified retry must retain the caller's exact accepted record.
+        // The inner service result is completed; only Core's outer source refusal may retry.
+        let consume = |proof: Verified| {
+            if !matches!(proof.readback(), VerifiedReadback::Serving(value) if value.record == record)
+            {
+                return Ok(Err(Error::SubstitutedOutcome));
+            }
+            // The publication lease encloses only this handoff, never a wait or HTTP transport.
+            proof.consume_for_serving(request, || self.time(), Ok)
+        };
+        complete_check(consume(proof), |failure| {
+            consume(failure.into_pending().verify_finalized(|| self.time())?)
+        })
+        .map_err(verification_error)?
     }
 }
 fn acknowledgement_result(submitted: [u8; 32], original: [u8; 32], expired: bool) -> Ack {
@@ -295,6 +304,22 @@ fn observation_error(error: ObservationError) -> Error {
         // Missing policy/history, failed Check, lost finality and UTC/deadline uncertainty all
         // fail unavailable. None fabricates a provider violation or a durable rejection result.
         _ => Error::Unavailable,
+    }
+}
+fn binding_error(terminal: CheckTermination<StreamTokenGatewayCheckBindingFailureV1>) -> Error {
+    match terminal {
+        CheckTermination::Terminal(failure) => failure
+            .rejection()
+            .map_or(Error::Unavailable, observation_error),
+        CheckTermination::Expired => Error::Unavailable,
+    }
+}
+fn verification_error(outcome: CheckTermination<StreamTokenGatewayCheckAttemptFailureV1>) -> Error {
+    match outcome {
+        CheckTermination::Terminal(failure) => failure
+            .rejection()
+            .map_or(Error::Unavailable, observation_error),
+        CheckTermination::Expired => Error::Unavailable,
     }
 }
 fn eligibility_time(

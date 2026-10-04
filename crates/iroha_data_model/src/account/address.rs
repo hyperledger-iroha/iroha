@@ -27,6 +27,9 @@ use thiserror::Error;
 #[cfg(test)]
 #[path = "address/canonical_multisig_tests.rs"]
 mod canonical_multisig_tests;
+#[cfg(test)]
+#[path = "address/retained_output_tests.rs"]
+mod retained_output_tests;
 
 pub mod compliance_vectors;
 /// Obtain the currently configured chain discriminant for i105 literal encoding,
@@ -120,6 +123,19 @@ impl AccountAddress {
         let canonical = self.canonical_bytes()?;
         encode_i105_literal(discriminant, &canonical)
     }
+    /// Render an existing account without crossing an inbound key ownership boundary.
+    pub(super) fn retained_account_i105(
+        account: &AccountId,
+        discriminant: u16,
+    ) -> Result<String, AccountAddressError> {
+        encode_i105_literal(discriminant, &canonical_output_bytes(account)?)
+    }
+
+    /// Render the same retained canonical bytes through the shared hexadecimal sink.
+    pub(super) fn retained_account_hex(account: &AccountId) -> Result<String, AccountAddressError> {
+        canonical_output_hex(account)
+    }
+
     /// Parse an address payload from its canonical byte representation.
     ///
     /// # Errors
@@ -240,26 +256,7 @@ impl AccountAddress {
     /// Canonical payloads are domain-agnostic and therefore do not include a
     /// serialized domain selector segment.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, AccountAddressError> {
-        let mut canonical_len = 0_usize;
-        self.emit_canonical_bytes(|chunk| {
-            canonical_len = canonical_len
-                .checked_add(chunk.len())
-                .ok_or(AccountAddressError::DecodeResourceLimit)?;
-            Ok::<_, AccountAddressError>(())
-        })
-        .map_err(|error| match error {
-            CanonicalEmissionError::Account(error) | CanonicalEmissionError::Sink(error) => error,
-        })?;
-        let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(canonical_len)
-            .map_err(|_| AccountAddressError::DecodeResourceLimit)?;
-        self.emit_canonical_bytes(|chunk| {
-            bytes.extend_from_slice(chunk);
-            Ok::<_, core::convert::Infallible>(())
-        })
-        .map_err(CanonicalEmissionError::into_account)?;
-        Ok(bytes)
+        canonical_output_bytes(self)
     }
 
     fn emit_canonical_bytes<E>(
@@ -276,34 +273,9 @@ impl AccountAddress {
     ///
     /// Returns [`AccountAddressError`] if canonical byte construction fails.
     pub fn canonical_hex(&self) -> Result<String, AccountAddressError> {
-        let mut canonical_bytes = 0_usize;
-        self.emit_canonical_bytes(|chunk| {
-            canonical_bytes = canonical_bytes
-                .checked_add(chunk.len())
-                .ok_or(AccountAddressError::DecodeResourceLimit)?;
-            Ok::<_, AccountAddressError>(())
-        })
-        .map_err(|error| match error {
-            CanonicalEmissionError::Account(error) | CanonicalEmissionError::Sink(error) => error,
-        })?;
-        let encoded_bytes = canonical_bytes
-            .checked_mul(2)
-            .and_then(|bytes| bytes.checked_add(2))
-            .ok_or(AccountAddressError::DecodeResourceLimit)?;
-        let mut canonical = String::new();
-        canonical
-            .try_reserve_exact(encoded_bytes)
-            .map_err(|_| AccountAddressError::DecodeResourceLimit)?;
-        canonical.push_str("0x");
-        self.emit_canonical_bytes(|chunk| {
-            for &byte in chunk {
-                push_lower_hex_byte(&mut canonical, byte);
-            }
-            Ok::<_, core::convert::Infallible>(())
-        })
-        .map_err(CanonicalEmissionError::into_account)?;
-        Ok(canonical)
+        canonical_output_hex(self)
     }
+
     /// Convert this address into a domainless [`AccountId`].
     ///
     /// # Errors
@@ -631,6 +603,196 @@ struct MultisigMemberPayload {
     weight: u16,
     public_key: PublicKey,
 }
+trait CanonicalAccountOutput {
+    fn emit_canonical_bytes<E>(
+        &self,
+        emit: impl FnMut(&[u8]) -> Result<(), E>,
+    ) -> Result<(), CanonicalEmissionError<E>>;
+}
+
+impl CanonicalAccountOutput for AccountAddress {
+    fn emit_canonical_bytes<E>(
+        &self,
+        emit: impl FnMut(&[u8]) -> Result<(), E>,
+    ) -> Result<(), CanonicalEmissionError<E>> {
+        AccountAddress::emit_canonical_bytes(self, emit)
+    }
+}
+
+impl CanonicalAccountOutput for AccountId {
+    fn emit_canonical_bytes<E>(
+        &self,
+        mut emit: impl FnMut(&[u8]) -> Result<(), E>,
+    ) -> Result<(), CanonicalEmissionError<E>> {
+        let class = match self.controller() {
+            AccountController::Single(_) => AddressClass::SingleKey,
+            AccountController::Multisig(policy) => {
+                if policy.members().len() > CONTROLLER_MULTISIG_MEMBER_MAX {
+                    return Err(CanonicalEmissionError::Account(
+                        AccountAddressError::MultisigMemberOverflow(policy.members().len()),
+                    ));
+                }
+                AddressClass::MultiSig
+            }
+        };
+        let header = AddressHeader::new(HEADER_VERSION_V1, class, HEADER_NORM_VERSION_V1)
+            .map_err(CanonicalEmissionError::Account)?;
+        emit(&[header.encode()]).map_err(CanonicalEmissionError::Sink)?;
+        match self.controller() {
+            AccountController::Single(public_key) => {
+                let (algorithm, _) = public_key.try_to_bytes().map_err(|_| {
+                    CanonicalEmissionError::Account(AccountAddressError::InvalidPublicKey)
+                })?;
+                let curve = CurveId::try_from_algorithm(algorithm)
+                    .map_err(AccountAddressError::from)
+                    .map_err(CanonicalEmissionError::Account)?;
+                emit_single_controller(curve, public_key, &mut emit)
+            }
+            AccountController::Multisig(policy) => emit_multisig_controller(
+                policy.version(),
+                policy.threshold(),
+                policy.members(),
+                &mut emit,
+            ),
+        }
+    }
+}
+
+fn canonical_output_bytes(
+    output: &impl CanonicalAccountOutput,
+) -> Result<Vec<u8>, AccountAddressError> {
+    let mut canonical_len = 0_usize;
+    output
+        .emit_canonical_bytes(|chunk| {
+            canonical_len = canonical_len
+                .checked_add(chunk.len())
+                .ok_or(AccountAddressError::DecodeResourceLimit)?;
+            Ok::<_, AccountAddressError>(())
+        })
+        .map_err(|error| match error {
+            CanonicalEmissionError::Account(error) | CanonicalEmissionError::Sink(error) => error,
+        })?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(canonical_len)
+        .map_err(|_| AccountAddressError::DecodeResourceLimit)?;
+    output
+        .emit_canonical_bytes(|chunk| {
+            bytes.extend_from_slice(chunk);
+            Ok::<_, core::convert::Infallible>(())
+        })
+        .map_err(CanonicalEmissionError::into_account)?;
+    Ok(bytes)
+}
+
+fn canonical_output_hex(
+    output: &impl CanonicalAccountOutput,
+) -> Result<String, AccountAddressError> {
+    let mut canonical_bytes = 0_usize;
+    output
+        .emit_canonical_bytes(|chunk| {
+            canonical_bytes = canonical_bytes
+                .checked_add(chunk.len())
+                .ok_or(AccountAddressError::DecodeResourceLimit)?;
+            Ok::<_, AccountAddressError>(())
+        })
+        .map_err(|error| match error {
+            CanonicalEmissionError::Account(error) | CanonicalEmissionError::Sink(error) => error,
+        })?;
+    let encoded_bytes = canonical_bytes
+        .checked_mul(2)
+        .and_then(|bytes| bytes.checked_add(2))
+        .ok_or(AccountAddressError::DecodeResourceLimit)?;
+    let mut canonical = String::new();
+    canonical
+        .try_reserve_exact(encoded_bytes)
+        .map_err(|_| AccountAddressError::DecodeResourceLimit)?;
+    canonical.push_str("0x");
+    output
+        .emit_canonical_bytes(|chunk| {
+            for &byte in chunk {
+                push_lower_hex_byte(&mut canonical, byte);
+            }
+            Ok::<_, core::convert::Infallible>(())
+        })
+        .map_err(CanonicalEmissionError::into_account)?;
+    Ok(canonical)
+}
+
+trait CanonicalMultisigMember {
+    fn canonical_coordinates(&self) -> Result<(CurveId, u16, &PublicKey), AccountAddressError>;
+}
+
+impl CanonicalMultisigMember for MultisigMemberPayload {
+    fn canonical_coordinates(&self) -> Result<(CurveId, u16, &PublicKey), AccountAddressError> {
+        Ok((self.curve, self.weight, &self.public_key))
+    }
+}
+
+impl CanonicalMultisigMember for MultisigMember {
+    fn canonical_coordinates(&self) -> Result<(CurveId, u16, &PublicKey), AccountAddressError> {
+        let (algorithm, _) = self
+            .public_key()
+            .try_to_bytes()
+            .map_err(|_| AccountAddressError::InvalidPublicKey)?;
+        let curve = CurveId::try_from_algorithm(algorithm).map_err(AccountAddressError::from)?;
+        Ok((curve, self.weight(), self.public_key()))
+    }
+}
+
+fn emit_single_controller<E>(
+    curve: CurveId,
+    public_key: &PublicKey,
+    emit: &mut impl FnMut(&[u8]) -> Result<(), E>,
+) -> Result<(), CanonicalEmissionError<E>> {
+    let (_alg, payload) = public_key
+        .try_to_bytes()
+        .map_err(|_| CanonicalEmissionError::Account(AccountAddressError::InvalidPublicKey))?;
+    if let Ok(length) = u8::try_from(payload.len()) {
+        emit(&[CONTROLLER_SINGLE_KEY_TAG, curve.as_u8(), length])
+            .map_err(CanonicalEmissionError::Sink)?;
+    } else {
+        let length = u16::try_from(payload.len()).map_err(|_| {
+            CanonicalEmissionError::Account(AccountAddressError::KeyPayloadTooLong(u16::MAX))
+        })?;
+        emit(&[CONTROLLER_SINGLE_KEY_EXTENDED_TAG, curve.as_u8()])
+            .map_err(CanonicalEmissionError::Sink)?;
+        emit(&length.to_be_bytes()).map_err(CanonicalEmissionError::Sink)?;
+    }
+    emit(payload).map_err(CanonicalEmissionError::Sink)?;
+    Ok(())
+}
+
+fn emit_multisig_controller<E>(
+    version: u8,
+    threshold: u16,
+    members: &[impl CanonicalMultisigMember],
+    emit: &mut impl FnMut(&[u8]) -> Result<(), E>,
+) -> Result<(), CanonicalEmissionError<E>> {
+    let member_count = u16::try_from(members.len()).map_err(|_| {
+        CanonicalEmissionError::Account(AccountAddressError::MultisigMemberOverflow(members.len()))
+    })?;
+    emit(&[CONTROLLER_MULTISIG_TAG, version]).map_err(CanonicalEmissionError::Sink)?;
+    emit(&threshold.to_be_bytes()).map_err(CanonicalEmissionError::Sink)?;
+    emit(&member_count.to_be_bytes()).map_err(CanonicalEmissionError::Sink)?;
+    for member in members {
+        let (curve, weight, public_key) = member
+            .canonical_coordinates()
+            .map_err(CanonicalEmissionError::Account)?;
+        let (_alg, key_bytes) = public_key
+            .try_to_bytes()
+            .map_err(|_| CanonicalEmissionError::Account(AccountAddressError::InvalidPublicKey))?;
+        let length = u16::try_from(key_bytes.len()).map_err(|_| {
+            CanonicalEmissionError::Account(AccountAddressError::KeyPayloadTooLong(u16::MAX))
+        })?;
+        emit(&[curve.as_u8()]).map_err(CanonicalEmissionError::Sink)?;
+        emit(&weight.to_be_bytes()).map_err(CanonicalEmissionError::Sink)?;
+        emit(&length.to_be_bytes()).map_err(CanonicalEmissionError::Sink)?;
+        emit(key_bytes).map_err(CanonicalEmissionError::Sink)?;
+    }
+    Ok(())
+}
+
 impl ControllerPayload {
     fn from_account_controller(
         controller: &AccountController,
@@ -695,50 +857,10 @@ impl ControllerPayload {
     ) -> Result<(), CanonicalEmissionError<E>> {
         match self {
             Self::SingleKey { curve, public_key } => {
-                let (_alg, payload) = public_key.try_to_bytes().map_err(|_| {
-                    CanonicalEmissionError::Account(AccountAddressError::InvalidPublicKey)
-                })?;
-                if let Ok(length) = u8::try_from(payload.len()) {
-                    emit(&[CONTROLLER_SINGLE_KEY_TAG, curve.as_u8(), length])
-                        .map_err(CanonicalEmissionError::Sink)?;
-                } else {
-                    let length = u16::try_from(payload.len()).map_err(|_| {
-                        CanonicalEmissionError::Account(AccountAddressError::KeyPayloadTooLong(
-                            u16::MAX,
-                        ))
-                    })?;
-                    emit(&[CONTROLLER_SINGLE_KEY_EXTENDED_TAG, curve.as_u8()])
-                        .map_err(CanonicalEmissionError::Sink)?;
-                    emit(&length.to_be_bytes()).map_err(CanonicalEmissionError::Sink)?;
-                }
-                emit(payload).map_err(CanonicalEmissionError::Sink)?;
-                Ok(())
+                emit_single_controller(*curve, public_key, emit)
             }
             Self::MultiSig(payload) => {
-                let member_count = u16::try_from(payload.members.len()).map_err(|_| {
-                    CanonicalEmissionError::Account(AccountAddressError::MultisigMemberOverflow(
-                        payload.members.len(),
-                    ))
-                })?;
-                emit(&[CONTROLLER_MULTISIG_TAG, payload.version])
-                    .map_err(CanonicalEmissionError::Sink)?;
-                emit(&payload.threshold.to_be_bytes()).map_err(CanonicalEmissionError::Sink)?;
-                emit(&member_count.to_be_bytes()).map_err(CanonicalEmissionError::Sink)?;
-                for member in &payload.members {
-                    let (_alg, key_bytes) = member.public_key.try_to_bytes().map_err(|_| {
-                        CanonicalEmissionError::Account(AccountAddressError::InvalidPublicKey)
-                    })?;
-                    let length = u16::try_from(key_bytes.len()).map_err(|_| {
-                        CanonicalEmissionError::Account(AccountAddressError::KeyPayloadTooLong(
-                            u16::MAX,
-                        ))
-                    })?;
-                    emit(&[member.curve.as_u8()]).map_err(CanonicalEmissionError::Sink)?;
-                    emit(&member.weight.to_be_bytes()).map_err(CanonicalEmissionError::Sink)?;
-                    emit(&length.to_be_bytes()).map_err(CanonicalEmissionError::Sink)?;
-                    emit(key_bytes).map_err(CanonicalEmissionError::Sink)?;
-                }
-                Ok(())
+                emit_multisig_controller(payload.version, payload.threshold, &payload.members, emit)
             }
         }
     }

@@ -519,12 +519,25 @@ fn taira_doctor_bypasses_default_and_explicit_client_config_loading() {
             error.pointer("/error/exit_code").and_then(Value::as_u64),
             Some(1)
         );
-        let message = error
-            .pointer("/error/message")
-            .and_then(Value::as_str)
-            .expect("error message");
-        assert!(message.contains("unsupported URL scheme `ftp`"));
-        assert!(!message.contains("Failed to load config"));
+        let mut chain = vec![
+            error
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .expect("error message")
+                .to_owned(),
+        ];
+        chain.extend(
+            error
+                .pointer("/error/causes")
+                .and_then(Value::as_array)
+                .expect("error causes")
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned),
+        );
+        let chain = chain.join("\n");
+        assert!(chain.contains("unsupported URL scheme `ftp`"), "{chain}");
+        assert!(!chain.contains("Failed to load config"));
     }
 }
 #[test]
@@ -628,7 +641,7 @@ fn soracles_aggregate_output_emits_instruction_payload() {
     let output = command()
         .arg("--config")
         .arg(&config_path)
-        .arg("--output")
+        .arg("--emit-instructions")
         .args([
             "app",
             "soracles",
@@ -2814,7 +2827,7 @@ fn repo_initiate_emits_instruction_payload() {
     let output = command()
         .arg("--config")
         .arg(&config_path)
-        .arg("--output")
+        .arg("--emit-instructions")
         .args([
             "app",
             "repo",
@@ -3477,7 +3490,7 @@ fn repo_unwind_emits_instruction_payload() {
     let output = command()
         .arg("--config")
         .arg(&config_path)
-        .arg("--output")
+        .arg("--emit-instructions")
         .args(["app", "repo", "unwind", "--agreement-id", "daily_repo"])
         .output()
         .expect("failed to execute iroha repo unwind");
@@ -3506,7 +3519,7 @@ fn settlement_dvp_emits_instruction_payload() {
     let output = command()
         .arg("--config")
         .arg(&config_path)
-        .arg("--output")
+        .arg("--emit-instructions")
         .args([
             "app",
             "settlement",
@@ -3565,7 +3578,7 @@ fn settlement_pvp_emits_instruction_payload() {
     let output = command()
         .arg("--config")
         .arg(&config_path)
-        .arg("--output")
+        .arg("--emit-instructions")
         .args([
             "app",
             "settlement",
@@ -3621,7 +3634,7 @@ fn settlement_accepts_commit_atomicity() {
     let output = command()
         .arg("--config")
         .arg(&config_path)
-        .arg("--output")
+        .arg("--emit-instructions")
         .args([
             "app",
             "settlement",
@@ -4906,7 +4919,7 @@ web_login = \"mad_hatter\"\n\
 password = \"ilovetea\"\n\
 \n\
 [account]\n\
-domain = \"wonderland.universal\"\n\
+chain_discriminant = 753\n\
 public_key = \"ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03\"\n\
 private_key = \"{private_key}\"\n",
             private_key = super::ALICE_PRIVATE_KEY,

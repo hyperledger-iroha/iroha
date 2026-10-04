@@ -7,7 +7,7 @@ use ivm::{
 use kotodama_lang::{compiler::Compiler as KotodamaCompiler, ir, parser, semantic};
 mod common;
 fn encoded_state_path(name: &str, key: i64) -> String {
-    let key = ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(
+    let key = ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(
         i128::from(key),
     ))
     .expect("encode canonical pointer-backed StateMap key");

@@ -22,8 +22,9 @@ mod unix_main {
         load_software_signer_wrapping_key_from_fd_v1,
     };
     use irohad::{
-        IrohaRuntimeProviderSlotV1, RuntimeProviderBrokerExecutableArgsV1,
-        RuntimeProviderBrokerExecutableV1, load_runtime_provider_broker_catalog_file_v1,
+        IrohaRuntimeProviderBindingsV1, IrohaRuntimeProviderSlotV1,
+        RuntimeProviderBrokerExecutableArgsV1, RuntimeProviderBrokerExecutableV1,
+        load_runtime_provider_broker_catalog_file_v1, load_runtime_provider_broker_policy_file_v1,
     };
     use norito::{NoritoDeserialize, NoritoSerialize};
     use std::{
@@ -362,11 +363,51 @@ mod unix_main {
             }
         }
     }
+    /// Terminal launcher error retains credential decoder provenance until reporting.
+    #[derive(Debug)]
+    enum LauncherError {
+        Operation(CliError),
+        ThresholdCredential(
+            irohad::external_software_signer::RuntimeConsensusThresholdSignerCredentialErrorV1,
+        ),
+    }
+    impl From<CliError> for LauncherError {
+        fn from(error: CliError) -> Self {
+            Self::Operation(error)
+        }
+    }
+    impl LauncherError {
+        fn message(&self) -> &'static str {
+            match self {
+                Self::Operation(error) => error.message(),
+                Self::ThresholdCredential(error) => match error {
+                    irohad::external_software_signer::RuntimeConsensusThresholdSignerCredentialErrorV1::Unavailable
+                    | irohad::external_software_signer::RuntimeConsensusThresholdSignerCredentialErrorV1::Session(_)
+                    | irohad::external_software_signer::RuntimeConsensusThresholdSignerCredentialErrorV1::DecodeResource(_)
+                    | irohad::external_software_signer::RuntimeConsensusThresholdSignerCredentialErrorV1::ParliamentFunding(_) => "runtime secret credential is locally unavailable",
+                    _ => "runtime secret credential was rejected",
+                },
+            }
+        }
+    }
+    impl std::fmt::Display for LauncherError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.message())
+        }
+    }
+    impl std::error::Error for LauncherError {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Self::ThresholdCredential(error) => Some(error),
+                Self::Operation(_) => None,
+            }
+        }
+    }
     pub fn main() {
         let result = if is_standard_broker_argv0(env::args_os().next().as_deref()) {
             run_standard_runtime_provider_broker()
         } else {
-            run(Cli::parse())
+            run(Cli::parse()).map_err(LauncherError::from)
         };
         if let Err(error) = result {
             eprintln!("{}", error.message());
@@ -597,19 +638,35 @@ mod unix_main {
         }
         Ok(())
     }
+    /// Admit one original pool from the parsed policy before any credential input.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn run_standard_runtime_provider_broker() -> Result<(), CliError> {
-        let args = RuntimeProviderBrokerExecutableArgsV1::parse();
-        let catalog = load_runtime_provider_broker_catalog_file_v1(args.catalog_path())
+    fn standard_broker_credential_budget_v1(
+        catalog: &IrohaRuntimeProviderBindingsV1,
+        broker_policy: &iroha_config::parameters::actual::RuntimeProviderBroker,
+    ) -> Result<iroha_core::state::AllocationBudget, CliError> {
+        catalog
+            .validate_credential_memory_policy_v1(broker_policy)
             .map_err(|_| CliError::Binding)?;
+        Ok(iroha_core::state::AllocationBudget::new(
+            broker_policy.credential_max_memory_bytes.get(),
+        ))
+    }
+    /// Import both platform handoffs through the one already admitted pool.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn load_standard_threshold_signers_v1(
+        catalog: &IrohaRuntimeProviderBindingsV1,
+        broker_policy: &iroha_config::parameters::actual::RuntimeProviderBroker,
+    ) -> Result<RuntimeConsensusThresholdSignerBackendsV1, LauncherError> {
+        let credential_budget = standard_broker_credential_budget_v1(catalog, broker_policy)?;
         #[cfg(target_os = "linux")]
         let threshold_signers = {
             let credential_directory = env::var_os("CREDENTIALS_DIRECTORY").map(PathBuf::from);
             RuntimeConsensusThresholdSignerBackendsV1::load_from_credential_directory_v1(
-                &catalog,
+                catalog,
                 credential_directory.as_deref(),
+                &credential_budget,
             )
-            .map_err(|_| CliError::Credential)?
+            .map_err(LauncherError::ThresholdCredential)?
         };
         #[cfg(target_os = "macos")]
         let threshold_signers = {
@@ -617,11 +674,22 @@ mod unix_main {
             validate_launchd_threshold_bundle_stdin_v1(&stdin)?;
             let mut credential_bundle = stdin.lock();
             RuntimeConsensusThresholdSignerBackendsV1::load_from_launchd_credential_bundle_v1(
-                &catalog,
+                catalog,
                 &mut credential_bundle,
+                &credential_budget,
             )
-            .map_err(|_| CliError::Credential)?
+            .map_err(LauncherError::ThresholdCredential)?
         };
+        Ok(threshold_signers)
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn run_standard_runtime_provider_broker() -> Result<(), LauncherError> {
+        let args = RuntimeProviderBrokerExecutableArgsV1::parse();
+        let broker_policy = load_runtime_provider_broker_policy_file_v1(args.broker_policy_path())
+            .map_err(|_| CliError::Binding)?;
+        let catalog = load_runtime_provider_broker_catalog_file_v1(args.catalog_path())
+            .map_err(|_| CliError::Binding)?;
+        let threshold_signers = load_standard_threshold_signers_v1(&catalog, &broker_policy)?;
         let mut signers =
             ExternalSoftwareSignerBackendsV1::new().with_base_registry(Arc::new(threshold_signers));
         for configured in catalog.iter() {
@@ -658,7 +726,7 @@ mod unix_main {
                     let SignerPurposeBindingV1::GovernanceDag { publisher_peer_id } =
                         binding.purpose_binding
                     else {
-                        return Err(CliError::Binding);
+                        return Err(CliError::Binding.into());
                     };
                     signers.insert_governance_dag(Arc::new(
                         ExternalSoftwareSignerGovernanceDagAdapterV1::try_new(
@@ -671,7 +739,7 @@ mod unix_main {
                 IrohaRuntimeProviderSlotV1::PotrGatewaySigner => {
                     let SignerPurposeBindingV1::PotrGateway { signer_id } = binding.purpose_binding
                     else {
-                        return Err(CliError::Binding);
+                        return Err(CliError::Binding.into());
                     };
                     signers.insert_potr_gateway(Arc::new(
                         ExternalSoftwareSignerPotrGatewayAdapterV1::try_new(client, signer_id)
@@ -684,7 +752,7 @@ mod unix_main {
                         provider_id,
                     } = binding.purpose_binding
                     else {
-                        return Err(CliError::Binding);
+                        return Err(CliError::Binding.into());
                     };
                     signers.insert_potr_provider(Arc::new(
                         ExternalSoftwareSignerPotrProviderAdapterV1::try_new(
@@ -699,7 +767,7 @@ mod unix_main {
                     let SignerPurposeBindingV1::BillingStatement { signer_id } =
                         binding.purpose_binding
                     else {
-                        return Err(CliError::Binding);
+                        return Err(CliError::Binding.into());
                     };
                     signers.insert_billing_statement(Arc::new(
                         ExternalSoftwareSignerBillingStatementAdapterV1::try_new(client, signer_id)
@@ -711,28 +779,32 @@ mod unix_main {
                         ExternalSoftwareSignerEvidenceViewerAdapterV1::try_new(client)
                             .map_err(|_| CliError::Client)?,
                     )),
-                _ => return Err(CliError::Binding),
+                _ => return Err(CliError::Binding.into()),
             }
             .map_err(|_| CliError::Binding)?;
         }
-        let executable = RuntimeProviderBrokerExecutableV1::try_from_args(&args, &signers)
-            .map_err(|_| CliError::Binding)?;
+        let executable = RuntimeProviderBrokerExecutableV1::try_from_catalog_v1(
+            catalog,
+            broker_policy,
+            &signers,
+        )
+        .map_err(|_| CliError::Binding)?;
         #[cfg(target_os = "linux")]
         {
             executable
                 .serve_until_shutdown_signal_with_systemd_notify()
-                .map_err(|_| CliError::Service)
+                .map_err(|_| LauncherError::Operation(CliError::Service))
         }
         #[cfg(target_os = "macos")]
         {
             executable
                 .serve_until_shutdown_signal(|| {})
-                .map_err(|_| CliError::Service)
+                .map_err(|_| LauncherError::Operation(CliError::Service))
         }
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    fn run_standard_runtime_provider_broker() -> Result<(), CliError> {
-        Err(CliError::Service)
+    fn run_standard_runtime_provider_broker() -> Result<(), LauncherError> {
+        Err(CliError::Service.into())
     }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn fixed_catalog_signer_role_name(
@@ -1464,6 +1536,209 @@ mod unix_main {
         use clap::CommandFactory as _;
         use std::os::unix::fs::symlink;
 
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        fn broker_policy_for_test(
+            contents: &str,
+        ) -> iroha_config::parameters::actual::RuntimeProviderBroker {
+            iroha_config::parameters::actual::RuntimeProviderBroker::from_toml_source(
+                iroha_config::base::toml::TomlSource::inline(
+                    contents.parse().expect("public broker policy table"),
+                ),
+            )
+            .expect("validated broker policy")
+        }
+
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        fn broker_node_config_for_test(
+            policy: &iroha_config::parameters::actual::RuntimeProviderBroker,
+        ) -> iroha_config::parameters::actual::Root {
+            // Checked-in development keys are fixture data. No runtime file or
+            // credential input is opened while projecting this public catalog.
+            let contents = include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../../defaults/kagami/iroha3-dev/peer0.toml"
+            ))
+            .replace(
+                "expected_hash_file = \"genesis.expected_hash\"",
+                "expected_hash = \"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E\"",
+            );
+            let mut config = iroha_config::parameters::actual::Root::from_toml_source(
+                iroha_config::base::toml::TomlSource::inline(
+                    contents.parse().expect("development node table"),
+                ),
+            )
+            .expect("validated fixture node configuration");
+            config.runtime_provider_broker = policy.clone();
+            config
+        }
+
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        fn threshold_catalog_for_test(
+            policy: &iroha_config::parameters::actual::RuntimeProviderBroker,
+            slot: IrohaRuntimeProviderSlotV1,
+        ) -> IrohaRuntimeProviderBindingsV1 {
+            let mut config = broker_node_config_for_test(policy);
+            match slot {
+                IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner => {
+                    config.sumeragi.global_beacon_partial_signer_provider_handle =
+                        Some("software://iroha/global-beacon/primary".into());
+                    config
+                        .sumeragi
+                        .global_beacon_partial_signer_provider_revision = Some(1);
+                    config
+                        .sumeragi
+                        .global_beacon_partial_signer_provider_policy_digest = Some([0xA1; 32]);
+                }
+                IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner => {
+                    config
+                        .gov
+                        .parliament_tle_partial_release_signer_provider_handle =
+                        Some("software://iroha/parliament-tle/primary".into());
+                    config
+                        .gov
+                        .parliament_tle_partial_release_signer_provider_revision = Some(1);
+                    config
+                        .gov
+                        .parliament_tle_partial_release_signer_provider_policy_digest =
+                        Some([0xA2; 32]);
+                }
+                _ => panic!("fixture must request threshold custody"),
+            }
+            let catalog = IrohaRuntimeProviderBindingsV1::try_from_config(&config)
+                .expect("project exact public credential assembly");
+            assert_eq!(catalog.len(), 1);
+            let canonical = catalog.export_canonical_v1().expect("export exact catalog");
+            let restored = IrohaRuntimeProviderBindingsV1::load_canonical_v1(&canonical)
+                .expect("reload exact public catalog artifact");
+            assert_eq!(restored, catalog);
+            restored
+        }
+
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[test]
+        fn standard_broker_policy_creates_one_exact_default_or_nondefault_credential_pool() {
+            for contents in ["", "credential_max_memory_bytes = 512"] {
+                let policy = broker_policy_for_test(contents);
+                for slot in [
+                    IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner,
+                    IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner,
+                ] {
+                    let catalog = threshold_catalog_for_test(&policy, slot);
+                    let budget = standard_broker_credential_budget_v1(&catalog, &policy)
+                        .expect("exact file policy and catalog admit the original pool");
+                    let limit = policy.credential_max_memory_bytes.get();
+                    assert_eq!(catalog.credential_max_memory_bytes(), limit);
+                    assert_eq!(budget.limit_bytes(), limit);
+                    let retained = budget.clone();
+                    assert!(budget.same_pool(&retained));
+                    let charge = budget.try_reserve_bytes(limit).expect("exact bound");
+                    drop(budget);
+                    assert_eq!(retained.reserved_bytes(), limit);
+                    assert!(retained.try_reserve_bytes(1).is_err());
+                    drop(charge);
+                    assert_eq!(retained.reserved_bytes(), 0);
+                    assert!(retained.try_reserve_bytes(limit).is_ok());
+                }
+            }
+        }
+
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[test]
+        fn standard_broker_rejects_larger_or_smaller_policy_before_platform_credential_input() {
+            for contents in ["", "credential_max_memory_bytes = 512"] {
+                let catalog_policy = broker_policy_for_test(contents);
+                let limit = catalog_policy.credential_max_memory_bytes.get();
+                for slot in [
+                    IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner,
+                    IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner,
+                ] {
+                    let catalog = threshold_catalog_for_test(&catalog_policy, slot);
+                    for supplied in [1, limit - 1, limit + 1] {
+                        let file_policy = broker_policy_for_test(&format!(
+                            "credential_max_memory_bytes = {supplied}"
+                        ));
+                        assert!(matches!(
+                            standard_broker_credential_budget_v1(&catalog, &file_policy),
+                            Err(CliError::Binding)
+                        ));
+                        // Exercise the production importer, including on macOS:
+                        // the policy rejection must precede stdin inspection and
+                        // any platform credential decoder or backend result.
+                        assert!(matches!(
+                            load_standard_threshold_signers_v1(&catalog, &file_policy),
+                            Err(LauncherError::Operation(CliError::Binding))
+                        ));
+                    }
+                }
+            }
+        }
+
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[test]
+        fn standard_broker_preserves_zero_bound_governance_catalog_without_threshold_custody() {
+            let policy = broker_policy_for_test("credential_max_memory_bytes = 512");
+            let mut config = broker_node_config_for_test(&policy);
+            let service = &mut config.torii.sorafs_storage.governance_dag_service;
+            service.enabled = true;
+            service.head_mode = "ipns".into();
+            service.signed_head_url = None;
+            service.head_authenticator_handle = None;
+            service.head_authenticator_revision = None;
+            service.head_authenticator_policy_digest = None;
+            service.head_request_auth_public_key = None;
+            service.ipfs_api_url = Some("https://governance-ingress.invalid/ipfs/".into());
+            service.ipns_name = Some("k51qzi5uqu5dtest".into());
+            service.ipns_key_name = Some("governance-head".into());
+            service.ipfs_authenticator_handle = Some("vault://governance/ipfs-primary".into());
+            service.ipfs_authenticator_revision = Some(1);
+            service.ipfs_authenticator_policy_digest = Some([0xA3; 32]);
+            // Canonical Ed25519 base-point public key; no secret key is needed.
+            let mut public_key = [0x66; 32];
+            public_key[0] = 0x58;
+            service.ipfs_request_auth_public_key = Some(public_key);
+            service.checkpoint_store_handle = Some("kms://governance/checkpoint-primary".into());
+            service.checkpoint_store_revision = Some(1);
+            service.checkpoint_store_policy_digest = Some([0xA4; 32]);
+            let view = iroha_config::parameters::actual::SorafsGovernanceDagServiceView {
+                source_dir: None,
+                producer_publisher_peer_id: None,
+                producer_signer_handle: None,
+                producer_signer_revision: None,
+                producer_signer_policy_digest: None,
+                producer_publisher_public_key_hex: None,
+                service: config.torii.sorafs_storage.governance_dag_service,
+            };
+            let catalog = IrohaRuntimeProviderBindingsV1::try_from_governance_dag_service_view(
+                &config.common.chain,
+                iroha_data_model::NetworkId::from_genesis_hash(config.genesis.expected_hash),
+                &view,
+            )
+            .expect("exact standalone governance inventory");
+            let restored = IrohaRuntimeProviderBindingsV1::load_canonical_v1(
+                &catalog
+                    .export_canonical_v1()
+                    .expect("export governance catalog"),
+            )
+            .expect("reload canonical no-threshold inventory");
+            assert_eq!(restored.credential_max_memory_bytes(), 0);
+            assert_eq!(
+                restored
+                    .iter()
+                    .map(|binding| binding.slot())
+                    .collect::<Vec<_>>(),
+                vec![
+                    IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
+                    IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore,
+                ]
+            );
+            assert_eq!(
+                standard_broker_credential_budget_v1(&restored, &policy)
+                    .expect("no threshold custody is requested")
+                    .limit_bytes(),
+                policy.credential_max_memory_bytes.get()
+            );
+        }
+
         #[test]
         fn artifact_roundtrip_preserves_directory_identity_and_rejects_file_hardlinks() {
             let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
@@ -1810,6 +2085,69 @@ mod unix_main {
             );
             assert!(!path.exists());
             assert!(!moved.join("receipt.json").exists());
+        }
+
+        #[test]
+        fn threshold_decoder_failure_remains_typed_until_unavailable_launcher_diagnostic() {
+            use iroha_core::beacon::credential::{
+                ConsensusThresholdCredentialDecodeErrorV1, decode_consensus_threshold_credential_v1,
+            };
+            let secret = "credential diagnostic secret sentinel".to_owned();
+            let bytes = norito::encode_canonical(&vec![secret.clone()]).unwrap();
+            let error = norito::with_decode_limits_scope(
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+                || decode_consensus_threshold_credential_v1::<Vec<String>>(&bytes),
+            )
+            .unwrap_err();
+            let error = LauncherError::ThresholdCredential(error.into());
+            assert_eq!(
+                error.message(),
+                "runtime secret credential is locally unavailable"
+            );
+            assert!(!format!("{error:?}").contains(&secret));
+            assert!(std::error::Error::source(&error).is_some());
+            let LauncherError::ThresholdCredential(irohad::external_software_signer::RuntimeConsensusThresholdSignerCredentialErrorV1::DecodeResource(original)) = error else { panic!("terminal diagnostic must keep the original cause"); };
+            assert_eq!(
+                original.kind(),
+                norito::core::DecodeAttemptErrorKind::EnclosingLimit
+            );
+            assert!(matches!(
+                original.into_error(),
+                norito::Error::ScopedDecodeResource(_)
+            ));
+            let rejected = LauncherError::ThresholdCredential(
+                ConsensusThresholdCredentialDecodeErrorV1::Rejected.into(),
+            );
+            assert_eq!(rejected.message(), "runtime secret credential was rejected");
+        }
+
+        #[test]
+        fn parliament_actual_pool_refusal_remains_typed_and_locally_unavailable() {
+            let pool = iroha_allocation::AllocationBudget::new(1);
+            let original = pool
+                .try_reserve(std::alloc::Layout::array::<u8>(2).unwrap())
+                .err()
+                .unwrap();
+            let error = LauncherError::ThresholdCredential(
+                irohad::external_software_signer::RuntimeConsensusThresholdSignerCredentialErrorV1::ParliamentFunding(
+                    irohad::external_software_signer::RuntimeParliamentTleCredentialFundingErrorV1::Storage(
+                        iroha_allocation::ChargedBufferError::Admission(original.clone()),
+                    ),
+                ),
+            );
+            assert_eq!(
+                error.message(),
+                "runtime secret credential is locally unavailable"
+            );
+            assert!(std::error::Error::source(&error).is_some());
+            let LauncherError::ThresholdCredential(
+                irohad::external_software_signer::RuntimeConsensusThresholdSignerCredentialErrorV1::ParliamentFunding(
+                    irohad::external_software_signer::RuntimeParliamentTleCredentialFundingErrorV1::Storage(
+                        iroha_allocation::ChargedBufferError::Admission(retained),
+                    ),
+                ),
+            ) = error else { panic!("retain original physical admission cause"); };
+            assert_eq!(retained, original);
         }
     }
 }

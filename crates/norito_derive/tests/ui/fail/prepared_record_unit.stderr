@@ -1,0 +1,5 @@
+error: decode_fields requires a closed positional record
+ --> tests/ui/fail/prepared_record_unit.rs:4:8
+  |
+4 | struct Unit;
+  |        ^^^^

@@ -103,6 +103,7 @@ def test_distribution_declares_inline_types() -> None:
 def test_validation_fee_public_types_use_the_current_torii_owner() -> None:
     for name in (
         "GovernanceValidationFeePayoutBinding",
+        "GovernanceValidationFeeRewardCustody",
         "GovernanceProposalValidationFeePayoutLifecycle",
         "GovernanceValidationFeePolicy",
     ):
@@ -114,6 +115,15 @@ def test_validation_fee_public_types_use_the_current_torii_owner() -> None:
 
     lifecycle = governance_proposals.GovernanceProposalValidationFeePayoutLifecycle
     assert set(lifecycle.__dataclass_fields__) == {"proposal_operator", "payout_binding"}
+    custody = governance_proposals.GovernanceValidationFeeRewardCustody
+    assert set(custody.__dataclass_fields__) == {
+        "contract_address",
+        "treasury_account_id",
+        "ds_asset_id",
+        "xor_asset_id",
+        "reward_pool_account_id",
+        "validator_lane_id",
+    }
     binding = governance_proposals.GovernanceValidationFeePayoutBinding
     assert "reference_provider_accounts" in binding.__dataclass_fields__
     assert "reward_pool_account_id" in binding.__dataclass_fields__
@@ -121,3 +131,80 @@ def test_validation_fee_public_types_use_the_current_torii_owner() -> None:
     for module in (iroha_python, python_client, governance_proposals):
         assert not hasattr(module, "GovernanceValidationFeePayoutRecipient")
         assert "GovernanceValidationFeePayoutRecipient" not in module.__all__
+
+
+def test_json_reads_reject_non_json_success_bodies() -> None:
+    response = StubResponse(payload=None)
+    response._content = b"definitely not json"
+    response.headers["Content-Type"] = "text/plain"
+    client = ToriiClient(
+        "https://torii.example",
+        session=RecordingSession(response),
+        max_retries=0,
+    )
+
+    with pytest.raises(RuntimeError, match="not valid JSON"):
+        client.request_json("GET", "/v1/blocks")
+
+
+_RETIRED_COLLECTION_METHODS = [
+    f"{verb}_{resource}{suffix}"
+    for verb, resource in [
+        ("list", "accounts"),
+        ("query", "accounts"),
+        ("list", "domains"),
+        ("query", "domains"),
+        ("list", "asset_definitions"),
+        ("query", "asset_definitions"),
+        ("list", "asset_holders"),
+        ("query", "asset_holders"),
+        ("list", "account_assets"),
+        ("query", "account_assets"),
+        ("list", "account_transactions"),
+        ("query", "account_transactions"),
+        ("list", "rwas"),
+        ("query", "rwas"),
+        ("list", "repo_agreements"),
+        ("query", "repo_agreements"),
+    ]
+    for suffix in ("", "_typed")
+] + ["find_account_assets", "find_account_asset_items", "stream_pipeline_transactions"]
+
+
+@pytest.mark.parametrize("retired_name", _RETIRED_COLLECTION_METHODS)
+def test_collection_reads_have_one_surface(retired_name: str) -> None:
+    assert not hasattr(ToriiClient, retired_name)
+
+
+@pytest.mark.parametrize(
+    "retired_export",
+    [
+        "QueryEnvelope",
+        "Pagination",
+        "account_query_envelope",
+        "ensure_aggregate",
+        "DataEventFilter",
+        "EventFilter",
+        "AccountListPage",
+        "AccountAssetsPage",
+        "RwaListPage",
+    ],
+)
+def test_retired_query_exports_are_absent(retired_export: str) -> None:
+    import iroha_python
+
+    assert not hasattr(iroha_python, retired_export)
+    assert retired_export not in iroha_python.__all__
+
+
+def test_collection_surface_is_reused_from_the_lightweight_client() -> None:
+    import iroha_torii_client
+
+    import iroha_python
+
+    assert iroha_python.F is iroha_torii_client.F
+    assert iroha_python.ListQuery is iroha_torii_client.ListQuery
+    assert iroha_python.ToriiError is iroha_torii_client.ToriiError
+    client = ToriiClient("https://torii.example", session=RecordingSession(StubResponse()))
+    assert isinstance(client.accounts, iroha_torii_client.AccountsCollection)
+    assert isinstance(client.asset_definitions, iroha_torii_client.AssetDefinitionsCollection)

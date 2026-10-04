@@ -201,6 +201,39 @@ class LinuxProcessReader:
             os.close(self.proc);self.proc=-1
 
 
+class _MachTimebaseInfo(ctypes.Structure):
+    """Native mach_timebase_info_data_t, whose unsigned ratio converts ticks to ns."""
+
+    _fields_ = [("numer", ctypes.c_uint32), ("denom", ctypes.c_uint32)]
+
+
+def darwin_cpu_timebase() -> tuple[int, int]:
+    """Read the kernel timebase; rusage_info CPU values are Mach absolute ticks."""
+    require(sys.platform == 'darwin', 'Darwin CPU timebase requires Darwin')
+    library = ctypes.CDLL('/usr/lib/libSystem.B.dylib')
+    library.mach_timebase_info.argtypes = (ctypes.POINTER(_MachTimebaseInfo),)
+    library.mach_timebase_info.restype = ctypes.c_int
+    info = _MachTimebaseInfo()
+    require(library.mach_timebase_info(ctypes.byref(info)) == 0,
+            'native CPU timebase unavailable')
+    numer, denom = int(info.numer), int(info.denom)
+    darwin_cpu_nanoseconds(0, numer, denom)
+    return numer, denom
+
+
+def darwin_cpu_nanoseconds(ticks: int, numer: int, denom: int) -> int:
+    """Convert a cumulative CPU counter with exact integer scaling, then bound it."""
+    require(type(ticks) is int and 0 <= ticks < 1 << 65,
+            'native CPU tick sum outside range')
+    require(type(numer) is int and type(denom) is int
+            and 0 < numer < 1 << 32 and 0 < denom < 1 << 32
+            and (numer + denom - 1) // denom <= 1_000_000_000,
+            'invalid native CPU timebase')
+    nanoseconds = ticks * numer // denom
+    require(nanoseconds < 1 << 64, 'native CPU time exceeds u64')
+    return nanoseconds
+
+
 class DarwinProcessReader:
     """Extend the existing Nexus native image/birth reader with parent and CPU."""
 
@@ -209,6 +242,7 @@ class DarwinProcessReader:
         from nexus import resource_process
         self.native = resource_process
         self.reader = resource_process.DarwinProcessReader()
+        self.cpu_numer, self.cpu_denom = darwin_cpu_timebase()
 
     def sample(self,pid:int,image:ExecutableImage)->dict[str,Any]:
         """Match native BSD birth and loaded UUID around RSS and CPU reads."""
@@ -234,8 +268,11 @@ class DarwinProcessReader:
                 'birth':{'kind':'darwin_bsdinfo','started_seconds':int(after.start_sec),
                 'started_microseconds':int(after.start_usec),'start_abstime':int(usage.start_abstime)},
                 'loaded_image_uuid':bytes(usage.uuid).hex(),'executable_path':str(image.path),
-                'executable_sha256':image.sha256},'cpu_time_ns':int(usage.user_time)+int(usage.system_time),
-                'cpu_counter_unit_ns':1,'rss_bytes':rss}
+                'executable_sha256':image.sha256},
+                'cpu_time_ns':darwin_cpu_nanoseconds(int(usage.user_time)+int(usage.system_time),
+                                                     self.cpu_numer,self.cpu_denom),
+                'cpu_counter_unit_ns':(self.cpu_numer+self.cpu_denom-1)//self.cpu_denom,
+                'rss_bytes':rss}
 
     def close(self)->None:
         """Darwin's reader holds no per-process descriptor between samples."""

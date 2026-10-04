@@ -476,7 +476,7 @@ where
                     .is_some_and(|previous| completion.completion_epoch < previous)
                 || completion.assignment_revision != record.assignment_revision
                 || !completion.completion_authority.is_valid()
-                || completion.completed_by != completion.completion_authority.provider_owner
+                || completion.completed_by != completion.completion_authority.completion_signer
                 || !completion.finalized_anchor.is_valid()
                 || completion.finalized_anchor.height > identity.height()
                 || completion.finalized_anchor.height == identity.height()
@@ -699,17 +699,23 @@ mod tests {
         };
         payload.validate().expect("valid test replication order");
         let issued_by = fixture_account();
+        let signer_key =
+            iroha_crypto::KeyPair::try_from_seed(vec![0xd3; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("dedicated completion key");
+        let completion_signer = AccountId::new(signer_key.public_key().clone());
+        assert_ne!(issued_by, completion_signer);
         let provider_completions = match status {
             ReplicationOrderStatus::Completed(completion_epoch) => canonical_providers
                 .iter()
                 .copied()
                 .map(|provider_id| ReplicationOrderCompletionRecord {
                     provider_id: ProviderId::new(provider_id),
-                    completed_by: issued_by.clone(),
+                    completed_by: completion_signer.clone(),
                     completion_epoch,
                     assignment_revision: 1,
                     completion_authority: ProviderIngestCompletionAuthorityV1::new(
                         issued_by.clone(),
+                        completion_signer.clone(),
                         ProviderIngestCompletionSignerPolicyV1 {
                             policy_id: [0xA1; 32],
                             revision: 1,
@@ -1097,6 +1103,17 @@ mod tests {
                 std::slice::from_ref(&mismatched_approval),
                 std::slice::from_ref(&order),
             ),
+            Err(RoutingAuthorityError::Corrupt)
+        );
+
+        let mut owner_signed = order.clone();
+        owner_signed.1.provider_completions[0].completed_by = owner_signed.1.provider_completions
+            [0]
+        .completion_authority
+        .provider_owner
+        .clone();
+        assert_eq!(
+            build_test_projection(identity, std::slice::from_ref(&manifest), &[owner_signed]),
             Err(RoutingAuthorityError::Corrupt)
         );
 

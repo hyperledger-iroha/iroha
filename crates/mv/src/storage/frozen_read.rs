@@ -7,8 +7,10 @@
 use super::*;
 
 impl<K: Key, V: Value, A, M: StorageMode<K, V>> Detached<K, V, A, M> {
-    /// Borrow the exact original undo entries for the existing snapshot codec.
-    pub(crate) fn original_undo_entries(&self) -> impl Iterator<Item = (&K, &Option<V>)> {
+    /// Borrow every original undo entry in semantic key order, including absent preimages.
+    /// The iterator retains no new allocation or current reader and grants no
+    /// execution or publication authority.
+    pub fn original_undo_entries(&self) -> impl Iterator<Item = (&K, &Option<V>)> {
         self.revert.iter()
     }
 

@@ -47,10 +47,14 @@ fn committed_read_returns_original_qc_backing_after_projection_refusal_and_retry
     });
     let source = chain
         .kura()
-        .get_block(std::num::NonZeroUsize::new(10).unwrap())
+        .get_block(
+            std::num::NonZeroUsize::new(10).unwrap(),
+            &chain.state().ivm_execution_budget(),
+        )
+        .expect("original block read attempt")
         .unwrap();
     let budget = AllocationBudget::new(1 << 27);
-    let decoded = CertificateRead::new(Arc::clone(&source), budget.clone())
+    let decoded = CertificateRead::new(Clone::clone(&source), budget.clone())
         .complete(&budget)
         .unwrap_or_else(|_| panic!("real original native certificate"));
     let original_bitmap = decoded.commit_qc.signers.as_bytes().as_ptr();
@@ -140,10 +144,14 @@ fn body_only_read_releases_original_qc_witness_before_returning_ready() {
     };
     let original = chain
         .kura()
-        .get_block(std::num::NonZeroUsize::new(10).unwrap())
+        .get_block(
+            std::num::NonZeroUsize::new(10).unwrap(),
+            &chain.state().ivm_execution_budget(),
+        )
+        .expect("original block read attempt")
         .unwrap();
     let budget = AllocationBudget::new(1 << 27);
-    let decoded = CertificateRead::new(Arc::clone(&original), budget.clone())
+    let decoded = CertificateRead::new(Clone::clone(&original), budget.clone())
         .complete(&budget)
         .unwrap_or_else(|_| panic!("original certified artifacts"));
     // Keep one observer of the exact existing shared witness; this allocates no replacement.
@@ -236,7 +244,11 @@ fn committed_result_decode_refusal_keeps_original_read_slot_and_retries() {
     ));
     let block = chain
         .kura()
-        .get_block(std::num::NonZeroUsize::new(10).unwrap())
+        .get_block(
+            std::num::NonZeroUsize::new(10).unwrap(),
+            &chain.state().ivm_execution_budget(),
+        )
+        .expect("original block read attempt")
         .unwrap();
     let budget = AllocationBudget::new(1 << 27);
     let decoded = CertificateRead::new(block.clone(), budget.clone())
@@ -327,8 +339,7 @@ fn committed_result_decode_refusal_keeps_original_read_slot_and_retries() {
 fn committed_certificate_allocator_refusal_retains_original_slot_and_retries() {
     use crate::test_allocations::refuse_one_layout_during;
     use iroha_data_model::{
-        block::decode_versioned_signed_block,
-        sumeragi_finality::test_fixtures::NativeFinalityFixture,
+        block::decode_framed_signed_block, sumeragi_finality::test_fixtures::NativeFinalityFixture,
     };
     let fixture = NativeFinalityFixture::new();
     let parent = fixture
@@ -338,7 +349,8 @@ fn committed_certificate_allocator_refusal_retains_original_slot_and_retries() {
     let ScheduledSlot::Ready(scheduled) = &parent.commitment().schedule.next else {
         panic!("original genesis authenticates successor");
     };
-    let source = Arc::new(decode_versioned_signed_block(&fixture.latest().block_wire).unwrap());
+    let source = crate::block::reserve_block_for_tests()
+        .initialize(decode_framed_signed_block(&fixture.latest().block_wire).unwrap());
     let crypto = Arc::new(BlsCrypto::new());
     crypto
         .admit_committee(
@@ -364,7 +376,7 @@ fn committed_certificate_allocator_refusal_retains_original_slot_and_retries() {
     }
     let budget = AllocationBudget::new(1 << 25);
     let mut read = CommittedRead::new(
-        Arc::clone(&source),
+        Clone::clone(&source),
         2,
         budget.clone(),
         crypto,

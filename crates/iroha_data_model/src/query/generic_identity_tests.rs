@@ -180,22 +180,6 @@ fn current_families() -> Vec<Value> {
         family("committed-second-network", || committed_transaction(1)),
     ];
     rows.extend(super::tx_predicate::generic_membership_identity_records());
-    #[cfg(feature = "ids_projection")]
-    rows.extend([
-        family("selector-mode-full", || super::dsl::SelectorMode::Full),
-        family("selector-mode-ids", || super::dsl::SelectorMode::IdsOnly),
-        family("selector-account-ids", SelectorTuple::<Account>::ids_only),
-        family("filtered-account-ids", || {
-            QueryWithFilter::new((), account_predicate(), SelectorTuple::ids_only())
-        }),
-        family("erased-account-ids", || {
-            ErasedIterQuery::new(
-                account_predicate(),
-                SelectorTuple::ids_only(),
-                account_query_payload(),
-            )
-        }),
-    ]);
     rows
 }
 
@@ -212,17 +196,10 @@ fn capture_query_identity_frames_for_first_release_migration() {
 fn complete_query_frames_match_current_canonical_fixtures() {
     use sha2::{Digest as _, Sha256};
 
-    #[cfg(not(feature = "ids_projection"))]
     let (source, digest, family_count) = (
         include_str!("../../tests/fixtures/query_generic_full_identity_frames.json"),
         "fd10dd777565d2e3cfc05c8a1e6b8da7852139432255e290378709d66d7861d6",
         23,
-    );
-    #[cfg(feature = "ids_projection")]
-    let (source, digest, family_count) = (
-        include_str!("../../tests/fixtures/query_generic_ids_identity_frames.json"),
-        "e2101ac59ba28454a918d50714b0cf1a98b2e29411391938ac0fa219054b7f4e",
-        28,
     );
     assert_eq!(hex::encode(Sha256::digest(source.as_bytes())), digest);
     let expected: Vec<Value> = json::from_str(source).expect("immutable query fixture");

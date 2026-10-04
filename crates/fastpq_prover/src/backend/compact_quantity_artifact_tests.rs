@@ -1,5 +1,6 @@
 //! Full-domain artifact identity, context and inherited decode-budget regressions.
 
+use super::effect_test_support::{EffectFixture, verify as verify_effect};
 use super::*;
 use crate::backend::compact_quantity_tests::{QuantityCase, QuantityFixture};
 use iroha_data_model::fastpq::{FastpqAxtPreProofMirrorsV1, FastpqAxtPublicMetadataV1};
@@ -49,11 +50,10 @@ fn fixture() -> QuantityFixture {
 }
 
 fn ordinary(fixture: &QuantityFixture, frame: Vec<u8>) -> FastpqOrdinaryCompactArtifactV1 {
-    FastpqOrdinaryCompactArtifactV1 {
-        profile_id: quantity_diagnostic_profile_id(),
-        statement: fixture.model(),
-        bundle_frame: frame,
-    }
+    EffectFixture::from_transfer_facts(&fixture.model()).artifact(frame)
+}
+fn effect_fixture(fixture: &QuantityFixture) -> EffectFixture {
+    EffectFixture::from_transfer_facts(&fixture.model())
 }
 
 fn axt(fixture: &QuantityFixture, frame: Vec<u8>) -> FastpqAxtCompactArtifactV1 {
@@ -162,10 +162,9 @@ fn assert_profile_rejected_before_child_decode(
     let expected = fixture.expected();
     let statement_digest = statement_digest(&fixture.model(), usize::MAX).unwrap();
     assert!(matches!(
-        verify_bound_quantity_ordinary_artifact(
+        verify_effect(
             &norito::encode_canonical(&ordinary).unwrap(),
-            &expected,
-            statement_digest,
+            &effect_fixture(fixture),
             policy(),
         ),
         Err(ArtifactError::Transport(
@@ -354,10 +353,17 @@ fn predecessor_quantity_profile_is_rejected_on_both_bound_routes() {
 #[test]
 fn advertised_profiles_and_structural_route_cannot_select_quantity_verifiers() {
     let f = fixture();
+    let expected = effect_fixture(&f);
     let ordinary_bytes = norito::encode_canonical(&ordinary(&f, vec![])).unwrap();
     let axt_bytes = norito::encode_canonical(&axt(&f, vec![])).unwrap();
+    let mut retired = ordinary(&f, vec![]);
+    retired.profile_id = quantity_diagnostic_profile_id();
     assert!(matches!(
-        verify_ordinary_artifact(&ordinary_bytes, &f.expected(), policy()),
+        verify_effect(
+            &norito::encode_canonical(&retired).unwrap(),
+            &expected,
+            policy()
+        ),
         Err(ArtifactError::Transport(
             FastpqCompactArtifactDecodeError::ProfileMismatch
         ))
@@ -372,17 +378,18 @@ fn advertised_profiles_and_structural_route_cannot_select_quantity_verifiers() {
     changed.profile_id = diagnostic_profile_id();
     let bytes = norito::encode_canonical(&changed).unwrap();
     assert!(matches!(
-        verify_quantity_ordinary_artifact(&bytes, &f.expected(), policy()),
+        verify_effect(&bytes, &expected, policy()),
         Err(ArtifactError::Transport(
             FastpqCompactArtifactDecodeError::ProfileMismatch
         ))
     ));
+    // The retired u64 profile is negative data, no selectable ordinary implementation.
     assert!(matches!(
-        verify_ordinary_artifact(&bytes, &f.expected(), policy()),
+        verify_effect(&ordinary_bytes, &expected, policy()),
         Err(ArtifactError::Verify(_))
     ));
     assert!(matches!(
-        verify_quantity_ordinary_artifact(&axt_bytes, &f.expected(), policy()),
+        verify_effect(&axt_bytes, &expected, policy()),
         Err(ArtifactError::Transport(
             FastpqCompactArtifactDecodeError::Norito(_)
         ))
@@ -398,7 +405,17 @@ fn advertised_profiles_and_structural_route_cannot_select_quantity_verifiers() {
 #[test]
 fn quantity_artifact_compares_every_expected_input_before_child_decode() {
     let f = fixture();
-    let ordinary = norito::encode_canonical(&ordinary(&f, vec![0])).unwrap();
+    let independent = effect_fixture(&f);
+    let n = independent.statement.effects.effects.len();
+    let carrier = norito::encode_canonical(
+        &crate::backend::compact_bundle::execution_effect::EffectBundleWire {
+            version: 1,
+            intermediate_roots: vec![Hash::new(b"invalid child fixture interior").into(); n - 1],
+            segments: vec![vec![0]; n],
+        },
+    )
+    .unwrap();
+    let ordinary = norito::encode_canonical(&independent.artifact(carrier)).unwrap();
     let axt = norito::encode_canonical(&axt(&f, vec![0])).unwrap();
     for index in 0..7 {
         let mut expected = f.expected();
@@ -411,10 +428,35 @@ fn quantity_artifact_compares_every_expected_input_before_child_decode() {
             5 => expected.tx_set_hash[0] ^= 1,
             _ => expected.ordering_hash[0] ^= 1,
         }
-        assert!(matches!(
-            verify_quantity_ordinary_artifact(&ordinary, &expected, policy()),
-            Err(ArtifactError::Verify(Error::PublicIoMismatch { .. }))
-        ));
+        if index < 6 {
+            let mut facts = independent.facts();
+            match index {
+                0 => facts.public_inputs.dsid[0] ^= 1,
+                1 => facts.public_inputs.slot ^= 1,
+                2 => facts.public_inputs.old_root[0] ^= 1,
+                3 => facts.public_inputs.new_root[0] ^= 1,
+                4 => facts.public_inputs.perm_root[0] ^= 1,
+                _ => facts.public_inputs.tx_set_hash[0] ^= 1,
+            }
+            assert!(matches!(super::effect_test_support::verify_expected(
+                &ordinary, &independent, crate::offline_compact::ExpectedExecutionEffects {
+                    source: &independent.source, statement: facts,
+                }, policy()), Err(ArtifactError::Verify(Error::TransferInvariant { details }))
+                    if details == "execution effect independent statement expectation mismatch"));
+        } else {
+            let mut offered = independent.artifact(vec![0]);
+            offered.statement.ordering_hash[0] ^= 1;
+            assert!(matches!(
+                verify_effect(
+                    &norito::encode_canonical(&offered).unwrap(),
+                    &independent,
+                    policy()
+                ),
+                Err(ArtifactError::Verify(Error::PublicIoMismatch {
+                    field: "compact_artifact_public_statement_digest"
+                }))
+            ));
+        }
         assert!(matches!(
             verify_quantity_axt_artifact(&axt, &expected, f.context(), policy()),
             Err(ArtifactError::Verify(Error::PublicIoMismatch { .. }))
@@ -451,11 +493,12 @@ fn quantity_artifact_requires_original_axt_advertisements_and_remote_preimages()
 #[test]
 fn quantity_artifact_raw_and_inherited_caps_precede_untrusted_allocations() {
     let f = fixture();
+    let independent = effect_fixture(&f);
     let expected = f.expected();
     let mut limits = policy();
     limits.transport.max_wire_bytes = 0;
     assert!(matches!(
-        verify_quantity_ordinary_artifact(&[0], &expected, limits),
+        verify_effect(&[0], &independent, limits),
         Err(ArtifactError::Transport(
             FastpqCompactArtifactDecodeError::WireBytes { .. }
         ))
@@ -470,14 +513,14 @@ fn quantity_artifact_raw_and_inherited_caps_precede_untrusted_allocations() {
     assert!(
         norito::core::with_decode_limits_scope(
             DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 32),
-            || verify_quantity_ordinary_artifact(&bytes, &expected, policy())
+            || verify_effect(&bytes, &independent, policy())
         )
         .is_err()
     );
     let mut limits = policy();
     limits.transport.max_bundle_frame_bytes = 0;
     assert!(matches!(
-        verify_quantity_ordinary_artifact(&bytes, &expected, limits),
+        verify_effect(&bytes, &independent, limits),
         Err(ArtifactError::Transport(
             FastpqCompactArtifactDecodeError::BundleBytes { .. }
         ))
@@ -491,7 +534,7 @@ fn quantity_artifact_false_rows_do_not_reach_the_proof_decoder() {
     artifact.statement.transitions[0].pre_value = 1_u64.to_le_bytes().to_vec();
     let bytes = norito::encode_canonical(&artifact).unwrap();
     assert!(matches!(
-        verify_quantity_ordinary_artifact(&bytes, &f.expected(), policy()),
+        verify_effect(&bytes, &effect_fixture(&f), policy()),
         Err(ArtifactError::Verify(_))
     ));
     let limits = PublicTransferLimits {
@@ -499,9 +542,9 @@ fn quantity_artifact_false_rows_do_not_reach_the_proof_decoder() {
         ..PublicTransferLimits::default()
     };
     assert!(matches!(
-        verify_quantity_ordinary_artifact(
+        verify_effect(
             &norito::encode_canonical(&ordinary(&f, vec![0])).unwrap(),
-            &f.expected(),
+            &effect_fixture(&f),
             ArtifactLimits {
                 public_statement: limits,
                 ..policy()
@@ -538,13 +581,35 @@ fn public_quantity_construction_preserves_enclosing_decode_allocation_budget() {
         })) if attempted > 0
     ));
     let materialized = norito::core::with_decode_limits_scope(budget, || {
-        materialize_quantity_public_transfers(
-            &f.claims,
-            f.inputs,
-            ProofSemantics::StateTransition,
-            PublicTransferLimits::default(),
-            TransferSmtBuildLimits::for_update_limit(4).unwrap(),
-        )
+        {
+            // This test fixture owns its finite tree pool; production supplies its original owner.
+            let tree_claims = &f.claims;
+            let tree_limits = TransferSmtBuildLimits::for_update_limit(4).unwrap();
+            let tree_updates = tree_claims
+                .iter()
+                .try_fold(0_usize, |count, claim| {
+                    count.checked_add(claim.deltas.len())
+                })
+                .expect("fixture effect count fits")
+                .checked_mul(2)
+                .expect("fixture row count fits");
+            let tree_bytes = tree_limits
+                .allocation_bytes(tree_updates, tree_updates)
+                .expect("fixture tree allocation demand fits");
+            let tree_budget = iroha_allocation::AllocationBudget::new(tree_bytes);
+            let mut tree_reservation = tree_budget
+                .try_reserve_bytes(tree_bytes)
+                .expect("fixture owns complete tree credit");
+            materialize_quantity_public_transfers(
+                tree_claims,
+                f.inputs,
+                ProofSemantics::StateTransition,
+                PublicTransferLimits::default(),
+                tree_limits,
+                &tree_budget,
+                &mut tree_reservation,
+            )
+        }
     });
     assert!(matches!(
         materialized,
@@ -559,13 +624,35 @@ fn public_quantity_construction_preserves_enclosing_decode_allocation_budget() {
     let restored = f.prepare(ProofSemantics::StateTransition);
     assert_eq!(restored.transitions(), f.rows.as_slice());
     assert_eq!(*restored.public_inputs(), f.inputs);
-    let materialized = materialize_quantity_public_transfers(
-        &f.claims,
-        f.inputs,
-        ProofSemantics::StateTransition,
-        PublicTransferLimits::default(),
-        TransferSmtBuildLimits::for_update_limit(4).unwrap(),
-    )
+    let materialized = {
+        // This test fixture owns its finite tree pool; production supplies its original owner.
+        let tree_claims = &f.claims;
+        let tree_limits = TransferSmtBuildLimits::for_update_limit(4).unwrap();
+        let tree_updates = tree_claims
+            .iter()
+            .try_fold(0_usize, |count, claim| {
+                count.checked_add(claim.deltas.len())
+            })
+            .expect("fixture effect count fits")
+            .checked_mul(2)
+            .expect("fixture row count fits");
+        let tree_bytes = tree_limits
+            .allocation_bytes(tree_updates, tree_updates)
+            .expect("fixture tree allocation demand fits");
+        let tree_budget = iroha_allocation::AllocationBudget::new(tree_bytes);
+        let mut tree_reservation = tree_budget
+            .try_reserve_bytes(tree_bytes)
+            .expect("fixture owns complete tree credit");
+        materialize_quantity_public_transfers(
+            tree_claims,
+            f.inputs,
+            ProofSemantics::StateTransition,
+            PublicTransferLimits::default(),
+            tree_limits,
+            &tree_budget,
+            &mut tree_reservation,
+        )
+    }
     .unwrap();
     assert_eq!(materialized.transitions(), f.rows.as_slice());
     assert_eq!(materialized.public_inputs(), f.inputs);

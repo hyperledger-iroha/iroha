@@ -142,7 +142,7 @@ pub fn apply_genesis(
     overlay
         .take_sumeragi_lanes()
         .map_err(StartupError::LaneStep)?;
-    let witness = overlay
+    let mut witness = overlay
         .take_exec_witness()
         .ok_or_else(|| StartupError::Local("genesis witness was not captured".into()))?;
     let budget = state.ivm_execution_budget();
@@ -153,9 +153,14 @@ pub fn apply_genesis(
     let transition = overlay
         .world_state_transition()
         .map_err(StartupError::Local)?;
-    let retained_result =
-        execution_result(&witness, valid.as_ref(), &transition, inputs, native_lanes)
-            .map_err(StartupError::ExecutionCommitment)?;
+    let retained_result = execution_result(
+        &mut witness,
+        valid.as_ref(),
+        &transition,
+        inputs,
+        native_lanes,
+    )
+    .map_err(StartupError::ExecutionCommitment)?;
     let preimage = encode_result_preimage(&retained_result, &budget)
         .map_err(|error| StartupError::Local(error.to_string()))?;
     let result = result_of_preimage(preimage.as_slice());
@@ -184,7 +189,12 @@ pub fn apply_genesis(
     let native_contexts = archive
         .prepare(&overlay, valid.as_ref(), &retained_result, &witness)
         .map_err(|error| StartupError::Local(error.to_string()))?;
-    let committed = valid.commit_unchecked().unpack(|_| {});
+    let shell = iroha_data_model::block::SharedSignedBlock::reserve(&budget)
+        .map_err(|error| StartupError::Deferred(error.into()))?;
+    let committed = valid
+        .with_commit_certificate(certificate.clone())
+        .commit_unchecked(shell)
+        .unpack(|_| {});
     match stored {
         Some(stored) => {
             if stored != &certificate {
@@ -192,13 +202,9 @@ pub fn apply_genesis(
             }
         }
         None => {
-            let frame = committed
-                .as_ref()
-                .clone()
-                .with_commit_certificate(Some(certificate.clone()));
             state
                 .kura()
-                .store_block(frame)
+                .store_block(committed.shared().clone())
                 .map_err(|error| StartupError::Local(error.to_string()))?;
         }
     }
@@ -233,7 +239,14 @@ pub fn apply_genesis(
                 },
             ),
         )
-        .map_err(StartupError::Local)?;
+        .map_err(|error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(reason) => {
+                StartupError::Local(reason)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                StartupError::Deferred(reason)
+            }
+        })?;
     overlay
         .apply_without_execution_with_sumeragi_commit(&committed, &certificate, committee)
         .map_err(|error| StartupError::Local(error.to_string()))?;
@@ -255,7 +268,18 @@ pub fn stored_genesis(
 ) -> Result<Option<(SignedBlock, CommitCertificate, GenesisTip)>, StartupError> {
     let Some(block) = state
         .kura()
-        .get_block(core::num::NonZeroUsize::new(1).expect("non-zero"))
+        .get_block(
+            core::num::NonZeroUsize::new(1).expect("non-zero"),
+            &state.ivm_execution_budget(),
+        )
+        .map_err(|error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                StartupError::Deferred(reason)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                StartupError::Local(error.to_string())
+            }
+        })?
     else {
         return Ok(None);
     };

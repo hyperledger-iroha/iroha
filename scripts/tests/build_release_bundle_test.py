@@ -6,6 +6,8 @@ import os
 import shutil
 import subprocess
 import tarfile
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,29 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "build_release_bundle.sh"
 VERSION = "2.0.0-rc.2.0"
 EPOCH = 1_234_567_890
+
+
+@pytest.fixture
+def tmp_path() -> Iterator[Path]:
+    """Own every ancestor of the authenticated packaging fixtures.
+
+    Release custody refuses shared writable ancestors. Create only this test's
+    private workspace below the checkout and remove that workspace on exit.
+    Test bodies keep the ordinary 022 mask so explicit safe artifact modes and
+    permission refusal controls retain their coverage. Restore the caller mask
+    after setup, execution, or cleanup failure.
+    """
+    original_umask = os.umask(0o077)
+    try:
+        parent = REPO_ROOT
+        for component in ("target", "unit-tests", "script-tests"):
+            parent /= component
+            parent.mkdir(mode=0o700, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="release-bundle-", dir=parent) as directory:
+            os.umask(0o022)
+            yield Path(directory).resolve()
+    finally:
+        os.umask(original_umask)
 
 
 def _write_executable(path: Path, payload: str) -> Path:
@@ -222,8 +247,6 @@ def _authenticated_prebuilt(
         if "-windows-" in target
         else ["irohad/external-software-signer-bin"]
     )
-    if "-linux-" in target or "-windows-" in target:
-        selected_features.append("irohad/ivm-cuda")
     manifest = {
         "schema": "iroha.release_prebuilt_provenance",
         "schema_version": 1,
@@ -263,12 +286,13 @@ def _run(
     env: dict[str, str] | None = None,
     omit_options: set[str] | None = None,
     target: str = "x86_64-unknown-linux-gnu",
+    cuda_approval: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     environment["PATH"] = f"{zstd.parent}{os.pathsep}{environment['PATH']}"
     environment["SOURCE_DATE_EPOCH"] = str(EPOCH)
     environment.update(env or {})
-    source_root = prepare_source_fixture(REPO_ROOT, output.with_name(f".{output.name}-source"), environment)
+    source_root = prepare_source_fixture(REPO_ROOT, output.with_name(f".{output.name}-source"), environment, cuda_approval=cuda_approval)
     commit = SOURCE_COMMIT
     authenticated_binaries, provenance_digest = _authenticated_prebuilt(
         binaries,
@@ -289,8 +313,6 @@ def _run(
         ("--zstd", str(zstd)),
         ("--trusted-zstd-sha256", digest),
     ]
-    if "-linux-" in target or "-windows-" in target:
-        option_pairs.append(("--trusted-cuda-key-sha256", CUDA_KEY_SHA256))
     omitted = omit_options or set()
     command = [str(source_root / "scripts/build_release_bundle.sh")]
     for option, value in option_pairs:
@@ -644,9 +666,9 @@ def test_bundle_source_has_no_stale_or_nondeterministic_packaging_paths() -> Non
 def test_bundle_requires_independent_cuda_review_input(tmp_path: Path) -> None:
     binaries, zstd, digest = _fixture(tmp_path)
     output = tmp_path / "out"
-    result = _run(output, binaries, zstd, digest, omit_options={"--trusted-cuda-key-sha256"})
+    result = _run(output, binaries, zstd, digest, cuda_approval=False)
     assert result.returncode != 0
-    assert "CUDA release requires --trusted-cuda-key-sha256" in result.stderr
+    assert "shipping CUDA requires source-approved REVIEWED_CUDA_BUNDLE_PINS" in result.stderr
     assert not _outputs(output)["archive"].exists()
 
 

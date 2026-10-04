@@ -44,13 +44,27 @@ fn same_predecessor(fixture: &Fixture, demand: bool) -> CertifiedTestChain {
     assert_eq!(chain.committed(8).core_hash(), fixture.context.parent_hash);
     assert_eq!(chain.committed(8).result(), fixture.context.parent_result);
     let view = fixture.chain.state().view();
-    let (id, record) = view
+    let (id, mut record) = view
         .world()
         .global_beacon_key_sessions()
         .iter()
         .next()
         .map(|(id, record)| (*id, record.clone()))
         .unwrap();
+    // The replay is another physical State: admit its own immutable graph from
+    // that State's original pool while keeping the exact authenticated source.
+    let binding = crate::beacon::GlobalThresholdBeaconSessionBindingV1 {
+        network_id: record.session.network_id,
+        session_id: id,
+        roster_hash: record.session.roster_hash,
+        transcript_hash: record.session.transcript_hash,
+    };
+    record.session = crate::beacon::validate_global_threshold_beacon_session_v1(
+        record.session.record(),
+        &binding,
+        &chain.state().ivm_execution_budget(),
+    )
+    .unwrap();
     let roster = chain
         .validators()
         .iter()

@@ -2,8 +2,52 @@ import CryptoKit
 import Foundation
 import XCTest
 @testable import IrohaSwift
+#if canImport(Darwin)
+import Darwin
+#endif
 
 final class NativeBridgeLoaderTests: XCTestCase {
+    #if canImport(Darwin)
+    func testLinkedNativeArchiveRetainsEveryDynamicExport() throws {
+        let (handle, status) = NoritoBridgeLoader.openHandle()
+        guard case .valid = status else {
+            XCTFail("Linked native bridge failed admission: \(status)")
+            return
+        }
+        let nativeHandle = try XCTUnwrap(handle)
+        XCTAssertTrue(NoritoBridgeLoader.hasRequiredExports(resolving: { symbol in
+            dlsym(nativeHandle, symbol) != nil
+        }))
+
+        var packageRoot = URL(fileURLWithPath: #filePath)
+        for _ in 0..<3 {
+            packageRoot.deleteLastPathComponent()
+        }
+        let inventoryURL = packageRoot.appendingPathComponent(
+            "Sources/NoritoBridgeRetention/NoritoBridgeRetention.c"
+        )
+        let inventory = try String(contentsOf: inventoryURL, encoding: .utf8)
+        let referencePattern = try NSRegularExpression(
+            pattern: #"\(NoritoBridgeExportReference\)([A-Za-z0-9_]+),"#
+        )
+        let references = referencePattern.matches(
+            in: inventory, range: NSRange(inventory.startIndex..., in: inventory)
+        )
+        let symbols = try references.map { reference in
+            let symbolRange = try XCTUnwrap(Range(reference.range(at: 1), in: inventory))
+            return String(inventory[symbolRange])
+        }
+        XCTAssertFalse(symbols.isEmpty, "Native export retention inventory is empty")
+        XCTAssertEqual(Set(symbols).count, symbols.count, "Native export retention inventory contains duplicates")
+        guard !symbols.isEmpty, Set(symbols).count == symbols.count else {
+            return
+        }
+        for symbol in symbols {
+            XCTAssertNotNil(dlsym(nativeHandle, symbol), "Missing linked native export: \(symbol)")
+        }
+    }
+    #endif
+
     func testEveryCurrentMlDsaExportIsRequiredForAdmission() {
         XCTAssertEqual(NoritoBridgeLoader.mldsaRequiredSymbols, [
             "soranet_mldsa_parameters",
@@ -505,7 +549,7 @@ final class BridgePolicyHintTests: XCTestCase {
 final class BridgeAvailabilitySurfaceTests: XCTestCase {
     func testTransferEncodingFailsWhenBridgeUnavailable() throws {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: 7, count: 32))
-        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let authority = try AccountId.make(publicKey: keypair.publicKey)
         let request = TransferRequest(networkId: TestNetworkIds.canonical,
                                       authority: authority,
                                       assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",

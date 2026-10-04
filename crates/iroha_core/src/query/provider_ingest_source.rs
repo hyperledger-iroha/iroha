@@ -14,6 +14,7 @@ use iroha_data_model::{
         publication::SorafsAssignedSourceRequestV1,
     },
 };
+use iroha_executor_data_model::permission::sorafs::CanCompleteSorafsReplicationOrder;
 use mv::storage::StorageReadOnly;
 use sorafs_manifest::capacity::ReplicationOrderV1;
 
@@ -61,12 +62,7 @@ pub fn authorize_publisher_source_v1(
     if now_secs == 0 || binding.assignment_revision == 0 {
         return Err(rejected);
     }
-    let finalized_epoch = view
-        .latest_block()
-        .ok_or(rejected)?
-        .header()
-        .creation_time()
-        .as_secs();
+    let finalized_epoch = view.authenticated_query_ledger_time_ms().ok_or(rejected)? / 1_000;
     let now = finalized_epoch.max(now_secs);
     verify_signer_finality_v1(
         view,
@@ -125,7 +121,7 @@ pub fn authorize_publisher_source_v1(
     })
 }
 
-/// Verify both admissions, the requester's current owner/permission, exact assignment and pin.
+/// Verify both admissions, the requester's exact governed completion signer and scoped permission, exact assignment and pin.
 /// Call before and after source I/O; the caller independently authenticates `authority`.
 ///
 /// # Errors
@@ -162,21 +158,14 @@ pub fn authorize_provider_source_v1(
         .map_err(|_| rejected)?;
     let world = view.world();
     let target = ProviderId::new(request.target_provider);
-    if world.provider_owners().get(&target) != Some(authority) {
-        return Err(rejected);
-    }
-    let permission = |permission: &iroha_data_model::permission::Permission| {
-        permission.name() == "CanCompleteSorafsReplicationOrder"
-            && permission.payload().get().as_str() == "null"
-    };
-    if !world
-        .account_permissions()
-        .get(authority)
-        .is_some_and(|permissions| permissions.iter().any(permission))
-        && !world
-            .account_roles_iter(authority)
-            .filter_map(|id| world.roles().get(id))
-            .any(|role| role.permissions().any(permission))
+    let completion = world
+        .provider_ingest_completion_authorities()
+        .get(&target)
+        .ok_or(rejected)?;
+    if !completion.is_valid()
+        || world.provider_owners().get(&target) != Some(&completion.provider_owner)
+        || authority != &completion.completion_signer
+        || !has_provider_completion_permission_v1(world, authority, target)
     {
         return Err(rejected);
     }
@@ -193,12 +182,7 @@ pub fn authorize_provider_source_v1(
         .replication_orders()
         .get(&ReplicationOrderId::new(request.order_id))
         .ok_or(rejected)?;
-    let finalized_secs = view
-        .latest_block()
-        .ok_or(rejected)?
-        .header()
-        .creation_time()
-        .as_secs();
+    let finalized_secs = view.authenticated_query_ledger_time_ms().ok_or(rejected)? / 1_000;
     let now = now_secs.max(finalized_secs);
     if !matches!(pin.status, PinStatus::Approved(_))
         || pin.policy.retention_epoch <= now
@@ -288,5 +272,111 @@ mod tests {
             authorize_provider_source_v1(&view, &account, &request, 1),
             Err(ProviderSourceAuthorizationErrorV1)
         );
+    }
+}
+
+/// Check one canonical provider-scoped completion grant, including inherited roles.
+/// This is a permission check only; callers separately authenticate current full authority.
+pub fn has_provider_completion_permission_v1(
+    world: &impl WorldReadOnly,
+    account: &AccountId,
+    provider: ProviderId,
+) -> bool {
+    if provider.as_bytes() == &[0; 32] {
+        return false;
+    }
+    let required =
+        iroha_data_model::permission::Permission::from(CanCompleteSorafsReplicationOrder {
+            provider_id: provider,
+        });
+    world
+        .account_permissions()
+        .get(account)
+        .is_some_and(|permissions| permissions.contains(&required))
+        || world
+            .account_roles_iter(account)
+            .filter_map(|id| world.roles().get(id))
+            .any(|role| role.permissions().any(|permission| permission == &required))
+}
+
+#[cfg(test)]
+mod completion_permission_tests {
+    use super::*;
+    use crate::state::World;
+    use iroha_data_model::{
+        IntoKeyValue, Registrable,
+        permission::{Permission, Permissions},
+        role::{Role, RoleId, RoleIdWithOwner},
+    };
+    use iroha_primitives::json::Json;
+
+    #[test]
+    fn completion_permission_is_exact_provider_scoped_and_inherits_roles() {
+        let signer = AccountId::new(iroha_crypto::KeyPair::random().public_key().clone());
+        let provider = ProviderId::new([1; 32]);
+        let other = ProviderId::new([2; 32]);
+        let exact: Permission = CanCompleteSorafsReplicationOrder {
+            provider_id: provider,
+        }
+        .into();
+        let mut world = World::default();
+        let (account_id, account) = iroha_data_model::account::Account::new(signer.clone())
+            .build(&signer)
+            .into_key_value();
+        world.accounts.insert(account_id, account);
+        for permission in [
+            Permission::new(exact.name().to_owned(), Json::new(())),
+            CanCompleteSorafsReplicationOrder { provider_id: other }.into(),
+        ] {
+            world
+                .account_permissions
+                .insert(signer.clone(), Permissions::from([permission]));
+            assert!(!has_provider_completion_permission_v1(
+                &world.view(),
+                &signer,
+                provider
+            ));
+        }
+        world
+            .account_permissions
+            .insert(signer.clone(), Permissions::from([exact.clone()]));
+        assert!(has_provider_completion_permission_v1(
+            &world.view(),
+            &signer,
+            provider
+        ));
+        assert!(!has_provider_completion_permission_v1(
+            &world.view(),
+            &signer,
+            other
+        ));
+        assert!(!has_provider_completion_permission_v1(
+            &world.view(),
+            &signer,
+            ProviderId::new([0; 32])
+        ));
+        let mut permissions = world.account_permissions.block();
+        assert!(permissions.remove(signer.clone()).is_some());
+        permissions.commit();
+        let role: RoleId = "dedicated_provider_completion".parse().unwrap();
+        world.roles.insert(
+            role.clone(),
+            Role::new(role.clone(), signer.clone())
+                .add_permission(exact)
+                .build(&signer),
+        );
+        world
+            .account_roles
+            .insert(RoleIdWithOwner::new(signer.clone(), role), ());
+        assert!(has_provider_completion_permission_v1(
+            &world.view(),
+            &signer,
+            provider
+        ));
+        assert!(!has_provider_completion_permission_v1(
+            &world.view(),
+            &signer,
+            other
+        ));
     }
 }

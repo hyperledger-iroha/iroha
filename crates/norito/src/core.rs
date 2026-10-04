@@ -37,17 +37,42 @@ pub use encoder::Encoder;
 mod encode_frames;
 mod encode_writers;
 mod fixed_frame;
+mod nominal_text;
 use encode_frames::write_frame_to_writer_with_flags;
 #[doc(hidden)]
 pub use encode_frames::write_frame_with_prefix;
 pub(crate) use encode_writers::ExactSliceWriter;
 use encode_writers::{ExactLengthWriter, LengthCountingWriter};
 pub use fixed_frame::FixedFrameLayout;
+pub use nominal_text::{NominalText, borrow_canonical_text, borrow_text_payload};
+mod budget_scope;
+mod field_destination;
+mod prepared_option;
+mod prepared_scope;
+mod prepared_sequence;
+mod prepared_string;
+use budget_scope::CounterOwner;
+pub use field_destination::{
+    CanonicalField, DecodeField, DecodeIntoError, DecodeRecordFields, FieldDestination,
+    OwnedFields, PreparedRecordDestination, framed_byte_array_field, framed_field,
+    with_context_fields,
+};
+pub use prepared_scope::{PreparedDecodeError, PreparedDecodeScopeError, PreparedDecodeWorkspace};
+pub use prepared_sequence::{
+    PreparedElementSequence, SequenceDestinationError, decode_raw_byte_sequence_into,
+    inspect_element_sequence, prepare_element_sequence,
+};
+pub use prepared_string::{StringDestinationError, borrow_canonical_string, decode_string_into};
+mod decode_attempt;
+pub use decode_attempt::classify_decode_attempt;
+pub use decode_attempt::{DecodeAttemptError, DecodeAttemptErrorKind, ScopedDecodeResourceError};
 mod byte_sequence;
 #[doc(hidden)]
 pub use byte_sequence::decode_byte_element_sequence_into;
 mod sequence_length;
 pub use sequence_length::SequencePayloadLength;
+mod payload_ref;
+pub use payload_ref::PayloadRef;
 #[cfg(test)]
 #[path = "core/counting_tests.rs"]
 mod counting_tests;
@@ -446,20 +471,23 @@ thread_local! {
 }
 #[derive(Debug, Default)]
 struct DecodeBudgetCounters {
+    attempt: AtomicU64,
     total_elements: AtomicU64,
     total_allocated_bytes: AtomicU64,
 }
 #[derive(Clone)]
 struct DecodeBudgetLayer {
     limits: DecodeLimits,
-    counters: Arc<DecodeBudgetCounters>,
+    counters: CounterOwner,
 }
 impl DecodeBudgetLayer {
     fn new(limits: DecodeLimits) -> Self {
-        Self {
+        let layer = Self {
             limits,
-            counters: Arc::new(DecodeBudgetCounters::default()),
-        }
+            counters: CounterOwner::Owned(Arc::new(DecodeBudgetCounters::default())),
+        };
+        decode_attempt::note_fresh_budget(&layer.counters);
+        layer
     }
 }
 #[derive(Clone)]
@@ -469,70 +497,48 @@ struct ActiveDecodeBudgetLayer {
 }
 /// Cloneable handle used to propagate an active decode budget without moving a
 /// thread-local guard between threads.
+/// The context owns one original layer; cloning shares its cumulative counters
+/// without allocating a one-element collection. Active scope layers borrow stack
+/// nodes; the shared counter control remains an independent owned allocation.
 #[derive(Clone)]
 pub(crate) struct DecodeBudgetContext {
-    layers: Vec<ActiveDecodeBudgetLayer>,
+    layer: ActiveDecodeBudgetLayer,
     depth: usize,
 }
 impl DecodeBudgetContext {
     pub(crate) fn new(limits: DecodeLimits) -> Self {
         let depth = DECODE_NESTING_DEPTH.with(Cell::get);
         Self {
-            layers: vec![ActiveDecodeBudgetLayer {
+            layer: ActiveDecodeBudgetLayer {
                 budget: DecodeBudgetLayer::new(limits),
                 base_depth: depth,
-            }],
+            },
             depth,
         }
     }
 }
 thread_local! {
-    static DECODE_BUDGET_LAYERS: RefCell<Vec<ActiveDecodeBudgetLayer>> = const { RefCell::new(Vec::new()) };
     static DECODE_NESTING_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
-pub(crate) struct DecodeLimitsGuard {
-    previous_layer_count: usize,
-    previous_depth: usize,
-    _not_send: PhantomData<Rc<()>>,
-}
-impl DecodeLimitsGuard {
-    fn enter(limits: DecodeLimits) -> Self {
-        Self::enter_context(&DecodeBudgetContext::new(limits))
-    }
-    pub(crate) fn enter_context(context: &DecodeBudgetContext) -> Self {
-        let previous_depth = DECODE_NESTING_DEPTH.with(Cell::get);
-        let previous_layer_count = DECODE_BUDGET_LAYERS.with(|slot| {
-            let mut active = slot.borrow_mut();
-            let previous = active.len();
-            for candidate in &context.layers {
-                let already_active = active.iter().any(|current| {
-                    Arc::ptr_eq(&current.budget.counters, &candidate.budget.counters)
-                });
-                if !already_active {
-                    active.push(candidate.clone());
-                }
-            }
-            previous
-        });
-        DECODE_NESTING_DEPTH.with(|slot| slot.set(previous_depth.max(context.depth)));
-        Self {
-            previous_layer_count,
-            previous_depth,
-            _not_send: PhantomData,
-        }
+impl DecodeBudgetContext {
+    pub(crate) fn with<R>(&self, body: impl FnOnce() -> R) -> R {
+        budget_scope::with_layers(core::slice::from_ref(&self.layer), self.depth, body)
     }
 }
-impl Drop for DecodeLimitsGuard {
-    fn drop(&mut self) {
-        DECODE_BUDGET_LAYERS.with(|slot| slot.borrow_mut().truncate(self.previous_layer_count));
-        DECODE_NESTING_DEPTH.with(|slot| slot.set(self.previous_depth));
+pub(crate) fn with_optional_decode_budget<R>(
+    context: Option<&DecodeBudgetContext>,
+    body: impl FnOnce() -> R,
+) -> R {
+    match context {
+        Some(context) => context.with(body),
+        None => body(),
     }
 }
 /// Return whether the current thread is inside at least one decode-limit scope.
 #[inline]
 #[doc(hidden)]
 pub fn decode_limits_active() -> bool {
-    DECODE_BUDGET_LAYERS.with(|slot| !slot.borrow().is_empty())
+    budget_scope::with_active(|layers| !layers.is_empty())
 }
 /// Check whether an original decoder error names a still-active resource ceiling.
 ///
@@ -543,8 +549,11 @@ pub fn decode_limits_active() -> bool {
 /// owner or a release notification.
 #[doc(hidden)]
 pub fn decode_error_matches_active_limits(error: &Error) -> bool {
-    DECODE_BUDGET_LAYERS.with(|slot| {
-        slot.borrow().iter().any(|layer| {
+    if let Error::ScopedDecodeResource(origin) = error {
+        return origin.matches_enclosing_scope();
+    }
+    budget_scope::with_active(|layers| {
+        layers.iter().any(|layer| {
             let limits = layer.budget.limits;
             match error {
                 Error::SequenceLengthExceeded { length, limit } => {
@@ -601,15 +610,18 @@ impl DecodeDepthGuard {
                 limit: usize::MAX,
                 context: "decode budget",
             })?;
-        DECODE_BUDGET_LAYERS.with(|slot| {
-            for layer in slot.borrow().iter() {
+        budget_scope::with_active(|layers| {
+            for (index, layer) in decode_attempt::layers_in_order(layers) {
                 let relative_depth = depth.saturating_sub(layer.base_depth);
                 if relative_depth > layer.budget.limits.max_nesting_depth() {
-                    return Err(Error::NestingDepthExceeded {
-                        depth: relative_depth,
-                        limit: layer.budget.limits.max_nesting_depth(),
-                        context: "decode budget",
-                    });
+                    return Err(decode_attempt::budget_error(
+                        index,
+                        Error::NestingDepthExceeded {
+                            depth: relative_depth,
+                            limit: layer.budget.limits.max_nesting_depth(),
+                            context: "decode budget",
+                        },
+                    ));
                 }
             }
             Ok(())
@@ -683,25 +695,29 @@ pub fn with_decode_limits<T>(
 /// thread still observes `limits`; the caller retains its exact outer result
 /// and error type. The closure must finish decoding before it returns.
 pub fn with_decode_limits_scope<T>(limits: DecodeLimits, decode: impl FnOnce() -> T) -> T {
-    let _guard = DecodeLimitsGuard::enter(limits);
-    decode()
+    DecodeBudgetContext::new(limits).with(decode)
 }
 #[inline]
 pub(crate) fn enforce_decode_sequence_length(length: u64) -> Result<(), Error> {
-    DECODE_BUDGET_LAYERS.with(|slot| {
-        let layers = slot.borrow();
-        for layer in layers.iter() {
+    budget_scope::with_active(|layers| {
+        for (index, layer) in decode_attempt::layers_in_order(layers) {
             let limit = limit_to_u64(layer.budget.limits.max_sequence_elements());
             if length > limit {
-                return Err(Error::SequenceLengthExceeded { length, limit });
+                return Err(decode_attempt::budget_error(
+                    index,
+                    Error::SequenceLengthExceeded { length, limit },
+                ));
             }
         }
-        for layer in layers.iter() {
+        for (index, layer) in decode_attempt::layers_in_order(layers) {
             let limit = limit_to_u64(layer.budget.limits.max_total_elements());
             if let Err(attempted) =
                 charge_atomic_budget(&layer.budget.counters.total_elements, length, limit)
             {
-                return Err(Error::TotalElementsExceeded { attempted, limit });
+                return Err(decode_attempt::budget_error(
+                    index,
+                    Error::TotalElementsExceeded { attempted, limit },
+                ));
             }
         }
         Ok(())
@@ -713,11 +729,14 @@ pub(crate) fn enforce_decode_sequence_length(length: u64) -> Result<(), Error> {
 }
 #[inline]
 pub(crate) fn check_decode_sequence_length(length: u64) -> Result<(), Error> {
-    DECODE_BUDGET_LAYERS.with(|slot| {
-        for layer in slot.borrow().iter() {
+    budget_scope::with_active(|layers| {
+        for (index, layer) in decode_attempt::layers_in_order(layers) {
             let limit = limit_to_u64(layer.budget.limits.max_sequence_elements());
             if length > limit {
-                return Err(Error::SequenceLengthExceeded { length, limit });
+                return Err(decode_attempt::budget_error(
+                    index,
+                    Error::SequenceLengthExceeded { length, limit },
+                ));
             }
         }
         Ok(())
@@ -730,11 +749,14 @@ pub(crate) fn enforce_decode_field_length(length: u64) -> Result<(), Error> {
 }
 #[inline]
 fn check_decode_field_length(length: u64) -> Result<(), Error> {
-    DECODE_BUDGET_LAYERS.with(|slot| {
-        for layer in slot.borrow().iter() {
+    budget_scope::with_active(|layers| {
+        for (index, layer) in decode_attempt::layers_in_order(layers) {
             let limit = limit_to_u64(layer.budget.limits.max_field_bytes());
             if length > limit {
-                return Err(Error::FieldLengthExceeded { length, limit });
+                return Err(decode_attempt::budget_error(
+                    index,
+                    Error::FieldLengthExceeded { length, limit },
+                ));
             }
         }
         Ok(())
@@ -746,13 +768,16 @@ pub fn reserve_decode_allocation(length: usize) -> Result<(), Error> {
     reserve_decode_allocation_u64(limit_to_u64(length))
 }
 fn reserve_decode_allocation_u64(length: u64) -> Result<(), Error> {
-    DECODE_BUDGET_LAYERS.with(|slot| {
-        for layer in slot.borrow().iter() {
+    budget_scope::with_active(|layers| {
+        for (index, layer) in decode_attempt::layers_in_order(layers) {
             let limit = limit_to_u64(layer.budget.limits.max_total_allocated_bytes());
             if let Err(attempted) =
                 charge_atomic_budget(&layer.budget.counters.total_allocated_bytes, length, limit)
             {
-                return Err(Error::TotalAllocationExceeded { attempted, limit });
+                return Err(decode_attempt::budget_error(
+                    index,
+                    Error::TotalAllocationExceeded { attempted, limit },
+                ));
             }
         }
         Ok(())
@@ -1153,11 +1178,15 @@ unsafe fn dealloc_checked(ptr: *mut u8, layout: Layout, needs_dealloc: bool) {
         unsafe { std::alloc::dealloc(ptr, layout) };
     }
 }
-fn try_decode_vec_with_capacity<T>(capacity: usize) -> Result<Vec<T>, Error> {
+fn reserve_decode_sequence_storage<T>(capacity: usize) -> Result<usize, Error> {
     let bytes = capacity
         .checked_mul(core::mem::size_of::<T>())
         .ok_or(Error::LengthMismatch)?;
     reserve_decode_allocation(bytes)?;
+    Ok(bytes)
+}
+fn try_decode_vec_with_capacity<T>(capacity: usize) -> Result<Vec<T>, Error> {
+    let bytes = reserve_decode_sequence_storage::<T>(capacity)?;
     let mut values = Vec::new();
     values
         .try_reserve(capacity)
@@ -1942,7 +1971,10 @@ where
 {
     encode_seq_payloads::<T, I>(writer, items)
 }
-fn sequence_encoded_len_hint<'a, T, I>(items: I) -> Option<usize>
+/// Canonical element-sequence sizing shared by immutable collection owners.
+/// Returns `None` when any original leaf has no representable length hint.
+#[doc(hidden)]
+pub fn sequence_encoded_len_hint<'a, T, I>(items: I) -> Option<usize>
 where
     T: SerializePayload + 'a,
     I: IntoIterator<Item = &'a T>,
@@ -1958,7 +1990,10 @@ where
     }
     Some(total)
 }
-fn sequence_encoded_len_exact<'a, T, I>(items: I) -> Option<usize>
+/// Exact canonical element-sequence sizing without staging a temporary byte Vec.
+/// Returns `None` when any original leaf has no representable exact length.
+#[doc(hidden)]
+pub fn sequence_encoded_len_exact<'a, T, I>(items: I) -> Option<usize>
 where
     T: SerializePayload + 'a,
     I: IntoIterator<Item = &'a T>,
@@ -3047,26 +3082,21 @@ where
     T: SerializePayload + for<'de> DeserializePayload<'de>,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        let tag = *bytes.first().ok_or(Error::LengthMismatch)?;
-        record_slice_access(bytes, 1);
-        match tag {
-            0 => Ok((None, 1)),
-            1 => {
-                let (len, hdr) = read_len_dyn_slice(&bytes[1..])?;
-                let start = 1 + hdr;
-                let end = start.checked_add(len).ok_or(Error::LengthMismatch)?;
-                if end > bytes.len() {
+        let (payload, used) = prepared_option::option_payload_prefix(bytes, |_| {
+            Error::Message("invalid option tag".into())
+        })?;
+        let value = match payload {
+            None => None,
+            Some(payload) => {
+                let (value, consumed) = decode_field_canonical::<T>(payload)?;
+                if consumed != payload.len() {
                     return Err(Error::LengthMismatch);
                 }
-                let (value, used) = decode_field_canonical::<T>(&bytes[start..end])?;
-                if used != len {
-                    return Err(Error::LengthMismatch);
-                }
-                record_slice_access(bytes, end);
-                Ok((Some(value), end))
+                Some(value)
             }
-            _ => Err(Error::Message("invalid option tag".into())),
-        }
+        };
+        record_slice_access(bytes, used);
+        Ok((value, used))
     }
 }
 impl<'a, T: DecodeFromSlice<'a>, E: DecodeFromSlice<'a>> DecodeFromSlice<'a> for Result<T, E> {
@@ -3207,6 +3237,9 @@ pub enum Error {
         /// Maximum cumulative byte count.
         limit: u64,
     },
+    /// Original decode-budget refusal with private, non-wire admission provenance.
+    #[error(transparent)]
+    ScopedDecodeResource(ScopedDecodeResourceError),
     /// A fallible raw allocation failed.
     #[error("failed to allocate {bytes} bytes while decoding")]
     AllocationFailed {
@@ -3422,6 +3455,7 @@ impl Error {
             Self::TotalAllocationExceeded { attempted, limit } => {
                 DecodeResourceError::TotalAllocationExceeded { attempted, limit }
             }
+            Self::ScopedDecodeResource(ref origin) => origin.resource(),
             Self::AllocationFailed { bytes } => DecodeResourceError::AllocationFailed { bytes },
             Self::NestingDepthExceeded {
                 depth,
@@ -4682,24 +4716,20 @@ impl<'a> DeserializePayload<'a> for String {
             .unwrap_or_else(|err| panic!("norito: invalid archived String: {err:?}"))
     }
     fn try_deserialize(archived: &'a Archived<String>) -> Result<Self, Error> {
-        let ptr = archived as *const _ as *const u8;
+        let ptr = std::ptr::from_ref(archived).cast::<u8>();
         let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
         let ptr_us = ptr as usize;
-        if ptr_us < base || ptr_us >= base + total {
+        let base_end = base.checked_add(total).ok_or(Error::LengthMismatch)?;
+        if ptr_us < base || ptr_us >= base_end {
             return Err(Error::LengthMismatch);
         }
-        let (len, hdr) = read_len_dyn_at_ptr(ptr)?;
-        let off = (ptr_us - base) + hdr;
-        let end = off.checked_add(len).ok_or(Error::LengthMismatch)?;
-        if end > total {
-            return Err(Error::LengthMismatch);
-        }
+        // SAFETY: this is the original validated active payload. Its tail is
+        // borrowed only while constructing this owned String.
         let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-        unsafe {
-            record_payload_access(payload.as_ptr().add(off), len);
-        }
-        let bytes = &payload[off..end];
-        try_copy_string_for_decode(bytes)
+        let (value, _) = prepared_string::string_payload(&payload[ptr_us - base..], |body| {
+            record_payload_access(body.as_ptr(), body.len());
+        })?;
+        try_copy_string_for_decode(value)
     }
 }
 
@@ -4748,12 +4778,10 @@ impl<'a> DeserializePayload<'a> for &'a str {
 // Bounded implementations for decoding from slices (no raw pointers)
 impl<'a> DecodeFromSlice<'a> for String {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        let (len, hdr) = read_len_dyn_slice(bytes)?;
-        let end = hdr.checked_add(len).ok_or(Error::LengthMismatch)?;
-        let data = bytes.get(hdr..end).ok_or(Error::LengthMismatch)?;
-        let s = try_copy_string_for_decode(data)?;
-        record_slice_access(bytes, end);
-        Ok((s, end))
+        let (value, used) = prepared_string::string_payload(bytes, |_| {})?;
+        let owned = try_copy_string_for_decode(value)?;
+        record_slice_access(bytes, used);
+        Ok((owned, used))
     }
 }
 impl<'a> DecodeFromSlice<'a> for &'a str {
@@ -4991,39 +5019,22 @@ where
         }
     }
     fn try_deserialize(archived: &'a Archived<Option<T>>) -> Result<Self, Error> {
-        let ptr = archived as *const _ as *const u8;
-        let tag = payload_range_from_ptr(ptr, 1)?[0];
-        match tag {
-            0 => Ok(None),
-            1 => {
-                let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
-                let ptr_us = ptr as usize;
-                if ptr_us < base || ptr_us >= base + total {
+        let bytes = payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+        let (payload, used) = prepared_option::option_payload_prefix(bytes, |tag| {
+            Error::invalid_tag("Option::try_deserialize", tag)
+        })?;
+        let value = match payload {
+            None => None,
+            Some(payload) => {
+                let (value, consumed) = decode_field_canonical::<T>(payload)?;
+                if consumed != payload.len() {
                     return Err(Error::LengthMismatch);
                 }
-                let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-                let start = ptr_us - base + 1; // skip tag
-                if start > payload.len() {
-                    return Err(Error::LengthMismatch);
-                }
-                let bytes = &payload[start..];
-                let (data_len, hdr) = read_len_dyn_slice(bytes)?;
-                let data_start = hdr;
-                let data_end = data_start
-                    .checked_add(data_len)
-                    .ok_or(Error::LengthMismatch)?;
-                if data_end > bytes.len() {
-                    return Err(Error::LengthMismatch);
-                }
-                let archived_slice = &bytes[data_start..data_end];
-                let (value, used) = decode_field_canonical::<T>(archived_slice)?;
-                if used != data_len {
-                    return Err(Error::LengthMismatch);
-                }
-                Ok(Some(value))
+                Some(value)
             }
-            _ => Err(Error::invalid_tag("Option::try_deserialize", tag)),
-        }
+        };
+        record_slice_access(bytes, used);
+        Ok(value)
     }
 }
 
@@ -6203,6 +6214,45 @@ pub fn encoded_payload_len(value: &dyn SerializePayload) -> Result<usize, Error>
     drop(encode_guard);
     Ok(payload_len)
 }
+/// Count a payload while limiting the bytes visited by nested measurement writers.
+///
+/// Every leaf and framing byte consumes the shared allowance once. A measured
+/// child's length is incorporated without a second charge or traversal. The
+/// refusal remains sticky even if a serializer ignores a failed write.
+///
+/// # Errors
+/// Returns a serialization error or [`Error::LengthMismatch`] when the finite
+/// count allowance is exceeded. Arbitrary work performed before a serializer
+/// writes bytes still belongs to the source owner's separate work boundary.
+pub fn encoded_payload_len_bounded(
+    value: &dyn SerializePayload,
+    maximum: usize,
+) -> Result<usize, Error> {
+    let guard = encode_writers::CountBudgetGuard::enter(maximum);
+    let length = encoded_payload_len(value)?;
+    guard.check()?;
+    if length > maximum {
+        return Err(Error::LengthMismatch);
+    }
+    Ok(length)
+}
+/// Count a complete frame under a finite header, padding and payload allowance.
+///
+/// # Errors
+/// Returns [`Error::LengthMismatch`] if framing alone or the measured payload
+/// exceeds `maximum`, or the underlying serialization error.
+pub fn encoded_frame_len_bounded<T: NoritoSerialize>(
+    value: &T,
+    maximum: usize,
+) -> Result<usize, Error> {
+    let framing = Header::SIZE
+        .checked_add(payload_alignment_padding_for::<T>())
+        .ok_or(Error::LengthMismatch)?;
+    let payload_maximum = maximum.checked_sub(framing).ok_or(Error::LengthMismatch)?;
+    framing
+        .checked_add(encoded_payload_len_bounded(value, payload_maximum)?)
+        .ok_or(Error::LengthMismatch)
+}
 /// Return the exact framed length under the active layout without allocating an output buffer.
 ///
 /// Like [`encoded_payload_len`], this counts a real serialization pass instead
@@ -6213,10 +6263,13 @@ pub fn encoded_payload_len(value: &dyn SerializePayload) -> Result<usize, Error>
 /// Returns a serialization error or [`Error::LengthMismatch`] if the framed
 /// length cannot be represented by `usize`.
 pub fn encoded_frame_len<T: NoritoSerialize>(value: &T) -> Result<usize, Error> {
-    let payload_len = encoded_payload_len(value)?;
-    Header::SIZE
+    let framing = Header::SIZE
         .checked_add(payload_alignment_padding_for::<T>())
-        .and_then(|framing| framing.checked_add(payload_len))
+        .ok_or(Error::LengthMismatch)?;
+    // A framed child contributes header bytes even when its payload is empty.
+    encode_writers::charge_counted_bytes(framing)?;
+    framing
+        .checked_add(encoded_payload_len(value)?)
         .ok_or(Error::LengthMismatch)
 }
 include!("core/exact_byte_vec.rs");
@@ -7393,7 +7446,9 @@ fn take_length_prefixed_context_field(
     ptr: *const u8,
     offset: usize,
 ) -> Result<(&'static [u8], usize), Error> {
-    let payload = payload_slice_from_ptr(ptr)?;
+    take_length_prefixed_field(payload_slice_from_ptr(ptr)?, offset)
+}
+fn take_length_prefixed_field(payload: &[u8], offset: usize) -> Result<(&[u8], usize), Error> {
     let remaining = payload.get(offset..).ok_or(Error::LengthMismatch)?;
     let (field_len, header_len) = read_len_dyn_slice(remaining)?;
     let data_start = offset
@@ -7541,3 +7596,7 @@ where
 }
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "core/budget_context_tests.rs"]
+mod budget_context_tests;

@@ -2,94 +2,21 @@ from __future__ import annotations
 
 import json
 
-from client_expensive_query_test_support import authenticated_query_client
+from iroha_python import F
+
 from iroha_python.client import ToriiClient
-from iroha_python.query import rwa_query_envelope
 
 from .helpers import RecordingSession, StubResponse
-
 
 SAMPLE_RWA_ID = "lot-001$commodities"
 SAMPLE_OWNER = "ed0120111111111111111111111111111111111111111111111111111111111111@wonderland"
 
 
-def test_rwa_query_envelope_builds_expected_shape() -> None:
-    payload = rwa_query_envelope(
-        filter={"eq": [{"name": "id"}, SAMPLE_RWA_ID]},
-        sort=[{"key": "id", "order": "desc"}],
-        limit=5,
-        offset=2,
-        fetch_size=10,
-        query_name="find_rwas",
-    )
-
-    assert payload == {
-        "filter": {"eq": [{"name": "id"}, SAMPLE_RWA_ID]},
-        "sort": [{"key": "id", "order": "desc"}],
-        "pagination": {"limit": 5, "offset": 2},
-        "fetch_size": 10,
-        "query": "find_rwas",
-    }
-
-
-def test_list_rwas_typed_encodes_params_and_decodes_page() -> None:
-    session = RecordingSession(
-        StubResponse(payload={"items": [{"id": SAMPLE_RWA_ID}], "total": 1})
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    page = client.list_rwas_typed(
-        filter={"eq": [{"name": "id"}, SAMPLE_RWA_ID]},
-        sort="id:desc",
-        limit=5,
-        offset=2,
-    )
-
-    params = session.calls[0]["params"]
-    assert json.loads(params["filter"]) == {"eq": [{"name": "id"}, SAMPLE_RWA_ID]}
-    assert params["sort"] == "id:desc"
-    assert params["limit"] == 5
-    assert params["offset"] == 2
-    assert page.total == 1
-    assert page.items[0].id == SAMPLE_RWA_ID
-
-
-def test_query_rwas_typed_posts_envelope_and_decodes_page() -> None:
-    session = RecordingSession(
-        StubResponse(payload={"items": [{"id": SAMPLE_RWA_ID}], "total": 1})
-    )
-    client = authenticated_query_client(session)
-
-    page = client.query_rwas_typed(
-        filter={"eq": [{"name": "id"}, SAMPLE_RWA_ID]},
-        sort=[{"key": "id", "order": "asc"}],
-        limit=3,
-        offset=1,
-        fetch_size=8,
-        query_name="find_rwas",
-    )
-
-    body = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert body == {
-        "filter": {"eq": [{"name": "id"}, SAMPLE_RWA_ID]},
-        "sort": [{"key": "id", "order": "asc"}],
-        "pagination": {"limit": 3, "offset": 1},
-        "fetch_size": 8,
-        "query": "find_rwas",
-    }
-    assert page.total == 1
-    assert page.items[0].id == SAMPLE_RWA_ID
-
-
-def test_list_explorer_rwas_typed_encodes_filters_and_decodes_page() -> None:
+def test_explorer_rwas_collection_encodes_filters_and_decodes_page() -> None:
     session = RecordingSession(
         StubResponse(
             payload={
-                "pagination": {
-                    "limit": 25,
-                    "next_cursor": "bmV4dC1yd2EtY3Vyc29y",
-                    "has_more": True,
-                },
+                "next_cursor": "bmV4dC1yd2EtY3Vyc29y",
                 "items": [
                     {
                         "id": SAMPLE_RWA_ID,
@@ -107,23 +34,23 @@ def test_list_explorer_rwas_typed_encodes_filters_and_decodes_page() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    page = client.list_explorer_rwas_typed(
+    page = client.explorer_rwas.list(
         cursor="cHJldmlvdXMtcndhLWN1cnNvcg",
         limit=25,
-        owned_by=SAMPLE_OWNER,
-        domain="commodities",
+        filter=(F.owned_by == SAMPLE_OWNER) & (F.domain == "commodities"),
     )
 
-    params = session.calls[0]["params"]
+    params = json.loads(session.calls[0]["data"])
     assert params == {
         "cursor": "cHJldmlvdXMtcndhLWN1cnNvcg",
         "limit": 25,
-        "owned_by": SAMPLE_OWNER,
-        "domain": "commodities",
+        "filter": {"op": "and", "args": [
+            {"op": "eq", "args": ["owned_by", SAMPLE_OWNER]},
+            {"op": "eq", "args": ["domain", "commodities"]},
+        ]},
     }
-    assert page.pagination.limit == 25
-    assert page.pagination.next_cursor == "bmV4dC1yd2EtY3Vyc29y"
-    assert page.pagination.has_more is True
+    assert page.next_cursor == "bmV4dC1yd2EtY3Vyc29y"
+    assert page.has_more is True
     assert page.items[0].id == SAMPLE_RWA_ID
     assert page.items[0].status is None
     assert page.items[0].metadata == {"grade": "AA"}

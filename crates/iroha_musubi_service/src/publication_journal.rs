@@ -1,8 +1,6 @@
 //! Crash-safe replay and idempotency persistence for the private Musubi publication service.
 #[cfg(test)]
 pub mod wire_fixtures;
-#[cfg(unix)]
-use super::publication_filesystem_owner_probe;
 use super::{
     InMemoryMusubiPublicationServiceJournalV1, InMemoryPublicationResultV1,
     MAX_CONTROL_RESPONSE_BYTES, MUSUBI_MAX_ARCHIVE_LOCATIONS_V1, MUSUBI_MAX_LOCATION_PROVIDERS_V1,
@@ -12,24 +10,16 @@ use super::{
     MusubiPublicationServiceJournalBindingV1, MusubiPublicationServiceJournalErrorV1,
     MusubiPublicationServiceJournalV1, valid_storage_generation_target,
 };
-#[cfg(unix)]
-use iroha_primitives::fs::secure_directory_open_flags;
-#[cfg(unix)]
-use rustix::fs::{AtFlags, FileType, Mode, OFlags, Stat};
-#[cfg(not(unix))]
-use std::io;
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use iroha_fs::{FileSnapshot, PrivateDirectory, PublishMode};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
-    fs::{self, File, OpenOptions},
-    io::{Read as _, Write as _},
-    path::{Path, PathBuf},
+    fs::{self, File},
+    io::{self, Read as _},
+    path::Path,
 };
 const JOURNAL_STATE_FILE: &str = "publication-journal-v1.norito";
 const JOURNAL_LOCK_FILE: &str = "publication-journal-v1.lock";
-const JOURNAL_NEXT_FILE: &str = "publication-journal-v1.next";
 const JOURNAL_STATE_DOMAIN_V1: [u8; 32] = *b"musubi-pub-journal-state-v1\0\0\0\0\0";
 const JOURNAL_STATE_SCHEMA_V1: u8 = 1;
 const MAX_DURABLE_JOURNAL_OPERATIONS_V1: u32 = 1_000_000;
@@ -143,8 +133,6 @@ impl DurableMusubiPublicationServiceJournalLimitsV1 {
 /// Stable failure opening or initializing a durable publication journal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DurableMusubiPublicationServiceJournalOpenErrorV1 {
-    /// V1 cannot provide its required filesystem guarantees on this platform.
-    UnsupportedPlatform,
     /// The configured directory is missing, shared, linked, or otherwise unsafe.
     UnsafeRoot,
     /// Another process already owns this journal.
@@ -169,7 +157,6 @@ impl DurableMusubiPublicationServiceJournalOpenErrorV1 {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::UnsupportedPlatform => "MUSUBI_PUBLICATION_JOURNAL_UNSUPPORTED_PLATFORM",
             Self::UnsafeRoot => "MUSUBI_PUBLICATION_JOURNAL_UNSAFE_ROOT",
             Self::Locked => "MUSUBI_PUBLICATION_JOURNAL_LOCKED",
             Self::Uninitialized => "MUSUBI_PUBLICATION_JOURNAL_UNINITIALIZED",
@@ -344,23 +331,21 @@ enum CandidateStateErrorV1 {
 }
 /// Restart-persistent bounded journal for one exact private publication-service deployment.
 ///
-/// V1 uses a dedicated Unix `0700` directory, holds one exclusive owner lock for its lifetime,
-/// and commits a complete canonical Norito snapshot through a private fixed temporary file,
-/// atomic rename, and file/directory durability barriers. It contains no CAR body, authorization
+/// V1 retains a native owner-private directory and one exclusive owner lock for its lifetime.
+/// It commits complete canonical Norito snapshots through the shared native filesystem owner,
+/// with private atomic publication and durability barriers. It contains no CAR body, authorization
 /// bytes, credentials, URLs, tokens, or provider secrets.
-// TODO: Bind each committed revision/digest to a deployment-sealed monotonic CAS and
-// authoritative finalized lineage before production rollout.
+/// This is local crash-safe replay custody, not an external rollback seal. Restoring an older
+/// filesystem image does not prove current protocol authorization; the native publication owners
+/// independently enforce finalized state, revocation and original transaction recovery.
 pub struct DurableMusubiPublicationServiceJournalV1 {
     binding: MusubiPublicationServiceJournalBindingV1,
     limits: DurableMusubiPublicationServiceJournalLimitsV1,
     journal: InMemoryMusubiPublicationServiceJournalV1,
     revision: u64,
-    root: PathBuf,
-    root_identity: JournalFileIdentity,
-    root_owner: u32,
-    root_handle: File,
+    root: PrivateDirectory,
     lock_handle: File,
-    lock_identity: JournalFileIdentity,
+    lock_snapshot: FileSnapshot,
     state_version: PersistedJournalVersionV1,
     poisoned: bool,
 }
@@ -416,9 +401,6 @@ impl DurableMusubiPublicationServiceJournalV1 {
         limits: DurableMusubiPublicationServiceJournalLimitsV1,
         initialize: bool,
     ) -> Result<Self, DurableMusubiPublicationServiceJournalOpenErrorV1> {
-        if !cfg!(unix) {
-            return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::UnsupportedPlatform);
-        }
         binding.validate().map_err(|_| {
             DurableMusubiPublicationServiceJournalOpenErrorV1::ConfigurationMismatch
         })?;
@@ -439,39 +421,37 @@ impl DurableMusubiPublicationServiceJournalV1 {
         } else {
             None
         };
-        let (root, root_handle, root_identity, root_owner) = open_private_root(root)?;
+        let root = PrivateDirectory::open_exact(root)
+            .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot)?;
         if initialize {
-            ensure_empty_initialization_root(&root, &root_handle)?;
+            ensure_empty_initialization_root(&root)?;
         }
-        let lock_mode = if initialize {
-            JournalLockOpenMode::CreateNew
-        } else {
-            JournalLockOpenMode::Existing
-        };
-        let (lock_handle, lock_identity) =
-            open_and_lock(&root, &root_handle, root_owner, lock_mode)?;
+        let (lock_handle, lock_snapshot) = open_and_lock(&root, initialize)?;
         let storage = JournalStorageContext {
             root: &root,
-            root_handle: &root_handle,
-            root_identity,
-            root_owner,
             lock_handle: &lock_handle,
-            lock_identity,
+            lock_snapshot,
         };
-        reconcile_directory(storage, limits.max_snapshot_usize())?;
-        let loaded = read_journal_state(
-            &root,
-            &root_handle,
-            JOURNAL_STATE_FILE,
-            root_owner,
-            &binding,
-            limits,
-        )?;
+        let loaded = read_journal_state(&root, &binding, limits)?;
         if initialize && loaded.is_some() {
             return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::AlreadyInitialized);
         }
         if !initialize && loaded.is_none() {
             return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::Uninitialized);
+        }
+        // Existing state must decode and match the original deployment before any cleanup.
+        // Initialization admits only its newly created lock; it never reconciles interrupted state.
+        if initialize {
+            validate_inventory(&root, false)?;
+        } else {
+            validate_lock(storage)?;
+            root.reconcile_atomic_staging(
+                &[JOURNAL_LOCK_FILE, JOURNAL_STATE_FILE],
+                16,
+                limits.max_snapshot_usize(),
+            )
+            .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState)?;
+            validate_lock(storage)?;
         }
         let (journal, revision, state_version) = loaded.map_or_else(
             || {
@@ -507,11 +487,8 @@ impl DurableMusubiPublicationServiceJournalV1 {
             journal,
             revision,
             root,
-            root_identity,
-            root_owner,
-            root_handle,
             lock_handle,
-            lock_identity,
+            lock_snapshot,
             state_version,
             poisoned: false,
         })
@@ -529,11 +506,8 @@ impl DurableMusubiPublicationServiceJournalV1 {
     fn storage_context(&self) -> JournalStorageContext<'_> {
         JournalStorageContext {
             root: &self.root,
-            root_handle: &self.root_handle,
-            root_identity: self.root_identity,
-            root_owner: self.root_owner,
             lock_handle: &self.lock_handle,
-            lock_identity: self.lock_identity,
+            lock_snapshot: self.lock_snapshot,
         }
     }
     fn transition<T>(
@@ -1143,24 +1117,18 @@ fn valid_result_key(key: MusubiPublicationIdempotencyKeyV1) -> bool {
 }
 #[derive(Clone, Copy)]
 struct JournalStorageContext<'a> {
-    root: &'a Path,
-    root_handle: &'a File,
-    root_identity: JournalFileIdentity,
-    root_owner: u32,
+    root: &'a PrivateDirectory,
     lock_handle: &'a File,
-    lock_identity: JournalFileIdentity,
+    lock_snapshot: FileSnapshot,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct PersistedJournalVersionV1 {
-    identity: JournalFileIdentity,
+    snapshot: FileSnapshot,
     length: u64,
     digest: [u8; 32],
 }
 fn read_journal_state(
-    root: &Path,
-    root_handle: &File,
-    name: &str,
-    root_owner: u32,
+    root: &PrivateDirectory,
     binding: &MusubiPublicationServiceJournalBindingV1,
     limits: DurableMusubiPublicationServiceJournalLimitsV1,
 ) -> Result<
@@ -1171,71 +1139,41 @@ fn read_journal_state(
     )>,
     DurableMusubiPublicationServiceJournalOpenErrorV1,
 > {
-    let Some(named_before) = journal_child_metadata(root, root_handle, name)? else {
-        return Ok(None);
+    let file = match root.open_read(JOURNAL_STATE_FILE) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState),
     };
-    validate_private_file(&named_before, root_owner)?;
-    validate_state_length(named_before.len(), limits.max_snapshot_usize())?;
-    let mut file = open_journal_child(root, root_handle, name)?
-        .ok_or(DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    let opened_before = file
-        .metadata()
-        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    validate_private_file(&opened_before, root_owner)?;
-    validate_state_length(opened_before.len(), limits.max_snapshot_usize())?;
-    if !same_file_version(&named_before, &opened_before) {
-        return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState);
-    }
-    let expected_length = usize::try_from(opened_before.len())
-        .unwrap_or_else(|_| limits.max_snapshot_usize())
-        .min(limits.max_snapshot_usize());
-    let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(expected_length)
-        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    std::io::Read::by_ref(&mut file)
-        .take(
-            u64::try_from(limits.max_snapshot_usize()).expect("validated snapshot bound fits u64")
-                + 1,
-        )
-        .read_to_end(&mut bytes)
-        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    let opened_after = file
-        .metadata()
-        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    let named_after = journal_child_metadata(root, root_handle, name)?
-        .ok_or(DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    validate_private_file(&opened_after, root_owner)?;
-    validate_private_file(&named_after, root_owner)?;
-    if bytes.is_empty()
-        || bytes.len() > limits.max_snapshot_usize()
-        || u64::try_from(bytes.len()).ok() != Some(opened_before.len())
-        || !same_file_version(&opened_before, &opened_after)
-        || !same_file_version(&opened_after, &named_after)
+    let snapshot = FileSnapshot::private_journal(&file)
+        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState)?;
+    let length = file.metadata().map_err(storage_error)?.len();
+    validate_state_length(length, limits.max_snapshot_usize())?;
+    let bytes = root
+        .read(JOURNAL_STATE_FILE, limits.max_snapshot_usize())
+        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState)?;
+    let version = PersistedJournalVersionV1 {
+        snapshot,
+        length,
+        digest: journal_file_digest(&bytes),
+    };
+    if bytes.len() as u64 != length
+        || FileSnapshot::private_journal(&file).map_err(storage_error)? != snapshot
     {
         return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState);
     }
-    let decode_limits = journal_decode_limits(bytes.len())?;
     let envelope: DurablePublicationJournalEnvelopeV1 =
-        norito::decode_canonical_with_limits(&bytes, decode_limits)
+        norito::decode_canonical_with_limits(&bytes, journal_decode_limits(bytes.len())?)
             .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState)?;
     envelope.validate_digest()?;
     let revision = envelope.state.revision;
     let journal = journal_from_state(&envelope.state, binding, limits)?;
     let canonical = encode_candidate(&journal, binding, limits, revision)
         .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState)?;
-    if canonical != bytes {
+    if canonical.as_slice() != bytes.as_slice() {
         return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState);
     }
-    Ok(Some((
-        journal,
-        revision,
-        PersistedJournalVersionV1 {
-            identity: JournalFileIdentity::from_metadata(&opened_after),
-            length: opened_after.len(),
-            digest: journal_file_digest(&bytes),
-        },
-    )))
+    validate_exact_state_file(root, version, limits.max_snapshot_usize())?;
+    Ok(Some((journal, revision, version)))
 }
 fn journal_decode_limits(
     payload_bytes: usize,
@@ -1257,170 +1195,74 @@ fn journal_file_digest(bytes: &[u8]) -> [u8; 32] {
     hasher.update(bytes);
     *hasher.finalize().as_bytes()
 }
+fn storage_error(_: io::Error) -> DurableMusubiPublicationServiceJournalOpenErrorV1 {
+    DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable
+}
 fn write_state(
     storage: JournalStorageContext<'_>,
     expected: Option<PersistedJournalVersionV1>,
     bytes: &[u8],
     maximum_bytes: usize,
 ) -> Result<PersistedJournalVersionV1, DurableMusubiPublicationServiceJournalOpenErrorV1> {
-    if bytes.is_empty() || bytes.len() > maximum_bytes {
-        return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState);
+    validate_state_length(bytes.len() as u64, maximum_bytes)?;
+    validate_lock(storage)?;
+    validate_inventory(storage.root, expected.is_some())?;
+    if let Some(expected) = expected {
+        validate_exact_state_file(storage.root, expected, maximum_bytes)?;
     }
-    let JournalStorageContext {
-        root,
-        root_handle,
-        root_identity,
-        root_owner,
-        lock_handle,
-        lock_identity,
-    } = storage;
-    validate_root_identity(root, root_handle, root_identity, root_owner)?;
-    validate_lock_identity(root, root_handle, lock_handle, lock_identity, root_owner)?;
-    validate_persisted_state(storage, expected, maximum_bytes)?;
-    let mut pending = PrivateJournalTemporaryFile::create(root, root_handle, root_owner)?;
-    pending
-        .file
-        .write_all(bytes)
-        .and_then(|()| pending.file.flush())
-        .and_then(|()| pending.file.sync_all())
-        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    let pending_version = PersistedJournalVersionV1 {
-        identity: pending.identity,
-        length: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+    // The original exclusive lock serializes this journal's writer. Native publication
+    // validates private destination custody and never uses a service-local path fallback.
+    storage
+        .root
+        .write_atomic(
+            JOURNAL_STATE_FILE,
+            bytes,
+            if expected.is_some() {
+                PublishMode::Replace
+            } else {
+                PublishMode::CreateNew
+            },
+        )
+        .map_err(storage_error)?;
+    validate_lock(storage)?;
+    validate_inventory(storage.root, true)?;
+    let file = storage
+        .root
+        .open_read(JOURNAL_STATE_FILE)
+        .map_err(storage_error)?;
+    let version = PersistedJournalVersionV1 {
+        snapshot: FileSnapshot::private_journal(&file).map_err(storage_error)?,
+        length: bytes.len() as u64,
         digest: journal_file_digest(bytes),
     };
-    pending.validate(root_owner)?;
-    validate_exact_state_file(
-        root,
-        root_handle,
-        JOURNAL_NEXT_FILE,
-        pending_version,
-        root_owner,
-        maximum_bytes,
-    )?;
-    validate_root_identity(root, root_handle, root_identity, root_owner)?;
-    validate_lock_identity(root, root_handle, lock_handle, lock_identity, root_owner)?;
-    validate_persisted_state(storage, expected, maximum_bytes)?;
-    validate_exact_state_file(
-        root,
-        root_handle,
-        JOURNAL_NEXT_FILE,
-        pending_version,
-        root_owner,
-        maximum_bytes,
-    )?;
-    replace_journal_state(root, root_handle)?;
-    pending.disarm();
-    validate_exact_state_file(
-        root,
-        root_handle,
-        JOURNAL_STATE_FILE,
-        pending_version,
-        root_owner,
-        maximum_bytes,
-    )?;
-    validate_root_identity(root, root_handle, root_identity, root_owner)?;
-    validate_lock_identity(root, root_handle, lock_handle, lock_identity, root_owner)?;
-    root_handle
-        .sync_all()
-        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    validate_root_identity(root, root_handle, root_identity, root_owner)?;
-    validate_lock_identity(root, root_handle, lock_handle, lock_identity, root_owner)?;
-    validate_exact_state_file(
-        root,
-        root_handle,
-        JOURNAL_STATE_FILE,
-        pending_version,
-        root_owner,
-        maximum_bytes,
-    )?;
-    Ok(pending_version)
+    validate_exact_state_file(storage.root, version, maximum_bytes)?;
+    Ok(version)
 }
 fn validate_live_state(
     storage: JournalStorageContext<'_>,
     expected: PersistedJournalVersionV1,
     maximum_bytes: usize,
 ) -> Result<(), DurableMusubiPublicationServiceJournalOpenErrorV1> {
-    validate_root_identity(
-        storage.root,
-        storage.root_handle,
-        storage.root_identity,
-        storage.root_owner,
-    )?;
-    validate_lock_identity(
-        storage.root,
-        storage.root_handle,
-        storage.lock_handle,
-        storage.lock_identity,
-        storage.root_owner,
-    )?;
-    validate_exact_state_file(
-        storage.root,
-        storage.root_handle,
-        JOURNAL_STATE_FILE,
-        expected,
-        storage.root_owner,
-        maximum_bytes,
-    )
-}
-fn validate_persisted_state(
-    storage: JournalStorageContext<'_>,
-    expected: Option<PersistedJournalVersionV1>,
-    maximum_bytes: usize,
-) -> Result<(), DurableMusubiPublicationServiceJournalOpenErrorV1> {
-    expected.map_or_else(
-        || {
-            if journal_child_metadata(storage.root, storage.root_handle, JOURNAL_STATE_FILE)?
-                .is_none()
-            {
-                Ok(())
-            } else {
-                Err(DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)
-            }
-        },
-        |expected| {
-            validate_exact_state_file(
-                storage.root,
-                storage.root_handle,
-                JOURNAL_STATE_FILE,
-                expected,
-                storage.root_owner,
-                maximum_bytes,
-            )
-        },
-    )
+    validate_lock(storage)?;
+    validate_inventory(storage.root, true)?;
+    validate_exact_state_file(storage.root, expected, maximum_bytes)
 }
 fn validate_exact_state_file(
-    root: &Path,
-    root_handle: &File,
-    name: &str,
+    root: &PrivateDirectory,
     expected: PersistedJournalVersionV1,
-    root_owner: u32,
     maximum_bytes: usize,
 ) -> Result<(), DurableMusubiPublicationServiceJournalOpenErrorV1> {
-    let named_before = journal_child_metadata(root, root_handle, name)?
-        .ok_or(DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    validate_private_file(&named_before, root_owner)?;
-    validate_state_length(named_before.len(), maximum_bytes)?;
-    if !expected.identity.matches(&named_before) || named_before.len() != expected.length {
+    root.revalidate().map_err(storage_error)?;
+    let mut file = root.open_read(JOURNAL_STATE_FILE).map_err(storage_error)?;
+    if FileSnapshot::private_journal(&file).map_err(storage_error)? != expected.snapshot {
         return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable);
     }
-    let mut file = open_journal_child(root, root_handle, name)?
-        .ok_or(DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    let opened_before = file
-        .metadata()
-        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    validate_private_file(&opened_before, root_owner)?;
-    if !same_file_version(&named_before, &opened_before) {
-        return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable);
-    }
+    validate_state_length(expected.length, maximum_bytes)?;
     let mut hasher = blake3::Hasher::new_derive_key("iroha:musubi:publication-journal-file:v1");
-    let mut total = 0_usize;
-    let mut buffer = vec![0_u8; 64 * 1024];
+    let mut total = 0usize;
+    let mut buffer = [0u8; 64 * 1024];
     loop {
-        let read = file
-            .read(&mut buffer)
-            .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
+        let read = file.read(&mut buffer).map_err(storage_error)?;
         if read == 0 {
             break;
         }
@@ -1432,21 +1274,15 @@ fn validate_exact_state_file(
         }
         hasher.update(&buffer[..read]);
     }
-    let opened_after = file
-        .metadata()
-        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    let named_after = journal_child_metadata(root, root_handle, name)?
-        .ok_or(DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    validate_private_file(&opened_after, root_owner)?;
-    validate_private_file(&named_after, root_owner)?;
-    if !same_file_version(&opened_before, &opened_after)
-        || !same_file_version(&opened_after, &named_after)
-        || u64::try_from(total).ok() != Some(expected.length)
+    let named = root.open_read(JOURNAL_STATE_FILE).map_err(storage_error)?;
+    if FileSnapshot::private_journal(&file).map_err(storage_error)? != expected.snapshot
+        || FileSnapshot::private_journal(&named).map_err(storage_error)? != expected.snapshot
+        || total as u64 != expected.length
         || *hasher.finalize().as_bytes() != expected.digest
     {
         return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable);
     }
-    Ok(())
+    root.revalidate().map_err(storage_error)
 }
 fn validate_state_length(
     length: u64,
@@ -1461,161 +1297,38 @@ fn validate_state_length(
     }
     Ok(())
 }
-fn open_private_root(
-    root: &Path,
-) -> Result<
-    (PathBuf, File, JournalFileIdentity, u32),
-    DurableMusubiPublicationServiceJournalOpenErrorV1,
-> {
-    let linked = fs::symlink_metadata(root)
-        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot)?;
-    validate_private_root(&linked)?;
-    let canonical = fs::canonicalize(root)
-        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot)?;
-    let canonical_metadata = fs::symlink_metadata(&canonical)
-        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot)?;
-    validate_private_root(&canonical_metadata)?;
-    if !same_file(&linked, &canonical_metadata) {
-        return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot);
-    }
-    #[cfg(unix)]
-    let filesystem_owner = publication_filesystem_owner_probe(&canonical)
-        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    #[cfg(unix)]
-    if metadata_owner(&linked) != filesystem_owner
-        || metadata_owner(&canonical_metadata) != filesystem_owner
-    {
-        return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot);
-    }
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    options.custom_flags(secure_directory_open_flags());
-    let handle = options
-        .open(&canonical)
-        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    let opened = handle
-        .metadata()
-        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    validate_private_root(&opened)?;
-    if !same_file(&canonical_metadata, &opened) {
-        return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot);
-    }
-    #[cfg(unix)]
-    if metadata_owner(&opened) != filesystem_owner {
-        return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot);
-    }
-    Ok((
-        canonical,
-        handle,
-        JournalFileIdentity::from_metadata(&opened),
-        metadata_owner(&opened),
-    ))
-}
-#[derive(Clone, Copy)]
-enum JournalLockOpenMode {
-    Existing,
-    CreateNew,
-}
 fn ensure_empty_initialization_root(
-    root: &Path,
-    root_handle: &File,
+    root: &PrivateDirectory,
 ) -> Result<(), DurableMusubiPublicationServiceJournalOpenErrorV1> {
-    if !journal_directory_names(root, root_handle)?.is_empty() {
+    if !root
+        .entries(1)
+        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::AlreadyInitialized)?
+        .is_empty()
+    {
         return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::AlreadyInitialized);
     }
     Ok(())
 }
 fn open_and_lock(
-    root: &Path,
-    root_handle: &File,
-    root_owner: u32,
-    mode: JournalLockOpenMode,
-) -> Result<(File, JournalFileIdentity), DurableMusubiPublicationServiceJournalOpenErrorV1> {
-    let before = journal_child_metadata(root, root_handle, JOURNAL_LOCK_FILE)?;
-    match (mode, before.is_some()) {
-        (JournalLockOpenMode::Existing, false) => {
-            return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::Uninitialized);
-        }
-        (JournalLockOpenMode::CreateNew, true) => {
-            return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::AlreadyInitialized);
-        }
-        _ => {}
+    root: &PrivateDirectory,
+    initialize: bool,
+) -> Result<(File, FileSnapshot), DurableMusubiPublicationServiceJournalOpenErrorV1> {
+    let file = if initialize {
+        root.create_lock(JOURNAL_LOCK_FILE)
+    } else {
+        root.open_existing_lock(JOURNAL_LOCK_FILE)
     }
-    if let Some(metadata) = &before {
-        validate_private_file(metadata, root_owner)?;
-        if metadata.len() != 0 {
-            return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState);
+    .map_err(|error| match error.kind() {
+        io::ErrorKind::NotFound => DurableMusubiPublicationServiceJournalOpenErrorV1::Uninitialized,
+        io::ErrorKind::AlreadyExists => {
+            DurableMusubiPublicationServiceJournalOpenErrorV1::AlreadyInitialized
         }
-    }
-    #[cfg(unix)]
-    let file = {
-        let _ = root;
-        let mut flags = OFlags::RDWR | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
-        if matches!(mode, JournalLockOpenMode::CreateNew) {
-            flags |= OFlags::CREATE | OFlags::EXCL;
-        }
-        File::from(
-            rustix::fs::openat(
-                root_handle,
-                JOURNAL_LOCK_FILE,
-                flags,
-                Mode::RUSR | Mode::WUSR,
-            )
-            .map_err(|error| match (mode, error) {
-                (JournalLockOpenMode::Existing, rustix::io::Errno::NOENT) => {
-                    DurableMusubiPublicationServiceJournalOpenErrorV1::Uninitialized
-                }
-                (JournalLockOpenMode::CreateNew, rustix::io::Errno::EXIST) => {
-                    DurableMusubiPublicationServiceJournalOpenErrorV1::AlreadyInitialized
-                }
-                _ => DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable,
-            })?,
-        )
-    };
-    #[cfg(not(unix))]
-    let file = {
-        let _ = root_handle;
-        let mut options = OpenOptions::new();
-        options.read(true).write(true).truncate(false);
-        if matches!(mode, JournalLockOpenMode::CreateNew) {
-            options.create_new(true);
-        }
-        options
-            .open(root.join(JOURNAL_LOCK_FILE))
-            .map_err(|error| match (mode, error.kind()) {
-                (JournalLockOpenMode::Existing, io::ErrorKind::NotFound) => {
-                    DurableMusubiPublicationServiceJournalOpenErrorV1::Uninitialized
-                }
-                (JournalLockOpenMode::CreateNew, io::ErrorKind::AlreadyExists) => {
-                    DurableMusubiPublicationServiceJournalOpenErrorV1::AlreadyInitialized
-                }
-                _ => DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable,
-            })?
-    };
-    if before.is_none() {
-        #[cfg(unix)]
-        file.set_permissions(fs::Permissions::from_mode(0o600))
-            .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    }
-    let opened = file
-        .metadata()
-        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    validate_private_file(&opened, root_owner)?;
-    if opened.len() != 0 {
+        _ => DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState,
+    })?;
+    let snapshot = FileSnapshot::private_journal(&file)
+        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState)?;
+    if file.metadata().map_err(storage_error)?.len() != 0 {
         return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState);
-    }
-    if before
-        .as_ref()
-        .is_some_and(|metadata| !same_file(metadata, &opened))
-    {
-        return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot);
-    }
-    let named = journal_child_metadata(root, root_handle, JOURNAL_LOCK_FILE)?
-        .ok_or(DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    validate_private_file(&named, root_owner)?;
-    if named.len() != 0 || !same_file(&opened, &named) {
-        return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot);
     }
     file.try_lock().map_err(|error| match error {
         fs::TryLockError::WouldBlock => DurableMusubiPublicationServiceJournalOpenErrorV1::Locked,
@@ -1623,465 +1336,52 @@ fn open_and_lock(
             DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable
         }
     })?;
-    let after = journal_child_metadata(root, root_handle, JOURNAL_LOCK_FILE)?
-        .ok_or(DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    validate_private_file(&after, root_owner)?;
-    if after.len() != 0 || !same_file(&opened, &after) {
-        return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot);
-    }
-    Ok((file, JournalFileIdentity::from_metadata(&opened)))
+    validate_lock(JournalStorageContext {
+        root,
+        lock_handle: &file,
+        lock_snapshot: snapshot,
+    })?;
+    Ok((file, snapshot))
 }
-fn reconcile_directory(
+fn validate_lock(
     storage: JournalStorageContext<'_>,
-    maximum_bytes: usize,
 ) -> Result<(), DurableMusubiPublicationServiceJournalOpenErrorV1> {
-    validate_root_identity(
-        storage.root,
-        storage.root_handle,
-        storage.root_identity,
-        storage.root_owner,
-    )?;
-    validate_lock_identity(
-        storage.root,
-        storage.root_handle,
-        storage.lock_handle,
-        storage.lock_identity,
-        storage.root_owner,
-    )?;
-    let mut remove_next = false;
-    for name in journal_directory_names(storage.root, storage.root_handle)? {
-        if name == JOURNAL_LOCK_FILE || name == JOURNAL_STATE_FILE {
-            continue;
-        }
-        if name == JOURNAL_NEXT_FILE && !remove_next {
-            let metadata =
-                journal_child_metadata(storage.root, storage.root_handle, JOURNAL_NEXT_FILE)?
-                    .ok_or(DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-            validate_private_file(&metadata, storage.root_owner)?;
-            if usize::try_from(metadata.len())
-                .ok()
-                .is_none_or(|length| length > maximum_bytes)
-            {
-                return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState);
-            }
-            remove_next = true;
-            continue;
-        }
-        return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot);
-    }
-    if remove_next {
-        let before = journal_child_metadata(storage.root, storage.root_handle, JOURNAL_NEXT_FILE)?
-            .ok_or(DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-        validate_private_file(&before, storage.root_owner)?;
-        remove_journal_next(storage.root, storage.root_handle)?;
-        storage
-            .root_handle
-            .sync_all()
-            .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    }
-    validate_root_identity(
-        storage.root,
-        storage.root_handle,
-        storage.root_identity,
-        storage.root_owner,
-    )?;
-    validate_lock_identity(
-        storage.root,
-        storage.root_handle,
-        storage.lock_handle,
-        storage.lock_identity,
-        storage.root_owner,
-    )
-}
-fn validate_lock_identity(
-    root: &Path,
-    root_handle: &File,
-    lock_handle: &File,
-    identity: JournalFileIdentity,
-    root_owner: u32,
-) -> Result<(), DurableMusubiPublicationServiceJournalOpenErrorV1> {
-    let named = journal_child_metadata(root, root_handle, JOURNAL_LOCK_FILE)?
-        .ok_or(DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    let opened = lock_handle
-        .metadata()
-        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    validate_private_file(&named, root_owner)?;
-    validate_private_file(&opened, root_owner)?;
-    if named.len() != 0
-        || opened.len() != 0
-        || !identity.matches(&named)
-        || !identity.matches(&opened)
-        || !same_file(&named, &opened)
+    storage.root.revalidate().map_err(storage_error)?;
+    let named = storage
+        .root
+        .open_read(JOURNAL_LOCK_FILE)
+        .map_err(storage_error)?;
+    if FileSnapshot::private_journal(storage.lock_handle).map_err(storage_error)?
+        != storage.lock_snapshot
+        || FileSnapshot::private_journal(&named).map_err(storage_error)? != storage.lock_snapshot
+        || named.metadata().map_err(storage_error)?.len() != 0
     {
         return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable);
     }
-    Ok(())
+    storage.root.revalidate().map_err(storage_error)
 }
-fn validate_root_identity(
-    root: &Path,
-    root_handle: &File,
-    identity: JournalFileIdentity,
-    root_owner: u32,
+fn validate_inventory(
+    root: &PrivateDirectory,
+    has_state: bool,
 ) -> Result<(), DurableMusubiPublicationServiceJournalOpenErrorV1> {
-    let named = fs::symlink_metadata(root)
-        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    let opened = root_handle
-        .metadata()
-        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-    validate_private_root(&named)?;
-    validate_private_root(&opened)?;
-    if metadata_owner(&named) != root_owner
-        || metadata_owner(&opened) != root_owner
-        || !identity.matches(&named)
-        || !identity.matches(&opened)
-    {
-        return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable);
-    }
-    Ok(())
-}
-fn open_journal_child(
-    root: &Path,
-    root_handle: &File,
-    name: &str,
-) -> Result<Option<File>, DurableMusubiPublicationServiceJournalOpenErrorV1> {
-    #[cfg(unix)]
-    {
-        let _ = root;
-        match rustix::fs::openat(
-            root_handle,
-            name,
-            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-            Mode::empty(),
-        ) {
-            Ok(file) => Ok(Some(File::from(file))),
-            Err(rustix::io::Errno::NOENT) => Ok(None),
-            Err(_) => Err(DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable),
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = root_handle;
-        match File::open(root.join(name)) {
-            Ok(file) => Ok(Some(file)),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(_) => Err(DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable),
-        }
-    }
-}
-fn journal_child_metadata(
-    root: &Path,
-    root_handle: &File,
-    name: &str,
-) -> Result<Option<fs::Metadata>, DurableMusubiPublicationServiceJournalOpenErrorV1> {
-    open_journal_child(root, root_handle, name)?
-        .map(|file| {
-            file.metadata()
-                .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)
+    let names = root.entries(2).map_err(storage_error)?;
+    let expected = if has_state {
+        vec![JOURNAL_LOCK_FILE, JOURNAL_STATE_FILE]
+    } else {
+        vec![JOURNAL_LOCK_FILE]
+    };
+    if names.len() != expected.len()
+        || expected.iter().any(|required| {
+            !names
+                .iter()
+                .any(|name| name.as_os_str() == std::ffi::OsStr::new(required))
         })
-        .transpose()
-}
-fn journal_directory_names(
-    root: &Path,
-    root_handle: &File,
-) -> Result<Vec<String>, DurableMusubiPublicationServiceJournalOpenErrorV1> {
-    #[cfg(unix)]
     {
-        let _ = root;
-        let entries = rustix::fs::Dir::read_from(root_handle)
-            .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-        let mut names = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|_| {
-                DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable
-            })?;
-            let bytes = entry.file_name().to_bytes();
-            if matches!(bytes, b"." | b"..") {
-                continue;
-            }
-            let name = std::str::from_utf8(bytes)
-                .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot)?;
-            if names.len() == 3 {
-                return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot);
-            }
-            names.push(name.to_owned());
-        }
-        Ok(names)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = root_handle;
-        let mut names = Vec::new();
-        for entry in fs::read_dir(root)
-            .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?
-        {
-            let entry = entry.map_err(|_| {
-                DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable
-            })?;
-            let name = entry
-                .file_name()
-                .into_string()
-                .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot)?;
-            if names.len() == 3 {
-                return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot);
-            }
-            names.push(name);
-        }
-        Ok(names)
-    }
-}
-fn remove_journal_next(
-    root: &Path,
-    root_handle: &File,
-) -> Result<(), DurableMusubiPublicationServiceJournalOpenErrorV1> {
-    #[cfg(unix)]
-    {
-        let _ = root;
-        rustix::fs::unlinkat(root_handle, JOURNAL_NEXT_FILE, AtFlags::empty())
-            .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = root_handle;
-        fs::remove_file(root.join(JOURNAL_NEXT_FILE))
-            .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)
-    }
-}
-fn replace_journal_state(
-    root: &Path,
-    root_handle: &File,
-) -> Result<(), DurableMusubiPublicationServiceJournalOpenErrorV1> {
-    #[cfg(unix)]
-    {
-        let _ = root;
-        rustix::fs::renameat(
-            root_handle,
-            JOURNAL_NEXT_FILE,
-            root_handle,
-            JOURNAL_STATE_FILE,
-        )
-        .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = root_handle;
-        fs::rename(root.join(JOURNAL_NEXT_FILE), root.join(JOURNAL_STATE_FILE))
-            .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)
-    }
-}
-fn validate_private_root(
-    metadata: &fs::Metadata,
-) -> Result<(), DurableMusubiPublicationServiceJournalOpenErrorV1> {
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot);
-    }
-    #[cfg(unix)]
-    if metadata.mode() & 0o7777 != 0o700 {
-        return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot);
+        return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable);
     }
     Ok(())
 }
-fn validate_private_file(
-    metadata: &fs::Metadata,
-    root_owner: u32,
-) -> Result<(), DurableMusubiPublicationServiceJournalOpenErrorV1> {
-    #[cfg(not(unix))]
-    let _ = root_owner;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState);
-    }
-    #[cfg(unix)]
-    if metadata.mode() & 0o7777 != 0o600 || metadata.nlink() != 1 || metadata.uid() != root_owner {
-        return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState);
-    }
-    Ok(())
-}
-struct PrivateJournalTemporaryFile {
-    path: PathBuf,
-    file: File,
-    root_handle: File,
-    identity: JournalFileIdentity,
-    armed: bool,
-}
-impl PrivateJournalTemporaryFile {
-    fn create(
-        root: &Path,
-        root_handle: &File,
-        root_owner: u32,
-    ) -> Result<Self, DurableMusubiPublicationServiceJournalOpenErrorV1> {
-        let path = root.join(JOURNAL_NEXT_FILE);
-        let pinned_root_handle = root_handle
-            .try_clone()
-            .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-        #[cfg(unix)]
-        let file = File::from(
-            rustix::fs::openat(
-                root_handle,
-                JOURNAL_NEXT_FILE,
-                OFlags::WRONLY
-                    | OFlags::CREATE
-                    | OFlags::EXCL
-                    | OFlags::NOFOLLOW
-                    | OFlags::NONBLOCK
-                    | OFlags::CLOEXEC,
-                Mode::RUSR | Mode::WUSR,
-            )
-            .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?,
-        );
-        #[cfg(not(unix))]
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-        #[cfg(unix)]
-        file.set_permissions(fs::Permissions::from_mode(0o600))
-            .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-        let metadata = file
-            .metadata()
-            .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-        let pending = Self {
-            path,
-            file,
-            root_handle: pinned_root_handle,
-            identity: JournalFileIdentity::from_metadata(&metadata),
-            armed: true,
-        };
-        pending.validate(root_owner)?;
-        Ok(pending)
-    }
-    fn validate(
-        &self,
-        root_owner: u32,
-    ) -> Result<(), DurableMusubiPublicationServiceJournalOpenErrorV1> {
-        let opened = self
-            .file
-            .metadata()
-            .map_err(|_| DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-        let named = journal_child_metadata(
-            self.path
-                .parent()
-                .expect("pending journal state has parent"),
-            &self.root_handle,
-            JOURNAL_NEXT_FILE,
-        )?
-        .ok_or(DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable)?;
-        validate_private_file(&opened, root_owner)?;
-        validate_private_file(&named, root_owner)?;
-        if !self.identity.matches(&opened)
-            || !self.identity.matches(&named)
-            || !same_file(&opened, &named)
-        {
-            return Err(DurableMusubiPublicationServiceJournalOpenErrorV1::StorageUnavailable);
-        }
-        Ok(())
-    }
-    fn disarm(&mut self) {
-        self.armed = false;
-    }
-}
-impl Drop for PrivateJournalTemporaryFile {
-    fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        #[cfg(unix)]
-        {
-            let Ok(stat) = rustix::fs::statat(
-                &self.root_handle,
-                JOURNAL_NEXT_FILE,
-                AtFlags::SYMLINK_NOFOLLOW,
-            ) else {
-                return;
-            };
-            if FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile
-                && stat.st_nlink == 1
-                && self.identity.matches_stat(&stat)
-            {
-                let _ =
-                    rustix::fs::unlinkat(&self.root_handle, JOURNAL_NEXT_FILE, AtFlags::empty());
-            }
-        }
-        #[cfg(not(unix))]
-        {
-            let Ok(metadata) = fs::symlink_metadata(&self.path) else {
-                return;
-            };
-            if metadata.is_file()
-                && !metadata.file_type().is_symlink()
-                && self.identity.matches(&metadata)
-            {
-                let _ = fs::remove_file(&self.path);
-            }
-        }
-    }
-}
-#[cfg(unix)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct JournalFileIdentity {
-    device: u64,
-    inode: u64,
-}
-#[cfg(unix)]
-impl JournalFileIdentity {
-    fn from_metadata(metadata: &fs::Metadata) -> Self {
-        Self {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-        }
-    }
-    fn matches(self, metadata: &fs::Metadata) -> bool {
-        self.device == metadata.dev() && self.inode == metadata.ino()
-    }
-    fn matches_stat(self, stat: &Stat) -> bool {
-        u64::try_from(stat.st_dev).ok() == Some(self.device) && self.inode == stat.st_ino
-    }
-}
-#[cfg(not(unix))]
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct JournalFileIdentity;
-#[cfg(not(unix))]
-impl JournalFileIdentity {
-    fn from_metadata(_metadata: &fs::Metadata) -> Self {
-        Self
-    }
-    fn matches(self, _metadata: &fs::Metadata) -> bool {
-        true
-    }
-}
-#[cfg(unix)]
-fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.dev() == right.dev() && left.ino() == right.ino()
-}
-#[cfg(unix)]
-fn same_file_version(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    same_file(left, right)
-        && left.len() == right.len()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-        && left.ctime() == right.ctime()
-        && left.ctime_nsec() == right.ctime_nsec()
-        && left.mode() == right.mode()
-        && left.uid() == right.uid()
-        && left.nlink() == right.nlink()
-}
-#[cfg(not(unix))]
-fn same_file(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
-    true
-}
-#[cfg(not(unix))]
-fn same_file_version(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.len() == right.len() && left.modified().ok() == right.modified().ok()
-}
-#[cfg(unix)]
-fn metadata_owner(metadata: &fs::Metadata) -> u32 {
-    metadata.uid()
-}
-#[cfg(not(unix))]
-fn metadata_owner(_metadata: &fs::Metadata) -> u32 {
-    0
-}
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::MusubiPublicationServiceConfigurationV1;
@@ -2093,110 +1393,67 @@ mod tests {
         musubi::{ArchiveId, MusubiContentDigestV1},
         sorafs::capacity::ProviderId,
     };
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt as _;
     const TEST_RETAINED_RESPONSE_BUDGET_BYTES: usize = 64;
+    #[cfg(unix)]
     #[test]
-    fn journal_children_remain_bound_to_open_directory_after_path_replacement() {
+    fn journal_refuses_path_replacement_without_mutating_either_directory() {
         let workspace = private_tempdir();
-        let configured = workspace.path().join("journal");
-        let displaced = workspace.path().join("displaced-journal");
-        fs::create_dir(&configured).expect("private journal directory");
-        fs::set_permissions(&configured, fs::Permissions::from_mode(0o700))
-            .expect("private journal mode");
-        let root_handle = OpenOptions::new()
-            .read(true)
-            .custom_flags(secure_directory_open_flags())
-            .open(&configured)
-            .expect("pin original journal directory");
-        let owner = root_handle.metadata().expect("root metadata").uid();
+        let root = PrivateDirectory::open_exact(workspace.path()).unwrap();
+        let configured = root.create_child("journal").unwrap();
+        let path = configured.path().to_owned();
+        let displaced = root.path().join("displaced");
+        drop(configured);
         let configuration = configuration();
-        let binding = journal_binding(&configuration);
-        let limits = limits();
-        let empty = InMemoryMusubiPublicationServiceJournalV1::new(
-            binding.clone(),
-            limits.max_operations_usize(),
-            limits.max_authorizations_usize(),
+        let mut journal = DurableMusubiPublicationServiceJournalV1::initialize(
+            &path,
+            journal_binding(&configuration),
+            limits(),
         )
-        .expect("bounded journal");
-        let bytes = encode_candidate(&empty, &binding, limits, 1).expect("canonical snapshot");
-        let mut pending = PrivateJournalTemporaryFile::create(&configured, &root_handle, owner)
-            .expect("create pending snapshot in pinned directory");
-        pending
-            .file
-            .write_all(&bytes)
-            .expect("write original snapshot");
-
-        fs::rename(&configured, &displaced).expect("move configured pathname");
-        fs::create_dir(&configured).expect("substitute configured pathname");
-        fs::set_permissions(&configured, fs::Permissions::from_mode(0o700))
-            .expect("replacement mode");
-        fs::write(configured.join(JOURNAL_NEXT_FILE), b"replacement")
-            .expect("replacement pending file");
-        fs::write(configured.join("replacement-only"), b"replacement")
-            .expect("replacement-only child");
+        .unwrap();
+        let original = fs::read(path.join(JOURNAL_STATE_FILE)).unwrap();
+        fs::rename(&path, &displaced).unwrap();
+        let replacement = root.create_child("journal").unwrap();
+        replacement
+            .write_atomic(JOURNAL_STATE_FILE, b"replacement", PublishMode::CreateNew)
+            .unwrap();
         assert_eq!(
-            journal_directory_names(&configured, &root_handle).expect("enumerate pinned root"),
-            vec![JOURNAL_NEXT_FILE.to_owned()]
+            journal.begin(&attempt(&configuration, 0x21, 0x22), 10_000),
+            Err(MusubiPublicationServiceJournalErrorV1::Unavailable)
         );
         assert_eq!(
-            read_journal_state(
-                &configured,
-                &root_handle,
-                JOURNAL_NEXT_FILE,
-                owner,
-                &binding,
-                limits,
-            )
-            .expect("read pinned snapshot")
-            .expect("original snapshot")
-            .1,
-            1
+            fs::read(displaced.join(JOURNAL_STATE_FILE)).unwrap(),
+            original
         );
-        pending
-            .validate(owner)
-            .expect("validate pinned pending snapshot");
-        drop(pending);
-        assert!(!displaced.join(JOURNAL_NEXT_FILE).exists());
         assert_eq!(
-            fs::read(configured.join(JOURNAL_NEXT_FILE)).expect("replacement remains"),
+            replacement.read(JOURNAL_STATE_FILE, 32).unwrap().as_slice(),
             b"replacement"
         );
-
-        let (lock, _) = open_and_lock(
-            &configured,
-            &root_handle,
-            owner,
-            JournalLockOpenMode::CreateNew,
-        )
-        .expect("lock original directory through pinned handle");
-        drop(lock);
-        assert!(displaced.join(JOURNAL_LOCK_FILE).is_file());
-        assert!(!configured.join(JOURNAL_LOCK_FILE).exists());
-
-        fs::write(displaced.join(JOURNAL_NEXT_FILE), &bytes).expect("pending original state");
-        replace_journal_state(&configured, &root_handle).expect("rename in original directory");
-        assert_eq!(
-            fs::read(displaced.join(JOURNAL_STATE_FILE)).expect("original installed state"),
-            bytes
-        );
-        assert!(!configured.join(JOURNAL_STATE_FILE).exists());
-        fs::write(displaced.join(JOURNAL_NEXT_FILE), b"stale").expect("stale original pending");
-        remove_journal_next(&configured, &root_handle).expect("unlink in original directory");
-        assert!(!displaced.join(JOURNAL_NEXT_FILE).exists());
-        assert_eq!(
-            fs::read(configured.join(JOURNAL_NEXT_FILE)).expect("replacement remains after unlink"),
-            b"replacement"
-        );
+        assert_eq!(replacement.entries(1).unwrap().len(), 1);
     }
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             [seed; 32],
         )))
     }
-    fn private_tempdir() -> tempfile::TempDir {
-        let root = tempfile::tempdir().expect("private journal root");
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
-            .expect("set private journal-root permissions");
-        root
+    struct PrivateTestRoot {
+        root: PrivateDirectory,
+        _parent: tempfile::TempDir,
+    }
+    impl PrivateTestRoot {
+        fn path(&self) -> &Path {
+            self.root.path()
+        }
+    }
+    fn private_tempdir() -> PrivateTestRoot {
+        let parent = tempfile::tempdir().expect("journal test workspace");
+        let root = PrivateDirectory::open_or_create(parent.path().join("private"))
+            .expect("native private test custody");
+        PrivateTestRoot {
+            _parent: parent,
+            root,
+        }
     }
     fn configuration() -> MusubiPublicationServiceConfigurationV1 {
         let broker_key = KeyPair::try_from_seed(
@@ -2258,10 +1515,6 @@ mod tests {
     #[test]
     fn error_codes_and_limits_are_stable() {
         let cases = [
-            (
-                DurableMusubiPublicationServiceJournalOpenErrorV1::UnsupportedPlatform,
-                "MUSUBI_PUBLICATION_JOURNAL_UNSUPPORTED_PLATFORM",
-            ),
             (
                 DurableMusubiPublicationServiceJournalOpenErrorV1::UnsafeRoot,
                 "MUSUBI_PUBLICATION_JOURNAL_UNSAFE_ROOT",
@@ -2354,6 +1607,153 @@ mod tests {
         .expect("lock released after drop");
         assert_eq!(reopened.revision(), 1);
     }
+    #[test]
+    fn startup_discards_only_bounded_native_staging_after_validating_committed_state() {
+        let root = private_tempdir();
+        let configuration = configuration();
+        let journal = DurableMusubiPublicationServiceJournalV1::initialize(
+            root.path(),
+            journal_binding(&configuration),
+            limits(),
+        )
+        .unwrap();
+        drop(journal);
+        let original = root
+            .root
+            .read(JOURNAL_STATE_FILE, limits().max_snapshot_usize())
+            .unwrap();
+        root.root
+            .write_atomic(".iroha-fs-1-0.tmp", b"interrupted", PublishMode::CreateNew)
+            .unwrap();
+        let journal = DurableMusubiPublicationServiceJournalV1::open(
+            root.path(),
+            journal_binding(&configuration),
+            limits(),
+        )
+        .unwrap();
+        assert_eq!(journal.revision(), 1);
+        assert_eq!(root.root.entries(2).unwrap().len(), 2);
+        assert_eq!(
+            root.root
+                .read(JOURNAL_STATE_FILE, limits().max_snapshot_usize())
+                .unwrap(),
+            original
+        );
+        drop(journal);
+        // The retired .next layout is unknown and is never silently deleted or decoded.
+        root.root
+            .write_atomic(
+                "publication-journal-v1.next",
+                b"unknown",
+                PublishMode::CreateNew,
+            )
+            .unwrap();
+        assert!(
+            DurableMusubiPublicationServiceJournalV1::open(
+                root.path(),
+                journal_binding(&configuration),
+                limits(),
+            )
+            .is_err()
+        );
+        assert_eq!(
+            root.root
+                .read("publication-journal-v1.next", 7)
+                .unwrap()
+                .as_slice(),
+            b"unknown"
+        );
+    }
+    #[test]
+    fn corrupt_or_missing_state_never_authorizes_staging_cleanup() {
+        for missing in [false, true] {
+            let root = private_tempdir();
+            let configuration = configuration();
+            drop(
+                DurableMusubiPublicationServiceJournalV1::initialize(
+                    root.path(),
+                    journal_binding(&configuration),
+                    limits(),
+                )
+                .unwrap(),
+            );
+            root.root
+                .write_atomic(".iroha-fs-1-0.tmp", b"retained", PublishMode::CreateNew)
+                .unwrap();
+            if missing {
+                fs::remove_file(root.path().join(JOURNAL_STATE_FILE)).unwrap();
+            } else {
+                root.root
+                    .write_atomic(JOURNAL_STATE_FILE, b"corrupt", PublishMode::Replace)
+                    .unwrap();
+            }
+            assert_eq!(
+                DurableMusubiPublicationServiceJournalV1::open(
+                    root.path(),
+                    journal_binding(&configuration),
+                    limits(),
+                )
+                .unwrap_err(),
+                if missing {
+                    DurableMusubiPublicationServiceJournalOpenErrorV1::Uninitialized
+                } else {
+                    DurableMusubiPublicationServiceJournalOpenErrorV1::InvalidState
+                }
+            );
+            assert_eq!(
+                root.root.read(".iroha-fs-1-0.tmp", 8).unwrap().as_slice(),
+                b"retained"
+            );
+            assert_eq!(root.path().join(JOURNAL_STATE_FILE).exists(), !missing);
+        }
+    }
+    #[test]
+    fn substituted_state_and_unexpected_live_inventory_permanently_poison_writer() {
+        for substitute in [false, true] {
+            let root = private_tempdir();
+            let configuration = configuration();
+            let mut journal = DurableMusubiPublicationServiceJournalV1::initialize(
+                root.path(),
+                journal_binding(&configuration),
+                limits(),
+            )
+            .unwrap();
+            let original = root
+                .root
+                .read(JOURNAL_STATE_FILE, limits().max_snapshot_usize())
+                .unwrap();
+            if substitute {
+                // Even identical canonical bytes do not replace the retained kernel object.
+                root.root
+                    .write_atomic(JOURNAL_STATE_FILE, &original, PublishMode::Replace)
+                    .unwrap();
+            } else {
+                root.root
+                    .write_atomic(".iroha-fs-1-0.tmp", b"unexpected", PublishMode::CreateNew)
+                    .unwrap();
+            }
+            let first = attempt(&configuration, 0x21, 0x22);
+            assert_eq!(
+                journal.begin(&first, 10_000),
+                Err(MusubiPublicationServiceJournalErrorV1::Unavailable)
+            );
+            assert_eq!(journal.revision(), 1);
+            if !substitute {
+                fs::remove_file(root.path().join(".iroha-fs-1-0.tmp")).unwrap();
+            }
+            assert_eq!(
+                journal.begin(&first, 10_001),
+                Err(MusubiPublicationServiceJournalErrorV1::Unavailable)
+            );
+            assert_eq!(
+                root.root
+                    .read(JOURNAL_STATE_FILE, limits().max_snapshot_usize())
+                    .unwrap(),
+                original
+            );
+        }
+    }
+    #[cfg(unix)]
     #[test]
     fn root_mode_rejects_special_permission_bits() {
         let root = private_tempdir();
@@ -2707,6 +2107,7 @@ mod tests {
             b"substituted lock state",
         )
         .expect("mutate lock file");
+        #[cfg(unix)]
         fs::set_permissions(
             root.path().join(JOURNAL_LOCK_FILE),
             fs::Permissions::from_mode(0o600),
@@ -2773,6 +2174,7 @@ mod tests {
         drop(reopened);
         fs::write(root.path().join(JOURNAL_STATE_FILE), b"not norito")
             .expect("corrupt journal state");
+        #[cfg(unix)]
         fs::set_permissions(
             root.path().join(JOURNAL_STATE_FILE),
             fs::Permissions::from_mode(0o600),

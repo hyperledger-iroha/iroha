@@ -118,11 +118,12 @@ impl Drop for Pending<'_> {
         self.second.release();
     }
 }
-fn register(
+fn register<'a>(
     source: &ReleaseNotification,
     control: &Arc<Control>,
-) -> iroha_allocation::release::ReleaseFuture {
-    let mut wait = source.observe().wait_for_release();
+    registration_1: &'a mut iroha_allocation::release::ReleaseRegistration,
+) -> iroha_allocation::release::ReleaseFuture<'a> {
+    let mut wait = source.observe().wait_for_release(registration_1);
     let waker = Waker::from(Arc::clone(control));
     assert!(
         Pin::new(&mut wait)
@@ -134,6 +135,14 @@ fn register(
 
 #[test]
 fn caller_owned_storage_slots_retain_replacement_prefix_until_all_writers_release() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+    let mut helper_release_registration_2 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     let (target, control) = fixture();
     let reader = target.second.snapshot();
     let mut pending = Pending {
@@ -141,8 +150,16 @@ fn caller_owned_storage_slots_retain_replacement_prefix_until_all_writers_releas
         second: target.second.block_acquisition(),
     };
     pending.first.initialize(BlockMode::Ordinary);
-    let first_wait = register(&target.first.revert_released, &control);
-    let second_wait = register(&target.second.revert_released, &control);
+    let first_wait = register(
+        &target.first.revert_released,
+        &control,
+        &mut helper_release_registration_1,
+    );
+    let second_wait = register(
+        &target.second.revert_released,
+        &control,
+        &mut helper_release_registration_2,
+    );
     control.armed.store(true, Ordering::SeqCst);
     assert!(
         catch_unwind(AssertUnwindSafe(|| pending
@@ -172,12 +189,20 @@ fn caller_owned_storage_slots_retain_replacement_prefix_until_all_writers_releas
 
 #[test]
 fn completed_storage_slots_release_physical_writers_before_retirement_and_refuse_reuse() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     let target = Storage::from_iter([(0usize, 7usize)]);
     let mut slot = target.block_acquisition();
     slot.initialize(BlockMode::Ordinary);
     let mut block = slot.into_block();
     block.insert(1, 8);
-    let mut wait = target.blocks_released.observe().wait_for_release();
+    let mut wait = target
+        .blocks_released
+        .observe()
+        .wait_for_release(&mut release_registration_1);
     assert!(
         Pin::new(&mut wait)
             .poll(&mut Context::from_waker(Waker::noop()))

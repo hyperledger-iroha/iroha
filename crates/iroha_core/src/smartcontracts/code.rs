@@ -98,102 +98,6 @@ impl ContractSubjectBinding {
         Ok(())
     }
 }
-/// Initialize bindings for a newly constructed first-release world.
-pub(crate) fn initialize_contract_subject_bindings(
-    world: &mut crate::state::World,
-) -> Result<(), String> {
-    let addresses: Vec<_> = world
-        .contract_instances
-        .view()
-        .iter()
-        .map(|(address, _)| address.clone())
-        .collect();
-    for address in addresses {
-        let bindings = world.contract_subject_bindings.view();
-        let binding = bindings.get(&address).ok_or_else(|| {
-            format!("active contract instance `{address}` has no lifecycle binding; legacy snapshots are not accepted")
-        })?;
-        binding.validate_for(&address)?;
-    }
-    rebuild_contract_subject_addresses(world)?;
-    validate_contract_subject_bindings(world)
-}
-/// Rebuild the reverse subject index exclusively from authenticated versioned bindings.
-///
-/// The index is deliberately omitted from snapshots/state roots. Rebuilding rejects duplicate
-/// subjects instead of allowing one historical contract to shadow another at admission time.
-pub(crate) fn rebuild_contract_subject_addresses(
-    world: &mut crate::state::World,
-) -> Result<(), String> {
-    let mut by_subject = BTreeMap::new();
-    for (address, binding) in world.contract_subject_bindings.view().iter() {
-        binding.validate_for(address)?;
-        if let Some(existing) = by_subject.insert(binding.subject.clone(), address.clone()) {
-            return Err(format!(
-                "contract subject `{}` is bound to both `{existing}` and `{address}`",
-                binding.subject
-            ));
-        }
-    }
-    world.contract_subject_addresses = by_subject.into_iter().collect();
-    Ok(())
-}
-/// Validate the complete typed subject ledger and require every active instance to have a binding.
-pub(crate) fn validate_contract_subject_bindings(
-    world: &crate::state::World,
-) -> Result<(), String> {
-    let bindings = world.contract_subject_bindings.view();
-    for (address, binding) in bindings.iter() {
-        binding.validate_for(address)?;
-        if world.accounts.view().get(&binding.subject).is_none() {
-            return Err(format!(
-                "contract subject account `{}` for `{address}` does not exist",
-                binding.subject
-            ));
-        }
-        let indexed_active_code_hash = world.contract_instances.view().get(address).copied();
-        if binding.lifecycle.active_code_hash != indexed_active_code_hash {
-            return Err(format!(
-                "contract lifecycle active code hash for `{address}` does not match the active-instance index"
-            ));
-        }
-        for owner in core::iter::once(&binding.lifecycle.owner)
-            .chain(binding.lifecycle.pending_owner.as_ref())
-        {
-            if let ContractLifecycleOwnerV1::Account(account) = owner
-                && world.accounts.view().get(account).is_none()
-            {
-                return Err(format!(
-                    "contract lifecycle owner `{account}` for `{address}` does not exist"
-                ));
-            }
-        }
-    }
-    for (address, _) in world.contract_instances.view().iter() {
-        if bindings.get(address).is_none() {
-            return Err(format!(
-                "active contract instance `{address}` has no versioned subject binding"
-            ));
-        }
-    }
-    if world.contract_subject_addresses.view().len() != bindings.len() {
-        return Err("contract subject reverse index cardinality mismatch".into());
-    }
-    for (address, binding) in bindings.iter() {
-        if world
-            .contract_subject_addresses
-            .view()
-            .get(&binding.subject)
-            != Some(address)
-        {
-            return Err(format!(
-                "contract subject reverse index mismatch for `{address}` and `{}`",
-                binding.subject
-            ));
-        }
-    }
-    Ok(())
-}
 /// Read the complete lifecycle record for a contract address, including inactive addresses.
 ///
 /// The returned subject is the consensus-persisted non-signing execution authority. `None` means
@@ -733,8 +637,22 @@ pub fn register_code_bytes(
     code: Vec<u8>,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<Hash, RegistryError> {
-    let verified = ivm::verify_contract_artifact(&code)
-        .map_err(|err| RegistryError::InvalidCode(err.to_string()))?;
+    let verified = ivm::verify_contract_artifact_with_memory_budget(
+        &code,
+        &state_transaction.execution_budget(),
+    )
+    .map_err(|error| {
+        if let Some(local) = error.local_vm_error()
+            && let Some(reason) = crate::execution_attempt::ExecutionDeferred::from_vm_error(&local)
+        {
+            return RegistryError::Instruction(
+                state_transaction.world.attempt_error_to_instruction_error(
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason),
+                ),
+            );
+        }
+        RegistryError::InvalidCode(error.to_string())
+    })?;
     let code_hash = verified.code_hash;
     RegisterSmartContractBytes {
         artifact_id: ContractArtifactId::new(dataspace_id, code_hash),
@@ -1188,8 +1106,8 @@ mod tests {
             callables: vec![ivm::call::EmbeddedCallableV1 {
                 entry_pc: 0,
                 frame_bytes: 0,
-                argument_words: Vec::new(),
-                result_words: vec![ivm::call::CallWordV1::Unit],
+                arguments: ivm::call::CallSchemaV1::empty(),
+                results: ivm::call::CallSchemaV1::unit(),
             }],
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "iroha-core-test".to_owned(),
@@ -2194,7 +2112,8 @@ seiyaku LifecycleAba {
             ContractSubjectBinding::new_direct(&address, authority.clone())
                 .with_active_code_hash(active_code_hash),
         );
-        initialize_contract_subject_bindings(&mut world).expect("initialize subject ledger");
+        crate::state::contract_subject_restore::rebuild(&mut world)
+            .expect("initialize subject ledger");
         let bindings = world.contract_subject_bindings.view();
         let binding = bindings.get(&address).expect("binding");
         assert_eq!(binding.subject, address.subject_id());
@@ -2215,7 +2134,10 @@ seiyaku LifecycleAba {
                 .get(&binding.subject),
             Some(&address)
         );
-        validate_contract_subject_bindings(&world).expect("validated subject ledger");
+        drop(world_view);
+        drop(bindings);
+        crate::state::contract_subject_restore::rebuild(&mut world)
+            .expect("validated subject ledger");
     }
     #[test]
     fn subject_binding_initialization_rejects_missing_subject_account() {
@@ -2242,7 +2164,7 @@ seiyaku LifecycleAba {
             ContractSubjectBinding::new_direct(&address, authority),
         );
 
-        let error = initialize_contract_subject_bindings(&mut world)
+        let error = crate::state::contract_subject_restore::rebuild(&mut world)
             .expect_err("a retained binding cannot reference an absent subject account");
         assert!(
             error.contains(&format!(
@@ -2420,7 +2342,7 @@ seiyaku LifecycleAba {
                 lifecycle: ContractLifecycleControlV1::direct(authority.clone()),
             },
         );
-        let error = initialize_contract_subject_bindings(&mut world)
+        let error = crate::state::contract_subject_restore::rebuild(&mut world)
             .expect_err("mismatched existing binding must fail closed");
         assert!(
             error.contains("contract subject binding mismatch"),

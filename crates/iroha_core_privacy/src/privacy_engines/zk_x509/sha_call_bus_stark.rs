@@ -72,6 +72,9 @@ use crate::privacy_engines::transparent_stark::{
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[path = "sha_native_aux_cache.rs"]
+mod native_aux_cache;
 /// Per-type closed-relation DER admission limit.
 pub(crate) const ZK_X509_SHA_CALL_MAX_DER_BYTES_V1: usize = 4_096;
 /// Exact number of canonical SHA calls at maximum shape.
@@ -2447,6 +2450,7 @@ impl<'a> ZkX509ShaBatchSegmentBaseSourceV1<'a> {
             replay: self.replay,
             binding: Some(binding),
             row_stream_emitted: false,
+            retained_aux: None,
         })
     }
     #[cfg(test)]
@@ -2477,9 +2481,38 @@ pub(crate) struct ZkX509ShaBatchSegmentAuxSourceV1<'a> {
     replay: ZkX509ShaSegmentReplayV1,
     binding: Option<ZkX509CredentialPreAuxBindingV1>,
     row_stream_emitted: bool,
+    retained_aux: Option<native_aux_cache::ShaNativeAuxCacheV1>,
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
+    /// Heap allowance for all four fixed native auxiliary caches. Inline owner
+    /// storage is already included in the enclosing MAIN source forecast.
+    pub(crate) fn native_aux_cache_forecast_all_v1() -> Result<usize, ZkX509ShaCallBusStarkErrorV1>
+    {
+        native_aux_cache::ShaNativeAuxCacheV1::heap_forecast_v1(ZK_X509_SHA_SEGMENT_ROWS_V1)?
+            .checked_mul(ZK_X509_SHA_SEGMENT_COUNT_V1)
+            .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)
+    }
+    /// Build once from this original opaque binding after MAIN has admitted the
+    /// fixed allocation forecast. No caller-provided rows or endpoints enter it.
+    pub(crate) fn retain_native_aux_v1(&mut self) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
+        if self.binding.is_none() || self.retained_aux.is_some() {
+            return Err(ZkX509ShaCallBusStarkErrorV1::Phase);
+        }
+        let cache = native_aux_cache::ShaNativeAuxCacheV1::build_v1(
+            ZK_X509_SHA_SEGMENT_ROWS_V1,
+            self.replay.segment(),
+            |visitor| self.replay_aux_rows_uncached_v1(visitor),
+        )?;
+        self.retained_aux = Some(cache);
+        Ok(())
+    }
+    /// Reachable cache capacities, independently charged from transform scratch.
+    pub(crate) fn retained_aux_heap_bytes_v1(&self) -> usize {
+        self.retained_aux
+            .as_ref()
+            .map_or(0, native_aux_cache::ShaNativeAuxCacheV1::heap_bytes_v1)
+    }
     /// Return the genuine private endpoint and compact-CA boundaries under
     /// this source's original opaque shared binding. No supplied endpoint or
     /// alternate raw challenge family is accepted by this operation.
@@ -2494,7 +2527,10 @@ impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
         if self.replay.segment() != segment {
             return Err(ZkX509ShaCallBusStarkErrorV1::Topology);
         }
-        self.replay_aux_rows_with_air_terminals_v1(|_, _| {})
+        if let Some(cache) = &self.retained_aux {
+            return cache.copy_terminals_v1();
+        }
+        self.replay_aux_rows_uncached_v1(|_, _| {})
     }
     /// Deterministically replay a challenge-independent column from this
     /// already-bound owner. This exposes no new phase or challenge constructor.
@@ -2528,7 +2564,22 @@ impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
         source.fill_base_columns_v1(segment, first_column, targets)
     }
 
+    #[cfg(test)]
     fn replay_aux_rows_with_air_terminals_v1(
+        &self,
+        mut visitor: impl FnMut(usize, [F; ZK_X509_SHA_BATCH_AUX_WIDTH_V1]),
+    ) -> Result<ZkX509ShaSegmentAirTerminalsV1, ZkX509ShaCallBusStarkErrorV1> {
+        self.binding.ok_or(ZkX509ShaCallBusStarkErrorV1::Phase)?;
+        if let Some(cache) = &self.retained_aux {
+            for (row, values) in cache.rows_v1().iter().enumerate() {
+                visitor(row, *values);
+            }
+            return cache.copy_terminals_v1();
+        }
+        self.replay_aux_rows_uncached_v1(visitor)
+    }
+
+    fn replay_aux_rows_uncached_v1(
         &self,
         mut visitor: impl FnMut(usize, [F; ZK_X509_SHA_BATCH_AUX_WIDTH_V1]),
     ) -> Result<ZkX509ShaSegmentAirTerminalsV1, ZkX509ShaCallBusStarkErrorV1> {
@@ -2642,7 +2693,7 @@ impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
     ///
     /// The opaque X5B1 binding remains internal. Replaying a column does not consume the separate
     /// one-shot row stream, so MAIN may request all registered columns in any deterministic order
-    /// without retaining an eager segment matrix.
+    /// using MAIN's admitted native cache when present.
     pub(crate) fn fill_aux_column_with_air_terminals_v1(
         &self,
         segment: usize,
@@ -2662,11 +2713,16 @@ impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
         validate_sha_column_batch_extent_v1(first_column, ZK_X509_SHA_BATCH_AUX_WIDTH_V1, targets)?;
         self.validate_column_request_v1(segment, first_column, targets[0])?;
         let mut fills = sha_column_fill_batch_v1(targets)?;
-        let terminals = self.replay_aux_rows_with_air_terminals_v1(|row, aux| {
-            for (offset, fill) in fills.iter_mut().enumerate() {
-                fill.write_v1(row, aux[first_column + offset]);
-            }
-        })?;
+        let terminals = if let Some(cache) = &self.retained_aux {
+            cache.fill_columns_v1(first_column, &mut fills)?;
+            cache.copy_terminals_v1()?
+        } else {
+            self.replay_aux_rows_uncached_v1(|row, aux| {
+                for (offset, fill) in fills.iter_mut().enumerate() {
+                    fill.write_v1(row, aux[first_column + offset]);
+                }
+            })?
+        };
         finish_sha_column_fill_batch_v1(fills)?;
         Ok(terminals)
     }
@@ -2706,14 +2762,15 @@ impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
             .for_each_aux_row_with_air_terminals_v1(visitor)?
             .into_segment_v1())
     }
-    /// Clear the retained opaque binding and permanently close every bound replay API.
+    /// Clear the retained rows, private terminals and opaque binding, then close replay.
     pub(crate) fn zeroize_private_v1(&mut self) {
+        self.retained_aux = None;
         self.binding = None;
         self.row_stream_emitted = true;
     }
     #[cfg(test)]
     fn private_is_zeroized_v1(&self) -> bool {
-        self.binding.is_none() && self.row_stream_emitted
+        self.binding.is_none() && self.row_stream_emitted && self.retained_aux.is_none()
     }
     #[cfg(test)]
     const fn row_stream_emitted_for_test_v1(&self) -> bool {
@@ -3679,6 +3736,7 @@ fn algebraic_security_bits_v1() -> (f64, f64, f64) {
 }
 #[cfg(test)]
 mod tests {
+    include!("sha_native_aux_cache_source_tests.rs");
     #[test]
     fn local_sha_relation_preserves_every_nonpublic_residue_for_all_segments() {
         fn compare<A: PolynomialAirFieldV1 + core::fmt::Debug + PartialEq>(
@@ -4409,9 +4467,13 @@ mod tests {
                 < core::mem::size_of::<Vec<F>>() * 4
         );
         assert!(
+            // The enclosing source forecast now charges the optional native
+            // cache's inline owner as well as its separately bounded heap.
+            // Retain the original bound on all other replay-owner metadata.
             core::mem::size_of::<ZkX509ShaBatchSegmentAuxSourceV1<'_>>()
                 < core::mem::size_of::<ZkX509CredentialPreAuxBindingV1>()
                     + core::mem::size_of::<Vec<F>>() * 4
+                    + core::mem::size_of::<Option<native_aux_cache::ShaNativeAuxCacheV1>>()
         );
         let mut partial = vec![F(0xA5); 8];
         assert!(matches!(

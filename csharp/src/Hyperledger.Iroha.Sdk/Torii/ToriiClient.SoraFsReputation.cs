@@ -280,7 +280,8 @@ public sealed partial class ToriiClient
                 response.StatusCode,
                 actualUri,
                 responseBody: null,
-                response.ReasonPhrase);
+                response.ReasonPhrase,
+                RejectCodeHeader(response));
             response.Dispose();
             throw error;
         }

@@ -78,7 +78,7 @@ pub(in super::super) fn witness(value: u64, gas: u64) -> d::Witness {
 }
 
 pub(in super::super) fn append_residues(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     bank: &[F],
     product: &[F],
     sources: Sources<'_>,

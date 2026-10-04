@@ -993,8 +993,8 @@ fn validate_operation_payload(
             let expected = provider_ingest_expected_signer_binding(&request.binding)?;
             if !expected
                 .qualification
-                .matches_authority(&context.provider_owner)
-                || expected.qualification.signer_policy != context.signer_policy
+                .matches_authority(&context.expected_authority.completion_signer)
+                || expected.qualification.signer_policy != context.expected_authority.signer_policy
             {
                 return Err(BrokerError::BindingMismatch);
             }

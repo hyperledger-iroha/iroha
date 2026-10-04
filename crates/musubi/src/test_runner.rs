@@ -2,26 +2,27 @@
 //!
 //! Selected workspace roots own their test targets and development edges. The consumer lock remains
 //! authoritative for exact registry selections, while every reachable registry bundle is
-//! re-authenticated before it can become a compiler input. Filesystem-backed execution is qualified
-//! on Unix; other targets fail closed before reading workspace, cache, or test-source state.
+//! re-authenticated before it can become a compiler input. Native retained directory and file
+//! authority protects source reads on Unix and Windows. Each source has a stable read snapshot;
+//! this does not claim an atomic snapshot of a concurrently edited whole workspace.
 use crate::{
     cache::{CachedCompilerPackageV1, MusubiCache},
     compiler::validate_exact_registry_interfaces_v1,
     compiler_identity::{local_package, registry_release},
     graph::{collect_local_members, resolve_workspace_local},
-    local_file::read_bounded_single_link_regular_file_v1,
     lockfile::{LockContextV1, LockedRootV1, LockfileV1},
     manifest::{ConcreteDependency, DependencySpec, PortablePath, parse_manifest},
     package::{is_excluded_directory, is_sensitive_component},
     resolver::ResolveModeV1,
     workspace::{DependencyKind, EffectiveDependency, Workspace, WorkspaceMember},
 };
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 use iroha_data_model::musubi::MusubiExactDependencyEdgeV1;
 use iroha_data_model::musubi::{
     MUSUBI_MAX_FILES_V1, MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1, MusubiDependencyKindV1,
     MusubiPackageSelectorV1, MusubiReleaseIdV1, MusubiVerificationNodeV1, MusubiVersionReqV1,
 };
+use iroha_fs::{OwnerDirectory, RetainedFile};
 use ivm::{SyscallPolicy, syscalls::compute_abi_hash};
 use kotodama_lang::{
     compiler::{CompilerMode, CompilerOptions},
@@ -37,7 +38,8 @@ use std::os::unix::fs::MetadataExt as _;
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
-    fmt, fs, io,
+    fmt, fs,
+    io::{self, Read as _},
     path::{Path, PathBuf},
 };
 /// Runtime controls for one authenticated Musubi workspace test invocation.
@@ -133,7 +135,7 @@ impl fmt::Display for WorkspaceTestErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnsupportedPlatform => formatter.write_str(
-                "secure Musubi workspace-test execution is unsupported on this platform; qualified execution currently requires Unix stable file identities",
+                "secure Musubi workspace-test execution requires native Unix or Windows filesystem custody",
             ),
             Self::Workspace(reason) => write!(formatter, "invalid test workspace: {reason}"),
             Self::Lock(reason) => write!(formatter, "invalid exact test lock: {reason}"),
@@ -184,9 +186,9 @@ impl AuthenticatedTestRegistryV1 for Option<&MusubiCache> {
 ///
 /// # Errors
 ///
-/// Returns [`WorkspaceTestErrorV1::UnsupportedPlatform`] on non-Unix targets before consulting
-/// the cache, workspace, lock, options, or declared test sources. On Unix, returns a categorized
-/// authentication, graph, compilation, or execution failure.
+/// Returns [`WorkspaceTestErrorV1::UnsupportedPlatform`] outside native Unix and Windows before
+/// consulting the cache, workspace, lock, options, or declared test sources. On supported hosts,
+/// returns a categorized authentication, graph, compilation, or execution failure.
 pub fn execute_workspace_tests_v1(
     cache: Option<&MusubiCache>,
     workspace: &Workspace,
@@ -198,11 +200,9 @@ pub fn execute_workspace_tests_v1(
     execute_workspace_tests_with_source(&cache, workspace, selected, lock, options)
 }
 fn ensure_test_runner_platform_supported_v1() -> Result<(), WorkspaceTestErrorV1> {
-    if cfg!(unix) {
+    if cfg!(any(unix, windows)) {
         Ok(())
     } else {
-        // TODO: Enable non-Unix workspace tests only after a safe stable handle-identity,
-        // single-link, and no-follow file-open abstraction is available.
         Err(WorkspaceTestErrorV1::UnsupportedPlatform)
     }
 }
@@ -952,7 +952,7 @@ fn declared_test_sources(
     let mut sources = Vec::new();
     let mut collisions = BTreeMap::new();
     let mut budget = DeclaredTestSourceBudgetV1::default();
-    if metadata_is_safe_test_file(&metadata) {
+    if metadata_is_safe_test_file(&target, &metadata) {
         if target.extension().and_then(|value| value.to_str()) != Some("ko") {
             return Err(WorkspaceTestErrorV1::Target(format!(
                 "test target `{}` must be a `.ko` file or directory",
@@ -970,9 +970,12 @@ fn declared_test_sources(
         )?);
     } else if metadata_is_safe_test_directory(&metadata) {
         budget.entries = 1;
+        let directory = OwnerDirectory::open(&target).map_err(|error| {
+            WorkspaceTestErrorV1::Target(format!("cannot retain test directory authority: {error}"))
+        })?;
         collect_declared_test_directory(
             &member.package_root,
-            &target,
+            &directory,
             relative,
             0,
             &mut collisions,
@@ -997,13 +1000,14 @@ fn declared_test_sources(
 }
 fn collect_declared_test_directory(
     package_root: &Path,
-    directory: &Path,
+    retained: &OwnerDirectory,
     relative: &Path,
     depth: usize,
     collisions: &mut BTreeMap<String, String>,
     budget: &mut DeclaredTestSourceBudgetV1,
     sources: &mut Vec<DeclaredTestSourceV1>,
 ) -> Result<(), WorkspaceTestErrorV1> {
+    let directory = retained.path();
     if depth > MAX_TEST_SOURCE_SET_DEPTH_V1 {
         return Err(WorkspaceTestErrorV1::Target(format!(
             "test source set exceeds {MAX_TEST_SOURCE_SET_DEPTH_V1} directory levels"
@@ -1024,21 +1028,20 @@ fn collect_declared_test_directory(
             directory.display()
         )));
     }
-    let entries = fs::read_dir(directory).map_err(|error| {
-        WorkspaceTestErrorV1::Target(format!(
-            "cannot read test directory `{}`: {error}",
-            directory.display()
-        ))
-    })?;
-    let mut names = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|error| {
-            WorkspaceTestErrorV1::Target(format!("cannot read a test-directory entry: {error}"))
+    let entries = retained
+        .entries(MUSUBI_MAX_FILES_V1 as usize)
+        .map_err(|error| {
+            WorkspaceTestErrorV1::Target(format!(
+                "cannot read test directory `{}`: {error}",
+                directory.display()
+            ))
         })?;
-        let name = entry.file_name().into_string().map_err(|_| {
+    let mut names = Vec::new();
+    for entry in &entries {
+        let name = entry.to_str().ok_or_else(|| {
             WorkspaceTestErrorV1::Target("test source path is not UTF-8".to_owned())
         })?;
-        names.push(name);
+        names.push(name.to_owned());
     }
     names.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
     for name in names {
@@ -1069,16 +1072,19 @@ fn collect_declared_test_directory(
         let logical_path = portable_test_path(&child_relative)?;
         register_test_path(collisions, &logical_path)?;
         if metadata_is_safe_test_directory(&metadata) {
+            let child = retained.open_child(&name).map_err(|error| {
+                WorkspaceTestErrorV1::Target(format!("cannot retain child test directory: {error}"))
+            })?;
             collect_declared_test_directory(
                 package_root,
-                &physical,
+                &child,
                 &child_relative,
                 depth.saturating_add(1),
                 collisions,
                 budget,
                 sources,
             )?;
-        } else if metadata_is_safe_test_file(&metadata) {
+        } else if metadata_is_safe_test_file(&physical, &metadata) {
             if physical.extension().and_then(|value| value.to_str()) == Some("ko") {
                 sources.push(read_declared_test_source(
                     package_root,
@@ -1100,7 +1106,15 @@ fn collect_declared_test_directory(
             directory.display()
         ))
     })?;
-    if !same_test_snapshot(&before, &after)
+    let current_entries = retained
+        .entries(MUSUBI_MAX_FILES_V1 as usize)
+        .map_err(|error| {
+            WorkspaceTestErrorV1::Target(format!(
+                "cannot revalidate test directory authority: {error}"
+            ))
+        })?;
+    if entries != current_entries
+        || !same_test_snapshot(&before, &after)
         || fs::canonicalize(directory).ok().as_deref() != Some(directory)
     {
         return Err(WorkspaceTestErrorV1::Target(format!(
@@ -1121,8 +1135,24 @@ fn read_declared_test_source(
         physical,
         logical_path,
         budget,
-        read_bounded_single_link_regular_file_v1,
+        |_, file, maximum| read_bounded_test_descriptor(file, maximum),
     )
+}
+fn read_bounded_test_descriptor(file: &mut fs::File, maximum: u64) -> io::Result<Vec<u8>> {
+    let length = file.metadata()?.len();
+    if length > maximum {
+        return Err(io::Error::other("test source exceeds its byte bound"));
+    }
+    let length = usize::try_from(length).map_err(io::Error::other)?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(length).map_err(io::Error::other)?;
+    bytes.resize(length, 0);
+    file.read_exact(&mut bytes)?;
+    let mut extra = [0];
+    if file.read(&mut extra)? != 0 {
+        return Err(io::Error::other("test source grew during its bounded read"));
+    }
+    Ok(bytes)
 }
 fn read_declared_test_source_with_reader<F>(
     package_root: &Path,
@@ -1132,16 +1162,22 @@ fn read_declared_test_source_with_reader<F>(
     read_file: F,
 ) -> Result<DeclaredTestSourceV1, WorkspaceTestErrorV1>
 where
-    F: FnOnce(&Path, u64) -> io::Result<Vec<u8>>,
+    F: FnOnce(&Path, &mut fs::File, u64) -> io::Result<Vec<u8>>,
 {
+    let remaining = MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1
+        .checked_sub(budget.source_bytes)
+        .ok_or_else(|| {
+            WorkspaceTestErrorV1::Target("test source byte budget is exhausted".to_owned())
+        })?;
+    let maximum = (MAX_MODULE_GRAPH_SOURCE_BYTES as u64).min(remaining);
     let before = fs::symlink_metadata(physical).map_err(|error| {
         WorkspaceTestErrorV1::Target(format!(
             "cannot inspect test source `{}`: {error}",
             physical.display()
         ))
     })?;
-    if !metadata_is_safe_test_file(&before)
-        || before.len() > MAX_MODULE_GRAPH_SOURCE_BYTES as u64
+    if !metadata_is_safe_test_file(physical, &before)
+        || before.len() > maximum
         || fs::canonicalize(physical).ok().as_deref() != Some(physical)
         || !physical.starts_with(package_root)
     {
@@ -1150,13 +1186,24 @@ where
             physical.display()
         )));
     }
-    let bytes = read_file(physical, MAX_MODULE_GRAPH_SOURCE_BYTES as u64).map_err(|error| {
+    let mut retained = RetainedFile::open_regular(physical).map_err(|error| {
+        WorkspaceTestErrorV1::Target(format!("cannot retain bounded test source: {error}"))
+    })?;
+    let snapshot = retained.snapshot().map_err(|error| {
+        WorkspaceTestErrorV1::Target(format!("cannot snapshot bounded test source: {error}"))
+    })?;
+    let bytes = read_file(physical, retained.file_mut(), maximum).map_err(|error| {
         WorkspaceTestErrorV1::Target(format!(
             "cannot securely read bounded test source `{}`: {error}",
             physical.display()
         ))
     })?;
-    if fs::canonicalize(physical).ok().as_deref() != Some(physical) {
+    let after = retained.snapshot().map_err(|error| {
+        WorkspaceTestErrorV1::Target(format!(
+            "test source changed during its bounded read: {error}"
+        ))
+    })?;
+    if snapshot != after || fs::canonicalize(physical).ok().as_deref() != Some(physical) {
         return Err(WorkspaceTestErrorV1::Target(format!(
             "test source `{}` changed while it was read",
             physical.display()
@@ -1269,24 +1316,24 @@ fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
     {
         metadata.file_type().is_symlink()
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        metadata.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = metadata;
         true
     }
 }
-fn metadata_is_safe_test_file(metadata: &fs::Metadata) -> bool {
+fn metadata_is_safe_test_file(path: &Path, metadata: &fs::Metadata) -> bool {
     if metadata_is_link_or_reparse(metadata) || !metadata.is_file() {
         return false;
     }
-    #[cfg(unix)]
-    {
-        metadata.nlink() == 1
-    }
-    #[cfg(not(unix))]
-    {
-        false
-    }
+    // Native retained opens enforce the single-link and no-reparse contract on both hosts,
+    // including non-Kotodama files which are inspected but never compiled.
+    RetainedFile::open_regular(path).is_ok()
 }
 fn metadata_is_safe_test_directory(metadata: &fs::Metadata) -> bool {
     !metadata_is_link_or_reparse(metadata) && metadata.is_dir()
@@ -1304,13 +1351,22 @@ fn same_test_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
             && left.ctime_nsec() == right.ctime_nsec()
             && left.nlink() == right.nlink()
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        // The retained OwnerDirectory separately proves exact directory/ancestor identity.
+        left.file_attributes() == right.file_attributes()
+            && left.creation_time() == right.creation_time()
+            && left.last_write_time() == right.last_write_time()
+            && left.file_size() == right.file_size()
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (left, right);
         false
     }
 }
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 mod tests {
     use super::*;
     use crate::{
@@ -1603,6 +1659,7 @@ path = "tests/unit.ko"
             );
         }
     }
+    #[cfg(unix)]
     #[test]
     fn standalone_contract_target_rejects_symlinks() {
         let (temporary, workspace) = standalone_fixture(
@@ -1997,7 +2054,6 @@ core = { package = "test/core", version = "^1.0.0" }
             ["tests/nested/a.ko", "tests/z.ko"]
         );
     }
-    #[cfg(unix)]
     #[test]
     fn directory_target_rejects_hardlinked_sources_before_execution() {
         let temp = tempdir().expect("tempdir");
@@ -2038,6 +2094,7 @@ core = { package = "test/core", version = "^1.0.0" }
     }
     #[test]
     fn declared_test_source_accepts_a_bounded_regular_leaf() {
+        assert_eq!(ensure_test_runner_platform_supported_v1(), Ok(()));
         let (_temporary, workspace) = declared_source_fixture("module Unit {}");
         let member = workspace
             .members()
@@ -2057,6 +2114,198 @@ core = { package = "test/core", version = "^1.0.0" }
         assert_eq!(declared.unit.source, "module Unit {}");
         assert_eq!(budget.source_bytes, 14);
     }
+    #[test]
+    fn declared_source_native_snapshot_rejects_mutation_during_the_read() {
+        let (_temporary, workspace) = declared_source_fixture("module Unit {}");
+        let member = workspace
+            .members()
+            .values()
+            .next()
+            .expect("workspace member");
+        let source = member.package_root.join("tests/unit.ko");
+        let mut budget = DeclaredTestSourceBudgetV1::default();
+        let result = read_declared_test_source_with_reader(
+            &member.package_root,
+            &source,
+            "tests/unit.ko".to_owned(),
+            &mut budget,
+            |path, file, maximum| {
+                // Windows may refuse this write while the original file handle is retained.
+                // Unix permits it, and the exact native post-read snapshot must reject it.
+                fs::write(path, "module Changed {}")?;
+                read_bounded_test_descriptor(file, maximum)
+            },
+        );
+        assert!(matches!(result, Err(WorkspaceTestErrorV1::Target(_))));
+        assert_eq!(budget.source_bytes, 0);
+    }
+    #[test]
+    fn bounded_test_descriptor_checks_length_before_allocation() {
+        let (_temporary, workspace) = declared_source_fixture("module Unit {}");
+        let member = workspace
+            .members()
+            .values()
+            .next()
+            .expect("workspace member");
+        let mut retained = RetainedFile::open_regular(member.package_root.join("tests/unit.ko"))
+            .expect("retained source");
+        assert!(read_bounded_test_descriptor(retained.file_mut(), 13).is_err());
+        assert_eq!(
+            read_bounded_test_descriptor(retained.file_mut(), 14).expect("exact byte bound"),
+            b"module Unit {}"
+        );
+    }
+    #[test]
+    fn declared_source_admits_the_remaining_aggregate_bound_before_reading() {
+        let (_temporary, workspace) = declared_source_fixture("module Unit {}");
+        let member = workspace
+            .members()
+            .values()
+            .next()
+            .expect("workspace member");
+        let source = member.package_root.join("tests/unit.ko");
+        let mut budget = DeclaredTestSourceBudgetV1 {
+            entries: 0,
+            source_bytes: MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1 - 14,
+        };
+        let declared = read_declared_test_source_with_reader(
+            &member.package_root,
+            &source,
+            "tests/unit.ko".to_owned(),
+            &mut budget,
+            |_, file, maximum| {
+                assert_eq!(maximum, 14);
+                read_bounded_test_descriptor(file, maximum)
+            },
+        )
+        .expect("exact remaining aggregate bound");
+        assert_eq!(declared.unit.source, "module Unit {}");
+        assert_eq!(budget.source_bytes, MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1);
+
+        budget.source_bytes = MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1 - 13;
+        let result = read_declared_test_source_with_reader(
+            &member.package_root,
+            &source,
+            "tests/unit.ko".to_owned(),
+            &mut budget,
+            |_, _, _| panic!("oversized source must fail before invoking its reader"),
+        );
+        assert!(matches!(result, Err(WorkspaceTestErrorV1::Target(_))));
+        assert_eq!(budget.source_bytes, MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1 - 13);
+    }
+    #[test]
+    fn declared_source_reads_retained_descriptor_during_path_substitution_and_restore() {
+        let (_temporary, workspace) = declared_source_fixture("module Unit {}");
+        let member = workspace
+            .members()
+            .values()
+            .next()
+            .expect("workspace member");
+        let source = member.package_root.join("tests/unit.ko");
+        let original = member.package_root.join("tests/original.ko");
+        let replacement = member.package_root.join("tests/replacement.ko");
+        write(&replacement, "module Evil {}");
+        let mut budget = DeclaredTestSourceBudgetV1::default();
+        let result = read_declared_test_source_with_reader(
+            &member.package_root,
+            &source,
+            "tests/unit.ko".to_owned(),
+            &mut budget,
+            |path, file, maximum| {
+                if fs::rename(path, &original).is_ok() {
+                    fs::rename(&replacement, path)?;
+                    let bytes = read_bounded_test_descriptor(file, maximum)?;
+                    // The named path temporarily points at another regular file of equal size.
+                    // Compiler input must still come from the originally retained descriptor.
+                    assert_eq!(bytes, b"module Unit {}");
+                    fs::rename(path, &replacement)?;
+                    fs::rename(&original, path)?;
+                    Ok(bytes)
+                } else {
+                    // Windows prevents replacement while the non-delete-sharing handle is held.
+                    read_bounded_test_descriptor(file, maximum)
+                }
+            },
+        );
+        match result {
+            Ok(source) => {
+                assert_eq!(source.unit.source, "module Unit {}");
+                assert_eq!(budget.source_bytes, 14);
+            }
+            Err(error) => {
+                // Platforms that record namespace changes in the native snapshot reject even
+                // a restored path; none may expose the temporarily substituted source bytes.
+                assert!(matches!(error, WorkspaceTestErrorV1::Target(_)));
+                assert_eq!(budget.source_bytes, 0);
+            }
+        }
+    }
+    #[test]
+    fn retained_test_directory_prevents_or_detects_path_replacement() {
+        let (_temporary, workspace) = declared_source_fixture("module Unit {}");
+        let member = workspace
+            .members()
+            .values()
+            .next()
+            .expect("workspace member");
+        let path = member.package_root.join("tests");
+        let retained = OwnerDirectory::open(&path).expect("retain test directory");
+        let original = retained.entries(1).expect("original inventory");
+        let replaced = fs::rename(&path, member.package_root.join("retired-tests"));
+        let mut sources = Vec::new();
+        let mut collisions = BTreeMap::new();
+        let mut budget = DeclaredTestSourceBudgetV1::default();
+        if replaced.is_ok() {
+            fs::create_dir(&path).expect("replacement directory");
+            write(&path.join("unit.ko"), "module Replaced {}");
+            assert!(
+                collect_declared_test_directory(
+                    &member.package_root,
+                    &retained,
+                    Path::new("tests"),
+                    0,
+                    &mut collisions,
+                    &mut budget,
+                    &mut sources
+                )
+                .is_err()
+            );
+            assert!(sources.is_empty());
+        } else {
+            // Native non-delete-sharing handles prevent the namespace mutation on Windows.
+            assert_eq!(retained.entries(1).expect("retained inventory"), original);
+            collect_declared_test_directory(
+                &member.package_root,
+                &retained,
+                Path::new("tests"),
+                0,
+                &mut collisions,
+                &mut budget,
+                &mut sources,
+            )
+            .expect("unchanged retained directory remains readable");
+            assert_eq!(sources.len(), 1);
+            assert_eq!(sources[0].unit.source, "module Unit {}");
+        }
+    }
+    #[test]
+    fn standalone_test_target_rejects_native_hardlinks() {
+        let (_temporary, workspace) = declared_source_fixture("module Unit {}");
+        let member = workspace
+            .members()
+            .values()
+            .next()
+            .expect("workspace member");
+        fs::hard_link(
+            member.package_root.join("tests/unit.ko"),
+            member.package_root.join("alias.ko"),
+        )
+        .expect("hardlink fixture");
+        assert!(matches!(
+            declared_test_sources(member, Path::new("tests/unit.ko")),
+            Err(WorkspaceTestErrorV1::Target(_))
+        ));
+    }
     #[cfg(unix)]
     #[test]
     fn declared_test_source_rejects_a_raced_regular_replacement() {
@@ -2075,21 +2324,16 @@ core = { package = "test/core", version = "^1.0.0" }
             &source,
             "tests/unit.ko".to_owned(),
             &mut budget,
-            |path, maximum| {
-                crate::local_file::read_bounded_single_link_regular_file_with_hook_v1(
-                    path,
-                    maximum,
-                    |path| {
-                        fs::remove_file(path)?;
-                        fs::rename(&replacement, path)
-                    },
-                )
+            |path, file, maximum| {
+                fs::remove_file(path)?;
+                fs::rename(&replacement, path)?;
+                read_bounded_test_descriptor(file, maximum)
             },
         )
         .err()
         .expect("raced declared-source replacement must fail");
         assert!(matches!(error, WorkspaceTestErrorV1::Target(_)));
-        assert!(error.to_string().contains("securely read bounded"));
+        assert!(error.to_string().contains("changed"));
         assert_eq!(budget.source_bytes, 0);
     }
     #[cfg(unix)]
@@ -2108,25 +2352,19 @@ core = { package = "test/core", version = "^1.0.0" }
             &source,
             "tests/unit.ko".to_owned(),
             &mut budget,
-            |path, maximum| {
-                crate::local_file::read_bounded_single_link_regular_file_with_hook_v1(
-                    path,
-                    maximum,
-                    |path| {
-                        fs::remove_file(path)?;
-                        let status = Command::new("mkfifo").arg(path).status()?;
-                        if !status.success() {
-                            return Err(io::Error::other("mkfifo failed"));
-                        }
-                        Ok(())
-                    },
-                )
+            |path, file, maximum| {
+                fs::remove_file(path)?;
+                let status = Command::new("mkfifo").arg(path).status()?;
+                if !status.success() {
+                    return Err(io::Error::other("mkfifo failed"));
+                }
+                read_bounded_test_descriptor(file, maximum)
             },
         )
         .err()
         .expect("raced FIFO source must fail without hanging");
         assert!(matches!(error, WorkspaceTestErrorV1::Target(_)));
-        assert!(error.to_string().contains("securely read bounded"));
+        assert!(error.to_string().contains("changed"));
         assert_eq!(budget.source_bytes, 0);
     }
     #[test]
@@ -2186,7 +2424,7 @@ core = { package = "test/core", version = "^1.0.0" }
         assert!(error.to_string().contains("hardlink or special file"));
     }
 }
-#[cfg(all(test, not(unix)))]
+#[cfg(all(test, not(any(unix, windows))))]
 mod unsupported_platform_tests {
     use super::{WorkspaceTestErrorV1, ensure_test_runner_platform_supported_v1};
     #[test]

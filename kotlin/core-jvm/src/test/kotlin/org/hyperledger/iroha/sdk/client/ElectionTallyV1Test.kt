@@ -119,7 +119,7 @@ class ElectionTallyV1Test {
             .setBaseUri(URI.create("https://torii.example/api"))
             .setLocalSigningContext(LocalSigningContext(network))
             .build()
-        val auth = ToriiCanonicalRequestAuth(
+        fun auth() = ToriiCanonicalRequestAuth(
             "alice@universal", RequestSigner.ed25519(
                 KeyPairGenerator.getInstance("Ed25519").generateKeyPair().private,
             ), 1_700_000_000_100L, "election-tally-2",
@@ -127,17 +127,17 @@ class ElectionTallyV1Test {
         val executor = CapturingExecutor(json("7", "[1,2]"))
         val client = HttpClientTransport(executor, config)
         listOf("", ".hidden", "bad/id", "a".repeat(129)).forEach { selector ->
-            assertFailsWith<IllegalArgumentException> { client.getElectionTally(selector, auth) }
+            assertFailsWith<IllegalArgumentException> { client.getElectionTally(selector, auth()) }
         }
         assertEquals(0, executor.calls)
 
         val wrongMedia = CapturingExecutor(json("7", "[1,2]"), contentType = "text/plain")
         assertFailsWith<CompletionException> {
-            HttpClientTransport(wrongMedia, config).getElectionTally("election-1", auth).join()
+            HttpClientTransport(wrongMedia, config).getElectionTally("election-1", auth()).join()
         }
         val oversized = CapturingExecutor(json("7", "[1,2]") + " ".repeat(8192))
         assertFailsWith<CompletionException> {
-            HttpClientTransport(oversized, config).getElectionTally("election-1", auth).join()
+            HttpClientTransport(oversized, config).getElectionTally("election-1", auth()).join()
         }
         assertEquals(1, wrongMedia.calls)
         assertEquals(1, oversized.calls)

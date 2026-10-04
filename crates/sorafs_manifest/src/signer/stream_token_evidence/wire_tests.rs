@@ -118,10 +118,21 @@ fn maximum_actual_observation_leaves_fit_finite_request_and_evidence_budgets() {
                     matches!(decoded, Err(norito::Error::NestingDepthExceeded { .. })),
                     "nested current schema must respect stricter outer depth"
                 );
+                let refusal = SignerStreamTokenStateObservationV1::decode_canonical(&state)
+                    .expect_err("actual enclosing depth refuses the canonical observation");
+                assert!(refusal.is_retryable());
+                assert_eq!(refusal.rejection(), None);
+                let SignerStreamTokenEvidenceAdmissionErrorV1::Codec(original) = refusal else {
+                    panic!("original decoder refusal")
+                };
                 assert_eq!(
-                    SignerStreamTokenStateObservationV1::decode_canonical(&state),
-                    Err(EvidenceError::InvalidDocument)
+                    original.kind(),
+                    norito::core::DecodeAttemptErrorKind::EnclosingLimit
                 );
+                assert!(matches!(
+                    original.into_error().decode_resource_error(),
+                    Some(norito::core::DecodeResourceError::NestingDepthExceeded { limit: 1, .. })
+                ));
             },
         );
         assert!(shallow_usage.total_allocated_bytes() <= allocation);
@@ -134,11 +145,11 @@ fn maximum_actual_observation_leaves_fit_finite_request_and_evidence_budgets() {
             _ => evidence.state.body.authority.administrator_id = "x".repeat(129),
         }
         assert_eq!(
-            evidence.state.body.signing_payload(),
+            evidence.state.body.signing_payload().map_err(rejection),
             Err(EvidenceError::InvalidState)
         );
         assert_eq!(
-            evidence.state.encode_canonical(),
+            evidence.state.encode_canonical().map_err(rejection),
             Err(EvidenceError::InvalidState)
         );
     }
@@ -148,7 +159,10 @@ fn maximum_actual_observation_leaves_fit_finite_request_and_evidence_budgets() {
             norito::DecodeLimits::new(4096, invalid.len(), 8192, 512 * 1024, 24),
             || SignerStreamTokenObservationRequestV1::decode_canonical(&invalid),
         );
-        assert_eq!(decoded, Err(EvidenceError::InvalidDocument));
+        assert_eq!(
+            decoded.map_err(rejection),
+            Err(EvidenceError::InvalidDocument)
+        );
         assert_eq!(usage.total_allocated_bytes(), 0);
     }
     let oversized = vec![0; 64 * 1024 + 1];
@@ -156,7 +170,10 @@ fn maximum_actual_observation_leaves_fit_finite_request_and_evidence_budgets() {
         norito::DecodeLimits::new(4096, oversized.len(), 8192, 512 * 1024, 24),
         || SignerStreamTokenStateObservationV1::decode_canonical(&oversized),
     );
-    assert_eq!(decoded, Err(EvidenceError::InvalidDocument));
+    assert_eq!(
+        decoded.map_err(rejection),
+        Err(EvidenceError::InvalidDocument)
+    );
     assert_eq!(usage.total_allocated_bytes(), 0);
     assert!(evidence.request.encode_canonical().is_ok());
 }
@@ -188,7 +205,8 @@ fn actual_schema_omissions_alternate_layouts_and_compression_fail_before_authori
                 .schema
             );
             assert_eq!(
-                SignerStreamTokenObservationRequestV1::decode_canonical(&invalid),
+                SignerStreamTokenObservationRequestV1::decode_canonical(&invalid)
+                    .map_err(rejection),
                 Err(EvidenceError::InvalidDocument)
             );
         }
@@ -203,7 +221,7 @@ fn actual_schema_omissions_alternate_layouts_and_compression_fail_before_authori
             let invalid = signed_bare_body(&changed, &baseline.observer);
             let mut evidence = checked_fixture(phase);
             assert_eq!(
-                evidence.verify_bytes(&invalid).err(),
+                evidence.verify_bytes(&invalid).err().map(rejection),
                 Some(EvidenceError::InvalidDocument)
             );
         }
@@ -211,7 +229,7 @@ fn actual_schema_omissions_alternate_layouts_and_compression_fail_before_authori
             let mut evidence = checked_fixture(phase);
             let invalid = omit_field(&evidence.state, 2, omitted);
             assert_eq!(
-                evidence.verify_bytes(&invalid).err(),
+                evidence.verify_bytes(&invalid).err().map(rejection),
                 Some(EvidenceError::InvalidDocument)
             );
         }
@@ -255,7 +273,8 @@ fn actual_schema_omissions_alternate_layouts_and_compression_fail_before_authori
             if alternate_request != canonical_request {
                 saw_alternate[0] = true;
                 assert_eq!(
-                    SignerStreamTokenObservationRequestV1::decode_canonical(&alternate_request),
+                    SignerStreamTokenObservationRequestV1::decode_canonical(&alternate_request)
+                        .map_err(rejection),
                     Err(EvidenceError::InvalidDocument)
                 );
             }
@@ -263,7 +282,7 @@ fn actual_schema_omissions_alternate_layouts_and_compression_fail_before_authori
                 saw_alternate[1] = true;
                 let mut evidence = checked_fixture(phase);
                 assert_eq!(
-                    evidence.verify_bytes(&alternate_state).err(),
+                    evidence.verify_bytes(&alternate_state).err().map(rejection),
                     Some(EvidenceError::InvalidDocument)
                 );
             }
@@ -297,7 +316,10 @@ fn actual_schema_omissions_alternate_layouts_and_compression_fail_before_authori
                 norito::DecodeLimits::new(4096, invalid.len(), 8192, 512 * 1024, 24),
                 || SignerStreamTokenStateObservationV1::decode_canonical(invalid),
             );
-            assert_eq!(decoded, Err(EvidenceError::InvalidDocument));
+            assert_eq!(
+                decoded.map_err(rejection),
+                Err(EvidenceError::InvalidDocument)
+            );
             assert_eq!(
                 usage.total_allocated_bytes(),
                 0,
@@ -317,7 +339,7 @@ fn actual_schema_omissions_alternate_layouts_and_compression_fail_before_authori
         ] {
             let mut evidence = checked_fixture(phase);
             assert_eq!(
-                evidence.verify_bytes(&invalid).err(),
+                evidence.verify_bytes(&invalid).err().map(rejection),
                 Some(EvidenceError::InvalidDocument)
             );
         }
@@ -418,7 +440,7 @@ fn genuine_release_and_stream_observations_cannot_cross_their_purpose_owners() {
         let mut stream = checked_fixture(phase);
         let stream_bytes = stream.observation_bytes();
         assert_eq!(
-            stream.verify_bytes(&release_bytes).err(),
+            stream.verify_bytes(&release_bytes).err().map(rejection),
             Some(EvidenceError::InvalidDocument)
         );
         assert_eq!(

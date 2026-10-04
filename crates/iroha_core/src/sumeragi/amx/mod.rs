@@ -26,27 +26,28 @@
 //! exact carrier. [`amx_record_proof`] authenticates that carrier and its complete write root
 //! before constructing a historical record proof, including after deadline pruning and replay.
 //!
-//! **Participants.** The participant side ([`iroha_data_model::sumeragi_amx::AmxParticipantStateV1`]
-//! over an [`iroha_data_model::sumeragi_amx::AmxEscrow`]) is tested over an in-memory
-//! dataspace. Escrow reports host failures separately from protocol rejection: a refused
-//! prepare records no vote, and a refused apply/release keeps the original unsettled entry
-//! and global-height cursor for retry. Native participant graph funding remains open.
+//! **Participants.** Native private roots use an original-pool charged immutable participant
+//! graph and dedicated monetary custody. Signed-genesis installation authenticates the complete
+//! canonical global genesis and its real H2 successor through the native prefix verifier;
+//! the source frames, derived authority and exact original transfer records remain retained.
+//! Prepare and Settle consume the component protocol over a separately funded candidate before
+//! protected monetary effects. Host failure retains the original participant for retry.
+//! Decoding a snapshot admits memory without granting the unencoded execution capability;
+//! authenticated participant restoration currently requires genuine genesis/journal replay.
 //! Inherited decoder limits remain typed local refusals through anchors, records and certified
 //! proofs. An executing instruction retains that refusal outside its canonical result, including
 //! when contract code catches the inner error; a refused attempt cannot publish World effects.
 //! The node driver can run independent signed dataspace roots, but the daemon does not yet
 //! supervise their participant State owners (lane instances still share `G`'s State,
-//! `specs/sumeragi_lanes.md` §0). TODO(S6): hosting a native AMX participant needs
-//! (1) a per-dataspace World with an `AmxParticipantStateV1` cell anchored at `G`'s genesis
-//! context, (2) native `PrepareAmx`/`SettleAmx`/`RelayGlobalHandoff` instructions of that
-//! instance that call `prepare`/`settle`/`handoff` and record the returned `Prepared` record into
-//! the instance's execution witness exactly as `G` does here, (3) an `AmxEscrow` implementation
-//! that locks, applies and releases the leg's World effects, (4) the same original archive
-//! ownership for each dataspace executor, and (5) relayers — the payload builders of each
-//! instance's validators — that include pending proofs (§11.4). The existing historical reader
+//! `specs/sumeragi_lanes.md` §0). TODO(S6): qualify the native monetary participant, supervise
+//! each independent State/archive owner in the daemon and add validator payload relayers for
+//! pending proofs (§11.4), then qualify whole-network commit/abort/deadline/restart behavior.
+//! The existing historical reader
 //! still shares the native receipt proof-graph and tree-scratch resource qualification gap.
 
 pub use crate::query::native_receipts::amx_record_proof;
+#[cfg(test)]
+pub(crate) use native::NativeAmxCellFixtureBlock;
 
 use iroha_data_model::{
     account::AccountId,
@@ -251,3 +252,10 @@ impl StateBlock<'_> {
 mod proof_tests;
 #[cfg(test)]
 mod tests;
+
+mod native;
+pub(crate) use native::VerifiedAmxMovement;
+pub(crate) use native::admit_world_state;
+pub(crate) use native::empty_participant_cell;
+pub use native::{NativeAmxAdmissionError, RetainedNativeAmx};
+pub(crate) use native::{ensure_retained_definitions, retained_account};

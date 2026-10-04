@@ -14,6 +14,7 @@ mod privacy_capability_manifest;
 pub mod privacy_native_actions;
 pub mod privacy_wallet_bundle;
 pub mod privacy_wallet_worker;
+mod private_transaction_counters;
 mod sorafs_orderbook_submission;
 mod zk_vk_draft;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -559,8 +560,13 @@ fn parse_provider_ingest_completion_authority(
     value: &Bound<'_, PyDict>,
 ) -> PyResult<ProviderIngestCompletionAuthorityV1> {
     const CONTEXT: &str = "expected_authority";
-    require_exact_dict_fields(value, &["provider_owner", "signer_policy"], CONTEXT)?;
+    require_exact_dict_fields(
+        value,
+        &["provider_owner", "completion_signer", "signer_policy"],
+        CONTEXT,
+    )?;
     let provider_owner = required_dict_string(value, "provider_owner", CONTEXT)?;
+    let completion_signer = required_dict_string(value, "completion_signer", CONTEXT)?;
     let signer_policy_value = required_dict_field(value, "signer_policy", CONTEXT)?;
     let signer_policy = signer_policy_value
         .cast::<PyDict>()
@@ -629,6 +635,7 @@ fn parse_provider_ingest_completion_authority(
     }
     Ok(ProviderIngestCompletionAuthorityV1::new(
         parse_exact_i105_account_id(&provider_owner, "expected_authority.provider_owner")?,
+        parse_exact_i105_account_id(&completion_signer, "expected_authority.completion_signer")?,
         signer_policy,
     ))
 }
@@ -14924,6 +14931,7 @@ fn canonical_genesis_header_hash_v1_py(
 fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     confidential_wallet::register(module)?;
     identity_codec_v1::register(module)?;
+    private_transaction_counters::register(module)?;
     module.add(
         "SorafsMultiFetchError",
         _py.get_type::<SorafsMultiFetchError>(),

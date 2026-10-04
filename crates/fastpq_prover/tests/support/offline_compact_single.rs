@@ -3,8 +3,25 @@
 //! One occurrence still uses the complete ordinary or AXT bundle relation.
 //! These tests do not replace the separate two-child ordering/root-chain tests.
 
+use super::effect_fixture::EffectFixture;
 use super::*;
-use fastpq_prover::offline_compact::VerifiedArtifact;
+use fastpq_prover::offline_compact::{VerifiedArtifact, execution_effect_profile_id};
+
+fn verify_effect_public(
+    fixture: &EffectFixture,
+    bytes: &[u8],
+    public: ExpectedStatement,
+    limits: &VerificationLimits,
+) -> Verified {
+    let mut expected = fixture.expected();
+    expected.statement.public_inputs = public.inputs;
+    expected.statement.statement_digest = Hash::from_marked_bytes(public.public_statement_digest)
+        .expect("test expected digest retains the canonical marker");
+    // Ordering is committed by the complete independently expected statement
+    // digest. Its offered-byte mutation is exercised separately below; the new
+    // API does not pretend to accept a second independent ordering expectation.
+    fixture.verify_expected(bytes, expected, *limits)
+}
 
 #[test]
 fn independent_capture_counts_preserve_full_quantity_facts() {
@@ -103,14 +120,34 @@ fn assert_inclusive_limits(
     );
 }
 
-/// Every changed independent expectation and every damaged byte string rejects.
+/// Every changed independent public fact and damaged byte string rejects.
+/// Ordinary ordering is bound by the independently expected full statement digest.
 fn assert_changed_expectations_rejected(
     verify: &VerifyRoute<'_>,
     bytes: &[u8],
     expected: ExpectedStatement,
     limits: &VerificationLimits,
+    is_axt: bool,
 ) {
     for field in 0..8 {
+        if field == 6 && !is_axt {
+            let mut changed = FastpqOrdinaryCompactArtifactV1::decode_canonical_with_limits(
+                bytes,
+                execution_effect_profile_id(),
+                limits.transport,
+            )
+            .unwrap();
+            changed.statement.ordering_hash[0] ^= 1;
+            assert!(matches!(
+                verify(
+                    &norito::encode_canonical(&changed).unwrap(),
+                    expected,
+                    *limits
+                ),
+                Err(VerificationError::Verify(Error::PublicIoMismatch { .. }))
+            ));
+            continue;
+        }
         let mut wrong = expected;
         match field {
             0 => wrong.inputs.dsid[0] ^= 1,
@@ -121,6 +158,14 @@ fn assert_changed_expectations_rejected(
             5 => wrong.inputs.tx_set_hash[0] ^= 1,
             6 => wrong.ordering_hash[0] ^= 1,
             _ => wrong.public_statement_digest[0] ^= 1,
+        }
+        if !is_axt && field < 6 {
+            assert!(matches!(
+                verify(bytes, wrong, *limits),
+                Err(VerificationError::Verify(Error::TransferInvariant { details }))
+                    if details == "execution effect independent statement expectation mismatch"
+            ));
+            continue;
         }
         assert!(matches!(
             verify(bytes, wrong, *limits),
@@ -144,10 +189,10 @@ fn assert_changed_statement_rejected(
     fixture: &capture::CaptureFixture,
     limits: &VerificationLimits,
 ) {
-    let mut changed_statement = fixture.statement.clone();
-    changed_statement.public_inputs.perm_root[0] ^= 1;
-    let changed_expected = ExpectedStatement::from_statement(&changed_statement).unwrap();
-    let changed_bytes = if is_axt {
+    if is_axt {
+        let mut changed_statement = fixture.statement.clone();
+        changed_statement.public_inputs.perm_root[0] ^= 1;
+        let changed_expected = ExpectedStatement::from_statement(&changed_statement).unwrap();
         let mut artifact = FastpqAxtCompactArtifactV1::decode_canonical_with_limits(
             bytes,
             quantity_profile_id(),
@@ -155,18 +200,25 @@ fn assert_changed_statement_rejected(
         )
         .unwrap();
         artifact.statement = changed_statement;
-        norito::encode_canonical(&artifact).unwrap()
+        let changed_bytes = norito::encode_canonical(&artifact).unwrap();
+        deep_context_rejected(&verify(&changed_bytes, changed_expected, *limits).unwrap_err());
     } else {
+        let mut changed = EffectFixture::from_transfer_facts(&fixture.statement);
+        changed.statement.public_inputs.perm_root[0] ^= 1;
+        changed.source.perm_root = changed.statement.public_inputs.perm_root;
         let mut artifact = FastpqOrdinaryCompactArtifactV1::decode_canonical_with_limits(
             bytes,
-            quantity_profile_id(),
+            execution_effect_profile_id(),
             limits.transport,
         )
         .unwrap();
-        artifact.statement = changed_statement;
-        norito::encode_canonical(&artifact).unwrap()
-    };
-    deep_context_rejected(&verify(&changed_bytes, changed_expected, *limits).unwrap_err());
+        artifact.source = changed.source.clone();
+        artifact.statement = changed.statement.clone();
+        let changed_bytes = norito::encode_canonical(&artifact).unwrap();
+        // Full source and statement mirrors plus independently recomputed digest
+        // agree, leaving the genuine original child's context/DEEP binding to reject.
+        deep_context_rejected(&changed.verify(&changed_bytes, *limits).unwrap_err());
+    }
 }
 
 /// Changed AXT expectations reject, and the ordinary route cannot bypass them.
@@ -175,6 +227,7 @@ fn assert_axt_context_changes_rejected(
     expected: ExpectedStatement,
     context: ExpectedAxtContext<'_>,
     limits: &VerificationLimits,
+    effect: &EffectFixture,
 ) {
     let limits = *limits;
     let mut wrong = context;
@@ -239,7 +292,7 @@ fn assert_axt_context_changes_rejected(
         )
         .unwrap_err(),
     );
-    assert!(verify_quantity_ordinary_artifact(bytes, expected, limits).is_err());
+    assert!(effect.verify(bytes, limits).is_err());
 }
 
 pub fn verify_count(
@@ -250,14 +303,19 @@ pub fn verify_count(
     maximum_child_bytes: Option<usize>,
 ) -> fastpq_prover::offline_compact::VerifiedArtifact {
     assert_eq!(fixture.statement.transcripts.len(), count);
-    let expected = fixture.expected;
+    let effect = EffectFixture::from_transfer_facts(&fixture.statement);
+    let expected = if is_axt {
+        fixture.expected
+    } else {
+        effect.public_expectation()
+    };
     let context = fixture.context();
     let limits = VerificationLimits::default();
     let verify = |bytes: &[u8], expected, limits| {
         if is_axt {
             verify_quantity_axt_artifact(bytes, expected, context, limits)
         } else {
-            verify_quantity_ordinary_artifact(bytes, expected, limits)
+            verify_effect_public(&effect, bytes, expected, &limits)
         }
     };
     let accepted = verify(bytes, expected, limits).unwrap();
@@ -272,7 +330,14 @@ pub fn verify_count(
     assert!(accepted.work().proof_bytes <= count * 512 * 1024);
     let maximum_child_bytes = maximum_child_bytes.unwrap_or_else(|| accepted.work().proof_bytes);
     assert!(maximum_child_bytes <= limits.bundle.segment.max_proof_bytes);
-    assert_eq!(accepted.identity().profile_id, quantity_profile_id());
+    assert_eq!(
+        accepted.identity().profile_id,
+        if is_axt {
+            quantity_profile_id()
+        } else {
+            execution_effect_profile_id()
+        }
+    );
     assert_eq!(
         accepted.identity().artifact_bytes,
         u64::try_from(bytes.len()).unwrap()
@@ -295,11 +360,12 @@ pub fn verify_count(
     } else {
         let artifact = FastpqOrdinaryCompactArtifactV1::decode_canonical_with_limits(
             bytes,
-            quantity_profile_id(),
+            execution_effect_profile_id(),
             limits.transport,
         )
         .unwrap();
-        assert_eq!(artifact.statement, fixture.statement);
+        assert_eq!(artifact.statement, effect.statement);
+        assert_eq!(artifact.source, effect.source);
         artifact.bundle_frame
     };
     assert_eq!(accepted.bundle_frame_bytes(), frame.len());
@@ -317,10 +383,10 @@ pub fn verify_count(
         frame.len(),
         maximum_child_bytes,
     );
-    assert_changed_expectations_rejected(&verify, bytes, expected, &limits);
+    assert_changed_expectations_rejected(&verify, bytes, expected, &limits, is_axt);
     assert_changed_statement_rejected(&verify, bytes, is_axt, fixture, &limits);
     if is_axt {
-        assert_axt_context_changes_rejected(bytes, expected, context, &limits);
+        assert_axt_context_changes_rejected(bytes, expected, context, &limits, &effect);
     } else {
         assert!(verify_quantity_axt_artifact(bytes, expected, context, limits).is_err());
     }
@@ -357,6 +423,7 @@ fn produce_one(is_axt: bool) {
         "single_public_producer={label}; required_device=Metal; default_payload_cap={}; default_work_cap={}",
         proving.max_segment_charge_bytes, proving.max_segment_work_units
     );
+    let effect = EffectFixture::from_transfer_facts(&fixture.statement);
     let started = std::time::Instant::now();
     let bytes = if is_axt {
         prove_quantity_axt_artifact(
@@ -367,7 +434,7 @@ fn produce_one(is_axt: bool) {
             limits,
         )
     } else {
-        prove_quantity_ordinary_artifact(&fixture.statement, fixture.expected, proving, limits)
+        effect.prove(proving, limits)
     }
     .unwrap();
     let elapsed = started.elapsed();

@@ -523,4 +523,58 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn absolute_helpers_refuse_every_observed_step_before_success_or_domain_fault() {
+        let (minimum, _) = extrema();
+        for (value, expected, magnitude_limbs, negative) in [
+            (BigInt::from(17_u64), Ok(BigInt::from(17_u64)), 1, false),
+            (BigInt::from(-17_i64), Ok(BigInt::from(17_u64)), 1, true),
+            (
+                minimum,
+                Err(NumericOperationError::MantissaOverflow),
+                8,
+                true,
+            ),
+        ] {
+            let middle = if negative {
+                NumericWorkStep::Negate {
+                    value_limbs: magnitude_limbs,
+                }
+            } else {
+                NumericWorkStep::Materialize {
+                    value_limbs: magnitude_limbs,
+                }
+            };
+            let expected_steps = [
+                NumericWorkStep::Finalize {
+                    value_limbs: magnitude_limbs,
+                },
+                middle,
+                NumericWorkStep::Finalize {
+                    value_limbs: magnitude_limbs,
+                },
+            ];
+            let mut actual = Vec::new();
+            let completed = IntUnaryOperation::Abs.evaluate_observed(&value, &mut |step| {
+                actual.push(step);
+                Ok::<_, usize>(())
+            });
+            assert_eq!(actual, expected_steps);
+            assert_eq!(completed, expected.map_err(ObservedNumericError::Numeric));
+            for stop in 0..expected_steps.len() {
+                let mut visited = Vec::new();
+                let refused = IntUnaryOperation::Abs.evaluate_observed(&value, &mut |step| {
+                    visited.push(step);
+                    if visited.len() == stop + 1 {
+                        Err(stop)
+                    } else {
+                        Ok(())
+                    }
+                });
+                assert_eq!(refused, Err(ObservedNumericError::Observer(stop)));
+                assert_eq!(visited, expected_steps[..=stop]);
+            }
+        }
+    }
 }

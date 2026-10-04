@@ -578,12 +578,13 @@ fn original_lane_history_refusal_reaches_evidence_without_recovery_or_rejection(
         state::StateReadOnly,
         sumeragi::runtime_availability::history::{HistoryCapture, HistoryScan},
     };
-    use std::{future::Future, pin::pin, task::Context};
+    use std::task::Context;
     let (chain, record, _epoch) =
         crate::sumeragi::runtime_availability::tests::npos_fixed_lane_chain_at(4);
     let state = chain.state();
     let budget = state.ivm_execution_budget();
     let baseline = budget.reserved_bytes();
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let ceiling = budget.limit_bytes();
     let generation = state.state_view_generation();
     let view = state.view();
@@ -615,14 +616,14 @@ fn original_lane_history_refusal_reaches_evidence_without_recovery_or_rejection(
     else {
         panic!("actual original archive capacity")
     };
-    let mut wait = pin!(release.clone().wait_for_release());
+    let wait = release.clone();
     let mut context = Context::from_waker(std::task::Waker::noop());
-    assert!(wait.as_mut().poll(&mut context).is_pending());
+    assert!(registration.poll_wait(&wait, &mut context).is_pending());
     assert!(
         matches!(classify(EvidenceAdmissionError::Source(error)), crate::block::BlockValidationError::ExecutionDeferred(retained) if retained == original)
     );
     drop(occupied);
-    assert!(wait.as_mut().poll(&mut context).is_ready());
+    assert!(registration.poll_wait(&wait, &mut context).is_ready());
     history.complete().unwrap();
     let context = history
         .finish_evidence()
@@ -631,6 +632,7 @@ fn original_lane_history_refusal_reaches_evidence_without_recovery_or_rejection(
     assert!(context.budget.same_pool(&budget));
     assert_eq!(budget.limit_bytes(), ceiling);
     drop(context);
+    drop(registration);
     assert_eq!(budget.reserved_bytes(), baseline);
 }
 

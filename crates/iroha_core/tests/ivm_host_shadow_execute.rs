@@ -27,7 +27,7 @@ fn tlv_blob<T: NoritoSerialize>(val: &T, ty: PointerType) -> Vec<u8> {
     blob
 }
 fn quantity_tlv(value: &Quantity) -> Vec<u8> {
-    ivm::numeric_tlv::encode_quantity(value).expect("encode quantity pointer envelope")
+    ivm_abi::numeric_tlv::encode_quantity(value).expect("encode quantity pointer envelope")
 }
 fn load_input_blob(vm: &mut IVM, cursor: &mut u64, blob: &[u8]) -> u64 {
     vm.memory
@@ -46,7 +46,7 @@ fn scall_program(syscall: u32) -> Vec<u8> {
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut program = ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length: 0,
         max_cycles: 1_000_000,

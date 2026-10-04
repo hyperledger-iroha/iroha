@@ -4,7 +4,7 @@ use super::*;
 use crate::config_tests::minimal_config_table;
 use iroha_config::base::{WithOrigin, toml::TomlSource};
 use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
-use iroha_data_model::{block::SignedBlock, prelude::*};
+use iroha_data_model::block::SharedSignedBlock;
 use std::{collections::BTreeMap, path::PathBuf, time::SystemTime};
 
 fn minimal_config() -> Config {
@@ -25,7 +25,7 @@ fn storage_config(root: &Path) -> Config {
 }
 
 /// Persist original signed genesis and native certified successors into a Strict Kura.
-fn populate_store(config: &Config, blocks: usize) -> Vec<Arc<SignedBlock>> {
+fn populate_store(config: &Config, blocks: usize) -> Vec<SharedSignedBlock> {
     let (kura, _) = Kura::new_with_configured_lane_catalog(
         &config.kura,
         &config.nexus.lane_config,
@@ -35,12 +35,12 @@ fn populate_store(config: &Config, blocks: usize) -> Vec<Arc<SignedBlock>> {
     let mut chain =
         CertifiedTestChain::start(TestChainConfig::new(iroha_core::state::World::new(), 1_000))
             .expect("execute original signed genesis");
-    let mut persisted: Vec<Arc<SignedBlock>> = Vec::new();
+    let mut persisted: Vec<SharedSignedBlock> = Vec::new();
     for height in 1..=blocks {
         if height > 1 {
             chain.commit(Vec::new());
         }
-        let block = Arc::clone(chain.committed(height as u64).block());
+        let block = chain.committed(height as u64).block().clone();
         kura.persist_block_immediate_for_bench(&block)
             .expect("persist fixture block");
         persisted.push(block);
@@ -190,8 +190,14 @@ fn run_check_storage_fails_closed_on_a_broken_snapshot() {
 #[test]
 fn config_compatibility_without_genesis_is_pending() {
     let config = minimal_config();
-    let compatibility = config_compatibility_v1(&config, None).expect("compute compatibility");
+    let compatibility = config_compatibility_v1(&config, None, crate::test_build_metadata())
+        .expect("compute compatibility");
     assert_eq!(compatibility.status, "pending");
+    assert_eq!(compatibility.node_identity, None);
+    assert_eq!(
+        compatibility.diagnostic_build.source_revision,
+        "local-fast-build"
+    );
     assert_eq!(compatibility.protocol_version, PROTOCOL_VERSION);
     assert_eq!(compatibility.config_fingerprint, None);
     assert_eq!(compatibility.execution_policy_hash, None);
@@ -214,7 +220,8 @@ fn config_compatibility_without_genesis_is_pending() {
     }
     // The values depend only on the build and the configuration.
     assert_eq!(
-        config_compatibility_v1(&config, None).expect("recompute compatibility"),
+        config_compatibility_v1(&config, None, crate::test_build_metadata())
+            .expect("recompute compatibility"),
         compatibility
     );
 }
@@ -223,6 +230,27 @@ fn config_compatibility_without_genesis_is_pending() {
 fn probe_reports_roundtrip_through_norito_json() {
     let compatibility = ConfigCompatibilityV1 {
         status: "ready".to_owned(),
+        node_identity: Some(NodeConfigIdentityV1 {
+            node_id: iroha_model_base::peer::PeerId::new(
+                iroha_crypto::KeyPair::try_from_seed(
+                    vec![0x71; 32],
+                    iroha_crypto::Algorithm::BlsNormal,
+                )
+                .expect("deterministic node identity")
+                .public_key()
+                .clone(),
+            ),
+            node_fingerprint: "99".repeat(32),
+            node_config_fingerprint: "aa".repeat(32),
+            initial_committee_size: 4,
+            network_id: NetworkId::from_genesis_hash(marker_hash(0xBB)),
+            genesis_hash: "bb".repeat(32),
+        }),
+        diagnostic_build: DiagnosticBuildIdentityV1 {
+            version: "3.0.0".to_owned(),
+            source_revision: "77".repeat(20),
+            build_fingerprint: "88".repeat(32),
+        },
         config_fingerprint: Some("11".repeat(32)),
         protocol_version: PROTOCOL_VERSION,
         wire_schema_hash: "22".repeat(32),

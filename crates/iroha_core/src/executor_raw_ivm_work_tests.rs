@@ -109,6 +109,54 @@ mod raw_ivm_work {
     }
 
     #[test]
+    fn generic_admission_pool_pressure_defers_before_execution_or_gas() {
+        use crate::execution_attempt::ExecutionAttemptError;
+        use crate::smartcontracts::ivm::cache::PreparedContractCache;
+        use iroha_allocation::{AllocationBudget, AllocationRefusal};
+
+        let state = fixture();
+        let bytes = program(&[], &[wide::encode_halt()]);
+        let transaction = signed(&state, &bytes, GAS);
+        let budget = AllocationBudget::new(0);
+        let mut cache = IvmCache::with_prepared_contract_cache(
+            0,
+            PreparedContractCache::with_execution_budget(0, budget.clone()),
+        );
+        let before_proof = enforce_transaction_contract_permission_before_proof_verification(
+            &state.view(),
+            &ALICE_ID,
+            &transaction,
+            &mut cache,
+            state.committed_height() as u64 + 1,
+            DataSpaceId::UNIVERSAL,
+        );
+        let Err(ExecutionAttemptError::Deferred(expected)) = before_proof else {
+            panic!("pre-proof admission must retain local pool refusal");
+        };
+        assert!(matches!(
+            expected.allocation_refusal(),
+            Some(AllocationRefusal::ExceedsLimit { limit_bytes: 0, .. })
+        ));
+        let mut block = next_block(&state);
+        let fragments = block.committed_fragment_count();
+        let mut tx =
+            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+        tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        let result =
+            Executor::Initial.execute_transaction(&mut tx, &ALICE_ID, transaction, &mut cache);
+        assert_eq!(
+            result,
+            Err(ExecutionAttemptError::Deferred(expected.clone()))
+        );
+        assert_eq!(tx.execution_deferral(), Some(expected));
+        assert_eq!(tx.last_tx_gas_used, 0);
+        assert_eq!(budget.peak_reserved_bytes(), 0);
+        drop(tx);
+        assert_eq!(block.committed_fragment_count(), fragments);
+    }
+
+    #[test]
     fn runtime_rejection_retains_real_vm_work_under_signed_and_remaining_block_limits() {
         let mut code = vec![wide::encode_ri(opcode::arithmetic::ADDI, 5, 5, 1); 100];
         code.push(wide::encode_halt());

@@ -33,13 +33,17 @@ use iroha_sumeragi::{
     types::Bitmap,
 };
 
-struct Anchor(HashOf<BlockHeader>);
+struct Anchor(HashOf<BlockHeader>, AllocationBudget);
 impl AnchorView for Anchor {
     fn applied_hash(&self, height: u64) -> Option<HashOf<BlockHeader>> {
         (height == 7).then_some(self.0)
     }
-    fn creation_time_ms(&self, height: u64) -> Option<u64> {
-        (height == 7).then_some(5_000)
+    fn creation_time_ms(&self, height: u64) -> Result<Option<u64>, Attempt<io::Error>> {
+        let _read = self
+            .1
+            .try_reserve(std::alloc::Layout::new::<u64>())
+            .map_err(|original| Attempt::Deferred(original.into()))?;
+        Ok((height == 7).then_some(5_000))
     }
 }
 impl AnchorSource for Anchor {
@@ -136,7 +140,10 @@ impl Fixture {
         let instance = lane_instance(&*crypto, &network, "HC29 component", &record);
         let genesis = lane_genesis_hash(&network, &record);
         let config = lane_height_config(&record).unwrap();
-        let anchor = Arc::new(Anchor(network.into_genesis_hash()));
+        let anchor = Arc::new(Anchor(
+            network.into_genesis_hash(),
+            AllocationBudget::new(std::mem::size_of::<u64>()),
+        ));
         let key = KeyPair::from_seed(vec![0x29; 32], Algorithm::Ed25519);
         let transaction = TransactionBuilder::new(
             network,
@@ -318,6 +325,64 @@ fn signed_four_validator_lane_execution_refusal_never_caches_invalid_or_publishe
     assert_eq!(lane.prepare(&malformed.body, &malformed.qc), Ok(None));
     assert!(lane.cache.is_empty());
 }
+#[test]
+fn anchor_read_refusal_retains_original_lane_body_until_capacity_returns() {
+    use crate::execution_attempt::ExecutionDeferred;
+    use iroha_allocation::AllocationRefusal;
+    use std::task::{Context, Waker};
+
+    let fixture = Fixture::new(true);
+    let mut lane: Lane = fixture
+        .recovery()
+        .complete()
+        .unwrap_or_else(|_| panic!("empty recovered lane"));
+    let layout = std::alloc::Layout::new::<u64>();
+    fixture.anchor.1.set_limit_bytes(
+        layout.size() + iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut registration = crate::unit_test_support::release_registration(&fixture.anchor.1);
+    let occupied = fixture.anchor.1.try_reserve(layout).unwrap();
+    let refusal = fixture.anchor.1.try_reserve(layout).unwrap_err();
+    let AllocationRefusal::Capacity { release, .. } = &refusal else {
+        panic!("occupied original anchor pool must be a temporary capacity refusal");
+    };
+    let released = release.clone();
+    let mut context = Context::from_waker(Waker::noop());
+    assert!(registration.poll_wait(&released, &mut context).is_pending());
+    let expected = ExecutionDeferred::from(refusal);
+    let pointer = fixture.body.payload().as_slice().as_ptr();
+    let retained = fixture.budget.reserved_bytes();
+    for _ in 0..2 {
+        assert_eq!(lane.execute(&fixture.body, &fixture.qc.block_hash), None);
+        assert_eq!(lane.anchor_refusal.as_ref(), Some(&expected));
+        assert_eq!(
+            lane.prepare(&fixture.body, &fixture.qc),
+            Err(PublicationError::Deferred(expected.clone().into()))
+        );
+        assert!(lane.cache.is_empty());
+        assert_eq!(lane.applied.height, 0);
+        assert_eq!(fixture.body.payload().as_slice().as_ptr(), pointer);
+        assert_eq!(fixture.budget.reserved_bytes(), retained);
+    }
+    let unrelated = AllocationBudget::new(layout.size());
+    drop(unrelated.try_reserve(layout).unwrap());
+    assert!(registration.poll_wait(&released, &mut context).is_pending());
+    drop(occupied);
+    assert!(registration.poll_wait(&released, &mut context).is_ready());
+    assert_eq!(
+        lane.execute(&fixture.body, &fixture.qc.block_hash),
+        Some(ExecOutcome::Valid(fixture.qc.result))
+    );
+    assert!(lane.anchor_refusal.is_none());
+    assert_eq!(
+        lane.prepare(&fixture.body, &fixture.qc),
+        Ok(Some(fixture.qc.result))
+    );
+    lane.commit(&fixture.body, &fixture.qc).unwrap();
+    assert_eq!(lane.applied.height, 1);
+    assert_eq!(lane.applied.state.anchor, 7);
+}
+
 #[test]
 fn signed_four_validator_lane_recovery_keeps_available_phase_and_exact_original_owners() {
     let fixture = Fixture::new(true);

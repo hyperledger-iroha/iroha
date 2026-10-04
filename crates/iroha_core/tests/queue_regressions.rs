@@ -16,7 +16,7 @@ use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_primitives::time::TimeSource;
 use nonzero_ext::nonzero;
-use std::{borrow::Cow, num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{borrow::Cow, collections::BTreeSet, num::NonZeroUsize, sync::Arc, time::Duration};
 use tokio::time::sleep;
 /// Read the queue's bounded ready snapshot and complete pending observation.
 trait QueueDrainExt {
@@ -159,6 +159,7 @@ async fn concurrent_ready_and_pending_drains_stay_consistent() {
         events_sender,
     ));
     let now = TimeSource::new_system().get_unix_time();
+    let mut expected_hashes = BTreeSet::new();
     // Pre-seed a few transactions to exercise both drain paths immediately.
     for nonce in 0..8 {
         let tx = make_transaction(
@@ -173,6 +174,7 @@ async fn concurrent_ready_and_pending_drains_stay_consistent() {
             !queue.is_expired(&tx),
             "seed transactions should remain valid during stress"
         );
+        expected_hashes.insert(tx.hash_as_entrypoint());
         queue
             .push(tx, state.view())
             .expect("queue accepts seed transaction");
@@ -205,6 +207,7 @@ async fn concurrent_ready_and_pending_drains_stay_consistent() {
     let authority_for_push = authority.clone();
     let key_pair_for_push = key_pair.clone();
     let push_task = async move {
+        let mut injected_hashes = BTreeSet::new();
         for nonce in 8..64 {
             let tx = make_transaction(
                 &chain_id_for_push,
@@ -214,24 +217,54 @@ async fn concurrent_ready_and_pending_drains_stay_consistent() {
                 Some(Duration::from_secs(120)),
                 TimeSource::new_system().get_unix_time(),
             );
-            if queue_for_push.is_expired(&tx) {
-                continue;
-            }
+            assert!(
+                !queue_for_push.is_expired(&tx),
+                "injected transaction is live"
+            );
+            injected_hashes.insert(tx.hash_as_entrypoint());
             queue_for_push
                 .push(tx, state_for_push.view())
                 .expect("queue accepts injected transaction during stress");
             sleep(Duration::from_millis(1)).await;
         }
+        injected_hashes
     };
-    tokio::join!(ready_task, pending_task, push_task);
-    // The queue should stay internally consistent despite the concurrent drains.
+    let (_, _, injected_hashes) = tokio::join!(ready_task, pending_task, push_task);
+    expected_hashes.extend(injected_hashes);
+    // Snapshots retain all original signed inputs. The ready cursor may begin in
+    // the middle of the FIFO after concurrent sampling; one bounded window
+    // reaches its end, and the next covers the complete retained queue.
+    assert_eq!(expected_hashes.len(), 64);
     let remaining = queue.queued_len();
-    if remaining > 0 {
-        // Verify that any residual transactions remain accessible via the ready drain.
-        let view = state.view();
-        let limit = NonZeroUsize::new(remaining).expect("non-zero queue length");
-        let guards = queue.drain_ready(&view, limit);
-        drop(view);
-        assert_eq!(guards.len(), remaining);
-    }
+    assert_eq!(remaining, 64);
+    let view = state.view();
+    let limit = NonZeroUsize::new(remaining).expect("non-zero queue length");
+    let first = queue.drain_ready(&view, limit);
+    assert!(first.len() <= remaining);
+    assert!(
+        first
+            .iter()
+            .all(|tx| expected_hashes.contains(&tx.hash_as_entrypoint()))
+    );
+    let guards = queue.drain_ready(&view, limit);
+    assert_eq!(guards.len(), remaining);
+    assert_eq!(
+        guards
+            .iter()
+            .map(AcceptedTransaction::hash_as_entrypoint)
+            .collect::<BTreeSet<_>>(),
+        expected_hashes
+    );
+    let pending = queue.drain_pending(&view);
+    assert_eq!(pending.len(), remaining);
+    assert_eq!(
+        pending
+            .iter()
+            .map(AcceptedTransaction::hash_as_entrypoint)
+            .collect::<BTreeSet<_>>(),
+        expected_hashes
+    );
+    drop(view);
+    drop((first, guards, pending));
+    assert_eq!(queue.queued_len(), remaining);
 }

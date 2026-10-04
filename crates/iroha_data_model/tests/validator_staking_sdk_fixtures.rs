@@ -24,16 +24,21 @@ use iroha_data_model::{
         staking::{PublicLanePeerBindingAuthorization, RebindPublicLaneValidatorPeer},
     },
     nexus::{
-        PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
-        PublicLaneMonetaryRegistrationV1, PublicLaneMonetaryScopeV1,
-        ValidatorCommitteeCredentialsV1, ValidatorCommitteePreparationV1,
-        ValidatorCommitteeTransitionV1,
+        PublicLaneFeeRewardClaimV1, PublicLaneMonetaryBondV1, PublicLaneMonetaryPlanV1,
+        PublicLaneMonetaryPreconditionV1, PublicLaneMonetaryRegistrationV1,
+        PublicLaneMonetaryScopeV1, PublicLaneMonetarySlashV1, PublicLaneMonetaryUnbondV1,
+        PublicLanePreparationBalanceV1, PublicLanePreparationOperationV1,
+        PublicLanePreparationRequestV1, PublicLanePreparationV1, PublicLanePrepareBondV1,
+        PublicLanePrepareClaimV1, PublicLanePrepareRegistrationV1, PublicLanePrepareUnbondV1,
+        PublicLanePreparedPlanV1, PublicLaneRewardClaimPlanV1, PublicLaneRewardClaimSourceV1,
+        PublicLaneRewardClaimStateV1, PublicLaneRewardRecordRefV1, ValidatorCommitteeCredentialsV1,
+        ValidatorCommitteePreparationV1, ValidatorCommitteeTransitionV1,
     },
     parameter::system::SumeragiNposParameters,
 };
 use iroha_model_base::{peer::PeerId, topology::LaneId};
 use iroha_primitives::numeric::Quantity;
-use norito::codec::Encode;
+use norito::codec::{DecodeAll, Encode};
 
 fn key(seed: u8, algorithm: Algorithm) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], algorithm).expect("deterministic checked key")
@@ -159,7 +164,7 @@ fn dkg_transcript(
     }
 }
 
-fn fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
+fn all_fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
     let network_id = network();
     let peers = peers();
     let genesis_authority = authority(network_id, &peers, 0);
@@ -257,6 +262,63 @@ fn fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
             },
         ),
     };
+    let bond_plan = PublicLaneMonetaryPlanV1 {
+        precondition: PublicLaneMonetaryPreconditionV1::Bond(PublicLaneMonetaryBondV1 {
+            activation_height: 201,
+            peer_id: peers[0].clone(),
+        }),
+        ..plan.clone()
+    };
+    let unbond_plan = PublicLaneMonetaryPlanV1 {
+        source_asset: plan.destination_asset.clone(),
+        destination_asset: plan.source_asset.clone(),
+        precondition: PublicLaneMonetaryPreconditionV1::Unbond(PublicLaneMonetaryUnbondV1 {
+            activation_height: 201,
+            request_hash: Hash::prehashed([0x75; 32]),
+        }),
+        ..plan.clone()
+    };
+    // These are exact DTO layouts; a privileged slash's authority and designated
+    // sink are authenticated by native execution, not by this wire fixture.
+    let slash_plan = PublicLaneMonetaryPlanV1 {
+        source_asset: plan.destination_asset.clone(),
+        destination_asset: plan.source_asset.clone(),
+        precondition: PublicLaneMonetaryPreconditionV1::Slash(PublicLaneMonetarySlashV1 {
+            activation_height: 201,
+            slashable_exposure: Quantity::from(1500_u64),
+        }),
+        ..plan.clone()
+    };
+    let reward_plan = PublicLaneRewardClaimPlanV1 {
+        network_scope: PublicLaneMonetaryScopeV1::Network(network_id),
+        valid_until_height: 210,
+        expected_state: Some(PublicLaneRewardClaimStateV1 {
+            through_epoch: Some(200),
+        }),
+        records: vec![PublicLaneRewardRecordRefV1 {
+            epoch: 201,
+            record_hash: Hash::new(b"sdk-exact-reward-record"),
+        }],
+        sources: vec![PublicLaneRewardClaimSourceV1 {
+            source_asset: plan.destination_asset.clone(),
+            destination_asset: plan.source_asset.clone(),
+            expected_accrued: Some(Quantity::from(5_u64)),
+            payout: Quantity::from(15_u64),
+        }],
+        fee_claim: None,
+    };
+    let mut fee_reward_plan = reward_plan.clone();
+    fee_reward_plan.fee_claim = Some(PublicLaneFeeRewardClaimV1 {
+        lifecycle_seal: [0x77; 32],
+        beneficiary_id: staker.clone(),
+        beneficiary_revision: 4,
+        source_asset: plan.destination_asset.clone(),
+        destination_asset: plan.source_asset.clone(),
+        amount: Quantity::from(7_u64),
+        expected_claim_sequence: 5,
+    });
+    assert!(reward_plan.has_canonical_shape(&staker));
+    assert!(fee_reward_plan.has_canonical_shape(&staker));
     let new_peer_key = key(0x73, Algorithm::Ed25519);
     let new_peer = PeerId::new(new_peer_key.public_key().clone());
     let consent = PublicLanePeerBindingAuthorization::new(
@@ -269,19 +331,219 @@ fn fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
     );
     let rebind = RebindPublicLaneValidatorPeer::new(
         LaneId::SINGLE,
-        staker,
+        staker.clone(),
         new_peer,
         SignatureOf::try_new(new_peer_key.private_key(), &consent).unwrap(),
     );
-    vec![
+    let mut rows = vec![
         ("authority_generation", genesis_authority.encode()),
         ("epoch_authorization", genesis_authorization.encode()),
         ("dkg_session", session.encode()),
         ("dkg_transcript", transcript.encode()),
         ("committee_transition", transition.encode()),
         ("monetary_plan", plan.encode()),
+        ("monetary_bond_plan", bond_plan.encode()),
+        ("monetary_unbond_plan", unbond_plan.encode()),
+        ("monetary_slash_plan", slash_plan.encode()),
+        ("reward_claim_plan", reward_plan.encode()),
+        ("fee_reward_claim_plan", fee_reward_plan.encode()),
         ("rebind_peer", rebind.encode()),
-    ]
+    ];
+    let requests = [
+        (
+            "prepare_registration_request",
+            "prepare_registration_response",
+            PublicLanePreparationOperationV1::Registration(PublicLanePrepareRegistrationV1 {
+                validator: staker.clone(),
+                peer_id: peers[0].clone(),
+                amount: plan.amount.clone(),
+                candidate: true,
+            }),
+            PublicLanePreparedPlanV1::Monetary(plan.clone()),
+        ),
+        (
+            "prepare_bond_request",
+            "prepare_bond_response",
+            PublicLanePreparationOperationV1::Bond(PublicLanePrepareBondV1 {
+                validator: staker.clone(),
+                staker: staker.clone(),
+                amount: bond_plan.amount.clone(),
+            }),
+            PublicLanePreparedPlanV1::Monetary(bond_plan),
+        ),
+        (
+            "prepare_unbond_request",
+            "prepare_unbond_response",
+            PublicLanePreparationOperationV1::FinalizeUnbond(PublicLanePrepareUnbondV1 {
+                validator: staker.clone(),
+                staker: staker.clone(),
+                request_id: Hash::new(b"sdk-withdrawal-request"),
+            }),
+            PublicLanePreparedPlanV1::Monetary(unbond_plan),
+        ),
+        (
+            "prepare_claim_request",
+            "prepare_claim_response",
+            PublicLanePreparationOperationV1::ClaimRewards(PublicLanePrepareClaimV1 {
+                recipient: staker,
+                upto_epoch: Some(201),
+                max_records: 1,
+                accrued_sources: vec![plan.destination_asset.clone()],
+            }),
+            PublicLanePreparedPlanV1::Claim(fee_reward_plan),
+        ),
+    ];
+    for (request_name, response_name, operation, prepared_plan) in requests {
+        let request = PublicLanePreparationRequestV1 {
+            lane_id: LaneId::SINGLE,
+            valid_for_blocks: 10,
+            operation,
+        };
+        let assets: std::collections::BTreeSet<_> =
+            [plan.source_asset.clone(), plan.destination_asset.clone()]
+                .into_iter()
+                .collect();
+        let response = PublicLanePreparationV1 {
+            request: request.clone(),
+            network_id,
+            observed_height: 200,
+            observed_block_hash: Hash::new(b"sdk-preparation-observation"),
+            observed_ledger_time_ms: 20_000,
+            assumed_execution_height: 201,
+            xor_asset_definition_id: plan.source_asset.definition().clone(),
+            plan: prepared_plan,
+            balances: assets
+                .into_iter()
+                .map(|asset| PublicLanePreparationBalanceV1 {
+                    asset,
+                    balance: Quantity::from(5_000_u64),
+                    stake_reserved: Quantity::from(1_000_u64),
+                    rewards_reserved: Quantity::from(22_u64),
+                })
+                .collect(),
+        };
+        rows.push((request_name, norito::encode_canonical(&request).unwrap()));
+        rows.push((response_name, norito::encode_canonical(&response).unwrap()));
+    }
+    rows
+}
+
+// Bare DTO payload fixtures stay separate from full request/response frames.
+// Swift and Kotlin consumers retain their exact, unchanged DTO identity set.
+fn fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
+    all_fixture_rows()
+        .into_iter()
+        .filter(|(name, _)| !name.starts_with("prepare_"))
+        .collect()
+}
+
+fn preparation_fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
+    all_fixture_rows()
+        .into_iter()
+        .filter(|(name, _)| name.starts_with("prepare_"))
+        .collect()
+}
+
+#[test]
+fn operation_specific_monetary_fixtures_roundtrip_exact_bindings_and_network_xor() {
+    let xor = SumeragiNposParameters::default().xor_asset_definition_id;
+    let rows = fixture_rows();
+    let plans = rows
+        .iter()
+        .filter(|(kind, _)| kind.starts_with("monetary_"))
+        .map(|(kind, bytes)| {
+            let plan = PublicLaneMonetaryPlanV1::decode_all(&mut bytes.as_slice()).unwrap();
+            assert_eq!(plan.encode(), *bytes, "{kind} exact roundtrip");
+            assert_eq!(
+                plan.network_scope,
+                PublicLaneMonetaryScopeV1::Network(network())
+            );
+            assert_eq!(plan.valid_until_height, 210);
+            assert_eq!(plan.amount, Quantity::from(1000_u64));
+            for asset in [&plan.source_asset, &plan.destination_asset] {
+                assert_eq!(asset.definition(), &xor);
+                assert_eq!(asset, &AssetId::new(xor.clone(), asset.account().clone()));
+            }
+            (*kind, plan)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(plans.len(), 4);
+    let registration = &plans[0].1;
+    for (kind, plan) in &plans {
+        match &plan.precondition {
+            PublicLaneMonetaryPreconditionV1::Registration(value) => {
+                assert_eq!(*kind, "monetary_plan");
+                assert_eq!(value.activation_height, 201);
+            }
+            PublicLaneMonetaryPreconditionV1::Bond(value) => {
+                assert_eq!(*kind, "monetary_bond_plan");
+                assert_eq!(value.activation_height, 201);
+                assert_eq!(value.peer_id, peers()[0]);
+                assert_eq!(plan.source_asset, registration.source_asset);
+                assert_eq!(plan.destination_asset, registration.destination_asset);
+            }
+            PublicLaneMonetaryPreconditionV1::Unbond(value) => {
+                assert_eq!(*kind, "monetary_unbond_plan");
+                assert_eq!(value.activation_height, 201);
+                assert_eq!(value.request_hash, Hash::prehashed([0x75; 32]));
+                assert_eq!(plan.source_asset, registration.destination_asset);
+                assert_eq!(plan.destination_asset, registration.source_asset);
+            }
+            PublicLaneMonetaryPreconditionV1::Slash(value) => {
+                assert_eq!(*kind, "monetary_slash_plan");
+                assert_eq!(value.activation_height, 201);
+                assert_eq!(value.slashable_exposure, Quantity::from(1500_u64));
+                assert_eq!(plan.source_asset, registration.destination_asset);
+                assert_eq!(plan.destination_asset, registration.source_asset);
+            }
+        }
+    }
+}
+
+#[test]
+fn staking_preparation_frames_keep_schema_alignment_and_exact_native_intent() {
+    let rows = preparation_fixture_rows();
+    let frames = rows.iter().collect::<Vec<_>>();
+    assert_eq!(frames.len(), 8);
+    for (name, bytes) in frames {
+        assert_eq!(&bytes[..4], b"NRT0");
+        if name.ends_with("_request") {
+            let request =
+                norito::decode_canonical::<PublicLanePreparationRequestV1>(bytes).unwrap();
+            assert_eq!(norito::encode_canonical(&request).unwrap(), *bytes);
+            assert!(
+                bytes.len() <= iroha_data_model::nexus::PUBLIC_LANE_PREPARATION_REQUEST_MAX_BYTES
+            );
+            assert_eq!(request.lane_id, LaneId::SINGLE);
+            assert_eq!(request.valid_for_blocks, 10);
+        } else {
+            let response = norito::decode_canonical::<PublicLanePreparationV1>(bytes).unwrap();
+            assert_eq!(norito::encode_canonical(&response).unwrap(), *bytes);
+            assert!(
+                bytes.len() <= iroha_data_model::nexus::PUBLIC_LANE_PREPARATION_RESPONSE_MAX_BYTES
+            );
+            assert_eq!(response.network_id, network());
+            assert_eq!(
+                response.observed_height + 1,
+                response.assumed_execution_height
+            );
+            assert_eq!(
+                response.xor_asset_definition_id,
+                SumeragiNposParameters::default().xor_asset_definition_id
+            );
+            for row in response.balances {
+                assert_eq!(
+                    row.asset,
+                    AssetId::new(
+                        response.xor_asset_definition_id.clone(),
+                        row.asset.account().clone()
+                    )
+                );
+                assert_eq!(row.stake_reserved, Quantity::from(1_000_u64));
+                assert_eq!(row.rewards_reserved, Quantity::from(22_u64));
+            }
+        }
+    }
 }
 
 #[test]
@@ -329,6 +591,48 @@ fn print_validator_staking_sdk_fixtures() {
     for (kind, bytes) in fixture_rows() {
         println!(
             "VALIDATOR_STAKING_SDK_FIXTURE={kind}\t{}",
+            hex::encode(bytes)
+        );
+    }
+}
+
+#[test]
+fn committed_staking_preparation_sdk_fixtures_match_current_rust_frames() {
+    // Read at runtime so the ignored native producer can run before first capture.
+    let committed = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/validator_staking/preparation_v1.tsv"
+    )).expect("missing native preparation fixtures; run print_staking_preparation_sdk_fixtures and capture its actual rows");
+    let rows = committed
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| line.split_once('\t').expect("kind and canonical hex"))
+        .collect::<Vec<_>>();
+    let expected = preparation_fixture_rows();
+    assert_eq!(
+        rows.len(),
+        expected.len(),
+        "preparation fixture row count changed"
+    );
+    for ((kind, bytes), (committed_kind, committed_hex)) in expected.into_iter().zip(rows) {
+        assert_eq!(
+            committed_kind, kind,
+            "preparation fixture order or identity changed"
+        );
+        assert_eq!(
+            committed_hex,
+            hex::encode(bytes),
+            "{kind} Norito frame drifted"
+        );
+    }
+}
+
+#[test]
+#[ignore = "capture actual native frames into fixtures/validator_staking/preparation_v1.tsv"]
+fn print_staking_preparation_sdk_fixtures() {
+    for (kind, bytes) in preparation_fixture_rows() {
+        println!(
+            "STAKING_PREPARATION_SDK_FIXTURE={kind}\t{}",
             hex::encode(bytes)
         );
     }

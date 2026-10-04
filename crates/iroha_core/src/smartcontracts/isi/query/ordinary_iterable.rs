@@ -7,10 +7,13 @@
 #![allow(unsafe_code)]
 use super::{
     OrdinaryQueryExecutionLimits, QueryAttemptError, QueryExecutionStats,
-    ordinary_memory::OrdinaryCursorMode,
+    ordinary_memory::OrdinaryCursorMode, singular_memory::SingularQueryFrame,
 };
 use crate::{
-    smartcontracts::ValidQuery,
+    smartcontracts::{
+        ValidQuery,
+        isi::triggers::set::{BorrowedTriggerSourceReadOnly as _, SetReadOnly},
+    },
     state::{StateReadOnly, WorldReadOnly},
 };
 use iroha_data_model::{
@@ -19,6 +22,7 @@ use iroha_data_model::{
         QueryOutputBatchBox, QueryOutputBatchBoxTuple, dsl::CompoundPredicate,
         error::QueryExecutionFail as Error, parameters::QueryParams,
     },
+    trigger::{Trigger, TriggerId},
 };
 use iroha_model_base::peer::PeerId;
 use mv::storage::StorageReadOnly as _;
@@ -35,11 +39,11 @@ use std::{
 };
 /// The world-state producer count admitted through a source-specific adapter.
 #[cfg(test)]
-pub(super) const ADMITTED_WORLD_PRODUCERS: usize = 2;
+pub(super) const ADMITTED_WORLD_PRODUCERS: usize = 4;
 /// The world-state producer count still awaiting source-specific bounded
 /// ownership and exact predicate parity.
 #[cfg(test)]
-pub(super) const WORLD_PRODUCER_RESIDUALS: usize = 35;
+pub(super) const WORLD_PRODUCER_RESIDUALS: usize = 33;
 /// The Kura producer count awaiting an authenticated bounded reader/projection.
 #[cfg(test)]
 pub(super) const KURA_PRODUCER_RESIDUALS: usize = 3;
@@ -97,13 +101,52 @@ where
                 stats,
             ));
         }
-        // TODO: Route each of the remaining 35 world producers through a query-specific
-        // borrowed scan which preserves its synthetic-field predicate rules,
-        // owns only the requested prefix/top-K through fallible exact storage,
-        // and performs bounded selector projection. The three Kura producers
+        if params.pagination.offset_value() == 0
+            && params.sorting.sort_by_metadata_key.is_none()
+            && predicate.is_pass()
+        {
+            if TypeId::of::<Q>()
+                == TypeId::of::<iroha_data_model::query::trigger::prelude::FindActiveTriggerIds>()
+                && TypeId::of::<T>() == TypeId::of::<TriggerId>()
+            {
+                drop(predicate);
+                let (rows, stats) = collect_active_trigger_ids(params, mode, limits, state)?;
+                return Ok((
+                    OrdinaryIterable::Owned(cast_owned_exact::<
+                        ExactOwnedRows<TriggerId>,
+                        ExactOwnedRows<T>,
+                    >(rows)?),
+                    stats,
+                ));
+            }
+            if TypeId::of::<Q>()
+                == TypeId::of::<iroha_data_model::query::trigger::prelude::FindTriggers>()
+                && TypeId::of::<T>() == TypeId::of::<Trigger>()
+            {
+                drop(predicate);
+                let (rows, stats) = collect_triggers(params, mode, limits, state)?;
+                return Ok((
+                    OrdinaryIterable::Owned(cast_owned_exact::<
+                        ExactOwnedRows<Trigger>,
+                        ExactOwnedRows<T>,
+                    >(rows)?),
+                    stats,
+                ));
+            }
+        }
+        // Admission refuses every other shape before execution; this is the
+        // fail-closed backstop. Admitting another of the remaining 33 world
+        // producers requires a query-specific borrowed scan which preserves its
+        // synthetic-field predicate rules and owns only the requested
+        // prefix/top-K through fallible exact storage. The three Kura producers
         // additionally need an authenticated fixed projection in the reader.
-        return Err(Error::Conversion(
-            "ordinary iterable source adapters are not yet complete".to_owned(),
+        let query = std::any::type_name::<Q>()
+            .rsplit("::")
+            .next()
+            .unwrap_or("iterable query");
+        return Err(super::ordinary_memory::signed_query_shape_not_admitted(
+            query,
+            "has no bounded signed-query source for this predicate, offset, sorting or cursor mode",
         )
         .into());
     }
@@ -352,7 +395,10 @@ pub(super) fn encode_bounded_frame<T: NoritoSerialize>(
     value: &T,
     maximum: usize,
 ) -> Result<Vec<u8>, Error> {
-    let encoded_len = norito::core::encoded_frame_len(value).map_err(|_| Error::CapacityLimit)?;
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let encoded_len = norito::core::encoded_frame_len_bounded(value, maximum)
+        .map_err(|_| Error::CapacityLimit)?;
     if encoded_len > maximum {
         return Err(Error::CapacityLimit);
     }
@@ -519,6 +565,198 @@ fn collect_account_ids(
         let (owned, allocated) = clone_account_for_admission(account, graph.next_limit()?)?;
         graph.record_decoded(allocated)?;
         rows.push(owned)?;
+    }
+    Ok((rows.finish()?, stats))
+}
+/// Share the same finite prefix/probe contract for ids and complete trigger rows.
+fn trigger_source_limits(
+    params: &QueryParams,
+    mode: OrdinaryCursorMode,
+    limits: OrdinaryQueryExecutionLimits,
+) -> Result<(usize, usize, u64), Error> {
+    let fetch = params
+        .fetch_size
+        .fetch_size
+        .unwrap_or(iroha_data_model::query::parameters::DEFAULT_FETCH_SIZE)
+        .get();
+    if fetch > limits.max_page_items() {
+        return Err(Error::CapacityLimit);
+    }
+    let rows = usize::try_from(account_prefix_target(
+        fetch,
+        params.pagination.limit_value().map(|limit| limit.get()),
+        mode,
+        limits.max_cursor_retained_items(),
+    )?)
+    .map_err(|_| Error::CapacityLimit)?;
+    let bytes =
+        usize::try_from(limits.max_source_item_bytes()).map_err(|_| Error::CapacityLimit)?;
+    let work = limits
+        .max_source_item_bytes()
+        .checked_mul(3)
+        .ok_or(Error::CapacityLimit)?;
+    Ok((rows, bytes, work))
+}
+/// Decode only after frame and exact row slots are admitted. Nested allocations
+/// consume both the per-row and aggregate retained graph allowance.
+fn decode_trigger_row<T>(frame: &[u8], graph: &mut RetainedDecodeBudget) -> Result<T, Error>
+where
+    T: NoritoSerialize + for<'de> norito::core::NoritoDeserialize<'de>,
+{
+    let elements = frame.len().checked_mul(8).ok_or(Error::CapacityLimit)?;
+    let limits =
+        norito::DecodeLimits::new(elements, frame.len(), elements, graph.next_limit()?, 64);
+    let (owned, usage) = norito::core::with_decode_limits_measured(limits, || {
+        norito::decode_from_bytes_with_limits::<T>(frame, limits)
+    });
+    let owned = owned.map_err(|_| Error::CapacityLimit)?;
+    graph.record_decoded(usage.total_allocated_bytes())?;
+    Ok(owned)
+}
+fn collect_active_trigger_ids(
+    params: &QueryParams,
+    mode: OrdinaryCursorMode,
+    limits: OrdinaryQueryExecutionLimits,
+    state: &impl StateReadOnly,
+) -> Result<(ExactOwnedRows<TriggerId>, QueryExecutionStats), Error> {
+    let (maximum_rows, maximum, work) = trigger_source_limits(params, mode, limits)?;
+    let source = state.world().triggers();
+    let mut stats = QueryExecutionStats::default();
+    let mut selected = 0usize;
+    for id in source.active_trigger_ids_iter().take(maximum_rows) {
+        stats.record_preflighted_item(work, Some(limits.execution_budget()))?;
+        drop(encode_bounded_frame(id, maximum)?);
+        selected = selected.checked_add(1).ok_or(Error::CapacityLimit)?;
+    }
+    let (mut graph, slot_bytes) =
+        RetainedDecodeBudget::new::<TriggerId>(selected, limits.max_source_item_bytes())?;
+    let mut rows = ExactOwnedRows::new(selected, slot_bytes)?;
+    for id in source.active_trigger_ids_iter().take(selected) {
+        stats.record_preflighted_item(work, Some(limits.execution_budget()))?;
+        let frame = encode_bounded_frame(id, maximum)?;
+        rows.push(decode_trigger_row(&frame, &mut graph)?)?;
+    }
+    Ok((rows.finish()?, stats))
+}
+/// Own validated identities and metadata without parser staging allocations.
+/// Empty executable vectors and fixed-size typed selectors need no decoder
+/// staging. Other projections retain strict canonical decoding; all final
+/// owners and decoder work share the original row and aggregate allowance.
+fn own_trigger_row(
+    source: &crate::smartcontracts::isi::triggers::set::BorrowedTriggerSource<'_>,
+    maximum: usize,
+    graph: &mut RetainedDecodeBudget,
+) -> Result<Trigger, Error> {
+    use iroha_data_model::{
+        events::EventFilterBox, transaction::Executable, trigger::action::Action,
+    };
+    let executable = encode_bounded_frame(
+        &SingularQueryFrame::<Executable>::new(source.executable()),
+        maximum,
+    )?;
+    let filter = encode_bounded_frame(
+        &SingularQueryFrame::<EventFilterBox>::new(source.filter()),
+        maximum
+            .checked_sub(executable.len())
+            .ok_or(Error::CapacityLimit)?,
+    )?;
+    let bytes = executable
+        .len()
+        .checked_add(filter.len())
+        .ok_or(Error::CapacityLimit)?;
+    let elements = bytes.checked_mul(8).ok_or(Error::CapacityLimit)?;
+    let limits = norito::DecodeLimits::new(elements, bytes, elements, graph.next_limit()?, 64);
+    let (owned, usage) = norito::core::with_decode_limits_measured(limits, || {
+        let id = TriggerId::new(
+            source
+                .id()
+                .name()
+                .try_clone_for_admission()
+                .map_err(|_| Error::CapacityLimit)?,
+        );
+        let authority = source
+            .authority()
+            .try_clone_for_admission()
+            .map_err(|_| Error::CapacityLimit)?;
+        let executable = match source.allocation_free_executable() {
+            Some(executable) => executable,
+            None => norito::decode_from_bytes_with_limits::<Executable>(&executable, limits)
+                .map_err(|_| Error::CapacityLimit)?,
+        };
+        let filter = match source
+            .try_own_filter_without_staging()
+            .map_err(|_| Error::CapacityLimit)?
+        {
+            Some(filter) => filter,
+            None => norito::decode_from_bytes_with_limits::<EventFilterBox>(&filter, limits)
+                .map_err(|_| Error::CapacityLimit)?,
+        };
+        // Stored by-call actions already bind their authority. Refuse a missing
+        // binding before the public constructor could create an uncharged clone.
+        if matches!(&filter, EventFilterBox::ExecuteTrigger(filter) if filter.authority().is_none())
+        {
+            return Err(Error::CapacityLimit);
+        }
+        let mut action = Action::new(executable, source.repeats(), authority, filter)
+            .map_err(|_| Error::CapacityLimit)?;
+        if let Some(retry_policy) = source.retry_policy() {
+            action = action
+                .with_retry_policy(retry_policy)
+                .map_err(|_| Error::CapacityLimit)?;
+        }
+        action.metadata = source
+            .metadata()
+            .try_clone_for_admission()
+            .map_err(|_| Error::CapacityLimit)?;
+        Ok::<_, Error>(Trigger::new(id, action))
+    });
+    let owned = owned?;
+    graph.record_decoded(usage.total_allocated_bytes())?;
+    Ok(owned)
+}
+fn collect_triggers(
+    params: &QueryParams,
+    mode: OrdinaryCursorMode,
+    limits: OrdinaryQueryExecutionLimits,
+    state: &impl StateReadOnly,
+) -> Result<(ExactOwnedRows<Trigger>, QueryExecutionStats), Error> {
+    use std::ops::ControlFlow;
+    let (maximum_rows, maximum, work) = trigger_source_limits(params, mode, limits)?;
+    let source = state.world().triggers();
+    let mut stats = QueryExecutionStats::default();
+    let mut selected = 0usize;
+    if maximum_rows != 0 {
+        source.visit_borrowed_trigger_sources(|source| {
+            stats.record_preflighted_item(work, Some(limits.execution_budget()))?;
+            if let Some(source) = source {
+                drop(encode_bounded_frame(
+                    &SingularQueryFrame::<Trigger>::new(source),
+                    maximum,
+                )?);
+                selected = selected.checked_add(1).ok_or(Error::CapacityLimit)?;
+            }
+            Ok(if selected == maximum_rows {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            })
+        })?;
+    }
+    let (mut graph, slot_bytes) =
+        RetainedDecodeBudget::new::<Trigger>(selected, limits.max_source_item_bytes())?;
+    let mut rows = ExactOwnedRows::new(selected, slot_bytes)?;
+    if selected != 0 {
+        source.visit_borrowed_trigger_sources(|source| {
+            stats.record_preflighted_item(work, Some(limits.execution_budget()))?;
+            if let Some(source) = source {
+                rows.push(own_trigger_row(source, maximum, &mut graph)?)?;
+            }
+            Ok(if rows.len == selected {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            })
+        })?;
     }
     Ok((rows.finish()?, stats))
 }
@@ -712,13 +950,313 @@ mod tests {
     use super::*;
     #[test]
     fn residual_inventory_is_explicit_and_exhaustive() {
-        assert_eq!(ADMITTED_WORLD_PRODUCERS, 2);
-        assert_eq!(WORLD_PRODUCER_RESIDUALS, 35);
+        assert_eq!(ADMITTED_WORLD_PRODUCERS, 4);
+        assert_eq!(WORLD_PRODUCER_RESIDUALS, 33);
         assert_eq!(KURA_PRODUCER_RESIDUALS, 3);
         assert_eq!(
             ADMITTED_WORLD_PRODUCERS + WORLD_PRODUCER_RESIDUALS + KURA_PRODUCER_RESIDUALS,
             40
         );
+    }
+    fn trigger_test_limits(source_bytes: u64) -> OrdinaryQueryExecutionLimits {
+        let items = 2;
+        let response = 16 * 1024;
+        let archive = 1024;
+        let decode = norito::DecodeLimits::new(64, 4096, 256, 16 * 1024, 16);
+        let execution = OrdinaryQueryExecutionLimits::required_execution_headroom_bytes(
+            items,
+            source_bytes,
+            response,
+            4096,
+            archive,
+            decode,
+        )
+        .unwrap();
+        let cursor = OrdinaryQueryExecutionLimits::required_cursor_retained_bytes(
+            items,
+            source_bytes,
+            source_bytes,
+            archive,
+        )
+        .unwrap();
+        OrdinaryQueryExecutionLimits::try_new(
+            1,
+            super::super::QueryExecutionBudget::from_weighted_limit(256 * 1024, 1, 1),
+            items,
+            execution,
+            source_bytes,
+            response,
+            items,
+            source_bytes,
+            cursor,
+            4096,
+            archive,
+            decode,
+        )
+        .unwrap()
+    }
+    fn trigger_test_state() -> crate::state::State {
+        use crate::smartcontracts::isi::triggers::specialized::{
+            SpecializedAction, SpecializedTrigger,
+        };
+        use iroha_data_model::{events::pipeline::BlockEventFilter, prelude::*};
+        use iroha_primitives::const_vec::ConstVec;
+        let world = crate::state::World::default();
+        {
+            let mut block = world.block();
+            let mut triggers = block.triggers.transaction();
+            let authority = iroha_test_samples::ALICE_ID.clone();
+            let instructions = || Executable::Instructions(ConstVec::new_empty());
+            let mut data = SpecializedAction::new(
+                instructions(),
+                Repeats::Indefinitely,
+                authority.clone(),
+                DataEventFilter::Any,
+            )
+            .unwrap();
+            data.metadata = crate::smartcontracts::isi::triggers::global_data_trigger_scope_metadata_for_testing(&authority);
+            assert!(
+                triggers
+                    .add_data_trigger(SpecializedTrigger::new("zdata".parse().unwrap(), data))
+                    .unwrap()
+            );
+            assert!(
+                triggers
+                    .add_pipeline_trigger(SpecializedTrigger::new(
+                        "apipeline".parse().unwrap(),
+                        SpecializedAction::new(
+                            instructions(),
+                            Repeats::Exactly(1),
+                            authority.clone(),
+                            PipelineEventFilterBox::from(BlockEventFilter::new()),
+                        )
+                        .unwrap(),
+                    ))
+                    .unwrap()
+            );
+            assert!(
+                triggers
+                    .add_time_trigger(SpecializedTrigger::new(
+                        "mtime".parse().unwrap(),
+                        SpecializedAction::new(
+                            instructions(),
+                            Repeats::Exactly(1),
+                            authority.clone(),
+                            TimeEventFilter(ExecutionTime::PreCommit),
+                        )
+                        .unwrap(),
+                    ))
+                    .unwrap()
+            );
+            assert!(
+                triggers
+                    .add_by_call_trigger(SpecializedTrigger::new(
+                        "bcall".parse().unwrap(),
+                        SpecializedAction::new(
+                            instructions(),
+                            Repeats::Exactly(0),
+                            authority,
+                            ExecuteTriggerEventFilter::new(),
+                        )
+                        .unwrap(),
+                    ))
+                    .unwrap()
+            );
+            triggers.apply();
+            block.commit();
+        }
+        crate::state::State::new(
+            world,
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        )
+    }
+    #[test]
+    fn bounded_trigger_rows_preserve_typed_order_and_frozen_cursor_prefix() {
+        use iroha_data_model::query::parameters::FetchSize;
+        use nonzero_ext::nonzero;
+        let state = trigger_test_state();
+        let view = state.view();
+        let limits = trigger_test_limits(super::super::ORDINARY_NAME_ID_SOURCE_BYTES);
+        let params = QueryParams {
+            fetch_size: FetchSize::new(Some(nonzero!(2_u64))),
+            ..QueryParams::default()
+        };
+        let expected = view.world().triggers().triggers_iter().collect::<Vec<_>>();
+        assert_eq!(
+            expected
+                .iter()
+                .map(|t| t.id().to_string())
+                .collect::<Vec<_>>(),
+            ["zdata", "apipeline", "mtime", "bcall"]
+        );
+        let (ephemeral, stats) =
+            collect_triggers(&params, OrdinaryCursorMode::Ephemeral, limits, &view).unwrap();
+        assert_eq!(
+            ephemeral
+                .map(|row| norito::encode_canonical(&row).unwrap())
+                .collect::<Vec<_>>(),
+            expected[..3]
+                .iter()
+                .map(|row| norito::encode_canonical(row).unwrap())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(stats.processed_items(), 6);
+        assert_eq!(stats.processed_bytes(), 18 * limits.max_source_item_bytes());
+        {
+            use iroha_data_model::query::{
+                ErasedIterQuery, QueryBox, QueryRequest, QueryWithParams,
+                dsl::SelectorTuple,
+                trigger::prelude::{FindActiveTriggerIds, FindTriggers},
+            };
+            let queries: [QueryBox<QueryOutputBatchBox>; 2] = [
+                Box::new(ErasedIterQuery::<Trigger>::new(
+                    CompoundPredicate::PASS,
+                    SelectorTuple::default(),
+                    norito::codec::Encode::encode(&FindTriggers),
+                )),
+                Box::new(ErasedIterQuery::<TriggerId>::new(
+                    CompoundPredicate::PASS,
+                    SelectorTuple::default(),
+                    norito::codec::Encode::encode(&FindActiveTriggerIds),
+                )),
+            ];
+            for query in queries {
+                let request = super::super::ValidQueryRequest {
+                    request: QueryRequest::Start(
+                        QueryWithParams::new(&query, params.clone()).unwrap(),
+                    ),
+                    limits: super::super::QueryLimits::new(2)
+                        .with_count_mode(super::super::QueryCountMode::Bounded)
+                        .with_ordinary_execution_limits(limits),
+                };
+                request
+                    .execute_ephemeral_with_stats(
+                        view.query_handle(),
+                        &view,
+                        &iroha_test_samples::ALICE_ID,
+                        None,
+                    )
+                    .expect("actual server-owned start shape and source adapter");
+            }
+        }
+        let (stored, stats) =
+            collect_triggers(&params, OrdinaryCursorMode::Stored, limits, &view).unwrap();
+        assert_eq!(stats.processed_items(), 8);
+        drop(view);
+        {
+            let mut block = state.world.block();
+            let mut triggers = block.triggers.transaction();
+            assert!(triggers.remove(&"zdata".parse().unwrap()));
+            triggers.apply();
+            block.commit();
+        }
+        assert_eq!(
+            stored
+                .map(|row| norito::encode_canonical(&row).unwrap())
+                .collect::<Vec<_>>(),
+            expected
+                .iter()
+                .map(|row| norito::encode_canonical(row).unwrap())
+                .collect::<Vec<_>>(),
+            "retained rows own the original immutable action bytes"
+        );
+    }
+    #[test]
+    fn bounded_active_trigger_ids_exclude_depleted_actions_and_honor_exact_limits() {
+        use iroha_data_model::query::parameters::FetchSize;
+        use nonzero_ext::nonzero;
+        let state = trigger_test_state();
+        let view = state.view();
+        let limits = trigger_test_limits(super::super::ORDINARY_NAME_ID_SOURCE_BYTES);
+        let params = QueryParams {
+            fetch_size: FetchSize::new(Some(nonzero!(2_u64))),
+            ..QueryParams::default()
+        };
+        let (ids, stats) =
+            collect_active_trigger_ids(&params, OrdinaryCursorMode::Stored, limits, &view).unwrap();
+        assert_eq!(
+            ids.map(|id| id.to_string()).collect::<Vec<_>>(),
+            ["zdata", "apipeline", "mtime"]
+        );
+        assert_eq!(stats.processed_items(), 6);
+        assert_eq!(stats.processed_bytes(), 18 * limits.max_source_item_bytes());
+        let frame = encode_bounded_frame(&"zdata".parse::<TriggerId>().unwrap(), 1024).unwrap();
+        assert!(RetainedDecodeBudget::new::<TriggerId>(1, 1).is_err());
+        assert!(
+            encode_bounded_frame(&"zdata".parse::<TriggerId>().unwrap(), frame.len() - 1).is_err()
+        );
+        let (mut graph, _) =
+            RetainedDecodeBudget::new::<TriggerId>(1, core::mem::size_of::<TriggerId>() as u64)
+                .unwrap();
+        assert!(decode_trigger_row::<TriggerId>(&frame, &mut graph).is_err());
+        let too_many = QueryParams {
+            fetch_size: FetchSize::new(Some(nonzero!(3_u64))),
+            ..QueryParams::default()
+        };
+        assert!(trigger_source_limits(&too_many, OrdinaryCursorMode::Ephemeral, limits).is_err());
+    }
+    #[test]
+    fn trigger_field_ownership_preserves_canonical_bytes_and_exact_shared_graph_limits() {
+        let state = trigger_test_state();
+        let view = state.view();
+        let expected = view.world().triggers().triggers_iter().collect::<Vec<_>>();
+        let source_bytes = super::super::ORDINARY_NAME_ID_SOURCE_BYTES;
+        let maximum = usize::try_from(source_bytes).unwrap();
+        let mut ordinal = 0;
+        view.world()
+            .triggers()
+            .visit_borrowed_trigger_sources(|source| {
+                let source = source.expect("all four original executable sources exist");
+                let canonical = norito::encode_canonical(&expected[ordinal]).unwrap();
+                let frame =
+                    encode_bounded_frame(&SingularQueryFrame::<Trigger>::new(source), maximum)?;
+                assert_eq!(frame, canonical);
+                assert!(
+                    encode_bounded_frame(
+                        &SingularQueryFrame::<Trigger>::new(source),
+                        frame.len() - 1
+                    )
+                    .is_err()
+                );
+                let (mut graph, inline) = RetainedDecodeBudget::new::<Trigger>(1, source_bytes)?;
+                let before = graph.remaining_graph_bytes;
+                let owned = own_trigger_row(source, maximum, &mut graph)?;
+                let allocated = before - graph.remaining_graph_bytes;
+                assert!(allocated > 0);
+                assert_eq!(norito::encode_canonical(&owned).unwrap(), canonical);
+                let exact = inline.checked_add(allocated).unwrap();
+                let (mut exact_graph, _) = RetainedDecodeBudget::new::<Trigger>(1, exact)?;
+                let exact_owned = own_trigger_row(source, maximum, &mut exact_graph)?;
+                assert_eq!(exact_graph.remaining_graph_bytes, 0);
+                assert_eq!(norito::encode_canonical(&exact_owned).unwrap(), canonical);
+                let (mut short_graph, _) = RetainedDecodeBudget::new::<Trigger>(1, exact - 1)?;
+                assert!(matches!(
+                    own_trigger_row(source, maximum, &mut short_graph),
+                    Err(Error::CapacityLimit)
+                ));
+                let (mut outer_graph, _) = RetainedDecodeBudget::new::<Trigger>(1, source_bytes)?;
+                let outer = norito::DecodeLimits::new(
+                    usize::MAX,
+                    usize::MAX,
+                    usize::MAX,
+                    usize::try_from(allocated - 1).unwrap(),
+                    usize::MAX,
+                );
+                assert!(
+                    norito::core::with_decode_limits_measured(outer, || own_trigger_row(
+                        source,
+                        maximum,
+                        &mut outer_graph
+                    ))
+                    .0
+                    .is_err()
+                );
+                ordinal += 1;
+                Ok(std::ops::ControlFlow::Continue(()))
+            })
+            .unwrap();
+        assert_eq!(ordinal, 4);
     }
     #[test]
     fn account_prefix_target_bounds_each_cursor_mode_and_explicit_limit() {

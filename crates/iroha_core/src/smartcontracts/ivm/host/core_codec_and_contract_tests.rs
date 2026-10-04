@@ -234,8 +234,8 @@ fn build_authenticated_test_contract_program_with_states(
         callables: vec![ivm::call::EmbeddedCallableV1 {
             entry_pc: 0,
             frame_bytes: 16,
-            argument_words: Vec::new(),
-            result_words: vec![ivm::call::CallWordV1::Unit],
+            arguments: ivm::call::CallSchemaV1::empty(),
+            results: ivm::call::CallSchemaV1::unit(),
         }],
         seiyaku_name: "CoreHostHarness".to_owned(),
         compiler_fingerprint: "iroha-core-host-tests".to_owned(),

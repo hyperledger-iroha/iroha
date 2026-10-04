@@ -3,14 +3,12 @@ use crate::{Run, RunContext};
 use eyre::{Result, WrapErr};
 use iroha::{
     blocking,
-    data_model::{account::AccountId, asset::AssetDefinitionId, nft::NftId, trigger::TriggerId},
+    data_model::{asset::AssetDefinitionId, nft::NftId, trigger::TriggerId},
     subscriptions::{SubscriptionCreate, SubscriptionUsage},
 };
 use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
-use iroha_torii_shared::subscriptions::{
-    SubscriptionCancelMode, SubscriptionListParams, SubscriptionPlanListParams,
-};
+use iroha_torii_shared::subscriptions::SubscriptionCancelMode;
 use std::{fs, path::PathBuf};
 
 #[derive(clap::Subcommand, Debug)]
@@ -36,13 +34,17 @@ pub enum PlanCommand {
     /// Prepare an unsigned plan registration under the configured account.
     Prepare(PlanPrepareArgs),
     /// List subscription plans.
-    List(PlanListArgs),
+    List(crate::collection_list::ListArgs),
 }
 impl Run for PlanCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Self::Prepare(args) => args.run(context),
-            Self::List(args) => args.run(context),
+            Self::List(args) => crate::collection_list::run_list(
+                context,
+                iroha::collections::Collection::SubscriptionPlans,
+                &args,
+            ),
         }
     }
 }
@@ -55,35 +57,6 @@ fn account_client<C: RunContext>(context: &C) -> Result<blocking::AccountClient>
 fn public_client<C: RunContext>(context: &C) -> Result<blocking::Client> {
     blocking::Client::from_client(context.client_from_config()?)
 }
-fn resolve_optional_account_id<C: RunContext>(
-    context: &C,
-    literal: Option<&str>,
-    flag: &str,
-) -> Result<Option<AccountId>> {
-    literal
-        .map(|literal| {
-            crate::resolve_account_id(context, literal)
-                .wrap_err_with(|| format!("failed to resolve {flag}"))
-        })
-        .transpose()
-}
-
-#[derive(Clone, Copy, Debug, clap::ValueEnum)]
-pub enum CountMode {
-    /// Return page availability without an exact total.
-    Bounded,
-    /// Return exact matching totals.
-    Exact,
-}
-impl CountMode {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Bounded => "bounded",
-            Self::Exact => "exact",
-        }
-    }
-}
-
 #[derive(clap::Args, Debug)]
 pub struct PlanPrepareArgs {
     /// Plan asset definition to register.
@@ -103,46 +76,12 @@ impl Run for PlanPrepareArgs {
     }
 }
 
-#[derive(clap::Args, Debug)]
-pub struct PlanListArgs {
-    /// Filter by provider account identifier or alias.
-    #[arg(long, value_name = "ACCOUNT_ID")]
-    pub provider: Option<String>,
-    /// Maximum page size.
-    #[arg(long)]
-    pub limit: Option<u64>,
-    /// Page offset.
-    #[arg(long, default_value_t = 0)]
-    pub offset: u64,
-    /// Select bounded or exact counting.
-    #[arg(long, value_enum)]
-    pub count_mode: Option<CountMode>,
-}
-impl Run for PlanListArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let provider =
-            resolve_optional_account_id(context, self.provider.as_deref(), "--provider")?
-                .map(|id| id.to_string());
-        let params = SubscriptionPlanListParams {
-            provider,
-            limit: self.limit,
-            offset: self.offset,
-            count_mode: self.count_mode.map(|mode| mode.as_str().to_owned()),
-        };
-        context.print_data(
-            &public_client(context)?
-                .subscriptions()
-                .list_plans(&params)?,
-        )
-    }
-}
-
 #[derive(clap::Subcommand, Debug)]
 pub enum SubscriptionCommand {
     /// Prepare subscription creation under the configured account.
     Prepare(SubscriptionPrepareArgs),
     /// List matching subscriptions.
-    List(SubscriptionListArgs),
+    List(crate::collection_list::ListArgs),
     /// Read one subscription.
     Get(SubscriptionIdArgs),
     /// Prepare pausing billing.
@@ -162,7 +101,13 @@ impl Run for SubscriptionCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let draft = match self {
             Self::Prepare(args) => return args.run(context),
-            Self::List(args) => return args.run(context),
+            Self::List(args) => {
+                return crate::collection_list::run_list(
+                    context,
+                    iroha::collections::Collection::Subscriptions,
+                    &args,
+                );
+            }
             Self::Get(args) => {
                 return context.print_data(
                     &public_client(context)?
@@ -230,47 +175,6 @@ impl Run for SubscriptionPrepareArgs {
             .subscriptions()
             .prepare(&self.into_intent())?;
         context.print_data(&draft)
-    }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct SubscriptionListArgs {
-    /// Filter by subscriber account identifier or alias.
-    #[arg(long)]
-    pub owned_by: Option<String>,
-    /// Filter by provider account identifier or alias.
-    #[arg(long)]
-    pub provider: Option<String>,
-    /// Filter by subscription status.
-    #[arg(long, value_parser = ["active", "paused", "past_due", "canceled", "suspended"])]
-    pub status: Option<String>,
-    /// Maximum page size.
-    #[arg(long)]
-    pub limit: Option<u64>,
-    /// Page offset.
-    #[arg(long, default_value_t = 0)]
-    pub offset: u64,
-    /// Select bounded or exact counting.
-    #[arg(long, value_enum)]
-    pub count_mode: Option<CountMode>,
-}
-impl Run for SubscriptionListArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let owned_by =
-            resolve_optional_account_id(context, self.owned_by.as_deref(), "--owned-by")?
-                .map(|id| id.to_string());
-        let provider =
-            resolve_optional_account_id(context, self.provider.as_deref(), "--provider")?
-                .map(|id| id.to_string());
-        let params = SubscriptionListParams {
-            owned_by,
-            provider,
-            status: self.status,
-            limit: self.limit,
-            offset: self.offset,
-            count_mode: self.count_mode.map(|mode| mode.as_str().to_owned()),
-        };
-        context.print_data(&public_client(context)?.subscriptions().list(&params)?)
     }
 }
 
@@ -430,33 +334,38 @@ mod tests {
     }
 
     #[test]
-    fn pagination_count_modes_and_status_are_closed() {
+    fn lists_use_shared_query_flags_and_reject_retired_controls() {
         for group in ["plan", "subscription"] {
-            for mode in ["exact", "bounded"] {
-                assert!(
-                    Cli::try_parse_from([
-                        "iroha",
-                        group,
-                        "list",
-                        "--count-mode",
-                        mode,
-                        "--limit",
-                        "10",
-                        "--offset",
-                        "2"
-                    ])
-                    .is_ok()
-                );
+            let cli = Cli::try_parse_from([
+                "iroha",
+                group,
+                "list",
+                "--filter",
+                "status = \"active\"",
+                "--limit",
+                "10",
+                "--cursor",
+                "cursor",
+                "--include-total",
+                "--all",
+            ])
+            .unwrap();
+            let args = match cli.command {
+                Command::Plan(PlanCommand::List(args))
+                | Command::Subscription(SubscriptionCommand::List(args)) => args,
+                _ => panic!("list command"),
+            };
+            assert!(args.to_query().unwrap().include_total);
+            for flag in [
+                "--count-mode",
+                "--offset",
+                "--status",
+                "--provider",
+                "--owned-by",
+            ] {
+                assert!(Cli::try_parse_from(["iroha", group, "list", flag, "1"]).is_err());
             }
-            assert!(
-                Cli::try_parse_from(["iroha", group, "list", "--count-mode", "unknown"]).is_err()
-            );
         }
-        assert!(
-            Cli::try_parse_from(["iroha", "subscription", "list", "--status", "unknown"]).is_err()
-        );
-        assert_eq!(CountMode::Bounded.as_str(), "bounded");
-        assert_eq!(CountMode::Exact.as_str(), "exact");
     }
 
     #[test]

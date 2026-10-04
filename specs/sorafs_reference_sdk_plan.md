@@ -131,15 +131,14 @@ native host. This closes the C# packaging implementation gap only; it does not
 claim that a clean five-host run, publication canary, SBOM, or provenance record
 has been collected.
 
-CocoaPods source wiring is implemented as an exact same-version split pod:
-`IrohaSwift` depends on a generated `NoritoBridge` podspec whose immutable
-`v<SemVer>` release URL, SHA-256, and vendored-XCFramework path bind the final
-authenticated ZIP. The package-first lint lane uses the package-local archive,
-validates the closed artifact
-inventory and builds the binary and source pods. Distribution remains open only
-for external publication and evidence: publish the immutable asset and both specs
-in dependency order, then capture a clean registry install, Release build, and
-signed provenance before claiming public native Swift readiness.
+SwiftPM is the sole supported Swift packaging path. `IrohaSwift/VERSION` owns
+the Swift package, tag and XCFramework archive version. The package owner
+authenticates the immutable ZIP, embedded ABI-25 manifest, closed inventory,
+source, locks and tools. Qualify both the archive consumer and an ordinary
+public `IrohaSwift` dependency in Release with real native execution and no
+unsafe linker flags. Public native Swift readiness still requires an immutable
+release asset, installed package consumer and signed provenance; host/simulator
+checks do not establish physical-device qualification.
 
 The existing `sorafs_manifest` crate exposes `ValidationOutcomeV1`,
 `validate_provider_advert_bytes`, `validate_provider_admission_envelope_bytes`,

@@ -54,7 +54,7 @@ mod tests {
         smartcontracts::isi::sccp::{store, test_support::blank_state},
     };
     use iroha_data_model::{
-        block::{BlockHeader, builder::BlockBuilder, consensus::ExecWitness},
+        block::{BlockHeader, consensus::ExecWitness},
         sccp::params::SccpParametersV1,
     };
     use std::num::NonZeroU64;
@@ -110,39 +110,28 @@ mod tests {
 
     /// Execute one fixture height with `parameters` written to SCCP state (or no SCCP write)
     /// and capture its ordinary execution witness.
-    fn captured_witness(parameters: Option<SccpParametersV1>) -> ExecWitness {
-        let state = blank_state();
-        let header = BlockHeader::new(NonZeroU64::MIN, None, None, 0, 0);
-        let source = BlockBuilder::new(header).build_with_signature(
-            0,
-            iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
-        );
-        // Own the recorder before any block effects. This component capture does
-        // not authenticate consensus controls or publish a certified carrier.
-        let (mut state_block, _recording) =
-            crate::block::ValidBlock::start_component_execution(&source, &state)
-                .expect("the original component execution recorder");
-        if let Some(parameters) = parameters {
-            let mut transaction = state_block.transaction();
-            store::parameters::set(&mut transaction, Some(parameters));
-            transaction.apply();
-        }
-        let tx_set_hash: [u8; 32] =
-            iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(std::iter::empty::<
-                &iroha_data_model::transaction::TransactionEntrypoint,
-            >())
-            .expect("empty transaction set digest")
-            .into();
-        state_block.set_fastpq_tx_set_hash(tx_set_hash);
-        state_block
-            .finalize_fastpq_source_inventory(&[], &[], &[])
-            .expect("empty source inventory");
-        state_block
-            .capture_exec_witness()
-            .expect("capture the ordinary witness");
-        state_block
-            .take_exec_witness()
-            .expect("the captured witness")
+    fn captured_witness(parameters: Option<SccpParametersV1>) -> crate::state::CapturedExecWitness {
+        crate::state::native_capture_fixture::with_native_capture_source(
+            false,
+            |_, mut state_block, _recording, mut source, _| {
+                if let Some(parameters) = parameters {
+                    let mut transaction = state_block.transaction();
+                    store::parameters::set(&mut transaction, Some(parameters));
+                    transaction.apply();
+                }
+                crate::state::native_capture_fixture::seal_native_source(
+                    &mut state_block,
+                    &mut source,
+                )
+                .unwrap();
+                state_block
+                    .capture_exec_witness()
+                    .expect("capture the original completed source");
+                state_block
+                    .take_exec_witness()
+                    .expect("the captured witness")
+            },
+        )
     }
 
     #[test]

@@ -260,6 +260,7 @@ fn invalid_chain_requests_do_not_create_partial_output_directories() {
         &mut BufWriter::new(Vec::new()),
         Some(" padded"),
         None,
+        TairaParentCatalog::WithIs,
     )
     .expect_err("malformed chain must fail");
     assert!(
@@ -274,6 +275,7 @@ fn invalid_chain_requests_do_not_create_partial_output_directories() {
         &mut BufWriter::new(Vec::new()),
         Some(PUBLIC_TAIRA_CHAIN_ID),
         None,
+        TairaParentCatalog::WithIs,
     )
     .expect_err("Taira profile mismatch must fail");
     assert!(
@@ -478,7 +480,8 @@ fn private_dataspace_profiles_match_their_exact_routing_contract() {
     ];
     for case in cases {
         let profile = Some(case.profile);
-        let dataspace_catalog = localnet_dataspace_catalog(profile, 1, false);
+        let dataspace_catalog =
+            localnet_dataspace_catalog(profile, 1, false, TairaParentCatalog::WithIs);
         assert_eq!(
             dataspace_catalog,
             vec![
@@ -493,7 +496,8 @@ fn private_dataspace_profiles_match_their_exact_routing_contract() {
             "private dataspace catalog must exactly match the selected physical identity"
         );
         let (lane_count, lane_catalog) =
-            localnet_lane_catalog(profile, false).expect("private lane catalog");
+            localnet_lane_catalog(profile, false, TairaParentCatalog::WithIs)
+                .expect("private lane catalog");
         assert_eq!(lane_count, case.lane_count);
         assert_eq!(
             lane_catalog,
@@ -526,7 +530,8 @@ fn private_dataspace_profiles_match_their_exact_routing_contract() {
             ],
             "private lane catalog must preserve the selected identity and leave unrelated lanes absent"
         );
-        let routing = localnet_routing_policy(profile, false).expect("private routing policy");
+        let routing = localnet_routing_policy(profile, false, TairaParentCatalog::WithIs)
+            .expect("private routing policy");
         let observed = routing
             .get("rules")
             .and_then(toml::Value::as_array)
@@ -598,10 +603,16 @@ fn private_dataspace_manifests_use_the_selected_lane_alias() {
         (SoraProfile::PrivateBpng, "bpng"),
     ] {
         let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
-        let manifest_directory =
-            write_localnet_lane_manifests(temp.path(), Some(profile), &peers, None, false)
-                .expect("write private lane manifest")
-                .expect("private lane manifest directory");
+        let manifest_directory = write_localnet_lane_manifests(
+            temp.path(),
+            Some(profile),
+            &peers,
+            None,
+            false,
+            TairaParentCatalog::WithIs,
+        )
+        .expect("write private lane manifest")
+        .expect("private lane manifest directory");
         assert_eq!(manifest_directory, temp.path().join("lane-manifests"));
         let manifest_files = fs::read_dir(&manifest_directory)
             .expect("read private lane manifest directory")
@@ -1107,6 +1118,7 @@ fn client_config_selects_the_generated_identity_file_only() {
         DEFAULT_CHAIN_ID,
         None,
         &localnet_client_identity(None, false).expect("default client"),
+        None,
     )
     .expect("write client config");
     let contents = fs::read_to_string(root.join("client.toml")).expect("read client config");
@@ -1131,13 +1143,22 @@ fn client_config_selects_the_generated_identity_file_only() {
         .get("account")
         .and_then(toml::Value::as_table)
         .expect("account table");
+    assert!(
+        !account.contains_key("domain"),
+        "client configurations carry no account domain"
+    );
     assert_eq!(
-        account.get("domain").and_then(toml::Value::as_str),
-        Some(CLIENT_ACCOUNT_DOMAIN)
+        account
+            .get("chain_discriminant")
+            .and_then(toml::Value::as_integer),
+        Some(i64::from(
+            iroha_config::parameters::defaults::common::chain_discriminant()
+        )),
+        "peers without an explicit prefix run with the node default, which the client states"
     );
     assert!(
-        !account.contains_key("chain_discriminant"),
-        "default localnet client config should not force an I105 prefix"
+        !account.contains_key("profile"),
+        "a local network must not claim a public network profile"
     );
 }
 #[test]
@@ -1154,6 +1175,7 @@ fn client_config_records_chain_discriminant_when_known() {
         DEFAULT_CHAIN_ID,
         Some(369),
         &localnet_client_identity(None, false).expect("default client"),
+        None,
     )
     .expect("write client config");
     let contents = fs::read_to_string(root.join("client.toml")).expect("read client config");
@@ -1168,6 +1190,36 @@ fn client_config_records_chain_discriminant_when_known() {
             .and_then(toml::Value::as_integer),
         Some(369)
     );
+}
+#[test]
+fn client_config_preserves_publication_with_explicit_network_context() {
+    let host =
+        CanonicalHost::parse(DEFAULT_PUBLIC_HOST, "--public-host").expect("canonicalize host");
+    let client = localnet_client_identity(None, false).expect("default client");
+    let publication =
+        toml::Table::from_iter([("request_timeout_ms".into(), toml::Value::Integer(30_000))]);
+    for configured in [None, Some(369)] {
+        let rendered = render_client_config(
+            8080,
+            &host,
+            DEFAULT_CHAIN_ID,
+            configured,
+            &client,
+            Some(&publication),
+        )
+        .expect("render client config");
+        let value: toml::Value = toml::from_str(&rendered).expect("parse client config");
+        let expected = configured
+            .unwrap_or_else(iroha_config::parameters::defaults::common::chain_discriminant);
+        assert_eq!(
+            value["account"]["chain_discriminant"].as_integer(),
+            Some(i64::from(expected))
+        );
+        assert_eq!(
+            value["musubi"]["publication"].as_table(),
+            Some(&publication)
+        );
+    }
 }
 #[test]
 fn generated_taira_genesis_grants_deployment_only_to_generated_client() {
@@ -1195,6 +1247,7 @@ fn generated_taira_genesis_grants_deployment_only_to_generated_client() {
         &mut BufWriter::new(Vec::new()),
         Some(PUBLIC_TAIRA_CHAIN_ID),
         None,
+        TairaParentCatalog::WithIs,
     )
     .expect("generate Taira with its runtime operator");
     let client_config: toml::Value = toml::from_str(
@@ -1796,6 +1849,7 @@ fn client_config_renders_ipv6_torii_url() {
         DEFAULT_CHAIN_ID,
         None,
         &localnet_client_identity(None, false).expect("default client"),
+        None,
     )
     .expect("write client config");
     let contents = fs::read_to_string(root.join("client.toml")).expect("read client config");
@@ -1832,6 +1886,7 @@ fn localnet_readme_records_only_base_seed_fingerprint_when_present() {
         &runtime_bundle,
         &tmp.path().join(LOCALNET_ALIAS_SETUP_INTENT_FILE),
         &shell_out_dir,
+        TairaParentCatalog::WithIs,
     )
     .expect("write readme");
     let contents = fs::read_to_string(tmp.path().join("README.md")).expect("read readme");
@@ -1887,6 +1942,7 @@ fn private_custody_readme_invokes_lifecycle_scripts_through_bash() {
         &runtime_bundle,
         &tmp.path().join(LOCALNET_ALIAS_SETUP_INTENT_FILE),
         &shell_out_dir,
+        TairaParentCatalog::WithIs,
     )
     .expect("write private-custody readme");
     let contents = fs::read_to_string(tmp.path().join("README.md")).expect("read readme");

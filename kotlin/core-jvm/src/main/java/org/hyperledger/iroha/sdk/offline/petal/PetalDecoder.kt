@@ -104,6 +104,13 @@ class PetalDecodedFrame internal constructor(
     val k: PetalLaneResult?,
     /** Lane `D` result. */
     val d: PetalLaneResult?,
+    /**
+     * The corner finder that was hidden (by a finger, a glare or the edge of the
+     * frame) and inferred from the other three, as its canonical index: 0 top-left,
+     * 1 top-right, 2 bottom-right, 3 bottom-left of the upright code; `null` when
+     * all four were seen.
+     */
+    val inferredCorner: Int?,
 ) {
     /** Number of lanes that decoded. */
     val lanesOk: Int get() = (if (p != null) 1 else 0) + (if (k != null) 1 else 0) + (if (d != null) 1 else 0)
@@ -160,13 +167,18 @@ class PetalDecodeResult internal constructor(
 /**
  * From a camera luma plane to lane data.
  *
- * The decoder locates the four finders, derives a homography for each
- * orientation hypothesis (four rotations, optionally mirrored), picks the
- * orientation whose ring gates line up (and whose lane `D` codeword checks
- * out), then reads the tiles and dots. Every tile is classified *jointly*: the
- * 8×8 sample patch is compared against the 32 hypotheses (polarity × glyph)
- * and the best match wins, so the katakana and the light/dark bit help each
- * other. Cells the decoder is unsure about become Reed–Solomon erasures.
+ * The decoder tries the finder candidates of [PetalLocator.candidates] in turn
+ * (four seen corners, or three with the fourth inferred and moved to where the
+ * dotted rings line up), derives a homography for each orientation hypothesis
+ * (four rotations, optionally mirrored), ranks the hypotheses by their ring
+ * gates plus the `天` silhouette, then reads the dots and tiles. Every tile is
+ * classified *jointly*: the 8×8 sample patch is compared against the 32
+ * hypotheses (polarity × glyph) and the best match wins, so the katakana and
+ * the light/dark bit help each other. Cells the decoder is unsure about become
+ * Reed–Solomon erasures.
+ *
+ * After a frame decodes, [track] reads the next ones from its pose without the
+ * finder search (what [PetalScanSession] does within 500 ms).
  *
  * The tile *level read* judges every patch against the light and dark levels
  * measured at the finders. When it leaves lane `P` or `K` unreadable, the
@@ -224,6 +236,13 @@ object PetalDecoder {
     /** Canonical finder centres `x0, y0, …` (clockwise from the top-left). */
     private val CANONICAL = DoubleArray(8)
 
+    /** Lattice cells outside the `天` mask (no tile is ever drawn there). */
+    private const val EMPTY_CELLS = PetalLayout.TILE_GRID * PetalLayout.TILE_GRID - PetalLayout.TILE_COUNT
+
+    /** Centres of the [EMPTY_CELLS] lattice cells outside the mask, row-major. */
+    private val EMPTY_X = DoubleArray(EMPTY_CELLS)
+    private val EMPTY_Y = DoubleArray(EMPTY_CELLS)
+
     init {
         for (k in 0 until 8) {
             val angle = PetalLayout.TAU * k.toDouble() / 8.0
@@ -234,10 +253,25 @@ object PetalDecoder {
             CANONICAL[2 * finder] = PetalLayout.finderCenterX(finder)
             CANONICAL[2 * finder + 1] = PetalLayout.finderCenterY(finder)
         }
+        var empty = 0
+        for (row in 0 until PetalLayout.TILE_GRID) {
+            val line = PetalLayout.MASK[row]
+            for (column in 0 until PetalLayout.TILE_GRID) {
+                if (line[column] == '#') continue
+                EMPTY_X[empty] = PetalLayout.TILE_ORIGIN + PetalLayout.TILE_PITCH * (column + 0.5)
+                EMPTY_Y[empty] = PetalLayout.TILE_ORIGIN + PetalLayout.TILE_PITCH * (row + 0.5)
+                empty += 1
+            }
+        }
     }
 
     /**
      * Decodes one camera frame.
+     *
+     * Tries the finder candidates of [PetalLocator.candidates] in order and returns the first
+     * that reads. For each, the orientation hypotheses (four quarter turns, optionally mirrored)
+     * are ranked by the ring gates plus the `天`; lane `D` is tried under the best three whose
+     * gate score is at least 0.2, then the tile lanes under the best four.
      *
      * Returns [PetalDecodeError.UNSUPPORTED_IMAGE] for unusable sizes,
      * [PetalDecodeError.NO_FINDERS] when no code is visible and
@@ -247,6 +281,27 @@ object PetalDecoder {
     @JvmOverloads
     fun decode(image: PetalLuma, options: PetalDecodeOptions = PetalDecodeOptions.DEFAULT): PetalDecodeResult =
         decode(image, options, PetalWorkspace())
+
+    /**
+     * Follows a code from the [previous] frame that decoded, without searching the whole image
+     * for finders (the most expensive part of [decode]).
+     *
+     * Each corner finder seen in the previous frame is re-found near where the previous pose puts
+     * it (see [PetalLocator.follow]); the mean movement of those predicts the rest. A corner
+     * inferred in the previous frame counts as seen again only when its blossom is re-found within
+     * a quarter diameter of that prediction (so a thumb beside it does not count). When exactly one
+     * corner is missing it is placed at the prediction and refined against the rings like an
+     * inferred corner. The orientation is kept from the previous frame. Returns `null` when the
+     * image is unusable, the previous pose is broken (non-finite, or finders larger than the
+     * image), two corners are lost or no lane decodes; the caller then runs [decode].
+     */
+    @JvmStatic
+    @JvmOverloads
+    fun track(
+        image: PetalLuma,
+        previous: PetalDecodedFrame,
+        options: PetalDecodeOptions = PetalDecodeOptions.DEFAULT,
+    ): PetalDecodedFrame? = track(image, previous, options, PetalWorkspace())
 
     /**
      * Reads all lanes with a known canvas-to-pixel [homography] (no finder
@@ -262,7 +317,7 @@ object PetalDecoder {
         options: PetalDecodeOptions = PetalDecodeOptions.DEFAULT,
     ): PetalDecodedFrame? {
         if (!supported(image, options)) return null
-        val reference = referenceLevels(image, homography.m) ?: return null
+        val reference = referenceLevels(image, homography.m, NO_CORNER) ?: return null
         return finish(image, options, 0, false, homography, reference, null, PetalWorkspace())
     }
 
@@ -280,7 +335,7 @@ object PetalDecoder {
     ): PetalFrameCells? {
         if (!supported(image, options)) return null
         val h = frame.homography.m
-        val reference = referenceLevels(image, h) ?: return null
+        val reference = referenceLevels(image, h, frame.inferredCorner ?: NO_CORNER) ?: return null
         val workspace = PetalWorkspace()
         samplePatches(image, h, workspace)
         val words = tileWords(readTiles(reference, options, workspace))
@@ -301,7 +356,7 @@ object PetalDecoder {
     ): Double? {
         if (!supported(image, options)) return null
         val h = frame.homography.m
-        val reference = referenceLevels(image, h) ?: return null
+        val reference = referenceLevels(image, h, frame.inferredCorner ?: NO_CORNER) ?: return null
         val workspace = PetalWorkspace()
         samplePatches(image, h, workspace)
         val reads = readTiles(reference, options, workspace)
@@ -312,29 +367,57 @@ object PetalDecoder {
 
     internal fun decode(image: PetalLuma, options: PetalDecodeOptions, workspace: PetalWorkspace): PetalDecodeResult {
         if (!supported(image, options)) return PetalDecodeResult(null, PetalDecodeError.UNSUPPORTED_IMAGE)
-        val finders = PetalLocator.locate(image, workspace)
-            ?: return PetalDecodeResult(null, PetalDecodeError.NO_FINDERS)
+        var located = false
+        val candidates = PetalLocator.Candidates(image, workspace)
+        while (candidates.hasNext()) {
+            val set = candidates.next()
+            located = true
+            decodeCandidate(image, options, set, workspace)?.let { return PetalDecodeResult(it, null) }
+        }
+        return PetalDecodeResult(null, if (located) PetalDecodeError.NO_ORIENTATION else PetalDecodeError.NO_FINDERS)
+    }
+
+    /** Marks "no inferred corner" where a corner index is expected. */
+    internal const val NO_CORNER = -1
+
+    /**
+     * Reads one finder candidate: refines an inferred corner against the rings, ranks the
+     * orientation hypotheses by gate score + `天` score, tries lane `D` under the best three whose
+     * gate score is at least 0.2, then the tile lanes under the best four. `null` when none reads.
+     */
+    internal fun decodeCandidate(
+        image: PetalLuma,
+        options: PetalDecodeOptions,
+        set: PetalFinderSet,
+        workspace: PetalWorkspace,
+    ): PetalDecodedFrame? {
+        val missing = set.inferred ?: NO_CORNER
+        val corners = if (missing == NO_CORNER) set.quad else refineInferredCorner(image, set.quad, missing)
         val scored = ArrayList<Hypothesis>(8)
-        for (hypothesis in hypotheses(finders, options.tryMirrored)) {
-            val reference = referenceLevels(image, hypothesis.homography.m) ?: continue
+        for (hypothesis in hypotheses(corners, options.tryMirrored)) {
+            val h = hypothesis.homography.m
+            val inferred = if (missing == NO_CORNER) NO_CORNER else canonicalCorner(missing, hypothesis.rotation, hypothesis.mirrored)
+            val reference = referenceLevels(image, h, inferred) ?: continue
+            hypothesis.inferred = inferred
             hypothesis.reference = reference
-            hypothesis.score = gateScore(image, hypothesis.homography.m, reference)
-            // Stable descending insertion by score (`sort_by` with `b.total_cmp(a)`).
+            hypothesis.gate = gateScore(image, h, reference)
+            hypothesis.mask = maskScore(image, h, reference)
+            hypothesis.rank = hypothesis.gate + hypothesis.mask
+            // Stable descending insertion by rank (`sort_by` with `(b.0 + b.1).total_cmp(&(a.0 + a.1))`).
             var at = scored.size
-            while (at > 0 && PetalNumerics.totalCompare(hypothesis.score, scored[at - 1].score) > 0) at -= 1
+            while (at > 0 && PetalNumerics.totalCompare(hypothesis.rank, scored[at - 1].rank) > 0) at -= 1
             scored.add(at, hypothesis)
         }
-        // 1. the ring beacon is the cheapest and strongest orientation check
+        // 1. the ring beacon is the cheapest and strongest orientation check; the ranking is not by
+        //    gate score alone, so a weak gate skips that hypothesis but not the ones after it
         for (index in 0 until minOf(3, scored.size)) {
             val candidate = scored[index]
-            if (candidate.score < 0.2) break
+            if (candidate.gate < 0.2) continue
             val reference = candidate.reference!!
             val d = readLaneD(image, candidate.homography.m, reference) ?: continue
-            return PetalDecodeResult(
-                finish(
-                    image, options, candidate.rotation, candidate.mirrored, candidate.homography, reference, d, workspace,
-                ),
-                null,
+            return finish(
+                image, options, candidate.rotation, candidate.mirrored, candidate.homography, reference, d, workspace,
+                candidate.inferredCorner(),
             )
         }
         // 2. fall back to the tile lanes under the most promising orientations
@@ -345,25 +428,130 @@ object PetalDecoder {
             samplePatches(image, h, workspace)
             val lanes = readTileLanes(reference, options, workspace)
             if (lanes.p != null || lanes.k != null) {
-                val frame = PetalDecodedFrame(
+                return PetalDecodedFrame(
                     candidate.homography,
                     candidate.rotation,
                     candidate.mirrored,
                     lanes.p,
                     lanes.k,
                     readLaneD(image, h, reference),
+                    candidate.inferredCorner(),
                 )
-                return PetalDecodeResult(frame, null)
             }
         }
-        return PetalDecodeResult(null, PetalDecodeError.NO_ORIENTATION)
+        return null
+    }
+
+    internal fun track(
+        image: PetalLuma,
+        previous: PetalDecodedFrame,
+        options: PetalDecodeOptions,
+        workspace: PetalWorkspace,
+    ): PetalDecodedFrame? {
+        if (!supported(image, options)) return null
+        val h0 = previous.homography.m
+        val expected = Array(4) { corner ->
+            val cx = CANONICAL[2 * corner]
+            val cy = CANONICAL[2 * corner + 1]
+            // the finder's diameter is 120 units: its widest projection along either axis
+            val across = span(h0, cx - 60.0, cy, cx + 60.0, cy)
+            val down = span(h0, cx, cy - 60.0, cx, cy + 60.0)
+            PetalFinder(applyX(h0, cx, cy), applyY(h0, cx, cy), PetalNumerics.max(across, down))
+        }
+        // a broken pose, or one whose finders are larger than the picture, cannot be followed
+        val short = minOf(image.width, image.height).toDouble()
+        for (finder in expected) {
+            val finite = !finder.x.isNaN() && !finder.x.isInfinite() && !finder.y.isNaN() && !finder.y.isInfinite() &&
+                !finder.size.isNaN() && !finder.size.isInfinite()
+            if (!finite || finder.size > short) return null
+        }
+        val previouslyInferred = previous.inferredCorner ?: NO_CORNER
+        val found = arrayOfNulls<PetalFinder>(4)
+        for (corner in 0 until 4) {
+            if (corner != previouslyInferred) found[corner] = PetalLocator.follow(image, expected[corner])
+        }
+        // the mean movement of the corners that were followed predicts the others
+        var followed = 0
+        var sumX = -0.0
+        var sumY = -0.0
+        for (corner in 0 until 4) {
+            val seen = found[corner] ?: continue
+            sumX += seen.x - expected[corner].x
+            sumY += seen.y - expected[corner].y
+            followed += 1
+        }
+        if (followed < 3) return null
+        val shiftX = sumX / followed.toDouble()
+        val shiftY = sumY / followed.toDouble()
+        fun predicted(corner: Int): PetalFinder =
+            PetalFinder(expected[corner].x + shiftX, expected[corner].y + shiftY, expected[corner].size)
+        // a corner that was hidden is seen again only when its blossom is found right where the
+        // others say it is (a bright thumb beside it must not count)
+        if (previouslyInferred != NO_CORNER) {
+            val at = predicted(previouslyInferred)
+            val again = PetalLocator.follow(image, at)
+            found[previouslyInferred] = again?.takeIf {
+                val dx = it.x - at.x
+                val dy = it.y - at.y
+                Math.sqrt(dx * dx + dy * dy) <= 0.25 * at.size
+            }
+        }
+        var lost = 0
+        var missing = NO_CORNER
+        for (corner in 0 until 4) {
+            if (found[corner] == null) {
+                lost += 1
+                missing = corner
+            }
+        }
+        if (lost > 1) return null
+        if (missing != NO_CORNER) found[missing] = predicted(missing)
+        var corners = Array(4) { found[it]!! }
+        if (missing != NO_CORNER) corners = refineInferredCorner(image, corners, missing)
+        val points = DoubleArray(8)
+        for (corner in 0 until 4) {
+            points[2 * corner] = corners[corner].x
+            points[2 * corner + 1] = corners[corner].y
+        }
+        val homography = PetalHomography.fromPoints(CANONICAL, points) ?: return null
+        val h = homography.m
+        val reference = referenceLevels(image, h, missing) ?: return null
+        val d = readLaneD(image, h, reference)
+        samplePatches(image, h, workspace)
+        val lanes = readTileLanes(reference, options, workspace)
+        if (lanes.p == null && lanes.k == null && d == null) return null
+        return PetalDecodedFrame(
+            homography,
+            previous.rotation,
+            previous.mirrored,
+            lanes.p,
+            lanes.k,
+            d,
+            if (missing == NO_CORNER) null else missing,
+        )
+    }
+
+    private fun applyX(h: DoubleArray, x: Double, y: Double): Double =
+        (h[0] * x + h[1] * y + h[2]) / (h[6] * x + h[7] * y + h[8])
+
+    private fun applyY(h: DoubleArray, x: Double, y: Double): Double =
+        (h[3] * x + h[4] * y + h[5]) / (h[6] * x + h[7] * y + h[8])
+
+    /** Pixel distance between the images of canvas points `(ax, ay)` and `(bx, by)` under [h]. */
+    private fun span(h: DoubleArray, ax: Double, ay: Double, bx: Double, by: Double): Double {
+        val dx = applyX(h, ax, ay) - applyX(h, bx, by)
+        val dy = applyY(h, ax, ay) - applyY(h, bx, by)
+        return Math.sqrt(dx * dx + dy * dy)
     }
 
     private fun supported(image: PetalLuma, options: PetalDecodeOptions): Boolean =
         image.width >= MIN_SIDE && image.height >= MIN_SIDE &&
             image.width.toLong() * image.height.toLong() <= options.maxPixels.toLong()
 
-    /** Reads every lane under one orientation; [d] may carry the lane `D` result already computed. */
+    /**
+     * Reads every lane under one orientation; [d] may carry the lane `D` result already computed.
+     * The frame reports [inferredCorner] (canonical index, or `null`).
+     */
     private fun finish(
         image: PetalLuma,
         options: PetalDecodeOptions,
@@ -373,21 +561,97 @@ object PetalDecoder {
         reference: Reference,
         d: PetalLaneResult?,
         workspace: PetalWorkspace,
+        inferredCorner: Int? = null,
     ): PetalDecodedFrame {
         val h = homography.m
         val dLane = d ?: readLaneD(image, h, reference)
         samplePatches(image, h, workspace)
         val lanes = readTileLanes(reference, options, workspace)
-        return PetalDecodedFrame(homography, rotation, mirrored, lanes.p, lanes.k, dLane)
+        return PetalDecodedFrame(homography, rotation, mirrored, lanes.p, lanes.k, dLane, inferredCorner)
     }
 
-    /** One orientation hypothesis and, once measured, its reference levels and gate score. */
-    private class Hypothesis(val rotation: Int, val mirrored: Boolean, val homography: PetalHomography) {
+    /** One orientation hypothesis and, once measured, its reference levels and scores. */
+    internal class Hypothesis(val rotation: Int, val mirrored: Boolean, val homography: PetalHomography) {
+        /** Canonical index of the inferred corner under this hypothesis, or [NO_CORNER]. */
+        var inferred = NO_CORNER
         var reference: Reference? = null
-        var score = 0.0
+        var gate = 0.0
+        var mask = 0.0
+
+        /** Gate score + `天` score, the ranking key. */
+        var rank = 0.0
+
+        fun inferredCorner(): Int? = if (inferred == NO_CORNER) null else inferred
     }
 
-    private fun hypotheses(finders: Array<PetalFinder>, tryMirrored: Boolean): List<Hypothesis> {
+    /**
+     * Canonical index of the corner at [index] of a finder quad under the orientation hypothesis
+     * ([rotation], [mirrored]).
+     */
+    internal fun canonicalCorner(index: Int, rotation: Int, mirrored: Boolean): Int =
+        if (mirrored) (rotation + 4 - index) % 4 else (index + 4 - rotation) % 4
+
+    /**
+     * The brightness summed over all ring slots under the pose that maps the canonical corners
+     * onto [corners] (`x0, y0, …` in quad order), or NaN when they admit no homography. The slots
+     * form the same set of points under every quarter turn and mirror of the canvas (80, 92 and
+     * 104 are multiples of four), so the value does not depend on the orientation.
+     */
+    private fun ringBrightness(image: PetalLuma, corners: DoubleArray): Double {
+        val h = PetalHomography.fromPoints(CANONICAL, corners)?.m ?: return Double.NaN
+        var sum = -0.0
+        for (flat in 0 until PetalLayout.TOTAL_SLOTS) {
+            sum += dotSamples(image, h, PetalLayout.SLOT_CENTER_X[flat], PetalLayout.SLOT_CENTER_Y[flat], 3.5)
+        }
+        return sum
+    }
+
+    /**
+     * Moves the [inferred] corner of [corners] to where the three dotted rings line up best: a
+     * 13 × 13 search in steps of 2 % of the mean leg around the parallelogram estimate, then a
+     * 9 × 9 search in steps of 0.5 % around the best point. The rings fix the geometry only; the
+     * orientation is decided afterwards by the gates and the `天`.
+     */
+    internal fun refineInferredCorner(image: PetalLuma, corners: Array<PetalFinder>, inferred: Int): Array<PetalFinder> {
+        val points = DoubleArray(8)
+        for (corner in 0 until 4) {
+            points[2 * corner] = corners[corner].x
+            points[2 * corner + 1] = corners[corner].y
+        }
+        val startX = points[2 * inferred]
+        val startY = points[2 * inferred + 1]
+        fun distance(other: Int): Double {
+            val dx = points[2 * other] - startX
+            val dy = points[2 * other + 1] - startY
+            return Math.sqrt(dx * dx + dy * dy)
+        }
+        val leg = 0.5 * (distance((inferred + 1) % 4) + distance((inferred + 3) % 4))
+        // best[0] brightness, best[1..2] the point (the search runs twice, so it lives in an array)
+        val best = doubleArrayOf(-Double.MAX_VALUE, startX, startY)
+        fun search(centreX: Double, centreY: Double, step: Double, reach: Int) {
+            for (dy in -reach..reach) {
+                for (dx in -reach..reach) {
+                    val x = centreX + dx.toDouble() * step
+                    val y = centreY + dy.toDouble() * step
+                    points[2 * inferred] = x
+                    points[2 * inferred + 1] = y
+                    val brightness = ringBrightness(image, points)
+                    if (brightness > best[0]) {
+                        best[0] = brightness
+                        best[1] = x
+                        best[2] = y
+                    }
+                }
+            }
+        }
+        search(startX, startY, 0.02 * leg, 6)
+        search(best[1], best[2], 0.005 * leg, 4)
+        val refined = corners.copyOf()
+        refined[inferred] = PetalFinder(best[1], best[2], corners[inferred].size)
+        return refined
+    }
+
+    internal fun hypotheses(finders: Array<PetalFinder>, tryMirrored: Boolean): List<Hypothesis> {
         val out = ArrayList<Hypothesis>(8)
         val dst = DoubleArray(8)
         for (mirrored in booleanArrayOf(false, true)) {
@@ -436,10 +700,18 @@ object PetalDecoder {
         return sum / 5.0
     }
 
-    internal fun referenceLevels(image: PetalLuma, h: DoubleArray): Reference? {
+    /**
+     * Light and dark levels at the four corners: the solid blossom core, and the black canvas 100
+     * units inward of it; `null` when a seen corner has less than 12 levels of contrast (or a
+     * non-finite one, under a broken pose). An
+     * [inferred] corner (canonical index, or [NO_CORNER]) was not seen, so its levels are
+     * extrapolated from the other three by the parallelogram rule and kept within their range.
+     */
+    internal fun referenceLevels(image: PetalLuma, h: DoubleArray, inferred: Int): Reference? {
         val lit = DoubleArray(4)
         val dark = DoubleArray(4)
         for (i in 0 until 4) {
+            if (i == inferred) continue
             val cx = CANONICAL[2 * i]
             val cy = CANONICAL[2 * i + 1]
             // the blossom is solid out to radius 24 around its centre
@@ -451,9 +723,51 @@ object PetalDecoder {
             val a = dotSamples(image, h, cx + sx * 100.0, cy, 5.0)
             val b = dotSamples(image, h, cx, cy + sy * 100.0, 5.0)
             dark[i] = 0.5 * (a + b)
-            if (lit[i] - dark[i] < 12.0) return null
+            // a NaN contrast (from a broken pose) refuses as well
+            val contrast = lit[i] - dark[i]
+            if (contrast.isNaN() || contrast.isInfinite() || contrast < 12.0) return null
+        }
+        if (inferred != NO_CORNER) {
+            lit[inferred] = extrapolate(lit, inferred)
+            dark[inferred] = extrapolate(dark, inferred)
+            // uneven light can push the estimates past each other; an inferred corner
+            // needs the same contrast as a seen one
+            if (lit[inferred] - dark[inferred] < 12.0) return null
         }
         return Reference(lit, dark)
+    }
+
+    /** The parallelogram estimate `v[n1] + v[n2] − v[opposite]` for corner [m], clamped to the range of the other three. */
+    private fun extrapolate(v: DoubleArray, m: Int): Double {
+        val n1 = (m + 1) % 4
+        val opposite = (m + 2) % 4
+        val n2 = (m + 3) % 4
+        val low = PetalNumerics.min(PetalNumerics.min(v[n1], v[opposite]), v[n2])
+        val high = PetalNumerics.max(PetalNumerics.max(v[n1], v[opposite]), v[n2])
+        val estimate = v[n1] + v[n2] - v[opposite]
+        return if (estimate < low) low else if (estimate > high) high else estimate
+    }
+
+    /**
+     * How well the `天` lines up: the mean normalised level over the tiles (each sampled at five
+     * points across the tile, so a glyph stroke at the centre does not decide it) minus the mean
+     * over the empty lattice cells. The mask is symmetric left to right but not top to bottom, so
+     * this tells the four quarter turns apart even when the ring gates are damaged.
+     */
+    internal fun maskScore(image: PetalLuma, h: DoubleArray, reference: Reference): Double {
+        var tiles = -0.0
+        for (tile in 0 until PetalLayout.TILE_COUNT) {
+            tiles += maskLevel(image, h, reference, PetalLayout.TILE_CENTER_X[tile], PetalLayout.TILE_CENTER_Y[tile])
+        }
+        var empty = -0.0
+        for (cell in 0 until EMPTY_CELLS) empty += maskLevel(image, h, reference, EMPTY_X[cell], EMPTY_Y[cell])
+        return tiles / PetalLayout.TILE_COUNT.toDouble() - empty / EMPTY_CELLS.toDouble()
+    }
+
+    private fun maskLevel(image: PetalLuma, h: DoubleArray, reference: Reference, x: Double, y: Double): Double {
+        val lit = reference.litAt(x, y)
+        val dark = reference.darkAt(x, y)
+        return (dotSamples(image, h, x, y, 8.0) - dark) / (lit - dark)
     }
 
     private fun normalisedDot(image: PetalLuma, h: DoubleArray, reference: Reference, flat: Int): Double {
@@ -464,7 +778,7 @@ object PetalDecoder {
         return (dotSamples(image, h, x, y, 3.5) - dark) / (lit - dark)
     }
 
-    private fun gateScore(image: PetalLuma, h: DoubleArray, reference: Reference): Double {
+    internal fun gateScore(image: PetalLuma, h: DoubleArray, reference: Reference): Double {
         var gates = -0.0
         for (slot in PetalLayout.GATE_SLOTS) gates += normalisedDot(image, h, reference, slot)
         var guards = -0.0

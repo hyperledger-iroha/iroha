@@ -397,6 +397,11 @@ public sealed class TransactionBuilder
         return new ReadOnlyDictionary<string, JsonNode?>(snapshot);
     }
 
+    /// <summary>Signs the transaction.</summary>
+    /// <remarks>
+    /// Building never changes the builder: without an explicit creation time each call stamps the
+    /// current time, so reusing a builder yields fresh transactions rather than replays.
+    /// </remarks>
     public SignedTransactionEnvelope BuildSigned(ReadOnlySpan<byte> privateKeySeed)
     {
         if (executableEntries.Count == 0)
@@ -408,8 +413,7 @@ public sealed class TransactionBuilder
         var context = new TransactionEncodingContext(AuthorityAccountId);
         context.EnsureAuthorityMatchesPrivateKey(privateKeySeed);
 
-        EnsureCreationTimeMilliseconds();
-        var transactionPayload = BuildPayloadBytes(context);
+        var transactionPayload = BuildPayloadBytes(context, EffectiveCreationTimeMilliseconds());
         var payloadHash = IrohaHash.Hash(transactionPayload);
         var signature = Ed25519Signer.Sign(payloadHash, privateKeySeed);
 
@@ -437,12 +441,12 @@ public sealed class TransactionBuilder
             transactionHash);
     }
 
-    internal byte[] BuildPayloadBytes(TransactionEncodingContext context)
+    internal byte[] BuildPayloadBytes(TransactionEncodingContext context, ulong creationTimeMilliseconds)
     {
         var payload = new CanonicalNoritoWriter();
         payload.WriteField(context.EncodeNetworkDomain(NetworkId));
         payload.WriteField(context.EncodeAccountId(AuthorityAccountId));
-        payload.WriteField(context.EncodeUInt64(CreationTimeMilliseconds ?? (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+        payload.WriteField(context.EncodeUInt64(creationTimeMilliseconds));
         var contractCallPresent = executableEntries.Any(static entry => entry is TransactionBatchEntry.ContractCallEntry);
         payload.WriteField(forceExecutableBatch || contractCallPresent
             ? context.EncodeExecutableBatch(executableEntries)
@@ -456,8 +460,14 @@ public sealed class TransactionBuilder
     }
 
     /// <summary>
-    /// Builds the exact unsigned JSON payload used for fee quoting and freezes its creation time.
+    /// Builds the exact unsigned JSON payload used for fee quoting.
     /// </summary>
+    /// <remarks>
+    /// Building never changes the builder: without <see cref="SetCreationTime(DateTimeOffset)"/>
+    /// each payload is stamped with the current time. Pin the creation time when a payload and a
+    /// later <see cref="BuildSigned(ReadOnlySpan{byte})"/> must describe the same transaction;
+    /// <see cref="LedgerClient.QuoteAndSignAsync"/> does this for you.
+    /// </remarks>
     public UnsignedTransactionPayload BuildUnsignedPayload()
     {
         if (executableEntries.Count == 0)
@@ -466,7 +476,7 @@ public sealed class TransactionBuilder
         }
         ValidateExecutableFeeIntent();
 
-        EnsureCreationTimeMilliseconds();
+        var creationTimeMilliseconds = EffectiveCreationTimeMilliseconds();
         var contractCallPresent = executableEntries.Any(static entry => entry is TransactionBatchEntry.ContractCallEntry);
         JsonObject executable;
         if (forceExecutableBatch || contractCallPresent)
@@ -491,7 +501,7 @@ public sealed class TransactionBuilder
         return new UnsignedTransactionPayload(
             NetworkId,
             AuthorityAccountId,
-            CreationTimeMilliseconds!.Value,
+            creationTimeMilliseconds,
             executable,
             TimeToLiveMilliseconds,
             Nonce,
@@ -540,10 +550,9 @@ public sealed class TransactionBuilder
         return this;
     }
 
-    private void EnsureCreationTimeMilliseconds()
-    {
-        CreationTimeMilliseconds ??= checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-    }
+    /// <summary>The pinned creation time, or the current time; never stored on the builder.</summary>
+    private ulong EffectiveCreationTimeMilliseconds() =>
+        CreationTimeMilliseconds ?? checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 
     private JsonNode? EncodeBatchEntryJson(TransactionBatchEntry entry)
     {

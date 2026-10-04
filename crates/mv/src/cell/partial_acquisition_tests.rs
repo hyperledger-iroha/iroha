@@ -10,7 +10,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst},
     },
-    task::{Context, Wake, Waker},
+    task::{Context, Poll, Wake, Waker},
 };
 
 #[derive(Default)]
@@ -98,11 +98,13 @@ impl<C: Send + Sync + 'static> Wake for Probe<C> {
     }
 }
 
-fn arm<C: Send + Sync + 'static>(
+fn arm<'a, C: Send + Sync + 'static>(
     cell: &Arc<Cell<Payload, C>>,
+    registration_1: &'a mut iroha_allocation::release::ReleaseRegistration,
+    registration_2: &'a mut iroha_allocation::release::ReleaseRegistration,
 ) -> (
     Arc<Observed>,
-    [iroha_allocation::release::ReleaseFuture; 2],
+    [iroha_allocation::release::ReleaseFuture<'a>; 2],
     [Waker; 2],
 ) {
     let observed = Arc::new(Observed::default());
@@ -114,8 +116,12 @@ fn arm<C: Send + Sync + 'static>(
         }))
     });
     let mut waits = [
-        cell.revert_released.observe().wait_for_release(),
-        cell.blocks_released.observe().wait_for_release(),
+        cell.revert_released
+            .observe()
+            .wait_for_release(registration_1),
+        cell.blocks_released
+            .observe()
+            .wait_for_release(registration_2),
     ];
     for (wait, waker) in waits.iter_mut().zip(&wakers) {
         assert!(
@@ -130,7 +136,7 @@ fn arm<C: Send + Sync + 'static>(
 fn assert_signals<C: Send + Sync + 'static>(
     cell: &Cell<Payload, C>,
     observed: &Observed,
-    mut waits: [iroha_allocation::release::ReleaseFuture; 2],
+    mut waits: [iroha_allocation::release::ReleaseFuture<'_>; 2],
     wakers: &[Waker; 2],
     counts: [usize; 2],
     poison_pair: usize,
@@ -186,11 +192,23 @@ fn abandon<C: Send + Sync + 'static>(
 
 #[test]
 fn second_clone_unwind_releases_both_original_writers_before_either_wake() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+    let mut helper_release_registration_2 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     for mode in 0..3 {
         let (cell, control) = seeded(CellAllocationCharges::untracked());
         let original = pointers(&cell);
         let predecessor = cell.publication.capture();
-        let (observed, waits, wakers) = arm(&cell);
+        let (observed, waits, wakers) = arm(
+            &cell,
+            &mut helper_release_registration_1,
+            &mut helper_release_registration_2,
+        );
         control.fail_on.store(1, SeqCst);
         let error = catch_unwind(AssertUnwindSafe(|| match mode {
             0 => drop(cell.block()),
@@ -221,18 +239,201 @@ fn charges(budget: &AllocationBudget) -> CellAllocationCharges<AllocationCharge>
     )
 }
 
+fn original_slot<'a>(
+    cell: &'a Cell<Payload, AllocationCharge>,
+    budget: &AllocationBudget,
+) -> BlockAcquisitionSlot<'a, Payload, AllocationCharge> {
+    let backing = CellGenerationBacking::try_from_charges(budget, charges(budget))
+        .unwrap_or_else(|_| panic!("original funded generation backing"));
+    let successor = CellPublicationSuccessor::try_from_charge(
+        budget,
+        budget
+            .try_reserve_bytes(CellPublicationSuccessor::allocation_layout().size())
+            .unwrap()
+            .try_split(CellPublicationSuccessor::allocation_layout())
+            .unwrap(),
+    )
+    .unwrap_or_else(|_| panic!("original funded successor"));
+    cell.try_block_acquisition_with_backing(backing, successor, budget)
+        .unwrap_or_else(|_| panic!("original pool owns both admissions"))
+}
+
+#[test]
+fn physical_writer_contention_retains_prepaid_pair_and_exact_release_without_blocking() {
+    use crate::{
+        BlockAcquisition as _,
+        storage::{AdmittedStorageError, StorageRole},
+    };
+
+    for role in [StorageRole::Undo, StorageRole::Current] {
+        let budget = AllocationBudget::new(16 * 1024);
+        let mut registration = crate::release_test_support::registration(&budget);
+        let (cell, control) = seeded(charges(&budget));
+        let baseline = budget.reserved_bytes();
+        let original = pointers(&cell);
+        let predecessor = cell.publication.capture();
+        let attempt = || {
+            let mut slot = original_slot(&cell, &budget);
+            let retained = budget.reserved_bytes();
+            let error = slot.try_initialize(BlockMode::Ordinary).unwrap_err();
+            let AdmittedStorageError::Busy {
+                role: actual,
+                release,
+            } = error
+            else {
+                panic!("actual foreign writer produces its exact Busy source")
+            };
+            assert_eq!(actual, role);
+            assert!(!slot.is_initialized());
+            assert_eq!(
+                control.calls.each_ref().map(|calls| calls.load(SeqCst)),
+                [0, 0]
+            );
+            assert_eq!(budget.reserved_bytes(), retained);
+            if role == StorageRole::Current {
+                assert!(
+                    cell.revert.try_acquire_writer().is_none(),
+                    "earlier undo custody stays in the original slot"
+                );
+            }
+            let mut wait = release.clone().wait_for_release(&mut registration);
+            let mut context = Context::from_waker(Waker::noop());
+            assert_eq!(Pin::new(&mut wait).poll(&mut context), Poll::Pending);
+            slot.release();
+            assert_eq!(
+                budget.reserved_bytes(),
+                retained,
+                "release precedes original backing destruction"
+            );
+            drop(slot);
+            assert_eq!(budget.reserved_bytes(), baseline);
+            assert_eq!(
+                Pin::new(&mut wait).poll(&mut context),
+                Poll::Pending,
+                "sibling cleanup cannot wake the refusing physical source"
+            );
+            assert_original(&cell, original);
+            assert!(predecessor.matches(&cell.publication));
+            release
+        };
+        let release = std::thread::scope(|scope| {
+            let (acquired_tx, acquired_rx) = std::sync::mpsc::sync_channel(1);
+            let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+            let blocker_cell = &cell;
+            let blocker = scope.spawn(move || {
+                let hold = || {
+                    acquired_tx.send(()).unwrap();
+                    // A regression to blocking acquisition must fail finitely rather
+                    // than deadlock this test process. The healthy path releases by
+                    // explicit signal only after asserting the actual refusal.
+                    let _ = release_rx.recv_timeout(std::time::Duration::from_secs(5));
+                };
+                match role {
+                    StorageRole::Undo => {
+                        let _guard = blocker_cell
+                            .revert_released
+                            .poisoning_guard(blocker_cell.revert.try_acquire_writer().unwrap());
+                        hold();
+                    }
+                    StorageRole::Current => {
+                        let _guard = blocker_cell
+                            .blocks_released
+                            .poisoning_guard(blocker_cell.blocks.try_acquire_writer().unwrap());
+                        hold();
+                    }
+                }
+            });
+            acquired_rx.recv().unwrap();
+            let attempted = catch_unwind(AssertUnwindSafe(attempt));
+            let released = release_tx.send(());
+            let joined = blocker.join();
+            // Always retire the real blocker and join it before propagating a
+            // failed observation or asserting the bounded acquisition result.
+            joined.unwrap();
+            assert!(
+                released.is_ok(),
+                "acquisition returned before the blocker deadline"
+            );
+            attempted.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+        });
+        assert_eq!(
+            Pin::new(&mut release.wait_for_release(&mut registration))
+                .poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(())
+        );
+        let mut retry = original_slot(&cell, &budget);
+        retry.try_initialize(BlockMode::Ordinary).unwrap();
+        assert!(retry.is_initialized());
+        drop(retry.into_block());
+        assert_original(&cell, original);
+        assert!(predecessor.matches(&cell.publication));
+        assert_eq!(budget.reserved_bytes(), baseline);
+    }
+}
+
+#[test]
+fn fallible_poison_retains_original_guards_without_poisoning_healthy_sibling() {
+    use crate::{
+        BlockAcquisition as _,
+        storage::{AdmittedStorageError, StorageRole},
+    };
+
+    let budget = AllocationBudget::new(16 * 1024);
+    let (cell, control) = seeded(charges(&budget));
+    let baseline = budget.reserved_bytes();
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            let _guard = cell.blocks.try_acquire_writer().unwrap();
+            panic!("poison actual current writer")
+        }))
+        .is_err()
+    );
+    let original = pointers(&cell);
+    let mut slot = original_slot(&cell, &budget);
+    let retained = budget.reserved_bytes();
+    assert!(matches!(
+        slot.try_initialize(BlockMode::Ordinary),
+        Err(AdmittedStorageError::Poisoned {
+            role: StorageRole::Current
+        })
+    ));
+    assert_eq!(
+        control.calls.each_ref().map(|calls| calls.load(SeqCst)),
+        [0, 0]
+    );
+    assert_eq!(budget.reserved_bytes(), retained);
+    assert!(cell.revert.try_acquire_writer().is_none());
+    assert!(cell.blocks.try_acquire_writer().is_none());
+    slot.release();
+    assert_eq!(budget.reserved_bytes(), retained);
+    drop(slot);
+    assert_eq!(budget.reserved_bytes(), baseline);
+    assert!(!cell.revert.is_poisoned());
+    assert!(cell.blocks.is_poisoned());
+    assert!(cell.blocks_released.observe().is_poisoned());
+    assert_original(&cell, original);
+}
+
 #[test]
 fn failed_second_clone_refunds_finished_undo_but_retains_its_own_charge() {
     for mode in 0..3 {
         let [current, undo] = Cell::<Payload, AllocationCharge>::allocation_layouts();
         let pair = current.size() + undo.size();
-        let budget = AllocationBudget::new(2 * pair);
+        let registration_bytes =
+            2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size();
+        let budget = AllocationBudget::new(2 * pair + registration_bytes);
+        let mut helper_release_registration_1 = crate::release_test_support::registration(&budget);
+        let mut helper_release_registration_2 = crate::release_test_support::registration(&budget);
         let (cell, control) = seeded(charges(&budget));
         let original = pointers(&cell);
         let predecessor = cell.publication.capture();
-        let (observed, waits, wakers) = arm(&cell);
+        let (observed, waits, wakers) = arm(
+            &cell,
+            &mut helper_release_registration_1,
+            &mut helper_release_registration_2,
+        );
         let prepaid = charges(&budget);
-        assert_eq!(budget.reserved_bytes(), 2 * pair);
+        assert_eq!(budget.reserved_bytes(), 2 * pair + registration_bytes);
         control.fail_on.store(1, SeqCst);
         let error = catch_unwind(AssertUnwindSafe(|| abandon(&cell, prepaid, mode))).unwrap_err();
         assert_eq!(
@@ -244,7 +445,10 @@ fn failed_second_clone_refunds_finished_undo_but_retains_its_own_charge() {
             [1, 1]
         );
         assert_signals(&cell, &observed, waits, &wakers, [1, 1], 3);
-        assert_eq!(budget.reserved_bytes(), pair + current.size());
+        assert_eq!(
+            budget.reserved_bytes(),
+            pair + current.size() + registration_bytes
+        );
         // Concread conservatively retains a failed Clone's already admitted
         // charge. Only the fully constructed undo clone is reclaimed/refunded;
         // these exact outer layouts do not fund this fixture's nested Vec.
@@ -258,7 +462,11 @@ fn already_poisoned_second_writer_refunds_unused_and_abandoned_charges() {
     for mode in 0..3 {
         let [current, undo] = Cell::<Payload, AllocationCharge>::allocation_layouts();
         let pair = current.size() + undo.size();
-        let budget = AllocationBudget::new(2 * pair);
+        let registration_bytes =
+            2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size();
+        let budget = AllocationBudget::new(2 * pair + registration_bytes);
+        let mut helper_release_registration_1 = crate::release_test_support::registration(&budget);
+        let mut helper_release_registration_2 = crate::release_test_support::registration(&budget);
         let (cell, control) = seeded(charges(&budget));
         // Poison the actual current mutex without constructing a generation.
         let poison = catch_unwind(AssertUnwindSafe(|| {
@@ -276,14 +484,18 @@ fn already_poisoned_second_writer_refunds_unused_and_abandoned_charges() {
         assert!(cell.blocks.is_poisoned());
         let original = pointers(&cell);
         let predecessor = cell.publication.capture();
-        let (observed, waits, wakers) = arm(&cell);
+        let (observed, waits, wakers) = arm(
+            &cell,
+            &mut helper_release_registration_1,
+            &mut helper_release_registration_2,
+        );
         assert!(catch_unwind(AssertUnwindSafe(|| abandon(&cell, charges(&budget), mode))).is_err());
         assert_eq!(
             control.calls.each_ref().map(|count| count.load(SeqCst)),
             [0, 0]
         );
         assert_signals(&cell, &observed, waits, &wakers, [1, 1], 3);
-        assert_eq!(budget.reserved_bytes(), pair);
+        assert_eq!(budget.reserved_bytes(), pair + registration_bytes);
         assert_original(&cell, original);
         assert!(predecessor.matches(&cell.publication));
     }
@@ -291,10 +503,22 @@ fn already_poisoned_second_writer_refunds_unused_and_abandoned_charges() {
 
 #[test]
 fn first_clone_unwind_releases_both_preacquired_writers() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+    let mut helper_release_registration_2 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     let (cell, control) = seeded(CellAllocationCharges::untracked());
     let original = pointers(&cell);
     let predecessor = cell.publication.capture();
-    let (observed, waits, wakers) = arm(&cell);
+    let (observed, waits, wakers) = arm(
+        &cell,
+        &mut helper_release_registration_1,
+        &mut helper_release_registration_2,
+    );
     control.fail_on.store(2, SeqCst);
     let error = catch_unwind(AssertUnwindSafe(|| drop(cell.block()))).unwrap_err();
     assert_eq!(
@@ -313,10 +537,22 @@ fn first_clone_unwind_releases_both_preacquired_writers() {
 
 #[test]
 fn completed_pair_keeps_notifications_until_consumption() {
+    let helper_release_budget = iroha_allocation::AllocationBudget::new(
+        2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut helper_release_registration_1 =
+        crate::release_test_support::registration(&helper_release_budget);
+    let mut helper_release_registration_2 =
+        crate::release_test_support::registration(&helper_release_budget);
+
     let (cell, _) = seeded(CellAllocationCharges::untracked());
     let original = pointers(&cell);
     let predecessor = cell.publication.capture();
-    let (observed, waits, wakers) = arm(&cell);
+    let (observed, waits, wakers) = arm(
+        &cell,
+        &mut helper_release_registration_1,
+        &mut helper_release_registration_2,
+    );
     let pair = cell.acquire_charged_writers(CellAllocationCharges::untracked());
     assert_eq!(
         observed.calls.each_ref().map(|count| count.load(SeqCst)),

@@ -29,14 +29,24 @@ built daemon.
 | `--profile <name>`  | Build with a specific Cargo profile (e.g., `debug` for previews); `local-release` cannot be packaged. |
 | `--no-archive`      | Skip the `.tar.gz` archive, leaving only the prepared folder.               |
 | `--matrix <path>`   | Append bundle metadata to a JSON matrix for CI provenance tracking.         |
-| `--smoke`           | Check packaged help, config-free source/bytecode/package deployment, live execution, repeated deployment, and four-validator restart with retained identity/state. |
-| `--network-profiles <path>` | Validate and package a canonical artifact of independently installed network authorities. |
+| `--smoke`           | Check packaged help, config-free deployment/restart, three-provider package publication, and cold dependency execution on four validators. |
+| `--network-profiles <path>` | Development profiles only: validate an explicit installation artifact. Release uses the committed preset described below. |
 | `--stage <dir>`     | Copy the finished bundle (and archive, when present) into a staging folder. |
+
+Release packaging requires `defaults/developer/network-profiles.nrt` from the authenticated
+release source, containing the independently approved Taira release key, rollback floor and
+checkpoint URL. The packager requires its exact committed image and refuses an override,
+missing file or absent Taira entry before building or replacing a bundle. The approved public
+artifact and its production checkpoint publisher remain release-owner prerequisites; the
+packager generates no authority. Developers using an installed official bundle supply no file.
+Debug/development bundles may omit profiles or use explicit fixture installation input.
 
 `--stage` is intended for CI pipelines where each build agent uploads its
 artefacts to a shared location. The helper recreates the bundle directory and
 copies the generated archive into the staging directory so publish jobs can
-collect platform-specific outputs without shell scripting.
+collect platform-specific outputs without shell scripting. It revalidates the retained profile
+image and generated archive digest before replacing staged output and checks the exact copies
+afterward. Archive hashing streams through a 32 GiB packaging bound.
 
 The canonical macOS package has one native application:
 
@@ -45,7 +55,7 @@ Mochi.app/Contents/Info.plist
 Mochi.app/Contents/MacOS/mochi
 Mochi.app/Contents/MacOS/kagami
 Mochi.app/Contents/MacOS/iroha3d
-Mochi.app/Contents/Resources/network-profiles.nrt # optional installed authorities
+Mochi.app/Contents/Resources/network-profiles.nrt # required release-owned Taira preset
 docs/README.md
 LICENSE
 manifest.json
@@ -68,20 +78,36 @@ relocation does not silently rebind them. Direct loose developer executables
 their programs. This development mode is not an alternate macOS package layout.
 
 The manifest inventories all packaged files except itself, including the plist
-and optional profiles. Inventory and staging propagate traversal failures and
+and installed profiles. Inventory and staging propagate traversal failures and
 reject symlinks or other nonregular entries instead of silently omitting them.
 The inventory is sorted by relative path; its hashes need authenticated release
 provenance before they establish download trust.
 
-`--smoke` runs the packaged Kagami from an empty workspace with an empty `PATH`.
+`--smoke` first checks the exact retained profile image and packaged Kagami network-name
+projection. It then runs the packaged Kagami from an empty workspace with an empty `PATH`.
 It supplies no TOML, starts the localnet through `contract deploy hello.ko`,
 also deploys `.to` and a local Musubi package, and verifies artifact readback and
 a live contract result on each of the four peers. It checks repeated starts and
 deployments, then stops and restarts all four validators. The exact deployment
-receipts and journals must survive. Cleanup uses authenticated
-localnet control; failures retain the private runtime directory and diagnostics.
-This single-run smoke does not establish the twenty-run latency target or the
-remote private-dataspace acceptance gates.
+receipts and journals must survive. On the same generation, it publishes a library
+through `kagami package publish`, resumes only that original operation within a
+bounded deadline, and requires complete publication plus the exact three original
+healthy providers and signed attestation set in every validator's native registry
+view. It removes the fixture's source, then deploys a separate contract with an
+exact registry dependency and checks the result on all four peers. The managed
+build cache must be absent before this dependent build; publication uses its own
+cache. Native resource limits remain unchanged. The same smoke then creates a second genuine named
+context, with only one network running at a time. It checks context list/show/use, explicit
+`contract deploy --context` without changing workspace selection, and original-journal recovery
+after restarting the intended network. Both deployments are read and executed on all four
+validators; cleanup covers both named environments.
+
+Cleanup uses authenticated localnet control; failures retain the private runtime
+directory and diagnostics. The combined installed publication regression has not
+yet been executed for the current candidate. The matrix retains the exact profile SHA-256, source path/commit for release input, and
+profile names, plus the archive SHA-256 when present. It records `local_native_diagnostic` and keeps official Taira attachment
+qualification false. This single-run smoke does not
+establish the twenty-run latency target or remote private-dataspace acceptance.
 
 The smoke's source, bytecode and local-package contracts have distinct behavior
 and must produce pairwise distinct artifact hashes. The test controller prepares
@@ -149,7 +175,8 @@ qualification is dispatched through `.github/workflows/devex_native.yml` using
 five explicitly supplied existing runner labels. Its resource and host checks,
 native custody tests and installed-runtime smoke are execution gates; defining
 the workflow does not establish that those platform jobs passed. An installation
-without `--network-profiles` supports localnets and claims no remote authority.
+built with a development profile may omit remote authority. Release packaging requires
+the committed Taira preset; a successful local smoke still does not qualify remote attachment.
 The workflow also runs the eight-validator attachment regression with its
 disposable TLS controller. Python 3.10+ with SSL and OpenSSL are test prerequisites;
 the controller supplies a private temporary CA only to its own child processes.

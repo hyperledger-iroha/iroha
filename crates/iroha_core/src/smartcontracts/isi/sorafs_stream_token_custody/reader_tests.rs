@@ -1,6 +1,7 @@
 //! Exact historical selection, bounded canonical decoding and no-write read regressions.
 use super::*;
 use iroha_crypto::Hash;
+use std::sync::Arc;
 
 /// The custody fixture's accounts and policy on a certified test chain (height 1 is genesis).
 fn certified_fixture() -> (
@@ -504,4 +505,126 @@ fn provider_removal_preserves_historical_reads_but_rejects_mutation_and_exact_re
         .expect("retained head");
     assert_eq!(later.state, approval.state);
     assert_eq!(later.anchor.state_digest, approval.anchor.state_digest);
+}
+
+#[test]
+fn independent_custody_projection_proves_absence_then_exact_native_configuration() {
+    use crate::query::signer_check::fixture::{commit, sign};
+    use iroha_allocation::AllocationBudget;
+    use iroha_data_model::{
+        sorafs::stream_token_custody::proof::{
+            StreamTokenCustodyProofRefV1, StreamTokenCustodyProofV1,
+        },
+        sumeragi_finality::{FinalityValidator, SumeragiFinalityVerifier},
+    };
+    let (mut chain, policy, provider) = certified_fixture();
+    let state = Arc::clone(chain.state());
+    let owner = AccountId::new(key(1).public_key().clone());
+    let validators = chain
+        .validators()
+        .iter()
+        .map(|(peer, pop)| FinalityValidator {
+            public_key: peer.public_key().clone(),
+            proof_of_possession: pop.clone(),
+        })
+        .collect();
+    let mut verifier =
+        SumeragiFinalityVerifier::new(chain.genesis(), &policy.binding.chain_id, validators)
+            .unwrap();
+    verifier
+        .verify(&crate::sumeragi::finality::build_proof(&state.view(), 1).unwrap())
+        .unwrap();
+    assert!(commit(&mut chain, 500, Vec::new()).is_empty());
+    let absent_tip = chain.committed(2);
+    let budget = AllocationBudget::new(32 * 1024 * 1024);
+    let publish = |tip: &crate::sumeragi::certified_chain::CommittedBlock,
+                   provider,
+                   budget: &AllocationBudget| {
+        state.with_native_stream_token_custody_snapshot_v1(
+            tip,
+            provider,
+            budget,
+            |world, owner, current| {
+                norito::encode_canonical(&StreamTokenCustodyProofRefV1::new(world, owner, current))
+                    .map_err(|e| e.to_string())
+            },
+        )
+    };
+    let absent =
+        StreamTokenCustodyProofV1::decode_frame(&publish(&absent_tip, provider, &budget).unwrap())
+            .unwrap();
+    let verified = verifier
+        .verify(&crate::sumeragi::finality::build_proof(&state.view(), 2).unwrap())
+        .unwrap();
+    assert!(
+        absent
+            .verify(
+                *state.network_id_ref(),
+                provider,
+                &owner,
+                &policy.binding,
+                State::native_world_schema_hash_v1().unwrap(),
+                &verified
+            )
+            .unwrap()
+            .current()
+            .is_none()
+    );
+    assert_eq!(budget.reserved_bytes(), 0);
+    assert!(publish(&absent_tip, provider, &AllocationBudget::new(0)).is_err());
+    assert!(publish(&absent_tip, ProviderId::new([0xfe; 32]), &budget).is_err());
+    let configure = MutateSorafsStreamTokenCustody {
+        provider_id: provider,
+        expected_revision: 0,
+        expected_digest: [0; 32],
+        action: Action::Configure(encode(&policy).unwrap()),
+    };
+    assert_eq!(
+        commit(
+            &mut chain,
+            1_000,
+            vec![sign(&state, configure.into(), 1, 1_000)]
+        ),
+        [true]
+    );
+    assert!(publish(&absent_tip, provider, &budget).is_err());
+    let current_tip = chain.committed(3);
+    let current =
+        StreamTokenCustodyProofV1::decode_frame(&publish(&current_tip, provider, &budget).unwrap())
+            .unwrap();
+    let verified = verifier
+        .verify(&crate::sumeragi::finality::build_proof(&state.view(), 3).unwrap())
+        .unwrap();
+    let current = current
+        .verify(
+            *state.network_id_ref(),
+            provider,
+            &owner,
+            &policy.binding,
+            State::native_world_schema_hash_v1().unwrap(),
+            &verified,
+        )
+        .unwrap();
+    let current = current.current().unwrap();
+    assert_eq!(current.record().revision, 1);
+    assert_eq!(current.record().execution_height, 3);
+    assert_eq!(current.record().authority, owner);
+    assert_eq!(current.control().policy, policy);
+    assert!(current.control().active_head.is_none());
+    assert_eq!(
+        current.anchor().state_digest,
+        current.record().canonical_digest().unwrap()
+    );
+    assert_eq!(budget.reserved_bytes(), 0);
+    // No provider council, admission, advertisement or token operation was installed.
+    assert!(
+        crate::query::provider_admission::read_head(state.view().world(), None)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        crate::query::provider_admission::read_head(state.view().world(), Some(provider))
+            .unwrap()
+            .is_none()
+    );
 }

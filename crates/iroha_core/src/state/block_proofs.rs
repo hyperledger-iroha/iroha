@@ -1,11 +1,11 @@
 //! Bounded proof serving from one WSV-selected, exact finalized block body.
 
-use std::{num::NonZeroU64, num::NonZeroUsize, sync::Arc};
+use std::{num::NonZeroU64, num::NonZeroUsize};
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     block::{
-        BlockHeader, SignedBlock,
+        BlockHeader,
         proofs::{
             AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1, BlockProofs, BlockReceiptProof,
             ExecutionReceiptProof,
@@ -106,6 +106,7 @@ pub(super) struct NativeProofSource<'a> {
     pub(super) chain_id: &'a iroha_model_base::chain::ChainId,
     pub(super) network: iroha_data_model::NetworkId,
     pub(super) hashes: &'a dyn super::BlockHashRead,
+    pub(super) budget: &'a iroha_allocation::AllocationBudget,
 }
 
 fn read_finalized_body(
@@ -114,7 +115,14 @@ fn read_finalized_body(
     expected_hash: HashOf<BlockHeader>,
     limits: BlockProofLimits,
     wire_response: bool,
-) -> Result<(Arc<SignedBlock>, Vec<u8>, Hash), BlockProofError> {
+) -> Result<
+    (
+        iroha_data_model::block::SharedSignedBlock,
+        crate::kura::NativeFrameBytes,
+        Hash,
+    ),
+    BlockProofError,
+> {
     let kura = source.kura;
     let height = usize::try_from(block_height.get())
         .ok()
@@ -169,6 +177,7 @@ fn read_finalized_body(
             max_source_wire_bytes: limits.max_source_wire_bytes,
             max_frame_wire_bytes: crate::kura::STRICT_INIT_MAX_BLOCK_BYTES,
         },
+        source.budget,
     )
     .map_err(|error| match error {
         NativeExecutionReadError::Capacity {
@@ -185,6 +194,7 @@ fn read_finalized_body(
             actual,
             limit,
         },
+        NativeExecutionReadError::Deferred(reason) => BlockProofError::Deferred(reason),
         error => BlockProofError::Storage {
             block_height,
             reason: error.to_string(),
@@ -206,7 +216,7 @@ fn read_finalized_body(
         .commitment()
         .execution
         .executed_block_wire_hash;
-    let block = Arc::clone(verified.authority.block());
+    let block = verified.authority.block().clone();
     let wire = verified.wire;
     if block.header().height() != block_height {
         return Err(BlockProofError::BlockHeightMismatch {
@@ -262,7 +272,7 @@ pub(super) fn executed_block_wire_from_kura(
     block_height: NonZeroU64,
     expected_hash: HashOf<BlockHeader>,
     limits: BlockProofLimits,
-) -> Result<Vec<u8>, BlockProofError> {
+) -> Result<crate::kura::NativeFrameBytes, BlockProofError> {
     read_finalized_body(source, block_height, expected_hash, limits, true).map(|(_, wire, _)| wire)
 }
 
@@ -420,14 +430,19 @@ mod native_proof_reader_tests {
             "the transport certificate cannot replace R's executed identity"
         );
         assert_eq!(
-            chain.state().executed_block_wire(height, limits()).unwrap(),
+            chain
+                .state()
+                .executed_block_wire(height, limits())
+                .unwrap()
+                .as_slice(),
             target.block().encode_wire().unwrap()
         );
         assert_eq!(
             chain
                 .state()
                 .executed_block_wire(NonZeroU64::new(1).unwrap(), limits())
-                .unwrap(),
+                .unwrap()
+                .as_slice(),
             chain.committed(1).block().encode_wire().unwrap()
         );
     }

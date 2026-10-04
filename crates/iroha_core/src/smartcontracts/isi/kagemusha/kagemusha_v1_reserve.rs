@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 #[path = "ordinary_top_up.rs"]
 pub(super) mod ordinary_top_up;
-pub use ordinary_top_up::{KagemushaOrdinaryTopUpRecordV1, read_finalized_ordinary_top_up_v1};
+pub use ordinary_top_up::KagemushaOrdinaryTopUpRecordV1;
 
 #[cfg(test)]
 use iroha_data_model::isi::{KagemushaFinalityTrustAnchorV1, KagemushaTopUpResultV1};
@@ -2305,7 +2305,7 @@ mod tests {
         block::{
             BlockHeader, CommitCertificate,
             consensus::{ExecKv, ExecWitness},
-            decode_versioned_signed_block,
+            decode_framed_signed_block,
         },
         isi::{
             KAGEMUSHA_CHAIN_VERSION_V1, KagemushaOperationFinalityV1,
@@ -2936,7 +2936,7 @@ mod tests {
         )
         .expect("actual paired Poseidon membership");
         let top_up_root = kagemusha_mint_finality_root_v1(top_up_membership_witness.root);
-        let mut block = decode_versioned_signed_block(&fixture.latest().block_wire).unwrap();
+        let mut block = decode_framed_signed_block(&fixture.latest().block_wire).unwrap();
         let certificate = block.commit_certificate().unwrap();
         let header = certificate.consensus_header().to_vec();
         let availability = certificate.availability().to_vec();

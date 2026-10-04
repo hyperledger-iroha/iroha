@@ -61,26 +61,10 @@ object UaidJsonParser {
         return UaidBindingsResponse(uaid, dataspaces)
     }
 
+    /** Decode one collection row and require its embedded manifest to match the requested UAID. */
     @JvmStatic
-    fun parseManifests(payload: ByteArray): UaidManifestsResponse {
-        val root = exactObject(
-            parse(payload),
-            "uaid manifests",
-            setOf("uaid", "total", "has_more", "count_mode", "manifests"),
-        )
-        val uaid = UaidLiteral.canonicalize(
-            exactString(root["uaid"], "uaid manifests.uaid"),
-            "uaid manifests.uaid",
-        )
-        val total = asUnsignedLong(root["total"], "uaid manifests.total")
-        val hasMore = asBoolean(root["has_more"], "uaid manifests.has_more")
-        val countMode = parseCountMode(
-            exactString(root["count_mode"], "uaid manifests.count_mode"),
-        )
-        val manifests = requiredArray(root["manifests"], "uaid manifests.manifests")
-            .mapIndexed { i, item -> parseManifestRecord(item, i, uaid) }
-        return UaidManifestsResponse(uaid, total, hasMore, countMode, manifests)
-    }
+    fun parseManifestRecord(payload: ByteArray, uaid: String): UaidManifestRecord =
+        parseManifestRecord(parse(payload), 0, UaidLiteral.canonicalize(uaid, "uaid manifests"))
 
     private fun parsePortfolioDataspace(
         item: Any?,
@@ -140,7 +124,7 @@ object UaidJsonParser {
         item: Any?,
         index: Int,
         responseUaid: String,
-    ): UaidManifestsResponse.UaidManifestRecord {
+    ): UaidManifestRecord {
         val path = "uaid manifests.manifests[$index]"
         val entry = exactObject(
             item,
@@ -172,7 +156,7 @@ object UaidJsonParser {
                 revocationPath,
                 setOf("epoch", "reason"),
             )
-            UaidManifestsResponse.UaidManifestRevocation(
+            UaidManifestRevocation(
                 asUnsignedLong(revocationMap["epoch"], "$revocationPath.epoch"),
                 nullableString(revocationMap["reason"], "$revocationPath.reason"),
             )
@@ -183,12 +167,12 @@ object UaidJsonParser {
             responseUaid,
             dataspaceId,
         )
-        return UaidManifestsResponse.UaidManifestRecord(
+        return UaidManifestRecord(
             dataspaceId,
             nullableExactString(entry["dataspace_alias"], "$path.dataspace_alias"),
             manifestHash,
             parseManifestStatus(exactString(entry["status"], "$path.status")),
-            UaidManifestsResponse.UaidManifestLifecycle(
+            UaidManifestLifecycle(
                 nullableUnsignedLong(
                     lifecycleMap["activated_epoch"],
                     "$path.lifecycle.activated_epoch",
@@ -381,29 +365,17 @@ object UaidJsonParser {
     private fun nullableUnsignedLong(value: Any?, path: String): Long? =
         if (value == null) null else asUnsignedLong(value, path)
 
-    private fun asBoolean(value: Any?, path: String): Boolean {
-        check(value is Boolean) { "$path must be a boolean" }
-        return value
-    }
-
     private fun exactStringList(value: Any?, path: String): List<String> =
         requiredArray(value, path).mapIndexed { index, entry ->
             exactString(entry, "$path[$index]")
         }
 
-    private fun parseCountMode(value: String): UaidManifestCountMode =
+    private fun parseManifestStatus(value: String): UaidManifestStatus =
         when (value) {
-            "bounded" -> UaidManifestCountMode.BOUNDED
-            "exact" -> UaidManifestCountMode.EXACT
-            else -> throw IllegalStateException("Unsupported manifest count_mode: $value")
-        }
-
-    private fun parseManifestStatus(value: String): UaidManifestsResponse.UaidManifestStatus =
-        when (value) {
-            "Pending" -> UaidManifestsResponse.UaidManifestStatus.PENDING
-            "Active" -> UaidManifestsResponse.UaidManifestStatus.ACTIVE
-            "Expired" -> UaidManifestsResponse.UaidManifestStatus.EXPIRED
-            "Revoked" -> UaidManifestsResponse.UaidManifestStatus.REVOKED
+            "Pending" -> UaidManifestStatus.PENDING
+            "Active" -> UaidManifestStatus.ACTIVE
+            "Expired" -> UaidManifestStatus.EXPIRED
+            "Revoked" -> UaidManifestStatus.REVOKED
             else -> throw IllegalStateException("Unsupported manifest status: $value")
         }
 }

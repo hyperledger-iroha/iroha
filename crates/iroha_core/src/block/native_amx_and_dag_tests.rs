@@ -1,23 +1,3 @@
-fn seed_domain_name_lease(world: &mut World, owner: &AccountId, domain_id: &DomainId) {
-    let selector = crate::sns::selector_for_domain(domain_id).expect("selector");
-    let address =
-        iroha_data_model::account::AccountAddress::from_account_id(owner).expect("address");
-    let record = iroha_data_model::sns::NameRecordV1::new(
-        selector.clone(),
-        owner.clone(),
-        vec![iroha_data_model::sns::NameControllerV1::account(&address)],
-        0,
-        0,
-        u64::MAX,
-        u64::MAX,
-        u64::MAX,
-        Metadata::default(),
-    );
-    world.smart_contract_state_mut_for_testing().insert(
-        crate::sns::record_storage_key(&selector),
-        norito::codec::Encode::encode(&record),
-    );
-}
 #[test]
 fn map_overlay_error_labels_amx_budget() {
     let err =
@@ -90,7 +70,7 @@ pub fn committed_and_valid_block_hashes_are_equal() {
     let valid_block = ValidBlock::new_dummy(peer_key_pair.private_key());
     let committed_block = valid_block
         .clone()
-        .commit(&topology)
+        .commit(&topology, crate::block::reserve_block_for_tests())
         .unpack(|_| {})
         .unwrap();
     assert_eq!(valid_block.as_ref().hash(), committed_block.as_ref().hash())
@@ -230,7 +210,14 @@ fn canonical_output_repeat_validation_is_deterministic() {
     // Replay the same signed inputs against an unchanged predecessor and compare
     // the complete canonical outputs, including each transaction result.
     let new_block = BlockBuilder::new(acc.clone())
-        .chain(0, state.view().latest_block().as_deref())
+        .chain(
+            0,
+            state
+                .view()
+                .latest_block()
+                .expect("original block read attempt")
+                .as_deref(),
+        )
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
         .unpack(|_| {});
     assert!(
@@ -253,7 +240,14 @@ fn canonical_output_repeat_validation_is_deterministic() {
     );
     drop(sb);
     let new_block2 = BlockBuilder::new(acc)
-        .chain(0, state.view().latest_block().as_deref())
+        .chain(
+            0,
+            state
+                .view()
+                .latest_block()
+                .expect("original block read attempt")
+                .as_deref(),
+        )
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
         .unpack(|_| {});
     let replay: SignedBlock = new_block2.into();

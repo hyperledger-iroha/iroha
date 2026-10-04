@@ -26,7 +26,9 @@ use std::time::Duration;
 pub(super) enum PendingCompletedFinalityV1 {
     Native(Box<PendingStreamTokenCheckV1>),
     #[cfg(test)]
-    Simulated,
+    Simulated {
+        deadline: std::time::Instant,
+    },
 }
 pub(super) enum CompletedFinalityV1 {
     Native(Box<VerifiedStreamTokenCheckV1>),
@@ -38,6 +40,14 @@ fn unavailable() -> StreamTokenIssuerError {
 }
 
 impl PendingCompletedFinalityV1 {
+    pub(super) fn deadline(&self) -> std::time::Instant {
+        match self {
+            Self::Native(pending) => pending.deadline(),
+            #[cfg(test)]
+            Self::Simulated { deadline } => *deadline,
+        }
+    }
+
     pub(super) fn verify(
         self,
         observation: &SignerStreamTokenStateObservationBodyV1,
@@ -46,14 +56,14 @@ impl PendingCompletedFinalityV1 {
     ) -> Result<CompletedFinalityV1, StreamTokenIssuerError> {
         let proof = match self {
             Self::Native(pending) => {
-                let verified = (*pending).verify_finalized(|| {
+                let verified = super::signer_binding::verify(*pending, || {
                     let now = clock.now_unix_ms().map_err(|_| iroha_core::query::stream_token_authority::observation::StreamTokenObservationErrorV1::Clock)?;
                     eligibility_interval(now, uncertainty_ms)
-                }).map_err(|_| unavailable())?;
+                })?;
                 CompletedFinalityV1::Native(Box::new(verified))
             }
             #[cfg(test)]
-            Self::Simulated => CompletedFinalityV1::Simulated,
+            Self::Simulated { .. } => CompletedFinalityV1::Simulated,
         };
         proof.validate(observation)?;
         Ok(proof)
@@ -155,9 +165,12 @@ impl super::signer_finality::CoreFinalityV1 {
         let signed = observer
             .finalize_check(prepared.instruction())
             .map_err(|_| unavailable())?;
-        let pending = prepared
-            .bind_signed_transaction(signed)
-            .map_err(|_| unavailable())?;
+        // Enter the exact signed owner before any post-sign clock or codec check.
+        // Local binding refusals keep this owner through the original deadline;
+        // they never invoke the observer's signing/submission operation again.
+        // TODO: give finalize_check itself durable sign/submit/recovery custody;
+        // a transport failure before its signed return remains a separate gate.
+        let pending = super::signer_binding::finish(prepared.bind_signed_transaction(signed))?;
         Ok(PendingCompletedFinalityV1::Native(Box::new(pending)))
     }
 }

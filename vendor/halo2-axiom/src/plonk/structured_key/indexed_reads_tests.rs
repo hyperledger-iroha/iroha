@@ -455,6 +455,15 @@ where
                     ));
                 }
             }
+            3 => {
+                for at in 0..record.nonzero as usize {
+                    cases.push((
+                        PolynomialId::FixedLagrange(column),
+                        record.payload.offset as usize + 4 + at * (4 + width) + 4,
+                        width,
+                    ));
+                }
+            }
             1 => {}
             _ => unreachable!(),
         }
@@ -814,7 +823,43 @@ where
         CoefficientTransformBoundaryPanic, with_coefficient_transform_panic,
     };
 
-    let (mut generated, mut bytes) = fixture::<C, false>(4, true, true);
+    use crate::poly::commitment::{Params as _, ParamsProver as _};
+    use group::Curve as _;
+
+    let (mut generated, _) = fixture::<C, false>(4, true, true);
+    // Zero-only columns now canonically use a bitset at this tiny domain. Populate
+    // every such unused parser-fixture column so the boundary observes nonzero decoded
+    // data before erasing it. Preserve the real polynomial banks, commitments,
+    // and Processed-key oracle; this fixture does not qualify a proof consumer.
+    let mut populated = 0;
+    for (values, coefficients_out) in generated
+        .fixed_values
+        .iter_mut()
+        .zip(&mut generated.fixed_polys)
+    {
+        if values.values.iter().all(|value| *value == C::Scalar::ZERO) {
+            values.values[0] = C::Scalar::ONE;
+            *coefficients_out = coefficients(&generated.vk.domain, values).unwrap();
+            populated += 1;
+        }
+    }
+    assert!(populated > 0);
+    let params = ParamsIPA::<C>::new(4);
+    let commitments = generated
+        .fixed_values
+        .iter()
+        .map(|values| params.commit_lagrange(values, Blind::default()).to_affine())
+        .collect();
+    generated.vk = VerifyingKey::from_parts(
+        generated.vk.domain.clone(),
+        commitments,
+        generated.vk.permutation.clone(),
+        generated.vk.cs.clone(),
+        generated.vk.selectors.clone(),
+        true,
+    );
+    let mut bytes = Vec::new();
+    generated.write_structured_v1(&mut bytes).unwrap();
     let initial = index::<C, false, _, _>(
         &mut bytes.as_slice(),
         4,
@@ -822,10 +867,7 @@ where
         &mut io::sink(),
     )
     .unwrap();
-    // The original fixture's constant fixed columns are zero. Give each one a canonical
-    // nonzero value so the hook proves that populated decoded data is erased in every mode.
-    // This is a parser fixture, not an authenticated artifact or a matching monetary key.
-    for mode in [0, 1, 2] {
+    for mode in [0, 1, 2, 3] {
         assert!(
             initial
                 .metadata()
@@ -833,23 +875,6 @@ where
                 .iter()
                 .any(|record| record.mode == mode)
         );
-    }
-    let nonzero_constant = C::Scalar::from(41).to_repr();
-    for record in &initial.metadata().fixed {
-        if record.mode == 0 {
-            let at = usize::try_from(record.payload.offset).unwrap();
-            let width = nonzero_constant.as_ref().len();
-            bytes[at..at + width].copy_from_slice(nonzero_constant.as_ref());
-        }
-    }
-    for (column, record) in initial.metadata().fixed.iter().enumerate() {
-        if record.mode == CONSTANT {
-            generated.fixed_values[column]
-                .values
-                .fill(C::Scalar::from(41));
-            generated.fixed_polys[column] =
-                coefficients(&generated.vk.domain, &generated.fixed_values[column]).unwrap();
-        }
     }
     let original = processed::<C, false>(&generated);
     let mut canonical = Vec::new();
@@ -948,4 +973,73 @@ fn both_pasta_indexed_coefficient_synthetic_post_decode_transform_panic_erases_o
  {
     coefficient_transform_boundary_unwind::<EqAffine>();
     coefficient_transform_boundary_unwind::<EpAffine>();
+}
+
+fn sparse_intervals<C: SerdeCurveAffine>()
+where
+    C::Scalar: SerdePrimeField + FromUniformBytes<64>,
+{
+    let (original, bytes) = fixture::<C, false>(6, false, false);
+    let key = index::<C, false, _, _>(
+        &mut bytes.as_slice(),
+        6,
+        bytes.len() as u64,
+        &mut io::sink(),
+    )
+    .unwrap();
+    for (column, record) in key
+        .metadata()
+        .fixed
+        .iter()
+        .enumerate()
+        .filter(|(_, record)| record.mode == SPARSE_ZERO)
+    {
+        for (start, length) in [(0, 0), (0, 1), (0, 64), (1, 8), (7, 9), (8, 32), (63, 1)] {
+            let mut output = vec![C::Scalar::from(99); length];
+            key.copy_native_interval(
+                &mut std::io::Cursor::new(&bytes),
+                PolynomialId::FixedLagrange(column),
+                start,
+                &mut output,
+            )
+            .unwrap();
+            assert_eq!(output, original.fixed_values[column][start..start + length]);
+        }
+        if record.nonzero > 1 {
+            let width = scalar_bytes::<C::Scalar>();
+            let at = record.payload.offset as usize;
+            let mut cases = Vec::new();
+            let mut bad = bytes.clone();
+            bad[at..at + 4].copy_from_slice(&(record.nonzero - 1).to_le_bytes());
+            cases.push(bad);
+            let mut bad = bytes.clone();
+            bad[at + 8..at + 8 + width].fill(255);
+            cases.push(bad);
+            let mut bad = bytes.clone();
+            bad[at + 8..at + 8 + width].copy_from_slice(C::Scalar::ZERO.to_repr().as_ref());
+            cases.push(bad);
+            let mut bad = bytes.clone();
+            bad[at + 4 + (4 + width)..at + 8 + (4 + width)].copy_from_slice(&0_u32.to_le_bytes());
+            cases.push(bad);
+            for bad in cases {
+                let mut output = vec![C::Scalar::from(99); 64];
+                assert!(
+                    key.copy_native_interval(
+                        &mut std::io::Cursor::new(&bad),
+                        PolynomialId::FixedLagrange(column),
+                        0,
+                        &mut output
+                    )
+                    .is_err()
+                );
+                assert!(output.iter().all(|value| *value == C::Scalar::ZERO));
+            }
+        }
+    }
+}
+#[test]
+fn both_fields_sparse_fixed_original_intervals_zero_gaps_and_changed_source_failures_clear_destinations()
+ {
+    sparse_intervals::<EqAffine>();
+    sparse_intervals::<EpAffine>();
 }

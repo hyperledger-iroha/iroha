@@ -108,7 +108,7 @@ mod tests {
     fn full_clock_selection_exact_roundtrip_preserves_installed_identity() {
         use iroha_crypto::KeyPair;
         use iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture;
-        let mut native = NativeFinalityFixture::start("clock-selection-original-fixture");
+        let mut native = NativeFinalityFixture::new_with_explicit_parameters();
         native.certify_with_world_root(
             native.block_with_submitted_work(native.next_header()),
             Hash::new(b"synthetic public clock selection World"),
@@ -119,7 +119,7 @@ mod tests {
                 .export_checkpoint(native.latest())
                 .unwrap(),
             native.network_id(),
-            "clock-selection-original-fixture".into(),
+            native.chain_id().into(),
             std::array::from_fn(|i| KagemushaOrdinaryNativeClockNodeV1 {
                 peer_id: PeerId::new(
                     KeyPair::from_seed(vec![i as u8 + 1; 32], Algorithm::BlsNormal)

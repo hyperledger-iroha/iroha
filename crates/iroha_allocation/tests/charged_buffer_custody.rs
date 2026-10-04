@@ -2,6 +2,7 @@
 
 #![allow(unsafe_code)]
 
+use iroha_allocation::release::ReleaseRegistration;
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     future::Future,
@@ -37,6 +38,15 @@ static REQUESTED_ALIGN: AtomicUsize = AtomicUsize::new(0);
 static FREED_SIZE: AtomicUsize = AtomicUsize::new(0);
 static FREED_ALIGN: AtomicUsize = AtomicUsize::new(0);
 static FREED: AtomicBool = AtomicBool::new(false);
+
+fn registration(budget: &AllocationBudget) -> ReleaseRegistration {
+    ReleaseRegistration::from_reservation(
+        &mut budget
+            .try_reserve(ReleaseRegistration::allocation_layout())
+            .unwrap(),
+    )
+    .unwrap()
+}
 
 #[test]
 fn child_backing_consumes_parent_credit_before_allocating_without_reacquisition() {
@@ -180,7 +190,10 @@ impl Wake for AfterFree {
         );
         assert_eq!(FREED_SIZE.load(SeqCst), self.expected);
         assert_eq!(FREED_ALIGN.load(SeqCst), self.expected_align);
-        assert_eq!(self.budget.reserved_bytes(), 0);
+        assert_eq!(
+            self.budget.reserved_bytes(),
+            ReleaseRegistration::allocation_layout().size()
+        );
         self.wakes.fetch_add(1, SeqCst);
     }
 }
@@ -188,11 +201,15 @@ impl Wake for AfterFree {
 #[test]
 fn exact_backing_layout_and_charge_survive_fill_until_actual_deallocation() {
     let _serial = SERIAL.lock().unwrap();
-    let budget = AllocationBudget::new(257);
+    let budget = AllocationBudget::new(257 + ReleaseRegistration::allocation_layout().size());
+    let mut budget_registration = registration(&budget);
     observe_next(257, false, &budget);
     let mut bytes = ChargedBuffer::<u8>::new(257, &budget).unwrap();
     assert_eq!(REQUESTED_SIZE.load(SeqCst), 257);
-    assert_eq!(RESERVED_AT_ALLOCATION.load(SeqCst), 257);
+    assert_eq!(
+        RESERVED_AT_ALLOCATION.load(SeqCst),
+        257 + ReleaseRegistration::allocation_layout().size()
+    );
     assert_eq!(REQUESTED_ALIGN.load(SeqCst), 1);
     let pointer = bytes.as_slice().as_ptr();
     assert_eq!(pointer as usize, POINTER.load(SeqCst));
@@ -202,7 +219,10 @@ fn exact_backing_layout_and_charge_survive_fill_until_actual_deallocation() {
     assert_eq!(bytes.as_slice().as_ptr(), pointer);
     assert!(bytes.append(&[0]).is_err());
     assert_eq!(bytes.as_slice().len(), 257);
-    assert_eq!(budget.reserved_bytes(), 257);
+    assert_eq!(
+        budget.reserved_bytes(),
+        257 + ReleaseRegistration::allocation_layout().size()
+    );
     let Err(AllocationRefusal::Capacity { release, .. }) = budget.try_reserve_bytes(1) else {
         panic!("the actual buffer must still own its charge");
     };
@@ -213,7 +233,7 @@ fn exact_backing_layout_and_charge_survive_fill_until_actual_deallocation() {
         wakes: AtomicUsize::new(0),
     });
     let waker = Waker::from(Arc::clone(&observed));
-    let mut released = pin!(release.wait_for_release());
+    let mut released = pin!(release.wait_for_release(&mut budget_registration));
     assert!(
         released
             .as_mut()
@@ -233,7 +253,8 @@ fn exact_backing_layout_and_charge_survive_fill_until_actual_deallocation() {
 #[test]
 fn capacity_refusal_precedes_allocation_and_original_wait_allows_retry() {
     let _serial = SERIAL.lock().unwrap();
-    let budget = AllocationBudget::new(79);
+    let budget = AllocationBudget::new(79 + ReleaseRegistration::allocation_layout().size());
+    let mut budget_registration = registration(&budget);
     let occupied = budget.try_reserve_bytes(79).unwrap();
     observe_next(79, false, &budget);
     let Err(ChargedBufferError::Admission(AllocationRefusal::Capacity {
@@ -245,13 +266,20 @@ fn capacity_refusal_precedes_allocation_and_original_wait_allows_retry() {
     else {
         panic!("capacity must return its original typed refusal");
     };
-    assert_eq!((requested_bytes, reserved_bytes, limit_bytes), (79, 79, 79));
+    assert_eq!(
+        (requested_bytes, reserved_bytes, limit_bytes),
+        (
+            79,
+            79 + ReleaseRegistration::allocation_layout().size(),
+            79 + ReleaseRegistration::allocation_layout().size()
+        )
+    );
     assert_eq!(
         NEXT_SIZE.load(SeqCst),
         79,
         "allocator must not run on refusal"
     );
-    let mut released = pin!(release.wait_for_release());
+    let mut released = pin!(release.wait_for_release(&mut budget_registration));
     let mut context = Context::from_waker(Waker::noop());
     assert_eq!(released.as_mut().poll(&mut context), Poll::Pending);
     drop(occupied);
@@ -260,7 +288,10 @@ fn capacity_refusal_precedes_allocation_and_original_wait_allows_retry() {
     assert_eq!(REQUESTED_SIZE.load(SeqCst), 79);
     drop(bytes);
     assert!(FREED.load(SeqCst));
-    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(
+        budget.reserved_bytes(),
+        ReleaseRegistration::allocation_layout().size()
+    );
 }
 
 #[test]
@@ -520,20 +551,22 @@ fn non_copy_elements_move_into_exact_backing_and_drop_before_refund() {
         id: usize,
         drops: &'a [AtomicUsize; 5],
         budget: &'a AllocationBudget,
-        backing_bytes: usize,
+        retained_bytes: usize,
     }
 
     impl Drop for DropEntry<'_> {
         fn drop(&mut self) {
             assert!(!FREED.load(SeqCst), "element dropped after backing free");
-            assert_eq!(self.budget.reserved_bytes(), self.backing_bytes);
+            assert_eq!(self.budget.reserved_bytes(), self.retained_bytes);
             self.drops[self.id].fetch_add(1, SeqCst);
         }
     }
 
     let _serial = SERIAL.lock().unwrap();
     let layout = Layout::array::<DropEntry<'_>>(3).unwrap();
-    let budget = AllocationBudget::new(layout.size());
+    let budget =
+        AllocationBudget::new(layout.size() + ReleaseRegistration::allocation_layout().size());
+    let mut budget_registration = registration(&budget);
     let drops = std::array::from_fn(|_| AtomicUsize::new(0));
     let observer = Arc::new(AfterFree {
         budget: budget.clone(),
@@ -550,14 +583,17 @@ fn non_copy_elements_move_into_exact_backing_and_drop_before_refund() {
     let mut entries = ChargedBuffer::<DropEntry<'_>>::try_from_charge(3, original).unwrap();
     assert_eq!(REQUESTED_SIZE.load(SeqCst), layout.size());
     assert_eq!(REQUESTED_ALIGN.load(SeqCst), layout.align());
-    assert_eq!(RESERVED_AT_ALLOCATION.load(SeqCst), layout.size());
+    assert_eq!(
+        RESERVED_AT_ALLOCATION.load(SeqCst),
+        layout.size() + ReleaseRegistration::allocation_layout().size()
+    );
     let pointer = entries.as_slice().as_ptr();
     let allocations = OBSERVED_COUNT.load(SeqCst);
     let entry = |id| DropEntry {
         id,
         drops: &drops,
         budget: &budget,
-        backing_bytes: layout.size(),
+        retained_bytes: layout.size() + ReleaseRegistration::allocation_layout().size(),
     };
     assert!(entries.try_push(entry(0)).is_ok());
     assert!(entries.try_push(entry(1)).is_ok());
@@ -570,7 +606,10 @@ fn non_copy_elements_move_into_exact_backing_and_drop_before_refund() {
     entries.truncate(1);
     assert_eq!(drops[1].load(SeqCst), 1);
     assert_eq!(drops[2].load(SeqCst), 1);
-    assert_eq!(budget.reserved_bytes(), layout.size());
+    assert_eq!(
+        budget.reserved_bytes(),
+        layout.size() + ReleaseRegistration::allocation_layout().size()
+    );
     assert!(entries.try_push(entry(4)).is_ok());
     assert_eq!(entries.as_slice().as_ptr(), pointer);
     assert_eq!(OBSERVED_COUNT.load(SeqCst), allocations);
@@ -579,7 +618,7 @@ fn non_copy_elements_move_into_exact_backing_and_drop_before_refund() {
         panic!("the original backing charge must remain occupied");
     };
     let waker = Waker::from(Arc::clone(&observer));
-    let mut released = pin!(release.wait_for_release());
+    let mut released = pin!(release.wait_for_release(&mut budget_registration));
     assert!(
         released
             .as_mut()

@@ -99,6 +99,20 @@ fn resolve_sora_profile(
         )),
     }
 }
+/// Fresh canonical Taira parent physical catalog selection.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TairaParentCatalogArg {
+    WithIs,
+    WithoutIs,
+}
+impl From<TairaParentCatalogArg> for TairaParentCatalog {
+    fn from(value: TairaParentCatalogArg) -> Self {
+        match value {
+            TairaParentCatalogArg::WithIs => Self::WithIs,
+            TairaParentCatalogArg::WithoutIs => Self::WithoutIs,
+        }
+    }
+}
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LocalnetPerfProfileArg {
     #[value(name = "10k-permissioned")]
@@ -130,10 +144,24 @@ pub struct Args {
     /// Canonical chain identifier written into genesis, peer configs, and the client config.
     #[arg(long, value_name = "CHAIN_ID", default_value = DEFAULT_CHAIN_ID)]
     chain_id: String,
+    /// Physical catalog for a fresh canonical Taira parent; without-is leaves IS for a private child.
+    /// This cannot remove a dataspace from an existing chain.
+    #[arg(long, value_enum, value_name = "CATALOG", default_value = "with-is")]
+    taira_parent_catalog: TairaParentCatalogArg,
     /// Account-address chain prefix written into genesis and client/peer configs.
     /// Public chain identities retain their fixed prefix.
     #[arg(long, value_name = "PREFIX")]
     chain_discriminant: Option<u16>,
+    /// Canonical public genesis instruction JSON array to extend the existing final phase.
+    #[arg(
+        long,
+        value_name = "PATH",
+        requires = "expected_genesis_instructions_sha256"
+    )]
+    genesis_instructions_file: Option<PathBuf>,
+    /// Raw SHA-256 of the exact selected instruction-file bytes (64 hexadecimal digits).
+    #[arg(long, value_name = "HEX", requires = "genesis_instructions_file", value_parser = parse_authored_sha256)]
+    expected_genesis_instructions_sha256: Option<[u8; 32]>,
     /// Enable Sora profile defaults; `nexus` enforces public dataspace rules (NPoS).
     /// Requires at least 4 peers.
     #[arg(long, value_enum, value_name = "PROFILE")]
@@ -194,13 +222,22 @@ fn resolve_requested_consensus_mode(
         SumeragiConsensusMode::from,
     )
 }
+fn parse_authored_sha256(raw: &str) -> std::result::Result<[u8; 32], String> {
+    let mut digest = [0_u8; 32];
+    hex::decode_to_slice(raw, &mut digest)
+        .map_err(|_| "expected SHA-256 must be exactly 64 hexadecimal digits".to_owned())?;
+    Ok(digest)
+}
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         let Self {
             peers,
             seed,
             chain_id,
+            taira_parent_catalog,
             chain_discriminant,
+            genesis_instructions_file,
+            expected_genesis_instructions_sha256,
             sora_profile,
             private_dataspace,
             perf_profile,
@@ -219,6 +256,21 @@ impl<T: Write> RunArgs<T> for Args {
         // validation. Once validation succeeds, `LocalnetOptions` takes over
         // the same custody obligation through its `Drop` implementation.
         let mut seed = seed.map(Zeroizing::new);
+        let authored_instructions = match (
+            genesis_instructions_file,
+            expected_genesis_instructions_sha256,
+        ) {
+            (None, None) => None,
+            (Some(path), Some(expected_sha256)) => Some(LocalnetAuthoredInstructions {
+                path,
+                expected_sha256,
+            }),
+            _ => {
+                return Err(eyre!(
+                    "genesis instruction file and expected SHA-256 must be selected together"
+                ));
+            }
+        };
         let sora_profile = resolve_sora_profile(sora_profile, private_dataspace)?;
         let perf_profile = perf_profile.map(LocalnetPerfProfile::from);
         let consensus_mode = resolve_requested_consensus_mode(consensus_mode, perf_profile);
@@ -253,7 +305,14 @@ impl<T: Write> RunArgs<T> for Args {
             consensus_mode,
             block_cadence_ms,
         };
-        generate_localnet_with_chain(&opts, writer, Some(&chain_id), chain_discriminant)
+        generate_localnet_with_authored_instructions(
+            &opts,
+            writer,
+            Some(&chain_id),
+            chain_discriminant,
+            taira_parent_catalog.into(),
+            authored_instructions.as_ref(),
+        )
     }
 }
 
@@ -267,6 +326,64 @@ mod tests {
     };
     use iroha_genesis::{RawGenesisTransaction, read_signed_genesis};
     use std::fs;
+    #[test]
+    fn authored_genesis_cli_requires_an_explicit_file_digest_pair() {
+        use clap::Parser as _;
+        #[derive(clap::Parser)]
+        struct Command {
+            #[command(flatten)]
+            localnet: Args,
+        }
+        let default =
+            Command::try_parse_from(["kagami-test", "--out-dir", "/unit-fixture"]).unwrap();
+        assert!(default.localnet.genesis_instructions_file.is_none());
+        assert!(
+            default
+                .localnet
+                .expected_genesis_instructions_sha256
+                .is_none()
+        );
+        let digest = hex::encode(iroha_crypto::sha256(b"selected public source"));
+        let parsed = Command::try_parse_from([
+            "kagami-test",
+            "--out-dir",
+            "/unit-fixture",
+            "--genesis-instructions-file",
+            "/public/instructions.json",
+            "--expected-genesis-instructions-sha256",
+            &digest,
+        ])
+        .unwrap();
+        assert_eq!(
+            parsed.localnet.genesis_instructions_file.unwrap(),
+            PathBuf::from("/public/instructions.json")
+        );
+        assert_eq!(
+            parsed
+                .localnet
+                .expected_genesis_instructions_sha256
+                .unwrap(),
+            iroha_crypto::sha256(b"selected public source")
+        );
+        for pair in [
+            ["--genesis-instructions-file", "/public/instructions.json"],
+            ["--expected-genesis-instructions-sha256", digest.as_str()],
+        ] {
+            assert!(
+                Command::try_parse_from([
+                    "kagami-test",
+                    "--out-dir",
+                    "/unit-fixture",
+                    pair[0],
+                    pair[1]
+                ])
+                .is_err()
+            );
+        }
+        for invalid in ["", "ab", "not-a-digest", &"00".repeat(33)] {
+            assert!(parse_authored_sha256(invalid).is_err());
+        }
+    }
     #[test]
     fn beacon_launch_cli_requires_all_explicit_native_selectors() {
         use clap::Parser as _;
@@ -378,6 +495,48 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn localnet_cli_selects_explicit_taira_parent_catalog() {
+        use clap::Parser as _;
+        #[derive(clap::Parser)]
+        struct Command {
+            #[command(flatten)]
+            localnet: Args,
+        }
+        let default =
+            Command::try_parse_from(["kagami-test", "--out-dir", "/unit-fixture"]).unwrap();
+        assert_eq!(
+            default.localnet.taira_parent_catalog,
+            TairaParentCatalogArg::WithIs
+        );
+        let without = Command::try_parse_from([
+            "kagami-test",
+            "--out-dir",
+            "/unit-fixture",
+            "--taira-parent-catalog",
+            "without-is",
+        ])
+        .unwrap();
+        assert_eq!(
+            without.localnet.taira_parent_catalog,
+            TairaParentCatalogArg::WithoutIs
+        );
+        assert_eq!(
+            TairaParentCatalog::from(without.localnet.taira_parent_catalog),
+            TairaParentCatalog::WithoutIs
+        );
+        assert!(
+            Command::try_parse_from([
+                "kagami-test",
+                "--out-dir",
+                "/unit-fixture",
+                "--taira-parent-catalog",
+                "is2"
+            ])
+            .is_err()
+        );
+    }
+
     #[test]
     fn localnet_cli_accepts_an_explicit_canonical_chain_id() {
         use clap::Parser as _;

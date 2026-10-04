@@ -46,6 +46,8 @@ fn attached_hash_preserves_original_nodes_and_both_wakes_until_joint_drop() {
     for replacement in [false, true] {
         for publish in [false, true] {
             let owner = BlockHashes::new(vec![hash(1), hash(2)]);
+            let mut release_slot_0 = crate::unit_test_support::release_registration(&owner.budget);
+            let mut release_slot_1 = crate::unit_test_support::release_registration(&owner.budget);
             let old = owner.view();
             let mut original = if replacement {
                 owner.block_and_revert()
@@ -63,12 +65,15 @@ fn attached_hash_preserves_original_nodes_and_both_wakes_until_joint_drop() {
             });
             let waker = Waker::from(Arc::clone(&callback));
             let mut cx = Context::from_waker(&waker);
-            let mut writer = owner.released.observe().wait_for_release();
+            let mut writer = owner
+                .released
+                .observe()
+                .wait_for_release(&mut release_slot_0);
             let mut reader = owner
                 .map()
                 .unwrap()
                 .observe_reader_release()
-                .wait_for_release();
+                .wait_for_release(&mut release_slot_1);
             assert!(Pin::new(&mut writer).poll(&mut cx).is_pending());
             assert!(Pin::new(&mut reader).poll(&mut cx).is_pending());
             let mut group = OriginalGroup {
@@ -172,6 +177,7 @@ fn attached_hash_busy_stale_and_unfilled_refusals_are_terminal_and_keep_exact_ro
 #[test]
 fn attached_hash_outer_unwind_keeps_native_notifications_after_enclosing_fence() {
     let owner = BlockHashes::new(vec![hash(1)]);
+    let mut release_slot_0 = crate::unit_test_support::release_registration(&owner.budget);
     let mut original = owner.block();
     original.push(hash(2));
     let fence = Arc::new(Mutex::new(()));
@@ -183,7 +189,7 @@ fn attached_hash_outer_unwind_keeps_native_notifications_after_enclosing_fence()
     let waker = Waker::from(Arc::clone(&callback));
     let mut cx = Context::from_waker(&waker);
     let wait = owner.released.observe();
-    let mut future = wait.clone().wait_for_release();
+    let mut future = wait.clone().wait_for_release(&mut release_slot_0);
     assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
     let mut group = OriginalGroup {
         hash: BlockHashField::new(original),
@@ -233,6 +239,8 @@ fn attached_hash_capture_moves_the_same_unpublished_root_and_revokes_terminal_ac
 #[test]
 fn hash_busy_retry_preserves_original_nodes_charges_and_acquired_prefix_notices() {
     let owner = BlockHashes::new(vec![hash(1), hash(2)]);
+    let mut release_slot_0 = crate::unit_test_support::release_registration(&owner.budget);
+    let mut release_slot_1 = crate::unit_test_support::release_registration(&owner.budget);
     let mut original = owner.block();
     original.push(hash(3));
     let pointer = std::ptr::from_ref(original.get(0).unwrap());
@@ -249,12 +257,15 @@ fn hash_busy_retry_preserves_original_nodes_charges_and_acquired_prefix_notices(
         assert_eq!(owner.budget.reserved_bytes(), reserved);
         drop(blocker);
     }
-    let mut writer_wait = owner.released.observe().wait_for_release();
+    let mut writer_wait = owner
+        .released
+        .observe()
+        .wait_for_release(&mut release_slot_0);
     let mut reader_wait = owner
         .map()
         .unwrap()
         .observe_reader_release()
-        .wait_for_release();
+        .wait_for_release(&mut release_slot_1);
     let callback = Arc::new(ObserveFence {
         fence: Arc::new(Mutex::new(())),
         calls: AtomicUsize::new(0),

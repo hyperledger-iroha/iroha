@@ -1,68 +1,6 @@
 //! One-shot, proof-clocked rotation DKG custody for one exact target seat.
 
 use super::*;
-use norito::{NoritoDeserialize, NoritoSerialize};
-
-#[derive(JsonSerialize, JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-struct SeatAttemptJournalV1 {
-    schema: String,
-    session: GlobalThresholdBeaconDkgSessionV1,
-    signer_index: u16,
-    chain_id: ChainId,
-    network_id: NetworkId,
-    /// Absent only for signed-genesis body bootstrap, before genuine H2 finality.
-    native_source: Option<SeatNativeSourceV1>,
-}
-
-#[derive(JsonSerialize, JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-struct SeatNativeSourceV1 {
-    height: u64,
-    block_hash: Hash,
-    consensus_hash: [u8; 32],
-    result: [u8; 32],
-}
-
-fn read_public_frame<T>(fd: BorrowedFd<'_>, deadline: Instant) -> Result<T>
-where
-    T: NoritoSerialize,
-    for<'de> T: NoritoDeserialize<'de>,
-{
-    let mut length = [0_u8; 4];
-    read_exact_until(fd, deadline, &mut length)?;
-    let length = usize::try_from(u32::from_be_bytes(length)).map_err(|_| Error::InvalidInput)?;
-    if length == 0 || length > MAX_PUBLIC_BYTES {
-        return Err(Error::InvalidInput);
-    }
-    let mut bytes = vec![0_u8; length];
-    read_exact_until(fd, deadline, &mut bytes)?;
-    norito::decode_canonical_with_limits(&bytes, norito::canonical_decode_limits(bytes.len()))
-        .map_err(|_| Error::Crypto)
-}
-
-fn write_public_frame<T: NoritoSerialize>(output: &Directory, name: &str, value: &T) -> Result<()> {
-    let bytes = norito::encode_canonical(value).map_err(|_| Error::Crypto)?;
-    output.write_new(std::ffi::OsStr::new(name), &bytes, false)
-}
-
-fn advance_verified_phase(
-    fd: BorrowedFd<'_>,
-    deadline: Instant,
-    verifier: &mut NativeJournalCursor,
-    last_height: &mut u64,
-    target_height: u64,
-    cutoff_height: u64,
-) -> Result<()> {
-    while *last_height < target_height {
-        read_rotation_phase_height(fd, deadline, verifier, last_height, cutoff_height)?;
-    }
-    if *last_height != target_height {
-        return Err(Error::Height);
-    }
-    Ok(())
-}
-
 fn exact_rotation_seat_session(
     proof: &RotationProofArgs,
     selected: &VerifiedValidatorCommitteeSelectionV1,
@@ -109,64 +47,54 @@ fn exact_rotation_seat_session(
     ))
 }
 
-/// Derive the one durable child name for an exact attempt and seat.
-pub(super) fn attempt_child_name(
-    session: &GlobalThresholdBeaconDkgSessionV1,
-    signer_index: u16,
-) -> String {
-    use std::fmt::Write as _;
-    let mut name = String::with_capacity(86);
-    name.push_str("attempt-");
-    for byte in session.attempt_id {
-        write!(name, "{byte:02x}").expect("writing into a String cannot fail");
-    }
-    write!(name, "-seat-{signer_index}").expect("writing into a String cannot fail");
-    name
-}
-
-/// Exclusively claim one seat's attempt under a pinned owner-private root.
-pub(super) fn claim_attempt_directory(
-    root_path: &Path,
-    session: &GlobalThresholdBeaconDkgSessionV1,
-    signer_index: u16,
-) -> Result<Directory> {
-    use std::os::unix::fs::MetadataExt as _;
-    let root = Directory::open(root_path)?;
-    let metadata = root.file.metadata().map_err(|_| Error::Io)?;
-    if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o7777 != 0o700 {
-        return Err(Error::InvalidCustody);
-    }
-    root.child(std::ffi::OsStr::new(&attempt_child_name(
-        session,
-        signer_index,
-    )))
-}
-
-/// Encode only this seat's verified share for one exact public session.
+/// Fixture entry into the canonical prepared producer, with an explicit original pool.
+#[cfg(test)]
 pub(super) fn encode_local_seat_credential(
-    public: GlobalThresholdBeaconKeySessionV1,
+    public: &ValidatedGlobalThresholdBeaconSessionV1,
     signer_index: u16,
     components: Zeroizing<[[u8; 32]; 3]>,
     handle: &str,
     revision: u64,
-) -> Result<([u8; 32], Zeroizing<Vec<u8>>)> {
-    let network = public.network_id;
-    let inventory = vec![RuntimeGlobalBeaconShareProvisioningV1::new(
-        public,
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<(
+    [u8; 32],
+    iroha_core::beacon::credential::SecretConsensusThresholdCredentialV1,
+)> {
+    use iroha_core::beacon::credential::{
+        GlobalBeaconCredentialEncodeErrorV1, PreparedGlobalBeaconCredentialV1,
+    };
+    let digest = global_beacon_partial_signer_public_inventory_digest_v1(
+        public.network_id,
+        &[(public.record(), signer_index)],
+    )
+    .map_err(|error| Error::Export(seat_export::ExportError::Credential(error.into())))?;
+    let mut prepared = PreparedGlobalBeaconCredentialV1::new(
+        public.network_id,
+        handle,
+        revision,
+        digest,
+        [(public, signer_index)],
+        budget,
+    )
+    .map_err(|error| Error::Export(seat_export::ExportError::Credential(error)))?;
+    let inventory = [RuntimeGlobalBeaconShareProvisioningV1::new(
+        public.clone(),
         signer_index,
         components,
     )];
-    let policy_digest = global_beacon_partial_signer_inventory_digest_v1(network, &inventory)
-        .map_err(|_| Error::Crypto)?;
-    let credential = encode_global_beacon_partial_signer_credential_v1(
-        network,
-        handle,
-        revision,
-        policy_digest,
-        inventory,
+    encode_global_beacon_partial_signer_credential_v1(
+        &mut prepared,
+        inventory
+            .iter()
+            .map(RuntimeGlobalBeaconShareProvisioningV1::credential_source),
     )
-    .map_err(|_| Error::Crypto)?;
-    Ok((policy_digest, credential))
+    .map_err(|error| Error::Export(seat_export::ExportError::Credential(error)))?;
+    let credential = prepared.into_credential().map_err(
+        |(_, error): (_, GlobalBeaconCredentialEncodeErrorV1)| {
+            Error::Export(seat_export::ExportError::Credential(error))
+        },
+    )?;
+    Ok((digest, credential))
 }
 
 /// Run a local dealer/recipient without ever constructing another seat's secret.
@@ -190,6 +118,7 @@ pub(super) fn provision_rotation_seat_command(
     provider_revision: u64,
     attempt_root: &Path,
     timeout_ms: u64,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<()> {
     let (key_descriptor, from_config) = match (key_fd, config_fd) {
         (Some(198), None) => (198, false),
@@ -219,7 +148,7 @@ pub(super) fn provision_rotation_seat_command(
             return Err(Error::InvalidInput);
         }
     }
-    let (evidence, selected) = read_verified_rotation_selection(proof)?;
+    let (evidence, selected) = read_verified_rotation_selection(proof, budget)?;
     let transition = &evidence
         .status
         .selected
@@ -247,206 +176,30 @@ pub(super) fn provision_rotation_seat_command(
     if signer.public_key() != roster[usize::from(signer_index - 1)].public_key() {
         return Err(Error::InvalidCustody);
     }
-    let verifier = rotation_phase_verifier(proof, &evidence)?;
-    let output = claim_attempt_directory(attempt_root, &session, signer_index)?;
-    run_seat_dkg(
-        session,
-        roster,
+    let verifier = rotation_phase_verifier(proof, &evidence, budget)?;
+    let authority =
+        iroha_core::beacon::AuthenticatedGlobalBeaconDkgAttemptV1::rotation(&selected, &verifier)?;
+    if authority.session() != session || authority.cutoff() != cutoff {
+        return Err(Error::InvalidInput);
+    }
+    // SAFETY: fd numbers are distinct, inherited FIFO identities were checked
+    // above, and this command transfers each source once into the retained owner.
+    use std::os::fd::FromRawFd as _;
+    let attempt = seat_attempt::SeatDkgAttempt::new(
+        authority,
+        &roster,
         signer_index,
         signer,
-        public_input,
-        finality_input,
+        unsafe { File::from_raw_fd(public_fd) },
+        unsafe { File::from_raw_fd(finality_fd) },
         verifier,
-        cutoff,
         provider_handle,
         provider_revision,
-        output,
+        attempt_root,
         deadline,
+        budget,
     )?;
-    Ok(())
-}
-
-/// Drive one local secret owner from signed public edges and verified height proofs.
-///
-/// The exact attempt directory must have been claimed exclusively before this call.
-pub(super) fn run_seat_dkg(
-    session: GlobalThresholdBeaconDkgSessionV1,
-    roster: Vec<PeerId>,
-    signer_index: u16,
-    signer: KeyPair,
-    public_input: BorrowedFd<'_>,
-    finality_input: BorrowedFd<'_>,
-    mut verifier: NativeJournalCursor,
-    cutoff: u64,
-    provider_handle: &str,
-    provider_revision: u64,
-    output: Directory,
-    deadline: Instant,
-) -> Result<()> {
-    output.write_new(
-        std::ffi::OsStr::new("attempt-journal.json"),
-        &json_bytes(&SeatAttemptJournalV1 {
-            schema: "iroha.global-beacon.dkg-seat-attempt.v1".into(),
-            session,
-            signer_index,
-            chain_id: verifier.chain_id().clone(),
-            network_id: verifier.network_id(),
-            native_source: verifier.tip().map(|tip| SeatNativeSourceV1 {
-                height: tip.height(),
-                block_hash: tip.block_hash().into(),
-                consensus_hash: tip.core_hash().0,
-                result: tip.result().0,
-            }),
-        })?,
-        true,
-    )?;
-    let mut local =
-        LocalGlobalThresholdBeaconDkgSeatV1::new(session, &roster, signer_index, &signer)
-            .map_err(|_| Error::Crypto)?;
-    let crypto = AdaptiveGlobalThresholdBeaconDkgCryptoV1;
-    let mut own_public =
-        GlobalThresholdBeaconDkgStateV1::new(session, &crypto).map_err(|_| Error::Crypto)?;
-    let (key, commitment) = local.publication();
-    own_public
-        .record_recipient_key(session.start_height, key)
-        .map_err(|_| Error::Crypto)?;
-    own_public
-        .record_dealer_commitment(session.start_height, commitment, &crypto)
-        .map_err(|_| Error::Crypto)?;
-    write_public_frame(
-        &output,
-        "publication.norito",
-        &own_public.public_snapshot().map_err(|_| Error::Crypto)?,
-    )?;
-
-    let all_public: GlobalThresholdBeaconDkgSnapshotV1 = read_public_frame(public_input, deadline)?;
-    if all_public.session != session
-        || all_public.last_updated_height != session.start_height
-        || all_public.recipient_keys.len() != roster.len()
-        || all_public.dealer_commitments.len() != roster.len()
-        || !all_public.encrypted_shares.is_empty()
-        || !all_public.share_acceptances.is_empty()
-    {
-        return Err(Error::InvalidInput);
-    }
-    let mut public = GlobalThresholdBeaconDkgStateV1::from_snapshot(all_public, &crypto)
-        .map_err(|_| Error::Crypto)?;
-    let mut verified_height = session.start_height;
-    advance_verified_phase(
-        finality_input,
-        deadline,
-        &mut verifier,
-        &mut verified_height,
-        session.commitments_end_height,
-        cutoff,
-    )?;
-    let snapshot = public.public_snapshot().map_err(|_| Error::Crypto)?;
-    let edges = local
-        .deliver(
-            &snapshot.recipient_keys,
-            &snapshot.dealer_commitments,
-            verified_height,
-            &signer,
-        )
-        .map_err(|_| Error::Crypto)?;
-    for edge in edges {
-        public
-            .record_encrypted_share(verified_height, edge)
-            .map_err(|_| Error::Crypto)?;
-    }
-    write_public_frame(
-        &output,
-        "deliveries.norito",
-        &public.public_snapshot().map_err(|_| Error::Crypto)?,
-    )?;
-
-    let all_edges: GlobalThresholdBeaconDkgSnapshotV1 = read_public_frame(public_input, deadline)?;
-    if all_edges.session != session
-        || all_edges.last_updated_height != session.commitments_end_height
-        || all_edges.encrypted_shares.len() != roster.len() * roster.len()
-        || !all_edges.share_acceptances.is_empty()
-    {
-        return Err(Error::InvalidInput);
-    }
-    let mut accepted_public =
-        GlobalThresholdBeaconDkgStateV1::from_snapshot(all_edges.clone(), &crypto)
-            .map_err(|_| Error::Crypto)?;
-    advance_verified_phase(
-        finality_input,
-        deadline,
-        &mut verifier,
-        &mut verified_height,
-        session.deliveries_end_height,
-        cutoff,
-    )?;
-    let acceptances = local
-        .accept(&all_edges, verified_height, &signer)
-        .map_err(|_| Error::Crypto)?;
-    for acceptance in acceptances {
-        accepted_public
-            .record_share_acceptance(verified_height, acceptance)
-            .map_err(|_| Error::Crypto)?;
-    }
-    write_public_frame(
-        &output,
-        "acceptances.norito",
-        &accepted_public
-            .public_snapshot()
-            .map_err(|_| Error::Crypto)?,
-    )?;
-
-    let assembled: GlobalThresholdBeaconKeySessionV1 = read_public_frame(public_input, deadline)?;
-    advance_verified_phase(
-        finality_input,
-        deadline,
-        &mut verifier,
-        &mut verified_height,
-        session.acceptances_end_height,
-        cutoff,
-    )?;
-    if assembled.adaptive_dkg.session != session
-        || assembled.adaptive_dkg.finalized_at_height != verified_height
-    {
-        return Err(Error::InvalidInput);
-    }
-    let components = local
-        .finalize_private_share(assembled.clone())
-        .map_err(|_| Error::Crypto)?;
-    let mut pending_share = Zeroizing::new(Vec::with_capacity(96));
-    for component in components.iter() {
-        pending_share.extend_from_slice(component);
-    }
-    let (policy_digest, credential) = encode_local_seat_credential(
-        assembled.clone(),
-        signer_index,
-        components,
-        provider_handle,
-        provider_revision,
-    )?;
-    output.write_new(
-        std::ffi::OsStr::new(GLOBAL_BEACON_PARTIAL_SIGNER_CREDENTIAL_NAME_V1),
-        &credential,
-        true,
-    )?;
-    output.write_new(
-        std::ffi::OsStr::new(ROTATION_PENDING_SHARE_NAME),
-        &pending_share,
-        true,
-    )?;
-    write_public_frame(&output, "public-session.norito", &assembled)?;
-    let provider = Provider {
-        signer_index,
-        validator: roster[usize::from(signer_index - 1)].clone(),
-        handle: provider_handle.to_owned(),
-        revision: provider_revision,
-        policy_digest,
-    };
-    output.write_new(
-        std::ffi::OsStr::new("provider.json"),
-        &json_bytes(&provider)?,
-        false,
-    )?;
-    Ok(())
+    attempt.resume().map_err(Error::PendingAttempt)
 }
 
 /// Assemble the all-seat public result without collecting any private shares.
@@ -457,8 +210,9 @@ pub(super) fn assemble_rotation_dkg_command(
     provider_paths: &[PathBuf],
     certificate_height: u64,
     output: &Path,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<()> {
-    let (evidence, selected) = read_verified_rotation_selection(proof)?;
+    let (evidence, selected) = read_verified_rotation_selection(proof, budget)?;
     let preparation = selected.preparation();
     let (expected_session, _, cutoff) = exact_rotation_seat_session(proof, &selected)?;
     let bytes = read_public_bytes_bounded(public_session_path, MAX_PUBLIC_BYTES)?;
@@ -479,7 +233,7 @@ pub(super) fn assemble_rotation_dkg_command(
         .iter()
         .map(|path| {
             let bytes = read_public_bytes_bounded(path, limits.journal_bytes)?;
-            NativeFinalityJournal::decode(&bytes, limits).map_err(|_| Error::Crypto)
+            NativeFinalityJournal::decode(&bytes, limits).map_err(Error::from)
         })
         .collect::<Result<Vec<_>>>()?;
     validate_rotation_phase_chain(
@@ -489,9 +243,10 @@ pub(super) fn assemble_rotation_dkg_command(
         finalized_height,
         cutoff,
         &phase_proofs,
+        budget,
     )?;
-    let record =
-        FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(public).map_err(|_| Error::Crypto)?;
+    let record = FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(public, budget)
+        .map_err(Error::from)?;
     let mut providers = provider_paths
         .iter()
         .map(|path| read_json::<Provider>(path))
@@ -520,6 +275,6 @@ pub(super) fn assemble_rotation_dkg_command(
         finalization_draft: certificate,
         providers,
     };
-    validate_rotation_bundle(&bundle, proof, &evidence, &selected)?;
+    validate_rotation_bundle(&bundle, proof, &evidence, &selected, budget)?;
     write_new(output, &json_bytes(&bundle)?, false)
 }

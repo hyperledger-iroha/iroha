@@ -26,7 +26,7 @@ fn tlv_envelope<T: NoritoSerialize>(type_id: PointerType, val: &T) -> Vec<u8> {
     blob
 }
 fn quantity_tlv(value: &Quantity) -> Vec<u8> {
-    ivm::numeric_tlv::encode_quantity(value).expect("encode quantity pointer envelope")
+    ivm_abi::numeric_tlv::encode_quantity(value).expect("encode quantity pointer envelope")
 }
 fn select_kotodama_entrypoint(vm: &mut IVM, program: &[u8], name: &str) {
     let metadata = ProgramMetadata::parse(program).expect("parse Kotodama V1 artifact");
@@ -89,7 +89,7 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     // Full program (metadata + code)
     let meta = ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length: 0,
         max_cycles: 10_000,
@@ -263,7 +263,7 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let meta = ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length: 0,
         max_cycles: 10_000,

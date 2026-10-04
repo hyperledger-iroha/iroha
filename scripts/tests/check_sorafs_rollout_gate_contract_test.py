@@ -706,18 +706,17 @@ ACTIVE_SORAFS_TODO_SCAN_FILES = (
     / "instructions"
     / "SetPricingScheduleInstruction.java",
     REPO_ROOT
-    / "java"
-    / "iroha_android"
+    / "kotlin"
+    / "core-jvm"
     / "src"
-    / "main"
+    / "sorafsJavaTest"
     / "java"
     / "org"
     / "hyperledger"
     / "iroha"
-    / "android"
-    / "model"
-    / "instructions"
-    / "UpsertProviderCreditInstruction.java",
+    / "sdk"
+    / "sorafs"
+    / "SorafsProviderCreditJavaConsumerTest.java",
     REPO_ROOT
     / "kotlin"
     / "core-jvm"
@@ -14859,30 +14858,38 @@ def test_provider_ingest_persists_and_reconciles_governed_signer_policy() -> Non
     ):
         assert field in pin_registry
     for field in (
-        "pub signer_policy: ProviderIngestCompletionSignerPolicyV1",
-        "signer_policy_floor: Option<ProviderIngestCompletionSignerPolicyV1>",
-        "signer_policy_successor_required: bool",
+        "pub expected_authority: ProviderIngestCompletionAuthorityV1",
+        "authority_floor: Option<ProviderIngestCompletionAuthorityV1>",
+        "authority_successor_required: bool",
     ):
         assert field in outbox
     for guard in (
-        "ProviderIngestSignerPolicyObservationV1::Missing",
+        "ProviderIngestCompletionAuthorityObservationV1::Missing",
         "ProviderIngestFailureClassV1::SignerPolicyChanged",
-        "policy == signing_context.signer_policy",
+        "policy == &signing_context.expected_authority",
         "finalized_signer_policy_change_invalidates_only_unexposed_bytes_after_restart",
         "signer_policy_floor_rejects_rollback_equivocation_and_identity_substitution",
         "ProviderIngestOutboxError::SignerPolicyRollback",
         "candidate.predecessor_digest != Some(retained.policy_digest)",
+        "candidate.provider_owner != retained.provider_owner",
+        "candidate == &retained",
+        "full_authority_floor_rejects_same_policy_key_swap_and_same_cut_conflict",
+        "dedicated_key_rotation_keeps_exposed_original_bytes_for_reconciliation",
     ):
         assert guard in outbox
     for guard in (
         "fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1",
         "fn current_eligibility(",
-        "exact_current_signer_policy",
+        "exact_current_signer_authority",
         "record_completion_signer_resolution_failure",
         "signer_policy_rotation_reconciles_exposed_transaction_before_authority_change",
         "policy_rotation_after_durable_begin_never_reaches_ingress_exposure",
     ):
         assert guard in runtime
+    assert "pub completion_signer: AccountId" in pin_registry
+    assert "context.expected_payload.authority() != &context.expected_authority.completion_signer" in outbox
+    assert "world.provider_owners().get(&provider_id) == Some(&expected.provider_owner)" in daemon
+    assert "has_provider_completion_permission_v1" in daemon
     assert "self.signer.signer_policy()" in daemon
     assert "self.current_eligibility()?" in daemon
     assert "newer finalized owner/policy" in closure

@@ -31,7 +31,7 @@ use iroha_config::{
 };
 use iroha_core::{
     beacon::{
-        self, FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+        self, RetainedFinalizedGlobalThresholdBeaconSessionV1,
         ceremony::{
             GlobalBeaconCeremonyPlanV1, GlobalBeaconInstallContextV1,
             GlobalBeaconInstallRangeSignaturesV1, deal_global_beacon_at_logical_clock_v1,
@@ -543,7 +543,7 @@ impl Seat {
 
 /// The dealt beacon session and the per-seat install signatures.
 struct PreDeal {
-    record: FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+    record: RetainedFinalizedGlobalThresholdBeaconSessionV1,
     install: GlobalBeaconInstallContextV1,
 }
 
@@ -565,7 +565,8 @@ fn pre_deal(
         .map(|seat| format!("software://iroha/node-secrets/beacon/{session_hex}/seat-{seat}"))
         .collect();
     let plan = GlobalBeaconCeremonyPlanV1::new(session, roster.to_vec(), handles, 1)?;
-    let dealt = deal_global_beacon_at_logical_clock_v1(&plan, signers)?;
+    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
+    let dealt = deal_global_beacon_at_logical_clock_v1(&plan, signers, &budget)?;
     plan.verify_seat_bindings(
         &dealt.record,
         &dealt
@@ -948,18 +949,11 @@ fn journal_from_store(store: &mut BlockStore, height: u64) -> Result<NativeFinal
 /// installed session. All validators must hold the same pulse block.
 fn verify_pulse(
     node_files: &[PathBuf],
-    record: &FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+    record: &RetainedFinalizedGlobalThresholdBeaconSessionV1,
     pulse_height: u64,
 ) -> Result<()> {
-    let session = beacon::validate_global_threshold_beacon_session_v1(
-        record.session.clone(),
-        &beacon::GlobalThresholdBeaconSessionBindingV1 {
-            network_id: record.session.network_id,
-            session_id: record.session.session_id,
-            roster_hash: record.session.roster_hash,
-            transcript_hash: record.session.transcript_hash,
-        },
-    )?;
+    record.validate()?;
+    let session = &record.session;
     let mut common = None;
     for node_file in node_files {
         let config = read_profile_node(node_file)?;
@@ -977,19 +971,21 @@ fn verify_pulse(
             network,
             iroha_data_model::block::consensus::SumeragiRootScope::Global,
             native_finality_limits(),
+            &iroha_allocation::AllocationBudget::new(native_finality_limits().allocated_bytes),
         )
         .map_err(|error| eyre!(error))?;
         let certified = with_verified_native_journal(
-            &journal,
+            (&journal).into(),
             &config.common.chain,
             &network,
             native_finality_limits(),
             cursor.attestations(),
+            cursor.allocation_budget(),
             |reader| {
                 reader
                     .walk(1, pulse_height)
                     .collect::<std::result::Result<Vec<CertifiedBlock>, _>>()
-                    .map_err(|error| error.to_string())
+                    .map_err(iroha_core::sumeragi::native_journal::NativeJournalError::History)
             },
         )
         .map_err(|error| eyre!(error))?;
@@ -1002,7 +998,7 @@ fn verify_pulse(
             })?;
         ensure!(pulse.height == pulse_height, "pulse height differs");
         beacon::verify_finalized_global_threshold_beacon_pulse_v1(
-            &session,
+            session,
             pulse,
             GlobalThresholdBeaconChainAnchorV1 {
                 height: pulse_height - 1,

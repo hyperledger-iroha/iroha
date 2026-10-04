@@ -1,5 +1,8 @@
 //! Actual linear-cell root/shell reclamation, prepaid MV credits and reader custody.
 
+#[path = "../src/release_test_support.rs"]
+mod release_test_support;
+
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
@@ -558,11 +561,15 @@ fn last_concurrent_readers_refund_once_and_wake_reentrant_retry_after_free() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     reset();
     let layouts = CellOwner::writer_allocation_layouts();
+    let registration_bytes =
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size();
     let budget = AllocationBudget::new(
-        CellOwner::initial_allocation_layouts().root.size()
+        registration_bytes
+            + CellOwner::initial_allocation_layouts().root.size()
             + 3 * layouts.reader.size()
             + layouts.cursor.size(),
     );
+    let mut registration = crate::release_test_support::registration(&budget);
     let owner = Arc::new(cell(&budget));
     let oldest_a = owner.read();
     let oldest_b = owner.read();
@@ -589,7 +596,7 @@ fn last_concurrent_readers_refund_once_and_wake_reentrant_retry_after_free() {
     });
     let waker = Waker::from(Arc::clone(&wake));
     let mut context = Context::from_waker(&waker);
-    let mut wait = Box::pin(release.wait_for_release());
+    let mut wait = Box::pin(release.wait_for_release(&mut registration));
     assert!(wait.as_mut().poll(&mut context).is_pending());
     assert_eq!(wake.wakes.load(SeqCst), 0);
     let barrier = Barrier::new(2);
@@ -611,7 +618,10 @@ fn last_concurrent_readers_refund_once_and_wake_reentrant_retry_after_free() {
     assert!(!wake.poisoned.load(SeqCst));
     refunded(0, 1);
     refunded(2, 1);
-    assert_eq!(budget.reserved_bytes(), initial_bytes());
+    assert_eq!(
+        budget.reserved_bytes(),
+        initial_bytes() + registration_bytes
+    );
     let retry = owner
         .try_write_charged(|data, layouts| charges(&budget, data, layouts, 5))
         .unwrap()
@@ -624,6 +634,7 @@ fn last_concurrent_readers_refund_once_and_wake_reentrant_retry_after_free() {
     drop(wake);
     drop(owner);
     refunded(4, 1);
+    drop(registration);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 
@@ -635,11 +646,15 @@ fn abort_and_construction_unwind_unlock_before_refund_reenters_writer() {
     for unwind in [false, true] {
         reset();
         let layouts = CellOwner::writer_allocation_layouts();
+        let registration_bytes =
+            iroha_allocation::release::ReleaseRegistration::allocation_layout().size();
         let budget = AllocationBudget::new(
-            CellOwner::initial_allocation_layouts().root.size()
+            registration_bytes
+                + CellOwner::initial_allocation_layouts().root.size()
                 + 2 * layouts.reader.size()
                 + layouts.cursor.size(),
         );
+        let mut registration = crate::release_test_support::registration(&budget);
         let owner = Arc::new(cell(&budget));
         let wake = Arc::new(Reenter {
             owner: Arc::clone(&owner),
@@ -661,9 +676,8 @@ fn abort_and_construction_unwind_unlock_before_refund_reenters_writer() {
                     else {
                         panic!("original shells must occupy the entire pool");
                     };
-                    let mut pending = Box::pin(release.wait_for_release());
-                    assert!(pending.as_mut().poll(&mut context).is_pending());
-                    wait = Some(pending);
+                    assert!(registration.poll_wait(&release, &mut context).is_pending());
+                    wait = Some(release);
                     Ok::<_, AllocationRefusal>(charges)
                 })
                 .unwrap();
@@ -676,19 +690,19 @@ fn abort_and_construction_unwind_unlock_before_refund_reenters_writer() {
         assert!(wake.writer_released.load(SeqCst));
         assert_eq!(wake.poisoned.load(SeqCst), unwind);
         assert!(
-            wait.as_mut()
-                .unwrap()
-                .as_mut()
-                .poll(&mut context)
+            registration
+                .poll_wait(wait.as_ref().unwrap(), &mut context)
                 .is_ready()
         );
         refunded(1, usize::from(!unwind));
         refunded(2, 0);
+        registration.cancel();
         drop(wait);
         drop(waker);
         drop(wake);
         drop(owner);
         refunded(0, 1);
+        drop(registration);
         assert_eq!(budget.reserved_bytes(), 0);
     }
 }
@@ -700,11 +714,15 @@ fn scoped_old_reader_refund_frees_original_storage_before_unlock_notification() 
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     reset();
     let layouts = CellOwner::writer_allocation_layouts();
+    let registration_bytes =
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size();
     let budget = AllocationBudget::new(
-        CellOwner::initial_allocation_layouts().root.size()
+        registration_bytes
+            + CellOwner::initial_allocation_layouts().root.size()
             + 3 * layouts.reader.size()
             + layouts.cursor.size(),
     );
+    let mut registration = crate::release_test_support::registration(&budget);
     let owner = Arc::new(cell(&budget));
     let oldest = owner.read();
     let mut writer = owner
@@ -732,9 +750,8 @@ fn scoped_old_reader_refund_frees_original_storage_before_unlock_notification() 
         else {
             panic!("original generations must fill the pool");
         };
-        let mut pending = Box::pin(release.wait_for_release());
-        assert!(pending.as_mut().poll(&mut context).is_pending());
-        wait = Some(pending);
+        assert!(registration.poll_wait(&release, &mut context).is_pending());
+        wait = Some(release);
         without_allocations(|| {
             drop(oldest);
             // This is an allocator-level free witness even while the original
@@ -745,12 +762,16 @@ fn scoped_old_reader_refund_frees_original_storage_before_unlock_notification() 
                 CellOwner::initial_allocation_layouts().root.size()
                     + 2 * layouts.reader.size()
                     + layouts.cursor.size()
+                    + registration_bytes
             );
             assert_eq!(wake.wakes.load(SeqCst), 0);
             drop(held);
             refunded(3, 1);
             refunded(4, 0);
-            assert_eq!(budget.reserved_bytes(), initial_bytes());
+            assert_eq!(
+                budget.reserved_bytes(),
+                initial_bytes() + registration_bytes
+            );
             assert_eq!(wake.wakes.load(SeqCst), 0);
         });
     });
@@ -759,17 +780,17 @@ fn scoped_old_reader_refund_frees_original_storage_before_unlock_notification() 
     assert!(wake.writer_released.load(SeqCst));
     assert!(!wake.poisoned.load(SeqCst));
     assert!(
-        wait.as_mut()
-            .unwrap()
-            .as_mut()
-            .poll(&mut context)
+        registration
+            .poll_wait(wait.as_ref().unwrap(), &mut context)
             .is_ready()
     );
+    registration.cancel();
     drop(wait);
     drop(waker);
     drop(wake);
     drop(owner);
     refunded(2, 1);
+    drop(registration);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 
@@ -985,12 +1006,16 @@ fn admitted_input_abort_and_constructor_panic_refund_after_original_scope_unlock
     for panic_create in [false, true] {
         reset();
         let layouts = InputCell::writer_allocation_layouts();
+        let registration_bytes =
+            iroha_allocation::release::ReleaseRegistration::allocation_layout().size();
         let budget = AllocationBudget::new(
-            InputCell::initial_allocation_layouts().root.size()
+            registration_bytes
+                + InputCell::initial_allocation_layouts().root.size()
                 + 2 * layouts.reader.size()
                 + layouts.cursor.size()
                 + Layout::new::<Reader>().size(),
         );
+        let mut registration = crate::release_test_support::registration(&budget);
         let owner = Arc::new(input_cell(&budget));
         let wake = Arc::new(Retry {
             owner: Arc::clone(&owner),
@@ -1011,9 +1036,8 @@ fn admitted_input_abort_and_constructor_panic_refund_after_original_scope_unlock
                         else {
                             panic!("the original shells and input must occupy the entire pool");
                         };
-                        let mut pending = Box::pin(release.wait_for_release());
-                        assert!(pending.as_mut().poll(&mut context).is_pending());
-                        wait = Some(pending);
+                        assert!(registration.poll_wait(&release, &mut context).is_pending());
+                        wait = Some(release);
                         Ok::<_, AllocationRefusal>(admission)
                     })
                     .unwrap();
@@ -1026,10 +1050,8 @@ fn admitted_input_abort_and_constructor_panic_refund_after_original_scope_unlock
         assert!(wake.unlocked.load(SeqCst));
         assert_eq!(owner.is_poisoned(), panic_create);
         assert!(
-            wait.as_mut()
-                .unwrap()
-                .as_mut()
-                .poll(&mut context)
+            registration
+                .poll_wait(wait.as_ref().unwrap(), &mut context)
                 .is_ready()
         );
         assert_eq!(CREATED_WRITERS.load(SeqCst), 1);
@@ -1038,13 +1060,17 @@ fn admitted_input_abort_and_constructor_panic_refund_after_original_scope_unlock
         refunded(3, 1);
         assert_eq!(
             budget.reserved_bytes(),
-            InputCell::initial_allocation_layouts().root.size() + layouts.reader.size()
+            InputCell::initial_allocation_layouts().root.size()
+                + layouts.reader.size()
+                + registration_bytes
         );
+        registration.cancel();
         drop(wait);
         drop(waker);
         drop(wake);
         drop(owner);
         refunded(0, 1);
+        drop(registration);
         assert_eq!(budget.reserved_bytes(), 0);
     }
 }
@@ -1106,7 +1132,11 @@ fn root_constructor_and_final_drop_destroy_data_before_refund_callbacks() {
     for panic_create in [false, true] {
         reset();
         let layouts = RootCell::initial_allocation_layouts();
-        let budget = AllocationBudget::new(layouts.root.size() + layouts.reader.size());
+        let registration_bytes =
+            iroha_allocation::release::ReleaseRegistration::allocation_layout().size();
+        let budget =
+            AllocationBudget::new(registration_bytes + layouts.root.size() + layouts.reader.size());
+        let mut registration = crate::release_test_support::registration(&budget);
         let charges = initial_charges(&budget, layouts);
         // The waiter and its callback are independent test control-plane
         // allocations. Arm the exact root/reader observation only at their
@@ -1124,7 +1154,7 @@ fn root_constructor_and_final_drop_destroy_data_before_refund_callbacks() {
         });
         let waker = Waker::from(Arc::clone(&retry));
         let mut context = Context::from_waker(&waker);
-        let mut wait = Box::pin(release.wait_for_release());
+        let mut wait = Box::pin(release.wait_for_release(&mut registration));
         assert!(wait.as_mut().poll(&mut context).is_pending());
         EXPECTED.with(|pending| pending.set(expected));
         let result = catch_unwind(AssertUnwindSafe(|| {
@@ -1145,6 +1175,8 @@ fn root_constructor_and_final_drop_destroy_data_before_refund_callbacks() {
         assert!(!retry.observed_live_payload.load(SeqCst));
         refunded(ROOT_ID, 1);
         refunded(0, 0);
+        drop(wait);
+        drop(registration);
         assert_eq!(budget.reserved_bytes(), 0);
     }
 }

@@ -11,8 +11,6 @@
 //! allocation before work. Callers must enforce encoded and allocation limits
 //! before decoding, then validate shape. A successful shape check is not acceptance.
 
-use std::collections::BTreeSet;
-
 use iroha_crypto::{Hash, HashOf};
 use norito::codec::{Decode, Encode};
 
@@ -735,8 +733,28 @@ pub fn validate_execution_outputs_v1<S: ExecutionInputs + ?Sized>(
     let mut previous_pipeline = None;
     let mut previous_time = None;
     let mut time_event = None;
-    let mut pipeline_triggers = BTreeSet::new();
-    let mut calls = BTreeSet::new();
+    // These two scratch graphs must fit the caller's active native allocation scope
+    // before either allocation. Borrow invocation identities; never clone trigger IDs
+    // or guess private BTree node layouts. The same finite duplicate checks remain.
+    let scratch_bytes = std::alloc::Layout::array::<&PipelineInvocationV1>(outputs.len())
+        .map_err(|_| "execution output scratch layout is unavailable".to_owned())?
+        .size()
+        .checked_add(
+            std::alloc::Layout::array::<Hash>(outputs.len())
+                .map_err(|_| "execution output scratch layout is unavailable".to_owned())?
+                .size(),
+        )
+        .ok_or_else(|| "execution output scratch layout is unavailable".to_owned())?;
+    norito::core::reserve_decode_allocation(scratch_bytes)
+        .map_err(|_| "execution output scratch exceeds the original allocation scope".to_owned())?;
+    let mut pipeline_triggers: Vec<&PipelineInvocationV1> = Vec::new();
+    let mut calls: Vec<Hash> = Vec::new();
+    pipeline_triggers
+        .try_reserve_exact(outputs.len())
+        .map_err(|_| "execution output scratch allocation is unavailable".to_owned())?;
+    calls
+        .try_reserve_exact(outputs.len())
+        .map_err(|_| "execution output scratch allocation is unavailable".to_owned())?;
     for output in outputs {
         output.validate_structure(proposal_height, network_inputs)?;
         match output {
@@ -752,12 +770,10 @@ pub fn validate_execution_outputs_v1<S: ExecutionInputs + ?Sized>(
                 }
                 phase = 1;
                 let position = (invocation.event, invocation.candidate_index);
-                if previous_pipeline.is_some_and(|previous| previous >= position)
-                    || !pipeline_triggers
-                        .insert((invocation.event, invocation.trigger.trigger_id.clone()))
-                {
+                if previous_pipeline.is_some_and(|previous| previous >= position) {
                     return Err("pipeline candidate is duplicated or unordered".into());
                 }
+                pipeline_triggers.push(invocation);
                 previous_pipeline = Some(position);
             }
             ExecutionOutputV1::Time(TimeExecutionOutputV1 { invocation, .. }) => {
@@ -771,9 +787,20 @@ pub fn validate_execution_outputs_v1<S: ExecutionInputs + ?Sized>(
                 time_event = Some(invocation.event);
             }
         }
-        if !calls.insert(output.execution_call_hash(proposal, network_inputs)?) {
-            return Err("multiple outputs claim one execution call".into());
-        }
+        let call = output.execution_call_hash(proposal, network_inputs)?;
+        calls.push(call);
+    }
+    pipeline_triggers.sort_unstable_by(|left, right| {
+        (left.event, &left.trigger.trigger_id).cmp(&(right.event, &right.trigger.trigger_id))
+    });
+    if pipeline_triggers.windows(2).any(|pair| {
+        pair[0].event == pair[1].event && pair[0].trigger.trigger_id == pair[1].trigger.trigger_id
+    }) {
+        return Err("pipeline candidate is duplicated or unordered".into());
+    }
+    calls.sort_unstable();
+    if calls.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err("multiple outputs claim one execution call".into());
     }
     if network_count != network_inputs.input_count() {
         return Err("execution outputs omit a network source".into());

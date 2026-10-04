@@ -14,9 +14,9 @@ use crate::kagemusha_v1_recursion::{
     },
     ordinary_guard_verifier::OrdinaryGuardProofWireV1,
 };
-use crate::kagemusha_v1_state::{DigestV1, KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1};
+use crate::kagemusha_v1_state::KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1;
 use iroha_data_model::kagemusha::*;
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 use zeroize::Zeroize as _;
 
 /// Public proof operands only, available exclusively to the Native-owned proof consumer.
@@ -53,12 +53,6 @@ impl GeneratedOrdinaryOutgoingCandidateOriginalsV1 {
         self.generated.eq_inner_proof.zeroize();
         self.generated.ep_inner_proof.zeroize();
         self.candidate
-    }
-    pub(crate) fn candidate(&self) -> &KagemushaAuthenticatedOrdinaryCashCandidateV1 {
-        &self.candidate
-    }
-    pub(crate) fn generated_state_proof(&self) -> &KagemushaGeneratedRecursiveStateProofV1 {
-        &self.generated
     }
 }
 struct SelectedOriginals {
@@ -229,9 +223,9 @@ impl<R: KagemushaArtifactByteResolverV1> KagemushaProductionProverV1<R> {
         self.recheck_ordinary_outgoing(selection, guard)?;
         result.ok_or_else(|| proving_error("outgoing complete witness was not lent"))?
     }
-    fn bind_outgoing_witness<'a, 'owner: 'a>(
+    fn bind_outgoing_witness<'a>(
         &'a self,
-        selection: &'a KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1<'owner>,
+        selection: &'a KagemushaAuthenticatedOrdinaryCashApprovalSelectionV1<'_>,
         guard: &KagemushaAuthenticatedOrdinaryPreparationGuardV1,
         secret: &[u8; 32],
         mut witness: KagemushaRecursiveStateGenerationWitnessV1<'a>,

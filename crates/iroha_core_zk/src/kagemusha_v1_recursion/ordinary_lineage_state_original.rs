@@ -355,7 +355,6 @@ mod tests {
 #[cfg(test)]
 mod parent_codec_tests {
     use super::*;
-    use ff::PrimeField as _;
     use halo2_base::gates::RangeInstructions as _;
     #[test]
     fn ordinary_parent_codec_inventory_uses_sole_complete_schema_and_array_framing() {

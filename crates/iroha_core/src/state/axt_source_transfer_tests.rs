@@ -280,3 +280,49 @@ fn finalized_source_resolver_requires_canonical_qc_bound_body() {
         Err(Error::FinalizedCarrier),
     );
 }
+
+#[test]
+fn finalized_source_capacity_refusal_retains_original_owner_and_exact_claim() {
+    use iroha_allocation::AllocationRefusal;
+    use std::{
+        future::Future as _,
+        num::NonZeroUsize,
+        task::{Context, Poll, Waker},
+    };
+
+    let fixture = finalized_fixture(false, true);
+    let state = source_state(&fixture);
+    let claim = source_claim(fixture.target());
+    let expected = state
+        .resolve_finalized_axt_source_transfer_v1(2, &claim, MAX_WORK, MAX_BYTES)
+        .expect("original exact finalized source");
+    state
+        .kura()
+        .forget_cached_block_for_testing(NonZeroUsize::new(2).unwrap())
+        .expect("durable source remains for cold retry");
+    let budget = state.ivm_execution_budget();
+    let mut registration = crate::unit_test_support::release_registration(&budget);
+    let retained = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
+    let refusal = state
+        .resolve_finalized_axt_source_transfer_v1(2, &claim, MAX_WORK, MAX_BYTES)
+        .expect_err("original source pool occupied");
+    let Error::Deferred(original) = refusal else {
+        panic!("source capacity must remain an unfinished read: {refusal:?}");
+    };
+    let Some(AllocationRefusal::Capacity { release, .. }) = original.allocation_refusal() else {
+        panic!("source read lost the original capacity owner");
+    };
+    let mut retry = std::pin::pin!(release.clone().wait_for_release(&mut registration));
+    let mut context = Context::from_waker(Waker::noop());
+    assert!(matches!(retry.as_mut().poll(&mut context), Poll::Pending));
+    drop(retained);
+    assert!(matches!(retry.as_mut().poll(&mut context), Poll::Ready(_)));
+    assert_eq!(
+        state
+            .resolve_finalized_axt_source_transfer_v1(2, &claim, MAX_WORK, MAX_BYTES)
+            .unwrap(),
+        expected
+    );
+}

@@ -39,6 +39,8 @@ const REQUIRED_OUTPUTS = [
   "sumeragiTyped.js",
   "toriiClient.js",
   "kotodamaCompiler/index.js",
+  "kotodamaCompiler/embeddedCallSchema.js",
+  "kotodamaCompiler/embeddedNorito.js",
 ];
 
 function runBuild(root, env = {}) {

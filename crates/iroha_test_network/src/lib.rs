@@ -6484,6 +6484,7 @@ fn parse_actual_config_for_genesis_result(
     let reader = ConfigReader::new()
         .with_env(MockEnv::default())
         .with_toml_source(TomlSource::inline(merged));
+    let sora_profile = iroha_config::sora_profile::SoraProfileSelection::from_reader(&reader);
     let user = reader
         .read_and_complete::<iroha_config::parameters::user::Root>()
         .map_err(|err| eyre!("failed to read merged config for genesis config: {err:?}"))?;
@@ -6491,7 +6492,7 @@ fn parse_actual_config_for_genesis_result(
         .parse()
         .map_err(|err| eyre!("failed to parse merged config for genesis config: {err:?}"))?;
     if config_requires_sora_profile(config_layers) {
-        config.apply_sora_profile();
+        sora_profile.apply(&mut config);
     }
     config.apply_storage_budget();
     Ok(config)
@@ -9738,10 +9739,6 @@ impl NetworkPeer {
             port = %self.port_api,
             "TEST_NETWORK client"
         );
-        let default_account_domain =
-            iroha_model_base::domain::DomainId::try_new("default", "universal")
-                .expect("explicit client convenience domain")
-                .to_string();
         let identity = self
             .client_config
             .get()
@@ -9756,7 +9753,6 @@ impl NetworkPeer {
                 Table::new()
                     .write("chain", identity.chain.to_string())
                     .write("network_id", identity.network_id.to_string())
-                    .write(["account", "domain"], default_account_domain)
                     .write(
                         ["account", "chain_discriminant"],
                         i64::from(identity.chain_discriminant),
@@ -10721,10 +10717,7 @@ mod tests {
     use iroha_core::sumeragi::consensus::compute_consensus_parameters_fingerprint;
     use iroha_crypto::Algorithm;
     use iroha_data_model::{
-        block::{
-            decode_framed_signed_block, decode_versioned_signed_block,
-            deframe_versioned_signed_block_bytes,
-        },
+        block::{decode_framed_signed_block, deframe_versioned_signed_block_bytes},
         isi::{Instruction, SetParameter},
         parameter::{Parameter, system::consensus_metadata},
         transaction::{Executable, ExecutableBatchItem},
@@ -12771,7 +12764,7 @@ mod tests {
         );
         let policies = resolve_da_proof_policies(peer, &config_layers)
             .expect("should resolve da proof policies");
-        assert_eq!(policies.policies.len(), 2);
+        assert_eq!(policies.policies().len(), 2);
         let actual = resolve_actual_config(peer, &config_layers)
             .expect("should resolve full config for genesis");
         assert_eq!(
@@ -15937,8 +15930,7 @@ mod tests {
             deframe_versioned_signed_block_bytes(&framed).expect("deframe framed genesis");
         assert_eq!(deframed.bytes.as_ref(), framed.as_slice());
         assert_eq!(deframed.bare_versioned.as_ref(), versioned.as_slice());
-        let decoded =
-            decode_versioned_signed_block(framed.as_slice()).expect("decode framed genesis");
+        let decoded = decode_framed_signed_block(framed.as_slice()).expect("decode framed genesis");
         assert_eq!(
             decoded.version(),
             1,

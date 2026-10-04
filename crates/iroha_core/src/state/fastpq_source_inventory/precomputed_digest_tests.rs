@@ -1,6 +1,7 @@
 //! Supplied digest validation fails before owned inventory publication or digest repair.
 
 use super::{
+    native_capture_fixture::{seal_native_source, with_native_capture_sources},
     tests::{apply_source, cache_canonical_test_transaction_set, delta, header, state},
     *,
 };
@@ -8,7 +9,6 @@ use crate::fastpq::{
     poseidon_preimage_digest, validate_precomputed_transfer_transcript_digests_in_map,
 };
 use iroha_data_model::fastpq::TransferTranscript;
-use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::ALICE_ID;
 
 fn precomputed_transcript(hash: Hash) -> TransferTranscript {
@@ -99,54 +99,51 @@ fn invalid_supplied_digest_is_preserved_and_failure_latches_before_publication()
 
 #[test]
 fn supplied_valid_and_missing_digests_seal_while_multi_delta_none_stays_unchanged() {
-    let _guard = crate::exec_witness::exec_witness_guard();
-    let state = state();
-    crate::exec_witness::start_block();
-    let mut block = state.block(header());
-    cache_canonical_test_transaction_set(&mut block, &[]);
-    let supplied_hash = Hash::new(b"valid supplied digest");
-    let missing_hash = Hash::new(b"missing digest finalized after validation");
-    let multi_hash = Hash::new(b"multi delta none policy unchanged");
-    for hash in [supplied_hash, missing_hash] {
-        apply_source(&mut block, hash, false, None);
-    }
-    let supplied = precomputed_transcript(supplied_hash).poseidon_preimage_digest;
-    block.fastpq_transcripts.get_mut(&supplied_hash).unwrap()[0].poseidon_preimage_digest =
-        supplied;
-    block.fastpq_transcripts.get_mut(&missing_hash).unwrap()[0].poseidon_preimage_digest = None;
-    let mut second = delta();
-    second.from_balance_before = Quantity::from(9_u32);
-    second.from_balance_after = Quantity::from(8_u32);
-    second.to_balance_before = Quantity::from(1_u32);
-    second.to_balance_after = Quantity::from(2_u32);
-    {
-        let mut tx = block.transaction_for_fastpq_testing(multi_hash);
-        tx.record_test_transfer_transcripts(&ALICE_ID, multi_hash, vec![delta(), second]);
-        tx.apply();
-    }
-    let multi_before = block.fastpq_transcripts[&multi_hash][0].clone();
-    assert!(multi_before.poseidon_preimage_digest.is_none());
-    block
-        .finalize_fastpq_source_inventory(&[], &[], &[])
-        .unwrap();
-    assert_eq!(
-        block.fastpq_transcripts[&supplied_hash][0].poseidon_preimage_digest,
-        supplied
+    with_native_capture_sources(
+        &[1, 1, 2],
+        |_state, mut block, _recording, mut source, hashes| {
+            let [supplied_hash, missing_hash, multi_hash]: [Hash; 3] = hashes.try_into().unwrap();
+            let supplied_row = &block.fastpq_transcripts[&supplied_hash][0];
+            let supplied = Some(poseidon_preimage_digest(
+                &supplied_row.deltas[0],
+                &supplied_hash,
+            ));
+            block.fastpq_transcripts.get_mut(&supplied_hash).unwrap()[0].poseidon_preimage_digest =
+                supplied;
+            block.fastpq_transcripts.get_mut(&missing_hash).unwrap()[0].poseidon_preimage_digest =
+                None;
+            assert_eq!(block.fastpq_transcripts[&multi_hash].len(), 1);
+            let multi_before = block.fastpq_transcripts[&multi_hash][0].clone();
+            assert_eq!(multi_before.deltas.len(), 2);
+            assert!(multi_before.poseidon_preimage_digest.is_none());
+            seal_native_source(&mut block, &mut source).unwrap();
+            assert!(block.fastpq_transcripts.is_empty());
+            let archive = source.fastpq_transcripts();
+            assert_eq!(
+                archive[&supplied_hash][0].poseidon_preimage_digest,
+                supplied
+            );
+            let missing = &archive[&missing_hash][0];
+            assert_eq!(
+                missing.poseidon_preimage_digest,
+                Some(poseidon_preimage_digest(
+                    &missing.deltas[0],
+                    &missing.batch_hash
+                ))
+            );
+            assert_eq!(archive[&multi_hash][0], multi_before);
+            let inventory = block.fastpq_source_inventory().unwrap().unwrap();
+            assert_eq!(inventory.transcript_entry_hashes().len(), 3);
+            assert_eq!(inventory.transcript_seal.transcript_count, 3);
+            assert_eq!(inventory.transcript_seal.delta_count, 4);
+            assert!(block.fastpq_source_captures.sealed_sources().is_ok());
+            block.capture_exec_witness().unwrap();
+            assert_eq!(
+                block.take_exec_witness().unwrap().fastpq_transcripts.len(),
+                3
+            );
+        },
     );
-    let missing = &block.fastpq_transcripts[&missing_hash][0];
-    assert_eq!(
-        missing.poseidon_preimage_digest,
-        Some(poseidon_preimage_digest(
-            &missing.deltas[0],
-            &missing.batch_hash
-        ))
-    );
-    assert_eq!(block.fastpq_transcripts[&multi_hash][0], multi_before);
-    let inventory = block.fastpq_source_inventory().unwrap().unwrap();
-    assert_eq!(inventory.transcript_entry_hashes().len(), 3);
-    assert_eq!(inventory.transcript_seal.transcript_count, 3);
-    assert_eq!(inventory.transcript_seal.delta_count, 4);
-    assert!(block.fastpq_source_captures.sealed_sources().is_ok());
 }
 
 #[test]

@@ -1,18 +1,20 @@
-"""Regression tests for FASTPQ's read-only macOS Metal toolchain probe."""
+"""Process-policy controls for the sole explicit FastPQ Metal candidate producer.
+
+Stand-in outputs are unqualified test bytes, never admitted libraries or hardware evidence."""
 
 from __future__ import annotations
 
+import json
 import os
-import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-CRATE = ROOT / "crates" / "fastpq_prover"
-BUILD_RS = CRATE / "build.rs"
+PRODUCER = ROOT / "scripts/build_fastpq_metal_bundle.py"
 
 
 def _write_executable(path: Path, source: str) -> None:
@@ -21,61 +23,10 @@ def _write_executable(path: Path, source: str) -> None:
 
 
 @pytest.fixture(scope="module")
-def build_script(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Compile build.rs against a no-op cc stub without invoking Cargo."""
-
-    rustc = shutil.which("rustc")
-    assert rustc is not None, "the Rust workspace test host must provide rustc"
-    build_dir = tmp_path_factory.mktemp("fastpq-metal-build-script")
-    cc_stub = build_dir / "cc_stub.rs"
-    cc_stub.write_text(
-        """
-        use std::path::Path;
-
-        pub struct Build;
-
-        impl Build {
-            pub fn new() -> Self { Self }
-            pub fn cuda(&mut self, _: bool) -> &mut Self { self }
-            pub fn debug(&mut self, _: bool) -> &mut Self { self }
-            pub fn file<P: AsRef<Path>>(&mut self, _: P) -> &mut Self { self }
-            pub fn flag<S: AsRef<str>>(&mut self, _: S) -> &mut Self { self }
-            pub fn include<P: AsRef<Path>>(&mut self, _: P) -> &mut Self { self }
-            pub fn ccbin(&mut self, _: bool) -> &mut Self { self }
-            pub fn compile(&mut self, _: &str) {}
-        }
-        """,
-        encoding="utf-8",
-    )
-    cc_rlib = build_dir / "libcc.rlib"
-    subprocess.run(
-        [
-            rustc,
-            "--edition=2024",
-            "--crate-name=cc",
-            "--crate-type=rlib",
-            str(cc_stub),
-            "-o",
-            str(cc_rlib),
-        ],
-        check=True,
-        cwd=ROOT,
-    )
-    executable = build_dir / "fastpq-build-script"
-    subprocess.run(
-        [
-            rustc,
-            "--edition=2024",
-            str(BUILD_RS),
-            "--extern",
-            f"cc={cc_rlib}",
-            "-o",
-            str(executable),
-        ],
-        check=True,
-        cwd=ROOT,
-    )
-    return executable
+def producer() -> Path:
+    """Use the sole explicit producer, without compiling or invoking build.rs."""
+    assert PRODUCER.is_file()
+    return PRODUCER
 
 
 @pytest.fixture
@@ -116,6 +67,10 @@ if [ "$#" -eq 1 ] && [ "$1" = "-v" ]; then
     fi
     exit 0
 fi
+if [ "$#" -eq 1 ] && [ "$1" = "-help" ]; then
+    printf '%s\n' '-fno-fast-math'
+    exit 0
+fi
 if [ -n "${FASTPQ_TEST_NO_TOOL_OUTPUT:-}" ]; then exit 0; fi
 output=
 while [ "$#" -gt 0 ]; do
@@ -150,7 +105,7 @@ printf 'fake-metallib\n' > "$output"
     return fake_bin, log, ready
 
 
-def _run_build_script(
+def _run_producer(
     executable: Path,
     fake_toolchain: tuple[Path, Path, Path],
     tmp_path: Path,
@@ -158,6 +113,7 @@ def _run_build_script(
     initially_ready: bool = False,
     prepopulate_outputs: bool = False,
     extra_env: dict[str, str] | None = None,
+    skip: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     fake_bin, log, ready = fake_toolchain
     if initially_ready:
@@ -176,23 +132,20 @@ def _run_build_script(
     environment.update(
         {
             "PATH": f"{fake_bin}{os.pathsep}{environment['PATH']}",
-            "CARGO_CFG_TARGET_OS": "macos",
-            "CARGO_FEATURE_FASTPQ_GPU": "1",
-            "OUT_DIR": str(out_dir),
             "FASTPQ_TEST_TOOL_LOG": str(log),
             "FASTPQ_TEST_TOOLCHAIN_READY": str(ready),
             "FASTPQ_TEST_METAL": str(fake_bin / "metal"),
             "FASTPQ_TEST_METALLIB": str(fake_bin / "metallib"),
         }
     )
-    environment.pop("CARGO_FEATURE_CUDA", None)
-    environment.pop("FASTPQ_SKIP_GPU_BUILD", None)
     if extra_env:
         environment.update(extra_env)
     completed = subprocess.run(
-        [str(executable)],
+        [sys.executable, str(executable), "--repo-root", str(ROOT),
+         "--output", str(out_dir / "candidate"), "--target", "aarch64-apple-darwin",
+         *(["--skip"] if skip else [])],
         check=False,
-        cwd=CRATE,
+        cwd=ROOT,
         env=environment,
         text=True,
         stdout=subprocess.PIPE,
@@ -203,98 +156,105 @@ def _run_build_script(
 
 
 def test_working_compiler_and_linker_do_not_trigger_download(
-    build_script: Path,
+    producer: Path,
     fake_toolchain: tuple[Path, Path, Path],
     tmp_path: Path,
 ) -> None:
-    completed, log = _run_build_script(
-        build_script, fake_toolchain, tmp_path, initially_ready=True
+    completed, log = _run_producer(
+        producer, fake_toolchain, tmp_path, initially_ready=True
     )
 
     assert completed.returncode == 0, completed.stderr
     assert not any(line.startswith("xcodebuild|") for line in log)
     assert log.count("metal|-v") == 1
     assert log.count("metallib|-v") == 1
-    assert "cargo:rustc-env=FASTPQ_METAL_LIB=" in completed.stdout
-    assert "fastpq.metallib" in completed.stdout
+    record = json.loads((tmp_path / "out/candidate/generation.json").read_text())
+    assert record["admission_authority"] is False
+    assert record["signed_provenance"] is False
+    assert record["hardware_qualification"] is False
+    assert len(record["sources"]) == 8
+    assert len(record["entry_points"]) == 16
+    assert len([line for line in log if line.startswith("metal|") and "|-c|" in line]) == 6
+    assert "unqualified" in completed.stdout
+    assert "sha256=" in completed.stdout
 
 
 def test_missing_toolchain_reports_manual_remediation_without_mutating_host(
-    build_script: Path,
+    producer: Path,
     fake_toolchain: tuple[Path, Path, Path],
     tmp_path: Path,
 ) -> None:
-    completed, log = _run_build_script(build_script, fake_toolchain, tmp_path)
+    completed, log = _run_producer(producer, fake_toolchain, tmp_path)
 
-    assert completed.returncode == 0, completed.stderr
+    assert completed.returncode == 1, completed.stderr
     assert log == [
         "xcrun|-sdk|macosx|--find|metal",
         "xcrun|--find|metal",
     ]
     assert not any(line.startswith("xcodebuild|") for line in log)
     assert not any("--kill-cache" in line for line in log)
-    assert "Metal compiler/linker is unavailable" in completed.stdout
-    assert "xcodebuild -downloadComponent MetalToolchain" in completed.stdout
-    assert "FASTPQ_SKIP_GPU_BUILD=1" in completed.stdout
-    assert "cargo:rustc-env=FASTPQ_METAL_LIB=" in completed.stdout
+    assert "Metal compiler/linker is unavailable" in completed.stderr
+    assert "xcodebuild -downloadComponent MetalToolchain" in completed.stderr
+    assert "--skip" in completed.stderr
+    assert not (tmp_path / "out/candidate").exists()
 
 
 def test_broken_linker_reports_probe_error_without_redetection_or_host_mutation(
-    build_script: Path,
+    producer: Path,
     fake_toolchain: tuple[Path, Path, Path],
     tmp_path: Path,
 ) -> None:
-    completed, log = _run_build_script(
-        build_script,
+    completed, log = _run_producer(
+        producer,
         fake_toolchain,
         tmp_path,
         initially_ready=True,
         extra_env={"FASTPQ_TEST_BROKEN_METALLIB": "1"},
     )
 
-    assert completed.returncode == 0, completed.stderr
+    assert completed.returncode == 1, completed.stderr
     assert not any(line.startswith("xcodebuild|") for line in log)
     assert not any("--kill-cache" in line for line in log)
     assert log.count("metal|-v") == 1
     assert log.count("metallib|-v") == 1
-    assert "linker probe failed" in completed.stdout
-    assert "xcode-select -p" in completed.stdout
-    assert "xcodebuild -downloadComponent MetalToolchain" in completed.stdout
-    assert "FASTPQ_SKIP_GPU_BUILD=1" in completed.stdout
-    assert "cargo:rustc-env=FASTPQ_METAL_LIB=" in completed.stdout
+    assert "linker probe failed" in completed.stderr
+    assert "xcode-select -p" in completed.stderr
+    assert "xcodebuild -downloadComponent MetalToolchain" in completed.stderr
+    assert "--skip" in completed.stderr
+    assert not (tmp_path / "out/candidate").exists()
 
 
 def test_broken_compiler_reports_probe_error_and_manual_remediation(
-    build_script: Path,
+    producer: Path,
     fake_toolchain: tuple[Path, Path, Path],
     tmp_path: Path,
 ) -> None:
-    completed, log = _run_build_script(
-        build_script,
+    completed, log = _run_producer(
+        producer,
         fake_toolchain,
         tmp_path,
         initially_ready=True,
         extra_env={"FASTPQ_TEST_BROKEN_METAL": "1"},
     )
 
-    assert completed.returncode == 0, completed.stderr
+    assert completed.returncode == 1, completed.stderr
     assert not any(line.startswith("xcodebuild|") for line in log)
     assert not any("--kill-cache" in line for line in log)
     assert log.count("metal|-v") == 1
-    assert "compiler probe failed" in completed.stdout
-    assert "xcode-select -p" in completed.stdout
-    assert "xcodebuild -downloadComponent MetalToolchain" in completed.stdout
-    assert "FASTPQ_SKIP_GPU_BUILD=1" in completed.stdout
-    assert "cargo:rustc-env=FASTPQ_METAL_LIB=" in completed.stdout
+    assert "compiler probe failed" in completed.stderr
+    assert "xcode-select -p" in completed.stderr
+    assert "xcodebuild -downloadComponent MetalToolchain" in completed.stderr
+    assert "--skip" in completed.stderr
+    assert not (tmp_path / "out/candidate").exists()
 
 
 def test_success_without_fresh_compiler_output_rejects_stale_artifacts(
-    build_script: Path,
+    producer: Path,
     fake_toolchain: tuple[Path, Path, Path],
     tmp_path: Path,
 ) -> None:
-    completed, log = _run_build_script(
-        build_script,
+    completed, log = _run_producer(
+        producer,
         fake_toolchain,
         tmp_path,
         initially_ready=True,
@@ -302,26 +262,27 @@ def test_success_without_fresh_compiler_output_rejects_stale_artifacts(
         extra_env={"FASTPQ_TEST_NO_TOOL_OUTPUT": "1"},
     )
 
-    assert completed.returncode == 0, completed.stderr
+    assert completed.returncode == 1, completed.stderr
     assert not any(line.startswith("xcodebuild|") for line in log)
-    assert "Metal AIR object was not produced" in completed.stdout
-    assert "cargo:rustc-env=FASTPQ_METAL_LIB=" in completed.stdout.splitlines()
-    assert "cargo:rustc-cfg=fastpq_metal_available" not in completed.stdout
+    assert "Metal AIR object was not produced" in completed.stderr
+    assert not (tmp_path / "out/candidate").exists()
+    for filename in ("ntt_stage.air", "poseidon.air", "bn254.air", "fastpq.metallib"):
+        assert (tmp_path / "out" / filename).read_text() == "stale\n"
 
 
 def test_explicit_skip_never_probes_or_downloads(
-    build_script: Path,
+    producer: Path,
     fake_toolchain: tuple[Path, Path, Path],
     tmp_path: Path,
 ) -> None:
-    completed, log = _run_build_script(
-        build_script,
+    completed, log = _run_producer(
+        producer,
         fake_toolchain,
         tmp_path,
-        extra_env={"FASTPQ_SKIP_GPU_BUILD": "1"},
+        skip=True,
     )
 
     assert completed.returncode == 0, completed.stderr
     assert log == []
-    assert "FASTPQ_SKIP_GPU_BUILD set" in completed.stdout
-    assert "cargo:rustc-env=FASTPQ_METAL_LIB=" in completed.stdout
+    assert "explicit --skip" in completed.stdout
+    assert not (tmp_path / "out/candidate").exists()

@@ -1250,3 +1250,156 @@ fn reserved_runtime_rejects_late_reconstruction_after_original_reserve() {
     ));
     assert_eq!(floor.advances, 0);
 }
+
+#[test]
+fn current_verification_refusal_retries_exact_signed_owner_before_fresh_clock_and_floor() {
+    use crate::native_check_binding::complete_check_with;
+    use iroha_core::execution_attempt::ExecutionAttemptError;
+    let mut f = Fixture::new();
+    let pending = pending_current(&f);
+    let signed = pending.signed_transaction().clone();
+    let deadline = pending.deadline();
+    assert_eq!(f.native.commit(NOW, vec![signed.clone()]), [true]);
+    let pool = f.native.state().ivm_execution_budget();
+    let original_limit = pool.limit_bytes();
+    let retained = pool.reserved_bytes();
+    let clock_calls = std::cell::Cell::new(0);
+    let verify = |pending: PendingFinalPromotionCheckV1| {
+        pending.verify_finalized(FinalPromotionCheckSourceV1::Current, || {
+            clock_calls.set(clock_calls.get() + 1);
+            Ok(times().0)
+        })
+    };
+    pool.set_limit_bytes(0);
+    let failed = verify(pending)
+        .err()
+        .expect("actual original State source allocation refuses");
+    assert_eq!(clock_calls.get(), 0, "source refusal precedes UTC sampling");
+    assert_eq!(
+        pool.reserved_bytes(),
+        retained,
+        "failed replay releases transient source owners"
+    );
+    let mut waits = 0;
+    let verified = complete_check_with(
+        Err(failed),
+        |failure| verify(failure.into_pending()),
+        std::time::Instant::now,
+        |failure, delay| {
+            waits += 1;
+            assert_eq!(failure.signed_transaction(), &signed);
+            assert_eq!(failure.deadline(), deadline);
+            assert_eq!(delay, Duration::from_millis(1));
+            let ExecutionAttemptError::Deferred(original) = failure.error() else {
+                panic!("local source refusal");
+            };
+            assert!(matches!(
+                original.allocation_refusal(),
+                Some(iroha_allocation::AllocationRefusal::ExceedsLimit { limit_bytes: 0, .. })
+            ));
+            assert_eq!(pool.reserved_bytes(), retained);
+            pool.set_limit_bytes(original_limit);
+        },
+    )
+    .unwrap_or_else(|_| {
+        panic!("same signed Check should verify after original capacity is restored")
+    });
+    assert_eq!(waits, 1);
+    assert_eq!(clock_calls.get(), 1);
+    assert_eq!(
+        verified.original_floor().height + 1,
+        verified.applied_floor().height
+    );
+    // The caller's durable floor has not been advanced by this source-only retry.
+    drop(verified);
+    assert!(
+        pool.reserved_bytes() < retained,
+        "last signed owner releases its original backing"
+    );
+}
+
+#[test]
+fn current_verification_clock_rejection_remains_clock_and_never_retries() {
+    use crate::native_check_binding::{CheckTermination, complete_check_with};
+    use iroha_core::query::final_promotion_authority::observation::FinalPromotionObservationErrorV1;
+    let mut f = Fixture::new();
+    let pending = pending_current(&f);
+    assert_eq!(
+        f.native
+            .commit(NOW, vec![pending.signed_transaction().clone()]),
+        [true]
+    );
+    let failed = pending
+        .verify_finalized(FinalPromotionCheckSourceV1::Current, || {
+            Err(FinalPromotionObservationErrorV1::Clock)
+        })
+        .err()
+        .expect("actual completed clock rejection");
+    assert_eq!(
+        failed.rejection(),
+        Some(FinalPromotionObservationErrorV1::Clock)
+    );
+    let original_deadline = failed.deadline();
+    let result: Result<(), _> = complete_check_with(
+        Err(failed),
+        |_| panic!("terminal Clock cannot retry"),
+        || original_deadline,
+        |_, _| panic!("terminal Clock cannot wait"),
+    );
+    let Err(terminal @ CheckTermination::Terminal(_)) = result else {
+        panic!("completed Clock retained");
+    };
+    assert_eq!(
+        crate::signer_operation::final_promotion::current_observation::verification_error(terminal),
+        CurrentError::Clock
+    );
+}
+
+#[test]
+fn current_verification_local_expiry_is_capacity_not_a_completed_check_rejection() {
+    use crate::native_check_binding::{CheckTermination, complete_check_with};
+    use iroha_core::execution_attempt::ExecutionAttemptError;
+    let mut f = Fixture::new();
+    let pending = pending_current(&f);
+    let deadline = pending.deadline();
+    let signed = pending.signed_transaction().clone();
+    assert_eq!(f.native.commit(NOW, vec![signed.clone()]), [true]);
+    let pool = f.native.state().ivm_execution_budget();
+    let limit = pool.limit_bytes();
+    let retained = pool.reserved_bytes();
+    pool.set_limit_bytes(0);
+    let failed = pending
+        .verify_finalized(FinalPromotionCheckSourceV1::Current, || {
+            panic!("source refusal cannot sample the clock");
+        })
+        .err()
+        .expect("actual original source refusal");
+    assert_eq!(failed.deadline(), deadline);
+    assert_eq!(failed.signed_transaction(), &signed);
+    let ExecutionAttemptError::Deferred(original) = failed.error() else {
+        panic!("local State refusal");
+    };
+    assert!(matches!(
+        original.allocation_refusal(),
+        Some(iroha_allocation::AllocationRefusal::ExceedsLimit { limit_bytes: 0, .. })
+    ));
+    assert_eq!(pool.reserved_bytes(), retained);
+    let result: Result<(), _> = complete_check_with(
+        Err(failed),
+        |_| panic!("no retry after original expiry"),
+        || deadline,
+        |_, _| panic!("already expired owner cannot wait"),
+    );
+    let Err(expired @ CheckTermination::Expired) = result else {
+        panic!("original lifetime expired locally");
+    };
+    assert_eq!(
+        crate::signer_operation::final_promotion::current_observation::verification_error(expired),
+        CurrentError::LocalCapacity,
+    );
+    assert!(
+        pool.reserved_bytes() < retained,
+        "expired original owner releases its backing"
+    );
+    pool.set_limit_bytes(limit);
+}

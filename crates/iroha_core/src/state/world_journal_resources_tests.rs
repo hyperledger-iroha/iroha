@@ -344,7 +344,9 @@ fn world_shell_refund_wake_observes_released_original_world_on_capture_refusal()
         }
     }
     let demand = WorldJournalShellDemand::plan().unwrap();
-    let budget = AllocationBudget::new(demand.total_bytes());
+    let waiter_bytes = iroha_allocation::release::ReleaseRegistration::allocation_layout().size();
+    let budget = AllocationBudget::new(demand.total_bytes() + waiter_bytes);
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let reservation = WorldJournalShellReservation::try_reserve(&budget).unwrap();
     let world = Arc::new(World::default());
     let mut original_probe = Some(
@@ -383,7 +385,7 @@ fn world_shell_refund_wake_observes_released_original_world_on_capture_refusal()
         panic!("finite original pool is full");
     };
     let waker = Waker::from(callback);
-    let mut wait = release.wait_for_release();
+    let mut wait = release.wait_for_release(&mut registration);
     assert!(
         Pin::new(&mut wait)
             .poll(&mut Context::from_waker(&waker))
@@ -401,5 +403,5 @@ fn world_shell_refund_wake_observes_released_original_world_on_capture_refusal()
         0,
         "capacity never wakes while the original World still owns its writer"
     );
-    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(budget.reserved_bytes(), waiter_bytes);
 }

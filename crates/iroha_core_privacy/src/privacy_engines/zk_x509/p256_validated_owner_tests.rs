@@ -111,6 +111,8 @@ fn validated_arithmetic_owner_matches_checked_rows_and_aux_without_revalidation(
     .unwrap();
     let trace = material.build_arithmetic_trace_v1().unwrap();
     drop(material);
+    // Retain a separately clearing original matrix as the independent native oracle.
+    let oracle = P256MainArithmeticGuardV1(Some(trace.clone()));
     let before = checked_constructors_v1();
     let owner = P256MainValidatedArithmeticV1::new_v1(role, trace).unwrap();
     assert_eq!(checked_constructors_v1(), before + 1);
@@ -123,7 +125,7 @@ fn validated_arithmetic_owner_matches_checked_rows_and_aux_without_revalidation(
     assert!(owner_slot.is_none());
     let rows = owner.rows_v1(role).unwrap();
     assert!(matches!(&rows.fixed, Cow::Borrowed(fixed) if core::ptr::eq(*fixed, &owner.fixed)));
-    let checked = P256ArithmeticAggregateRowsV1::new_v1(role, owner.trace_v1()).unwrap();
+    let checked = P256ArithmeticAggregateRowsV1::new_v1(role, oracle.as_ref_v1().unwrap()).unwrap();
     assert_eq!(checked_constructors_v1(), before + 2);
     for row in 0..P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1 {
         assert_eq!(
@@ -141,13 +143,42 @@ fn validated_arithmetic_owner_matches_checked_rows_and_aux_without_revalidation(
         for (row, value) in column.iter().enumerate() {
             assert_eq!(
                 *value,
-                owner
-                    .trace_v1()
+                oracle
+                    .as_ref_v1()
+                    .unwrap()
                     .base
                     .get(row)
                     .map_or(F::ZERO, |cells| cells[index])
             );
         }
+    }
+    for first in (0..P256_ARITHMETIC_BASE_WIDTH_V1).step_by(8) {
+        let width = 8.min(P256_ARITHMETIC_BASE_WIDTH_V1 - first);
+        let mut columns = vec![vec![F(101); P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1]; width];
+        rows.fill_base_columns_v1(
+            first,
+            &mut columns
+                .iter_mut()
+                .map(Vec::as_mut_slice)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        for (offset, column) in columns.iter().enumerate() {
+            for (row, value) in column.iter().enumerate() {
+                assert_eq!(
+                    *value,
+                    oracle
+                        .as_ref_v1()
+                        .unwrap()
+                        .base
+                        .get(row)
+                        .map_or(F::ZERO, |cells| cells[first + offset])
+                );
+            }
+        }
+        columns
+            .iter_mut()
+            .for_each(|column| super::super::private_table::zeroize_fields_v1(column));
     }
     assert_eq!(checked_constructors_v1(), before + 2);
     let post_base = super::tests::main_post_base_v1(71);
@@ -162,7 +193,7 @@ fn validated_arithmetic_owner_matches_checked_rows_and_aux_without_revalidation(
     ));
     let mut raw_aux = P256ArithmeticAggregateAuxStreamV1::new_v1(
         role,
-        owner.trace_v1(),
+        oracle.as_ref_v1().unwrap(),
         post_base.p256_scalar(),
         post_base.p256_arithmetic_copy(),
     )
@@ -194,7 +225,7 @@ fn validated_arithmetic_owner_matches_checked_rows_and_aux_without_revalidation(
     assert!(matches!(
         P256ArithmeticAggregateAuxStreamV1::new_v1(
             role,
-            owner.trace_v1(),
+            oracle.as_ref_v1().unwrap(),
             bad,
             post_base.p256_arithmetic_copy()
         ),
@@ -212,8 +243,7 @@ fn validated_arithmetic_owner_matches_checked_rows_and_aux_without_revalidation(
     assert_eq!(checked_constructors_v1(), before + 3);
     drop((raw_aux, owner_aux, rows, checked));
     let expected = super::super::allocation_payload::sum_v1([
-        super::super::allocation_payload::vector_v1(&owner.trace.fixed),
-        super::super::allocation_payload::vector_v1(&owner.trace.base),
+        P256CompactArithmeticTraceV1::payload_forecast_v1(P256_ARITHMETIC_OPERATIONS_V1).unwrap(),
         owner.fixed.allocated_heap_bytes_v1(),
     ]);
     assert_eq!(owner.allocated_heap_bytes_v1(), expected);

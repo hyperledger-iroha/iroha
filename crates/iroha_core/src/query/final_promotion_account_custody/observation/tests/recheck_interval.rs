@@ -29,7 +29,10 @@ fn initial_interval_enforces_earliest_observation_age_at_exact_boundary() {
         );
         let result = pending.verify_finalized(|| Ok(interval(2000, upper)));
         if let Some(error) = expected {
-            assert_eq!(result.err(), Some(error));
+            assert_eq!(
+                result.err().and_then(|failure| failure.rejection()),
+                Some(error)
+            );
         } else {
             let verified = result.unwrap();
             assert_eq!(verified.eligibility_time_interval(), interval(2000, upper));
@@ -130,7 +133,8 @@ fn retained_interval_does_not_claim_newer_native_authority() {
     assert_eq!(
         pending
             .verify_finalized(|| Ok(interval(NOW + 1, NOW + 2)))
-            .err(),
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Authority),
         "only a fresh Check can observe the subsequent revocation"
     );

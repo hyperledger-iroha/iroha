@@ -15,8 +15,8 @@ pub(crate) use deferred::DeferredPublicationRwLock;
 /// A parking-lot reader/writer lock with one original release-notification source.
 ///
 /// Like the underlying lock, this lock does not poison on unwind. Constructing
-/// its notification and registering waiters have the existing native allocation
-/// requirements; this wrapper does not claim resource admission for them.
+/// `try_new` admits the notification control from the caller's original pool.
+/// Native lock internals and later waiter registrations remain separate owners.
 #[derive(Default)]
 pub struct PublicationRwLock<T> {
     inner: parking_lot::RwLock<T>,
@@ -34,6 +34,40 @@ pub struct PublicationRwLockWriteGuard<'lock, T> {
 }
 
 impl<T> PublicationRwLock<T> {
+    /// Observe this lock's actual release without acquiring a guard or allocating.
+    pub(crate) fn observe_release(&self) -> ReleaseWait {
+        self.released.observe()
+    }
+
+    /// Construct the exact release control from the caller's original finite pool.
+    /// Native mutex internals and future waiter registrations are separate owners.
+    ///
+    /// # Errors
+    /// Preserves original credit refusal or the actual failed control allocation.
+    pub(crate) fn try_new(
+        value: T,
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<Self, mv::storage::AdmittedStorageError> {
+        let layout = ReleaseNotification::allocation_layout::<iroha_allocation::AllocationCharge>();
+        let mut reservation = budget
+            .try_reserve(layout)
+            .map_err(mv::storage::AdmittedStorageError::Allocation)?;
+        let charge = reservation
+            .try_split(layout)
+            .expect("exact original control layout");
+        let released =
+            ReleaseNotification::try_new_charged(charge).map_err(|(charge, error)| {
+                drop(charge);
+                mv::storage::AdmittedStorageError::Allocator {
+                    layout: error.layout(),
+                }
+            })?;
+        Ok(Self {
+            inner: parking_lot::RwLock::new(value),
+            released,
+        })
+    }
+
     /// Bind the protected value and its release source at construction.
     pub fn new(value: T) -> Self {
         Self {
@@ -62,6 +96,12 @@ impl<T> PublicationRwLock<T> {
             .map(|guard| PublicationRwLockReadGuard {
                 inner: self.released.guard(guard),
             })
+    }
+
+    /// Acquire a reader or retain its exact physical source observed before probing.
+    pub fn try_read_or_wait(&self) -> Result<PublicationRwLockReadGuard<'_, T>, ReleaseWait> {
+        let wait = self.released.observe();
+        self.try_read().ok_or(wait)
     }
 
     /// Acquire exclusive access using the underlying lock's blocking semantics.

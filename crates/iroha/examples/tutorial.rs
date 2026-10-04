@@ -18,6 +18,8 @@ fn main() {
         .expect("Asset minting example is expected to work correctly");
     asset_burning_test(config.clone())
         .expect("Asset burning example is expected to work correctly");
+    collection_query_test(config.clone())
+        .expect("Collection query example is expected to work correctly");
     // output_visualising_test(&config).expect(msg: "Visualising outputs example is expected to work correctly");
     println!("Success!");
 }
@@ -252,6 +254,41 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
         .wrap_err("Failed to submit transaction")?;
     // #endregion burn_asset_submit_tx_alt
     // Finish the test successfully
+    Ok(())
+}
+fn collection_query_test(config: Config) -> Result<(), Error> {
+    // #region collection_query_crates
+    use iroha::{
+        account_address::encode_account_id_to_i105,
+        blocking::Client,
+        collections::{Collection, ListQuery, SortKey, field},
+    };
+    // #endregion collection_query_crates
+    // Create an Iroha client
+    let client = Client::new(config)?;
+    // #region collection_query_list
+    // Asset definitions owned by this account, by id, 25 per page
+    let me = encode_account_id_to_i105(
+        client.client().account(),
+        client.client().account_chain_discriminant(),
+    )?;
+    let query = ListQuery::new()
+        .filter(field("owned_by").eq(me))
+        .sort_by(SortKey::asc("id"))
+        .limit(25);
+    let first_page = client.list_page(&Collection::AssetDefinitions, &query)?;
+    println!(
+        "{} definitions on the first page; more pages: {}",
+        first_page.items.len(),
+        first_page.has_more()
+    );
+    // #endregion collection_query_list
+    // #region collection_query_iterate
+    // Every matching definition; further pages are fetched lazily
+    for definition in client.list(Collection::AssetDefinitions, query) {
+        println!("{:?}", definition?.get("id"));
+    }
+    // #endregion collection_query_iterate
     Ok(())
 }
 #[cfg(test)]

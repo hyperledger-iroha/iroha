@@ -763,7 +763,7 @@ fn rejected_next_bridge_finality_response(
     height: NonZeroU64,
     verifier: &mut iroha_data_model::sumeragi_finality::SumeragiFinalityVerifier,
     response: HttpResponse<Vec<u8>>,
-) -> String {
+) -> eyre::Report {
     capture_request(response, |mock_transport| {
         let client = client
             .clone()
@@ -774,7 +774,6 @@ fn rejected_next_bridge_finality_response(
     })
     .0
     .expect_err("bridge finality response must fail")
-    .to_string()
 }
 
 #[test]
@@ -957,7 +956,7 @@ fn bridge_finality_next_reader_response_contract_failures_do_not_advance() {
             Some(APPLICATION_NORITO),
         ),
     );
-    assert!(error.contains("Failed to get current finality proof"));
+    assert!(error.to_string().contains("sumeragi.finality_proof.read"));
 
     let error = rejected_next_bridge_finality_response(
         &client,
@@ -965,7 +964,7 @@ fn bridge_finality_next_reader_response_contract_failures_do_not_advance() {
         &mut verifier,
         mk_response(StatusCode::OK, body.clone(), Some(APPLICATION_JSON)),
     );
-    assert!(error.contains("invalid content-type"));
+    assert!(error.to_string().contains("invalid content-type"));
 
     let mut duplicate_content_type =
         mk_response(StatusCode::OK, body.clone(), Some(APPLICATION_NORITO));
@@ -979,7 +978,7 @@ fn bridge_finality_next_reader_response_contract_failures_do_not_advance() {
         &mut verifier,
         duplicate_content_type,
     );
-    assert!(error.contains("multiple Content-Type"));
+    assert!(error.to_string().contains("multiple Content-Type"));
 
     let error = rejected_next_bridge_finality_response(
         &client,
@@ -991,7 +990,7 @@ fn bridge_finality_next_reader_response_contract_failures_do_not_advance() {
             Some(APPLICATION_NORITO),
         ),
     );
-    assert!(error.contains("response exceeds"));
+    assert!(error.to_string().contains("response exceeds"));
 
     let mut trailing = body.clone();
     trailing.push(0);
@@ -1001,7 +1000,11 @@ fn bridge_finality_next_reader_response_contract_failures_do_not_advance() {
         &mut verifier,
         mk_response(StatusCode::OK, trailing, Some(APPLICATION_NORITO)),
     );
-    assert!(error.contains("canonical Norito"));
+    assert!(matches!(
+        error.downcast_ref::<crate::Error>(),
+        Some(crate::Error::CanonicalDecode { operation: "sumeragi.finality_proof.read", source })
+            if source.kind() == norito::core::DecodeAttemptErrorKind::Invalid
+    ));
 
     let actual = capture_request(
         mk_response(StatusCode::OK, body, Some(APPLICATION_NORITO)),
@@ -1033,7 +1036,7 @@ fn bridge_finality_next_reader_verification_failure_does_not_advance() {
         &mut verifier,
         mk_response(StatusCode::OK, invalid_body, Some(APPLICATION_NORITO)),
     );
-    assert!(!error.is_empty());
+    assert!(!error.to_string().is_empty());
 
     let body = norito::to_bytes(&successor).expect("encode canonical successor proof");
     let actual = capture_request(
@@ -1614,5 +1617,191 @@ fn private_root_anchor_read_is_bounded_exact_and_does_not_authenticate_the_quoru
                 height
             )
             .is_err()
+    );
+}
+
+#[test]
+fn independent_custody_state_uses_exact_bounded_route_and_never_treats_http_absence_as_state() {
+    use iroha_data_model::sorafs::stream_token_custody::proof::MAX_STREAM_TOKEN_CUSTODY_PROOF_BYTES_V1;
+    let (client, provider, binding, verified) = stream_token_custody_control_fixture();
+    let owner = AccountId::new(
+        KeyPair::from_seed(vec![0x66; 32], Algorithm::Ed25519)
+            .public_key()
+            .clone(),
+    );
+    for response in [
+        mk_response(StatusCode::OK, vec![1, 2, 3], Some(APPLICATION_NORITO)),
+        mk_response(StatusCode::NOT_FOUND, Vec::new(), Some(APPLICATION_NORITO)),
+        mk_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            Vec::new(),
+            Some(APPLICATION_NORITO),
+        ),
+        mk_response(StatusCode::OK, b"{}".to_vec(), Some(APPLICATION_JSON)),
+        mk_response(
+            StatusCode::OK,
+            vec![0; MAX_STREAM_TOKEN_CUSTODY_PROOF_BYTES_V1 + 1],
+            Some(APPLICATION_NORITO),
+        ),
+    ] {
+        let (result, request) = capture_request(response, |transport| {
+            let client = client.clone().with_test_http_transport(transport);
+            mark_data_model_compatible(&client);
+            client.get_stream_token_custody_state(
+                provider,
+                &owner,
+                &binding,
+                Hash::new(b"independently selected schema"),
+                &verified,
+            )
+        });
+        assert!(result.is_err());
+        assert_eq!(
+            request.url.path(),
+            format!(
+                "/v1/sorafs/providers/{}/custody/2",
+                hex::encode(provider.as_bytes())
+            )
+        );
+        assert_eq!(
+            request.max_response_bytes,
+            MAX_STREAM_TOKEN_CUSTODY_PROOF_BYTES_V1
+        );
+        assert_eq!(
+            request
+                .headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("accept"))
+                .map(|(_, value)| value.as_str()),
+            Some(APPLICATION_NORITO)
+        );
+    }
+}
+
+#[test]
+fn independent_custody_state_decodes_authenticated_absence_on_the_selected_global_root() {
+    use iroha_data_model::{
+        sorafs::stream_token_custody::proof::StreamTokenCustodyProofV1,
+        sumeragi_finality::{
+            WorldStateElementKindV1, WorldStateSnapshotEntryV1, WorldStateSnapshotV1,
+            world_state_value_hash_v1,
+        },
+        testing::native_finality::NativeFinalityFixture,
+    };
+    let (mut client, provider, mut binding, _) = stream_token_custody_control_fixture();
+    let mut native = NativeFinalityFixture::start("sdk-native-custody-absence");
+    client.chain = native.chain_id().parse().unwrap();
+    client.network_id = native.network_id();
+    binding.chain_id = client.chain.to_string();
+    binding.network_id = *client.network_id.as_bytes();
+    let owner = AccountId::new(
+        KeyPair::from_seed(vec![0x66; 32], Algorithm::Ed25519)
+            .public_key()
+            .clone(),
+    );
+    let schema = Hash::new(b"independently qualified sdk custody schema");
+    let proof = StreamTokenCustodyProofV1 {
+        world: WorldStateSnapshotV1 {
+            schema_hash: schema,
+            entries: vec![WorldStateSnapshotEntryV1 {
+                field_id: "world.provider_owners".into(),
+                kind: WorldStateElementKindV1::Table,
+                key_hash: Some(world_state_value_hash_v1(&provider).unwrap()),
+                value_hash: world_state_value_hash_v1(&owner).unwrap(),
+            }],
+        },
+        owner: owner.clone(),
+        current: None,
+    };
+    let block = native.block_with_submitted_work(native.next_header());
+    let certificate = native.certify_with_world_root(block, proof.world.root().unwrap());
+    let verified = native
+        .verifier()
+        .verify_retained_decision(&certificate)
+        .unwrap();
+    let response = mk_response(
+        StatusCode::OK,
+        norito::encode_canonical(&proof).unwrap(),
+        Some(APPLICATION_NORITO),
+    );
+    let (result, _) = capture_request(response, |transport| {
+        let client = client.with_test_http_transport(transport);
+        mark_data_model_compatible(&client);
+        client.get_stream_token_custody_state(provider, &owner, &binding, schema, &verified)
+    });
+    let state = result.unwrap();
+    assert!(state.current().is_none());
+    assert_eq!(state.owner(), &owner);
+    assert_eq!(state.context_id(), verified.context_id());
+}
+
+#[test]
+fn independent_custody_state_refuses_foreign_private_or_expired_selection_before_dispatch() {
+    use iroha_data_model::{
+        block::consensus::SumeragiRootScope, testing::native_finality::NativeFinalityFixture,
+    };
+    let (client, provider, binding, verified) = stream_token_custody_control_fixture();
+    let owner = AccountId::new(
+        KeyPair::from_seed(vec![0x66; 32], Algorithm::Ed25519)
+            .public_key()
+            .clone(),
+    );
+    let mut private = NativeFinalityFixture::start_with_scope(
+        "private-custody-root",
+        SumeragiRootScope::Dataspace {
+            parent_network_id: client.network_id,
+            dataspace_id: iroha_model_base::topology::DataSpaceId::new(u64::MAX),
+        },
+    );
+    let block = private.block_with_submitted_work(private.next_header());
+    let certificate = private.certify(block);
+    let private_block = private
+        .verifier()
+        .verify_retained_decision(&certificate)
+        .unwrap();
+    with_mock_http(
+        |_| panic!("invalid or expired custody selection must not dispatch"),
+        |transport| {
+            let client = client.with_test_http_transport(transport);
+            mark_data_model_compatible(&client);
+            let schema = Hash::new(b"selected schema");
+            let mut changed = binding.clone();
+            changed.chain_id = "other-chain".into();
+            assert!(
+                client
+                    .get_stream_token_custody_state(provider, &owner, &changed, schema, &verified)
+                    .is_err()
+            );
+            let mut foreign = client.clone();
+            foreign.chain = "another-root-label".parse().unwrap();
+            changed.chain_id = foreign.chain.to_string();
+            assert!(
+                foreign
+                    .get_stream_token_custody_state(provider, &owner, &changed, schema, &verified)
+                    .is_err()
+            );
+            let mut private_client = client.clone();
+            private_client.chain = private.chain_id().parse().unwrap();
+            private_client.network_id = private.network_id();
+            changed.chain_id = private_client.chain.to_string();
+            changed.network_id = *private_client.network_id.as_bytes();
+            assert!(
+                private_client
+                    .get_stream_token_custody_state(
+                        provider,
+                        &owner,
+                        &changed,
+                        schema,
+                        &private_block
+                    )
+                    .is_err()
+            );
+            let expired = client.with_request_deadline(std::time::Instant::now());
+            assert!(
+                expired
+                    .get_stream_token_custody_state(provider, &owner, &binding, schema, &verified)
+                    .is_err()
+            );
+        },
     );
 }

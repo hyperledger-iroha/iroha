@@ -426,7 +426,7 @@ impl Inner {
             configs,
             startup_nonce(),
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.map_rejection(|completed| completed.to_string()))?;
         let member = record
             .committee
             .iter()

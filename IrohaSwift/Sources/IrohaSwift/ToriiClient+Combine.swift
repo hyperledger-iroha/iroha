@@ -4,20 +4,11 @@ import Combine
 
 @available(iOS 15.0, macOS 12.0, *)
 public extension ToriiClient {
-    /// Fetch account asset balances once and emit them on the requested scheduler.
-    func assetsPublisher(accountId: String,
-                         limit: Int = 100,
-                         asset: String? = nil,
-                         scope: String? = nil,
-                         scheduler: DispatchQueue? = .main) -> AnyPublisher<[ToriiAssetBalance], ToriiClientError> {
-        makeValuePublisher(operation: { try await self.getAssets(accountId: accountId, limit: limit, asset: asset, scope: scope) },
-                           scheduler: scheduler)
-    }
-
     /// Expose verifying-key server-sent events as a Combine publisher.
-    func verifyingKeyEventsPublisher(filter: ToriiVerifyingKeyEventFilter = ToriiVerifyingKeyEventFilter(),
-                                     scheduler: DispatchQueue? = .main) -> AnyPublisher<ToriiVerifyingKeyEventMessage, ToriiClientError> {
-        makeStreamPublisher({ self.streamVerifyingKeyEvents(filter: filter) },
+    func verifyingKeyEventsPublisher(
+        scheduler: DispatchQueue? = .main
+    ) -> AnyPublisher<ToriiEventMessage<ToriiEventNotice>, ToriiClientError> {
+        makeStreamPublisher({ self.streamVerifyingKeyEvents() },
                             scheduler: scheduler)
     }
 
@@ -98,37 +89,6 @@ public extension ToriiClient {
         }, scheduler: scheduler)
     }
 
-    /// Bridge an async Torii call into a Combine publisher.
-    func makeValuePublisher<Output>(operation: @Sendable @escaping () async throws -> Output,
-                                    scheduler: DispatchQueue?) -> AnyPublisher<Output, ToriiClientError> {
-        let queue = scheduler ?? DispatchQueue.main
-        let taskContainer = ToriiCombineTaskContainer()
-
-        return Deferred {
-            Future<Output, ToriiClientError> { promise in
-                let promiseBox = ToriiCombinePromiseBox(promise)
-                let task = Task {
-                    do {
-                        let value = try await operation()
-                        if !Task.isCancelled {
-                            promiseBox.promise(.success(value))
-                        }
-                    } catch is CancellationError {
-                        // Subscriber likely cancelled; drop the completion.
-                    } catch {
-                        if !Task.isCancelled {
-                            promiseBox.promise(.failure(ToriiClient.mapToClientError(error)))
-                        }
-                    }
-                }
-                taskContainer.task = task
-            }
-        }
-        .handleEvents(receiveCancel: { taskContainer.task?.cancel() })
-        .receive(on: queue)
-        .eraseToAnyPublisher()
-    }
-
     /// Bridge an async stream into a Combine publisher, propagating cancellation cleanly.
     func makeStreamPublisher<Output>(_ builder: @Sendable @escaping () -> AsyncThrowingStream<Output, Error>,
                                      scheduler: DispatchQueue?) -> AnyPublisher<Output, ToriiClientError> {
@@ -170,18 +130,6 @@ public extension ToriiClient {
             return toriiError
         }
         return .transport(error)
-    }
-}
-
-final class ToriiCombineTaskContainer: @unchecked Sendable {
-    var task: Task<Void, Never>?
-}
-
-private final class ToriiCombinePromiseBox<Output>: @unchecked Sendable {
-    let promise: Future<Output, ToriiClientError>.Promise
-
-    init(_ promise: @escaping Future<Output, ToriiClientError>.Promise) {
-        self.promise = promise
     }
 }
 

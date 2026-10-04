@@ -44,8 +44,10 @@ pub struct MusubiPublicationFinalizedPinRegistrationQueryV1 {
 }
 
 /// Redacted finality/replay failure for one signed pin registration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MusubiPublicationFinalizedPinRegistrationReadErrorV1 {
+    /// Original local allocation admission has not completed; retry the same read.
+    Deferred(iroha_core::execution_attempt::ExecutionDeferred),
     /// The named height or source snapshot is ahead of this node's finalized view.
     LocallyAhead,
     /// The signed intent, output, finalized block, or current pin record differs.
@@ -54,12 +56,34 @@ pub enum MusubiPublicationFinalizedPinRegistrationReadErrorV1 {
 impl core::fmt::Display for MusubiPublicationFinalizedPinRegistrationReadErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self {
+            Self::Deferred(_) => "finalized history read is waiting for local capacity",
             Self::LocallyAhead => "finalized Musubi pin registration is ahead of local state",
             Self::Invalid => "finalized Musubi pin registration is invalid",
         })
     }
 }
 impl std::error::Error for MusubiPublicationFinalizedPinRegistrationReadErrorV1 {}
+impl From<iroha_core::execution_attempt::ExecutionDeferred>
+    for MusubiPublicationFinalizedPinRegistrationReadErrorV1
+{
+    fn from(error: iroha_core::execution_attempt::ExecutionDeferred) -> Self {
+        Self::Deferred(error)
+    }
+}
+impl From<iroha_core::execution_attempt::ExecutionAttemptError<iroha_core::kura::Error>>
+    for MusubiPublicationFinalizedPinRegistrationReadErrorV1
+{
+    fn from(
+        error: iroha_core::execution_attempt::ExecutionAttemptError<iroha_core::kura::Error>,
+    ) -> Self {
+        match error {
+            iroha_core::execution_attempt::ExecutionAttemptError::Deferred(error) => {
+                Self::Deferred(error)
+            }
+            iroha_core::execution_attempt::ExecutionAttemptError::Rejected(_) => Self::Invalid,
+        }
+    }
+}
 
 /// Daemon-owned same-view finality and current-state reader for pin-registration recovery.
 ///
@@ -145,6 +169,9 @@ impl MusubiPublicationFinalizedPinRegistrationReaderV1 {
                 super::MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::LocallyAhead => {
                     LocallyAhead
                 }
+                super::MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Deferred(
+                    error,
+                ) => MusubiPublicationFinalizedPinRegistrationReadErrorV1::Deferred(error),
                 super::MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Invalid => Invalid,
             })?;
         let manifest = validate_signed_pin_intent(
@@ -166,15 +193,18 @@ impl MusubiPublicationFinalizedPinRegistrationReaderV1 {
             .get(height.get() - 1)
             .copied()
             .ok_or(Invalid)?;
-        let block = view.kura().get_block(height).ok_or(Invalid)?;
+        let block = view
+            .kura()
+            .get_block(height, &view.execution_budget())?
+            .ok_or(Invalid)?;
         if !validate_finalized_block_wire(
             &view,
             &self.network_id,
             query.finalized_height,
             canonical_hash,
             &block,
-        ) || block.validate_output_merkle_cache().is_err()
-            || !exact_successful_pin_transaction(&query.transaction, &block)
+        )? || block.validate_output_merkle_cache().is_err()
+            || !exact_successful_pin_transaction(&query.transaction, &block)?
         {
             return Err(Invalid);
         }
@@ -205,7 +235,6 @@ pub(super) fn validate_signed_pin_intent(
     use MusubiPublicationFinalizedPinRegistrationReadErrorV1::Invalid;
     if transaction.network_id() != Some(network_id)
         || transaction.authority() != authority
-        || transaction.verify_signature().is_err()
         || !transaction.metadata().is_empty()
         || transaction.attachments().is_some()
         || transaction.multisig_signatures().is_some()
@@ -214,6 +243,10 @@ pub(super) fn validate_signed_pin_intent(
     {
         return Err(Invalid);
     }
+    let signer = transaction.authority().try_signatory().ok_or(Invalid)?;
+    let hash = iroha_crypto::HashOf::try_new(transaction.payload()).map_err(codec_refusal)?;
+    iroha_crypto::verify_signature_borrowed(&transaction.signature().0, signer, hash.as_ref())
+        .map_err(|_| Invalid)?;
     let Executable::Instructions(instructions) = transaction.instructions() else {
         return Err(Invalid);
     };
@@ -227,9 +260,21 @@ pub(super) fn validate_signed_pin_intent(
         return Err(Invalid);
     }
     let manifest = sorafs_manifest::decode_manifest_v1_canonical(&register.manifest_payload)
-        .map_err(|_| Invalid)?;
-    if ManifestDigest::from_manifest(&manifest).map_err(|_| Invalid)? != expected_digest
-        || manifest.root_cid.as_slice() != archive.root_cid.as_bytes()
+        .map_err(manifest_codec_refusal)?;
+    if ManifestDigest::from_manifest(&manifest).map_err(codec_refusal)? != expected_digest {
+        return Err(Invalid);
+    }
+    validate_pin_manifest(&manifest, archive)?;
+    Ok(manifest)
+}
+
+/// The sole exact archive-to-manifest relation, shared by preparation and signed readback.
+pub(super) fn validate_pin_manifest(
+    manifest: &ManifestV1,
+    archive: &MusubiArchiveCommitmentV1,
+) -> Result<(), MusubiPublicationFinalizedPinRegistrationReadErrorV1> {
+    use MusubiPublicationFinalizedPinRegistrationReadErrorV1::Invalid;
+    if manifest.root_cid.as_slice() != archive.root_cid.as_bytes()
         || manifest.chunking.profile_id.0 != archive.chunker.profile_id
         || manifest.chunking.namespace != archive.chunker.namespace
         || manifest.chunking.name != archive.chunker.name
@@ -243,48 +288,88 @@ pub(super) fn validate_signed_pin_intent(
     {
         return Err(Invalid);
     }
-    Ok(manifest)
+    Ok(())
+}
+
+pub(super) fn manifest_codec_refusal(
+    error: sorafs_manifest::ManifestDecodeError,
+) -> MusubiPublicationFinalizedPinRegistrationReadErrorV1 {
+    match error {
+        sorafs_manifest::ManifestDecodeError::Decode { source }
+        | sorafs_manifest::ManifestDecodeError::CanonicalEncoding { source } => {
+            codec_refusal(source)
+        }
+        _ => MusubiPublicationFinalizedPinRegistrationReadErrorV1::Invalid,
+    }
+}
+
+pub(super) fn codec_refusal(
+    error: norito::Error,
+) -> MusubiPublicationFinalizedPinRegistrationReadErrorV1 {
+    use MusubiPublicationFinalizedPinRegistrationReadErrorV1::{Deferred, Invalid};
+    if matches!(&error, norito::Error::AllocationFailed { .. }) {
+        Deferred(ivm::error::ExecutionDeferral::AllocationUnavailable.into())
+    } else if norito::core::decode_error_matches_active_limits(&error) {
+        Deferred(ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into())
+    } else {
+        Invalid
+    }
 }
 
 fn exact_successful_pin_transaction(
     expected: &SignedTransaction,
     block: &iroha_data_model::block::SignedBlock,
-) -> bool {
-    let Ok(expected_wire) = expected.encode_wire_v1() else {
-        return false;
-    };
+) -> Result<bool, MusubiPublicationFinalizedPinRegistrationReadErrorV1> {
+    let expected_hash = expected.try_hash_as_entrypoint().map_err(codec_refusal)?;
+    let expected_wire = expected
+        .wire_plan_v1()
+        .map_err(codec_refusal)?
+        .into_vec_bounded(128 * 1024)
+        .map_err(codec_refusal)?;
     let mut found = false;
     for (input_index, entrypoint) in block.network_entrypoints().enumerate() {
         let transaction = match entrypoint {
             TransactionEntrypoint::External(transaction) => transaction,
             TransactionEntrypoint::SealedReveal(reveal) => {
-                if reveal.signed_transaction().hash() == expected.hash() {
-                    return false;
+                if reveal
+                    .signed_transaction()
+                    .try_hash_as_entrypoint()
+                    .map_err(codec_refusal)?
+                    == expected_hash
+                {
+                    return Ok(false);
                 }
                 continue;
             }
             TransactionEntrypoint::SealedCommitment(_) => continue,
         };
-        if transaction.hash() != expected.hash() {
+        if transaction
+            .try_hash_as_entrypoint()
+            .map_err(codec_refusal)?
+            != expected_hash
+        {
             continue;
         }
         let Some((_, output)) = u32::try_from(input_index)
             .ok()
             .and_then(|index| block.network_output_at(index))
         else {
-            return false;
+            return Ok(false);
         };
-        if found
-            || output.result.is_err()
-            || !transaction
-                .encode_wire_v1()
-                .is_ok_and(|wire| wire == expected_wire)
-        {
-            return false;
+        if found || output.result.is_err() {
+            return Ok(false);
+        }
+        let actual = transaction
+            .wire_plan_v1()
+            .map_err(codec_refusal)?
+            .into_vec_bounded(128 * 1024)
+            .map_err(codec_refusal)?;
+        if actual != expected_wire {
+            return Ok(false);
         }
         found = true;
     }
-    found
+    Ok(found)
 }
 
 fn pin_record_matches_intent(
@@ -549,6 +634,69 @@ mod tests {
     }
 
     #[test]
+    fn original_pin_codec_refusal_is_local_deferred_and_same_wire_retries() {
+        let (network, authority, archive, manifest, key) = fixture();
+        let digest = ManifestDigest::from_manifest(&manifest).unwrap();
+        let transaction = signed_pin(network, authority.clone(), &key, &manifest, false);
+        let wire = transaction.encode_wire_v1().unwrap();
+        let zero = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
+        let refused = norito::with_decode_limits_scope(zero, || {
+            validate_signed_pin_intent(&network, &authority, &archive, &transaction, digest)
+        });
+        assert!(matches!(
+            refused,
+            Err(MusubiPublicationFinalizedPinRegistrationReadErrorV1::Deferred(_))
+        ));
+        assert_eq!(transaction.encode_wire_v1().unwrap(), wire);
+        assert_eq!(
+            validate_signed_pin_intent(&network, &authority, &archive, &transaction, digest)
+                .unwrap(),
+            manifest
+        );
+        // This block exercises the existing output matcher only, not a native-finality proof.
+        let block = result_bearing_block(transaction.clone(), true);
+        let refused = norito::with_decode_limits_scope(zero, || {
+            exact_successful_pin_transaction(&transaction, &block)
+        });
+        assert!(matches!(
+            refused,
+            Err(MusubiPublicationFinalizedPinRegistrationReadErrorV1::Deferred(_))
+        ));
+        assert!(exact_successful_pin_transaction(&transaction, &block).unwrap());
+    }
+
+    #[test]
+    fn manifest_codec_refusal_preserves_allocation_and_rejects_invalid_wire() {
+        use MusubiPublicationFinalizedPinRegistrationReadErrorV1::{Deferred, Invalid};
+        use sorafs_manifest::ManifestDecodeError;
+
+        for error in [
+            ManifestDecodeError::Decode {
+                source: norito::Error::AllocationFailed { bytes: 64 },
+            },
+            ManifestDecodeError::CanonicalEncoding {
+                source: norito::Error::AllocationFailed { bytes: 64 },
+            },
+        ] {
+            assert_eq!(
+                manifest_codec_refusal(error),
+                Deferred(ivm::error::ExecutionDeferral::AllocationUnavailable.into())
+            );
+        }
+        for error in [
+            ManifestDecodeError::NonCanonicalEncoding,
+            ManifestDecodeError::Decode {
+                source: norito::Error::LengthMismatch,
+            },
+            ManifestDecodeError::CanonicalEncoding {
+                source: norito::Error::LengthMismatch,
+            },
+        ] {
+            assert_eq!(manifest_codec_refusal(error), Invalid);
+        }
+    }
+
+    #[test]
     fn current_pin_record_rejects_retirement_fee_substitution_and_manifest_changes() {
         let (_, authority, archive, manifest, _) = fixture();
         let digest = ManifestDigest::from_manifest(&manifest).expect("manifest digest");
@@ -606,9 +754,9 @@ mod tests {
         let transaction = signed_pin(network, authority, &key, &manifest, false);
         let successful = result_bearing_block(transaction.clone(), true);
         assert!(successful.validate_output_merkle_cache().is_ok());
-        assert!(exact_successful_pin_transaction(&transaction, &successful));
+        assert!(exact_successful_pin_transaction(&transaction, &successful).unwrap());
         let rejected = result_bearing_block(transaction.clone(), false);
-        assert!(!exact_successful_pin_transaction(&transaction, &rejected));
+        assert!(!exact_successful_pin_transaction(&transaction, &rejected).unwrap());
         let other = signed_pin(
             network,
             AccountId::new(key.public_key().clone()),
@@ -616,6 +764,6 @@ mod tests {
             &manifest,
             true,
         );
-        assert!(!exact_successful_pin_transaction(&other, &successful));
+        assert!(!exact_successful_pin_transaction(&other, &successful).unwrap());
     }
 }

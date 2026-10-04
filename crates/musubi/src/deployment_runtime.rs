@@ -1,12 +1,13 @@
 //! Presentation-free contract compilation and durable native deployment.
 //!
-//! Callers supply the exact SDK configuration, alias scope and private journal root. This
-//! boundary never discovers a wallet, network configuration or signing material from a project.
+//! Callers supply the exact SDK configuration, alias scope, private journal root and cache root.
+//! This boundary never discovers a wallet, network configuration, cache location or signing
+//! material from a project or the operating-system user cache.
 use crate::archive_fetch::PreparedProductionSorafsArchiveTransportV1;
 use eyre::{Result, WrapErr as _, bail, eyre};
 use iroha::config::Config;
 use iroha_contract_deploy::{
-    DeploymentPreflight, DeploymentProgress, DeploymentReceipt, DeploymentRequest,
+    DeploymentError, DeploymentPreflight, DeploymentProgress, DeploymentReceipt, DeploymentRequest,
     DeploymentService, JournalDisposition, MAX_DEPLOYMENT_ARTIFACT_BYTES, PreparedDeployment,
 };
 use iroha_data_model::{
@@ -200,6 +201,7 @@ pub type BuildRegistryResolver =
 pub struct DeploymentRuntime {
     config: Config,
     journal_root: PathBuf,
+    cache_root: PathBuf,
     archive_transport: Option<PreparedProductionSorafsArchiveTransportV1>,
     build_registry: Option<Config>,
     registry_resolver: Option<std::sync::Arc<BuildRegistryResolver>>,
@@ -207,10 +209,11 @@ pub struct DeploymentRuntime {
 impl DeploymentRuntime {
     /// Retain immutable context without reading files, loading keys or contacting the network.
     #[must_use]
-    pub fn new(config: Config, journal_root: PathBuf) -> Self {
+    pub fn new(config: Config, journal_root: PathBuf, cache_root: PathBuf) -> Self {
         Self {
             config,
             journal_root,
+            cache_root,
             archive_transport: None,
             build_registry: None,
             registry_resolver: None,
@@ -299,6 +302,7 @@ impl DeploymentRuntime {
                 locked,
             } => crate::command::build_runtime_package(
                 &self.config,
+                &self.cache_root,
                 self.build_registry.as_ref(),
                 self.registry_resolver.as_deref(),
                 manifest,
@@ -377,7 +381,7 @@ impl DeploymentRuntime {
                     }
                     let receipt = service
                         .resume(&journal, progress)
-                        .wrap_err_with(|| format!("deployment journal: {}", journal.display()))?;
+                        .map_err(|error| journal_failure(error, &journal))?;
                     return Ok(DeploymentRun { receipt, journal });
                 }
                 JournalDisposition::Pending { .. } => {
@@ -410,7 +414,7 @@ impl DeploymentRuntime {
         let journal = session.persist(&service, &prepared)?;
         let receipt = service
             .execute(&prepared, &journal, progress)
-            .wrap_err_with(|| format!("deployment journal: {}", journal.display()))?;
+            .map_err(|error| journal_failure(error, &journal))?;
         Ok(DeploymentRun { receipt, journal })
     }
 
@@ -453,13 +457,69 @@ impl DeploymentRuntime {
             &plan_journal_id(&retained_preflight)?,
         )?;
         let receipt = after_review(&retained_preflight, review, || {
-            Ok(service.resume(&retained, progress)?)
+            service
+                .resume(&retained, progress)
+                .map_err(|error| journal_failure(error, &retained))
         })?;
         Ok(DeploymentRun {
             receipt,
             journal: retained,
         })
     }
+
+    /// Locate and authenticate the current completed deployment for one exact alias.
+    ///
+    /// No build, wallet discovery, signing or dispatch occurs. The same native alias slot and
+    /// retained journal ownership used by deployment also governs this read.
+    ///
+    /// # Errors
+    /// Rejects absent, unresolved, substituted, unsafe or changed current deployments.
+    pub fn current_deployment(&self, alias: &ContractAlias) -> Result<CurrentDeployment> {
+        let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
+        let slot = deployment_slot(&self.config, &self.journal_root, alias);
+        // A read must not create a new alias slot merely because no deployment exists.
+        let writer = PrivateDirectory::open(&slot)?;
+        let lock = writer.open_read("deployment.lock")?;
+        lock.try_lock()
+            .wrap_err("deployment target is already in use")?;
+        writer.revalidate()?;
+        let session = DeploymentSlot {
+            writer,
+            _lock: lock,
+        };
+        let journal = session
+            .current_journal()?
+            .ok_or_else(|| eyre!("contract alias has no retained deployment"))?;
+        let service = DeploymentService::new(self.config.clone())?;
+        let preflight = service.retained_preflight(&journal)?;
+        if &preflight.contract_alias != alias {
+            bail!("retained deployment resolves a different alias");
+        }
+        validate_journal_location(
+            &self.config,
+            &self.journal_root,
+            &journal,
+            alias,
+            &plan_journal_id(&preflight)?,
+        )?;
+        let contract = service.current_completed_contract(&journal)?;
+        Ok(CurrentDeployment { contract, journal })
+    }
+}
+
+/// Exact completed deployment selected by the native alias slot.
+pub struct CurrentDeployment {
+    /// Authenticated Applied receipt and complete retained artifact.
+    pub contract: iroha_contract_deploy::CompletedContract,
+    /// Owner-private original deployment recovery path.
+    pub journal: PathBuf,
+}
+
+fn journal_failure(error: DeploymentError, journal: &Path) -> eyre::Report {
+    // Frontends commonly display only the outer message. Preserve the native public diagnostic
+    // alongside its exact recovery path without expanding arbitrary underlying error chains.
+    let message = format!("{error}\nDeployment journal: {}", journal.display());
+    eyre::Report::new(error).wrap_err(message)
 }
 
 fn after_review<T, R, F: FnMut(&T) -> Result<()> + ?Sized>(
@@ -585,6 +645,56 @@ mod tests {
     const SOURCE: &str = "seiyaku Coffee { view fn quote(int cups) -> int { return cups * 10; } }";
 
     #[test]
+    fn journal_failure_display_preserves_pending_hash_cause_and_exact_recovery_path() {
+        let hash = iroha::crypto::Hash::new(b"original attempted deployment").to_string();
+        let journal = Path::new("managed state/deployments/original journal");
+        let diagnostic =
+            eyre!("internal transport detail").wrap_err("the original finality deadline elapsed");
+        let error = journal_failure(
+            DeploymentError::Pending {
+                step: "upload".to_owned(),
+                hash: hash.clone(),
+                source: diagnostic,
+            },
+            journal,
+        );
+        let displayed = error.to_string();
+        assert!(displayed.contains("deployment step `upload`"));
+        assert!(displayed.contains(&hash));
+        assert!(displayed.contains("the original finality deadline elapsed"));
+        assert!(displayed.contains("resume this journal without creating another deployment"));
+        assert!(displayed.ends_with(&format!("Deployment journal: {}", journal.display())));
+        assert!(!displayed.contains("internal transport detail"));
+        assert!(matches!(
+            error.downcast_ref::<DeploymentError>(),
+            Some(DeploymentError::Pending { hash: original, .. }) if original == &hash
+        ));
+    }
+
+    #[test]
+    fn journal_failure_preserves_native_error_categories_and_public_messages() {
+        let journal = Path::new("managed state/original journal");
+        for native in [
+            DeploymentError::Preflight {
+                operation: "fee quote",
+                source: eyre!("approved fee cap exceeded"),
+            },
+            DeploymentError::Journal(eyre!("original journal is busy")),
+            DeploymentError::Readback(eyre!("alias differs from original contract")),
+        ] {
+            let public = native.to_string();
+            let error = journal_failure(native, journal);
+            assert!(error.to_string().starts_with(&public));
+            assert!(error.downcast_ref::<DeploymentError>().is_some());
+            assert!(
+                error
+                    .to_string()
+                    .ends_with(&format!("Deployment journal: {}", journal.display()))
+            );
+        }
+    }
+
+    #[test]
     fn retained_plan_review_rejection_prevents_recovery_dispatch() {
         let dispatches = std::cell::Cell::new(0);
         let result = after_review(
@@ -672,7 +782,6 @@ chain = "00000000-0000-0000-0000-000000000000"
 network_id = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
 torii_url = "http://127.0.0.1:9/"
 [account]
-domain = "wonderland.universal"
 chain_discriminant = 753
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
 private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
@@ -680,6 +789,30 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         Config::load_bytes_with_musubi_publication(Path::new("unused-runtime.toml"), source)
             .expect("fixture config")
             .0
+    }
+
+    #[test]
+    fn current_deployment_read_never_creates_or_repairs_an_absent_slot() -> Result<()> {
+        let temporary = TempDir::new()?;
+        let config = config();
+        let root = temporary.path().join("absent-deployments");
+        let runtime = DeploymentRuntime::new(
+            config.clone(),
+            root.clone(),
+            temporary.path().join("explicit-build-cache"),
+        );
+        let alias: ContractAlias = "Counter::universal".parse()?;
+        assert!(runtime.current_deployment(&alias).is_err());
+        assert!(!root.exists());
+
+        let slot = deployment_slot(&config, &root, &alias);
+        let directory = PrivateDirectory::open_or_create(&slot)?;
+        directory.write_atomic("sentinel", b"original", PublishMode::CreateNew)?;
+        assert!(runtime.current_deployment(&alias).is_err());
+        assert!(!slot.join("deployment.lock").exists());
+        assert!(!slot.join("active-journal").exists());
+        assert_eq!(directory.read("sentinel", 8)?.as_slice(), b"original");
+        Ok(())
     }
 
     #[test]
@@ -695,7 +828,11 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
             temp.path().join("Musubi.toml"),
             "invalid unrelated manifest",
         )?;
-        let runtime = DeploymentRuntime::new(config(), temp.path().join("journals"));
+        let runtime = DeploymentRuntime::new(
+            config(),
+            temp.path().join("journals"),
+            temp.path().join("explicit-build-cache"),
+        );
         let built = runtime.build(&ContractInput::Source(source))?;
         assert_eq!(built.name(), "Coffee");
         let bytecode = temp.path().join("contract.to");
@@ -703,6 +840,7 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         let loaded = runtime.build(&ContractInput::Bytecode(bytecode))?;
         assert_eq!(loaded.bytes(), built.bytes());
         assert!(!temp.path().join("journals").exists());
+        assert!(!temp.path().join("explicit-build-cache").exists());
         assert!(!temp.path().join("Musubi.lock").exists());
         Ok(())
     }
@@ -751,10 +889,14 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
             temp.path().join("Musubi.networks.toml"),
             "invalid unused network binding",
         )?;
-        let runtime = DeploymentRuntime::new(config(), temp.path().join("journals"))
-            .with_build_registry_resolver(std::sync::Arc::new(|| {
-                panic!("local package must not resolve a parent registry")
-            }));
+        let runtime = DeploymentRuntime::new(
+            config(),
+            temp.path().join("journals"),
+            temp.path().join("explicit-build-cache"),
+        )
+        .with_build_registry_resolver(std::sync::Arc::new(|| {
+            panic!("local package must not resolve a parent registry")
+        }));
         let input = |locked| ContractInput::Package {
             manifest: manifest.clone(),
             package: None,
@@ -767,6 +909,7 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         assert_eq!(runtime.build(&input(true))?.bytes(), artifact.bytes());
         assert!(temp.path().join("Musubi.lock").is_file());
         assert!(!temp.path().join("journals").exists());
+        assert!(!temp.path().join("explicit-build-cache").exists());
         Ok(())
     }
 
@@ -779,7 +922,11 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
             &manifest,
             "manifest-version = 1\n[package]\nnamespace = \"demo\"\nname = \"coffee\"\nversion = \"0.1.0\"\nedition = \"1\"\nabi-version = 1\n[[contract]]\nname = \"coffee\"\npath = \"contract.ko\"\n[dependencies]\ndependency = { package = \"deps.sora/dependency\", version = \"^1.0.0\" }\n",
         )?;
-        let runtime = DeploymentRuntime::new(config(), temp.path().join("journals"));
+        let runtime = DeploymentRuntime::new(
+            config(),
+            temp.path().join("journals"),
+            temp.path().join("explicit-build-cache"),
+        );
         let error = runtime
             .build(&ContractInput::Package {
                 manifest,
@@ -796,6 +943,7 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
             "{error:#}"
         );
         assert!(!temp.path().join("Musubi.lock").exists());
+        assert!(!temp.path().join("explicit-build-cache").exists());
         Ok(())
     }
 
@@ -871,7 +1019,11 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         fs::write(&source, "not Kotodama")?;
         let root = temp.path().join("journals");
         fs::create_dir(&root)?;
-        let runtime = DeploymentRuntime::new(config(), root.clone());
+        let runtime = DeploymentRuntime::new(
+            config(),
+            root.clone(),
+            temp.path().join("explicit-build-cache"),
+        );
         let alias = AliasSelection::Scope {
             domain: None,
             dataspace: "universal".into(),
@@ -909,6 +1061,7 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
                 .contains("outside this runtime's journal slots")
         );
         assert_eq!(iroha_data_model::account::address::chain_discriminant(), 73);
+        assert!(!temp.path().join("explicit-build-cache").exists());
         Ok(())
     }
 }

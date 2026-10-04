@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sumeragi mutation gate: the meta-check of spec §13.4 for `crates/iroha_sumeragi`.
+"""Sumeragi mutation gate: the meta-check of spec §13.4 for each implementation owner.
 
 Purpose
     Every mutation of §13.4 exists in the crate only as a `cfg(sumeragi_mutation = "<ID>")`
@@ -31,6 +31,10 @@ Purpose
     (the as-built rules E1-E7 of Appendix E, with their regression tests) and MR-* (revision-4
     rules with det_r4 tests).
 
+    `--core` selects the Core unit-test owner and `SUMERAGI_CORE_MUTATION`;
+    `--daemon` selects the daemon unit-test owner and `SUMERAGI_DAEMON_MUTATION`.
+    Each test-only feature guards only its own crate, without mutating dependencies.
+
 Prerequisites
     Python 3.9+ (stdlib only) and a working `cargo` for the workspace. Builds go to a dedicated
     target directory (default `<repo>/target/sumeragi-mutants`), one sub-directory per job
@@ -51,6 +55,7 @@ Examples
     scripts/sumeragi_mutation_gate.py --only MS2,MS27 --fast
     scripts/sumeragi_mutation_gate.py --list
     scripts/sumeragi_mutation_gate.py --core --strict --jobs 1
+    scripts/sumeragi_mutation_gate.py --daemon --only HC93 --strict --jobs 1
 """
 
 from __future__ import annotations
@@ -446,7 +451,7 @@ CORE_MUTATIONS = [
       ["sumeragi::certified_chain::tests::state_certificate::state_certificate_signed_availability_scratch_uses_original_query_allowance"]),
     m("HC11", "history: use a warm decoded body instead of rereading the pinned durable certificate",
       ["sumeragi::certified_chain::tests::durable_certificate_read_rejects_checksum_valid_corruption_after_cache_warm"]),
-    m("HC12", "beacon: reconstruct prepared beacon proofs without original-pool admission",
+    m("HC12", "beacon: allocate children before complete original prepaid session admission",
       ["beacon::validation::tests::beacon_verification_reserves_exact_buffers_and_refuses_before_unfunded_work"]),
     m("HC13", "certificate query: construct aggregate pairing scratch without original request admission",
       ["sumeragi::certified_chain::tests::state_certificate::state_certificate_pairing_constructor_refusal_preserves_original_source_for_retry"]),
@@ -502,12 +507,12 @@ CORE_MUTATIONS = [
     m("HC30", "registry: turn original scope or permission decode refusal into a completed fee or authorization outcome",
       ['sumeragi::node::tests::dataspace_roots::scope_refusal_tests::signed_private_contract_lookup_does_not_turn_scope_refusal_into_vm_permission_denial',
        'sumeragi::node::tests::dataspace_roots::scope_refusal_tests::signed_private_account_permission_read_defers_without_constructing_a_json_token',
-       'validation_fee::tests::signed_fee_runtime_read_does_not_turn_scope_refusal_into_a_nonmatching_origin',
-       'validation_fee::tests::original_retained_fee_registry_does_not_publish_local_decode_refusal_as_malformed',
+       'validation_fee::tests::registry_refusal_tests::signed_fee_runtime_read_does_not_turn_scope_refusal_into_a_nonmatching_origin',
+       'validation_fee::tests::registry_refusal_tests::original_retained_fee_registry_does_not_publish_local_decode_refusal_as_malformed',
        'smartcontracts::isi::world::isi::tests::signed_payout_scope_refusal_cannot_publish_a_parliament_terminal_outcome']),
-    m("HC32", "credit readers: turn original outer Norito decode refusal into malformed durable leaves",
-      ["validation_fee::tests::original_treasury_credit_record_decode_refusal_preserves_balance_and_retries",
-       "validation_fee::tests::original_treasury_credit_asset_decode_refusal_preserves_binding_and_retries"]),
+    m("HC32", "reward credit readers: turn original alias or owner decode refusal into malformed durable leaves",
+      ["validation_fee_rewards::tests::original_fee_credit_alias_decode_refusal_preserves_balance_and_retries",
+       "validation_fee_rewards::tests::original_fee_credit_owner_decode_refusal_preserves_exact_binding_and_retries"]),
     m("HC33", "credit refusal classifier: borrow any active scope for a global or inner format limit",
       ["execution_attempt::tests::norito_global_archive_cap_is_terminal_inside_an_outer_decode_scope",
        "execution_attempt::tests::norito_inner_format_limits_are_terminal_under_a_wider_outer_scope"]),
@@ -562,8 +567,10 @@ CORE_MUTATIONS = [
       ['sumeragi::certified_chain::refusal_tests::original_availability_history_refusal_is_pending_without_corruption', 'sumeragi::certified_chain::refusal_tests::original_availability_constructor_refusal_retries_without_installing_authority', 'sumeragi::driver::exec::refusal_tests::append_refusal_keeps_original_commit_and_release_owner_until_durable', 'sumeragi::driver::serve::tests::refused_metadata_owner_cannot_be_replaced_by_another_peer_during_backoff']),
     m("HC51", "lane history: erase original archive, prefix, evidence or proposal policy refusal",
       ['sumeragi::runtime_availability::history::source_refusal_tests::original_archive_read_refusal_preserves_pool_release_and_same_lane_prefix', 'sumeragi::runtime_availability::history::source_refusal_tests::original_certificate_projection_refusal_preserves_pool_release_and_exact_carrier', 'sumeragi::runtime_availability::history::source_refusal_tests::original_lane_evidence_handoff_preserves_actual_decode_refusal_and_exact_cut', 'sumeragi::lanes::registry::tests::original_native_lane_authority_refusal_reaches_merge_and_original_pool_retry', 'sumeragi::evidence::tests::original_lane_history_refusal_reaches_evidence_without_recovery_or_rejection', 'sumeragi::executor::publication_tests::original_lane_policy_proposal_refusal_retains_worker_owner_and_exact_queued_retry']),
-    m("HC55", "stake-index quantities: release original magnitude charges before their physical owners",
+    m("HC87", "stake-index quantities: release original magnitude charges before their physical owners",
       ["smartcontracts::isi::staking::tests::stake_index_quantities_prepaid_and_borrowed_from_original_pool"]),
+    m("HC94", "replay completion: accept replacement source configuration after receipt retirement",
+      ["sumeragi::executor::publication_tests::replay_completion_retirement_keeps_exact_source_and_original_pool_retry"]),
     m("HC53", "network time: omit host suspension from admission time and probe custody",
       ['time::tests::suspend_inclusive_clock_advances_admission_and_expires_retained_probes', 'time::tests::suspend_inclusive_clock_counts_entire_probe_round_trip']),
     m("HC48", "incumbent authority and key lifecycle: turn local read refusal into completed instruction failure",
@@ -575,8 +582,153 @@ CORE_MUTATIONS = [
       ['sumeragi::finality::tests::original_checkpoint_binary_refusal_is_local_and_retries_exact_original_source']),
     m("HC54", "beacon custody: accept a genuine same-roster DKG from another authority generation",
       ['state::validator_committee::tests::generation::committee_bootstrap_rejects_genuine_dkg_from_another_generation', 'state::validator_committee::tests::generation::committee_restore_rejects_genuine_dkg_from_another_generation']),
+    m("HC95", "native AMX participant: let a certified Begin authorize a different signed debit source",
+      ["sumeragi::amx::native::tests::native_amx_paid_commit_survives_certified_restart_and_rejects_bypass"]),
+    m("HC55", "fee reward claims: ignore signed custody, entitlement and beneficiary preconditions",
+      ['validation_fee_rewards::tests::signed_fee_reward_claim_rejects_every_changed_binding_before_mutation']),
+    m("HC56", "shared custody: omit fee obligations from the combined staking and reward reserve floor",
+      ['validation_fee_rewards::tests::shared_fee_stake_reward_custody_is_additive']),
+    m("HC57", "startup replay: acknowledge a changed certificate or availability source as an exact retry",
+      ['sumeragi::executor::replay::tests::completed_replay_rejects_altered_certificate_and_source_without_losing_exact_retry']),
+    m("HC58", "shared network currency: admit substitute, scoped or wrong-precision XOR custody",
+      ['validation_fee_rewards::tests::canonical_network_xor_is_required_before_fee_reward_state_changes',
+       'state::network_xor::tests::network_xor_rejects_wrong_definition_scope_and_precision',
+       'smartcontracts::isi::staking::tests::staking_registration_rejects_wrong_xor_shape_with_transaction_rollback',
+       'smartcontracts::isi::staking::tests::reward_claim_rejects_wrong_xor_shape_with_transaction_rollback']),
+    m("HC59", "beacon reducer: retain a well-formed but unverified partial signature",
+      ['beacon::tests::threshold_beacon_inline_reducer_rejects_invalid_share_without_losing_original_slots']),
+    m("HC60", "publication preparation: erase the original pool refusal at scheduler handoff",
+      ['sumeragi::executor::preparation::tests::certificate_capacity_refusal_reaches_scheduler_with_original_release_and_execution']),
+    m("HC61", "lane anchor history: turn original pool refusal into an invalid anchor verdict",
+      ['sumeragi::lanes::executor::native_decode_tests::anchor_read_refusal_retains_original_lane_body_until_capacity_returns',
+       'sumeragi::lanes::evidence::tests::anchor_history_refusal_retains_exact_source_through_lane_evidence_retry']),
+    m("HC62", "prepared block custody: accept a different shared control carrying identical certified bytes",
+      ['sumeragi::executor::publication_tests::prepared_block_moves_original_graph_and_rejects_replaced_shared_control']),
+    m("HC63", "State publication: erase original physical lock or allocation refusal before scheduler retry",
+      ['sumeragi::executor::publication::tests::state_publication_lock_refusals_reach_scheduler_with_original_execution_and_release',
+       'sumeragi::executor::publication::tests::state_execution_and_membership_refusals_preserve_actual_release_owners']),
+    m("HC64", "committed archive capture: erase original history or archive index refusal",
+      ['sumeragi::executor::archive_tests::committed_archive_index_refusal_retains_original_release_and_exact_publication',
+       'sumeragi::executor::archive_tests::committed_archive_cold_history_refusal_retains_original_pool_and_exact_publication']),
+    m("HC65", "cold publication preparation: erase the original execution refusal before scheduler retry",
+      ['sumeragi::executor::preparation::tests::cold_prepare_refusal_retains_original_finishing_owner_and_exact_release',
+       'sumeragi::executor::preparation::tests::cold_prepare_validation_refusals_retain_original_storage_owners']),
+    m("HC66", "opaque host and replay effects: derive unsigned staking monetary plans",
+      ['executor::opaque_monetary_tests::raw_ivm_staking_trigger_requires_signed_monetary_plan',
+       'executor::opaque_monetary_tests::supplied_proved_staking_effects_require_signed_monetary_plan']),
+    m("HC67", "live multisig proposal: classify a local decoder refusal as malformed authority",
+      ['smartcontracts::isi::multisig::tests::proposal_attempt::live_multisig_proposal_decode_refusal_retries_original_signed_xor_claim']),
+    m("HC68", "retained multisig proposal: accept an unapproved body or rebound physical row",
+      ['smartcontracts::isi::multisig::tests::proposal_attempt::live_multisig_proposal_body_binding_rolls_back_original_signed_xor_claim',
+       'smartcontracts::isi::multisig::tests::proposal_attempt::proposal_migration_validates_original_physical_key_and_body_before_writes',
+       'queue::router::tests::persisted_multisig_body_binding_and_local_refusal_reach_signed_queue_admission',
+       'state::deserialize::decode_tests::restored_multisig_proposals_require_exact_body_and_preserve_local_read_refusal']),
+    m("HC69", "multisig cancellation and expiry: treat unfinished custom decoding as a nonmatch",
+      ['smartcontracts::isi::multisig::tests::proposal_attempt::cancel_wrapper_decode_refusal_rolls_back_and_retries_original_signed_approval',
+       'smartcontracts::isi::multisig::tests::proposal_attempt::expiry_child_decode_refusal_rolls_back_and_retries_original_signed_approval']),
+    m("HC70", "multisig queue traversal: ignore the native deferred execution depth bound",
+      ['queue::router::tests::persisted_multisig_chain_is_checked_in_linear_expansions']),
+    m("HC71", "original World Cell acquisition: discard typed physical contention through infallible initialization",
+      ['sumeragi::executor::preparation::tests::cold_prepare_validation_refusals_retain_original_storage_owners']),
+    m("HC72", "prepared certificate reader: stringify actual State view contention",
+      ['sumeragi::executor::validation_refusal_tests::prepared_certificate_busy_retries_same_execution_after_original_reader_release']),
+    m("HC73", "physical history contention: substitute logical membership cleanup as the retry source",
+      ['state::storage_transactions::history::tests::physical_history_busy_ignores_logical_cleanup_and_retries_actual_release',
+       'sumeragi::executor::publication::tests::state_publication_lock_refusals_reach_scheduler_with_original_execution_and_release']),
+    m("HC74", "committed-head retry: let a timer replace the original refusing source",
+      ["sumeragi::driver::exec::source_retry_tests::committed_head_waits_for_original_release_across_prepare_append_and_commit"]),
+    m("HC75", "DA cold reconstruction: refund original allocation while physical writers remain held",
+      ["state::da_hydration::release_tests::original_cold_da_refunds_follow_all_rebuild_and_rewind_writers"]),
+    m("HC76", "execution producer retry: let timers replace original physical refusal custody",
+      ["sumeragi::driver::exec::producer_retry_tests::every_execution_producer_retains_original_source_until_actual_release"]),
+    m("HC78", "execution producer cancellation: resurrect an original in-flight request when its context returns",
+      ["sumeragi::driver::exec::producer_retry_tests::cancellation_stays_final_when_the_identical_context_and_request_return"]),
+
+    m("HC77", "pending ingress admission: let loop progress replace the original refusing source",
+      ["sumeragi::driver::witness_admission_tests::pending_capacity_requires_original_release_despite_foreign_wake_and_huge_clock"]),
+    m("HC80", "admitted ingress eviction: refund original capacity beneath pending and ingress mutexes",
+      ["sumeragi::driver::witness_admission_tests::admitted_ingress_eviction_refunds_only_after_pending_and_ingress_mutexes_release"]),
+    m("HC79", "completed replay acknowledgement: stringify original encoding capacity refusal",
+      ["sumeragi::executor::replay::tests::completed_replay_retains_exact_receipt_through_original_pool_scratch_refusal"]),
+    m("HC81", "native beacon readiness: stringify the original startup control refusal",
+      ["sumeragi::executor::publication_tests::beacon_startup_retains_original_capacity_through_worker_channel_and_node"]),
+    m("HC82", "cold World-root verification: stringify the original storage refusal",
+      ["sumeragi::test_chain::tests::world_state_tests::world_root_verification_preserves_original_writer_refusal_and_exact_retry",
+       "sumeragi::test_chain::tests::world_state_tests::world_root_verification_preserves_original_capacity_refusal_and_exact_retry"]),
+    m("HC83", "scheduler retirement: refund original controls before cancelling all registered waiters",
+      ["sumeragi::driver::exec::producer_retry_tests::cancelling_and_dropping_scheduler_unlinks_all_waiters_before_original_refunds"]),
+    m("HC84", "startup committed history: collapse original cold-read refusal into invalid configuration",
+      ["kura::tests::startup_history_retains_original_cold_kura_refusal_and_exact_retry"]),
+    m("HC85", "beacon: reuse authenticated shared session under a substituted current binding",
+      ["beacon::session_owner::validated::tests::shared_authenticated_session_rechecks_every_current_external_binding"]),
+    m("HC86", "native execution: retry an original local custody invariant instead of requiring recovery",
+      ["sumeragi::executor::preparation::tests::original_local_custody_invariant_halts_worker_without_fee_result_or_quarantine"]),
+    m("HC88", "beacon decoder: collapse original surviving decode scope refusal into invalid input",
+      ["beacon::tests::session_decoder_preserves_actual_local_scope_without_invalidity_or_fabricated_pool"]),
+    m("HC89", "credential decoder: reject original inherited-scope or physical allocation refusal",
+      ["beacon::credential::tests::credential_decoder_captures_original_scope_before_unwind_and_retries_unchanged_bytes",
+       "beacon::credential::tests::credential_decoder_physical_refusal_keeps_exact_allocator_cause_and_retries"]),
+    m("HC90", "native journal: replace original block-control capacity refusal with invalid evidence",
+      ["sumeragi::native_journal::tests::native_cursor_preserves_original_pool_refusal_and_retries_identical_prefix"]),
+    m("HC91", "live DKG: reconstruct signature output only after the durable attempt claim and RNG",
+      ["beacon::dkg_local_seat::ownership_tests::prepared_local_outputs_are_complete_before_randomness_at_four_and_thirty_one"]),
+    m("HC92", "credential output: allocate a second whole secret frame after private extraction",
+      ["beacon::credential::prepared_output::tests::prepared_credential_uses_exact_original_output_without_late_growth_at_four_and_thirty_one"]),
+    m("HC96", "validation-fee permission guard: treat a failed protected registry read as unrestricted delegation",
+      ["validation_fee::tests::permission_guard_tests::malformed_protected_registry_rejects_account_grant_before_permission_mutation"]),
+    m("HC97", "validation-fee trigger permission guard: discard a recognized trigger payload decode error and permit delegation",
+      ["validation_fee::tests::permission_guard_tests::trigger_permission_guard_tests::malformed_trigger_permission_rejects_account_grant_before_mutation"]),
+    m("HC98", "native source publication: halt instead of reacquiring ordinary State publication",
+      ["sumeragi::executor::preparation::tests::native_source_publication_change_retries_without_recovery_or_quarantine"]),
+    m("HC99", "native source publication: replace the original local capacity refusal",
+      ["block::valid::native_header_source_tests::native_local_refusal_after_source_publication_retains_original_capacity"]),
+    m("HC100", "election rank: bind candidate selection to E+1 instead of the frozen E+2 target",
+      ["sumeragi::epoch_election::tests::genuine_candidate_pools_choose_largest_equal_vote_committee"]),
+    m("HC101", "committee readiness: one funded target substitutes for every frozen target seat",
+      ["sumeragi::epoch_election::tests::prepared_boundary_readiness_requires_every_frozen_seat_custody"]),
+    m("HC102", "committee readiness: target quorum substitutes for the complete signed readiness roster",
+      ["sumeragi::epoch_election::tests::prepared_boundary_readiness_requires_every_frozen_seat_custody"]),
+    m("HC103", "retention: demand fresh incumbent BLS publications for the retained authority generation",
+      ["sumeragi::epoch_election::tests::frozen_boundary_refusal_returns_original_pool_and_does_not_need_fresh_incumbent_keys"]),
+    m("HC104", "DKG checkpoint: allow a foreign native clock to supply generation source authority",
+      ["beacon::dkg_local_seat::checkpoint_authority::tests::signed_genesis_authority_keeps_original_wider_cutoff_and_authenticates_no_h1_result"]),
+    m("HC108", "DKG checkpoint: extend the original signed genesis cutoff",
+      ["beacon::dkg_local_seat::checkpoint_authority::tests::signed_genesis_authority_keeps_original_wider_cutoff_and_authenticates_no_h1_result"]),
+    m("HC112", "DKG delivery restore: retire the original polynomial before its durable publication barriers",
+      ["beacon::dkg_local_seat::restore::tests::actual_native_heads_restore_original_delivery_then_acceptance_without_signing_or_growth"]),
+    m("HC113", "DKG acceptance restore: omit original signed capsule decryption and private component equality",
+      ["beacon::dkg_local_seat::restore::tests::original_signed_capsule_relation_is_checked_before_any_accepted_owner_or_row_moves"]),
+    m("HC114", "DKG aggregate authority: omit the actual finalized native-tip height binding",
+      ["beacon::dkg_local_seat::aggregate::tests::aggregate_checked_context_refuses_nonfinal_native_tip_zero_intent_and_changed_original_checkpoint"]),
+    m("HC115", "DKG aggregate production: erase original contributions and acknowledgments before durable handoff",
+      ["beacon::dkg_local_seat::aggregate::tests::actual_native_h4_aggregate_stays_original_until_explicit_retirement_and_restores_small_owner"]),
+    m("HC118", "native journal source: omit the original prepared source pool binding",
+      ["sumeragi::native_journal::tests::source_tests::native_reader_rejects_foreign_prepared_source_pool_before_decode_or_control_admission"]),
+]
 
 
+# Daemon integration rules execute only in the owning daemon unit-test crate.
+DAEMON_MUTATIONS = [
+    m("HC105", "DKG generation restore: ignore original input marker or later producer intent",
+      ["beacon_bootstrap::seat_attempt::durable_tests::input_marker_or_later_intent_cannot_restore_generation_or_grant_a_new_interval"]),
+    m("HC106", "DKG generation restore: accept a replaced inherited input stream",
+      ["beacon_bootstrap::seat_attempt::durable_tests::generation_reload_rejects_foreign_provider_original_cutoff_fake_h1_result_and_replaced_input"]),
+    m("HC107", "DKG generation restore: replace original native expiry with a fresh caller interval",
+      ["beacon_bootstrap::seat_attempt::durable_deadline::tests::actual_native_boot_origin_freeze_restore_cannot_extend_admitted_deadline"]),
+    m("HC109", "DKG generation restore: treat visible complete files as already durable",
+      ["beacon_bootstrap::seat_attempt::durable::tests::visible_complete_original_head_is_synced_before_restored_claim_and_publication"]),
+    m("HC110", "DKG target proof: consume the once-verified original FIFO frame before durable preservation",
+      ["beacon_bootstrap::seat_attempt::finality::tests::original_verified_target_proof_publication_refusal_retains_frame_and_never_advances_twice"]),
+    m("HC111", "DKG later restore: ignore a surviving partial extraction or final-session intent",
+      ["beacon_bootstrap::seat_attempt::later_restore_tests::complete_original_later_head_never_reopens_partial_next_read_or_extraction_intent"]),
+    m("HC116", "DKG aggregate restore: omit original held-source file and directory durability barriers",
+      ["beacon_bootstrap::seat_attempt::aggregate_tests::original_complete_aggregate_and_four_output_heads_restore_genuine_h3_h4_ancestry_same_claim_and_exact_private_bytes"]),
+    m("HC117", "DKG aggregate export restore: treat a partial output set as an empty fresh destination",
+      ["beacon_bootstrap::seat_attempt::aggregate_tests::original_aggregate_head_rejects_partial_final_output_prefix_before_private_export_adoption"]),
+    m("HC119", "DKG native replay: pin a foreign charged proof source before checking its original pool",
+      ["beacon_bootstrap::seat_attempt::finality::tests::durable_native_replay_rejects_foreign_source_pool_without_pinning_or_advancing"]),
+    m("HC93", "broker beacon operation: reconstruct the authenticated session at every phase",
+      ["runtime_provider_broker::protocol::platform::tests::beacon_operation_reuses_original_graph_across_ingress_dispatch_and_response"]),
 ]
 
 
@@ -596,6 +748,8 @@ BY_ID = index_mutations(MUTATIONS)
 
 def package_options(args):
     """Select the actual implementation owner without propagating a mutation to dependencies."""
+    if getattr(args, "daemon", False):
+        return "irohad_lib", "mutation-testing", "SUMERAGI_DAEMON_MUTATION"
     if getattr(args, "core", False):
         return "iroha_core", "mutation-testing,iroha-core-tests", "SUMERAGI_CORE_MUTATION"
     return CRATE, FEATURES, "SUMERAGI_MUTATION"
@@ -619,6 +773,7 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
     env = dict(os.environ)
     env.pop("SUMERAGI_MUTATION", None)
     env.pop("SUMERAGI_CORE_MUTATION", None)
+    env.pop("SUMERAGI_DAEMON_MUTATION", None)
     crate, features, mutation_env = package_options(args)
     env.pop("SUMERAGI_SIM_SEED", None)
     if mutation:
@@ -701,9 +856,14 @@ def build(args, target_dir, mutation, log_path):
                 detail=detail, log=str(log_path))
 
 
-def has_switch(mid, *, core=False):
-    cfg = "sumeragi_core_mutation" if core else "sumeragi_mutation"
-    source = REPO / "crates" / "iroha_core" / "src" if core else CRATE_SRC
+def has_switch(mid, *, core=False, daemon=False):
+    if core and daemon:
+        raise ValueError("a mutation has exactly one implementation owner")
+    if daemon:
+        cfg, source = "sumeragi_daemon_mutation", REPO / "crates" / "irohad" / "src"
+    else:
+        cfg = "sumeragi_core_mutation" if core else "sumeragi_mutation"
+        source = REPO / "crates" / "iroha_core" / "src" if core else CRATE_SRC
     needle = f'{cfg} = "{mid}"'
     return any(needle in p.read_text() for p in source.rglob("*.rs"))
 
@@ -713,7 +873,10 @@ def evaluate(args, target_dir, mu):
     result = {"id": mu.id, "site": mu.site, "named_tests": list(mu.tests),
               "scenarios": [SCENARIOS[s] for s in mu.scenarios]}
     started = time.monotonic()
-    present = has_switch(mu.id, core=True) if getattr(args, "core", False) else has_switch(mu.id)
+    if getattr(args, "daemon", False):
+        present = has_switch(mu.id, daemon=True)
+    else:
+        present = has_switch(mu.id, core=True) if getattr(args, "core", False) else has_switch(mu.id)
     if not present:
         result.update(verdict="error", reason="no cfg switch for this id in the crate")
         return result
@@ -777,8 +940,11 @@ def main():
                     "deterministic test (then by its randomized scenario); the unmutated build "
                     "must pass.",
         formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
-    parser.add_argument("--core", action="store_true",
-                        help="qualify registered production iroha_core rules with their Core tests")
+    owner = parser.add_mutually_exclusive_group()
+    owner.add_argument("--core", action="store_true",
+                       help="qualify registered production iroha_core rules with their Core tests")
+    owner.add_argument("--daemon", action="store_true",
+                       help="qualify registered irohad_lib integration rules with daemon unit tests")
     parser.add_argument("--only", help="comma-separated mutation ids (default: all)")
     parser.add_argument("--jobs", type=int, default=1,
                         help="parallel jobs, each with its own target sub-directory")
@@ -787,7 +953,7 @@ def main():
     parser.add_argument("--seeds", type=int, default=200,
                         help="SUMERAGI_SIM_SEEDS for the scenarios (default 200)")
     parser.add_argument("--target-dir", type=Path,
-                        help="dedicated target root (default: target/sumeragi-mutants; --core: target/sumeragi-core-mutants)")
+                        help="dedicated target root (default: target/sumeragi-mutants; --core: target/sumeragi-core-mutants; --daemon: target/sumeragi-daemon-mutants)")
     parser.add_argument("--skip-baseline", action="store_true",
                         help="do not run the unmutated build")
     parser.add_argument("--strict", action="store_true",
@@ -804,11 +970,13 @@ def main():
     parser.add_argument("--list", action="store_true", help="print the mutation table and exit")
     args = parser.parse_args()
     if args.target_dir is None:
-        args.target_dir = REPO / "target" / ("sumeragi-core-mutants" if args.core else "sumeragi-mutants")
+        name = ("sumeragi-daemon-mutants" if args.daemon else
+                "sumeragi-core-mutants" if args.core else "sumeragi-mutants")
+        args.target_dir = REPO / "target" / name
     args.target_dir = args.target_dir.resolve()
     if args.core_profile is not None and not args.core:
-        parser.error("--core-profile requires --core; protocol qualification always uses release")
-    table = CORE_MUTATIONS if args.core else MUTATIONS
+        parser.error("--core-profile requires --core; protocol and daemon qualification use release")
+    table = DAEMON_MUTATIONS if args.daemon else CORE_MUTATIONS if args.core else MUTATIONS
     by_id = index_mutations(table)
     if min(args.timeout_build, args.timeout_test, args.timeout_scenario) < 0:
         parser.error("timeouts must be nonnegative; 0 waits without terminating a command")

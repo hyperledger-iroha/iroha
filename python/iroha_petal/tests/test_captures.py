@@ -4,9 +4,11 @@
 """Golden camera captures in ``fixtures/petal/petal_captures_v1.json``.
 
 Every conforming decoder must read the lanes named in ``must_decode``, must
-never report wrong data for any lane, and must reject the negatives. This port
-follows the reference operation by operation, so it is also held to the exact
-lanes the reference read (``reference_decoded``).
+never report wrong data for any lane, must report the recorded inferred corner,
+must follow each tracking pair from its first frame into its second, and must
+reject the negatives. This port follows the reference operation by operation,
+so it is also held to the exact lanes the reference read (``reference_decoded``
+and ``reference_tracked``).
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from iroha_petal import (
     decode_lane,
     encode_lane,
     render_frame,
+    track_frame,
 )
 from iroha_petal.decode import _projector, _read_tiles, _reference_levels, _sample_patches
 
@@ -45,7 +48,12 @@ CAPTURE_NAMES = [
     "overexposed-540p",
     "veiled-720p",
     "shadow-band-540p",
+    "hidden-corner-540p",
+    "cut-corner-720p",
 ]
+
+#: The tracking pairs of the fixture, in order.
+TRACK_NAMES = ["steady-hand-540p", "thumb-arrives-540p"]
 
 #: Tile lanes that the level read (judging patches against the finder levels) cannot read on
 #: the lighting captures; only the normalised read gets them.
@@ -57,9 +65,15 @@ class CaptureTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.doc = captures_fixture()
 
-    def test_the_fixture_carries_the_nine_captures_and_two_negatives(self) -> None:
+    def test_the_fixture_carries_eleven_captures_two_tracks_and_two_negatives(self) -> None:
         self.assertEqual([c["name"] for c in self.doc["captures"]], CAPTURE_NAMES)
+        self.assertEqual([t["name"] for t in self.doc["tracks"]], TRACK_NAMES)
         self.assertEqual(len(self.doc["negatives"]), 2)
+        inferred = {c["name"]: c["inferred_corner"] for c in self.doc["captures"]}
+        self.assertEqual(
+            {name: corner for name, corner in inferred.items() if corner is not None},
+            {"hidden-corner-540p": 3, "cut-corner-720p": 2},
+        )
 
     def test_golden_captures_decode_as_recorded(self) -> None:
         assembler = StreamAssembler()
@@ -76,6 +90,9 @@ class CaptureTest(unittest.TestCase):
             timings.append((name, image.width, image.height, decoded.lanes, elapsed))
             self.assertLess(elapsed, TIME_BUDGET_S, f"{name}: decode took {elapsed:.1f} s")
             self.assertEqual(decoded.mirrored, capture["mirrored"], f"{name}: mirror flag")
+            self.assertEqual(
+                decoded.inferred_corner, capture["inferred_corner"], f"{name}: inferred corner"
+            )
             must = capture["must_decode"]
             for letter, result in (("P", decoded.p), ("K", decoded.k), ("D", decoded.d)):
                 expected = bytes.fromhex(capture[f"{letter.lower()}_data"])
@@ -91,6 +108,39 @@ class CaptureTest(unittest.TestCase):
         self.assertGreater(assembler.progress().atoms_received, 10)
         for name, width, height, lanes, elapsed in timings:
             sys.stderr.write(f"\n  {name:<22} {width}x{height} lanes {lanes:<3} {elapsed:.2f} s")
+        sys.stderr.write("\n")
+
+    def test_golden_tracks_follow_the_pose_into_the_next_frame(self) -> None:
+        timings = []
+        for pair in self.doc["tracks"]:
+            name = pair["name"]
+            first = luma_of(pair, "from_luma_zlib_base64")
+            try:
+                previous = decode_frame(first)
+            except DecodeError as error:  # pragma: no cover - failure path
+                self.fail(f"{name}: first frame: {error}")
+            started = time.perf_counter()
+            followed = track_frame(luma_of(pair, "to_luma_zlib_base64"), previous)
+            elapsed = time.perf_counter() - started
+            self.assertIsNotNone(followed, f"{name}: tracking lost the code")
+            timings.append((name, followed.lanes, elapsed))
+            must = pair["must_track"]
+            for letter, result in (("P", followed.p), ("K", followed.k), ("D", followed.d)):
+                if result is None:
+                    self.assertNotIn(letter, must, f"{name}: lane {letter} lost")
+                else:
+                    expected = bytes.fromhex(pair[f"{letter.lower()}_data"])
+                    self.assertEqual(result.data, expected, f"{name}: lane {letter} data")
+            self.assertEqual(followed.lanes, pair["reference_tracked"], f"{name}: lanes")
+            self.assertEqual(
+                followed.inferred_corner, pair["inferred_corner"], f"{name}: inferred corner"
+            )
+            # the orientation is kept from the first frame
+            self.assertEqual(
+                (followed.rotation, followed.mirrored), (previous.rotation, previous.mirrored)
+            )
+        for name, lanes, elapsed in timings:
+            sys.stderr.write(f"\n  {name:<22} tracked lanes {lanes:<3} {elapsed:.2f} s")
         sys.stderr.write("\n")
 
     def test_lighting_captures_need_the_normalised_read(self) -> None:
@@ -134,6 +184,13 @@ class CaptureTest(unittest.TestCase):
                 (p.hex(), k.hex(), d.hex()),
                 (capture["p_data"], capture["k_data"], capture["d_data"]),
                 capture["name"],
+            )
+        for pair in self.doc["tracks"]:
+            p, k, d = encoder.lane_data(pair["to_frame"])
+            self.assertEqual(
+                (p.hex(), k.hex(), d.hex()),
+                (pair["p_data"], pair["k_data"], pair["d_data"]),
+                pair["name"],
             )
 
     def test_renderer_reproduces_the_clean_capture_pixel_for_pixel(self) -> None:

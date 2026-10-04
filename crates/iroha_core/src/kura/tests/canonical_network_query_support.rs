@@ -10,14 +10,14 @@ pub(crate) struct CanonicalQueryStore {
     /// Actual physical store used by the State query reader.
     pub(crate) kura: Arc<Kura>,
     /// Original native bodies retained independently of query caches.
-    pub(crate) blocks: Vec<Arc<SignedBlock>>,
+    pub(crate) blocks: Vec<iroha_data_model::block::SharedSignedBlock>,
     _chain: crate::sumeragi::test_chain::CertifiedTestChain,
 }
 impl CanonicalQueryStore {
     /// Retain the chain's original executed blocks and certificates without resigning.
     pub(crate) fn from_chain(chain: crate::sumeragi::test_chain::CertifiedTestChain) -> Self {
         let blocks = (1..=chain.height())
-            .map(|height| Arc::clone(chain.committed(height).block()))
+            .map(|height| (chain.committed(height).block()).clone())
             .collect();
         Self {
             state: Arc::clone(chain.state()),
@@ -30,9 +30,8 @@ impl CanonicalQueryStore {
     /// Extend the same original native chain without altering any retained query prefix.
     pub(crate) fn append_next(&mut self) {
         self._chain.commit(Vec::new());
-        self.blocks.push(Arc::clone(
-            self._chain.committed(self._chain.height()).block(),
-        ));
+        self.blocks
+            .push(self._chain.committed(self._chain.height()).block().clone());
     }
 
     /// Exact expected bytes for the selected complete physical bodies, without reading storage.

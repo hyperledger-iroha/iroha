@@ -83,7 +83,8 @@ fn bind(
     instruction: &MutateSorafsTopologyAuthority,
     floor: NativeCheckFloorV1,
 ) -> Result<BoundNativeCheckV1, Error> {
-    bind_signed_check_v1(
+    bind_fixture(
+        &state,
         round,
         NativeCustodyCheckRefV1::Topology(instruction),
         &state.view().chain_id().to_string(),
@@ -106,10 +107,11 @@ fn role16_binding_rejects_substituted_floor_action_and_purpose() {
         authenticate_applied_check_v1(
             &state,
             NativeCustodyCheckPurposeV1::FinalPromotion,
-            bound,
+            &mut Some(bound),
             &round,
         )
-        .err(),
+        .err()
+        .map(crate::execution_attempt::expect_completed_rejection),
         Some(Error::Invalid),
     );
 
@@ -172,10 +174,11 @@ fn finalized_role16_check_with_closed_core_result_cannot_authenticate() {
         authenticate_applied_check_v1(
             &state,
             NativeCustodyCheckPurposeV1::Topology,
-            bound,
+            &mut Some(bound),
             &round,
         )
-        .err(),
+        .err()
+        .map(crate::execution_attempt::expect_completed_rejection),
         Some(Error::Execution),
         "a finalized failed output cannot be a topology approval",
     );

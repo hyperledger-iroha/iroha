@@ -79,13 +79,33 @@ import org.hyperledger.iroha.sdk.alias.requireOnboardingCredential
 import org.hyperledger.iroha.sdk.alias.AliasTransactionPlanJsonParser
 import org.hyperledger.iroha.sdk.alias.AliasTransactionPlanV1
 import org.hyperledger.iroha.sdk.alias.AccountAliasName
+import org.hyperledger.iroha.sdk.client.collections.AccountAssetRow
+import org.hyperledger.iroha.sdk.client.collections.AccountHistoryRow
+import org.hyperledger.iroha.sdk.client.collections.AccountRow
+import org.hyperledger.iroha.sdk.client.collections.AccountPermissionRow
+import org.hyperledger.iroha.sdk.client.collections.SubscriptionPlanRow
+import org.hyperledger.iroha.sdk.client.collections.SubscriptionRow
+import org.hyperledger.iroha.sdk.client.collections.ContractActivityRow
+import org.hyperledger.iroha.sdk.client.collections.ContractEventRow
+import org.hyperledger.iroha.sdk.client.collections.AssetDefinitionRow
+import org.hyperledger.iroha.sdk.client.collections.AssetHolderRow
+import org.hyperledger.iroha.sdk.client.collections.CollectionQueryTransport
+import org.hyperledger.iroha.sdk.client.collections.DomainRow
+import org.hyperledger.iroha.sdk.client.collections.NftRow
+import org.hyperledger.iroha.sdk.client.collections.RepoAgreementRow
+import org.hyperledger.iroha.sdk.client.collections.RwaLotRow
+import org.hyperledger.iroha.sdk.client.collections.ToriiCollection
+import org.hyperledger.iroha.sdk.client.collections.TransactionRow
 
 /**
- * HTTP-based client implementation that will forward transactions to an Iroha Torii endpoint.
+ * HTTP client for one Iroha Torii endpoint.
  *
- * Serialization and endpoint construction follow the `/v1/pipeline/transactions` Torii route.
- * Network execution is delegated to [HttpTransportExecutor] so tests can run without making
- * outbound calls.
+ * Transactions are submitted through `/v1/pipeline/transactions`. The Torii collections
+ * ([domains], [accounts], [assetDefinitions], [nfts], [rwas], [repoAgreements], [accountAssets],
+ * [assetHolders], [transactions] and [accountTransactions]) are read with
+ * [org.hyperledger.iroha.sdk.query.ListQuery] through `POST <collection>/query`; see
+ * [ToriiCollection]. Network execution is delegated to [HttpTransportExecutor] so tests can run
+ * without making outbound calls.
  */
 class HttpClientTransport private constructor(
     private val executor: HttpTransportScope,
@@ -128,6 +148,7 @@ class HttpClientTransport private constructor(
             config.requestTimeout(),
             config.defaultHeaders(),
             config.wireFormatPreference().acceptHeader(),
+            config.allowPlaintextLoopback(),
         )
         return ensureTransactionSubmissionCompatibility()
             .thenCompose { executeAccepted(request, "transaction JSON submit", 202) }
@@ -140,6 +161,7 @@ class HttpClientTransport private constructor(
             config.requestTimeout(),
             config.defaultHeaders(),
             config.wireFormatPreference().acceptHeader(),
+            config.allowPlaintextLoopback(),
         )
         return ensureTransactionSubmissionCompatibility().thenCompose {
             notifyRequest(request)
@@ -153,8 +175,11 @@ class HttpClientTransport private constructor(
                 }
                 val statusCode = response.statusCode
                 if (statusCode != 202) {
-                    val error = RuntimeException(
-                        "transaction entrypoint submit request failed with status $statusCode",
+                    val error = ToriiApiException.fromResponse(
+                        statusCode,
+                        response.headers,
+                        response.body,
+                        "transaction entrypoint submit",
                     )
                     notifyFailure(request, error)
                     return@handle CompletableFuture<ClientResponse>().also {
@@ -266,12 +291,14 @@ class HttpClientTransport private constructor(
             config.requestTimeout(),
             config.defaultHeaders(),
             config.wireFormatPreference().acceptHeader(),
+            config.allowPlaintextLoopback(),
         )
         return ensureTransactionSubmissionCompatibility()
             .thenCompose { executeAccepted(request, "transaction entrypoint JSON submit", 202) }
     }
 
     override fun waitForTransactionStatus(hashHex: String, options: PipelineStatusOptions?): CompletableFuture<Map<String, Any>> {
+        ToriiRequestBuilder.requireTransactionHash(hashHex)
         val resolved = PipelineStatusOptions.resolve(options)
         val timeoutMillis = resolved.timeoutMillis
         val deadline = if (timeoutMillis == null) {
@@ -294,6 +321,215 @@ class HttpClientTransport private constructor(
     }
 
     fun config(): ClientConfig = config
+
+    private val collectionTransport = CollectionQueryTransport(::queryCollection)
+
+    /** Domains (`/v1/domains`), default order `id`. */
+    @get:JvmName("domains")
+    val domains: ToriiCollection<DomainRow> = collection("/v1/domains", ::DomainRow)
+
+    /** Accounts (`/v1/accounts`), default order `id`. */
+    @get:JvmName("accounts")
+    val accounts: ToriiCollection<AccountRow> = collection("/v1/accounts", ::AccountRow)
+
+    /** Asset definitions (`/v1/assets/definitions`), default order `id`. */
+    @get:JvmName("assetDefinitions")
+    val assetDefinitions: ToriiCollection<AssetDefinitionRow> =
+        collection("/v1/assets/definitions", ::AssetDefinitionRow)
+
+    /** NFTs (`/v1/nfts`), default order `id`. */
+    @get:JvmName("nfts")
+    val nfts: ToriiCollection<NftRow> = collection("/v1/nfts", ::NftRow)
+
+    /** Real-world-asset lots (`/v1/rwas`), default order `id`. */
+    @get:JvmName("rwas")
+    val rwas: ToriiCollection<RwaLotRow> = collection("/v1/rwas", ::RwaLotRow)
+
+    /** Repo agreements (`/v1/repo/agreements`), default order `id`. */
+    @get:JvmName("repoAgreements")
+    val repoAgreements: ToriiCollection<RepoAgreementRow> = collection("/v1/repo/agreements", ::RepoAgreementRow)
+
+    /** Effective direct and role-granted permissions for the account. */
+    fun accountPermissions(accountId: String): ToriiCollection<AccountPermissionRow> =
+        collection("/v1/accounts/${collectionPathSegment(accountId, "accountId")}/permissions", ::AccountPermissionRow)
+
+    /** Subscription plans, ordered by id. */
+    @get:JvmName("subscriptionPlans")
+    val subscriptionPlans: ToriiCollection<SubscriptionPlanRow> = collection("/v1/subscriptions/plans", ::SubscriptionPlanRow)
+
+    /** Flattened subscriptions, ordered by id. */
+    @get:JvmName("subscriptions")
+    val subscriptions: ToriiCollection<SubscriptionRow> = collection("/v1/subscriptions", ::SubscriptionRow)
+
+    /** Space-directory manifests for one canonical UAID. */
+    fun uaidManifests(uaid: String): ToriiCollection<UaidManifestRecord> {
+        val canonical = UaidLiteral.canonicalize(uaid, "uaid manifests")
+        return collection("/v1/space-directory/uaids/${encodePathSegment(canonical)}/manifests", {
+            UaidJsonParser.parseManifestRecord(it.toJsonBytes(), canonical)
+        })
+    }
+
+    /** Contract transaction history, newest first; sort, aggregate and include_total are unsupported. */
+    @get:JvmName("contractActivity")
+    val contractActivity: ToriiCollection<ContractActivityRow> = collection("/v1/contracts/activity", ::ContractActivityRow, history = true)
+
+    /** Contract event history, newest first; sort, aggregate and include_total are unsupported. */
+    @get:JvmName("contractEvents")
+    val contractEvents: ToriiCollection<ContractEventRow> = collection("/v1/contracts/events", ::ContractEventRow, history = true)
+
+    /**
+     * Balances of [accountId] (`/v1/accounts/{account_id}/assets`), default order `asset`, `scope`.
+     * [accountId] is a canonical I105 literal or an on-chain alias.
+     */
+    fun accountAssets(accountId: String): ToriiCollection<AccountAssetRow> =
+        collection("/v1/accounts/${collectionPathSegment(accountId, "accountId")}/assets", ::AccountAssetRow)
+
+    /** Holders of [assetDefinitionId] (`/v1/assets/{definition_id}/holders`), default order `account_id`, `scope`. */
+    fun assetHolders(assetDefinitionId: String): ToriiCollection<AssetHolderRow> =
+        collection(
+            "/v1/assets/${collectionPathSegment(assetDefinitionId, "assetDefinitionId")}/holders",
+            ::AssetHolderRow,
+        )
+
+    /**
+     * Every committed transaction (`POST /v1/transactions/query`), a history collection read
+     * newest first by (`block_height`, `block_index`). `sort`, `include_total` and `aggregate`
+     * are rejected; a page may hold fewer than `limit` rows and still have a `next_cursor`.
+     */
+    @get:JvmName("transactions")
+    val transactions: ToriiCollection<TransactionRow> = collection("/v1/transactions", ::TransactionRow, history = true)
+
+    /**
+     * Committed transactions [accountId] signed or that reference it
+     * (`/v1/accounts/{account_id}/transactions`), a history collection like [transactions].
+     */
+    fun accountTransactions(accountId: String): ToriiCollection<TransactionRow> =
+        collection(
+            "/v1/accounts/${collectionPathSegment(accountId, "accountId")}/transactions",
+            ::TransactionRow,
+            history = true,
+        )
+
+    /** Account movements, newest first, with cursor-bounded history controls. */
+    fun accountHistory(accountId: String): ToriiCollection<AccountHistoryRow> =
+        collection("/v1/accounts/${collectionPathSegment(accountId, "accountId")}/history", ::AccountHistoryRow, history = true)
+
+    /** Explorer accounts rows, with bounded cursor pagination. */
+    @get:JvmName("explorerAccounts")
+    val explorerAccounts: ToriiCollection<org.hyperledger.iroha.sdk.json.JsonObject> =
+        collection("/v1/explorer/accounts", { it }, history = true).json()
+
+    /** Explorer domains rows, with bounded cursor pagination. */
+    @get:JvmName("explorerDomains")
+    val explorerDomains: ToriiCollection<org.hyperledger.iroha.sdk.json.JsonObject> =
+        collection("/v1/explorer/domains", { it }, history = true).json()
+
+    /** Explorer asset-definitions rows, with bounded cursor pagination. */
+    @get:JvmName("explorerAssetDefinitions")
+    val explorerAssetDefinitions: ToriiCollection<org.hyperledger.iroha.sdk.json.JsonObject> =
+        collection("/v1/explorer/asset-definitions", { it }, history = true).json()
+
+    /** Explorer assets rows, with bounded cursor pagination. */
+    @get:JvmName("explorerAssets")
+    val explorerAssets: ToriiCollection<org.hyperledger.iroha.sdk.json.JsonObject> =
+        collection("/v1/explorer/assets", { it }, history = true).json()
+
+    /** Explorer nfts rows, with bounded cursor pagination. */
+    @get:JvmName("explorerNfts")
+    val explorerNfts: ToriiCollection<org.hyperledger.iroha.sdk.json.JsonObject> =
+        collection("/v1/explorer/nfts", { it }, history = true).json()
+
+    /** Explorer rwas rows, with bounded cursor pagination. */
+    @get:JvmName("explorerRwas")
+    val explorerRwas: ToriiCollection<org.hyperledger.iroha.sdk.json.JsonObject> =
+        collection("/v1/explorer/rwas", { it }, history = true).json()
+
+    /** Explorer blocks rows, with bounded cursor pagination. */
+    @get:JvmName("explorerBlocks")
+    val explorerBlocks: ToriiCollection<org.hyperledger.iroha.sdk.json.JsonObject> =
+        collection("/v1/explorer/blocks", { it }, history = true).json()
+
+    /** Explorer transactions rows, with bounded cursor pagination. */
+    @get:JvmName("explorerTransactions")
+    val explorerTransactions: ToriiCollection<org.hyperledger.iroha.sdk.json.JsonObject> =
+        collection("/v1/explorer/transactions", { it }, history = true).json()
+
+    /** Explorer transactions/latest rows, with bounded cursor pagination. */
+    @get:JvmName("explorerLatestTransactions")
+    val explorerLatestTransactions: ToriiCollection<org.hyperledger.iroha.sdk.json.JsonObject> =
+        collection("/v1/explorer/transactions/latest", { it }, history = true).json()
+
+    /** Explorer instructions rows, with bounded cursor pagination. */
+    @get:JvmName("explorerInstructions")
+    val explorerInstructions: ToriiCollection<org.hyperledger.iroha.sdk.json.JsonObject> =
+        collection("/v1/explorer/instructions", { it }, history = true).json()
+
+    /** Explorer instructions/latest rows, with bounded cursor pagination. */
+    @get:JvmName("explorerLatestInstructions")
+    val explorerLatestInstructions: ToriiCollection<org.hyperledger.iroha.sdk.json.JsonObject> =
+        collection("/v1/explorer/instructions/latest", { it }, history = true).json()
+
+    private fun <T> collection(
+        path: String,
+        decode: (org.hyperledger.iroha.sdk.json.JsonObject) -> T,
+        history: Boolean = false,
+    ): ToriiCollection<T> = ToriiCollection(collectionTransport, path, true, null, history, decode)
+
+    private fun collectionPathSegment(value: String, name: String): String {
+        require(value.isNotEmpty() && value.trim() == value) { "$name must be non-empty without surrounding whitespace" }
+        return encodePathSegment(value)
+    }
+
+    /** One `POST <path>/query`, signed when [auth] or the client-wide canonical auth is configured. */
+    private fun queryCollection(
+        path: String,
+        body: ByteArray,
+        auth: ToriiCanonicalRequestAuth?,
+    ): CompletableFuture<TransportResponse> {
+        val target = resolvePath("$path/query")
+        val signer = auth ?: config.canonicalAuth()
+        val canonicalHeaders = if (signer == null) {
+            emptyMap()
+        } else {
+            requireCanonicalHeadersUnset()
+            buildCanonicalHeaders("POST", target, body, signer)
+        }
+        val headers = LinkedHashMap<String, String>()
+        headers["Accept"] = "application/json"
+        headers["Content-Type"] = "application/json"
+        for ((name, value) in config.defaultHeaders()) {
+            if (headers.keys.none { it.equals(name, ignoreCase = true) }) headers[name] = value
+        }
+        headers.putAll(canonicalHeaders)
+        TransportSecurity.requireHttpRequestAllowed(
+            "HttpClientTransport collection query",
+            config.baseUri(),
+            target,
+            headers,
+            body,
+            config.allowPlaintextLoopback(),
+        )
+        val builder = TransportRequest.builder()
+            .setUri(target)
+            .setMethod("POST")
+            .setBody(body)
+            .setTimeout(config.requestTimeout())
+            .setMaximumResponseBytes(COLLECTION_RESPONSE_MAX_BYTES)
+        for ((name, value) in headers) builder.addHeader(name, value)
+        val request = builder.build()
+        notifyRequest(request)
+        val response = executor.execute(request)
+        response.whenComplete { result, failure ->
+            if (failure != null) {
+                notifyFailure(request, unwrapCompletion(failure))
+            } else if (result.statusCode == 200) {
+                notifyResponse(request, ClientResponse(result.statusCode, ByteArray(0), result.message))
+            } else {
+                notifyFailure(request, ToriiApiException.fromResponse(result.statusCode, result.headers, result.body))
+            }
+        }
+        return response
+    }
     override fun close() {
         val polls = synchronized(lifecycleLock) {
             if (closed) return
@@ -305,8 +541,12 @@ class HttpClientTransport private constructor(
         executor.close()
     }
     fun newNoritoRpcClient(): NoritoRpcClient = config.toNoritoRpcClient(executor)
-    /** Creates an event-stream client without a canonical account identity. */
-    fun newEventStreamClient(): ToriiEventStreamClient = newEventStreamClientBuilder().build()
+    /**
+     * Creates an event-stream client. Requests are signed with the client-wide
+     * [ClientConfig.canonicalAuth] when one is configured and are anonymous otherwise.
+     */
+    fun newEventStreamClient(): ToriiEventStreamClient =
+        config.canonicalAuth()?.let(::newEventStreamClient) ?: newEventStreamClientBuilder().build()
 
     /** Creates an event-stream client that signs each exact final request URI. */
     fun newEventStreamClient(canonicalAuth: ToriiCanonicalRequestAuth): ToriiEventStreamClient =
@@ -320,6 +560,7 @@ class HttpClientTransport private constructor(
             .setTransportExecutor(executor)
             .defaultHeaders(config.defaultHeaders())
             .observers(config.observers())
+            .allowPlaintextLoopback(config.allowPlaintextLoopback())
 
     fun newSorafsGatewayClient(): SorafsGatewayClient = newSorafsGatewayClient(config.sorafsGatewayUri())
     fun newSorafsGatewayClient(baseUri: URI): SorafsGatewayClient = SorafsGatewayClient(executor = executor, baseUri = baseUri, timeout = config.requestTimeout(), defaultHeaders = config.defaultHeaders(), observers = config.observers())
@@ -387,12 +628,6 @@ class HttpClientTransport private constructor(
         val canonical = UaidLiteral.canonicalize(uaid, "uaid bindings")
         val params = query?.toQueryParameters() ?: emptyMap()
         return fetchJson(buildJsonGetRequest("/v1/space-directory/uaids/${encodePathSegment(canonical)}", params), UaidJsonParser::parseBindings, "UAID bindings")
-    }
-
-    fun getUaidManifests(uaid: String, query: UaidManifestQuery?): CompletableFuture<UaidManifestsResponse> {
-        val canonical = UaidLiteral.canonicalize(uaid, "uaid manifests")
-        val params = query?.toQueryParameters() ?: emptyMap()
-        return fetchJson(buildJsonGetRequest("/v1/space-directory/uaids/${encodePathSegment(canonical)}/manifests", params), UaidJsonParser::parseManifests, "UAID manifests")
     }
 
     fun listIdentifierPolicies(): CompletableFuture<IdentifierPolicyListResponse> = fetchJson(buildJsonGetRequest("/v1/identifier-policies", emptyMap()), IdentifierJsonParser::parsePolicyList, "identifier policy list")
@@ -1507,6 +1742,7 @@ class HttpClientTransport private constructor(
             config.requestTimeout(),
             config.defaultHeaders(),
             config.wireFormatPreference().acceptHeader(),
+            config.allowPlaintextLoopback(),
         )
 
         return ensureTransactionSubmissionCompatibility().thenCompose {
@@ -1543,11 +1779,11 @@ class HttpClientTransport private constructor(
                     }
                 }
                 if (statusCode != 202) {
-                    val error = TransactionSubmissionHttpException(
+                    val error = TransactionSubmissionHttpException.from(
                         hashHex,
                         statusCode,
                         rejectCode,
-                        responseBody,
+                        response.body,
                     )
                     notifyFailure(request, error)
                     return@handle CompletableFuture<ClientResponse>().also {
@@ -1605,51 +1841,117 @@ class HttpClientTransport private constructor(
         val hashed = redaction.hashAuthority(authority); if (hashed.isPresent) fields["authority_hash"] = hashed.get() else emitRedactionFailure(sink, signalId, "hash_failed")
     }
 
+    /** Attempt counter and last observed status carried between polls. */
+    private class PollProgress(val attempts: Int, val lastPayload: Map<String, Any>?)
+
+    /**
+     * Poll until a terminal status. Synchronously completed requests (and zero intervals) loop here
+     * instead of recursing, so long waits cannot overflow the stack; positive intervals hop to the
+     * scheduler thread.
+     */
     private fun pollPipelineStatus(hashHex: String, options: PipelineStatusOptions, deadline: Long, attemptsSoFar: Int, lastPayload: Map<String, Any>?, future: CompletableFuture<Map<String, Any>>) {
-        if (future.isDone) return
-        val configuredMaxAttempts = options.maxAttempts
-        if (configuredMaxAttempts != null && attemptsSoFar >= configuredMaxAttempts) { future.completeExceptionally(TransactionTimeoutException("Transaction $hashHex did not reach a terminal status after $attemptsSoFar attempts", hashHex, attemptsSoFar, lastPayload)); return }
-        val request = ToriiRequestBuilder.buildStatusRequest(config.baseUri(), hashHex, config.requestTimeout(), config.defaultHeaders())
-        notifyRequest(request)
-        executor.execute(request).whenComplete { response, throwable ->
-            try {
-                if (future.isDone) return@whenComplete
-                if (throwable != null) { val cause = if (throwable is CompletionException) throwable.cause ?: throwable else throwable; notifyFailure(request, cause); future.completeExceptionally(cause); return@whenComplete }
-                val clientResponse = ClientResponse(response.statusCode, response.body, response.message, null, extractRejectCode(response))
-                notifyResponse(request, clientResponse)
-                val statusCode = clientResponse.statusCode
-                if (statusCode != 200 && statusCode != 404) { future.completeExceptionally(buildPipelineStatusHttpException(hashHex, clientResponse)); return@whenComplete }
-                val payload =
-                    if (statusCode == 404) null
-                    else parsePipelineStatusPayload(clientResponse.body)
-                val nextAttempts = attemptsSoFar + 1
-                val statusLiteral =
-                    if (payload == null) null
-                    else PipelineStatusExtractor.requireAuthoritativeStatus(payload, hashHex)
-                val isStateResolved = payload?.get("resolved_from") == "state"
-                val isSuccess = statusLiteral == "Applied" && isStateResolved
-                val isFailure =
-                    (statusLiteral == "Rejected" || statusLiteral == "Expired") &&
-                        isStateResolved
-                emitPipelineStatusTelemetry(request, hashHex, statusLiteral, isSuccess, isFailure, nextAttempts)
-                if (options.observer != null) { try { options.observer.onStatus(statusLiteral ?: "", payload ?: emptyMap(), nextAttempts) } catch (observerError: RuntimeException) { future.completeExceptionally(observerError); return@whenComplete } }
-                if (isSuccess) { future.complete(payload); return@whenComplete }
-                if (isFailure) { future.completeExceptionally(TransactionStatusException(hashHex, statusLiteral, payload)); return@whenComplete }
-                if (configuredMaxAttempts != null && nextAttempts >= configuredMaxAttempts) { future.completeExceptionally(TransactionTimeoutException("Transaction $hashHex did not reach a terminal status after $nextAttempts attempts", hashHex, nextAttempts, payload)); return@whenComplete }
-                if (deadline != Long.MAX_VALUE && System.currentTimeMillis() >= deadline) { future.completeExceptionally(TransactionTimeoutException("Transaction $hashHex did not reach a terminal status within the configured timeout", hashHex, nextAttempts, payload)); return@whenComplete }
-                scheduleNextPoll(hashHex, options, deadline, nextAttempts, payload, future)
-            } catch (e: Exception) { if (!future.isDone) future.completeExceptionally(e) }
+        var progress = PollProgress(attemptsSoFar, lastPayload)
+        while (!future.isDone) {
+            val configuredMaxAttempts = options.maxAttempts
+            if (configuredMaxAttempts != null && progress.attempts >= configuredMaxAttempts) {
+                future.completeExceptionally(TransactionTimeoutException("Transaction $hashHex did not reach a terminal status after ${progress.attempts} attempts", hashHex, progress.attempts, progress.lastPayload))
+                return
+            }
+            val request = try {
+                ToriiRequestBuilder.buildStatusRequest(
+                    config.baseUri(),
+                    hashHex,
+                    config.requestTimeout(),
+                    config.defaultHeaders(),
+                    config.allowPlaintextLoopback(),
+                )
+            } catch (error: RuntimeException) {
+                future.completeExceptionally(error)
+                return
+            }
+            notifyRequest(request)
+            val responseFuture = executor.execute(request)
+            val current = progress
+            if (!responseFuture.isDone) {
+                responseFuture.whenComplete { response, throwable ->
+                    val next = observePipelineStatus(hashHex, options, deadline, current, request, response, throwable, future)
+                    if (next != null) scheduleNextPoll(hashHex, options, deadline, next, future)
+                }
+                return
+            }
+            val outcome: Pair<TransportResponse?, Throwable?> = try {
+                responseFuture.join() to null
+            } catch (error: Throwable) {
+                null to error
+            }
+            val next = observePipelineStatus(hashHex, options, deadline, current, request, outcome.first, outcome.second, future) ?: return
+            if (options.intervalMillis > 0L) {
+                scheduleNextPoll(hashHex, options, deadline, next, future)
+                return
+            }
+            progress = next
         }
     }
 
-    private fun scheduleNextPoll(hashHex: String, options: PipelineStatusOptions, deadline: Long, attemptsSoFar: Int, lastPayload: Map<String, Any>?, future: CompletableFuture<Map<String, Any>>) {
+    /** Settle [future] on a terminal or failed observation; otherwise return the next progress. */
+    private fun observePipelineStatus(
+        hashHex: String,
+        options: PipelineStatusOptions,
+        deadline: Long,
+        progress: PollProgress,
+        request: TransportRequest,
+        response: TransportResponse?,
+        throwable: Throwable?,
+        future: CompletableFuture<Map<String, Any>>,
+    ): PollProgress? {
+        try {
+            if (future.isDone) return null
+            if (throwable != null) { val cause = unwrapCompletion(throwable); notifyFailure(request, cause); future.completeExceptionally(cause); return null }
+            response!!
+            val configuredMaxAttempts = options.maxAttempts
+            val clientResponse = ClientResponse(response.statusCode, response.body, response.message, null, extractRejectCode(response))
+            notifyResponse(request, clientResponse)
+            val statusCode = clientResponse.statusCode
+            if (statusCode != 200 && statusCode != 404) { future.completeExceptionally(buildPipelineStatusHttpException(hashHex, response)); return null }
+            val payload =
+                if (statusCode == 404) null
+                else parsePipelineStatusPayload(clientResponse.body)
+            val nextAttempts = progress.attempts + 1
+            val statusLiteral =
+                if (payload == null) null
+                else PipelineStatusExtractor.requireAuthoritativeStatus(payload, hashHex)
+            val isStateResolved = payload?.get("resolved_from") == "state"
+            val isSuccess = statusLiteral == "Applied" && isStateResolved
+            val isFailure =
+                (statusLiteral == "Rejected" || statusLiteral == "Expired") &&
+                    isStateResolved
+            emitPipelineStatusTelemetry(request, hashHex, statusLiteral, isSuccess, isFailure, nextAttempts)
+            if (options.observer != null) { try { options.observer.onStatus(statusLiteral ?: "", payload ?: emptyMap(), nextAttempts) } catch (observerError: RuntimeException) { future.completeExceptionally(observerError); return null } }
+            if (isSuccess) { future.complete(payload); return null }
+            if (isFailure) { future.completeExceptionally(TransactionStatusException(hashHex, statusLiteral, payload)); return null }
+            if (configuredMaxAttempts != null && nextAttempts >= configuredMaxAttempts) { future.completeExceptionally(TransactionTimeoutException("Transaction $hashHex did not reach a terminal status after $nextAttempts attempts", hashHex, nextAttempts, payload)); return null }
+            if (deadline != Long.MAX_VALUE && System.currentTimeMillis() >= deadline) { future.completeExceptionally(TransactionTimeoutException("Transaction $hashHex did not reach a terminal status within the configured timeout", hashHex, nextAttempts, payload)); return null }
+            return PollProgress(nextAttempts, payload)
+        } catch (e: Exception) {
+            if (!future.isDone) future.completeExceptionally(e)
+            return null
+        }
+    }
+
+    private fun scheduleNextPoll(hashHex: String, options: PipelineStatusOptions, deadline: Long, progress: PollProgress, future: CompletableFuture<Map<String, Any>>) {
         if (future.isDone) return
         val interval = options.intervalMillis
-        val task = Runnable { pollPipelineStatus(hashHex, options, deadline, attemptsSoFar, lastPayload, future) }
-        if (interval <= 0L) { task.run(); return }
+        if (interval <= 0L) {
+            pollPipelineStatus(hashHex, options, deadline, progress.attempts, progress.lastPayload, future)
+            return
+        }
         synchronized(lifecycleLock) {
             if (closed || future.isDone) return
-            scheduler.schedule({ task.run() }, minOf(interval, Long.MAX_VALUE), TimeUnit.MILLISECONDS)
+            scheduler.schedule(
+                { pollPipelineStatus(hashHex, options, deadline, progress.attempts, progress.lastPayload, future) },
+                interval,
+                TimeUnit.MILLISECONDS,
+            )
         }
     }
 
@@ -1735,6 +2037,7 @@ class HttpClientTransport private constructor(
             target,
             operatorHeaders,
             null,
+            config.allowPlaintextLoopback(),
         )
         return builder.build()
     }
@@ -1787,6 +2090,7 @@ class HttpClientTransport private constructor(
                 target,
                 canonicalHeaders,
                 null,
+                config.allowPlaintextLoopback(),
             )
         }
         return builder.build()
@@ -1828,6 +2132,7 @@ class HttpClientTransport private constructor(
             target,
             canonicalHeaders,
             body,
+            config.allowPlaintextLoopback(),
         )
         return builder.build()
     }
@@ -1863,6 +2168,7 @@ class HttpClientTransport private constructor(
             target,
             canonicalHeaders,
             body,
+            config.allowPlaintextLoopback(),
         )
         return builder.build()
     }
@@ -1896,17 +2202,8 @@ class HttpClientTransport private constructor(
         return builder.build()
     }
 
-    private fun buildCanonicalHeaders(method: String, target: URI, body: ByteArray?, canonicalAuth: ToriiCanonicalRequestAuth): Map<String, String> {
-        val networkId = config.requireLocalSigningContext().networkId()
-        val timestampMs = canonicalAuth.timestampMs
-        val nonce = canonicalAuth.nonce
-        require((timestampMs == null) == (nonce == null)) { "timestampMs and nonce must be provided together" }
-        return if (timestampMs == null) {
-            CanonicalRequestSigner.buildHeaders(networkId, method, target, body, canonicalAuth.accountId, canonicalAuth.signer)
-        } else {
-            CanonicalRequestSigner.buildHeaders(networkId, method, target, body, canonicalAuth.accountId, canonicalAuth.signer, timestampMs, nonce!!)
-        }
-    }
+    private fun buildCanonicalHeaders(method: String, target: URI, body: ByteArray?, canonicalAuth: ToriiCanonicalRequestAuth): Map<String, String> =
+        canonicalAuth.headers(config.requireLocalSigningContext().networkId(), method, target, body)
 
     private fun resolvePath(path: String?): URI {
         if (path.isNullOrBlank()) return config.baseUri()
@@ -1992,7 +2289,7 @@ class HttpClientTransport private constructor(
             val clientResponse = ClientResponse(response.statusCode, response.body, response.message, null, extractRejectCode(response))
             val statusAccepted = acceptedStatus?.let { response.statusCode == it }
                 ?: (response.statusCode in 200..299)
-            if (!statusAccepted) { val error = RuntimeException("$errorContext request failed with status ${response.statusCode}"); throw error }
+            if (!statusAccepted) throw ToriiApiException.fromResponse(response.statusCode, response.headers, response.body, errorContext)
             if (exactJsonMediaType) {
                 requireExactJsonResponse(response, errorContext)
             }
@@ -2077,8 +2374,8 @@ class HttpClientTransport private constructor(
                 }
                 requirePrivateNoStore(response.headers, errorContext)
             }
-            require(response.statusCode == 200) {
-                "$errorContext request failed with status ${response.statusCode}"
+            if (response.statusCode != 200) {
+                throw ToriiApiException.fromResponse(response.statusCode, response.headers, response.body, errorContext)
             }
             if (!requirePrivateNoStoreResponse) {
                 requireExactHeader(
@@ -2317,8 +2614,7 @@ class HttpClientTransport private constructor(
         return executeResponse(request, errorContext) { response ->
             val clientResponse = ClientResponse(response.statusCode, response.body, response.message, null, extractRejectCode(response))
             if (response.statusCode != acceptedStatus) {
-                val error = RuntimeException("$errorContext request failed with status ${response.statusCode}")
-                throw error
+                throw ToriiApiException.fromResponse(response.statusCode, response.headers, response.body, errorContext)
             }
             notifyResponse(request, clientResponse)
             clientResponse
@@ -2330,9 +2626,7 @@ class HttpClientTransport private constructor(
         errorContext: String,
     ) {
         if (response.statusCode != 200) {
-            throw RuntimeException(
-                "$errorContext request failed with status ${response.statusCode}",
-            )
+            throw ToriiApiException.fromResponse(response.statusCode, response.headers, response.body, errorContext)
         }
         val contentTypes = response.headers.entries
             .asSequence()
@@ -2450,7 +2744,7 @@ class HttpClientTransport private constructor(
             if (response.statusCode == 404) { notifyResponse(request, clientResponse); return@executeResponse Optional.empty<T>() }
             val statusAccepted = acceptedStatus?.let { response.statusCode == it }
                 ?: (response.statusCode in 200..299)
-            if (!statusAccepted) { val error = RuntimeException("$errorContext request failed with status ${response.statusCode}"); throw error }
+            if (!statusAccepted) throw ToriiApiException.fromResponse(response.statusCode, response.headers, response.body, errorContext)
             val parsed = parser.apply(response.body)
             notifyResponse(request, clientResponse)
             Optional.of<T>(parsed)
@@ -2460,7 +2754,7 @@ class HttpClientTransport private constructor(
     private fun <T : Any> fetchOptionalJson(request: TransportRequest, parser: Function<ByteArray, T>, errorContext: String): CompletableFuture<Optional<T>> {
         return executeResponse(request, errorContext) { response ->
             val clientResponse = ClientResponse(response.statusCode, response.body, response.message, null, extractRejectCode(response))
-            if (response.statusCode < 200 || response.statusCode >= 300) { val error = RuntimeException("$errorContext request failed with status ${response.statusCode}"); throw error }
+            if (response.statusCode < 200 || response.statusCode >= 300) throw ToriiApiException.fromResponse(response.statusCode, response.headers, response.body, errorContext)
             if (response.body.isEmpty()) { notifyResponse(request, clientResponse); return@executeResponse Optional.empty<T>() }
             val parsed = parser.apply(response.body)
             notifyResponse(request, clientResponse)
@@ -2480,6 +2774,7 @@ class HttpClientTransport private constructor(
         private const val ACCOUNT_ONBOARDING_CURRENT_STATE_RESPONSE_MAX_BYTES = 4L * 1024L
         private const val DEFAULT_TRANSACTION_TTL_MS = 100_000L
         private const val APPLICATION_NORITO = "application/x-norito"
+        private const val COLLECTION_RESPONSE_MAX_BYTES = 32L * 1024 * 1024
         private val CANONICAL_AUTH_HEADERS = setOf(
             CanonicalRequestSigner.HEADER_ACCOUNT,
             CanonicalRequestSigner.HEADER_SIGNATURE,
@@ -2535,7 +2830,8 @@ class HttpClientTransport private constructor(
             val host = request.headers["Host"]; return if (host.isNullOrEmpty()) "" else host[0]
         }
         private fun emitRedactionFailure(sink: TelemetrySink, signalId: String, reason: String) { sink.emitSignal(REDACTION_FAILURE_SIGNAL, mapOf("signal_id" to signalId, "reason" to reason)) }
-        private fun buildPipelineStatusHttpException(hashHex: String, response: ClientResponse): TransactionStatusHttpException = TransactionStatusHttpException(hashHex, response.statusCode, response.rejectCode(), HttpErrorMessageExtractor.extractMessage(response.body))
+        private fun buildPipelineStatusHttpException(hashHex: String, response: TransportResponse): TransactionStatusHttpException =
+            TransactionStatusHttpException.from(hashHex, response.statusCode, extractRejectCode(response), response.body)
         private fun appendQuery(target: URI, params: Map<String, String>): URI {
             if (params.isEmpty()) return target
             val targetText = target.toString()

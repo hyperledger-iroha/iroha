@@ -48,7 +48,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
             recorded_at_height: 3,
             recorded_at_view: 0,
             recorded_at_ms: 30,
-            penalty_status: EvidencePenaltyStatus::Cancelled { height: 5 },
+            penalty_status: EvidencePenaltyStatus::Applied { height: 5 },
         },
     ];
     for record in records {
@@ -101,7 +101,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
     assert_eq!(items.len(), 3);
     let expected_statuses = [
         norito::json!({
-            "status": "cancelled",
+            "status": "applied",
             "details": { "height": 5 }
         }),
         norito::json!({

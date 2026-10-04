@@ -6,31 +6,46 @@
 ///
 /// Only constructors whose enclosing [`Builtin`] has a source-visible surface
 /// are part of Kotodama V1; the remaining variants are host/compiler plumbing.
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, strum::EnumIter, strum::IntoStaticStr,
-)]
-#[strum(serialize_all = "snake_case", const_into_str)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, strum::EnumIter)]
 pub enum PointerConstructor {
+    /// Parse an account identity into an `AccountId` pointer.
     #[default]
     AccountId,
+    /// Parse an asset definition identity into an `AssetDefinitionId` pointer.
     AssetDefinition,
+    /// Parse an asset identity into an `AssetId` pointer.
     AssetId,
+    /// Parse an NFT identity into an `NftId` pointer.
     NftId,
+    /// Parse a validated ledger `Name` pointer.
     Name,
+    /// Parse a `Json` pointer from its string representation.
     Json,
+    /// Internal constructor for a `DomainId` pointer.
     Domain,
+    /// Parse a domain identity into a `DomainId` pointer.
     DomainId,
+    /// Internal constructor for a byte-buffer pointer.
     Blob,
+    /// Internal constructor for Norito-encoded bytes.
     NoritoBytes,
-    #[strum(serialize = "dataspace_id")]
+    /// Parse a dataspace identity into a `DataSpaceId` pointer.
     DataSpaceId,
+    /// Parse an atomic cross-dataspace transaction descriptor.
     AxtDescriptor,
+    /// Parse a V1 anchored-spend descriptor for an atomic cross-dataspace transaction.
     AxtAnchoredSpendV1,
+    /// Internal constructor for an opaque proof pointer.
     ProofBlob,
+    /// Internal constructor for a typed Soracloud host request.
     SoracloudRequest,
+    /// Internal constructor for a typed Soracloud host response.
     SoracloudResponse,
 }
 impl PointerConstructor {
+    /// Resolve a pointer constructor by its compiler-internal spelling.
+    ///
+    /// Source visibility is determined by the enclosing [`Builtin`] registry entry.
     pub fn from_name(name: &str) -> Option<Self> {
         Some(match name {
             "account_id" => Self::AccountId,
@@ -52,8 +67,26 @@ impl PointerConstructor {
             _ => return None,
         })
     }
+    /// Return the canonical compiler-internal spelling of this constructor.
     pub const fn name(self) -> &'static str {
-        self.into_str()
+        match self {
+            Self::AccountId => "account_id",
+            Self::AssetDefinition => "asset_definition",
+            Self::AssetId => "asset_id",
+            Self::NftId => "nft_id",
+            Self::Name => "name",
+            Self::Json => "json",
+            Self::Domain => "domain",
+            Self::DomainId => "domain_id",
+            Self::Blob => "blob",
+            Self::NoritoBytes => "norito_bytes",
+            Self::DataSpaceId => "dataspace_id",
+            Self::AxtDescriptor => "axt_descriptor",
+            Self::AxtAnchoredSpendV1 => "axt_anchored_spend_v1",
+            Self::ProofBlob => "proof_blob",
+            Self::SoracloudRequest => "soracloud_request",
+            Self::SoracloudResponse => "soracloud_response",
+        }
     }
     const fn return_type_name(self) -> &'static str {
         match self {
@@ -266,208 +299,385 @@ pub struct BuiltinSpec {
 }
 /// Canonical Kotodama helper/builtin calls that are part of the current source
 /// surface and are worth classifying centrally.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, strum::EnumIter, strum::IntoStaticStr)]
-#[strum(serialize_all = "snake_case", const_into_str)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, strum::EnumIter)]
 pub enum Builtin {
+    /// Construct the selected typed pointer-ABI value from a string.
     PointerConstructor(PointerConstructor),
+    /// Check whether a durable state map contains a key.
     Contains,
+    /// Read a durable state map value, using the supplied default when absent.
     GetOrDefault,
+    /// Read a durable state map value with an optional default.
     GetOr,
+    /// Ensure a durable state map entry exists and return its value.
     Ensure,
-    #[strum(serialize = "remove")]
+    /// Remove a durable state map entry and return its previous optional value.
     StateMapRemove,
+    /// Internal bounded key scan of an integer-keyed state map.
     KeysTake2,
+    /// Internal bounded value scan of an integer-valued state map.
     ValuesTake2,
+    /// Internal bounded key/value scan of an integer state map.
     KeysValuesTake2,
+    /// Read the byte value at a durable state path.
     StateGet,
+    /// Write a byte value at a durable state path.
     StateSet,
+    /// Delete the value at a durable state path.
     StateDel,
+    /// Check whether a durable state path exists.
     StateHas,
+    /// Read the length reported by the durable state path syscall.
     StateLen,
+    /// Count entries under a durable state path.
     StateCount,
+    /// Internal execution of a Norito-encoded host query.
     QueryExecuteNorito,
+    /// Query the optional projected view of an account.
     QueryGetAccount,
+    /// Query the optional projected view of an asset.
     QueryGetAsset,
+    /// Query the optional projected view of an asset definition.
     QueryGetAssetDefinition,
+    /// Query the optional projected view of a domain.
     QueryGetDomain,
+    /// Query the optional projected view of an NFT.
     QueryGetNft,
+    /// Query a bounded page of projected account views.
     QueryPageAccounts,
+    /// Query a bounded page of projected asset views.
     QueryPageAssets,
+    /// Query a bounded page of projected asset definition views.
     QueryPageAssetDefinitions,
+    /// Query a bounded page of projected domain views.
     QueryPageDomains,
+    /// Query a bounded page of projected NFT views.
     QueryPageNfts,
+    /// Query a named ledger parameter.
     QueryGetParameter,
+    /// Query an encoded seiyaku manifest.
     QueryGetContractManifest,
+    /// Query a named seiyaku instance.
     QueryGetContractInstance,
+    /// Internal execution of an encoded smart-contract query.
     ExecuteQuery,
+    /// Submit the encoded governance ballot instruction.
     ScExecuteSubmitBallot,
+    /// Resolve an account alias to its canonical account identity.
     ResolveAccountAlias,
+    /// Bill the active host-managed subscription.
     SubscriptionBill,
+    /// Record usage for the active host-managed subscription.
     SubscriptionRecordUsage,
+    /// Read the quantity held by an account for an asset definition.
     GetAccountBalance,
+    /// Read a named public input as bytes.
     GetPublicInput,
+    /// Invoke a seiyaku with quantity input and minimum-output constraints.
     ContractInvokeQuantity2,
+    /// Internal integer debug-output syscall.
     DebugPrint,
+    /// Internal string debug-log syscall.
     DebugLog,
+    /// Assert a condition in a local test build.
     Assert,
+    /// Reject contract execution with a typed error when a condition is false.
     Require,
+    /// Emit an informational debug record for a string or integer.
     Info,
+    /// Assert integer equality in a local test build.
     AssertEq,
-    #[strum(serialize = "invoke_entrypoint")]
+    /// Invoke a runtime kotoage from a test using the current caller.
     TestInvokeEntrypoint,
-    #[strum(serialize = "invoke_entrypoint_as")]
+    /// Invoke a runtime kotoage from a test as a fixture actor.
     TestInvokeEntrypointAs,
-    #[strum(serialize = "expect_reject_as")]
+    /// Require a fixture-actor invocation to produce the expected rejection.
     TestExpectRejectAs,
-    #[strum(serialize = "expect_any_reject_as")]
+    /// Require a fixture-actor invocation to reject.
     TestExpectAnyRejectAs,
-    #[strum(serialize = "actor_account")]
+    /// Read a fixture actor's canonical account identity.
     TestActorAccount,
-    #[strum(serialize = "actor_public_key")]
+    /// Read a fixture actor's public key bytes.
     TestActorPublicKey,
-    #[strum(serialize = "actor_sign")]
+    /// Sign a payload with a fixture actor's test key.
     TestActorSign,
+    /// Set one JSON metadata entry on an account.
     SetAccountDetail,
+    /// Mint an asset quantity for an account.
     MintAsset,
+    /// Burn an asset quantity held by an account.
     BurnAsset,
+    /// Transfer an asset quantity between accounts in a specified dataspace.
     TransferAsset,
+    /// Update an account asset's transfer availability at an expected revision.
     SetAssetTransferAvailability,
+    /// Set or remove an account asset's daily transfer cap.
     SetAssetTransferDailyLimit,
+    /// Set or remove an account asset's holding limit.
     SetAssetHoldingLimit,
+    /// Propose an alias account-recovery replacement for a request generation.
     AccountRecoveryPropose,
+    /// Approve an alias account-recovery request generation.
     AccountRecoveryApprove,
+    /// Cancel an alias account-recovery request generation.
     AccountRecoveryCancel,
+    /// Finalize an alias account-recovery request generation.
     AccountRecoveryFinalize,
+    /// Mint an NFT for its owner.
     NftMintAsset,
+    /// Set one JSON metadata entry on an NFT.
     NftSetMetadata,
+    /// Burn an NFT.
     NftBurnAsset,
+    /// Transfer an NFT between accounts.
     NftTransferAsset,
+    /// Register a ledger domain.
     RegisterDomain,
+    /// Unregister a ledger domain.
     UnregisterDomain,
+    /// Transfer ownership of a ledger domain between accounts.
     TransferDomain,
+    /// Register a canonical account identity.
     RegisterAccount,
+    /// Unregister an account.
     UnregisterAccount,
+    /// Register an asset definition with its name, scale and mintability.
     RegisterAsset,
+    /// Create an asset definition with an explicit owner.
     CreateNewAsset,
+    /// Unregister an asset definition.
     UnregisterAsset,
+    /// Register a peer described by JSON.
     RegisterPeer,
+    /// Unregister a peer described by JSON.
     UnregisterPeer,
+    /// Register a trigger described by JSON.
     RegisterTrigger,
+    /// Unregister a named trigger.
     UnregisterTrigger,
+    /// Change a named trigger's enabled state.
     SetTriggerEnabled,
+    /// Create a named role with a JSON permission set.
     CreateRole,
+    /// Delete a named role.
     DeleteRole,
+    /// Grant a role to an account.
     GrantRole,
+    /// Revoke a role from an account.
     RevokeRole,
+    /// Grant a permission to an account.
     GrantPermission,
+    /// Revoke a permission from an account.
     RevokePermission,
+    /// Grant an account permission to invoke a seiyaku kotoage.
     GrantContractEntrypoint,
+    /// Revoke an account's permission to invoke a seiyaku kotoage.
     RevokeContractEntrypoint,
+    /// Open an escrow offer with an asset quantity and optional evidence.
     EscrowOpenOffer,
+    /// Accept a named escrow offer.
     EscrowAccept,
+    /// Mark payment as sent for a named escrow offer.
     EscrowMarkPaymentSent,
+    /// Release a named escrow offer.
     EscrowRelease,
+    /// Cancel a named escrow offer.
     EscrowCancel,
+    /// Open a dispute for an escrow offer with optional evidence.
     EscrowOpenDispute,
+    /// Resolve an escrow dispute with buyer and seller quantities.
     EscrowResolveDispute,
+    /// Read a private numeric input in ZK mode.
     GetPrivateInput,
+    /// Commit the current output in ZK mode.
     CommitOutput,
+    /// Request host creation of NFTs for all users.
     CreateNftsForAllUsers,
+    /// Internal mutation of the host execution-depth limit.
     SetExecutionDepth,
+    /// Begin a host-managed V1 asset transfer batch.
     TransferV1BatchBegin,
+    /// End a host-managed V1 asset transfer batch.
     TransferV1BatchEnd,
+    /// Apply an encoded V1 asset transfer batch.
     TransferV1BatchApply,
+    /// Lower a bounded list of asset transfers to a host-managed batch.
     TransferBatch,
+    /// Begin an atomic cross-dataspace transaction using its descriptor.
     AxtBegin,
+    /// Declare a dataspace touch and its manifest in an atomic transaction.
     AxtTouch,
-    #[strum(serialize = "axt_stage_anchored_spend")]
+    /// Stage a V1 anchored spend in an atomic cross-dataspace transaction.
     StageAnchoredSpend,
+    /// Internal verification of a dataspace proof.
     VerifyDsProof,
+    /// Commit the active atomic cross-dataspace transaction.
     AxtCommit,
+    /// Internal request to deactivate a seiyaku instance.
     DeactivateContractInstance,
+    /// Internal request to remove registered seiyaku code bytes.
     RemoveSmartContractBytes,
+    /// Internal request to register seiyaku code.
     RegisterSmartContractCode,
+    /// Internal request to register seiyaku bytecode.
     RegisterSmartContractBytes,
+    /// Internal request to activate a seiyaku instance.
     ActivateContractInstance,
+    /// Read encoded roots from the host ZK registry.
     ZkRootsGet,
+    /// Read an encoded governance vote tally.
     ZkVoteGetTally,
+    /// Ask the host to verify an encoded ZK proof batch.
     ZkVerifyBatch,
+    /// Ask the host to verify an encoded governance ballot.
     ZkVoteVerifyBallot,
+    /// Ask the host to verify an encoded governance tally.
     ZkVoteVerifyTally,
+    /// Build an encoded governance ballot instruction from its proof fields.
     BuildSubmitBallotInline,
+    /// Read an encoded VRF epoch seed.
     VrfEpochSeed,
+    /// Verify an encoded VRF request and return its response.
     VrfVerify,
+    /// Verify an encoded batch of VRF requests and return its response.
     VrfVerifyBatch,
+    /// Hash bytes with SM3.
     Sm3Hash,
+    /// Hash bytes with SHA-256.
     Sha256Hash,
+    /// Hash bytes with SHA-3.
     Sha3Hash,
+    /// Hash bytes with BLAKE2b-256.
     Blake2b256Hash,
+    /// Hash bytes with Keccak-256.
     Keccak256Hash,
+    /// Hash bytes with the canonical Iroha hash operation.
     IrohaHash,
+    /// Verify an SM2 signature with an optional distinguishing identifier.
     Sm2Verify,
+    /// Verify a signature using the selected signature scheme.
     VerifySignature,
+    /// Seal bytes using SM4-GCM with nonce and associated data.
     Sm4GcmSeal,
+    /// Open authenticated bytes using SM4-GCM.
     Sm4GcmOpen,
+    /// Seal bytes using SM4-CCM with an optional tag length.
     Sm4CcmSeal,
+    /// Open authenticated bytes using SM4-CCM.
     Sm4CcmOpen,
+    /// Internal heap allocation helper.
     Alloc,
+    /// Read the encoded execution summary.
     ExecutionSummary,
+    /// Internal heap-growth helper.
     GrowHeap,
+    /// Verify an encoded proof through the host.
     VerifyProof,
+    /// Internal memory Merkle-path extraction helper.
     GetMerklePath,
+    /// Internal compact memory Merkle-path extraction helper.
     GetMerkleCompact,
+    /// Internal compact register Merkle-path extraction helper.
     GetRegisterMerkleCompact,
+    /// Internal Soracloud committed-state read request.
     SoracloudReadCommittedState,
+    /// Internal Soracloud state-mutation request.
     SoracloudEmitStateMutation,
+    /// Internal Soracloud mailbox-message emission request.
     SoracloudEmitMailboxMessage,
+    /// Internal Soracloud journal-append request.
     SoracloudAppendJournal,
+    /// Internal Soracloud checkpoint-publication request.
     SoracloudPublishCheckpoint,
+    /// Internal Soracloud configuration read request.
     SoracloudReadConfig,
+    /// Internal Soracloud secret-envelope read request.
     SoracloudReadSecretEnvelope,
+    /// Add a signatory to an account.
     AddSignatory,
+    /// Remove a signatory from an account.
     RemoveSignatory,
+    /// Set an account's signature quorum.
     SetAccountQuorum,
+    /// Build a durable state path key through its receiver method.
     Path,
+    /// Internal decoding of a ledger `Name` from bytes.
     NameDecode,
+    /// Internal equality check of two pointer-ABI values.
     TlvEq,
+    /// Internal length query for a pointer-ABI value.
     TlvLen,
+    /// Read the length of a byte value.
     BytesLen,
+    /// Internal encoding of a pointer-ABI value as Norito bytes.
     PointerToNorito,
+    /// Create an empty JSON object.
     JsonObject,
+    /// Internal scalar integer setter for a JSON object.
     JsonSetInt,
+    /// Set an account identity in a JSON object.
     JsonSetAccountId,
+    /// Internal encoding of JSON to bytes.
     EncodeJson,
+    /// Internal decoding of JSON from bytes.
     DecodeJson,
-    #[strum(serialize = "encode_schema")]
+    /// Internal encoding of JSON according to a named schema.
     SchemaEncode,
-    #[strum(serialize = "decode_schema")]
+    /// Internal decoding of bytes according to a named schema.
     SchemaDecode,
+    /// Internal query of a named schema's JSON description.
     SchemaInfo,
+    /// Internal exact conversion of a wide numeric value to an integer.
     NumericToInt,
+    /// Internal lowering of integer or decimal negation.
     NumericNeg,
+    /// Internal lowering of wide numeric addition.
     NumericAdd,
+    /// Internal lowering of wide numeric subtraction.
     NumericSub,
+    /// Internal lowering of wide numeric multiplication.
     NumericMul,
+    /// Internal lowering of wide numeric division.
     NumericDiv,
+    /// Internal lowering of integer remainder.
     NumericRem,
+    /// Internal lowering of wide numeric equality.
     NumericEq,
+    /// Internal lowering of wide numeric inequality.
     NumericNe,
+    /// Internal lowering of wide numeric less-than comparison.
     NumericLt,
+    /// Internal lowering of wide numeric less-than-or-equal comparison.
     NumericLe,
+    /// Internal lowering of wide numeric greater-than comparison.
     NumericGt,
+    /// Internal lowering of wide numeric greater-than-or-equal comparison.
     NumericGe,
+    /// Internal instruction-only numeric-to-integer helper.
     NumericToIntDirect,
+    /// Internal instruction-only numeric addition helper.
     NumericAddDirect,
+    /// Internal instruction-only numeric subtraction helper.
     NumericSubDirect,
+    /// Internal instruction-only numeric multiplication helper.
     NumericMulDirect,
+    /// Internal instruction-only numeric division helper.
     NumericDivDirect,
+    /// Internal instruction-only numeric remainder helper.
     NumericRemDirect,
+    /// Internal instruction-only numeric negation helper.
     NumericNegDirect,
+    /// Internal instruction-only numeric equality helper.
     NumericEqDirect,
+    /// Internal instruction-only numeric inequality helper.
     NumericNeDirect,
+    /// Internal instruction-only numeric less-than comparison helper.
     NumericLtDirect,
+    /// Internal instruction-only numeric less-than-or-equal comparison helper.
     NumericLeDirect,
+    /// Internal instruction-only numeric greater-than comparison helper.
     NumericGtDirect,
+    /// Internal instruction-only numeric greater-than-or-equal comparison helper.
     NumericGeDirect,
     /// Explicit modulo-2^512 `int` addition.
     WrappingAdd,
@@ -477,37 +687,67 @@ pub enum Builtin {
     WrappingMul,
     /// Explicit modulo-2^512 `int` negation.
     WrappingNeg,
+    /// Compute the integer square root.
     Isqrt,
+    /// Compute an integer's absolute value.
     Abs,
+    /// Select the smaller of two integers.
     Min,
+    /// Select the larger of two integers.
     Max,
+    /// Divide integers with rounding toward positive infinity.
     DivCeil,
+    /// Compute the greatest common divisor of two integers.
     Gcd,
+    /// Compute the integer mean of two integers.
     Mean,
+    /// Internal Poseidon helper over two scalar register values.
     Poseidon2,
+    /// Internal Poseidon helper over six scalar register values.
     Poseidon6,
+    /// Internal public-key generation helper over a scalar register value.
     Pubkgen,
+    /// Commit secret numeric values in ZK mode.
     Valcom,
-    #[strum(serialize = "setvl")]
+    /// Internal vector-length selection helper.
     SetVl,
+    /// Read an optional integer field from JSON.
     GetInt,
+    /// Read an optional decimal field from JSON.
     GetDecimal,
+    /// Read an optional quantity field from JSON.
     GetQuantity,
+    /// Read an optional nested JSON field.
     GetJson,
+    /// Read an optional ledger name field from JSON.
     GetName,
+    /// Read an optional account identity field from JSON.
     GetAccountId,
+    /// Read an optional asset definition identity field from JSON.
     GetAssetDefinitionId,
+    /// Read an optional NFT identity field from JSON.
     GetNftId,
+    /// Read an optional byte field encoded as hexadecimal in JSON.
     GetBlobHex,
+    /// Read the current trigger event as JSON.
     TriggerEvent,
+    /// Read the current execution authority.
     Authority,
+    /// Read the current seiyaku subject account.
     ContractSubject,
+    /// Read the host's current time in milliseconds.
     CurrentTimeMs,
+    /// Read the current block height.
     BlockHeight,
+    /// Read the current block timestamp in milliseconds.
     BlockTimeMs,
+    /// Read the encoded chain identity.
     ChainId,
+    /// Read the encoded seiyaku address.
     ContractAddress,
+    /// Read the current kotoage name as bytes.
     Entrypoint,
+    /// Internal system-variable read of the execution authority.
     SysvarAuthority,
 }
 impl Builtin {
@@ -768,7 +1008,229 @@ impl Builtin {
     pub const fn name(self) -> &'static str {
         match self {
             Self::PointerConstructor(constructor) => constructor.name(),
-            _ => self.into_str(),
+            Self::Contains => "contains",
+            Self::GetOrDefault => "get_or_default",
+            Self::GetOr => "get_or",
+            Self::Ensure => "ensure",
+            Self::StateMapRemove => "remove",
+            Self::KeysTake2 => "keys_take2",
+            Self::ValuesTake2 => "values_take2",
+            Self::KeysValuesTake2 => "keys_values_take2",
+            Self::StateGet => "state_get",
+            Self::StateSet => "state_set",
+            Self::StateDel => "state_del",
+            Self::StateHas => "state_has",
+            Self::StateLen => "state_len",
+            Self::StateCount => "state_count",
+            Self::QueryExecuteNorito => "query_execute_norito",
+            Self::QueryGetAccount => "query_get_account",
+            Self::QueryGetAsset => "query_get_asset",
+            Self::QueryGetAssetDefinition => "query_get_asset_definition",
+            Self::QueryGetDomain => "query_get_domain",
+            Self::QueryGetNft => "query_get_nft",
+            Self::QueryPageAccounts => "query_page_accounts",
+            Self::QueryPageAssets => "query_page_assets",
+            Self::QueryPageAssetDefinitions => "query_page_asset_definitions",
+            Self::QueryPageDomains => "query_page_domains",
+            Self::QueryPageNfts => "query_page_nfts",
+            Self::QueryGetParameter => "query_get_parameter",
+            Self::QueryGetContractManifest => "query_get_contract_manifest",
+            Self::QueryGetContractInstance => "query_get_contract_instance",
+            Self::ExecuteQuery => "execute_query",
+            Self::ScExecuteSubmitBallot => "sc_execute_submit_ballot",
+            Self::ResolveAccountAlias => "resolve_account_alias",
+            Self::SubscriptionBill => "subscription_bill",
+            Self::SubscriptionRecordUsage => "subscription_record_usage",
+            Self::GetAccountBalance => "get_account_balance",
+            Self::GetPublicInput => "get_public_input",
+            Self::ContractInvokeQuantity2 => "contract_invoke_quantity2",
+            Self::DebugPrint => "debug_print",
+            Self::DebugLog => "debug_log",
+            Self::Assert => "assert",
+            Self::Require => "require",
+            Self::Info => "info",
+            Self::AssertEq => "assert_eq",
+            Self::TestInvokeEntrypoint => "invoke_entrypoint",
+            Self::TestInvokeEntrypointAs => "invoke_entrypoint_as",
+            Self::TestExpectRejectAs => "expect_reject_as",
+            Self::TestExpectAnyRejectAs => "expect_any_reject_as",
+            Self::TestActorAccount => "actor_account",
+            Self::TestActorPublicKey => "actor_public_key",
+            Self::TestActorSign => "actor_sign",
+            Self::SetAccountDetail => "set_account_detail",
+            Self::MintAsset => "mint_asset",
+            Self::BurnAsset => "burn_asset",
+            Self::TransferAsset => "transfer_asset",
+            Self::SetAssetTransferAvailability => "set_asset_transfer_availability",
+            Self::SetAssetTransferDailyLimit => "set_asset_transfer_daily_limit",
+            Self::SetAssetHoldingLimit => "set_asset_holding_limit",
+            Self::AccountRecoveryPropose => "account_recovery_propose",
+            Self::AccountRecoveryApprove => "account_recovery_approve",
+            Self::AccountRecoveryCancel => "account_recovery_cancel",
+            Self::AccountRecoveryFinalize => "account_recovery_finalize",
+            Self::NftMintAsset => "nft_mint_asset",
+            Self::NftSetMetadata => "nft_set_metadata",
+            Self::NftBurnAsset => "nft_burn_asset",
+            Self::NftTransferAsset => "nft_transfer_asset",
+            Self::RegisterDomain => "register_domain",
+            Self::UnregisterDomain => "unregister_domain",
+            Self::TransferDomain => "transfer_domain",
+            Self::RegisterAccount => "register_account",
+            Self::UnregisterAccount => "unregister_account",
+            Self::RegisterAsset => "register_asset",
+            Self::CreateNewAsset => "create_new_asset",
+            Self::UnregisterAsset => "unregister_asset",
+            Self::RegisterPeer => "register_peer",
+            Self::UnregisterPeer => "unregister_peer",
+            Self::RegisterTrigger => "register_trigger",
+            Self::UnregisterTrigger => "unregister_trigger",
+            Self::SetTriggerEnabled => "set_trigger_enabled",
+            Self::CreateRole => "create_role",
+            Self::DeleteRole => "delete_role",
+            Self::GrantRole => "grant_role",
+            Self::RevokeRole => "revoke_role",
+            Self::GrantPermission => "grant_permission",
+            Self::RevokePermission => "revoke_permission",
+            Self::GrantContractEntrypoint => "grant_contract_entrypoint",
+            Self::RevokeContractEntrypoint => "revoke_contract_entrypoint",
+            Self::EscrowOpenOffer => "escrow_open_offer",
+            Self::EscrowAccept => "escrow_accept",
+            Self::EscrowMarkPaymentSent => "escrow_mark_payment_sent",
+            Self::EscrowRelease => "escrow_release",
+            Self::EscrowCancel => "escrow_cancel",
+            Self::EscrowOpenDispute => "escrow_open_dispute",
+            Self::EscrowResolveDispute => "escrow_resolve_dispute",
+            Self::GetPrivateInput => "get_private_input",
+            Self::CommitOutput => "commit_output",
+            Self::CreateNftsForAllUsers => "create_nfts_for_all_users",
+            Self::SetExecutionDepth => "set_execution_depth",
+            Self::TransferV1BatchBegin => "transfer_v1_batch_begin",
+            Self::TransferV1BatchEnd => "transfer_v1_batch_end",
+            Self::TransferV1BatchApply => "transfer_v1_batch_apply",
+            Self::TransferBatch => "transfer_batch",
+            Self::AxtBegin => "axt_begin",
+            Self::AxtTouch => "axt_touch",
+            Self::StageAnchoredSpend => "axt_stage_anchored_spend",
+            Self::VerifyDsProof => "verify_ds_proof",
+            Self::AxtCommit => "axt_commit",
+            Self::DeactivateContractInstance => "deactivate_contract_instance",
+            Self::RemoveSmartContractBytes => "remove_smart_contract_bytes",
+            Self::RegisterSmartContractCode => "register_smart_contract_code",
+            Self::RegisterSmartContractBytes => "register_smart_contract_bytes",
+            Self::ActivateContractInstance => "activate_contract_instance",
+            Self::ZkRootsGet => "zk_roots_get",
+            Self::ZkVoteGetTally => "zk_vote_get_tally",
+            Self::ZkVerifyBatch => "zk_verify_batch",
+            Self::ZkVoteVerifyBallot => "zk_vote_verify_ballot",
+            Self::ZkVoteVerifyTally => "zk_vote_verify_tally",
+            Self::BuildSubmitBallotInline => "build_submit_ballot_inline",
+            Self::VrfEpochSeed => "vrf_epoch_seed",
+            Self::VrfVerify => "vrf_verify",
+            Self::VrfVerifyBatch => "vrf_verify_batch",
+            Self::Sm3Hash => "sm3_hash",
+            Self::Sha256Hash => "sha256_hash",
+            Self::Sha3Hash => "sha3_hash",
+            Self::Blake2b256Hash => "blake2b256_hash",
+            Self::Keccak256Hash => "keccak256_hash",
+            Self::IrohaHash => "iroha_hash",
+            Self::Sm2Verify => "sm2_verify",
+            Self::VerifySignature => "verify_signature",
+            Self::Sm4GcmSeal => "sm4_gcm_seal",
+            Self::Sm4GcmOpen => "sm4_gcm_open",
+            Self::Sm4CcmSeal => "sm4_ccm_seal",
+            Self::Sm4CcmOpen => "sm4_ccm_open",
+            Self::Alloc => "alloc",
+            Self::ExecutionSummary => "execution_summary",
+            Self::GrowHeap => "grow_heap",
+            Self::VerifyProof => "verify_proof",
+            Self::GetMerklePath => "get_merkle_path",
+            Self::GetMerkleCompact => "get_merkle_compact",
+            Self::GetRegisterMerkleCompact => "get_register_merkle_compact",
+            Self::SoracloudReadCommittedState => "soracloud_read_committed_state",
+            Self::SoracloudEmitStateMutation => "soracloud_emit_state_mutation",
+            Self::SoracloudEmitMailboxMessage => "soracloud_emit_mailbox_message",
+            Self::SoracloudAppendJournal => "soracloud_append_journal",
+            Self::SoracloudPublishCheckpoint => "soracloud_publish_checkpoint",
+            Self::SoracloudReadConfig => "soracloud_read_config",
+            Self::SoracloudReadSecretEnvelope => "soracloud_read_secret_envelope",
+            Self::AddSignatory => "add_signatory",
+            Self::RemoveSignatory => "remove_signatory",
+            Self::SetAccountQuorum => "set_account_quorum",
+            Self::Path => "path",
+            Self::NameDecode => "name_decode",
+            Self::TlvEq => "tlv_eq",
+            Self::TlvLen => "tlv_len",
+            Self::BytesLen => "bytes_len",
+            Self::PointerToNorito => "pointer_to_norito",
+            Self::JsonObject => "json_object",
+            Self::JsonSetInt => "json_set_int",
+            Self::JsonSetAccountId => "json_set_account_id",
+            Self::EncodeJson => "encode_json",
+            Self::DecodeJson => "decode_json",
+            Self::SchemaEncode => "encode_schema",
+            Self::SchemaDecode => "decode_schema",
+            Self::SchemaInfo => "schema_info",
+            Self::NumericToInt => "numeric_to_int",
+            Self::NumericNeg => "numeric_neg",
+            Self::NumericAdd => "numeric_add",
+            Self::NumericSub => "numeric_sub",
+            Self::NumericMul => "numeric_mul",
+            Self::NumericDiv => "numeric_div",
+            Self::NumericRem => "numeric_rem",
+            Self::NumericEq => "numeric_eq",
+            Self::NumericNe => "numeric_ne",
+            Self::NumericLt => "numeric_lt",
+            Self::NumericLe => "numeric_le",
+            Self::NumericGt => "numeric_gt",
+            Self::NumericGe => "numeric_ge",
+            Self::NumericToIntDirect => "numeric_to_int_direct",
+            Self::NumericAddDirect => "numeric_add_direct",
+            Self::NumericSubDirect => "numeric_sub_direct",
+            Self::NumericMulDirect => "numeric_mul_direct",
+            Self::NumericDivDirect => "numeric_div_direct",
+            Self::NumericRemDirect => "numeric_rem_direct",
+            Self::NumericNegDirect => "numeric_neg_direct",
+            Self::NumericEqDirect => "numeric_eq_direct",
+            Self::NumericNeDirect => "numeric_ne_direct",
+            Self::NumericLtDirect => "numeric_lt_direct",
+            Self::NumericLeDirect => "numeric_le_direct",
+            Self::NumericGtDirect => "numeric_gt_direct",
+            Self::NumericGeDirect => "numeric_ge_direct",
+            Self::WrappingAdd => "wrapping_add",
+            Self::WrappingSub => "wrapping_sub",
+            Self::WrappingMul => "wrapping_mul",
+            Self::WrappingNeg => "wrapping_neg",
+            Self::Isqrt => "isqrt",
+            Self::Abs => "abs",
+            Self::Min => "min",
+            Self::Max => "max",
+            Self::DivCeil => "div_ceil",
+            Self::Gcd => "gcd",
+            Self::Mean => "mean",
+            Self::Poseidon2 => "poseidon2",
+            Self::Poseidon6 => "poseidon6",
+            Self::Pubkgen => "pubkgen",
+            Self::Valcom => "valcom",
+            Self::SetVl => "setvl",
+            Self::GetInt => "get_int",
+            Self::GetDecimal => "get_decimal",
+            Self::GetQuantity => "get_quantity",
+            Self::GetJson => "get_json",
+            Self::GetName => "get_name",
+            Self::GetAccountId => "get_account_id",
+            Self::GetAssetDefinitionId => "get_asset_definition_id",
+            Self::GetNftId => "get_nft_id",
+            Self::GetBlobHex => "get_blob_hex",
+            Self::TriggerEvent => "trigger_event",
+            Self::Authority => "authority",
+            Self::ContractSubject => "contract_subject",
+            Self::CurrentTimeMs => "current_time_ms",
+            Self::BlockHeight => "block_height",
+            Self::BlockTimeMs => "block_time_ms",
+            Self::ChainId => "chain_id",
+            Self::ContractAddress => "contract_address",
+            Self::Entrypoint => "entrypoint",
+            Self::SysvarAuthority => "sysvar_authority",
         }
     }
     /// Canonical V1 source spelling, including the public namespace.
@@ -2395,6 +2857,18 @@ mod tests {
             assert_eq!(Builtin::from_source_name(constructor.name()), None);
             assert_eq!(builtin.signature().parameters, &["string"]);
         }
+    }
+    #[test]
+    fn canonical_names_support_constant_evaluation() {
+        const DATASPACE: &str = PointerConstructor::DataSpaceId.name();
+        const REMOVE: &str = Builtin::StateMapRemove.name();
+        const ANCHORED_SPEND: &str = Builtin::StageAnchoredSpend.name();
+        const POINTER: &str =
+            Builtin::PointerConstructor(PointerConstructor::AssetDefinition).name();
+        assert_eq!(DATASPACE, "dataspace_id");
+        assert_eq!(REMOVE, "remove");
+        assert_eq!(ANCHORED_SPEND, "axt_stage_anchored_spend");
+        assert_eq!(POINTER, "asset_definition");
     }
     #[test]
     fn registry_is_exhaustive_and_canonical_names_round_trip() {

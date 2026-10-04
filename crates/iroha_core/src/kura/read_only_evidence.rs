@@ -3,8 +3,12 @@
 /// Failure of bounded immutable Kura evidence admission or consumption.
 #[derive(Debug)]
 pub enum CanonicalKuraEvidenceError {
-    /// A structural, ordering, identity or resource contract failed.
+    /// A structural, ordering, identity or declared bound contract failed.
     Invalid(&'static str),
+    /// The sole canonical decoder retains the original attempt and its resource origin.
+    Decode(norito::core::DecodeAttemptError),
+    /// The original file-buffer allocation failed; it has no pool release source.
+    Allocator(std::collections::TryReserveError),
     /// A read-only operating-system operation failed.
     Io(std::io::Error),
     /// The platform lacks this owner's descriptor-relative no-follow implementation.
@@ -14,6 +18,12 @@ impl std::fmt::Display for CanonicalKuraEvidenceError {
     fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Invalid(code) => write!(output, "canonical Kura evidence: {code}"),
+            Self::Decode(_) => {
+                output.write_str("canonical Kura evidence: canonical decode failure")
+            }
+            Self::Allocator(_) => {
+                output.write_str("canonical Kura evidence: file-buffer allocation failure")
+            }
             Self::Io(_) => output.write_str("canonical Kura evidence: read-only I/O failure"),
             Self::UnsupportedPlatform => {
                 output.write_str("canonical Kura evidence: unsupported secure reader platform")
@@ -24,6 +34,8 @@ impl std::fmt::Display for CanonicalKuraEvidenceError {
 impl std::error::Error for CanonicalKuraEvidenceError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Decode(error) => Some(error),
+            Self::Allocator(error) => Some(error),
             Self::Io(error) => Some(error),
             _ => None,
         }
@@ -181,8 +193,12 @@ impl CanonicalKuraEvidenceComplete {
 /// admitted: exact index/hash counts and contiguous data, with no uncommitted suffix.
 /// The admitted journal images remain resident (at most 48 MB combined), bounded by
 /// `max_committed_blocks`; native body decoding remains frame bounded.
-/// Every failure, including a caught
-/// consumer panic, poisons the session. Nothing is finally qualified before `finish`.
+/// An original local resource refusal before consumption leaves the cursor unchanged
+/// and permits retry only after the exact retained sources and marker are rechecked.
+/// Other errors and consumer errors or caught panics poison the session. Nothing is
+/// finally qualified before `finish`.
+/// TODO: fund the retained journal images, file buffers and decoder backing through
+/// the caller's original allocation owner; finite byte bounds alone do not fund them.
 #[derive(Debug)]
 pub struct CanonicalKuraEvidenceReader {
     limits: CanonicalKuraEvidenceLimits,
@@ -202,7 +218,8 @@ impl CanonicalKuraEvidenceReader {
     /// Paths must be absolute, already normalized, bounded and free of symlink components.
     /// Every requested carrier must lie within the exact published commit marker.
     /// # Errors
-    /// Returns invalid-input, immutable-prefix, secure-I/O or unsupported-platform errors.
+    /// Returns invalid-input, immutable-prefix, original decoder or allocator,
+    /// secure-I/O, or unsupported-platform errors.
     pub fn open(
         block_store: &Path,
         limits: CanonicalKuraEvidenceLimits,
@@ -229,11 +246,14 @@ impl CanonicalKuraEvidenceReader {
                 after_admission,
             )?;
             let marker_bytes = sources.marker.read(0, sources.marker.len())?;
-            let marker: BlockStoreCommitMarker = norito::decode_canonical_with_limits(
-                &marker_bytes,
-                limits.decode_limits(marker_bytes.len()),
-            )
-            .map_err(|_| CanonicalKuraEvidenceError::Invalid("canonical published marker"))?;
+            let marker: BlockStoreCommitMarker =
+                norito::with_decode_limits_scope(limits.decode_limits(marker_bytes.len()), || {
+                    norito::decode_canonical_for_admission(
+                        &marker_bytes,
+                        norito::canonical_decode_limits(marker_bytes.len()),
+                    )
+                })
+                .map_err(CanonicalKuraEvidenceError::Decode)?;
             evidence_require(
                 marker.version == BlockStoreCommitMarker::VERSION
                     && marker.count > 0
@@ -318,7 +338,9 @@ impl CanonicalKuraEvidenceReader {
     ///
     /// Returned wire bytes still require the independently anchored finality verifier.
     /// # Errors
-    /// Fails and poisons on skipped/repeated heights, bounds, codec or file identity errors.
+    /// Fails and poisons on skipped/repeated heights, bounds, invalid bytes or file
+    /// identity errors. A pre-consumer local resource refusal permits unchanged
+    /// retry only after an exact source recheck.
     pub fn read_carrier(&mut self, height: u64) -> CanonicalKuraEvidenceResult<Vec<u8>> {
         self.read_carrier_with(height, Ok)
     }
@@ -341,64 +363,10 @@ impl CanonicalKuraEvidenceReader {
         }
         #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
         {
-            evidence_require(
-                height == self.next_height && height <= self.limits.last_height,
-                "exact increasing carrier interval",
-            )?;
-            let index = self.index(height)?;
-            evidence_require(
-                index.length <= self.limits.max_carrier_bytes as u64,
-                "carrier frame bound",
-            )?;
-            let wire = self.sources.data.read(index.start, index.length)?;
-            let block =
-                norito::with_decode_limits_scope(self.limits.decode_limits(wire.len()), || {
-                    iroha_data_model::block::decode_versioned_signed_block(&wire)
-                })
-                .map_err(|_| CanonicalKuraEvidenceError::Invalid("carrier decode"))?;
-            evidence_require(
-                norito::canonical_frame_len(&block)
-                    .map_err(|_| CanonicalKuraEvidenceError::Invalid("carrier encoding"))?
-                    <= self.limits.max_carrier_bytes,
-                "carrier canonical bound",
-            )?;
-            let canonical = block
-                .encode_wire()
-                .map_err(|_| CanonicalKuraEvidenceError::Invalid("carrier wire encoding"))?;
-            evidence_require(
-                canonical == wire
-                    && block.header().height().get() == height
-                    && block.hash() == self.hash(height)?,
-                "canonical carrier association",
-            )?;
-            let previous = if height == 1 {
-                None
-            } else {
-                Some(self.hash(height - 1)?)
+            let wire = match self.prepare_carrier(height) {
+                Ok(wire) => wire,
+                Err(error) => return self.refuse_before_consumer(error),
             };
-            evidence_require(
-                block.header().prev_block_hash() == previous,
-                "carrier parent journal association",
-            )?;
-            let certificate =
-                block
-                    .commit_certificate()
-                    .ok_or(CanonicalKuraEvidenceError::Invalid(
-                        "native commit certificate is absent",
-                    ))?;
-            evidence_require(
-                !certificate.result_preimage().is_empty()
-                    && if height == 1 {
-                        certificate.consensus_header().is_empty()
-                            && certificate.commit_qc().is_empty()
-                            && certificate.availability().is_empty()
-                    } else {
-                        !certificate.consensus_header().is_empty()
-                            && !certificate.commit_qc().is_empty()
-                            && !certificate.availability().is_empty()
-                    },
-                "native commit certificate shape",
-            )?;
             // The exact four native artifact byte strings remain inside the unchanged wire.
             // Presence/shape and disk association do not authenticate their signatures or result.
             self.add_output(wire.len())?;
@@ -412,6 +380,80 @@ impl CanonicalKuraEvidenceReader {
             self.poisoned = false;
             Ok(result)
         }
+    }
+    #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+    fn prepare_carrier(&self, height: u64) -> CanonicalKuraEvidenceResult<Vec<u8>> {
+        evidence_require(
+            height == self.next_height && height <= self.limits.last_height,
+            "exact increasing carrier interval",
+        )?;
+        let index = self.index(height)?;
+        evidence_require(
+            index.length <= self.limits.max_carrier_bytes as u64,
+            "carrier frame bound",
+        )?;
+        let wire = self.sources.data.read(index.start, index.length)?;
+        let block = norito::with_decode_limits_scope(self.limits.decode_limits(wire.len()), || {
+            iroha_data_model::block::decode_framed_signed_block(&wire)
+        })
+        .map_err(CanonicalKuraEvidenceError::Decode)?;
+        // The sole decoder already checks exact framed length and canonical bytes.
+        evidence_require(
+            block.header().height().get() == height && block.hash() == self.hash(height)?,
+            "canonical carrier association",
+        )?;
+        let previous = if height == 1 {
+            None
+        } else {
+            Some(self.hash(height - 1)?)
+        };
+        evidence_require(
+            block.header().prev_block_hash() == previous,
+            "carrier parent journal association",
+        )?;
+        let certificate = block
+            .commit_certificate()
+            .ok_or(CanonicalKuraEvidenceError::Invalid(
+                "native commit certificate is absent",
+            ))?;
+        evidence_require(
+            !certificate.result_preimage().is_empty()
+                && if height == 1 {
+                    certificate.consensus_header().is_empty()
+                        && certificate.commit_qc().is_empty()
+                        && certificate.availability().is_empty()
+                } else {
+                    !certificate.consensus_header().is_empty()
+                        && !certificate.commit_qc().is_empty()
+                        && !certificate.availability().is_empty()
+                },
+            "native commit certificate shape",
+        )?;
+        Ok(wire)
+    }
+    #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+    fn refuse_before_consumer<T>(
+        &mut self,
+        error: CanonicalKuraEvidenceError,
+    ) -> CanonicalKuraEvidenceResult<T> {
+        let local_resource = match &error {
+            CanonicalKuraEvidenceError::Decode(error) => matches!(
+                error.kind(),
+                norito::core::DecodeAttemptErrorKind::Allocator
+                    | norito::core::DecodeAttemptErrorKind::EnclosingLimit
+            ),
+            CanonicalKuraEvidenceError::Allocator(_) => true,
+            CanonicalKuraEvidenceError::Invalid(_)
+            | CanonicalKuraEvidenceError::Io(_)
+            | CanonicalKuraEvidenceError::UnsupportedPlatform => false,
+        };
+        if local_resource {
+            // No cursor/output mutation or consumer callback has occurred. A changed
+            // descriptor or marker remains terminal even when allocation was refused.
+            self.check_sources()?;
+            self.poisoned = false;
+        }
+        Err(error)
     }
     /// Consume this owner only after the complete requested native carrier interval.
     /// # Errors
@@ -439,10 +481,7 @@ impl CanonicalKuraEvidenceReader {
         #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
         {
             self.sources.check()?;
-            evidence_require(
-                self.sources.marker.read(0, self.sources.marker.len())? == self.marker_bytes,
-                "published marker changed",
-            )
+            self.sources.marker.check_marker_bytes(&self.marker_bytes)
         }
     }
     #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
@@ -692,6 +731,21 @@ mod canonical_evidence_read_only_fs {
                 rustix::io::fcntl_getfd(&self.file).map_err(std::io::Error::from)?,
             ))
         }
+        pub(super) fn check_marker_bytes(&self, expected: &[u8]) -> Result<()> {
+            self.check()?;
+            require(
+                expected.len() <= super::MAX_BLOCK_COMMIT_MARKER_BYTES
+                    && expected.len() as u64 == self.len(),
+                "published marker recheck bound",
+            )?;
+            // Rechecking a resource-refused read must not need another heap buffer.
+            // The complete marker is independently bounded at source admission.
+            let mut bytes = [0u8; super::MAX_BLOCK_COMMIT_MARKER_BYTES];
+            let observed = &mut bytes[..expected.len()];
+            self.file.read_exact_at(observed, 0)?;
+            self.check()?;
+            require(observed == expected, "published marker changed")
+        }
         pub(super) fn read(&self, offset: u64, length: u64) -> Result<Vec<u8>> {
             self.read_after_check(offset, length, || {})
         }
@@ -712,9 +766,7 @@ mod canonical_evidence_read_only_fs {
             let length =
                 usize::try_from(length).map_err(|_| Error::Invalid("read size conversion"))?;
             let mut bytes = Vec::new();
-            bytes
-                .try_reserve_exact(length)
-                .map_err(|_| Error::Invalid("read allocation"))?;
+            bytes.try_reserve_exact(length).map_err(Error::Allocator)?;
             bytes.resize(length, 0);
             after_check();
             self.file.read_exact_at(&mut bytes, offset)?;

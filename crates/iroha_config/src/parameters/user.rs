@@ -62,6 +62,8 @@ use std::{
 };
 use thiserror::Error;
 mod app_routed_read_config;
+mod musubi_publication_installation;
+pub use musubi_publication_installation::MusubiPublicationInstallation;
 mod sccp;
 pub use sccp::{
     SccpAttestor, SccpLightClientKeeper, SccpLightClientKeeperEndpoints, SccpNode, SccpSecretHeader,
@@ -831,9 +833,46 @@ mod chain_id_config_tests {
 /// Public location of the authenticated local runtime-provider broker.
 #[derive(Debug, ReadConfig)]
 pub struct RuntimeProviderBroker {
+    /// Server observer-operation allowance before dispatch through reply publication.
+    #[config(
+        default = "DurationMs(defaults::runtime_provider_broker::OBSERVER_OPERATION_TIMEOUT)"
+    )]
+    observer_operation_timeout_ms: DurationMs,
+    /// Aggregate memory retained by current and pending consensus credentials.
+    #[config(default = "defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES")]
+    credential_max_memory_bytes: NonZeroUsize,
     /// Absolute path to the canonical broker Unix socket.
     #[config(default = "defaults::runtime_provider_broker::endpoint_path()")]
     endpoint_path: WithOrigin<PathBuf>,
+}
+
+impl RuntimeProviderBroker {
+    pub(super) fn parse(
+        self,
+    ) -> core::result::Result<actual::RuntimeProviderBroker, Report<ParseError>> {
+        let observer_operation_timeout = self.observer_operation_timeout_ms.get();
+        if observer_operation_timeout.is_zero()
+            || observer_operation_timeout
+                > defaults::runtime_provider_broker::OBSERVER_OPERATION_TIMEOUT
+        {
+            return Err(Report::new(ParseError::InvalidRuntimeProviderBrokerConfig)
+                .attach("observer_operation_timeout_ms must be between 1 and 15000"));
+        }
+        let (endpoint_path, endpoint_origin) = self.endpoint_path.into_tuple();
+        actual::RuntimeProviderBrokerEndpointPath::try_new(endpoint_path)
+            .map(|endpoint_path| actual::RuntimeProviderBroker {
+                observer_operation_timeout,
+                endpoint_path,
+                credential_max_memory_bytes: self.credential_max_memory_bytes,
+            })
+            .map_err(|error| {
+                Report::new(ParseError::InvalidRuntimeProviderBrokerConfig)
+                    .attach(error)
+                    .attach(format!(
+                        "runtime_provider_broker.endpoint_path origin: {endpoint_origin:?}"
+                    ))
+            })
+    }
 }
 
 /// User-level configuration container for `Root`.
@@ -1271,19 +1310,10 @@ impl Root {
             emitter.emit(report);
         }
         let (network, block_sync, transaction_gossiper) = self.network.parse(&mut emitter);
-        let (endpoint_path, endpoint_origin) =
-            self.runtime_provider_broker.endpoint_path.into_tuple();
-        let runtime_provider_broker =
-            actual::RuntimeProviderBrokerEndpointPath::try_new(endpoint_path)
-                .map(|endpoint_path| actual::RuntimeProviderBroker { endpoint_path })
-                .map_err(|error| {
-                    Report::new(ParseError::InvalidRuntimeProviderBrokerConfig)
-                        .attach(error)
-                        .attach(format!(
-                            "runtime_provider_broker.endpoint_path origin: {endpoint_origin:?}"
-                        ))
-                })
-                .ok_or_emit(&mut emitter);
+        let runtime_provider_broker = self
+            .runtime_provider_broker
+            .parse()
+            .ok_or_emit(&mut emitter);
         let peer = Peer::new(network.address.value().clone(), peer_public_key);
         let trusted_peers = self.trusted_peers.map(|x| {
             let others = x.0.into_iter().filter(|p| p.id() != peer.id()).collect();
@@ -13443,15 +13473,15 @@ impl SnapshotResourcePolicy {
 /// User-level non-secret custody and private TLS listener settings for Musubi publication.
 #[derive(Debug, Clone, ReadConfig)]
 pub struct MusubiPublication {
+    /// Optional complete original identity, credentials and finite pin spending selection.
+    #[config(nested)]
+    pub installation: MusubiPublicationInstallation,
     /// Parent directory for the independent durable journal, seed and clock owners.
     #[config(default = "PathBuf::from(defaults::musubi_publication::CUSTODY_ROOT)")]
     pub custody_root: WithOrigin<PathBuf>,
     /// Bind address for the injected private TLS listener.
     #[config(default = "defaults::musubi_publication::PRIVATE_TLS_BIND.to_owned()")]
     pub private_tls_bind: String,
-    /// Exact prefix removed before one of the three private publication routes is matched.
-    #[config(default = "defaults::musubi_publication::PRIVATE_MOUNT_PREFIX.to_owned()")]
-    pub private_mount_prefix: String,
     /// Maximum simultaneous private TLS requests and bounded request buffers.
     #[config(default = "defaults::musubi_publication::MAX_INFLIGHT_REQUESTS")]
     pub max_inflight_requests: u16,
@@ -13532,13 +13562,6 @@ impl MusubiPublication {
                     .attach("musubi_publication.max_inflight_requests must be within 1..=4"),
             );
         }
-        if !valid_musubi_private_mount_prefix(&self.private_mount_prefix) {
-            emitter.emit(
-                Report::new(ParseError::InvalidMusubiPublicationConfig).attach(
-                    "musubi_publication.private_mount_prefix is not a canonical path prefix",
-                ),
-            );
-        }
         if self.journal_max_operations == 0 || self.journal_max_operations > 1_000_000 {
             emitter.emit(
                 Report::new(ParseError::InvalidMusubiPublicationConfig)
@@ -13606,10 +13629,17 @@ impl MusubiPublication {
                 ),
             );
         }
+        let installation = self.installation.parse(emitter);
+        if installation.is_some() && private_tls_bind.port() == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidMusubiPublicationConfig)
+                    .attach("installed publication requires a nonzero TLS port"),
+            );
+        }
         actual::MusubiPublication {
+            installation,
             custody_root: self.custody_root.resolve_relative_path(),
             private_tls_bind,
-            private_mount_prefix: self.private_mount_prefix,
             max_inflight_requests: self.max_inflight_requests,
             journal_max_operations: self.journal_max_operations,
             journal_max_authorizations: self.journal_max_authorizations,
@@ -13624,16 +13654,6 @@ impl MusubiPublication {
             pin_transaction_authority,
         }
     }
-}
-fn valid_musubi_private_mount_prefix(prefix: &str) -> bool {
-    prefix.len() <= 64
-        && prefix.starts_with('/')
-        && prefix[1..].split('/').all(|part| {
-            !part.is_empty()
-                && part
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-        })
 }
 /// User-level configuration container for the embedded Soracloud runtime manager.
 #[derive(Debug, Clone, ReadConfig)]
@@ -14707,6 +14727,9 @@ pub struct Torii {
     /// Aggregate bytes for signed-query ingress and cross-dataspace fanout.
     #[config(default = "defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES")]
     pub query_fanout_max_retained_bytes: Bytes,
+    /// Maximum complete working set for one query, independent of aggregate capacity.
+    #[config(default = "defaults::torii::QUERY_FANOUT_MAX_WORKING_SET_BYTES")]
+    pub query_fanout_max_working_set_bytes: Bytes,
     /// Absolute deadline for reading one admitted App API routed-read body.
     #[config(default = "app_routed_read_config::default_body_timeout()")]
     pub app_api_routed_read_body_read_timeout_ms: DurationMs,
@@ -15080,6 +15103,14 @@ impl core::fmt::Debug for Torii {
             )
             .field("query_max_inflight", &self.query_max_inflight)
             .field("query_heavy_max_inflight", &self.query_heavy_max_inflight)
+            .field(
+                "query_fanout_max_retained_bytes",
+                &self.query_fanout_max_retained_bytes,
+            )
+            .field(
+                "query_fanout_max_working_set_bytes",
+                &self.query_fanout_max_working_set_bytes,
+            )
             .field("require_api_token", &self.require_api_token)
             .field("api_tokens", &self.api_tokens)
             .field(
@@ -16054,6 +16085,7 @@ impl Torii {
         }
         let max_content_len = self.max_content_len.get();
         let query_fanout_max_retained_bytes = self.query_fanout_max_retained_bytes.get();
+        let query_fanout_max_working_set_bytes = self.query_fanout_max_working_set_bytes.get();
         if max_content_len == 0 {
             emit_torii_config_error(emitter, "torii.max_content_len must be greater than zero");
         }
@@ -16073,6 +16105,12 @@ impl Torii {
                     "torii.query_fanout_max_retained_bytes must be at least {} bytes for four bounded ingress slots and one fanout working set",
                     defaults::torii::QUERY_FANOUT_MIN_POOL_BYTES_V1
                 ),
+            );
+        }
+        if query_fanout_max_working_set_bytes == 0 {
+            emit_torii_config_error(
+                emitter,
+                "torii.query_fanout_max_working_set_bytes must be greater than zero",
             );
         }
         app_routed_read_config::validate(&self, emitter);
@@ -16099,6 +16137,12 @@ impl Torii {
             emit_torii_config_error(
                 emitter,
                 "torii.query_fanout_max_retained_bytes must fit the platform address space",
+            );
+        }
+        if usize::try_from(query_fanout_max_working_set_bytes).is_err() {
+            emit_torii_config_error(
+                emitter,
+                "torii.query_fanout_max_working_set_bytes must fit the platform address space",
             );
         }
         if let Some(preauth_allow_cidrs) = self.preauth_allow_cidrs.as_ref() {
@@ -16164,6 +16208,7 @@ impl Torii {
             query_max_inflight: self.query_max_inflight,
             query_heavy_max_inflight: self.query_heavy_max_inflight,
             query_fanout_max_retained_bytes: self.query_fanout_max_retained_bytes,
+            query_fanout_max_working_set_bytes: self.query_fanout_max_working_set_bytes,
             app_api_routed_read_body_read_timeout,
             query_queue_timeout: self.query_queue_timeout_ms.get(),
             tx_rate_per_authority_per_sec: self
@@ -17396,6 +17441,9 @@ pub struct ToriiTransport {
     /// HTTP/1 listener, parser, and socket limits.
     #[config(nested)]
     pub http: ToriiHttpTransport,
+    /// Optional HTTPS listener; an absent address disables it.
+    #[config(nested)]
+    pub https: ToriiHttpsTransport,
     /// Norito-RPC transport rollout settings.
     #[config(nested)]
     pub norito_rpc: ToriiNoritoRpcTransport,
@@ -17442,6 +17490,7 @@ impl Default for ToriiHttpTransport {
         }
     }
 }
+include!("user/torii_https_transport.rs");
 /// Norito-RPC transport configuration parameters.
 #[derive(ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiNoritoRpcTransport {
@@ -17521,6 +17570,7 @@ impl ToriiTransport {
                 max_headers: self.http.max_headers,
                 max_header_bytes: self.http.max_header_bytes,
             },
+            https: self.https.parse(emitter),
             norito_rpc: self.norito_rpc.parse(emitter),
         }
     }
@@ -18689,7 +18739,6 @@ impl AccountOnboarding {
             "CanSubmitSorafsTelemetry",
             "CanFileSorafsCapacityDispute",
             "CanIssueSorafsReplicationOrder",
-            "CanCompleteSorafsReplicationOrder",
             "CanSetSorafsPricing",
             "CanManageSorafsModeration",
             "CanManageSorafsPopRegistry",
@@ -24310,25 +24359,22 @@ impl SorafsProviderIngestFinalizedArchiveConfig {
 }
 /// User policy for Musubi provider-attestation journaling.
 ///
-/// `enabled = true` requests activation but does not itself permit durable
-/// capture. Stock `irohad` rejects the request until a concrete capture child
-/// is qualified. The three public provider bindings are mandatory as one
-/// all-or-none set while paths, deployment nonces, endpoints, credentials,
-/// tokens, and keys remain deliberately absent.
+/// Native activation requires the concrete ordinary-open journal and dedicated completion
+/// credential. External adapter selection remains separately qualified and does not imply native
+/// custody. All three public bindings are mandatory; paths and credentials remain separate.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsProviderAttestationJournalConfig {
-    /// Request activation of finalized-intent capture; stock `irohad` currently
-    /// rejects the request until a concrete capture child is qualified.
+    /// Request the supervised finalized-intent capture after concrete custody qualification.
     #[config(
         default = "defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal::ENABLED"
     )]
     pub enabled: bool,
-    /// Stable public identity of the rollback-resistant UNIX-time seal.
-    pub clock_seal_handle: Option<String>,
-    /// Exact non-zero clock-seal adapter and public-policy revision.
-    pub clock_seal_revision: Option<u64>,
-    /// Exact lowercase non-zero digest of the clock-seal public policy.
-    pub clock_seal_policy_digest_hex: Option<String>,
+    /// Stable public clock identity; native UTC has crash durability, not an external rollback seal.
+    pub clock_handle: Option<String>,
+    /// Exact non-zero clock adapter and public-policy revision.
+    pub clock_revision: Option<u64>,
+    /// Exact lowercase non-zero digest of the clock public policy.
+    pub clock_policy_digest_hex: Option<String>,
     /// Stable public identity of the approval-only signer.
     pub approval_signer_handle: Option<String>,
     /// Exact non-zero approval-signer adapter and public-policy revision.
@@ -24390,9 +24436,9 @@ impl Default for SorafsProviderAttestationJournalConfig {
         use defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal as journal;
         Self {
             enabled: journal::ENABLED,
-            clock_seal_handle: None,
-            clock_seal_revision: None,
-            clock_seal_policy_digest_hex: None,
+            clock_handle: None,
+            clock_revision: None,
+            clock_policy_digest_hex: None,
             approval_signer_handle: None,
             approval_signer_revision: None,
             approval_signer_policy_digest_hex: None,
@@ -24506,11 +24552,11 @@ impl SorafsProviderAttestationJournalConfig {
             })
         }
         let binding_fields = [
-            ("clock_seal_handle", self.clock_seal_handle.is_some()),
-            ("clock_seal_revision", self.clock_seal_revision.is_some()),
+            ("clock_handle", self.clock_handle.is_some()),
+            ("clock_revision", self.clock_revision.is_some()),
             (
-                "clock_seal_policy_digest_hex",
-                self.clock_seal_policy_digest_hex.is_some(),
+                "clock_policy_digest_hex",
+                self.clock_policy_digest_hex.is_some(),
             ),
             (
                 "approval_signer_handle",
@@ -24654,11 +24700,11 @@ impl SorafsProviderAttestationJournalConfig {
             );
             valid = false;
         }
-        let clock_seal = parse_binding(
-            "clock_seal",
-            self.clock_seal_handle,
-            self.clock_seal_revision,
-            self.clock_seal_policy_digest_hex,
+        let clock = parse_binding(
+            "clock",
+            self.clock_handle,
+            self.clock_revision,
+            self.clock_policy_digest_hex,
             emitter,
         );
         let approval_signer = parse_binding(
@@ -24680,7 +24726,7 @@ impl SorafsProviderAttestationJournalConfig {
             return None;
         }
         Some(actual::SorafsProviderAttestationJournal {
-            clock_seal: clock_seal?,
+            clock: clock?,
             approval_signer: approval_signer?,
             inventory: inventory?,
             max_entries: self.max_entries,
@@ -24789,9 +24835,8 @@ pub struct SorafsProviderIngestRuntimeConfig {
     /// Durable payload-free completion-outbox policy.
     #[config(nested)]
     pub outbox: SorafsProviderIngestOutboxConfig,
-    /// Optional request to activate the capture-only Musubi provider-attestation
-    /// journal; stock `irohad` currently rejects it until a concrete child is
-    /// qualified.
+    /// Optional native completed-bundle attestation journal. Activation requires exact
+    /// native credential bindings and explicitly initialized retained custody.
     #[config(nested)]
     pub provider_attestation_journal: SorafsProviderAttestationJournalConfig,
 }
@@ -27354,13 +27399,16 @@ impl SorafsNativeTransactionSignerBinding {
         } = self;
         if software_credential.as_ref().is_some_and(|credential| {
             !credential.is_absolute()
-                || credential.components().any(|part| {
-                    matches!(
-                        part,
-                        std::path::Component::CurDir
-                            | std::path::Component::ParentDir
-                            | std::path::Component::Prefix(_)
-                    )
+                || credential.components().any(|part| match part {
+                    std::path::Component::CurDir | std::path::Component::ParentDir => true,
+                    // Match iroha_fs's native local-drive contract. Verbatim drive paths are
+                    // also returned by Windows canonicalize; UNC/device namespaces are not
+                    // supported private stores. Runtime custody still validates every handle.
+                    std::path::Component::Prefix(prefix) => !matches!(
+                        prefix.kind(),
+                        std::path::Prefix::Disk(_) | std::path::Prefix::VerbatimDisk(_)
+                    ),
+                    _ => false,
                 })
         }) {
             emit(
@@ -33451,12 +33499,6 @@ impl SorafsGatewayCompliance {
                 hosts,
             });
             previous_feed = Some(&feed.feed_id);
-        }
-        if feeds.is_empty() {
-            emit(
-                emitter,
-                "sorafs.gateway.compliance.feeds must not be empty when enabled",
-            );
         }
         if self.max_encoded_bytes.0 == 0
             || self.max_encoded_bytes.0 > 16 * 1024 * 1024

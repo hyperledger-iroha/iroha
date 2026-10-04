@@ -183,41 +183,55 @@ impl SnapshotNexusRuntime {
     }
 
     pub(super) fn active_incarnations(&self) -> Result<BTreeMap<LaneId, Hash>, LaneLifecycleError> {
-        let lineage = self.lineage_projection();
-        self.lanes
-            .iter()
-            .map(|lane| {
-                lineage
-                    .get(&lane.id)
-                    .map(|entry| (lane.id, entry.incarnation))
-                    .ok_or_else(|| {
-                        runtime_catalog_invalid(format!(
-                            "active lane {} is missing retained lineage",
-                            lane.id
-                        ))
-                    })
-            })
-            .collect()
+        let lineage = &self.lane_incarnation_lineage;
+        if lineage
+            .windows(2)
+            .any(|pair| pair[0].lane_id >= pair[1].lane_id)
+        {
+            return Err(runtime_catalog_invalid(
+                "canonical runtime lanes and lineage must be strictly ordered",
+            ));
+        }
+        let mut active = BTreeMap::new();
+        for lane in &self.lanes {
+            let index = lineage
+                .binary_search_by_key(&lane.id, |entry| entry.lane_id)
+                .map_err(|_| {
+                    runtime_catalog_invalid(format!(
+                        "active lane {} is missing retained lineage",
+                        lane.id
+                    ))
+                })?;
+            active.insert(lane.id, lineage[index].incarnation);
+        }
+        Ok(active)
     }
 
     pub(super) fn active_activation_heights(
         &self,
     ) -> Result<BTreeMap<LaneId, u64>, LaneLifecycleError> {
-        let lineage = self.lineage_projection();
-        self.lanes
-            .iter()
-            .map(|lane| {
-                lineage
-                    .get(&lane.id)
-                    .map(|entry| (lane.id, entry.activation_height))
-                    .ok_or_else(|| {
-                        runtime_catalog_invalid(format!(
-                            "active lane {} is missing retained lineage",
-                            lane.id
-                        ))
-                    })
-            })
-            .collect()
+        let lineage = &self.lane_incarnation_lineage;
+        if lineage
+            .windows(2)
+            .any(|pair| pair[0].lane_id >= pair[1].lane_id)
+        {
+            return Err(runtime_catalog_invalid(
+                "canonical runtime lanes and lineage must be strictly ordered",
+            ));
+        }
+        let mut active = BTreeMap::new();
+        for lane in &self.lanes {
+            let index = lineage
+                .binary_search_by_key(&lane.id, |entry| entry.lane_id)
+                .map_err(|_| {
+                    runtime_catalog_invalid(format!(
+                        "active lane {} is missing retained lineage",
+                        lane.id
+                    ))
+                })?;
+            active.insert(lane.id, lineage[index].activation_height);
+        }
+        Ok(active)
     }
 }
 
@@ -241,9 +255,10 @@ impl State {
     ///
     /// This deliberately skips startup and lifecycle validation so negative router tests can
     /// inspect malformed policies. It does not install physical lane storage and must not be
-    /// used by execution, commit, recovery, or storage fixtures.
-    #[cfg(test)]
-    pub(crate) fn install_synthetic_routing_snapshot_for_testing(
+    /// used by execution, commit, recovery, or storage fixtures. The `iroha-core-tests`
+    /// capability also permits cross-crate negative routing fixtures to use this same owner.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn install_synthetic_routing_snapshot_for_testing(
         &self,
         mut nexus: iroha_config::parameters::actual::Nexus,
     ) {
@@ -385,8 +400,17 @@ impl State {
         world: &impl WorldReadOnly,
         baseline: &LaneManifestRegistryHandle,
     ) -> Result<CanonicalRuntimeProjection, LaneLifecycleError> {
+        Self::project_canonical_runtime_from_inputs(record, world, baseline, &self.nexus.read())
+    }
+
+    pub(super) fn project_canonical_runtime_from_inputs(
+        record: &SnapshotNexusRuntime,
+        world: &impl WorldReadOnly,
+        baseline: &LaneManifestRegistryHandle,
+        configured: &iroha_config::parameters::actual::Nexus,
+    ) -> Result<CanonicalRuntimeProjection, LaneLifecycleError> {
         let catalog = runtime_catalog_from_world(world)?;
-        let nexus = record.nexus_projection_with_catalog(&self.nexus.read(), catalog.as_ref())?;
+        let nexus = record.nexus_projection_with_catalog(configured, catalog.as_ref())?;
         if let Some(catalog) = &catalog
             && catalog.baseline_manifests_hash
                 != Hash::prehashed(baseline.baseline_consensus_policy_digest())

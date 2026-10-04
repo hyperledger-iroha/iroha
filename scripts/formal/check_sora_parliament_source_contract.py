@@ -593,9 +593,10 @@ def require_block_start_construction(state: str) -> None:
             raise RuntimeError(f"{path}: start construction has duplicate or invalid original fields")
         bindings[name] = value if separator else name
     expected = {name: name for name in (
-        "world", "da_rewind_releases",
+        "world",
     )}
     expected.update({
+        "_da_rewind_releases": "da_rewind_releases",
         "canonical_runtime": "block_field::BlockField::new(canonical_runtime)",
         "native_execution_tip": "block_field::BlockField::new(native_execution_tip)",
         "block_hashes": "block_hash_field::BlockHashField::new(block_hashes)",
@@ -603,6 +604,8 @@ def require_block_start_construction(state: str) -> None:
         "commit_topology": "block_field::BlockField::new(commit_topology)",
         "prev_commit_topology": "block_field::BlockField::new(prev_commit_topology)",
         "local_storage_refusal": "None",
+        "_da_rewind_releases": "da_rewind_releases",
+        "_read_releases": "StateViewReleases::new(self)",
         "state_ref": "self", "_curr_block": "curr_block",
         "nexus": "projection.nexus", "start_of_block_effects_applied": "false",
         "pending_parliament_telemetry_events":
@@ -833,6 +836,53 @@ def require_parliament_event_capture(state: str) -> None:
         )
 
 
+def require_completed_replay_source(source: str) -> None:
+    """Retire the graph while preserving its exact configuration and committee identity."""
+    path = "crates/iroha_core/src/sumeragi/executor/replay.rs"
+    identity = compact_rust(mask_rust(rust_item(source, "struct ReplaySource {", path)))
+    expected = (
+        "structReplaySource{instance:Hash32,height:u64,block_hash:Hash32,"
+        "epoch:EpochConfig,params:ChainParams,committee_digest:Hash,}"
+    )
+    if identity != expected:
+        raise RuntimeError(f"{path}: completed replay must retain the complete original source identity")
+    capture = compact_rust(mask_rust(rust_item(source, "    fn capture(", path)))
+    expected_capture = (
+        "fncapture(source:&AvailabilitySource)->Self{"
+        "letHeightConfig{epoch,committee,params,}=source.config();Self{"
+        "instance:source.instance(),height:source.height(),block_hash:source.block_hash(),"
+        "epoch:**epoch,params:*params,committee_digest:committee_digest(committee),}}"
+    )
+    if capture != expected_capture:
+        raise RuntimeError(f"{path}: completed replay must capture the complete original source configuration")
+    digest = compact_rust(mask_rust(rust_item(source, "fn committee_digest(", path)))
+    expected_digest = compact_rust(mask_rust("""
+        fn committee_digest(committee: &Committee) -> Hash {
+            Hash::new_from_writer(|writer| {
+                writer.write_all(iroha_sumeragi::preimage::TAG_COMMITTEE)?;
+                writer.write_all(
+                    &u32::try_from(committee.n())
+                        .expect("validated committee size fits u32")
+                        .to_be_bytes(),
+                )?;
+                for key in committee.members() {
+                    let bytes = key.as_bytes();
+                    writer.write_all(
+                        &u16::try_from(bytes.len())
+                            .expect("validated public key length fits u16")
+                            .to_be_bytes(),
+                    )?;
+                    writer.write_all(bytes)?;
+                }
+                Ok(())
+            })
+            .expect("incremental hash writer cannot fail")
+        }
+    """))
+    if digest != expected_digest:
+        raise RuntimeError(f"{path}: completed replay must stream the complete canonical committee preimage")
+
+
 def require_parliament_commit_publication(state: str) -> None:
     """Publish Parliament metrics only from the retained State owner, once, after publication."""
     state_path = "crates/iroha_core/src/state.rs"
@@ -843,18 +893,85 @@ def require_parliament_commit_publication(state: str) -> None:
     # authority. It selects observations only, after the real replay path has
     # admitted sources, witnesses and finality through the ordinary pipeline.
     executor_path = "crates/iroha_core/src/sumeragi/executor.rs"
-    executor = compact_rust(read(executor_path))
+    executor_source = read(executor_path)
+    executor = compact_rust(executor_source)
     require_all(executor_path, executor, (
-        ".prepare_with_origin(block,commit_qc,CommitTelemetryOrigin::HistoricalReplay)",
         "self.prepare_with_origin(block,commit_qc,CommitTelemetryOrigin::Forward)",
         "require_body_admission(block,&self.execution_budget)?;require_qc_witness_admission(commit_qc,&self.execution_budget)?;self.call(|reply|Request::Prepare(block.clone(),commit_qc.clone(),origin,reply))",
         "Request::Prepare(block,qc,origin,reply)=>{let_=reply.send(self.prepare_with_origin(&block,&qc,origin));}",
+        "Request::Replay(block,qc,reply)=>{let_=reply.send(self.replay(&block,&qc));}",
         "pending.matches(block,qc)&&pending.telemetry_origin==origin",
-        "iflive.telemetry_origin.is_some_and(|original|original!=origin){returnErr(\"preparedexecutiontelemetryorigincannotbereplaced\".into());}",
+        "iflive.telemetry_origin.is_some_and(|original|original!=origin){returnErr(PublicationError::Retryable(\"preparedexecutiontelemetryorigincannotbereplaced\".into(),));}",
         "live.telemetry_origin=Some(origin);",
         'telemetry_origin:live.telemetry_origin.expect("originalpreparedtelemetryorigin")',
         "pub(crate)fntelemetry_origin(&self)->CommitTelemetryOrigin{self.telemetry_origin}",
         "let(state,tip,telemetry_origin)=original.into_parts();Self{state,tip,parent:None,telemetry_origin,}",
+    ))
+    replay_modules = list(re.finditer(
+        r"(?P<attrs>(?:[ \t]*#\[[^\n]+\]\s*)*)\bmod\s+replay\s*;",
+        mask_rust(executor_source),
+    ))
+    if len(replay_modules) != 1 or replay_modules[0].group("attrs").strip():
+        raise RuntimeError(f"{executor_path}: replay must use its original unconditional module")
+    replay_dispatch = compact_rust(mask_rust(rust_item(
+        executor_source, "    pub fn replay(", executor_path,
+    )))
+    # Admission and the serialized result keep the original PublicationError.
+    # Pin their direct order and final expression so a diagnostic conversion,
+    # ignored guard or substituted successful reply cannot erase local refusal.
+    require_all(executor_path, replay_dispatch, (
+        "->Result<(),PublicationError>{"
+        "require_body_admission(block,&self.execution_budget)?;"
+        "require_qc_witness_admission(commit_qc,&self.execution_budget)?;"
+        "self.call(|reply|Request::Replay(block.clone(),commit_qc.clone(),reply))"
+        ".unwrap_or_else(||Err(control::stopped()))}",
+    ))
+    replay_path = "crates/iroha_core/src/sumeragi/executor/replay.rs"
+    replay_source = read(replay_path)
+    require_completed_replay_source(replay_source)
+    worker_replay = compact_rust(mask_rust(rust_item(
+        replay_source, "    pub(super) fn replay(", replay_path,
+    )))
+    require_all(replay_path, worker_replay, ("self.replay_with_encoder(block,qc,encode)",))
+    replay = compact_rust(mask_rust(rust_item(
+        replay_source, "    fn replay_with_encoder(", replay_path,
+    )))
+    require_all(replay_path, replay, (
+        "require_body_admission(block,&budget)?;require_qc_witness_admission(qc,&budget)?;",
+        "returncompleted.acknowledge(block,qc,&budget,&mutencode);",
+        "matchself.prepare_with_origin(block,qc,CommitTelemetryOrigin::HistoricalReplay)?{Some(result)ifresult==qc.result=>{}",
+        "self.commit(block,qc)?;",
+        "ifletErr(error)=self.retire_completed_replay(block,qc){"
+        "ifletPublicationError::RecoveryRequired(reason)=&error{"
+        "self.recovery=Some(reason.clone());}returnErr(error);}",
+    ))
+    retirement = compact_rust(mask_rust(rust_item(
+        replay_source, "    fn retire_completed_replay(", replay_path,
+    )))
+    require_all(replay_path, retirement, (
+        "iforiginal!=qc||live.header!=*block.header()||live.availability!=*block.availability()||live.source!=*block.source()||live.telemetry_origin!=Some(CommitTelemetryOrigin::HistoricalReplay)",
+        "letqc=Hash::new(certificate.commit_qc());",
+        "letpayload=Hash::new(block.payload().as_slice());",
+        "->Result<(),PublicationError>{",
+        "letinvalid=|reason:&str|PublicationError::RecoveryRequired(reason.to_owned());",
+        "letview=self.state.try_view_once()?;",
+        "self.completed_replay=Some(CompletedReplay{"
+        "source:ReplaySource::capture(&live.source),tip,header,qc,availability,payload,});",
+    ))
+    acknowledgement = compact_rust(mask_rust(rust_item(
+        replay_source, "    fn acknowledge(", replay_path,
+    )))
+    require_all(replay_path, acknowledgement, (
+        "else{preparation::encoding_failure(&error)}",
+        "letheader=digest(CertificatePart::Header(block.header()))?;",
+        "letqc=digest(CertificatePart::Qc(qc))?;",
+        "letavailability=digest(CertificatePart::Availability(block.availability()))?;",
+        compact_rust(mask_rust(
+            'if !cfg!(all(test, sumeragi_core_mutation = "HC94")) '
+            '&& self.source != ReplaySource::capture(block.source())'
+        )),
+        "self.payload!=Hash::new(block.payload().as_slice())"
+        "||self.header!=header||self.qc!=qc||self.availability!=availability",
     ))
     startup_path = "crates/iroha_core/src/sumeragi/startup.rs"
     require_all(startup_path, compact_rust(read(startup_path)), (
@@ -1053,8 +1170,81 @@ SCHEDULE_EXECUTION_PATH = "crates/iroha_core/src/sumeragi/schedule/execution.rs"
 NATIVE_HEADER_SOURCE_PATH = "crates/iroha_core/src/block/native_header_source.rs"
 
 
+BEACON_ROSTER_PATH = "crates/iroha_core/src/beacon.rs"
+BEACON_ROSTER_CODEC_PATH = "crates/iroha_core/src/beacon/validation.rs"
+BEACON_SEALED_SESSION_PATH = "crates/iroha_core/src/beacon/session_owner/validated.rs"
+BEACON_DKG_OWNER_PATH = "crates/iroha_core/src/beacon/session_owner/dkg.rs"
+
+
+def require_beacon_finalization_roster(committee: str) -> None:
+    """Finalization authenticates the original current and frozen target rosters."""
+    committee_path = "crates/iroha_core/src/state/validator_committee.rs"
+    finalization = section(committee, "pub(crate) fn validate_beacon_finalization(",
+                           "impl StateBlock<'_> {", committee_path)
+    require_all(committee_path, finalization, (
+        "current_authority(state)?", "validate_against_authority(authority)",
+        "authority.generation != 0 || authorization.beacon != BeaconEpochBindingV1::Bootstrap",
+        "authenticated_global_threshold_beacon_roster_hash_v1(&record.session, authorizing_roster)",
+        "validator_committee_transitions()", "validate_against_preparing_authorization(authorization)?",
+        "active != Some(incumbent.session_id)", "current.session.transcript_hash != incumbent.transcript_hash",
+        "transition.outcome.is_some()", "height >= authorization.last_height",
+        "record.session.session_id != preparation.beacon_session_id()?",
+        "record.session.adaptive_dkg.session.start_height <= preparation.selection_height",
+        "record.session.adaptive_dkg.finalized_at_height >= preparation.first_height - 1",
+        "let target_roster = preparation.committee.iter().map(|seat| &seat.validator);",
+        "authenticated_global_threshold_beacon_roster_hash_iter_v1(&record.session, target_roster)",
+        "Ok(false)",
+    ))
+
+
+def require_borrowed_beacon_roster_and_sealed_binding() -> None:
+    """Borrowed identities retain canonical order, exact count and current seal binding."""
+    source = read(BEACON_ROSTER_PATH)
+    authenticated = compact_rust(rust_item(
+        source, "pub(crate) fn authenticated_global_threshold_beacon_roster_hash_iter_v1<",
+        BEACON_ROSTER_PATH))
+    require_all(BEACON_ROSTER_PATH, authenticated, (
+        "I:ExactSizeIterator<Item=&'aPeerId>+Clone,",
+        "letcount=roster.len();",
+        "letroster_hash=global_threshold_beacon_roster_hash_iter_v1(roster);",
+        "ifsession.roster_hash!=roster_hash||usize::from(session.committee_size)!=count{"
+        "returnErr(GlobalThresholdBeaconError::RosterMismatch);}",
+        "Ok(roster_hash)",
+    ))
+    digest = compact_rust(rust_item(
+        source, "pub fn global_threshold_beacon_roster_hash_iter_v1<", BEACON_ROSTER_PATH))
+    require_all(BEACON_ROSTER_PATH, digest, (
+        "I:ExactSizeIterator<Item=&'aPeerId>+Clone,",
+        "*iroha_crypto::HashOf::new(&validation::RosterIter(roster)).as_ref()",
+    ))
+    codec = compact_rust(rust_item(
+        read(BEACON_ROSTER_CODEC_PATH),
+        "impl<'a, I> norito::core::SerializePayload for RosterIter<I>",
+        BEACON_ROSTER_CODEC_PATH))
+    require_all(BEACON_ROSTER_CODEC_PATH, codec, (
+        "I:ExactSizeIterator<Item=&'aPeerId>+Clone,",
+        "norito::core::write_element_sequence::<PeerId,_>(writer,self.0.clone())",
+    ))
+    sealed = read(BEACON_SEALED_SESSION_PATH)
+    recheck = compact_rust(rust_item(sealed, "    pub fn check_binding(", BEACON_SEALED_SESSION_PATH))
+    require_all(BEACON_SEALED_SESSION_PATH, recheck, (
+        "validate_binding(self.record(),expected)",
+    ))
+    binding = compact_rust(rust_item(sealed, "fn validate_binding(", BEACON_SEALED_SESSION_PATH))
+    require_all(BEACON_SEALED_SESSION_PATH, binding, (
+        "ifsource.version!=iroha_data_model::consensus::GLOBAL_THRESHOLD_BEACON_VERSION_V1{"
+        "returnErr(GlobalThresholdBeaconError::UnsupportedVersion{actual:source.version,});}",
+        "ifsource.network_id!=expected.network_id{returnErr(GlobalThresholdBeaconError::NetworkMismatch);}",
+        "ifsource.session_id!=expected.session_id{returnErr(GlobalThresholdBeaconError::SessionMismatch);}",
+        "ifsource.roster_hash!=expected.roster_hash{returnErr(GlobalThresholdBeaconError::RosterMismatch);}",
+        "ifsource.transcript_hash!=expected.transcript_hash{returnErr(GlobalThresholdBeaconError::TranscriptMismatch);}",
+        "beacon::validate_adaptive_dkg_geometry(source)?;",
+    ))
+
+
 def require_parliament_beacon_requirement(beacon: str, producer: str) -> None:
     """Authenticated root ownership and exact committed demand gate both consumers."""
+    require_borrowed_beacon_roster_and_sealed_binding()
     path = EPOCH_BEACON_PATH
     ownership = compact_rust(rust_item(beacon, "fn owns_global_control(", path))
     expected_ownership = compact_rust("""
@@ -1183,9 +1373,29 @@ def require_parliament_beacon_requirement(beacon: str, producer: str) -> None:
             };
         """),
         "validate_pending_slot(world,current,height)?;",
-        "letpeers=current.committee.iter().map(|seat|seat.validator.clone()).collect::<Vec<_>>();",
-        "authenticated_global_threshold_beacon_roster_hash_v1(&record.session,&peers)",
-        "verify_finalized_global_threshold_beacon_pulse_v1(",
+        "letpeers=current.committee.iter().map(|seat|&seat.validator);",
+        "authenticated_global_threshold_beacon_roster_hash_iter_v1(&record.session,peers)",
+        compact_rust("""
+            let binding = GlobalThresholdBeaconSessionBindingV1 {
+                network_id: current.network_id,
+                session_id: pulse.session_id,
+                roster_hash,
+                transcript_hash: record.session.transcript_hash,
+            };
+            let session = &record.session;
+            session
+                .check_binding(&binding)
+                .map_err(|error| error.to_string())?;
+            let link = verify_finalized_global_threshold_beacon_pulse_v1(
+                &session,
+                &pulse,
+                anchor,
+                expected_context
+                    .as_ref()
+                    .ok_or("native pulse has no parent context")?,
+            )
+            .map_err(|error| error.to_string())?;
+        """),
     )
     positions = [admission.find(token) for token in admission_order]
     if (any(admission.count(token) != 1 for token in admission_order)
@@ -1392,9 +1602,13 @@ def require_native_beacon_pulse_application(
     """)
     request_order = (
         compact_rust("""
-            let root_scope = if height == genesis_height {
-                iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(source)
-                    .map_err(ScheduleError::Epoch)?
+                let root_scope = if height == genesis_height {
+                    iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(source)
+                        .map_err(|error| {
+                            crate::execution_attempt::genesis_read_attempt_error(error, |error| {
+                                ScheduleError::Epoch(error.to_string())
+                            })
+                        })?
                     .sumeragi_context
                     .root_scope
             } else {
@@ -1610,23 +1824,76 @@ def require_encrypted_beacon_dkg_source(model: str, core: str) -> None:
         "|| self.encrypted_shares.len() != all_edges",
         "|| self.share_acceptances.len() != all_edges",
         "self.aborted = true;",
-        "return Err(GlobalThresholdBeaconError::IncompleteDkgEdges);",
+        "return Err(GlobalThresholdBeaconError::IncompleteDkgEdges.into());",
         "&encrypted_shares,\n            &share_acceptances,",
-        "GlobalThresholdBeaconDkgTranscriptV1 {",
     ))
-    verification = rust_item(core, "fn validate_adaptive_dkg_shape<E>(", core_path)
-    require_all(core_path, verification, (
-        "admit: &mut impl FnMut(usize) -> Result<(), E>",
-        "Result<(), GlobalThresholdBeaconVerificationError<E>>",
-        "validation::DkgSnapshotRef::from(transcript).validate_with_admission(admit)?;",
+    # Follow the sole retained constructor rather than requiring an uncharged
+    # inline DTO. Publication must keep the original snapshot, budget and cause.
+    retained_order = (
+        "letsnapshot=self.public_snapshot()?;",
+        "letfinalized=session_owner::retain_finalized_dkg("
+        "snapshot.record(),&qualified_dealers,event_hash,height,&derived,&self.budget,)?;",
+        "self.finalized=Some(finalized);",
+        "self.last_updated_height=height;",
+    )
+    compact_finalization = compact_rust(finalization)
+    positions = [compact_finalization.rfind(token) for token in retained_order]
+    if any(position < 0 for position in positions) or positions != sorted(positions):
+        raise RuntimeError(f"{core_path}: finalization must publish the original retained DKG owner")
+    retained = compact_rust(rust_item(
+        read(BEACON_DKG_OWNER_PATH), "pub(in crate::beacon) fn retain_finalized_dkg(",
+        BEACON_DKG_OWNER_PATH,
+    ))
+    require_all(BEACON_DKG_OWNER_PATH, retained, (
+        "letmutreservation=budget.try_reserve_bytes(demand.total_bytes()?)?;",
+        "letmutconstruction=Construction::with_demand(demand,budget,&mutreservation)?;",
+        "letpublic_shares=construction.copied(&derived.public_shares)?;",
+        "letqualified_dealers=construction.copied(qualified_dealers)?;",
+        "letrecipient_keys=construction.recipients(source.recipient_keys.iter())?;",
+        "letdealer_commitments=construction.dealers(source.dealer_commitments.iter())?;",
+        "letencrypted_shares=construction.edges(source.encrypted_shares.iter())?;",
+        "letshare_acceptances=construction.acceptances(source.share_acceptances.iter())?;",
+        "letadaptive_dkg=GlobalThresholdBeaconDkgTranscriptV1{session:source.session,"
+        "generator_h:source.generator_h,generator_v:source.generator_v,dealer_commitments,"
+        "recipient_keys,encrypted_shares,share_acceptances,qualified_dealers,event_hash,"
+        "finalized_at_height:height,};",
+        "letowner=construction.finish(GlobalThresholdBeaconKeySessionV1{",
+        "dkg_contribution_hash:event_hash,transcript_hash:derived.transcript_hash,})?;",
+        "ifconstruction.reservation.remaining_bytes()!=0{"
+        "returnErr(GlobalThresholdBeaconSessionError::PlanChanged);}",
+        "Ok(owner)",
+    ))
+    geometry = rust_item(core, "fn validate_adaptive_dkg_geometry(", core_path)
+    require_all(core_path, geometry, (
+        "validate_dkg_session(&transcript.session)?;",
+        "let seats = usize::from(session.committee_size);",
+        "let all_edges = seats\n        .checked_mul(seats)",
         "transcript.recipient_keys.len() != seats",
         "|| transcript.dealer_commitments.len() != seats",
         "|| transcript.encrypted_shares.len() != all_edges",
         "|| transcript.share_acceptances.len() != all_edges",
-        "return Err(GlobalThresholdBeaconError::IncompleteDkgEdges.into());",
+        ".eq(1..=session.committee_size)",
+        "return Err(GlobalThresholdBeaconError::IncompleteDkgEdges);",
+        "validation::DkgSnapshotRef::from(transcript).validate_bounds()?;",
+    ))
+    verification = rust_item(core, "fn validate_adaptive_dkg_shape<V: validation::DkgSignatureVerifier>(", core_path)
+    require_all(core_path, verification, (
+        "verifier: &mut V",
+        "Result<(), GlobalThresholdBeaconVerificationError<V::Resource>>",
+        "validate_adaptive_dkg_geometry(record)?;",
+        "validation::DkgSnapshotRef::from(transcript).validate_with_verifier(verifier)?;",
         "&transcript.encrypted_shares,\n        &transcript.share_acceptances,",
         "!= transcript.event_hash",
     ))
+    ordered = (
+        "validate_adaptive_dkg_geometry(record)?;",
+        "validation::DkgSnapshotRef::from(transcript).validate_with_verifier(verifier)?;",
+        "global_threshold_beacon_dkg_event_hash_v1(",
+    )
+    positions = [verification.find(token) for token in ordered]
+    if (any(verification.count(token) != 1 for token in ordered)
+            or positions != sorted(positions)):
+        raise RuntimeError(f"{core_path}: geometry and original verifier must precede event admission")
 
 
 def require_signed_deferred_authority_and_native_fees(
@@ -1661,16 +1928,30 @@ def require_signed_deferred_authority_and_native_fees(
 
     deferred = item(fee, "pub(crate) fn enforce_opaque_deferred_instruction_groups(", fee_path)
     require(fee_path, deferred, (
-        "{crate::deferred_authority::reject_opaque_deferred_authority(groups, stx)?;"
+        "{crate::deferred_authority::reject_opaque_deferred_authority(groups, stx)"
+        ".map_err(|error| transaction_attempt_rejection(stx, error))?;"
         "let registry = validated_policy_registry(stx)",
         "active_policy_from_validated_registry(registry.as_ref(), stx)",
     ))
     authoritative = item(authority, "pub(crate) fn reject_opaque_deferred_authority(", authority_path)
     require(authority_path, authoritative, (
-        "for instructions in instruction_groups.values()",
+        "Result<(), Attempt<TransactionRejectionReason>>",
+        "reject_opaque_instruction_authority(instruction_groups.values()"
+        ".flat_map(|instructions| instructions.iter()),state_transaction,)",
+        ".map_err(|error| error.map_rejection(TransactionRejectionReason::Validation))",
+    ))
+    shared_authority = item(authority, "pub(crate) fn reject_opaque_instruction_authority<'a>(", authority_path)
+    require(authority_path, shared_authority, (
+        "Result<(), Attempt<ValidationFail>>",
         "reject_opaque_committee_operations_with(instructions, &mut visited, 0, &mut |approve|",
         "live_proposal_instructions_for_approval(state_transaction, approve)",
-        "TransactionRejectionReason::Validation(ValidationFail::NotPermitted(",
+        ".map_err(|error| {error.map_rejection(|error| {ValidationFail::NotPermitted(",
+    ))
+    refusal = item(fee, "fn transaction_attempt_rejection(", fee_path)
+    require(fee_path, refusal, (
+        "ExecutionAttemptError::Rejected(error) => error",
+        "ExecutionAttemptError::Deferred(reason) => {"
+        "TransactionRejectionReason::Validation(state.defer_execution(reason))}",
     ))
     classifier = item(authority, "fn monetary_staking_wire_id(", authority_path)
     require(authority_path, classifier, (
@@ -1687,20 +1968,26 @@ def require_signed_deferred_authority_and_native_fees(
         "if let Some(instruction_wire_id) = monetary_staking_wire_id(instruction)",
         "return Err(OpaqueDeferredAuthorityError::StakingOperation {instruction_index, instruction_wire_id,});",
     ))
-    recursive = item(authority, "fn reject_opaque_committee_operations_with<F>(", authority_path)
+    recursive = item(authority, "fn reject_opaque_committee_operations_with<'a, F>(", authority_path)
     require(authority_path, recursive, (
-        "if depth > MAX_OPAQUE_DEFERRED_PROPOSAL_DEPTH {return Err(OpaqueDeferredAuthorityError::ProposalDepthExceeded);}",
+        "if depth > MAX_OPAQUE_DEFERRED_PROPOSAL_DEPTH {return Err(OpaqueDeferredAuthorityError::ProposalDepthExceeded.into());}",
         "reject_opaque_committee_operation(instruction, index)?;",
         "MultisigInstructionBox::Propose(proposal)",
-        "reject_opaque_committee_operations_with(&proposal.instructions, visited, depth + 1, resolve,)?;",
+        "reject_opaque_committee_operations_with(proposal.instructions.iter(), visited, depth + 1, resolve,)?;",
         "MultisigInstructionBox::Approve(approval)",
-        "let Some((authority, instructions)) = resolve(&approval) else",
+        "Result<(), Attempt<OpaqueDeferredAuthorityError>>",
+        "multisig_instruction_decode_attempt(error, |_| ())",
+        "Attempt::Deferred(reason) => return Err(Attempt::Deferred(reason))",
+        "Attempt::Rejected(()) => None",
+        "let Some((authority, instructions)) = resolve(&approval).map_err(|error| {"
+        "error.map_rejection(|error| {OpaqueDeferredAuthorityError::ProposalReadFailed(error.to_string())})})?else",
+        "reject_opaque_committee_operations_with(instructions.iter(), visited, depth + 1, resolve,)?;",
         "return Err(OpaqueDeferredAuthorityError::UnresolvedMultisigApproval",
         "if visited.insert(identity)",
         "Executable::Instructions(nested)",
-        "reject_opaque_committee_operations_with(nested, visited, depth + 1, resolve)?;",
+        "reject_opaque_committee_operations_with(nested.iter(), visited, depth + 1, resolve,)?;",
         "Executable::IvmProved(proved)",
-        "reject_opaque_committee_operations_with(&proved.overlay, visited, depth + 1, resolve,)?;",
+        "reject_opaque_committee_operations_with(proved.overlay.iter(), visited, depth + 1, resolve,)?;",
         "Executable::Batch(items)",
         "std::slice::from_ref(instruction), visited, depth + 1, resolve,",
     ))
@@ -5145,21 +5432,7 @@ def main() -> int:
 
     committee_path = "crates/iroha_core/src/state/validator_committee.rs"
     committee = read(committee_path)
-    finalization = section(committee, "pub(crate) fn validate_beacon_finalization(",
-                           "impl StateBlock<'_> {", committee_path)
-    require_all(committee_path, finalization, (
-        "current_authority(state)?", "validate_against_authority(authority)",
-        "authority.generation != 0 || authorization.beacon != BeaconEpochBindingV1::Bootstrap",
-        "authenticated_global_threshold_beacon_roster_hash_v1(&record.session, authorizing_roster)",
-        "validator_committee_transitions()", "validate_against_preparing_authorization(authorization)?",
-        "active != Some(incumbent.session_id)", "current.session.transcript_hash != incumbent.transcript_hash",
-        "transition.outcome.is_some()", "height >= authorization.last_height",
-        "record.session.session_id != preparation.beacon_session_id()?",
-        "record.session.adaptive_dkg.session.start_height <= preparation.selection_height",
-        "record.session.adaptive_dkg.finalized_at_height >= preparation.first_height - 1",
-        "authenticated_global_threshold_beacon_roster_hash_v1(&record.session, &target_roster)",
-        "Ok(false)",
-    ))
+    require_beacon_finalization_roster(committee)
     boundary = section(committee, "pub(crate) fn finalize_validator_committee_boundary(",
                        "fn owns_validator(", committee_path)
     require_all(committee_path, boundary, (

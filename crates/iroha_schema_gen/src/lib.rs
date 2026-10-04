@@ -50,6 +50,12 @@ macro_rules! schema_types {
             iroha_data_model::sumeragi_finality::SumeragiFinalityCheckpoint,
             iroha_data_model::sumeragi_finality::SumeragiFinalityBundle,
             iroha_data_model::sumeragi_finality::SumeragiFinalityAttestation,
+            // Closed private counter originals and distinct native computation attestations.
+            iroha_data_model::private_transaction_counters::SignedPrivateCountersRequestV1,
+            iroha_data_model::private_transaction_counters::PrivateCountersPolicyV1,
+            iroha_data_model::private_transaction_counters::PrivateCountersManifestV1,
+            iroha_data_model::private_transaction_counters::PrivateCountersResponseV1,
+            iroha_data_model::private_transaction_counters::PrivateCountersCertificateV1,
             // Independent private roots and body-free parent anchoring.
             iroha_data_model::block::consensus::SumeragiRootScope,
             iroha_data_model::block::consensus::PrivateRootFeePolicy,
@@ -62,9 +68,21 @@ macro_rules! schema_types {
             iroha_data_model::private_dataspace::PrivateDataspaceRecordProof,
             iroha_data_model::isi::private_dataspace::RegisterPrivateDataspace,
             iroha_data_model::isi::private_dataspace::AnchorPrivateDataspace,
+            // Native publication recovery checks retain authority-wide absence and exact row presence.
+            iroha_data_model::isi::musubi::AdvanceMusubiPinOutboxV1,
+            iroha_data_model::isi::musubi::CheckMusubiPinOutboxV1,
             iroha_data_model::smart_contract::ContractArtifactId,
             // Current finalized provider authority and signed discovery material.
             iroha_data_model::sorafs::provider_admission::discovery::ProviderDiscoveryProofV1,
+            iroha_data_model::sorafs::stream_token_custody::proof::StreamTokenCustodyProofV1,
+            iroha_data_model::sorafs::reserve::proof::ReservePolicyProofV1,
+            iroha_data_model::sorafs::reserve::account_proof::ReserveAccountProofV1,
+            iroha_data_model::sorafs::reserve::ReserveProviderAccountV1,
+            iroha_data_model::sorafs::reserve::history::ReserveStateV1,
+            // Reserve-account responses retain these originals as opaque byte frames.
+            iroha_data_model::sorafs::pricing::ProviderCreditRecord,
+            iroha_data_model::sorafs::capacity::CapacityDeclarationRecord,
+            iroha_data_model::sorafs::pricing::PricingScheduleRecord,
             iroha_data_model::sorafs::provider_admission::discovery::account_read::RegisteredAccountReadV1,
             iroha_data_model::sorafs::stream_token_custody::history::StreamTokenCustodyControlIndexV1,
             iroha_data_model::sns::lease::SnsLeaseProofV1,
@@ -261,6 +279,7 @@ mod tests {
     use iroha_schema::{MetaMap, Metadata};
     mod final_promotion;
     mod final_promotion_account_custody;
+    mod musubi;
     mod privacy_qualification;
     mod private_dataspace;
     mod sorafs_publication;
@@ -677,6 +696,75 @@ mod tests {
                 .map(|field| field.name.as_str())
                 .collect::<Vec<_>>(),
             ["body", "signature"]
+        );
+        assert!(find_missing_schema_references(&schemas).is_empty());
+    }
+
+    #[test]
+    fn private_counter_originals_register_the_complete_distinct_computation_schema() {
+        use iroha_data_model::private_transaction_counters::{
+            CounterContractErrorV1, CounterExecutableBindingV1, CounterMemberBodyV1,
+            PrivateCountersCertificateV1, PrivateCountersClaimV1, PrivateCountersManifestV1,
+            PrivateCountersPolicyV1, PrivateCountersResponseV1, SignedPrivateCountersRequestV1,
+        };
+        let schemas = super::build_schemas();
+        assert!(schemas.contains_key::<SignedPrivateCountersRequestV1>());
+        assert!(schemas.contains_key::<PrivateCountersPolicyV1>());
+        assert!(schemas.contains_key::<PrivateCountersManifestV1>());
+        assert!(schemas.contains_key::<PrivateCountersResponseV1>());
+        assert!(schemas.contains_key::<PrivateCountersCertificateV1>());
+        assert!(schemas.contains_key::<CounterContractErrorV1>());
+        let Some(Metadata::Struct(binding)) = schemas.get::<CounterExecutableBindingV1>() else {
+            panic!("original pre-submit executable expectation must be registered");
+        };
+        assert_eq!(
+            binding
+                .declarations
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            ["action_id", "authority", "executable_hash"]
+        );
+        let Some(Metadata::Struct(claim)) = schemas.get::<PrivateCountersClaimV1>() else {
+            panic!("complete private computation claim must be registered");
+        };
+        assert_eq!(
+            claim
+                .declarations
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "version",
+                "network_id",
+                "scope",
+                "request_hash",
+                "authority",
+                "reader",
+                "purpose",
+                "policy_hash",
+                "manifest_hash",
+                "cut",
+                "certified_block_time_ms",
+                "nonce",
+                "groups"
+            ]
+        );
+        let Some(Metadata::Struct(body)) = schemas.get::<CounterMemberBodyV1>() else {
+            panic!("distinct per-member computation signing envelope must be registered");
+        };
+        assert_eq!(
+            body.declarations
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "domain",
+                "version",
+                "claim_hash",
+                "member_index",
+                "observed_at_ms"
+            ]
         );
         assert!(find_missing_schema_references(&schemas).is_empty());
     }

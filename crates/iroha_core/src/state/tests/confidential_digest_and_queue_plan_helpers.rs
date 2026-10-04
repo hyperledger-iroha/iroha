@@ -90,7 +90,7 @@ state_test! { sync confidential_registry_delta_cap_limits_transitions
     assert_eq!(beta_status, ConfidentialStatus::Proposed);
 }
 fn assemble_ivm_header(code: &[u8]) -> Vec<u8> {
-    let_row! { mut blob = ivm::ProgramMetadata { version_major: 1, version_minor: 0, mode: 0, vector_length: 0, max_cycles: 1_000_000, abi_version: 1, } .encode() };
+    let_row! { mut blob = ivm::ProgramMetadata { version_major: 1, version_minor: 1, mode: 0, vector_length: 0, max_cycles: 1_000_000, abi_version: 1, } .encode() };
     blob.extend_from_slice(code);
     blob
 }
@@ -118,9 +118,15 @@ fn new_dummy_block_with_payload(f: impl FnOnce(&mut BlockHeader)) -> CommittedBl
     );
     block
         .as_mut()
-        .replace_signatures(BTreeSet::from([signature]))
+        .replace_signatures(
+            iroha_data_model::block::BlockSignatures::try_from_iter([signature])
+                .expect("at most 31 block signatures"),
+        )
         .expect("replace signature after completing fixture execution metadata");
-    block.commit(&topology).unpack(|_| {}).unwrap()
+    block
+        .commit(&topology, crate::block::reserve_block_for_tests())
+        .unpack(|_| {})
+        .unwrap()
 }
 fn set_commit_topology_from_keypairs(state: &State, keypairs: &[KeyPair]) {
     let mut topo = state.commit_topology.block();
@@ -247,21 +253,4 @@ fn component_commit_topology_preserves_scheduled_network_authority_on_consensus_
             assert!(view.world.consensus_keys().get(&id).is_some());
         }
     }
-}
-fn empty_global_block_after(previous: Option<&SignedBlock>) -> SignedBlock {
-    let_row! { creation_time_ms = previous.map_or(1_700_000_000_000, |block| { block.header().creation_time_ms.saturating_add(1) }) };
-    autoscale_signed_block_with_committed_fragments(previous, creation_time_ms, 0)
-}
-fn commit_block_metadata_to_state(state: &State, block: &SignedBlock) {
-    let mut state_block = state.block(block.header().clone());
-    // Structural history still owns an exact height/hash sample and its actual
-    // predecessor. Do not reconstruct earlier runtime policy at snapshot time.
-    state_block
-        .stage_autoscale_sample_record_for_count(block, 0)
-        .expect("empty metadata carrier retains its runtime sample");
-    state_block.block_hashes.push(block.hash());
-    insert_empty_transaction_block_for_state_commit(&mut state_block, block);
-    state_block
-        .commit()
-        .expect("test global block metadata must commit to State");
 }

@@ -42,11 +42,11 @@ macro_rules! runtime_cells {
                 Ok(Self::Pending(pending))
             }
 
-            fn initialize(&mut self, mode: BlockMode) {
+            fn initialize(&mut self, mode: BlockMode) -> Result<(), StateStorageAdmissionError> {
                 let Self::Pending(pending) = self else {
                     panic!("original pending State Cells");
                 };
-                $(pending.$field.as_mut().expect("original State Cell slot").initialize(mode);)+
+                $(pending.$field.as_mut().expect("original State Cell slot").try_initialize(mode).map_err(StateStorageAdmissionError::World)?;)+
                 // All native/user work completed while the enclosing State owner
                 // retained these slots. These transfers only move checked originals.
                 let Self::Pending(mut pending) = std::mem::replace(self, Self::Empty) else {
@@ -55,6 +55,7 @@ macro_rules! runtime_cells {
                 *self = Self::Acquired(AcquiredCells {
                     $($field: Some(pending.$field.take().expect("original State Cell slot").into_block()),)+
                 });
+                Ok(())
             }
 
             fn release(&mut self) {
@@ -252,7 +253,7 @@ impl<'state> RuntimeBlockAcquisition<'state> {
             BlockMode::Replace
         } else {
             BlockMode::Ordinary
-        });
+        })?;
         self.complete = true;
         Ok(())
     }

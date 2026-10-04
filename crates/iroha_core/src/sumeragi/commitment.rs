@@ -122,11 +122,12 @@ pub fn execution_commitment(
     executed
         .validate_output_merkle_cache()
         .map_err(|error| CommitmentError::InvalidOutputs(error.to_string()))?;
-    let wire = executed
-        .encode_wire()
+    // The certificate was refused above, so this complete stored-frame identity is exactly
+    // the result-bearing wire R authenticates. Stream its original graph instead of creating
+    // uncharged payload and frame buffers solely to count and hash their bytes.
+    let (executed_block_wire_len, executed_block_wire_hash) = executed
+        .canonical_wire_identity()
         .map_err(|error| CommitmentError::Encoding(error.to_string()))?;
-    let executed_block_wire_len =
-        u64::try_from(wire.len()).map_err(|_| CommitmentError::WireLength(u64::MAX))?;
     if executed_block_wire_len == 0 || executed_block_wire_len > MAX_EXECUTED_BLOCK_WIRE_BYTES {
         return Err(CommitmentError::WireLength(executed_block_wire_len));
     }
@@ -159,7 +160,7 @@ pub fn execution_commitment(
         world_state_root: transition.world_state_root,
         event_commitment: transition.event_commitment,
         executed_block_wire_len,
-        executed_block_wire_hash: Hash::new(&wire),
+        executed_block_wire_hash,
         transaction_input_commitment: executed.network_input_merkle_commitment(),
         transaction_output_commitment: executed.output_merkle_commitment(),
     })
@@ -173,14 +174,14 @@ pub fn execution_commitment(
 /// See [`CommitmentError`].
 #[allow(unsafe_code)]
 pub(crate) fn execution_result(
-    witness: &ExecWitness,
+    witness: &mut crate::state::CapturedExecWitness,
     executed: &SignedBlock,
     transition: &WorldStateTransition,
     inputs: RetainedPayload<NativeExecutionInputs>,
     native_lanes: NativeLaneStateProof,
 ) -> Result<RetainedPayload<ExecutionResultCommitment>, CommitmentError> {
     let height = executed.header().height().get();
-    let execution = execution_commitment(witness, executed, transition)?;
+    let execution = witness.prepare_native_execution(executed, transition)?;
     // SAFETY: only the two original canonical fields move, without clone, growth, sharing or
     // extraction. The new height, slim execution commitment and fixed context proof contain
     // no owned allocations.
@@ -1101,6 +1102,133 @@ mod tests {
             compute_post_state_root(&[], &[])
         );
         assert_ne!(commitment.post_state_root, commitment.ordinary_writes_root);
+    }
+
+    #[test]
+    fn execution_commitment_streams_exact_full_wire_without_payload_or_frame_allocation() {
+        use crate::test_allocations::allocations_during;
+
+        let key = KeyPair::from_seed(vec![0xA3; 32], Algorithm::BlsNormal);
+        let original = executed(&key);
+        let empty_witness = witness(Vec::new(), Vec::new());
+        let transition = transition();
+        let mut previous_identity = None;
+        for fragments in [0, 1, 128] {
+            // Structural component fixture: no callback or consensus authenticity is inferred.
+            // Change a genuine result field while retaining the same proposal and signature.
+            let mut block = original
+                .canonical_resultless_proposal()
+                .expect("original complete proposal");
+            block
+                .set_execution_outputs(
+                    Vec::new(),
+                    fragments,
+                    Default::default(),
+                    Vec::new(),
+                    Default::default(),
+                    Default::default(),
+                    &crate::execution_output_test_support::structural_output_limits(),
+                )
+                .unwrap();
+            assert_eq!(block.hash(), original.hash());
+            let original_signature = block
+                .signatures()
+                .next()
+                .expect("actual original BLS signature")
+                .signature()
+                .payload()
+                .as_ptr();
+            let original_policy = std::ptr::from_ref(
+                block
+                    .da_proof_policies()
+                    .expect("complete signed DA policy body"),
+            );
+
+            // The independently materialized full canonical wire is the comparison oracle,
+            // and its actual physical census demonstrates the scratch this producer retires.
+            let mut materialized = None;
+            let materialized_allocations = allocations_during(|| {
+                materialized = Some(block.encode_wire().expect("complete canonical wire"));
+            });
+            assert!(materialized_allocations >= 2);
+            let wire = materialized.unwrap();
+            let wire_pointer = wire.as_ptr();
+            let expected = (wire.len() as u64, Hash::new(&wire));
+            let mut commitment = None;
+            let outer_flags = norito::core::header_flags::COMPACT_LEN;
+            {
+                let _outer_flags = norito::core::DecodeFlagsGuard::enter(outer_flags);
+                let actual_allocations = allocations_during(|| {
+                    commitment = Some(execution_commitment(&empty_witness, &block, &transition));
+                });
+                assert_eq!(
+                    actual_allocations, 0,
+                    "the real production producer must not allocate either complete wire buffer"
+                );
+                assert_eq!(norito::core::get_decode_flags(), outer_flags);
+            }
+            let commitment = commitment.unwrap().unwrap();
+            let identity = (
+                commitment.executed_block_wire_len,
+                commitment.executed_block_wire_hash,
+            );
+            assert_eq!(identity, expected);
+            assert_eq!(
+                commitment.parent_world_state_root,
+                transition.parent_world_state_root
+            );
+            assert_eq!(commitment.world_state_root, transition.world_state_root);
+            assert_eq!(commitment.event_commitment, transition.event_commitment);
+            assert_eq!(commitment.parent_state_root, Hash::new([]));
+            assert_eq!(commitment.post_state_root, Hash::new([]));
+            assert_eq!(commitment.ordinary_writes_root, Hash::new([]));
+            assert_eq!(commitment.kagemusha_top_up_root, None);
+            assert_eq!(commitment.kagemusha_top_up_count, 0);
+            assert_eq!(
+                commitment.transaction_input_commitment,
+                block.network_input_merkle_commitment()
+            );
+            assert_eq!(
+                commitment.transaction_output_commitment,
+                block.output_merkle_commitment()
+            );
+            assert_eq!(wire.as_ptr(), wire_pointer);
+            assert_eq!(Hash::new(&wire), expected.1);
+            assert_eq!(
+                block
+                    .signatures()
+                    .next()
+                    .unwrap()
+                    .signature()
+                    .payload()
+                    .as_ptr(),
+                original_signature
+            );
+            assert_eq!(
+                std::ptr::from_ref(block.da_proof_policies().unwrap()),
+                original_policy
+            );
+            assert_eq!(block.committed_fragment_count(), Some(fragments));
+            if let Some(previous) = previous_identity {
+                assert_ne!(
+                    identity.1, previous,
+                    "the complete result field participates"
+                );
+            }
+            previous_identity = Some(identity.1);
+        }
+
+        // Nonempty execution witnesses and the complete authority/context graph still produce
+        // exactly the same R when the independently encoded wire supplies its length and hash.
+        let (result, preimage, digest) =
+            result_for_test(&sample_witness(), &original, next(), None).unwrap();
+        let wire = original.encode_wire().unwrap();
+        let mut independent = result.clone();
+        independent.execution.executed_block_wire_len = wire.len() as u64;
+        independent.execution.executed_block_wire_hash = Hash::new(&wire);
+        assert_eq!(independent, result);
+        assert_eq!(independent.preimage().unwrap(), preimage);
+        assert_eq!(independent.result().unwrap(), digest);
     }
 
     #[test]

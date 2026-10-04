@@ -15,7 +15,6 @@ use crate::kagemusha_v1_state::{
     CreditIdV1, KagemushaTransitionKindV1, OrdinaryConsumedCreditsForQualificationV1,
     ordinary_incoming_preview_for_qualification_v1,
 };
-use ff::Field as _;
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
 use iroha_data_model::kagemusha::*;
 
@@ -38,6 +37,7 @@ pub(super) fn prove_ordinary_receive_state_for_testing_v1(
     let seed = KagemushaRecoverySeedV1::from_unsealed([44; 32]).unwrap();
     let c = &receiver.credential;
     assert_eq!(&sender.send.receiver_credential, c);
+    verify_retained_terminal_guard(sender);
     let source = &sender.send.funded.mint_source;
     let wrapper_eq = &sender.wrapper.generated.eq_protocol;
     let wrapper_ep = &sender.wrapper.generated.ep_protocol;
@@ -926,4 +926,101 @@ fn outgoing_data(
         sender.wrapper.generated.original.clone(),
     )
     .unwrap()
+}
+
+/// Replay the sender's retained purpose-one Guard against the same original intent,
+/// body, preparation, approval and issuer policy before constructing Receive.
+/// This is a mathematical corridor check, not a manufactured Native admission.
+fn verify_retained_terminal_guard(sender: &OrdinarySendTerminalForTestingV1) {
+    use super::super::{
+        KagemushaNormalizedGuardStatementV1, ordinary_guard_verifier::public_column,
+    };
+    let send = &sender.send;
+    let prepared = &send.prepared;
+    let body = &sender.record.body;
+    sender
+        .record
+        .validate_against_originals(&sender.intent, prepared)
+        .unwrap();
+    let mut context = send.preview.guard_context;
+    context.terminal_commit_binding_digest =
+        kagemusha_ordinary_terminal_guard_commit_binding_digest_v1(
+            body.binding_digest().unwrap(),
+            send.candidate_digest,
+            sender.intent.state_statement_digest,
+            prepared.reservation_digest,
+        )
+        .unwrap();
+    context.sender_one_time_authorization_digest = prepared.preparation_authorization_digest;
+    context.transition_intent_digest = body.binding_digest().unwrap();
+    context.recovery_record_digest = sender.intent.binding_digest().unwrap();
+    let normalized = KagemushaNormalizedGuardStatementV1::derive_from_transition(
+        &send.preview.statement,
+        context,
+    )
+    .unwrap();
+    let authorization = kagemusha_ordinary_financial_authorization_proof_binding_digest_v1(
+        kagemusha_ordinary_app_approval_proof_binding_digest_v1(&sender.approval).unwrap(),
+        None,
+    )
+    .unwrap();
+    let subject: [u8; 32] = Sha256::digest(
+        sender
+            .approval
+            .challenge
+            .subject
+            .canonical_signing_bytes()
+            .unwrap(),
+    )
+    .into();
+    let credential = send.funded.bootstrap.credential.canonical_digest().unwrap();
+    let provider = send.funded.state.device_policy_binding.hardware_policy_id;
+    assert_eq!(sender.record.sender_credential_digest, credential);
+    assert_eq!(sender.record.terminal_authorization_digest, authorization);
+    assert_eq!(sender.record.terminal_subject_digest, subject);
+    assert_eq!(
+        sender.approval.challenge.normalized_guard_digest,
+        normalized.canonical_digest().unwrap()
+    );
+    let digests = [
+        normalized.canonical_digest().unwrap(),
+        credential,
+        authorization,
+        subject,
+        provider,
+    ];
+    let guard = &sender.terminal_guard;
+    assert_eq!(
+        public_column::<Fp>(digests, guard.eq.history.as_bytes()),
+        guard.eq.instances
+    );
+    assert_eq!(
+        public_column::<Fq>(digests, guard.ep.history.as_bytes()),
+        guard.ep.instances
+    );
+    guard
+        .verify_originals(provider, &send.funded.bootstrap.issuer_table)
+        .unwrap();
+    let eq = canonical_kagemusha_eq_parameters_v1();
+    let ep = canonical_kagemusha_ep_parameters_v1();
+    // Every independently reconstructed context digest is proof-bound in both parities.
+    // A changed statement may still yield an IPA equation, so also require its terminal decision.
+    for index in 0..digests.len() {
+        let mut changed = digests;
+        changed[index][0] ^= 1;
+        let eq_values = public_column::<Fp>(changed, guard.eq.history.as_bytes());
+        let ep_values = public_column::<Fq>(changed, guard.ep.history.as_bytes());
+        assert!(
+            verify_eq_succinct_protocol(&eq, &guard.eq.protocol, &guard.eq.proof, &eq_values)
+                .ok()
+                .and_then(|acc| KagemushaEqAccumulatorV1::from_native(&acc).ok())
+                .is_none_or(|acc| decide_kagemusha_eq_accumulator_v1(&eq, &acc).is_err())
+        );
+        assert!(
+            verify_ep_succinct_protocol(&ep, &guard.ep.protocol, &guard.ep.proof, &ep_values)
+                .ok()
+                .and_then(|acc| KagemushaEpAccumulatorV1::from_native(&acc).ok())
+                .is_none_or(|acc| decide_kagemusha_ep_accumulator_v1(&ep, &acc).is_err())
+        );
+    }
 }

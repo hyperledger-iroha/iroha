@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -176,6 +177,115 @@ class PetalImageDecodeTest {
     fun aBlankImageHasNoFinders() {
         assertNull(PetalLocator.locate(PetalLuma(200, 200)))
         assertNull(PetalLocator.locate(PetalLuma(0, 0)))
+        assertTrue(PetalLocator.locateCandidates(PetalLuma(200, 200)).isEmpty())
+        assertFalse(PetalLocator.candidates(PetalLuma(0, 0)).hasNext())
+    }
+
+    @Test
+    fun threeFindersFormingACornerInferTheFourth() {
+        val blob = { x: Double, y: Double -> PetalFinder(x, y, 60.0) }
+        // top-left, top-right and bottom-left of a slightly rotated square, plus clutter
+        val finders = listOf(blob(100.0, 110.0), blob(540.0, 90.0), blob(120.0, 550.0)) +
+            (0 until 5).map { PetalFinder(300.0 + 10.0 * it, 300.0, 14.0) }
+        val set = assertNotNull(PetalLocator.selectTriple(finders), "a corner of three")
+        val inferred = assertNotNull(set.inferred)
+        val fourth = set.corners[inferred]
+        assertTrue(Math.abs(fourth.x - 560.0) < 1e-9 && Math.abs(fourth.y - 530.0) < 1e-9, "$fourth")
+        assertEquals(2, inferred, "the inferred corner is bottom-right in clockwise order")
+        // three blossoms in a row are no corner
+        assertNull(PetalLocator.selectTriple(listOf(blob(0.0, 0.0), blob(440.0, 0.0), blob(880.0, 0.0))))
+    }
+
+    @Test
+    fun aSmallerBlobAtTheInferredCornerCompletesTheQuad() {
+        // steep tilt: the far finder is under 0.55 of the largest, but it is where the fourth corner belongs
+        val finders = listOf(
+            PetalFinder(100.0, 100.0, 64.0),
+            PetalFinder(540.0, 100.0, 60.0),
+            PetalFinder(100.0, 540.0, 62.0),
+            PetalFinder(520.0, 515.0, 30.0),
+        )
+        val strong = PetalLocator.strongFinders(finders)
+        assertEquals(3, strong.size)
+        val set = assertNotNull(PetalLocator.selectTriple(strong), "triple")
+        val full = assertNotNull(PetalLocator.completeTriple(finders, set.quad, assertNotNull(set.inferred)), "completed")
+        assertTrue(full.any { Math.abs(it.x - 520.0) < 1e-9 && Math.abs(it.y - 515.0) < 1e-9 })
+    }
+
+    /** The 512-pixel render the reference locator tests use. */
+    private fun locatorFrame(): PetalRgb =
+        PetalRenderer.render(PetalStreamEncoder(ByteArray(200) { 9 }, 1).cells(1), PetalRenderOptions(512, 2))
+
+    @Test
+    fun aHiddenBlossomYieldsAnInferredCandidate() {
+        val rgb = locatorFrame()
+        val n = rgb.width
+        val data = rgb.data()
+        // paint over the bottom-left blossom (centre 36, 476 at this size)
+        for (y in 420 until n) for (x in 0 until 92) for (c in 0 until 3) data[(y * n + x) * 3 + c] = 0
+        val candidates = PetalLocator.locateCandidates(assertNotNull(PetalRgb.fromRaw(n, n, data)).toLuma())
+        val inferred = assertNotNull(candidates.firstOrNull { it.inferred != null }, "an inferred candidate")
+        val corner = inferred.corners[inferred.inferred ?: 0]
+        assertTrue(Math.abs(corner.x - 36.0) < 4.0 && Math.abs(corner.y - 476.0) < 4.0, "$corner")
+    }
+
+    /** A canvas-sized image with finder (lit) and reference-canvas (dark) levels painted where they are sampled. */
+    private fun levelCard(levels: List<Pair<Int, Int>>): PetalLuma {
+        val luma = PetalLuma(1024, 1024)
+        fun paint(cx: Double, cy: Double, radius: Double, value: Int) {
+            for (y in (cy - radius).toInt()..(cy + radius).toInt()) {
+                for (x in (cx - radius).toInt()..(cx + radius).toInt()) {
+                    luma.pixels[y * 1024 + x] = value.toByte()
+                }
+            }
+        }
+        for (corner in 0 until 4) {
+            val cx = PetalLayout.finderCenterX(corner)
+            val cy = PetalLayout.finderCenterY(corner)
+            val sx = if (cx < 512.0) 1.0 else -1.0
+            val sy = if (cy < 512.0) 1.0 else -1.0
+            paint(cx, cy, 30.0, levels[corner].first)
+            paint(cx + sx * 100.0, cy, 12.0, levels[corner].second)
+            paint(cx, cy + sy * 100.0, 12.0, levels[corner].second)
+        }
+        return luma
+    }
+
+    @Test
+    fun anInferredCornerNeedsContrastToo() {
+        val h = PetalHomography.IDENTITY.m
+        // even light: the hidden corner (3) gets levels between the others'
+        val even = levelCard(listOf(230 to 30, 220 to 25, 210 to 20, 0 to 0))
+        val reference = assertNotNull(PetalDecoder.referenceLevels(even, h, 3), "levels")
+        assertTrue(reference.lit[3] - reference.dark[3] >= 12.0)
+        // the hidden corner's neighbours disagree (one dim, one veiled): the estimates cross
+        val uneven = levelCard(listOf(60 to 45, 250 to 20, 200 to 185, 0 to 0))
+        assertNull(PetalDecoder.referenceLevels(uneven, h, 3))
+        // with every corner seen, the same light is fine
+        val seen = levelCard(listOf(60 to 45, 250 to 20, 200 to 185, 240 to 20))
+        assertNotNull(PetalDecoder.referenceLevels(seen, h, PetalDecoder.NO_CORNER))
+    }
+
+    @Test
+    fun followingFindsAMovedBlossomAndRefusesALostOne() {
+        val luma = locatorFrame().toLuma()
+        val found = assertNotNull(PetalLocator.follow(luma, PetalFinder(48.0, 27.0, 60.0)), "followed")
+        assertTrue(Math.abs(found.x - 36.0) < 1.5 && Math.abs(found.y - 36.0) < 1.5, "$found")
+        // nothing bright near the centre of the canvas corner gap
+        assertNull(PetalLocator.follow(luma, PetalFinder(140.0, 36.0, 30.0)))
+        // a finder far outside the image is lost, not an error
+        assertNull(PetalLocator.follow(luma, PetalFinder(-1e12, 1e15, 60.0)))
+        assertNull(PetalLocator.follow(luma, PetalFinder(Double.NaN, 36.0, 60.0)))
+        for ((x, y, size) in listOf(
+            Triple(1e300, 36.0, 60.0),
+            Triple(-1e300, -1e300, 60.0),
+            Triple(36.0, Double.POSITIVE_INFINITY, 60.0),
+            Triple(36.0, 36.0, Double.NaN),
+        )) {
+            assertNull(PetalLocator.follow(luma, PetalFinder(x, y, size)), "($x, $y, $size)")
+        }
+        // a huge disc just covers the whole image
+        PetalLocator.follow(luma, PetalFinder(36.0, 36.0, 1e300))
     }
 
     private val streamPayload = ByteArray(300) { i -> ((i.toLong() * 2_654_435_761L) ushr 11).toByte() }
@@ -310,7 +420,7 @@ class PetalImageDecodeTest {
         val clean = cleanPatches(5)
         val data = clean.encoder.laneData(5)
         val options = PetalDecodeOptions.DEFAULT
-        val reference = assertNotNull(PetalDecoder.referenceLevels(clean.luma, clean.h.m), "reference levels")
+        val reference = assertNotNull(PetalDecoder.referenceLevels(clean.luma, clean.h.m, PetalDecoder.NO_CORNER), "reference levels")
         val reads = listOf(
             "level" to PetalDecoder.readTiles(reference, options, clean.workspace),
             "normalised" to PetalDecoder.readTilesNormalised(options, clean.workspace),
@@ -340,7 +450,7 @@ class PetalImageDecodeTest {
                 patches[cell] = gain * patches[cell] + offset
             }
         }
-        val reference = assertNotNull(PetalDecoder.referenceLevels(clean.luma, clean.h.m), "reference levels")
+        val reference = assertNotNull(PetalDecoder.referenceLevels(clean.luma, clean.h.m, PetalDecoder.NO_CORNER), "reference levels")
         val levelWords = PetalDecoder.tileWords(PetalDecoder.readTiles(reference, options, clean.workspace))
         assertNull(
             laneOf(PetalLane.P, levelWords),
@@ -414,7 +524,7 @@ class PetalImageDecodeTest {
         // the finder levels cannot describe a step in the light: the level read loses lane K
         val h = renderHomography()
         val options = PetalDecodeOptions.DEFAULT
-        val reference = assertNotNull(PetalDecoder.referenceLevels(luma, h.m), "reference levels")
+        val reference = assertNotNull(PetalDecoder.referenceLevels(luma, h.m, PetalDecoder.NO_CORNER), "reference levels")
         val workspace = PetalWorkspace()
         PetalDecoder.samplePatches(luma, h.m, workspace)
         val levelWords = PetalDecoder.tileWords(PetalDecoder.readTiles(reference, options, workspace))
@@ -608,15 +718,216 @@ class PetalImageDecodeTest {
         }
     }
 
+    /** A 768-pixel render of frame [frame] with the blossom of canonical corner [corner] painted over with background. */
+    private fun hiddenBlossom(frame: Int, corner: Int): Pair<PetalStreamEncoder, PetalRgb> {
+        val (encoder, rgb) = setup(frame)
+        val n = rgb.width
+        val scale = n / 1024.0
+        val cx = PetalLayout.finderCenterX(corner) * scale
+        val cy = PetalLayout.finderCenterY(corner) * scale
+        val reach = 75.0 * scale
+        val data = rgb.data()
+        for (y in 0 until n) {
+            for (x in 0 until n) {
+                val dx = x + 0.5 - cx
+                val dy = y + 0.5 - cy
+                if (dx * dx + dy * dy <= reach * reach) for (c in 0 until 3) data[(y * n + x) * 3 + c] = 0
+            }
+        }
+        return encoder to assertNotNull(PetalRgb.fromRaw(n, n, data))
+    }
+
     @Test
-    fun aValidCodeWithAMissingFinderIsNotMisread() {
-        val (_, rgb) = setup(2)
+    fun aHiddenBlossomIsInferredAndEveryLaneStillReads() {
+        for (corner in 0 until 4) {
+            val (encoder, rgb) = hiddenBlossom(2, corner)
+            val result = PetalDecoder.decode(rgb.toLuma())
+            val decoded = assertNotNull(result.frame, "corner $corner: ${result.error}")
+            val data = encoder.laneData(2)
+            assertEquals(corner, decoded.inferredCorner, "corner $corner")
+            assertEquals(0, decoded.rotation, "corner $corner")
+            assertEquals(false, decoded.mirrored, "corner $corner")
+            assertContentEquals(data.p(), decoded.p?.data, "corner $corner lane P")
+            assertContentEquals(data.k(), decoded.k?.data, "corner $corner lane K")
+            assertContentEquals(data.d(), decoded.d?.data, "corner $corner lane D")
+        }
+    }
+
+    @Test
+    fun theInferredCornerIsReportedInCodeCoordinatesWhenMirrored() {
+        // hide the top-right blossom of the code, then mirror the picture: the hidden
+        // blossom appears top-left in the image but is still corner 1 of the code
+        val (encoder, rgb) = hiddenBlossom(3, 1)
+        val n = rgb.width
+        val source = rgb.data()
+        val mirrored = ByteArray(source.size)
+        for (y in 0 until n) {
+            for (x in 0 until n) {
+                System.arraycopy(source, (y * n + (n - 1 - x)) * 3, mirrored, (y * n + x) * 3, 3)
+            }
+        }
+        val decoded = assertNotNull(PetalDecoder.decode(assertNotNull(PetalRgb.fromRaw(n, n, mirrored)).toLuma()).frame)
+        assertTrue(decoded.mirrored)
+        assertEquals(1, decoded.inferredCorner)
+        assertContentEquals(encoder.laneData(3).d(), decoded.d?.data)
+    }
+
+    @Test
+    fun aLargeHiddenRegionNeverReadsWrongData() {
+        // the whole bottom-right quarter is gone: rings and tiles with it
+        val (encoder, rgb) = setup(2)
         val n = rgb.width
         val data = rgb.data()
-        // erase the bottom-right blossom
         for (y in n * 3 / 4 until n) for (x in n * 3 / 4 until n) for (c in 0 until 3) data[(y * n + x) * 3 + c] = 0
-        val damaged = assertNotNull(PetalRgb.fromRaw(n, n, data))
-        assertNull(PetalDecoder.decode(damaged.toLuma()).frame)
+        val truth = encoder.laneData(2)
+        val frame = PetalDecoder.decode(assertNotNull(PetalRgb.fromRaw(n, n, data)).toLuma()).frame ?: return
+        frame.p?.let { assertContentEquals(truth.p(), it.data) }
+        frame.k?.let { assertContentEquals(truth.k(), it.data) }
+        frame.d?.let { assertContentEquals(truth.d(), it.data) }
+    }
+
+    /** Shifts a luma image by whole pixels, filling with black. */
+    private fun shifted(image: PetalLuma, dx: Int, dy: Int): PetalLuma {
+        val source = image.data()
+        val out = ByteArray(source.size)
+        for (y in 0 until image.height) {
+            for (x in 0 until image.width) {
+                val sx = x - dx
+                val sy = y - dy
+                if (sx >= 0 && sy >= 0 && sx < image.width && sy < image.height) {
+                    out[y * image.width + x] = source[sy * image.width + sx]
+                }
+            }
+        }
+        return assertNotNull(PetalLuma.fromRaw(image.width, image.height, out))
+    }
+
+    /** Places a luma image in the middle of a larger black frame. */
+    private fun padded(image: PetalLuma, pad: Int): PetalLuma {
+        val width = image.width + 2 * pad
+        val out = ByteArray(width * (image.height + 2 * pad))
+        val source = image.data()
+        for (y in 0 until image.height) System.arraycopy(source, y * image.width, out, (y + pad) * width + pad, image.width)
+        return assertNotNull(PetalLuma.fromRaw(width, image.height + 2 * pad, out))
+    }
+
+    @Test
+    fun trackingFollowsASmallMovementAndGivesUpOnAJump() {
+        val (encoder, rgb) = setup(6)
+        val luma = padded(rgb.toLuma(), 100)
+        val first = assertNotNull(PetalDecoder.decode(luma).frame, "decodes")
+        val data = encoder.laneData(6)
+        val followed = assertNotNull(PetalDecoder.track(shifted(luma, 9, -6), first), "tracks a 9 px move")
+        assertContentEquals(data.p(), followed.p?.data)
+        assertContentEquals(data.k(), followed.k?.data)
+        assertContentEquals(data.d(), followed.d?.data)
+        assertNull(followed.inferredCorner)
+        assertEquals(first.rotation, followed.rotation)
+        // more than a finder diameter: tracking refuses, a full decode is needed
+        val jumped = shifted(luma, 95, 0)
+        assertNull(PetalDecoder.track(jumped, first))
+        assertNotNull(PetalDecoder.decode(jumped).frame)
+        // unusable images are refused without work
+        assertNull(PetalDecoder.track(PetalLuma(47, 400), first))
+        assertNull(PetalDecoder.track(luma, first, PetalDecodeOptions(maxPixels = 1_000)))
+        // the code left the picture: nothing to follow in a blank frame or in noise
+        assertNull(PetalDecoder.track(PetalLuma(luma.width, luma.height), first))
+        val rng = PetalXorshift32(77)
+        val noise = assertNotNull(PetalLuma.fromRaw(luma.width, luma.height, ByteArray(luma.width * luma.height) { rng.nextByte().toByte() }))
+        assertNull(PetalDecoder.track(noise, first))
+        // a smaller frame than the pose expects: the finders fall outside it
+        assertNull(PetalDecoder.track(assertNotNull(PetalLuma.fromRaw(200, 150, ByteArray(200 * 150) { 40 })), first))
+    }
+
+    @Test
+    fun trackingSurvivesABlossomThatDisappears() {
+        val (_, rgb) = setup(4)
+        val first = assertNotNull(PetalDecoder.decode(rgb.toLuma()).frame, "decodes")
+        // the same code, slightly moved, now with the bottom-left blossom covered
+        val (encoder, covered) = hiddenBlossom(4, 3)
+        val followed = assertNotNull(PetalDecoder.track(shifted(covered.toLuma(), -5, 4), first), "tracks with three blossoms")
+        assertEquals(3, followed.inferredCorner)
+        assertContentEquals(encoder.laneData(4).d(), followed.d?.data)
+        // the diagnostics use the extrapolated levels of the inferred corner
+        assertNotNull(PetalDecoder.observedCells(shifted(covered.toLuma(), -5, 4), followed))
+    }
+
+    @Test
+    fun brokenPosesAreRefusedWithoutCrashing() {
+        val (_, rgb) = setup(4)
+        val luma = rgb.toLuma()
+        val previous = assertNotNull(PetalDecoder.decode(luma).frame, "decodes")
+        val nonFinite = listOf(
+            PetalHomography(DoubleArray(9) { Double.NaN }),
+            PetalHomography(doubleArrayOf(Double.POSITIVE_INFINITY, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)),
+        )
+        for (broken in nonFinite) assertNull(PetalDecoder.decodeAt(luma, broken))
+        // the last one makes every finder far larger than the image
+        val huge = PetalHomography(doubleArrayOf(50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 1.0))
+        for (broken in nonFinite + huge) {
+            for (inferred in listOf(null, 2)) {
+                val pose = PetalDecodedFrame(broken, previous.rotation, previous.mirrored, previous.p, previous.k, previous.d, inferred)
+                assertNull(PetalDecoder.track(luma, pose), "$broken inferred $inferred")
+            }
+        }
+    }
+
+    @Test
+    fun aBlossomThatReappearsIsSeenAgain() {
+        val (_, covered) = hiddenBlossom(4, 3)
+        val first = assertNotNull(PetalDecoder.decode(covered.toLuma()).frame, "decodes")
+        assertEquals(3, first.inferredCorner)
+        // the thumb moves away and the hand moves a little
+        val (encoder, rgb) = setup(4)
+        val followed = assertNotNull(PetalDecoder.track(shifted(rgb.toLuma(), 4, -3), first), "tracks")
+        assertNull(followed.inferredCorner)
+        assertContentEquals(encoder.laneData(4).d(), followed.d?.data)
+        // still covered: still inferred
+        val still = assertNotNull(PetalDecoder.track(shifted(covered.toLuma(), 4, -3), first), "tracks")
+        assertEquals(3, still.inferredCorner)
+    }
+
+    @Test
+    fun theTianMaskTellsTheQuarterTurnsApart() {
+        val (_, rgb) = setup(5)
+        val luma = rgb.toLuma()
+        val quad = assertNotNull(PetalLocator.locate(luma), "four finders").toTypedArray()
+        val byRotation = DoubleArray(4) { -Double.MAX_VALUE }
+        for (hypothesis in PetalDecoder.hypotheses(quad, true)) {
+            val h = hypothesis.homography.m
+            val reference = assertNotNull(PetalDecoder.referenceLevels(luma, h, PetalDecoder.NO_CORNER), "levels")
+            if (!hypothesis.mirrored) byRotation[hypothesis.rotation] = PetalDecoder.maskScore(luma, h, reference)
+        }
+        // upright wins clearly over the three other quarter turns
+        for (rotation in 1 until 4) assertTrue(byRotation[0] > byRotation[rotation] + 0.1, byRotation.joinToString())
+    }
+
+    @Test
+    fun inferredCornersMapToCanonicalIndicesUnderEveryOrientation() {
+        // the quad corner that a hypothesis maps canonical corner `i` onto must map back to `i`
+        val quad = arrayOf(
+            PetalFinder(100.0, 100.0, 60.0),
+            PetalFinder(500.0, 120.0, 60.0),
+            PetalFinder(480.0, 520.0, 60.0),
+            PetalFinder(90.0, 490.0, 60.0),
+        )
+        val canonical = doubleArrayOf(72.0, 72.0, 952.0, 72.0, 952.0, 952.0, 72.0, 952.0)
+        for (mirrored in listOf(false, true)) {
+            for (rotation in 0 until 4) {
+                for (i in 0 until 4) {
+                    val index = if (mirrored) (rotation + 4 - i) % 4 else (i + rotation) % 4
+                    assertEquals(i, PetalDecoder.canonicalCorner(index, rotation, mirrored), "rotation $rotation mirrored $mirrored")
+                }
+            }
+        }
+        // and `hypotheses` puts quad corners where that mapping says
+        val hypothesis = PetalDecoder.hypotheses(quad, true).first { it.rotation == 3 && it.mirrored }
+        for (index in 0 until 4) {
+            val i = PetalDecoder.canonicalCorner(index, 3, true)
+            val mapped = hypothesis.homography.apply(canonical[2 * i], canonical[2 * i + 1])
+            assertEquals(quad[index].x, mapped[0], 1e-6)
+            assertEquals(quad[index].y, mapped[1], 1e-6)
+        }
     }
 
     @Test

@@ -11,7 +11,7 @@ import unittest
 
 from petal_test_support import Lcg
 
-from iroha_petal import crc32c
+from iroha_petal import crc32c, layout
 from iroha_petal.glyphs import (
     GLYPH_CHARS,
     GLYPH_COUNT,
@@ -237,6 +237,9 @@ class LayoutTest(unittest.TestCase):
                 flat += 1
 
     def test_slot_centres_are_single_precision_values_on_the_rings(self) -> None:
+        # the angles use Rust's `f32::consts::TAU` (0x40C90FDB, 2 pi rounded to nearest),
+        # not twice a single-precision pi (one ulp lower)
+        self.assertEqual(struct.pack(">f", layout._TAU_F32).hex(), "40c90fdb")
         self.assertEqual(slot_center(0, 0), (872.0, 512.0))
         for ring, n in enumerate(RING_SLOTS):
             for slot in range(n):

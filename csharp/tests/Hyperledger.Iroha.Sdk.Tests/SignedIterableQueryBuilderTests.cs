@@ -400,7 +400,7 @@ public sealed class SignedIterableQueryBuilderTests
     }
 
     [Fact]
-    public void SelectingNewIterableQueryClearsStaleParamsBeforeSigning()
+    public void SelectingAnotherIterableQueryKeepsParametersAndClearsOnlyTheSelection()
     {
         var envelope = new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId)
             .FindAccountsWithAsset(FixtureAssetDefinitionId)
@@ -414,12 +414,37 @@ public sealed class SignedIterableQueryBuilderTests
         var start = ReadIterableStart(envelope);
         Assert.Equal(0u, start.ItemKindDiscriminant);
         Assert.Empty(start.QueryPayload);
-        Assert.Null(start.Limit);
-        Assert.Equal(0ul, start.Offset);
-        Assert.Null(start.FetchSize);
-        Assert.Null(start.SortByMetadataKey);
-        Assert.Null(start.SortOrderDiscriminant);
+        Assert.Equal(25ul, start.Limit);
+        Assert.Equal(7ul, start.Offset);
+        Assert.Equal(50ul, start.FetchSize);
+        Assert.Equal("rank", start.SortByMetadataKey);
         AssertSignatureVerifies(envelope);
+    }
+
+    [Fact]
+    public void ParametersSetBeforeSelectingAQueryApplyRegardlessOfCallOrder()
+    {
+        var parametersFirst = new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId)
+            .SetLimit(10)
+            .SortByMetadata("rank")
+            .FindAccounts()
+            .BuildSigned(
+                Convert.FromHexString(FixtureSeedHex),
+                1_735_689_600_000,
+                100_000,
+                Enumerable.Repeat((byte)0x11, 32).ToArray());
+        var parametersLast = new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId)
+            .FindAccounts()
+            .SetLimit(10)
+            .SortByMetadata("rank")
+            .BuildSigned(
+                Convert.FromHexString(FixtureSeedHex),
+                1_735_689_600_000,
+                100_000,
+                Enumerable.Repeat((byte)0x11, 32).ToArray());
+
+        Assert.Equal(parametersLast.VersionedNoritoBytes, parametersFirst.VersionedNoritoBytes);
+        Assert.Equal(10ul, ReadIterableStart(parametersFirst).Limit);
     }
 
     private static void AssertIterableStart(

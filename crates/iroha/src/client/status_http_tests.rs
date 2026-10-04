@@ -133,16 +133,23 @@ async fn status_and_version_deadlines_cancel_pending_custom_dispatch() {
         } else {
             client.status().get().await.unwrap_err()
         };
-        assert_eq!(
-            error,
-            Error::Timeout {
-                operation: if version {
+        {
+            let actual_error = error;
+            let Error::Timeout {
+                operation: actual_operation,
+            } = &actual_error
+            else {
+                panic!("unexpected SDK error: {actual_error:?}");
+            };
+            assert_eq!(
+                (actual_operation,),
+                (&(if version {
                     "core.api_version"
                 } else {
                     "diagnostic.status"
-                }
-            }
-        );
+                }),)
+            );
+        };
         assert_eq!(requests.lock().unwrap().len(), 1);
         assert_eq!(completed.load(Ordering::SeqCst), 0);
     }
@@ -150,32 +157,87 @@ async fn status_and_version_deadlines_cancel_pending_custom_dispatch() {
 
 #[tokio::test]
 async fn status_preserves_typed_transport_errors_and_maps_untyped_failures() {
-    let expected = Error::ResponseTooLarge {
+    let failure = Mutex::new(Some(Error::ResponseTooLarge {
         maximum: 7,
         actual: Some(8),
-    };
-    let failure = expected.clone();
+    }));
     let (client, _, _) = attach(
-        move |_| Err(failure.clone().into()),
+        move |_| {
+            Err(failure
+                .lock()
+                .unwrap()
+                .take()
+                .expect("one original failure")
+                .into())
+        },
         Duration::ZERO,
         Duration::ZERO,
         WireFormatPreference::JsonOnly,
     );
-    assert_eq!(client.status().get().await.unwrap_err(), expected);
+    assert!(matches!(
+        client.status().get().await.unwrap_err(),
+        Error::ResponseTooLarge {
+            maximum: 7,
+            actual: Some(8)
+        }
+    ));
     let (client, _, _) = attach(
         |_| Err(eyre::eyre!("fixture connection reset")),
         Duration::ZERO,
         Duration::ZERO,
         WireFormatPreference::JsonOnly,
     );
-    assert_eq!(
-        client.status().get().await.unwrap_err(),
-        Error::Transport {
-            operation: "diagnostic.status",
-            kind: crate::TransportErrorKind::Other,
-            details: "fixture connection reset".to_owned(),
-        }
-    );
+    {
+        let actual_error = client.status().get().await.unwrap_err();
+        let Error::Transport {
+            operation: actual_operation,
+            kind: actual_kind,
+            details: actual_details,
+        } = &actual_error
+        else {
+            panic!("unexpected SDK error: {actual_error:?}");
+        };
+        assert_eq!(
+            (actual_operation, actual_kind, actual_details,),
+            (
+                &("diagnostic.status"),
+                &(crate::TransportErrorKind::Other),
+                &("fixture connection reset".to_owned()),
+            )
+        );
+    };
+}
+
+#[test]
+fn transport_conversion_moves_original_typed_response_custody_through_contexts() {
+    let mut body = Vec::with_capacity(128);
+    body.extend_from_slice(b"original bounded transport response");
+    let original_address = body.as_ptr();
+    let original_capacity = body.capacity();
+    let error = eyre::Report::new(Error::Http {
+        operation: "nexus.validator_committee.read",
+        status: 429,
+        retry_after: Some(Duration::from_secs(3)),
+        body,
+    })
+    .wrap_err("first dispatch context")
+    .wrap_err("outer operation context");
+    let converted = dispatch::transport_error("diagnostic.status", error);
+    let Error::Http {
+        operation,
+        status,
+        retry_after,
+        body,
+    } = converted
+    else {
+        panic!("original typed error must survive contexts: {converted:?}");
+    };
+    assert_eq!(operation, "nexus.validator_committee.read");
+    assert_eq!(status, 429);
+    assert_eq!(retry_after, Some(Duration::from_secs(3)));
+    assert_eq!(body, b"original bounded transport response");
+    assert_eq!(body.as_ptr(), original_address, "move the same backing");
+    assert_eq!(body.capacity(), original_capacity);
 }
 
 #[test]
@@ -187,17 +249,21 @@ fn transport_conversion_preserves_io_categories_through_contexts() {
         let error = eyre::Report::new(std::io::Error::new(kind, "fixture failure"))
             .wrap_err("dispatch context");
         assert!(
-            matches!(dispatch::transport_error("diagnostic.status", &error),
+            matches!(dispatch::transport_error("diagnostic.status", error),
             Error::Transport { kind: crate::TransportErrorKind::Io(observed), .. } if observed == kind)
         );
     }
     let error = eyre::Report::new(std::io::Error::from(std::io::ErrorKind::TimedOut));
-    assert_eq!(
-        dispatch::transport_error("diagnostic.status", &error),
-        Error::Timeout {
-            operation: "diagnostic.status"
-        }
-    );
+    {
+        let actual_error = dispatch::transport_error("diagnostic.status", error);
+        let Error::Timeout {
+            operation: actual_operation,
+        } = &actual_error
+        else {
+            panic!("unexpected SDK error: {actual_error:?}");
+        };
+        assert_eq!((actual_operation,), (&("diagnostic.status"),));
+    };
 }
 
 #[tokio::test]
@@ -220,24 +286,36 @@ async fn status_unavailable_is_typed_without_changing_other_http_errors_or_repla
             } else {
                 client.status().get().await.unwrap_err()
             };
-            let expected = if !version && status == 503 {
-                Error::StatusUnavailable {
-                    reason: None,
-                    retry_after: None,
-                }
+            if !version && status == 503 {
+                assert!(matches!(
+                    error,
+                    Error::StatusUnavailable {
+                        reason: None,
+                        retry_after: None
+                    }
+                ));
             } else {
-                Error::Http {
-                    operation: if version {
+                let Error::Http {
+                    operation,
+                    status: actual_status,
+                    retry_after,
+                    body: actual_body,
+                } = error
+                else {
+                    panic!("unexpected SDK error: {error:?}");
+                };
+                assert_eq!(
+                    operation,
+                    if version {
                         "core.api_version"
                     } else {
                         "diagnostic.status"
-                    },
-                    status,
-                    retry_after: None,
-                    body,
-                }
-            };
-            assert_eq!(error, expected);
+                    }
+                );
+                assert_eq!(actual_status, status);
+                assert_eq!(retry_after, None);
+                assert_eq!(actual_body, body);
+            }
             assert_eq!(requests.lock().unwrap().len(), 1);
         }
     }
@@ -274,13 +352,20 @@ async fn status_unavailable_reasons_are_safe_in_errors_and_do_not_trigger_retrie
             WireFormatPreference::NoritoPreferred,
         );
         let error = client.status().get().await.unwrap_err();
-        assert_eq!(
-            error,
-            Error::StatusUnavailable {
-                reason: Some(reason),
-                retry_after: Some(Duration::from_secs(3)),
-            }
-        );
+        {
+            let actual_error = &error;
+            let Error::StatusUnavailable {
+                reason: actual_reason,
+                retry_after: actual_retry_after,
+            } = &actual_error
+            else {
+                panic!("unexpected SDK error: {actual_error:?}");
+            };
+            assert_eq!(
+                (actual_reason, actual_retry_after,),
+                (&(Some(reason)), &(Some(Duration::from_secs(3))),)
+            );
+        };
         assert_eq!(
             error.to_string(),
             format!("diagnostic.status returned HTTP 503 ({})", reason.code(),)
@@ -329,13 +414,17 @@ fn status_unavailable_rejects_missing_unknown_invalid_and_duplicate_reason_heade
         }
         let error =
             status::decode_response(reply, WireFormatPreference::NoritoPreferred).unwrap_err();
-        assert_eq!(
-            error,
-            Error::StatusUnavailable {
-                reason: None,
-                retry_after: None
-            }
-        );
+        {
+            let actual_error = &error;
+            let Error::StatusUnavailable {
+                reason: actual_reason,
+                retry_after: actual_retry_after,
+            } = &actual_error
+            else {
+                panic!("unexpected SDK error: {actual_error:?}");
+            };
+            assert_eq!((actual_reason, actual_retry_after,), (&(None), &(None),));
+        };
         assert_eq!(
             error.to_string(),
             "diagnostic.status returned HTTP 503 (unclassified)"
@@ -370,13 +459,20 @@ async fn custom_transports_cannot_exceed_status_or_version_body_bounds() {
             } else {
                 client.status().get().await.unwrap_err()
             };
-            assert_eq!(
-                error,
-                Error::ResponseTooLarge {
-                    maximum,
-                    actual: (!declared_length).then_some(maximum + 1)
-                }
-            );
+            {
+                let actual_error = error;
+                let Error::ResponseTooLarge {
+                    maximum: actual_maximum,
+                    actual: actual_actual,
+                } = &actual_error
+                else {
+                    panic!("unexpected SDK error: {actual_error:?}");
+                };
+                assert_eq!(
+                    (actual_maximum, actual_actual,),
+                    (&(maximum), &((!declared_length).then_some(maximum + 1)),)
+                );
+            };
         }
     }
 }

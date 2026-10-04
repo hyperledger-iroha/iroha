@@ -289,9 +289,9 @@ fn observer_node_catches_up() -> Result<()> {
         let (items, total) = match parsed {
             JsonValue::Object(m) => {
                 let total = m
-                    .get("total")
-                    .and_then(norito::json::Value::as_u64)
-                    .unwrap_or_default();
+                    .get("items")
+                    .and_then(norito::json::Value::as_array)
+                    .map_or(0, |items| items.len() as u64);
                 let items = m
                     .get("items")
                     .and_then(|v| match v {
@@ -354,7 +354,7 @@ fn observer_node_catches_up() -> Result<()> {
             }
             let env = norito::json!({
                 "filter": {"op": "and", "args": args},
-                "pagination": {"limit": 100, "offset": 0}
+                "limit": 100
             });
             let body = norito::json::to_json(&env)?;
             let client = integration_tests::http::client();
@@ -373,9 +373,9 @@ fn observer_node_catches_up() -> Result<()> {
             let (items, total) = match parsed {
                 JsonValue::Object(m) => {
                     let total = m
-                        .get("total")
-                        .and_then(norito::json::Value::as_u64)
-                        .unwrap_or_default();
+                        .get("items")
+                        .and_then(norito::json::Value::as_array)
+                        .map_or(0, |items| items.len() as u64);
                     let items = m
                         .get("items")
                         .and_then(|v| match v {

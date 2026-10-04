@@ -1308,13 +1308,18 @@ mod tests {
         let sync_error = build_adversarial_request()
             .send_blocking()
             .expect_err("sync custom transport response must be bounded by the SDK");
-        assert_eq!(
-            sync_error.downcast_ref::<crate::Error>(),
-            Some(&crate::Error::ResponseTooLarge {
-                maximum: 8,
-                actual: Some(9),
-            })
-        );
+        {
+            let actual_error =
+                (sync_error.downcast_ref::<crate::Error>()).expect("original SDK error source");
+            let crate::Error::ResponseTooLarge {
+                maximum: actual_maximum,
+                actual: actual_actual,
+            } = &actual_error
+            else {
+                panic!("unexpected SDK error: {actual_error:?}");
+            };
+            assert_eq!((actual_maximum, actual_actual,), (&(8), &(Some(9)),));
+        };
 
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1323,13 +1328,18 @@ mod tests {
         let async_error = runtime
             .block_on(build_adversarial_request().send())
             .expect_err("async custom transport response must be bounded by the SDK");
-        assert_eq!(
-            async_error.downcast_ref::<crate::Error>(),
-            Some(&crate::Error::ResponseTooLarge {
-                maximum: 8,
-                actual: Some(9),
-            })
-        );
+        {
+            let actual_error =
+                (async_error.downcast_ref::<crate::Error>()).expect("original SDK error source");
+            let crate::Error::ResponseTooLarge {
+                maximum: actual_maximum,
+                actual: actual_actual,
+            } = &actual_error
+            else {
+                panic!("unexpected SDK error: {actual_error:?}");
+            };
+            assert_eq!((actual_maximum, actual_actual,), (&(8), &(Some(9)),));
+        };
     }
     #[test]
     fn request_snapshot_preserves_utf8_header_bytes_used_by_account_ids() {

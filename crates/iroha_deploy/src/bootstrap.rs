@@ -9,7 +9,7 @@
 //! checkpoint with an older tip. Changing the installed authority fails closed against retained
 //! releases and requires an independently authenticated key-rotation migration.
 // TODO(DX5): publish release-signed Taira checkpoints and install the independently selected
-// release key/floor in native runtime bundles, then connect this owner to dataspace provisioning.
+// release key/floor in native runtime bundles, then qualify the connected dataspace provisioning flow.
 
 use std::{fs::File, path::Path, sync::Mutex};
 
@@ -34,7 +34,12 @@ pub use profile::{
 pub use transport::{CheckpointReadError, CheckpointTransport, MAX_DOWNLOADED_CHECKPOINT_BYTES};
 mod provisioning;
 pub use provisioning::{ReleaseBuildRegistry, ReleaseFaucet, ReleasePeer};
+mod publication;
 mod registry;
+pub use publication::{
+    NetworkPublicationPolicy, PinnedPublicationGenesis, PreparedNetworkPublication,
+    prepare_network_publication,
+};
 
 const RELEASE_DOMAIN: &[u8] = b"iroha.developer.network-checkpoint.v1\0";
 const MAX_MANIFEST_BYTES: usize = 16 * 1024;

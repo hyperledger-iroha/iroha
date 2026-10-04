@@ -1,5 +1,5 @@
 //! IVM/ABI helper subcommands for the CLI.
-use crate::{Run, RunContext};
+use crate::{Run, RunContext, cli_output::print_with_optional_text};
 use eyre::{Result, eyre};
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -38,8 +38,13 @@ impl Run for AbiHashArgs {
         } else {
             hex_lower(&hash)
         };
-        context.println(s)?;
-        Ok(())
+        let mut value = norito::json::Map::new();
+        value.insert(
+            "policy".into(),
+            norito::json::Value::String(self.policy.to_ascii_lowercase()),
+        );
+        value.insert("abi_hash".into(), norito::json::Value::String(s.clone()));
+        print_with_optional_text(context, Some(s), &norito::json::Value::Object(value))
     }
 }
 fn parse_policy(s: &str) -> Result<ivm::SyscallPolicy> {
@@ -98,18 +103,25 @@ mod tests {
 }
 #[derive(clap::Args, Debug)]
 pub struct SyscallsArgs {
-    /// Output format: 'min' (one per line) or 'markdown'
-    #[arg(long, value_name = "FORMAT", default_value = "min")]
-    format: String,
+    /// Rendering of the syscall list: one entry per line, or a Markdown table
+    #[arg(long, value_name = "FORMAT", value_enum, default_value_t = SyscallListFormat::Min)]
+    format: SyscallListFormat,
+}
+/// Rendering of `iroha tools ivm syscalls`.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum SyscallListFormat {
+    /// One `- <number> <NAME>` entry per line.
+    Min,
+    /// A Markdown table.
+    Markdown,
 }
 impl Run for SyscallsArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let out = match self.format.as_str() {
-            "markdown" => ivm::syscalls::render_syscalls_markdown_table(),
-            _ => ivm::syscalls::render_syscalls_min_list(),
+        let out = match self.format {
+            SyscallListFormat::Markdown => ivm::syscalls::render_syscalls_markdown_table(),
+            SyscallListFormat::Min => ivm::syscalls::render_syscalls_min_list(),
         };
-        context.println(out)?;
-        Ok(())
+        context.println_data(out.trim_end())
     }
 }
 #[derive(clap::Args, Debug)]
@@ -144,8 +156,6 @@ impl Run for ManifestGenArgs {
         );
         let mut top = norito::json::Map::new();
         top.insert("manifest".into(), norito::json::Value::Object(manifest));
-        let s = norito::json::to_json_pretty(&norito::json::Value::Object(top))?;
-        context.println(s)?;
-        Ok(())
+        context.print_data(&norito::json::Value::Object(top))
     }
 }

@@ -1,7 +1,7 @@
 const OPENAPI_CONTRACT_ASSET_VERSION: u64 = 1;
-const OPENAPI_CONTRACT_ASSET_LEN: usize = 10_343;
+const OPENAPI_CONTRACT_ASSET_LEN: usize = 10_461;
 const OPENAPI_CONTRACT_ASSET_SHA256: &str =
-    "0743402196a2d2e15426d464c3e584ebfebe4d552851a21087b767e77e38a9ba";
+    "9ac246108936e901e05ca09ee423e24f13508c32bea09cb7c07e3c2ea47a0ddd";
 const OPENAPI_CONTRACT_SECTION_ORDER: &[&str] = &[
     "evidence.audit.description",
     "evidence.audit.success",
@@ -32,7 +32,7 @@ const OPENAPI_CONTRACT_SECTION_ORDER: &[&str] = &[
     "app.page.required",
     "app.page.properties",
     "repo.agreement.fields",
-    "repo.query.fields",
+    "collection.query.fields",
     "contract.alias.request.required",
     "contract.alias.binding.required",
     "contract.alias.binding.optional",
@@ -818,7 +818,7 @@ fn sorafs_replication_openapi_is_a_strict_chain_authoritative_v1_projection() {
         "SorafsReplicationSlaV1", &contract_words( "ingest_deadline_secs min_availability_percent_milli min_por_success_percent_milli", ), &[];
         "SorafsReplicationMetadataEntryV1", &contract_words("key value"), &[];
         "SorafsReplicationCanonicalOrderV1", &contract_words(concat!( "version order_id_hex manifest_cid_b64 manifest_digest_hex chunking_profile ", "target_replicas assignments issued_at deadline_at sla metadata" )), &[];
-        "SorafsProviderIngestCompletionAuthorityV1", &contract_words("provider_owner signer_policy"), &[];
+        "SorafsProviderIngestCompletionAuthorityV1", &contract_words("provider_owner completion_signer signer_policy"), &[];
         "SorafsProviderIngestFinalizedAnchorV1", &contract_words("height block_hash_hex"), &[];
         "SorafsReplicationCompletionV1", &contract_words(concat!( "provider_hex completed_by completion_epoch assignment_revision ", "completion_authority finalized_anchor" )), &[];
         "SorafsReplicationOrderProjectionV1", &contract_words(concat!( "order_id_hex manifest_digest_hex issued_by issued_epoch deadline_epoch status ", "canonical_order_b64 assignment_revision order provider_completions providers" )), &[];

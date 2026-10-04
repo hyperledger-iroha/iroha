@@ -1,5 +1,8 @@
 //! Original-mask replay from closed immutable MAIN witness owners.
 
+use super::super::super::der_stark::{
+    fill_zk_x509_der_stark_native_aux_columns_v1, fill_zk_x509_der_stark_native_base_columns_v1,
+};
 use super::super::super::private_table::{
     PrivateTableV1, zeroize_field_rows_v1, zeroize_fields_v1,
 };
@@ -332,11 +335,19 @@ impl MainTraceMaskGroupV1 {
     }
 }
 
-/// Six exact groups retain explicit original masks, never all native coefficients.
-/// Witnesses remain borrowed from the closed phase owners below. Each replay
-/// reconstructs the same polynomial and final commitment replay checks its root.
+/// Retained originals are created only by the first commitment. The test-only
+/// oracle keeps original native replay available for independent comparison.
+enum RetainedRfcV1 {
+    Original(super::main_retained_rfc::MainRetainedRfcV1),
+    #[cfg(test)]
+    ReplayOracle,
+}
+/// Six exact groups retain original masks and the RFC masked coefficient owners.
+/// Other columns replay their closed immutable sources; every final commitment
+/// replay still checks its original root.
 pub(in super::super) struct MainTracePolynomialSetV1 {
     proof_instance: ZkX509ProofInstanceV1,
+    retained_rfc: RetainedRfcV1,
     groups: [MainTraceMaskGroupV1; FULL_PROFILE_TRACE_GROUPS_V1],
     cut: Option<aggregate::retained_commitment::RetainedMerkleCutV1>,
 }
@@ -354,6 +365,7 @@ impl MainTracePolynomialSetV1 {
         layout.validate_exact_full_profile_registration_v1()?;
         let set = Self {
             proof_instance: TEST_PROOF_INSTANCE_V1,
+            retained_rfc: RetainedRfcV1::ReplayOracle,
             groups: groups
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::TranscriptMismatch)?,
@@ -369,6 +381,13 @@ impl MainTracePolynomialSetV1 {
         kind: MainTraceColumnKindV1,
     ) -> Result<(), ZkX509StarkErrorV1> {
         layout.validate_exact_full_profile_registration_v1()?;
+        match &self.retained_rfc {
+            RetainedRfcV1::Original(cache) => {
+                cache.validate_v1(self.proof_instance, layout, kind)?
+            }
+            #[cfg(test)]
+            RetainedRfcV1::ReplayOracle => (),
+        }
         for (masks, group) in self.groups.iter().zip(&layout.trace_groups) {
             let width = match kind {
                 MainTraceColumnKindV1::Base => group.base_width,
@@ -407,8 +426,100 @@ impl MainTracePolynomialSetV1 {
         .map_err(map_aggregate_error_v1)
     }
 
+    pub(super) fn retained_rfc_payload_v1(&self) -> usize {
+        match &self.retained_rfc {
+            RetainedRfcV1::Original(cache) => cache.allocated_payload_v1(),
+            #[cfg(test)]
+            RetainedRfcV1::ReplayOracle => 0,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn replay_columns_coefficients_v1(
+        &self,
+        layout: &AggregateProofLayoutV1,
+        kind: MainTraceColumnKindV1,
+        group_index: usize,
+        columns: core::ops::Range<usize>,
+        sources: &MainTraceReplaySourcesV1<'_, '_>,
+        policy: MainBoundedTransformPolicyV1,
+    ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1> {
+        check_completion_v1(goldilocks_transform_completion_uncertain_v1())?;
+        let width = columns
+            .end
+            .checked_sub(columns.start)
+            .filter(|&n| n > 0 && n <= aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1)
+            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+        let masks = self
+            .groups
+            .get(group_index)
+            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+        if columns.end > masks.masks.len() {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        let cache = match &self.retained_rfc {
+            RetainedRfcV1::Original(cache) => cache,
+            #[cfg(test)]
+            RetainedRfcV1::ReplayOracle => {
+                return self.replay_uncached_columns_v1(
+                    layout,
+                    kind,
+                    group_index,
+                    columns,
+                    sources,
+                    policy,
+                );
+            }
+        };
+        cache.validate_v1(self.proof_instance, layout, kind)?;
+        let (first_end, first_cached) = cache.run_v1(group_index, columns.start, columns.end)?;
+        if !first_cached && first_end == columns.end {
+            return self.replay_uncached_columns_v1(
+                layout,
+                kind,
+                group_index,
+                columns,
+                sources,
+                policy,
+            );
+        }
+        let policy = policy.reserve_additional_v1(
+            super::main_retained_rfc::MainRetainedRfcV1::replay_metadata_v1(),
+        )?;
+        let mut output = Vec::new();
+        output
+            .try_reserve_exact(width)
+            .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+        if output.capacity() != width {
+            return Err(ZkX509StarkErrorV1::ProofTooLarge);
+        }
+        let mut first = columns.start;
+        while first < columns.end {
+            let (end, cached) = cache.run_v1(group_index, first, columns.end)?;
+            let batch = if cached {
+                cache.copy_columns_v1(group_index, first..end)?
+            } else {
+                self.replay_uncached_columns_v1(
+                    layout,
+                    kind,
+                    group_index,
+                    first..end,
+                    sources,
+                    policy,
+                )?
+            };
+            if batch.len() != end - first || batch.capacity() != end - first {
+                return Err(ZkX509StarkErrorV1::ProofTooLarge);
+            }
+            output.extend(batch);
+            first = end;
+        }
+        check_completion_v1(goldilocks_transform_completion_uncertain_v1())?;
+        Ok(output)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn replay_uncached_columns_v1(
         &self,
         layout: &AggregateProofLayoutV1,
         kind: MainTraceColumnKindV1,
@@ -487,7 +598,7 @@ impl MainTracePolynomialSetV1 {
         Ok(result)
     }
 
-    /// First commitment consumes each native source once and retains its masks and Merkle cut.
+    /// First commitment consumes each native source once, retaining masks, RFC originals and its Merkle cut.
     /// All successful RNG draws, polynomials and commitment framing are unchanged.
     /// Errors are fail-fast: no later source/RNG activity and no partial root escapes.
     pub(super) fn sample_and_commit_joined_v1<R: TryRngCore>(
@@ -522,6 +633,9 @@ impl MainTracePolynomialSetV1 {
         }
         let mut set = Self {
             proof_instance,
+            retained_rfc: RetainedRfcV1::Original(
+                super::main_retained_rfc::MainRetainedRfcV1::new_v1(proof_instance, layout, kind)?,
+            ),
             groups: groups
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::TranscriptMismatch)?,
@@ -539,6 +653,9 @@ impl MainTracePolynomialSetV1 {
         )
         .map_err(map_aggregate_error_v1)?;
         let policy = MainBoundedTransformPolicyV1::for_assembly_v1(layout, assembly_payload)?
+            .reserve_additional_v1(
+                super::main_retained_rfc::MainRetainedRfcV1::replay_metadata_v1(),
+            )?
             .for_native_replay_v1()?;
         let (commitment, cut) = Self::commit_joined_batches_v1(
             proof_instance,
@@ -552,7 +669,9 @@ impl MainTracePolynomialSetV1 {
                 let mut pending = Vec::new().into_iter();
                 let mut next_column = columns.start;
                 let range = columns.clone();
-                set.groups
+                let retained_range = columns.clone();
+                let mut batch = set
+                    .groups
                     .get_mut(group)
                     .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?
                     .sample_and_replay_batch_with_v1(
@@ -594,7 +713,17 @@ impl MainTracePolynomialSetV1 {
                             )
                         },
                         goldilocks_transform_completion_uncertain_v1,
-                    )
+                    )?;
+                match &mut set.retained_rfc {
+                    RetainedRfcV1::Original(cache) => {
+                        cache.retain_batch_v1(group, retained_range, &mut batch)?
+                    }
+                    #[cfg(test)]
+                    RetainedRfcV1::ReplayOracle => {
+                        return Err(ZkX509StarkErrorV1::InternalInvariant);
+                    }
+                }
+                Ok(batch)
             },
         )?;
         set.cut = Some(cut.ok_or(ZkX509StarkErrorV1::InternalInvariant)?);
@@ -721,6 +850,54 @@ impl MainTracePolynomialSetV1 {
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)
     }
 
+    pub(super) fn retained_group_width_v1(&self, group: usize) -> usize {
+        match &self.retained_rfc {
+            RetainedRfcV1::Original(cache) => cache.group_width_v1(group),
+            #[cfg(test)]
+            RetainedRfcV1::ReplayOracle => 0,
+        }
+    }
+
+    /// Gather only original noncached sources; cached columns remain borrowed
+    /// from the immutable first-commit owner. All original source errors occur
+    /// before any opening checks. Each public batch still covers every index.
+    pub(super) fn deep_batch_v1<'a>(
+        &'a self,
+        layout: &AggregateProofLayoutV1,
+        kind: MainTraceColumnKindV1,
+        group: usize,
+        columns: core::ops::Range<usize>,
+        sources: &MainTraceReplaySourcesV1<'_, '_>,
+    ) -> Result<main_deep_replay::MainDeepReplayBatchV1<'a>, ZkX509StarkErrorV1> {
+        self.validate_v1(layout, kind)?;
+        let _width = columns
+            .end
+            .checked_sub(columns.start)
+            .filter(|&n| n > 0 && n <= aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1)
+            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+        let masks = self
+            .groups
+            .get(group)
+            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+        if columns.end > masks.masks.len() {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        main_deep_replay::MainDeepReplayBatchV1::gather_v1(
+            columns,
+            |first, end| match &self.retained_rfc {
+                RetainedRfcV1::Original(cache) => cache.run_v1(group, first, end),
+                #[cfg(test)]
+                RetainedRfcV1::ReplayOracle => Ok((end, false)),
+            },
+            |range| sources.native_columns_v1(layout, kind, group, range),
+            |column| match &self.retained_rfc {
+                RetainedRfcV1::Original(cache) => cache.column_v1(group, column),
+                #[cfg(test)]
+                RetainedRfcV1::ReplayOracle => Err(ZkX509StarkErrorV1::InternalInvariant),
+            },
+        )
+    }
+
     pub(super) fn deep_group_v1(
         &self,
         layout: &AggregateProofLayoutV1,
@@ -744,30 +921,37 @@ impl MainTracePolynomialSetV1 {
             .0
             .try_reserve_exact(masks.masks.len())
             .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-        let points = main_deep_replay::MainNativeDeepPointsV1::new_v1(masks.native_log, point)?;
+        let points = main_deep_replay::MainMixedDeepPointsV1::new_v1(
+            masks.native_log,
+            point,
+            self.retained_group_width_v1(group) != 0,
+            main_resources::MainProverBufferPlanV1::new_v1(layout)?.replay_batch,
+        )?;
         for first in (0..masks.masks.len()).step_by(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
             let end = masks
                 .masks
                 .len()
                 .min(first + aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1);
-            let native = sources.native_columns_v1(layout, kind, group, first..end)?;
-            points.check_workspace_v1(&[], 0, &native, native.capacity())?;
+            let batch = self.deep_batch_v1(layout, kind, group, first..end, sources)?;
+            points.check_workspace_v1(&[], 0, &batch.native, batch.native.capacity())?;
             let original_masks = self.original_masks_v1(layout, kind, group, first..end)?;
-            if native.len() != original_masks.len() {
+            if batch.length != original_masks.len() {
                 return Err(ZkX509StarkErrorV1::InternalInvariant);
             }
             let mut values = main_deep_replay::MainDeepStackValuesV1::<
                 { 2 * aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1 },
             >::zero_v1();
-            values.as_mut_slice_v1()[..2 * native.len()]
+            values.as_mut_slice_v1()[..2 * batch.length]
                 .par_chunks_mut(2)
-                .zip(native.par_iter())
+                .enumerate()
                 .zip(original_masks.par_iter())
-                .try_for_each(|((values, native), mask)| {
-                    values.copy_from_slice(&points.evaluate_v1(native, mask.coefficients())?);
+                .try_for_each(|((offset, values), mask)| {
+                    values.copy_from_slice(
+                        &points.evaluate_v1(batch.input_v1(offset, mask.coefficients())?)?,
+                    );
                     Ok::<(), ZkX509StarkErrorV1>(())
                 })?;
-            for pair in values.as_slice_v1()[..2 * native.len()].chunks_exact(2) {
+            for pair in values.as_slice_v1()[..2 * batch.length].chunks_exact(2) {
                 current_values.0.push(pair[0]);
                 next_values.0.push(pair[1]);
             }
@@ -1054,7 +1238,7 @@ pub(super) enum MainTraceReplaySourcesV1<'phase, 'assembly> {
 }
 
 impl MainTraceReplaySourcesV1<'_, '_> {
-    /// Extract each SHA run and arithmetic/value base or bound auxiliary run once, preserving
+    /// Extract each DER, SHA and arithmetic/value base or bound auxiliary run once, preserving
     /// public group/registration order and the closed base/bound phase.
     pub(super) fn native_columns_v1(
         &self,
@@ -1079,6 +1263,162 @@ impl MainTraceReplaySourcesV1<'_, '_> {
         while first < columns.end {
             let (registration, local) =
                 registered_main_group_column_v1(layout, group, kind, first)?;
+            #[cfg(test)]
+            let source_timer = PhaseTimerV1::start_v1(match (registration.segment.adapter, kind) {
+                (SegmentAdapterIdV1::ByteMemory, MainTraceColumnKindV1::Base) => {
+                    PhaseV1::SourceByteMemoryBase
+                }
+                (SegmentAdapterIdV1::ByteMemory, MainTraceColumnKindV1::Aux) => {
+                    PhaseV1::SourceByteMemoryAux
+                }
+                (SegmentAdapterIdV1::StrictDer, MainTraceColumnKindV1::Base) => {
+                    PhaseV1::SourceStrictDerBase
+                }
+                (SegmentAdapterIdV1::StrictDer, MainTraceColumnKindV1::Aux) => {
+                    PhaseV1::SourceStrictDerAux
+                }
+                (SegmentAdapterIdV1::Rfc5280, MainTraceColumnKindV1::Base) => {
+                    PhaseV1::SourceRfc5280Base
+                }
+                (SegmentAdapterIdV1::Rfc5280, MainTraceColumnKindV1::Aux) => {
+                    PhaseV1::SourceRfc5280Aux
+                }
+                (SegmentAdapterIdV1::Sha256CallBus, MainTraceColumnKindV1::Base) => {
+                    PhaseV1::SourceSha256CallBusBase
+                }
+                (SegmentAdapterIdV1::Sha256CallBus, MainTraceColumnKindV1::Aux) => {
+                    PhaseV1::SourceSha256CallBusAux
+                }
+                (SegmentAdapterIdV1::CaAccumulator, MainTraceColumnKindV1::Base) => {
+                    PhaseV1::SourceCaAccumulatorBase
+                }
+                (SegmentAdapterIdV1::CaAccumulator, MainTraceColumnKindV1::Aux) => {
+                    PhaseV1::SourceCaAccumulatorAux
+                }
+                (SegmentAdapterIdV1::Projection, MainTraceColumnKindV1::Base) => {
+                    PhaseV1::SourceProjectionBase
+                }
+                (SegmentAdapterIdV1::Projection, MainTraceColumnKindV1::Aux) => {
+                    PhaseV1::SourceProjectionAux
+                }
+                (SegmentAdapterIdV1::P256Arithmetic, MainTraceColumnKindV1::Base) => {
+                    PhaseV1::SourceP256ArithmeticBase
+                }
+                (SegmentAdapterIdV1::P256Arithmetic, MainTraceColumnKindV1::Aux) => {
+                    PhaseV1::SourceP256ArithmeticAux
+                }
+                (SegmentAdapterIdV1::P256Reduction, MainTraceColumnKindV1::Base) => {
+                    PhaseV1::SourceP256ReductionBase
+                }
+                (SegmentAdapterIdV1::P256Reduction, MainTraceColumnKindV1::Aux) => {
+                    PhaseV1::SourceP256ReductionAux
+                }
+                (SegmentAdapterIdV1::P256LowS, MainTraceColumnKindV1::Base) => {
+                    PhaseV1::SourceP256LowSBase
+                }
+                (SegmentAdapterIdV1::P256LowS, MainTraceColumnKindV1::Aux) => {
+                    PhaseV1::SourceP256LowSAux
+                }
+                (SegmentAdapterIdV1::P256Window, MainTraceColumnKindV1::Base) => {
+                    PhaseV1::SourceP256WindowBase
+                }
+                (SegmentAdapterIdV1::P256Window, MainTraceColumnKindV1::Aux) => {
+                    PhaseV1::SourceP256WindowAux
+                }
+                (SegmentAdapterIdV1::P256ValueBus, MainTraceColumnKindV1::Base) => {
+                    PhaseV1::SourceP256ValueBusBase
+                }
+                (SegmentAdapterIdV1::P256ValueBus, MainTraceColumnKindV1::Aux) => {
+                    PhaseV1::SourceP256ValueBusAux
+                }
+                (SegmentAdapterIdV1::P256ScalarBitBus, MainTraceColumnKindV1::Base) => {
+                    PhaseV1::SourceP256ScalarBitBusBase
+                }
+                (SegmentAdapterIdV1::P256ScalarBitBus, MainTraceColumnKindV1::Aux) => {
+                    PhaseV1::SourceP256ScalarBitBusAux
+                }
+            });
+            if registration.segment.adapter == SegmentAdapterIdV1::StrictDer {
+                let end = columns.end.min(match kind {
+                    MainTraceColumnKindV1::Base => registration.base_end()?,
+                    MainTraceColumnKindV1::Aux => registration.aux_end()?,
+                });
+                if end <= first {
+                    return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                }
+                let count = end - first;
+                let rows = registration.segment.trace_size();
+                if output.capacity() != width {
+                    return Err(ZkX509StarkErrorV1::ProofTooLarge);
+                }
+                let mut batch = Vec::new();
+                batch
+                    .try_reserve_exact(count)
+                    .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+                if batch.capacity() != count {
+                    return Err(ZkX509StarkErrorV1::ProofTooLarge);
+                }
+                for _ in 0..count {
+                    let column = zeroed_main_trace_column_v1(rows)?;
+                    if column.0.capacity() != rows {
+                        return Err(ZkX509StarkErrorV1::ProofTooLarge);
+                    }
+                    batch.push(column);
+                }
+                {
+                    let mut targets: [&mut [F]; aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1] =
+                        core::array::from_fn(|_| -> &mut [F] { &mut [] });
+                    for (target, column) in targets.iter_mut().zip(batch.iter_mut()) {
+                        *target = &mut **column;
+                    }
+                    match self {
+                        Self::Base {
+                            assembly,
+                            sha,
+                            p256,
+                            ..
+                        } => {
+                            let source = MainLog19BaseTraceGroupSourceV1::for_main_v1(
+                                layout, assembly, sha, p256,
+                            )?;
+                            if source.registration_index_v1(registration)? != 0 {
+                                return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                            }
+                            fill_zk_x509_der_stark_native_base_columns_v1(
+                                source.der,
+                                local,
+                                &mut targets[..count],
+                            )?;
+                        }
+                        Self::Bound { log19, .. } => {
+                            if log19.registration_index_v1(registration)? != 0 {
+                                return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                            }
+                            match kind {
+                                MainTraceColumnKindV1::Base => {
+                                    fill_zk_x509_der_stark_native_base_columns_v1(
+                                        &log19.der.base,
+                                        local,
+                                        &mut targets[..count],
+                                    )?;
+                                }
+                                MainTraceColumnKindV1::Aux => {
+                                    fill_zk_x509_der_stark_native_aux_columns_v1(
+                                        &log19.der,
+                                        local,
+                                        &mut targets[..count],
+                                    )?;
+                                }
+                            }
+                        }
+                    }
+                }
+                output.extend(batch);
+                first = end;
+                #[cfg(test)]
+                source_timer.complete_v1();
+                continue;
+            }
             if registration.segment.adapter == SegmentAdapterIdV1::Rfc5280
                 && matches!(kind, MainTraceColumnKindV1::Base)
             {
@@ -1127,6 +1467,8 @@ impl MainTraceReplaySourcesV1<'_, '_> {
                 }
                 output.extend(batch);
                 first = end;
+                #[cfg(test)]
+                source_timer.complete_v1();
                 continue;
             }
             if registration.segment.adapter == SegmentAdapterIdV1::Rfc5280
@@ -1173,6 +1515,8 @@ impl MainTraceReplaySourcesV1<'_, '_> {
                 }
                 output.extend(batch);
                 first = end;
+                #[cfg(test)]
+                source_timer.complete_v1();
                 continue;
             }
             let grouped_p256_aux = registration.segment.adapter
@@ -1220,6 +1564,8 @@ impl MainTraceReplaySourcesV1<'_, '_> {
                 }
                 output.extend(batch);
                 first = end;
+                #[cfg(test)]
+                source_timer.complete_v1();
                 continue;
             }
             if grouped_p256_aux
@@ -1257,11 +1603,15 @@ impl MainTraceReplaySourcesV1<'_, '_> {
                 }
                 output.extend(batch);
                 first = end;
+                #[cfg(test)]
+                source_timer.complete_v1();
                 continue;
             }
             if registration.segment.adapter != SegmentAdapterIdV1::Sha256CallBus {
                 output.push(self.native_column_v1(layout, kind, registration, local)?);
                 first += 1;
+                #[cfg(test)]
+                source_timer.complete_v1();
                 continue;
             }
             let end = columns.end.min(match kind {
@@ -1309,6 +1659,8 @@ impl MainTraceReplaySourcesV1<'_, '_> {
             drop(targets);
             output.extend(batch);
             first = end;
+            #[cfg(test)]
+            source_timer.complete_v1();
         }
         if output.len() != width {
             return Err(ZkX509StarkErrorV1::InternalInvariant);

@@ -68,6 +68,7 @@ fn installed_floor_increase_is_durable_and_concurrent_owner_cannot_regress_it() 
     let binding = Binding {
         profile: ProfileBinding::from_profile(&original),
         spec: super::super::tests::private_spec(),
+        account_alias: "admin".into(),
         context: None,
     };
     let directory = parent
@@ -107,6 +108,34 @@ fn installed_floor_increase_is_durable_and_concurrent_owner_cannot_regress_it() 
 }
 
 #[test]
+fn retained_attachment_requires_an_explicit_canonical_owner_alias() {
+    let binding = Binding {
+        profile: ProfileBinding::from_profile(&profile(
+            87,
+            1,
+            "https://fixture.example/checkpoint",
+        )),
+        spec: super::super::tests::private_spec(),
+        account_alias: "admin".into(),
+        context: None,
+    };
+    let bytes = encode(&binding).unwrap();
+    let restored: Binding = decode(&bytes).unwrap();
+    assert_eq!(restored.account_alias, "admin");
+    let mut old: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+    old.as_object_mut().unwrap().remove("account_alias");
+    assert!(decode::<Binding>(&norito::json::to_vec(&old).unwrap()).is_err());
+    let temporary = tempfile::tempdir().unwrap();
+    let directory = PrivateDirectory::open_or_create(temporary.path().join("binding")).unwrap();
+    let mut invalid = binding;
+    invalid.account_alias = "admin@other".into();
+    directory
+        .write_atomic(BINDING, &encode(&invalid).unwrap(), PublishMode::CreateNew)
+        .unwrap();
+    assert!(read_binding(&directory).is_err());
+}
+
+#[test]
 fn invalid_or_uninstalled_attachment_requests_have_no_network_generation_side_effects() {
     let _guard = super::super::native_test_guard();
     let temporary = tempfile::tempdir().unwrap();
@@ -120,6 +149,7 @@ fn invalid_or_uninstalled_attachment_requests_have_no_network_generation_side_ef
         name: "private".into(),
         network: "taira".into(),
         alias: "privateapp".into(),
+        account_alias: "admin".into(),
         timeout: MAX_ATTACH,
     };
     assert!(store.up_dataspace(&runtime, &request).is_err());
@@ -195,6 +225,7 @@ fn completed_binding_detects_changed_child_and_preserves_private_reset_evidence(
             "https://fixture.example/checkpoint",
         )),
         spec,
+        account_alias: "admin".into(),
         context: Some(prepared.context.clone()),
     };
     verify_context(&binding, &prepared).unwrap();
@@ -237,7 +268,7 @@ fn failed_first_private_start_retains_exact_context_and_diagnostics_before_attac
     .unwrap();
     let store = ManagedStore::open(root.path()).unwrap();
     let binary = root.path().join("not-executable");
-    let mut request = LocalnetRequest::new(binary.clone(), binary);
+    let mut request = LocalnetRequest::private_root(binary.clone(), binary);
     request.name = "private".into();
     request.startup_timeout = Duration::from_secs(120);
     let mut binding = Binding {
@@ -247,6 +278,7 @@ fn failed_first_private_start_retains_exact_context_and_diagnostics_before_attac
             "https://fixture.example/checkpoint",
         )),
         spec: super::super::tests::private_spec(),
+        account_alias: "admin".into(),
         context: None,
     };
     let parent = OwnerDirectory::open_or_create(store.root().join("attachments")).unwrap();

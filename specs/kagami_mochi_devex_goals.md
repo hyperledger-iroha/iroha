@@ -19,6 +19,20 @@ in private managed storage outside projects. Kagami is the CLI frontend; Mochi
 is the desktop frontend to the same services.
 
 The default localnet has four validators and a funded deployment-capable account.
+Fresh managed global genesis retains three distinct providers on peers 0–2, each with its own
+credentials, native attestation history and retained CA/leaf identity. One network inventory owns
+the reserve operations signer, reputation recorder, pricing and initial admission policy. Private
+roots use the minimal `Standard` profile. Each provider has an original HTTPS listener; the shared
+build-registry factory selects that exact provider and origin through fresh authenticated native
+discovery. Both control and CAR clients validate its original CA, hostname and leaf, with the
+original loopback address and port. Public remote discovery retains its public-address rules.
+Generation leaves token services disabled. The startup worker composes one reserve activation,
+three independent funded provider/custody/gateway histories and one reputation policy through
+their native owners. It promotes each signed compliance catalog and restarts all four owned peers
+with the aggregate configuration. Every original transaction remains in the all-peer barrier;
+a maximum-height observation floor never replaces those receipts. This combined path still needs
+native qualification. Reopen preserves each original finite interval, endpoint and profile;
+it never upgrades a retained generation in place.
 An attached private dataspace has four local validators with owner-only application
 data, works behind NAT, and publishes only authenticated commitments and certificates
 to its parent. Restricted FullReplica lanes do not satisfy that privacy contract.
@@ -96,13 +110,47 @@ workflow likewise does not claim reference-host latency qualification. See
   Minamoto mutation and hardware-backed offline monetary guarantees are outside
   this developer workflow.
 
+The publication clock and replay journal use the shared native filesystem owner on Unix and
+Windows, with explicit initialization, existing-only reopen, original lock/file snapshots and
+bounded recovery of unpublished atomic staging. The signed transaction writer is shared by model
+and wallet callers. Purpose-specific wallet APIs can retain the exact unsigned request before a
+managed attempt is committed; quotation and signing resume that original request. Managed
+bootstrap retains clock-independent policy and fee intent. Only a newly started worker can issue
+a finite, cancellable authorization for unfinished initial work. Expired unsigned requests may
+advance through a bounded retained attempt chain; quoted payloads, signatures and paid carriers
+are never replaced. Complete local recovery creates no authorization, and missing parent custody
+with retained child work refuses without recreating history. Combined native validation remains open.
+
+Seed storage uses the same portable filesystem owner. Provisioning explicitly initializes the
+original owner marker; ordinary startup refuses
+missing ownership. Canonical CAR records publish without replacement as immutable private files;
+interrupted pending writes remain visible tombstones. The daemon storage modules and their
+existing finality/custody fixtures use the portable owner. Native whole-service and Windows
+execution are still qualification gates.
+
+Authenticated provider-inventory reads retain the daemon's original live inventory and recheck
+native archive, order, completion authority and admission before and after reading. The publisher
+uses its own ordinary SDK identity to acquire complete original signed attestations from at least
+three independently selected provider origins before constructing registration payloads. Its
+immutable checkpoint binds every original attestation and the complete canonical storage request;
+recovery never substitutes compact references or refetches missing anchored originals. The native
+paid pin coordinator retains original requests, fee authorization, signatures and ordinary Queue
+submission. The concrete storage backend stages exact finalized seed bytes through the existing
+publisher-source owner and reports completion only from actual native provider workers. Generated
+TLS selection binds the original network, provider, certificate and dedicated listener port.
+Stock startup now selects the complete configured publication installation, opens its original
+journal/seed/clock/pin custody before binding the private listener, and uses fresh native discovery
+for each of the original three providers. The generated runtime installs this configuration only
+on the seed peer after aggregate activation. These source paths require combined native validation.
+
 ## Qualification and documentation
 
-Unsigned macOS ARM64 installed-release diagnostics now exercise both the local
-four-validator workflow and a disposable four-parent/four-private attachment.
-They verify all three contract inputs, exact repeat receipts, localnet restart
-recovery, funded parent provisioning, paid SNS ownership, private execution and
-independently authenticated parent anchoring. The attachment fixture also checks
+Installed-release fixtures exercise both the local four-validator workflow and a
+disposable four-parent/four-private attachment. They check all three contract inputs,
+exact repeat receipts, localnet restart recovery, funded parent provisioning, paid SNS
+ownership, private execution and independently authenticated parent anchoring.
+The combined flows require a fresh run against the current implementation; component
+tests do not establish their completion. The attachment fixture also checks
 that its private canary, complete artifact bytes and listener token are absent
 from captured parent requests and retained parent files. This bounded regression
 does not establish universal secrecy, official Taira readiness, native desktop
@@ -174,9 +222,16 @@ observation failures retain the preceding checkpoint. The release watermark reco
 an explicit uninitialized state so a failed first download remains retryable without
 treating a missing custody record as a fresh trust decision.
 Initial release, finality, provisioning and attachment directories publish their complete
-records and lock files atomically. Prepared wallet journals likewise appear only after the
-original operation is durable; a crash may leave an unpublished private staging sibling,
-but cannot expose a lock-only operation at its final path.
+records and lock files atomically. Native wallet preparation first publishes its exact
+unsigned request with the lock, then retains the quoted payload before signing and the
+signed operation before dispatch. A crash can expose one of these complete durable
+stages, but cannot expose a lock-only operation at its final path. Read-only recovery
+never finishes preparation; explicit preparation preserves the original request, payload,
+nonce, quote and lifetime. Retiring a clean request-only stage grants no replacement
+authorization. The generated parent's live capability authorizes any permitted unsigned successor;
+status, recovery, maintenance and daemon restart cannot create that capability. Cancellation is
+checked at the wallet's preparation, signing and submission boundaries, including after HTTP
+preflight. Native interruption and whole-worker qualification remain required.
 Managed environments likewise publish keys, signed genesis, final-path configurations
 and their sole generation manifest together. Only an unpublished stage may be discarded
 under exclusive operation ownership. A published incomplete generation fails closed;
@@ -206,11 +261,54 @@ discovery; a cold fetch authenticates the current provider policy and native tok
 signer against a newly observed parent decision. A private child context cannot
 select its own registry or forward its listener credentials.
 
-The composed cold-package workflow remains unqualified: it needs genuine governed
-provider admission and token custody, normal TLS, native DNS timeout/rebinding and
-revocation coverage, and the complete HTTP/TLS, JSON, CAR and cache 64 MiB peak-RSS
-gate. Local-package smoke and isolated transport or allocation tests do not
+The composed cold-package workflow remains unqualified. Initial funding, governed token
+custody, signed compliance catalog installation and runtime activation are wired into the
+startup worker. Bounded advert/catalog maintenance rechecks current native discovery before
+replacing its finite readiness observation. Restart reconstructs each provider's native-selected
+enrollment and exact independent ancestry. Retained aggregate references can require original
+component material but cannot select native state or replace missing committed bodies. Automatic
+custody renewal withdraws Ready before a finite bounded turn, then reuses the original paid
+readiness receipt across an owned restart. All three providers must remain current; unchanged
+providers keep their original monotonic enrollment timers across another provider's renewal.
+Catalog startup retains each native-selected predecessor component before renewal and reconciles
+an already-applied original renewal before strict current-use rendering. Initial startup and
+purpose-closed renewal authorization share one finite epoch/claim owner. A later owned turn may
+retire an expired, canonically proven unsigned wallet request while preserving its still-valid
+attester body and original fees. If that body has expired, the sole custody body history can
+retain a successor before attester signing, using fresh native predecessor evidence and live
+purpose-closed authorization. The history permits at most 64 bodies and 64 aggregate dispatch
+reservations. Paid payloads and signed envelopes remain immutable and retain exact recovery.
+Completing an already-reserved successor that expired during downtime consumes that turn's one
+replacement claim; attempting another body in the same turn returns `ReplacementLimit`. A later
+fresh invocation may advance that unused body. Missing anchored local material refuses without
+reconstruction.
+Generic observation failures still use bounded retries because the existing source/SDK errors
+conflate transport and proof rejection. Native qualification of this composed unsigned-body
+recovery remains pending, alongside renewal and interrupted-bootstrap authorization qualification,
+qualification of the implemented native paid pin coordinator and publisher acquisition of original
+signed attestations, and the implemented stock publication-service and generated runtime projection.
+The explicit generated publication API accepts the original client image, namespace binding and
+owner-paid fee intent, exact prepared three-provider transport, and generation-bound journal/cache
+paths. First use advances the original anchored wallet namespace parent; resume and recovery
+retain the original request and cannot authorize another namespace transaction. Kagami
+`package publish` and the Mochi Packages view call this same API and display its canonical
+result, diagnostic and exit status. Resume uses the original operation without reopening source
+files. Managed contract builds use the original generation build cache, separate from publication
+cache; local source, bytecode and local-only packages perform no cache I/O. The implemented
+frontend handoff and three-provider cold publication still require qualification, together with
+DNS timeout/rebinding and revocation coverage, and the complete
+HTTP/TLS, JSON, CAR and cache 64 MiB peak-RSS gate. Local-package smoke and isolated transport or allocation tests do not
 establish that combined result.
+Native provider ingest now carries a mandatory governed completion signer independently
+of the provider owner throughout Model/Core, storage runtime and SDK consumers. Owner-only
+authority CAS and provider-scoped completion permission remain native checks. The generated
+profile funds the dedicated signer and the startup worker provisions its authority through
+the sole wallet before activation. Qualification still requires a real distinct-key
+Set-to-Complete flow, once-only recovery, current native token/chunk serving and native
+Windows custody; direct storage injection or a relaxed key check cannot close it.
+An explicitly empty external compliance-feed inventory is valid, but still requires the normal
+signed catalog, independent acknowledgement quorum, promotion and freshness checks. Its production
+feed transport refuses every unconfigured host before DNS or HTTP; it does not bypass compliance.
 Its harness must exercise the native gateway owner with atomic quotas, leases and
 durable callbacks through the complete daemon service graph. The SDK's bounded
 provider-discovery reader authenticates current token custody against an independently selected signer
@@ -219,6 +317,112 @@ That evidence supplies enrollment inputs; current signer eligibility and downloa
 admission still require their separate checks.
 The first release removes external broker gateway authority; bare gateway DTOs and
 test providers cannot supply the native deployment authority.
+
+The wallet owns a closed initial reserve-policy operation: revision one without a
+predecessor, exact asset and role bindings, and original signed fee/deadline terms.
+Its journal permits once-only dispatch and read-only recovery of that same request.
+Caller-selected fields do not prove policy absence or governance permission.
+The independent reserve-policy reader binds the selected Global decision and native
+schema to the manager's direct governance permission, selected account and asset keys,
+and exact policy and activation provenance. Its account-authenticated Torii route
+works before service activation and shares the native snapshot and bounded transport
+owners. Authenticated singleton absence does not establish namespace emptiness or
+initial activation eligibility. The managed initial-policy coordinator authenticates
+the original generated roles and signed genesis, retains the original policy and
+authorization, and delegates signing and once-only dispatch to that wallet owner.
+Native Set execution checks activation eligibility. The coordinator reports activation
+only after independently verifying successful inclusion of the exact original
+transaction and a fresh policy proof matching its policy, manager and activation time.
+Read-only recovery never prepares or dispatches a transaction; historical inclusion
+remains reportable when current evidence is unavailable. Current-candidate native
+validation of managed collateral/credit/capacity provisioning and durable service
+activation remains required for unattended cold-package setup.
+
+The wallet also retains a closed provider reserve-registration request with its exact
+selected policy, provider owner, underwriting terms, fee authorization and UTC deadline.
+Its single native registration instruction uses the existing once-only journal; recovery
+preserves the original signed wire. Native execution owns policy, operations-authority,
+provider-owner and partition-absence checks. The managed registration coordinator uses the
+original shared reserve-operations credential and retains the manager's finality context;
+TopUp and capacity transactions use the selected provider's owner credential.
+Its independent native account proof authenticates the exact provider owner, active policy
+and optional partition at one certified Global cut through an account-authenticated route
+available before service activation. The coordinator retains immutable selection and
+authorization, delegates once-only dispatch to the wallet, and keeps historical successful
+registration separate from fresh provider facts across restart, policy rotation and outages.
+Read-only recovery never prepares or sends a transaction. Registration creates an unfunded
+`Warning` partition. Current-candidate runtime validation, funded collateral, credit,
+admission, capacity and durable configuration publication remain required before managed
+service activation; neither registration nor its proof establishes usable collateral backing.
+
+The managed top-up request retains the generated provider's selected policy, complete
+partition, revision, movement id/amount and original UTC/fee authorization. It shares the
+registration proof reader and the wallet's once-only journal. Preparation and first dispatch
+require a fresh matching predecessor. Historical request evidence has a private constructor:
+it requires the exact signed native TopUp request in an independently certified successful
+carrier. Public transaction reports cannot create that evidence. Recovery preserves it across
+current-read outages; an unprepared expired intent performs no reads, quotes or dispatch.
+Current provider facts remain separate. Request execution grants no approval, transfers no
+principal and establishes no service readiness.
+
+The managed approval owner requires that original opaque request evidence on every call.
+Its journal retains request claims for equality checks; decoding them cannot create historical
+authority. It selects a fresh complete provider partition, current revision and active policy,
+including legitimate policy rotation after the request. The wallet retains the exact manager
+decision, rationale, UTC deadline and fee authorization and permits once-only dispatch.
+Native execution resolves the Pending movement and atomically transfers provider principal
+to custody. Historical approval requires the exact successful signed decision carrier joined
+to the original request evidence. It remains separate from current account facts across
+outages and restart; expired unprepared recovery performs no reads or signing. Native
+component controls cover rotation, stale rejection, transfer, fees and recovery, but remain
+unexecuted on the current candidate. The combined funded collateral, admission, capacity
+and durable service activation path remains unqualified.
+
+Provider credit updates require an explicit predecessor: `None` requires native absence,
+and `Some` binds the canonical hash of the complete current record. Execution compares it
+before reserve scans or mutation and retains the existing backing and slash checks. The
+wallet preserves that selection, the full desired record and original fee/UTC terms through
+once-only dispatch and recovery. The account proof authenticates optional credit alongside
+the policy, owner and partition at the same certified Global cut; it conveys current facts
+without granting service eligibility. The managed initial-credit coordinator retains the
+generated roles, complete intent and original checkpoint, checks fresh absence before
+preparation or first dispatch, and always submits the native absence guard. A collision
+cannot become a replacement update. Recovery preserves the original successful carrier
+and withholds any current cut older than it; expired unprepared intents perform no HTTP.
+Native runtime validation remains open. Native capture preserves the nominal codec
+identities and updates the populated guarded-instruction frames from their compiled owner.
+
+The wallet's capacity-declaration operation retains the complete canonical manifest,
+selected policy/partition/credit claims and original UTC/fee authorization. It signs one
+provider-owner `RegisterCapacityDeclaration`, preserving native replacement semantics;
+preflight observations do not become a capacity CAS. Recovery retains the original
+envelope, and stake declarations transfer no principal. The managed capacity owner selects
+the original generated plan and derives principal and nominal credit from canonical pricing
+and reserve underwriting. It retains complete original inputs before the wallet operation
+and keeps exact historical completion separate from fresh current facts. The startup worker
+now composes automatic funding and initial service activation with explicit finite authorization
+recovery; combined native validation remains open.
+
+The same account proof also authenticates the provider's optional complete capacity
+record and the required governed pricing cell at its selected Global cut. Capacity
+may be absent, future or expired; these facts grant no registration or service
+eligibility. Economic consumers validate the authenticated schedule before using it.
+The native publisher retains all three typed credit/capacity/pricing frames and
+their allocation reservations through response encoding. Combined native runtime
+validation remains required.
+
+The optional native Torii HTTPS listener shares the public router, authorization,
+connection limits and shutdown with HTTP. It loads bounded private DER material and
+limits TLS handshake time. Endpoint admission names this server certificate material
+`Tls`; separate mutual-TLS ingress requirements retain their own policy. Generated-local
+client trust, startup rendering and durable service activation are implemented; their
+combined native qualification remains open.
+
+The wallet also owns initial gateway setup as one ordered Configure, exact Operate
+grant and exact Check grant, followed separately by the recorder policy's sole Set.
+Both retain complete original policies, roles, UTC and fees through the same once-only
+journal. Successful setup execution grants no current Serving authority; managed
+coordination and native daemon qualification remain necessary.
 
 The native gateway owner is separate from token-signing custody.
 Gateway requests, quota inputs and receipts now have one canonical data-model owner;

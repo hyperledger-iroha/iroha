@@ -12,7 +12,7 @@ mod restore;
 use super::*;
 use crate::{
     beacon::{
-        FinalizedGlobalThresholdBeaconKeySessionRecordV1, prepared_session_and_signers_fixture_v1,
+        RetainedFinalizedGlobalThresholdBeaconSessionV1, prepared_session_and_signers_fixture_v1,
         prove_global_threshold_beacon_seat_readiness_v1,
     },
     kagemusha_v1_test_fixtures::{
@@ -78,6 +78,8 @@ pub(crate) fn fixture_with_native_selection(
     selection_anchor: HashOf<iroha_data_model::block::BlockHeader>,
     election_seed: [u8; 32],
 ) -> Fixture {
+    // Pure World component fixture: one explicit original pool for both generations.
+    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     let mut keys = (1..=size)
         .map(|index| KeyPair::from_seed(vec![index as u8; 32], Algorithm::BlsNormal))
         .collect::<Vec<_>>();
@@ -125,9 +127,13 @@ pub(crate) fn fixture_with_native_selection(
             acceptances_end_height: start_height + 3,
         }
     };
-    let (old, _) = prepared_session_and_signers_fixture_v1(dkg([0x71; 32], [0x71; 32], &peers, 1));
-    let mut old_record =
-        FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(old.record().clone()).unwrap();
+    let (old, _) =
+        prepared_session_and_signers_fixture_v1(dkg([0x71; 32], [0x71; 32], &peers, 1), &budget);
+    let mut old_record = RetainedFinalizedGlobalThresholdBeaconSessionV1 {
+        session: old.clone(),
+        activated_at_height: None,
+        retired_at_height: None,
+    };
     old_record.activate(5).unwrap();
     let genesis = mint_finality_genesis_for_authority(&incumbent, 10);
     let authorization = mint_finality_successor_authorization(
@@ -176,12 +182,15 @@ pub(crate) fn fixture_with_native_selection(
         .map(|seat| seat.validator.clone())
         .collect::<Vec<_>>();
     // The target ceremony is the preparation's own attempt.
-    let (target, signers) = prepared_session_and_signers_fixture_v1(dkg(
-        preparation.beacon_session_id().unwrap(),
-        preparation.transition_id().unwrap(),
-        &target_peers,
-        11,
-    ));
+    let (target, signers) = prepared_session_and_signers_fixture_v1(
+        dkg(
+            preparation.beacon_session_id().unwrap(),
+            preparation.transition_id().unwrap(),
+            &target_peers,
+            11,
+        ),
+        &budget,
+    );
     let authority = mint_finality_authority(network, 1, &roster);
     let mut world = World::new();
     world
@@ -193,7 +202,11 @@ pub(crate) fn fixture_with_native_selection(
     );
     world.global_beacon_key_sessions.insert(
         target.record().session_id,
-        FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(target.record().clone()).unwrap(),
+        RetainedFinalizedGlobalThresholdBeaconSessionV1 {
+            session: target.clone(),
+            activated_at_height: None,
+            retired_at_height: None,
+        },
     );
     for (index, validator_keys) in authority.validators.iter().enumerate() {
         let possession = prove_kagemusha_mint_finality_candidate_possession_v1(

@@ -1,6 +1,10 @@
 name: NoritoDemo
 options:
   bundleIdPrefix: tech.iroha
+settings:
+  configs:
+    Debug:
+      ONLY_ACTIVE_ARCH: YES
 packages:
   IrohaSwift:
     path: ../../../IrohaSwift

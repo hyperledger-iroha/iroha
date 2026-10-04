@@ -187,10 +187,10 @@ STAGES = (
         "taira::tests::doctor_mock_required_tool_missing_reports_failure",
         "taira::tests::doctor_readiness_requires_exact_plain_text_ready_in_both_scopes",
     )),
-    ("complete effective account permission reads", (
-        "tests::account_permission_list_reads_complete_effective_fanout_before_global_pagination",
-        "tests::account_permission_list_rejects_partial_or_non_effective_pages_without_output",
-        "tests::account_permission_list_rejects_zero_pagination_before_http",
+    ("complete account permission cursor reads", (
+        "tests::account_permission_list_uses_shared_cursor_pages",
+        "tests::account_permission_list_rejects_failed_or_non_effective_pages_without_output",
+        "tests::account_permission_list_rejects_zero_limit_before_http",
         "tests::account_permission_list_propagates_server_page_cap_rejection",
     )),
     ("public account key conversion", (
@@ -608,6 +608,14 @@ DAEMON_STARTUP_STAGES = (("frozen startup policy before snapshot authentication 
 )),)
 DAEMON_STAGES += DAEMON_STARTUP_STAGES
 
+DAEMON_SNAPSHOT_STAGES = (("snapshot refusal and native identity classification", (
+    "snapshot_restore_policy::tests::native_identity_mismatch_halts_but_execution_replay_requires_strict_mode",
+    "snapshot_restore_policy::tests::snapshot_local_refusal_never_authorizes_empty_state_fallback",
+    "snapshot_restore_policy::tests::classification_borrows_raw_failure_and_preserves_original_release_observation",
+    "snapshot_restore_policy::tests::snapshot_busy_reader_preserves_actual_publication_wait_without_empty_fallback",
+)),)
+DAEMON_STAGES += DAEMON_SNAPSHOT_STAGES
+
 TORII_STARTUP_STAGES = (("configured initial catalog and explicit network identity", (
     "tests_runtime_handlers::configured_catalog_fixture_binds_initial_geometry_and_explicit_network",
 )), ("HTTP admission waits for Queue startup reconciliation", (
@@ -670,8 +678,9 @@ TORII_UNIT_STAGES += (("current prepared and public transaction admission", (
     "tests_runtime_handlers::prepared_current_admission_rejects_actual_multiroute_payload_before_custody",
 )),)
 
-TORII_UNIT_STAGES += (("signed account permission query preservation", (
-    "torii_routed_read_tests::account_permissions_handler_query_preserves_signed_pagination_and_count_mode",
+TORII_UNIT_STAGES += (("canonical account permission query preservation", (
+    "torii_routed_read_tests::permission_collection_counts_deduplicated_grants_once_across_routes",
+    "torii_routed_read_tests::permission_collection_rejects_retired_or_missing_continuation_evidence",
 )),)
 
 DISPATCHER_TRANSITION_STAGES = (("reversible dispatcher upgrade and native plan preparation", (
@@ -813,6 +822,13 @@ CORE_ADMISSION_STARTUP_STAGES += (("unconditional alias registry admission and r
 CORE_NATIVE_ARCHIVE_RECOVERY_STAGES = native_owner_stages("native durable archive recovery")
 CORE_ADMISSION_STARTUP_STAGES += CORE_NATIVE_ARCHIVE_RECOVERY_STAGES
 
+CORE_NATIVE_RECEIPT_STAGES = (("original native receipt mailbox custody", (
+    "sumeragi::attestation::tests::mailbox_and_release_control_require_original_pool_admission_before_allocation",
+    "sumeragi::attestation::tests::mailbox_poison_is_observed_only_after_the_original_guard_releases",
+    "sumeragi::attestation::tests::actual_mailbox_contention_retains_original_receipt_and_source",
+)),)
+CORE_ADMISSION_STARTUP_STAGES += CORE_NATIVE_RECEIPT_STAGES
+
 
 CORE_ADMISSION_STARTUP_STAGES += (("typed State status contention and integrity boundary", (
     'state::telemetry_status::tests::status_source_busy_is_distinct_from_changed_or_invalid_journal',
@@ -832,7 +848,7 @@ CORE_REWARD_ACCOUNTING_STAGES = (("retained reward cursors, unpaid custody and r
     'smartcontracts::isi::staking::tests::reward_obligation_audit_rejects_corrupt_record_keys',
     'smartcontracts::isi::staking::tests::reward_claim_uses_recorded_custody_after_fee_policy_changes',
     'smartcontracts::isi::staking::tests::reward_recording_excludes_bonded_custody_from_a_shared_fee_sink',
-    'smartcontracts::isi::staking::tests::reward_failed_second_source_preserves_all_claim_state_without_overlay_rollback',
+    'smartcontracts::isi::staking::tests::reward_failed_second_source_rolls_back_all_claim_state',
     'smartcontracts::isi::staking::tests::claim_rewards_transfers_and_marks_epoch',
     'smartcontracts::isi::staking::tests::claim_rewards_defers_dust_without_marking_paid',
     'smartcontracts::isi::staking::tests::claim_rewards_rejects_mismatched_reward_record_rows_without_releasing_reserves',
@@ -845,8 +861,32 @@ CORE_MONETARY_AUTHORITY_STAGES = (("exact signed staking and reward monetary aut
     'smartcontracts::isi::staking::tests::registration_rejects_changed_signed_monetary_fields_without_custody_writes',
     'smartcontracts::isi::staking::tests::reward_claim_rejects_changed_record_source_and_entitlement_without_payment',
     'smartcontracts::isi::staking::tests::genesis_monetary_scope_requires_exact_height_without_npos_parameters',
+    'executor::opaque_monetary_tests::raw_ivm_staking_trigger_requires_signed_monetary_plan',
+    'executor::opaque_monetary_tests::supplied_proved_staking_effects_require_signed_monetary_plan',
+    'smartcontracts::isi::multisig::tests::proposal_attempt::live_multisig_proposal_decode_refusal_retries_original_signed_xor_claim',
+    'smartcontracts::isi::multisig::tests::proposal_attempt::live_multisig_proposal_missing_malformed_and_rebound_state_are_not_deferrals',
+    'smartcontracts::isi::multisig::tests::proposal_attempt::live_multisig_proposal_body_binding_rolls_back_original_signed_xor_claim',
+    'smartcontracts::isi::multisig::tests::proposal_attempt::proposal_migration_validates_original_physical_key_and_body_before_writes',
+    'smartcontracts::isi::multisig::tests::proposal_attempt::cancel_wrapper_decode_refusal_rolls_back_and_retries_original_signed_approval',
+    'smartcontracts::isi::multisig::tests::proposal_attempt::expiry_child_decode_refusal_rolls_back_and_retries_original_signed_approval',
+    'smartcontracts::isi::multisig::tests::multisig_expiry_traversal_rejects_cycles_and_excessive_depth',
+    'queue::router::tests::persisted_multisig_body_binding_and_local_refusal_reach_signed_queue_admission',
+    'queue::router::tests::persisted_multisig_proposal_cycle_fails_closed_without_rejecting_repeated_siblings',
+    'queue::router::tests::persisted_multisig_chain_is_checked_in_linear_expansions',
+    'state::deserialize::decode_tests::restored_multisig_proposals_require_exact_body_and_preserve_local_read_refusal',
 )), )
 CORE_ADMISSION_STARTUP_STAGES += CORE_MONETARY_AUTHORITY_STAGES
+
+CORE_FEE_REWARD_AUTHORITY_STAGES = (("signed network-XOR fee rewards and additive custody", (
+    'validation_fee_rewards::tests::canonical_network_xor_is_required_before_fee_reward_state_changes',
+    'validation_fee_rewards::tests::signed_fee_reward_claim_rejects_every_changed_binding_before_mutation',
+    'validation_fee_rewards::tests::self_custody_fee_claim_releases_only_its_exact_reserve_without_debiting_balance',
+    'validation_fee_rewards::tests::absent_fee_claim_leaves_even_unreadable_credit_and_dust_untouched',
+    'validation_fee_rewards::tests::signed_fee_reward_claim_rolls_back_public_payout_when_fee_transfer_is_refused',
+    'validation_fee_rewards::tests::shared_fee_stake_reward_custody_is_additive',
+    'validation_fee_rewards::tests::fee_reward_claim_refuses_currency_substitution_and_stale_credit',
+)), )
+CORE_ADMISSION_STARTUP_STAGES += CORE_FEE_REWARD_AUTHORITY_STAGES
 
 CORE_ADMISSION_STARTUP_STAGES += (("committed catalog snapshot restart with complete configured baseline", (
     "state::tests::snapshot_runtime_catalog_restart_authenticates_full_configured_dataspace_baseline",
@@ -959,14 +999,20 @@ TEST_NETWORK_STAGES = (("isolated validator fixture configuration", (
     "tests::consensus_first_boot_never_reasserts_a_key_after_history_loss",
 )),)
 
+TEST_NETWORK_STAGES += (("checkout-local owner-private broker custody", (
+    "disposable_runtime_provider_broker::tests::configured_broker_root_retains_exact_parent_owner_and_endpoint_bound",
+    "disposable_runtime_provider_broker::tests::configured_broker_root_rejects_noncanonical_mutable_and_symlink_parents",
+    "disposable_runtime_provider_broker::tests::configured_broker_root_rejects_oversized_endpoint_before_creating_custody",
+)),)
+
 NETWORK_OBSERVATION_STAGES = (("signed genesis paid authority and public failure observation", (
     'dataspace_deploy_cli::signed_genesis_validator_mapping_preserves_runtime_accounts',
     'dataspace_deploy_cli::phase_failure_summary_excludes_signed_payloads',
 )), ("inherited native deployment deadline", (
     "dataspace_deploy_cli::remaining_cli_budget_keeps_original_deadline_and_never_rounds_up",
 )), ("complete bounded effective permission observation", (
-    "runtime_catalog_transition::permission_page_tests::permission_page_requires_complete_short_fanout",
-    "runtime_catalog_transition::permission_page_tests::permission_page_rejects_saturation_and_duplicate_items",
+    "runtime_catalog_transition::permission_page_tests::permission_page_requires_cursor_exhaustion",
+    "runtime_catalog_transition::permission_page_tests::permission_page_accepts_exhausted_limit_and_rejects_oversized_or_duplicate_items",
     "runtime_catalog_transition::permission_page_tests::permission_page_preserves_failure_context_and_rejects_invalid_metadata",
 )), ("bounded validator status observation", (
     "status_observation_tests::status_observation_retries_typed_busy_json_and_norito_with_remaining_budget",
@@ -1190,6 +1236,7 @@ TORII_UNIT_STAGES = (("released State snapshots and exact canonical outcome auth
 
 HARNESS_TARGETS = {
     "allocation": ("native finite allocation custody", "iroha_allocation", "lib", ["-p", "iroha_allocation", "--lib"]),
+    "allocation-shared": ("physical funded shared wake custody", "charged_shared_custody", "test", ["-p", "iroha_allocation", "--test", "charged_shared_custody"]),
     "mv": ("native MV ownership", "mv", "lib", ["-p", "mv", "--lib"]),
     "mv-ebr": ("native EBR allocation custody", "ebr_allocation_custody", "test", ["-p", "mv", "--test", "ebr_allocation_custody"]),
     "mv-map": ("native owned map generations", "map_owned_generations", "test", ["-p", "mv", "--test", "map_owned_generations"]),
@@ -1295,6 +1342,7 @@ CORE_STAGES = CORE_NONEMPTY_STAGES + CORE_STAGES
 
 
 CURRENT_CONSENSUS_STAGES = (("current nonempty consensus and bounded work wakeup", (
+    'machine::tests::control::control_work_context_requires_complete_applied_parent_and_current_signer',
     'machine::tests::handlers::idle_payload_wait_and_payload_ready',
     'machine::tests::handlers::oversized_payload_waits_for_bounded_rebuild',
     'machine::tests::liveness::det_l13_late_views_build_nonempty_work',
@@ -1397,11 +1445,12 @@ TORII_UNIT_STAGES += (("actual current-node public finality boundary", (
     'openapi::tests::compact_finality_app_contracts::generated_spec_documents_exact_current_sumeragi_status',
 )),)
 DAEMON_STAGES += (("current certificate beacon admission before custody", (
-    'beacon_bootstrap::tests::current_phase_pipe_accepts_real_work_and_rejects_replay',
+    'beacon_bootstrap::seat_attempt::finality::tests::current_phase_pipe_accepts_real_work_and_rejects_replay',
 )),)
 
 # Production beacon setup must fail before unrelated tests and network fixtures.
 CORE_BEACON_STAGES = (('height-bound beacon readiness and actual custody', (
+    'sumeragi::node::tests::p2p_owner_tests::network_start_rejects_closed_retained_actor_before_driver_files',
     'state::tests::component_commit_topology_preserves_scheduled_network_authority',
     'beacon::tests::runtime_beacon_capability_requires_exact_live_session_and_seat_without_signing',
 )), )
@@ -1428,13 +1477,15 @@ DAEMON_BEACON_STAGES = (('native beacon bootstrap, broker and consumed credentia
     'taira_runtime_signer::tests::descriptor_loader_accepts_only_canonical_owner_only_ed25519',
     'beacon_bootstrap::tests::each_seat_credential_binds_exact_public_session_and_private_share',
     'beacon_bootstrap::tests::genesis_session_rejects_mutated_identity_under_same_attempt',
-    'beacon_bootstrap::tests::rotation_phase_pipe_rejects_truncated_oversized_and_noncanonical_proofs',
-    'beacon_bootstrap::tests::one_shot_attempt_directory_cannot_reroll_after_restart',
+    'beacon_bootstrap::seat_attempt::finality::tests::rotation_phase_pipe_rejects_truncated_oversized_and_noncanonical_proofs',
+    'beacon_bootstrap::seat_attempt::claim::tests::one_shot_attempt_directory_cannot_reroll_after_restart',
     'beacon_bootstrap::tests::rotation_config_descriptor_uses_only_exact_native_consensus_identity',
-    'beacon_bootstrap::tests::bounded_phase_reader_consumes_exact_frame_without_advancing_next_frame',
+    'beacon_bootstrap::seat_attempt::input::tests::bounded_phase_reader_consumes_exact_frame_without_advancing_next_frame',
     'beacon_bootstrap::tests::rotation_seat_parser_requires_independent_pins_and_private_identity',
     'beacon_bootstrap::tests::genesis_seat_parser_requires_signed_anchor_and_one_private_identity',
     'beacon_bootstrap::tests::genesis_public_assembly_requires_exact_proof_and_provider_inputs',
+    'beacon_bootstrap::tests::every_bootstrap_command_requires_one_explicit_positive_credential_limit',
+    'beacon_bootstrap::tests::bootstrap_session_refusal_retains_operation_source_and_last_credential_reader',
 )), )
 TORII_BEACON_STAGES = (('current consensus readiness leaves setup ingress open', (
     'tests_runtime_handlers::readyz_tracks_live_consensus_without_gating_beacon_setup',
@@ -1732,9 +1783,22 @@ CORE_STAGES += CORE_STATE_ACQUISITION_STAGES
 CORE_STARTUP_STAGES += CORE_STATE_ACQUISITION_STAGES
 CORE_ADMISSION_STARTUP_STAGES += CORE_STATE_ACQUISITION_STAGES
 
+CORE_STATE_VIEW_CONSUMER_STAGES = (("original State reader refusals through authority and snapshot capture", (
+    'state::authority_registry::lane_manifest_policy::tests::authority_captures_preserve_exact_state_reader_refusal',
+    'state::world_projection::world_state_accumulator::world_state_snapshot::tests::snapshot_reader_refusal_preserves_original_source_and_does_not_call_consumer',
+    'state::native_execution_tip::finalized_world::tests::source_bounds_corrupt_carrier_and_busy_publication_return_no_receipt',
+    'sumeragi::executor::validation_refusal_tests::prepared_certificate_busy_retries_same_execution_after_original_reader_release',
+    'publication_rwlock::tests::admitted_reader_control_preserves_original_refusal_and_outlives_its_lock',
+    'publication_lock::admitted_control_tests::original_fence_control_is_fallible_and_retained_by_its_release_observation',
+    'state::deserialize::kagemusha_registry_persistence_tests::runtime_reload_world_reader_notifications_follow_commit_fence_release',
+)), )
+CORE_STAGES += CORE_STATE_VIEW_CONSUMER_STAGES
+CORE_STARTUP_STAGES += CORE_STATE_VIEW_CONSUMER_STAGES
+CORE_ADMISSION_STARTUP_STAGES += CORE_STATE_VIEW_CONSUMER_STAGES
+
 
 # Portable ownership prerequisites; every selected leaf runs in both scopes.
-MV_OWNERSHIP_HARNESSES = ("allocation", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread")
+MV_OWNERSHIP_HARNESSES = ("allocation", "allocation-shared", "mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread")
 
 ALLOCATION_OWNERSHIP_STAGES = (('finite resident allocation pool', (
     'tests::charge_keeps_original_pool_alive_after_budget_handle_is_dropped',
@@ -1746,7 +1810,7 @@ ALLOCATION_OWNERSHIP_STAGES = (('finite resident allocation pool', (
 )),
     ('native physical release ownership', (
         'release::tests::release_before_registration_is_retained_and_other_sources_do_not_wake',
-        'release::tests::first_registered_wake_can_reenter_both_initialized_notification_locks',
+        'release::tests::first_registered_wake_reenters_unlocked_source_after_original_node_is_detached',
         'release::tests::panicking_first_waker_still_notifies_the_remaining_original_cohort',
         'release::tests::cancellation_and_waker_replacement_do_not_steal_another_wait',
         'release::tests::replacing_a_waker_allows_its_destructor_to_observe_the_same_source',
@@ -1770,9 +1834,40 @@ ALLOCATION_OWNERSHIP_STAGES = (('finite resident allocation pool', (
         'release::tests::deferred_notice_merge_retains_exact_source_and_never_wakes_early',
         'release::tests::deferred_notice_merge_preserves_poison_after_rejected_transfer',
     )),
+
+    ('prepaid reusable release registration', (
+        'release::registration_tests::exact_registration_refusal_preserves_reservation_and_original_pool',
+        'release::registration_tests::original_registration_rearms_cancels_and_releases_without_allocating',
+        'release::registration_tests::source_replacement_and_old_releases_never_consume_new_callback',
+        'release::registration_tests::wake_callback_rearming_same_node_stays_outside_original_cohort',
+        'release::registration_tests::forgotten_borrowed_future_still_unlinks_and_refunds_its_original_registration',
+        'release::registration_tests::registration_retains_completed_source_until_cancel_and_saturation_is_ready',
+    )),
+    ('original funded shared wake control', (
+        'shared::wake_tests::charged_waker_conversion_clones_callbacks_and_final_drop_allocate_nothing',
+        'shared::wake_tests::consumed_and_borrowed_wake_panics_preserve_exact_reference_custody',
+        'shared::wake_tests::refused_wake_control_returns_unchanged_target_before_any_waker_exists',
+    )),
 )
 
+ALLOCATION_SHARED_STAGES = (("actual shared waker deallocation custody", (
+    "charged_waker_keeps_exact_physical_control_until_last_consumed_wake",
+)),)
+
 MV_OWNERSHIP_STAGES = (
+    ("actual Cell writer availability during custody cleanup", (
+        'cell::test_support::tests::physical_probe_distinguishes_poison_from_each_held_original_writer',
+        'cell::test_support::tests::physical_probe_during_unwind_preserves_healthy_and_poisoned_originals',
+    )),
+    ("original Cell partial acquisition and physical contention", (
+        'cell::partial_acquisition_tests::physical_writer_contention_retains_prepaid_pair_and_exact_release_without_blocking',
+        'cell::partial_acquisition_tests::fallible_poison_retains_original_guards_without_poisoning_healthy_sibling',
+        'cell::partial_acquisition_tests::second_clone_unwind_releases_both_original_writers_before_either_wake',
+        'cell::partial_acquisition_tests::failed_second_clone_refunds_finished_undo_but_retains_its_own_charge',
+        'cell::partial_acquisition_tests::already_poisoned_second_writer_refunds_unused_and_abandoned_charges',
+        'cell::partial_acquisition_tests::first_clone_unwind_releases_both_preacquired_writers',
+        'cell::partial_acquisition_tests::completed_pair_keeps_notifications_until_consumption',
+    )),
     ("caller-owned capture and original notification custody", (
         'capture_tests::capture_slots_keep_exact_ordinary_and_replacement_journals_until_all_writers_release',
         'capture_tests::capture_slots_keep_successful_sibling_through_admission_refusal_and_caught_panic',
@@ -1859,6 +1954,9 @@ MV_OWNERSHIP_STAGES = (
         'storage::publication_tests::replacement_restores_discarded_tip_only_keys_and_candidate_undo',
         'storage::publication_tests::untouched_noop_and_absent_touches_publish_exact_undo_transitions',
         'cell::publication_tests::prepared_cell_identity_and_cleanup_remain_owned_through_aggregate_unlock',
+    )),
+    ('original nonblocking current Storage reader', (
+        'storage::current_reader_tests::original_current_reader_retains_busy_and_defers_unlock_notification',
     )),
     ('move-only Storage journal detachment', (
         'storage::detached_tests::aborted_children_and_noop_touches_survive_detachment_without_invented_entries',
@@ -2147,6 +2245,7 @@ CONCREAD_STAGES = (
         'internals::lincowcell::identity_preparation_tests::reader_wake_unwind_preserves_physical_poison_and_original_commit',
     )),
     ('admitted B+ tree planning and retained edits', (
+        'bptree::admission::tests::acquired_writer_footprint_refusal_retries_same_guard_without_early_release',
         'bptree::admission::tests::acquired_admission_refusal_retains_actual_writer_and_deferred_release',
         'bptree::admission::tests::acquired_admission_busy_poison_and_unwind_preserve_real_custody',
         'bptree::admission::tests::acquired_admission_success_and_planning_refusal_preserve_original_input',
@@ -2315,6 +2414,78 @@ DATA_MODEL_STAGES += (("native selective execution inclusion", (
     "query::canonical_output_inclusion_tests::selective_inclusion_binds_both_qc_roots_counts_network_and_source_join",
 )),)
 
+# Shared block control and all consuming read boundaries use the original finite owner.
+MODEL_SHARED_BLOCK_STAGES = (("original immutable shared block controls", (
+    'block::shared::tests::shared_block_moves_original_graph_and_retains_credit_through_final_clone',
+    'block::shared::tests::shared_block_refusal_returns_same_graph_and_prepaid_shortage_preserves_parent',
+    'block::shared::tests::prepaid_shared_block_shell_can_be_cancelled_or_initialized_without_new_admission',
+)),)
+DATA_MODEL_STAGES += MODEL_SHARED_BLOCK_STAGES
+
+CORE_SHARED_BLOCK_HISTORY_STAGES = (("original canonical history and hydration refusal", (
+    'kura::tests::startup_history_retains_original_cold_kura_refusal_and_exact_retry',
+    'kura::tests::canonical_cold_read_control_refusal_retains_release_owner_and_exact_retry',
+    'kura::tests::canonical_cold_read_budget_refusal_preserves_storage_and_retry',
+    'kura::tests::authenticated_da_body_read_refuses_oversized_occupied_file_without_repair',
+    'kura::tests::executed_history_denial_precedes_cold_body_decode_and_projection',
+    'state::tests::da_hydration_test_cases::da_hydration_capacity_refusal_preserves_indexes_and_original_retry_owner',
+    'state::da_hydration::release_tests::hydration_source_reader_callbacks_follow_rebuild_fences_on_success_and_failure',
+    'state::da_hydration::release_tests::original_cold_da_refunds_follow_all_rebuild_and_rewind_writers',
+    'state::world_commit::tests::actual_state_commit_publishes_prepared_da_despite_ahead_cache',
+    'state::axt_source_transfer_tests::finalized_source_capacity_refusal_retains_original_owner_and_exact_claim',
+    'snapshot::tests::snapshot_commit_evidence_refusal_retains_original_pool_and_captured_publication',
+    'telemetry::tests::classified_status_tests::cold_status_history_refusal_retains_original_pool_and_unpublished_counters',
+    'telemetry::tests::classified_status_tests::cold_genesis_uptime_refusal_remains_deferred_after_classified_prefix',
+    'sumeragi::lanes::executor::native_decode_tests::anchor_read_refusal_retains_original_lane_body_until_capacity_returns',
+    'sumeragi::lanes::evidence::tests::anchor_history_refusal_retains_exact_source_through_lane_evidence_retry',
+)),)
+CORE_STAGES += CORE_SHARED_BLOCK_HISTORY_STAGES
+CORE_STARTUP_STAGES += CORE_SHARED_BLOCK_HISTORY_STAGES
+CORE_ADMISSION_STARTUP_STAGES += CORE_SHARED_BLOCK_HISTORY_STAGES
+
+CORE_CANONICAL_XOR_STAGES = (("exact network XOR scope precision and rollback", (
+    'state::network_xor::tests::network_xor_rejects_wrong_definition_scope_and_precision',
+    'state::stake_reserves::tests::pinned_stake_custody_rejects_wrong_xor_scope_and_precision',
+    'state::stake_reserves::tests::pinned_stake_custody_snapshot_rejects_wrong_precision_in_both_cuts',
+    'state::reward_reserves::tests::reward_reserves_reject_wrong_xor_scope_and_precision',
+    'state::reward_reserves::tests::reward_reserves_snapshot_rejects_wrong_precision_in_both_cuts',
+    'smartcontracts::isi::staking::tests::staking_registration_rejects_wrong_xor_shape_with_transaction_rollback',
+    'smartcontracts::isi::staking::tests::reward_claim_rejects_wrong_xor_shape_with_transaction_rollback',
+)),)
+CORE_STAGES += CORE_CANONICAL_XOR_STAGES
+CORE_STARTUP_STAGES += CORE_CANONICAL_XOR_STAGES
+CORE_ADMISSION_STARTUP_STAGES += CORE_CANONICAL_XOR_STAGES
+CORE_NATIVE_STAKING_PENALTY_STAGES = (("authenticated detector and funded XOR penalties", (
+    'sumeragi::evidence_history::lane::tests::native_lane_original_genesis_escrow_is_debited_only_by_delayed_authenticated_admission',
+    'sumeragi::evidence::tests::original_carrier_admits_then_finality_terminalizes_exact_parent_evidence',
+    'sumeragi::evidence::tests::same_block_proof_cannot_authorize_a_penalty',
+)),)
+CORE_STAGES += CORE_NATIVE_STAKING_PENALTY_STAGES
+CORE_STARTUP_STAGES += CORE_NATIVE_STAKING_PENALTY_STAGES
+CORE_ADMISSION_STARTUP_STAGES += CORE_NATIVE_STAKING_PENALTY_STAGES
+KAGAMI_CANONICAL_XOR_STAGES = (("generated and verified canonical network XOR", (
+    'genesis::generate::consensus_manifest_tests::every_network_xor_is_generated_with_global_scale_nine',
+    'verify::tests::public_xor_verification_rejects_wrong_scope_and_precision',
+)),)
+KAGAMI_STAGES += KAGAMI_CANONICAL_XOR_STAGES
+
+TORII_SHARED_BLOCK_HISTORY_STAGES = (("original history capacity through HTTP streams and recovery", (
+    'routing::multisig_contract_call_tests::original_contract_vrf_policy_refusal_is_unfinished_and_same_source_retries',
+    'canonical_history::tests::original_block_proof_refusal_remains_retryable_instead_of_missing_or_corrupt',
+    'canonical_history::tests::original_da_hydration_refusal_remains_retryable_instead_of_an_empty_index',
+    'da::commitments::tests::original_commitment_history_capacity_is_retryable_for_prove_and_verify',
+    'da::pin_intents::tests::original_pin_history_capacity_is_retryable_for_prove_and_verify',
+    'routing::block::tests::original_block_history_refusal_closes_retryably_without_erasing_owner',
+    'routing::event::tests::original_event_history_refusal_closes_retryably_without_visibility_fallback',
+    'routing::sse_stream_tests::original_event_history_capacity_is_terminal_and_never_silent_sse_filtering',
+    'routing::explorer_body_read_tests::original_explorer_body_refusal_and_corruption_cannot_become_hash_only_metadata',
+    'tests_runtime_handlers::original_history_pool_refusal_preserves_pending_status_and_refuses_visibility_and_health',
+    'push::tests::original_push_history_capacity_preserves_cursor_queue_and_pool_release',
+    'push::tests::push_history_retry_waits_only_on_original_release_and_remains_shutdown_responsive',
+    'push::tests::push_worker_admits_original_retry_control_before_startup_and_refunds_after_shutdown',
+)),)
+TORII_UNIT_STAGES += TORII_SHARED_BLOCK_HISTORY_STAGES
+
 # Exact native owners supplement the independent application and custody regressions above.
 _NATIVE_CURRENT_STAGES = native_owner_stages(exclude=("native durable archive recovery",))
 CORE_STAGES += _NATIVE_CURRENT_STAGES
@@ -2327,6 +2498,7 @@ def qualification_stages(qualification_scope: str = "basic") -> dict[str, tuple]
         raise CheckError("native qualification scope must be basic or full")
     selected = {
         "allocation": ALLOCATION_OWNERSHIP_STAGES,
+        "allocation-shared": ALLOCATION_SHARED_STAGES,
         "mv": MV_OWNERSHIP_STAGES, "mv-ebr": MV_EBR_STAGES, "mv-map": MV_MAP_STAGES,
         "mv-admitted-map": MV_ADMITTED_MAP_STAGES, "concread": CONCREAD_STAGES,
         "config": CONFIG_STAGES, "config-fixtures": CONFIG_FIXTURE_STAGES, "config-unit": CONFIG_UNIT_STAGES, "genesis": GENESIS_STAGES, "data-model": DATA_MODEL_STAGES,
@@ -4003,7 +4175,9 @@ def validate_mv_test_registration(root: Path) -> None:
         ("cell::publication_tests::", "cell.rs", "cell/publication_tests.rs", "publication_tests"),
         ("cell::aggregate_acquisition_tests::", "cell.rs", "cell/aggregate_acquisition_tests.rs", "aggregate_acquisition_tests"),
         ("cell::fresh_pair_acquisition_tests::", "cell.rs", "cell/fresh_pair_acquisition_tests.rs", "fresh_pair_acquisition_tests"),
+        ("cell::partial_acquisition_tests::", "cell.rs", "cell/partial_acquisition_tests.rs", "partial_acquisition_tests"),
         ("storage::publication_tests::", "storage.rs", "storage/publication_tests.rs", "publication_tests"),
+        ("storage::current_reader_tests::", "storage.rs", "storage/current_reader_tests.rs", "current_reader_tests"),
         ("storage::aggregate_acquisition_tests::", "storage.rs", "storage/aggregate_acquisition_tests.rs", "aggregate_acquisition_tests"),
         ("storage::detached_tests::", "storage.rs", "storage/detached_tests.rs", "detached_tests"),
         ("storage::admitted_tests::", "storage.rs", "storage/admitted_tests.rs", "admitted_tests"),
@@ -4022,10 +4196,10 @@ def validate_mv_test_registration(root: Path) -> None:
             return sources[relative]
         def edge(parent, child, name):
             text, masked = source(parent)
-            pattern = r'^#\[path = "' + re.escape(child) + r'"\]\s*\nmod ' + re.escape(name) + r';'
+            pattern = r'^#\[path = "' + re.escape(child) + r'"\]\s*\n(?:pub )?mod ' + re.escape(name) + r';'
             matches = [match for match in re.finditer(pattern, text, re.MULTILINE)
                        if masked[match.start():match.start() + 2] == "#["]
-            declarations = list(re.finditer(r'^mod ' + re.escape(name) + r';$', masked, re.MULTILINE))
+            declarations = list(re.finditer(r'^(?:pub )?mod ' + re.escape(name) + r';$', masked, re.MULTILINE))
             if not matches and child == name + ".rs":
                 # Rust's default sibling path is exact too. Inspect the complete
                 # attribute prefix so a foreign #[path] cannot masquerade as it.
@@ -4051,6 +4225,23 @@ def validate_mv_test_registration(root: Path) -> None:
                 before = masked[:match.start()]
                 if before.count("{") == before.count("}"):
                     available.append(prefix + match.group(1))
+        edge("cell.rs", "cell/test_support.rs", "test_support")
+        diagnostic = source("cell/test_support.rs")[1]
+        modules = list(re.finditer(r'^mod tests\s*\{', diagnostic, re.MULTILINE))
+        if len(modules) != 1:
+            raise ValueError("registered MV inline test module differs: cell::test_support::tests")
+        start = modules[0].end()
+        depth, end = 1, start
+        while depth and end < len(diagnostic):
+            depth += (diagnostic[end] == "{") - (diagnostic[end] == "}")
+            end += 1
+        if depth or diagnostic[:start].count("{") != diagnostic[:start].count("}") + 1:
+            raise ValueError("registered MV inline test module scope differs: cell::test_support::tests")
+        body = diagnostic[start:end - 1]
+        for match in re.finditer(r'^[ \t]*#\[test\]\s*\n[ \t]*fn (\w+)\s*\(', body, re.MULTILINE):
+            before = body[:match.start()]
+            if before.count("{") == before.count("}"):
+                available.append("cell::test_support::tests::" + match.group(1))
         selected = [name for _, names in MV_OWNERSHIP_STAGES for name in names]
         missing = [name for name in selected if available.count(name) != 1]
         if len(selected) != len(set(selected)) or missing:
@@ -4063,9 +4254,15 @@ def validate_mv_test_registration(root: Path) -> None:
         if len(re.findall(r'^pub mod release;$', source("lib.rs")[1], re.MULTILINE)) != 1:
             raise ValueError("registered allocation crate module differs: release")
         edge("release.rs", "release_tests.rs", "tests")
+        edge("release.rs", "release_registration_tests.rs", "registration_tests")
+        if len(re.findall(r"^pub mod shared;$", source("lib.rs")[1], re.MULTILINE)) != 1:
+            raise ValueError("registered allocation crate module differs: shared")
+        edge("shared.rs", "shared_wake_tests.rs", "wake_tests")
         available = []
         for prefix, child in (("tests::", "allocation_tests.rs"),
-                              ("release::tests::", "release_tests.rs")):
+                              ("release::tests::", "release_tests.rs"),
+                              ("release::registration_tests::", "release_registration_tests.rs"),
+                              ("shared::wake_tests::", "shared_wake_tests.rs")):
             masked = source(child)[1]
             available.extend(prefix + match.group(1) for match in re.finditer(
                 r'^#\[test\]\s*\nfn (\w+)\s*\(', masked, re.MULTILINE
@@ -4074,6 +4271,17 @@ def validate_mv_test_registration(root: Path) -> None:
         missing = [name for name in selected if available.count(name) != 1]
         if len(selected) != len(set(selected)) or missing:
             raise ValueError("registered allocation test lacks one actual source definition: " + ", ".join(missing))
+        manifest = tomllib.loads((package.parent / "Cargo.toml").read_text())
+        _, target, kind, arguments = HARNESS_TARGETS["allocation-shared"]
+        targets = [row for row in manifest.get("test", []) if row.get("name") == target]
+        if (kind != "test" or arguments != ["-p", "iroha_allocation", "--test", target]
+                or len(targets) != 1 or targets[0].get("path") != "tests/charged_shared_custody.rs"):
+            raise ValueError("registered allocation shared test target differs")
+        text = mask((package.parent / targets[0]["path"]).read_text())
+        available = re.findall(r"^#\[test\]\s*\nfn (\w+)\s*\(", text, re.MULTILINE)
+        selected = [name for _, names in ALLOCATION_SHARED_STAGES for name in names]
+        if len(selected) != len(set(selected)) or any(available.count(name) != 1 for name in selected):
+            raise ValueError("registered allocation shared test lacks one actual source definition")
     except (OSError, UnicodeError, KeyError, TypeError, ValueError) as error:
         raise CheckError("MV test source registration failed: " + str(error)) from error
 

@@ -1,7 +1,6 @@
 use crate::workspace_root;
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey, PublicKey, Signature, SignatureOf};
 use norito::{
-    core::to_bytes,
     json::{self, Map as NoritoMap, Number as NoritoNumber, Value as NoritoValue},
     streaming::{
         RansGroupTableV1, RansTablesBodyV1, RansTablesSignatureV1, RansTablesV1,
@@ -10,7 +9,6 @@ use norito::{
 };
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-use sha2::{Digest, Sha256};
 use std::{
     error::Error,
     fs,
@@ -101,7 +99,7 @@ pub fn execute_rans_tables(options: RansTablesOptions) -> Result<(), Box<dyn Err
         return Ok(());
     }
     let mut payload = build_payload(options.seed, options.bundle_width)?;
-    let checksum = compute_checksum(&payload.body)?;
+    let checksum = payload.body.checksum_sha256()?;
     payload.checksum_sha256 = checksum;
     let signature = if let Some(path) = options.signing_key.as_ref() {
         Some(sign_payload(&payload, path)?)
@@ -266,11 +264,6 @@ fn normalize_frequencies(frequencies: &mut [u32], target_sum: u32) {
         normalize_frequencies(frequencies, target_sum);
     }
 }
-fn compute_checksum(body: &RansTablesBodyV1) -> Result<[u8; 32], Box<dyn Error>> {
-    let bytes = to_bytes(body)?;
-    let digest = Sha256::digest(bytes);
-    Ok(digest.into())
-}
 fn sign_payload(
     payload: &RansTablesV1,
     key_path: &Path,
@@ -305,7 +298,7 @@ fn sign_payload(
         signature: signature_bytes,
     })
 }
-fn signed_tables_to_value(signed: &SignedRansTablesV1) -> NoritoValue {
+fn signed_tables_to_value(signed: &SignedRansTablesV1) -> Result<NoritoValue, Box<dyn Error>> {
     let mut map = NoritoMap::new();
     map.insert("payload".to_string(), payload_to_value(&signed.payload));
     map.insert(
@@ -314,9 +307,10 @@ fn signed_tables_to_value(signed: &SignedRansTablesV1) -> NoritoValue {
             .signature
             .as_ref()
             .map(signature_to_value)
+            .transpose()?
             .unwrap_or(NoritoValue::Null),
     );
-    NoritoValue::Object(map)
+    Ok(NoritoValue::Object(map))
 }
 fn payload_to_value(payload: &RansTablesV1) -> NoritoValue {
     let mut map = NoritoMap::new();
@@ -381,13 +375,11 @@ fn group_to_value(group: &RansGroupTableV1) -> NoritoValue {
     map.insert("cumulative".to_string(), NoritoValue::Array(cumulative));
     NoritoValue::Object(map)
 }
-fn signature_to_value(signature: &RansTablesSignatureV1) -> NoritoValue {
+fn signature_to_value(signature: &RansTablesSignatureV1) -> Result<NoritoValue, Box<dyn Error>> {
     let mut map = NoritoMap::new();
     map.insert(
         "algorithm".to_string(),
-        NoritoValue::String(match signature.algorithm {
-            SignatureAlgorithm::Ed25519 => "Ed25519".to_string(),
-        }),
+        json::to_value(&signature.algorithm)?,
     );
     map.insert(
         "public_key".to_string(),
@@ -397,7 +389,7 @@ fn signature_to_value(signature: &RansTablesSignatureV1) -> NoritoValue {
         "signature".to_string(),
         NoritoValue::String(hex::encode_upper(signature.signature)),
     );
-    NoritoValue::Object(map)
+    Ok(NoritoValue::Object(map))
 }
 fn signed_tables_from_value(value: &NoritoValue) -> Result<SignedRansTablesV1, Box<dyn Error>> {
     let map = value
@@ -544,14 +536,8 @@ fn signature_from_value(value: &NoritoValue) -> Result<RansTablesSignatureV1, Bo
         .ok_or_else(|| "signature must be an object".to_string())?;
     let algorithm = map
         .get("algorithm")
-        .and_then(NoritoValue::as_str)
-        .ok_or_else(|| "signature.algorithm must be a string".to_string())?;
-    let algorithm = match algorithm {
-        "Ed25519" => SignatureAlgorithm::Ed25519,
-        other => {
-            return Err(format!("unsupported signature algorithm `{other}`").into());
-        }
-    };
+        .ok_or_else(|| "signature.algorithm is required".to_string())?;
+    let algorithm = json::from_value::<SignatureAlgorithm>(algorithm.clone())?;
     let public_key_hex = map
         .get("public_key")
         .and_then(NoritoValue::as_str)
@@ -586,13 +572,13 @@ fn write_artifact(
     }
     match format {
         OutputFormat::Json => {
-            let json_value = signed_tables_to_value(signed);
+            let json_value = signed_tables_to_value(signed)?;
             let mut text = json::to_json_pretty(&json_value)?;
             text.push('\n');
             fs::write(path, text)?;
         }
         OutputFormat::Toml => {
-            let json_value = signed_tables_to_value(signed);
+            let json_value = signed_tables_to_value(signed)?;
             let toml_value = norito_to_toml(&json_value)?
                 .ok_or("signed rANS tables must not serialize to null")?;
             let mut text = toml::to_string_pretty(&toml_value)?;
@@ -646,7 +632,7 @@ fn verify_artifact(path: &Path) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 fn verify_payload(signed: &SignedRansTablesV1) -> Result<(), Box<dyn Error>> {
-    let expected_checksum = compute_checksum(&signed.payload.body)?;
+    let expected_checksum = signed.payload.body.checksum_sha256()?;
     if expected_checksum != signed.payload.checksum_sha256 {
         return Err("checksum mismatch".into());
     }
@@ -783,7 +769,7 @@ mod tests {
     use tempfile::{NamedTempFile, TempDir};
     fn sample_payload(seed: u64) -> RansTablesV1 {
         let body = generate_body(seed, MAX_BUNDLE_WIDTH).expect("generate deterministic body");
-        let checksum = compute_checksum(&body).expect("compute checksum");
+        let checksum = body.checksum_sha256().expect("compute checksum");
         RansTablesV1 {
             version: 1,
             generated_at: 1,
@@ -942,6 +928,32 @@ mod tests {
         }
     }
     #[test]
+    fn signature_value_uses_canonical_algorithm_and_refuses_other_spellings() {
+        let signature = RansTablesSignatureV1 {
+            algorithm: SignatureAlgorithm::Ed25519,
+            public_key: [0x11; 32],
+            signature: [0x22; 64],
+        };
+        let value = signature_to_value(&signature).expect("encode signature wrapper");
+        assert_eq!(
+            value.get("algorithm").and_then(NoritoValue::as_str),
+            Some("ed25519")
+        );
+        assert_eq!(
+            signature_from_value(&value).expect("decode canonical wrapper"),
+            signature
+        );
+        for spelling in ["Ed25519", "ED25519", "ed_25519", ""] {
+            let mut changed = value.as_object().expect("signature wrapper object").clone();
+            changed.insert(
+                "algorithm".to_owned(),
+                NoritoValue::String(spelling.to_owned()),
+            );
+            assert!(signature_from_value(&NoritoValue::Object(changed)).is_err());
+        }
+    }
+
+    #[test]
     fn write_and_parse_artifacts() {
         let payload = sample_payload(1234);
         let key_file = write_ed25519_key([0x22; 32]);
@@ -965,6 +977,15 @@ mod tests {
         assert_eq!(parsed_toml, signed);
         verify_artifact(&json_path).expect("verify json artefact");
         verify_artifact(&toml_path).expect("verify toml artefact");
+        for flags in [0, norito::core::header_flags::COMPACT_LEN] {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+            let loaded = norito::streaming::load_bundle_tables_from_toml(&toml_path)
+                .expect("native producer output must pass the runtime table loader");
+            assert_eq!(loaded.checksum(), payload.checksum_sha256);
+            assert_eq!(loaded.max_width(), payload.body.bundle_width);
+            assert_eq!(loaded.precision_bits(), DEFAULT_PRECISION_BITS);
+            assert_eq!(norito::core::effective_decode_flags(), Some(flags));
+        }
         let csv_text = fs::read_to_string(&csv_path).expect("read csv");
         let mut lines = csv_text.lines();
         assert_eq!(

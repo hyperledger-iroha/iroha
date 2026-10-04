@@ -1,0 +1,1229 @@
+//! Paid native participants over independent signed roots, genuine record archives and replay.
+
+use super::*;
+use crate::{
+    state::World,
+    sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+};
+use iroha_crypto::{Algorithm, KeyPair};
+use iroha_data_model::{
+    account::Account,
+    asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId},
+    isi::{
+        Grant, InstructionBox, Mint, Register, Transfer, Unregister,
+        sumeragi_amx::{BeginAmxV1, RegisterAmxDataspaceV1, RelayAmxPreparedV1},
+    },
+    nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig},
+    sumeragi_amx::{AmxRecordKind, AmxTransactionV1, AmxVoteV1},
+    sumeragi_finality::genesis_epoch,
+};
+use iroha_model_base::{chain::ChainId, domain::DomainId};
+use iroha_primitives::numeric::{Numeric, Quantity};
+
+const FIRST: DataSpaceId = DataSpaceId::new((1_u64 << 40) + 117);
+const SECOND: DataSpaceId = DataSpaceId::new((1_u64 << 40) + 118);
+
+fn payer() -> KeyPair {
+    KeyPair::from_seed(vec![0x51; 32], Algorithm::Ed25519)
+}
+fn receiver() -> KeyPair {
+    KeyPair::from_seed(vec![0x52; 32], Algorithm::Ed25519)
+}
+fn account(key: &KeyPair) -> AccountId {
+    AccountId::new(key.public_key().clone())
+}
+fn principal() -> AssetDefinitionId {
+    AssetDefinitionId::derive_from_components(
+        DomainId::try_new("amx", "private-amx").unwrap(),
+        "principal".parse().unwrap(),
+    )
+}
+fn fee_asset() -> AssetDefinitionId {
+    AssetDefinitionId::parse_address_literal(
+        &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+    )
+    .unwrap()
+}
+fn global_config() -> TestChainConfig {
+    let mut config = TestChainConfig::new(World::new(), 1_000);
+    config.genesis_instructions.push(
+        Grant::account_permission(
+            iroha_executor_data_model::permission::parameter::CanSetParameters,
+            account(&config.genesis_key),
+        )
+        .into(),
+    );
+    config
+}
+
+fn private_config(global: &CertifiedTestChain, id: DataSpaceId) -> TestChainConfig {
+    let mut config = TestChainConfig::new(World::new(), 1_000);
+    config.chain_id = ChainId::from("native-amx-private-root");
+    config.root_scope = SumeragiRootScope::Dataspace {
+        parent_network_id: global.network_id(),
+        dataspace_id: id,
+    };
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.lane_catalog = LaneCatalog::new(
+        1_u32.try_into().unwrap(),
+        vec![LaneConfig {
+            dataspace_id: id,
+            alias: "private-amx".into(),
+            ..LaneConfig::default()
+        }],
+    )
+    .unwrap();
+    nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+    nexus.lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+    nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+        id,
+        alias: "private-amx".into(),
+        description: None,
+        fault_tolerance: 1,
+    }])
+    .unwrap();
+    nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
+    nexus.routing_policy.default_dataspace = id;
+    nexus.fees.fee_asset_id = fee_asset().canonical_address();
+    nexus.fees.fee_sink_account_id = account(&config.genesis_key).to_string();
+    nexus.fees.base_fee = Quantity::zero();
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
+    config.nexus = Some(nexus);
+    config
+        .genesis_parameters
+        .push(iroha_data_model::parameter::Parameter::Custom(
+            iroha_data_model::block::consensus::PrivateRootFeePolicy {
+                asset_definition_id: fee_asset(),
+                base_fee: 1_u32.into(),
+                per_byte_fee: Quantity::zero(),
+                per_instruction_fee: 1_u32.into(),
+                per_gas_unit_fee: 1_u32.into(),
+            }
+            .into_custom_parameter()
+            .unwrap(),
+        ));
+    config.pipeline.gas.tech_account_id = account(&config.genesis_key).to_string();
+    config.pipeline.gas.accepted_assets = vec![fee_asset().canonical_address()];
+    config.pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
+        asset: fee_asset().canonical_address(),
+        units_per_gas: 1,
+        twap_local_per_xor: Numeric::one(),
+        liquidity: iroha_config::parameters::actual::GasLiquidity::Tier2,
+        volatility: iroha_config::parameters::actual::GasVolatility::Stable,
+    }];
+    let domain = DomainId::try_new("amx", "private-amx").unwrap();
+    config.genesis_instructions = vec![
+        Register::account(Account::new(account(&payer()))).into(),
+        Register::account(Account::new(account(&receiver()))).into(),
+        Register::domain(iroha_data_model::domain::Domain::new(domain.clone())).into(),
+        Register::asset_definition(AssetDefinition::numeric(
+            fee_asset(),
+            "AMX fee",
+            AssetBalancePolicy::DataspaceRestricted,
+            Some(domain.clone()),
+        ))
+        .into(),
+        Register::asset_definition(AssetDefinition::numeric(
+            principal(),
+            "AMX principal",
+            AssetBalancePolicy::DataspaceRestricted,
+            Some(domain),
+        ))
+        .into(),
+        Mint::asset_quantity(
+            1_000_000_u32,
+            AssetId::with_scope(
+                fee_asset(),
+                account(&payer()),
+                AssetBalanceScope::Dataspace(id),
+            ),
+        )
+        .into(),
+        Mint::asset_quantity(
+            1_000_000_u32,
+            AssetId::with_scope(
+                fee_asset(),
+                account(&receiver()),
+                AssetBalanceScope::Dataspace(id),
+            ),
+        )
+        .into(),
+        Mint::asset_quantity(
+            1_000_u32,
+            AssetId::with_scope(
+                principal(),
+                account(&payer()),
+                AssetBalanceScope::Dataspace(id),
+            ),
+        )
+        .into(),
+        RegisterAmxParticipantV1 {
+            dataspace: id,
+            global_chain_id: global_config().chain_id,
+            global_genesis: global.committed(1).block().encode_wire().unwrap(),
+            global_successor: global.committed(2).block().encode_wire().unwrap(),
+        }
+        .into(),
+    ];
+    // Every ordinary private fixture transaction, including clock work and negative controls,
+    // pays the real signed private fee policy from its own restricted balance partition.
+    for key in [
+        config.genesis_key.clone(),
+        KeyPair::from_seed(vec![0xCC; 32], Algorithm::Ed25519),
+    ] {
+        config.genesis_instructions.push(
+            Mint::asset_quantity(
+                1_000_000_u32,
+                AssetId::with_scope(fee_asset(), account(&key), AssetBalanceScope::Dataspace(id)),
+            )
+            .into(),
+        );
+    }
+    config
+}
+
+struct Roots {
+    global: CertifiedTestChain,
+    participants: [CertifiedTestChain; 2],
+}
+impl Roots {
+    fn new() -> Self {
+        let mut global = CertifiedTestChain::start(global_config()).unwrap();
+        let first = global.sign(
+            &global_config().genesis_key,
+            [iroha_data_model::isi::Log::new(
+                iroha_logger::Level::INFO,
+                "authenticate native AMX global genesis".into(),
+            )
+            .into()],
+            1_499,
+        );
+        assert_eq!(global.commit_at(1_500, vec![first]), vec![true]);
+        let participants = [FIRST, SECOND]
+            .map(|id| CertifiedTestChain::start(private_config(&global, id)).unwrap());
+        assert_ne!(participants[0].network_id(), participants[1].network_id());
+        assert!(
+            !participants[0]
+                .state()
+                .ivm_execution_budget()
+                .same_pool(&participants[1].state().ivm_execution_budget())
+        );
+        assert_ne!(
+            participants[0].kura().store_root(),
+            participants[1].kura().store_root()
+        );
+        let registrations = [FIRST, SECOND]
+            .into_iter()
+            .zip(&participants)
+            .map(|(id, chain)| {
+                RegisterAmxDataspaceV1 {
+                    dataspace: id,
+                    instance: chain.instance().0,
+                    anchor: norito::encode_canonical(&genesis_epoch(chain.genesis()).unwrap())
+                        .unwrap(),
+                }
+                .into()
+            })
+            .collect::<Vec<InstructionBox>>();
+        let signed = global.sign(&global_config().genesis_key, registrations, 1_999);
+        assert_eq!(global.commit_at(2_000, vec![signed]), vec![true]);
+        Self {
+            global,
+            participants,
+        }
+    }
+    fn transaction(&self, amount: u32, nonce: u8) -> AmxTransactionV1 {
+        AmxTransactionV1 {
+            legs: [FIRST, SECOND]
+                .into_iter()
+                .map(|id| AmxLegV1 {
+                    dataspace: id,
+                    payload: norito::encode_canonical(&AmxTransferLegV1 {
+                        source: AssetId::with_scope(
+                            principal(),
+                            account(&payer()),
+                            AssetBalanceScope::Dataspace(id),
+                        ),
+                        destination: account(&receiver()),
+                        amount: amount.into(),
+                    })
+                    .unwrap(),
+                })
+                .collect(),
+            deadline: self.global.height() + 20,
+            nonce: [nonce; 32],
+        }
+    }
+    fn begin(
+        &mut self,
+        transaction: &AmxTransactionV1,
+    ) -> iroha_data_model::sumeragi_amx::AmxRecordProofV1 {
+        let signed = self.global.sign(
+            &global_config().genesis_key,
+            [BeginAmxV1 {
+                transaction: transaction.clone(),
+            }
+            .into()],
+            2_999,
+        );
+        assert_eq!(self.global.commit_at(3_000, vec![signed]), vec![true]);
+        super::super::amx_record_proof(
+            &self.global.state().view(),
+            self.global.height(),
+            AmxRecordKind::Begin,
+            transaction.id().unwrap(),
+        )
+        .unwrap()
+        .unwrap()
+    }
+    fn prepare(
+        &mut self,
+        index: usize,
+        transaction: &AmxTransactionV1,
+        begin: &iroha_data_model::sumeragi_amx::AmxRecordProofV1,
+    ) -> iroha_data_model::sumeragi_amx::AmxRecordProofV1 {
+        self.prepare_at(index, transaction, begin, 4_000)
+    }
+    fn prepare_at(
+        &mut self,
+        index: usize,
+        transaction: &AmxTransactionV1,
+        begin: &iroha_data_model::sumeragi_amx::AmxRecordProofV1,
+        timestamp_ms: u64,
+    ) -> iroha_data_model::sumeragi_amx::AmxRecordProofV1 {
+        let id = [FIRST, SECOND][index];
+        let chain = &mut self.participants[index];
+        let signed = chain.sign(
+            &payer(),
+            [PrepareAmxV1 {
+                dataspace: id,
+                transaction: transaction.clone(),
+                begin: begin.clone(),
+            }
+            .into()],
+            timestamp_ms.checked_sub(1).unwrap(),
+        );
+        assert_eq!(chain.commit_at(timestamp_ms, vec![signed]), vec![true]);
+        let proof = super::super::amx_record_proof(
+            &chain.state().view(),
+            chain.height(),
+            AmxRecordKind::Prepared,
+            transaction.id().unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(
+            proof.block.commit_qc.len() > 0,
+            "original signed certificate"
+        );
+        proof
+    }
+    fn decide(
+        &mut self,
+        proofs: impl IntoIterator<Item = iroha_data_model::sumeragi_amx::AmxRecordProofV1>,
+        tx: [u8; 32],
+    ) -> iroha_data_model::sumeragi_amx::AmxRecordProofV1 {
+        let signed = self.global.sign(
+            &global_config().genesis_key,
+            proofs
+                .into_iter()
+                .map(|proof| RelayAmxPreparedV1 { proof }.into()),
+            4_999,
+        );
+        assert_eq!(self.global.commit_at(5_000, vec![signed]), vec![true]);
+        super::super::amx_record_proof(
+            &self.global.state().view(),
+            self.global.height(),
+            AmxRecordKind::Decision,
+            tx,
+        )
+        .unwrap()
+        .unwrap()
+    }
+}
+
+fn balance(
+    chain: &CertifiedTestChain,
+    id: DataSpaceId,
+    definition: AssetDefinitionId,
+    owner: AccountId,
+) -> Quantity {
+    chain
+        .state()
+        .view()
+        .world()
+        .assets()
+        .get(&AssetId::with_scope(
+            definition,
+            owner,
+            AssetBalanceScope::Dataspace(id),
+        ))
+        .map_or_else(Quantity::zero, |value| value.as_ref().clone())
+}
+fn native(chain: &CertifiedTestChain) -> NativeAmxParticipantStateV1 {
+    chain
+        .state()
+        .view()
+        .world()
+        .sumeragi_amx_participant()
+        .canonical()
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn native_amx_paid_commit_survives_certified_restart_and_rejects_bypass() {
+    let mut roots = Roots::new();
+    let transaction = roots.transaction(100, 1);
+    let begin = roots.begin(&transaction);
+    // HC95: a valid foreign Begin never authorizes a different signed debit source.
+    let thief = roots.participants[0].sign(
+        &receiver(),
+        [PrepareAmxV1 {
+            dataspace: FIRST,
+            transaction: transaction.clone(),
+            begin: begin.clone(),
+        }
+        .into()],
+        3_500,
+    );
+    assert_eq!(
+        roots.participants[0].commit_at(3_600, vec![thief]),
+        vec![false]
+    );
+    assert_eq!(
+        balance(
+            &roots.participants[0],
+            FIRST,
+            principal(),
+            account(&payer())
+        ),
+        1_000_u32.into()
+    );
+    assert!(native(&roots.participants[0]).escrows.is_empty());
+    let first = roots.prepare(0, &transaction, &begin);
+    let second = roots.prepare(1, &transaction, &begin);
+    for (id, chain) in [FIRST, SECOND].into_iter().zip(&roots.participants) {
+        let native = native(chain);
+        assert_eq!(
+            balance(chain, id, principal(), account(&payer())),
+            900_u32.into()
+        );
+        assert_eq!(
+            balance(chain, id, principal(), native.custody),
+            100_u32.into()
+        );
+        assert_eq!(
+            balance(chain, id, principal(), account(&receiver())),
+            Quantity::zero()
+        );
+        assert!(
+            balance(chain, id, fee_asset(), account(&payer())) < 1_000_000_u32.into(),
+            "actual positive private fee debit"
+        );
+    }
+    let custody = native(&roots.participants[0]).custody;
+    let bypass = roots.participants[0].sign(
+        &payer(),
+        [Transfer::asset_quantity(
+            AssetId::with_scope(
+                principal(),
+                custody.clone(),
+                AssetBalanceScope::Dataspace(FIRST),
+            ),
+            100_u32,
+            account(&receiver()),
+        )
+        .into()],
+        4_199,
+    );
+    assert_eq!(
+        roots.participants[0].commit_at(4_200, vec![bypass]),
+        vec![false]
+    );
+    let remove = roots.participants[0].sign(
+        &global_config().genesis_key,
+        [Unregister::account(custody).into()],
+        4_299,
+    );
+    assert_eq!(
+        roots.participants[0].commit_at(4_300, vec![remove]),
+        vec![false]
+    );
+    for instruction in [
+        Unregister::account(account(&receiver())).into(),
+        Unregister::asset_definition(principal()).into(),
+        Unregister::domain(DomainId::try_new("amx", "private-amx").unwrap()).into(),
+    ] {
+        let signed = roots.participants[0].sign(&global_config().genesis_key, [instruction], 4_399);
+        assert_eq!(
+            roots.participants[0].commit_at(4_400, vec![signed]),
+            vec![false],
+            "original pending parties and monetary definitions cannot be retired"
+        );
+    }
+    let decision = roots.decide([first, second], transaction.id().unwrap());
+    assert!(
+        matches!(decision.record,AmxRecordV1::Decision(value) if value.outcome==AmxOutcomeV1::Commit)
+    );
+    let mut forged = decision.clone();
+    if let AmxRecordV1::Decision(value) = &mut forged.record {
+        value.outcome = AmxOutcomeV1::Abort;
+    }
+    let counterfeit = roots.participants[0].sign(
+        &payer(),
+        [SettleAmxV1 {
+            dataspace: FIRST,
+            decision: forged,
+        }
+        .into()],
+        5_099,
+    );
+    assert_eq!(
+        roots.participants[0].commit_at(5_100, vec![counterfeit]),
+        vec![false]
+    );
+    assert!(native(&roots.participants[0]).escrows[0].settled.is_none());
+    for (id, chain) in [FIRST, SECOND].into_iter().zip(&mut roots.participants) {
+        let signed = chain.sign(
+            &payer(),
+            [SettleAmxV1 {
+                dataspace: id,
+                decision: decision.clone(),
+            }
+            .into()],
+            5_999,
+        );
+        assert_eq!(chain.commit_at(6_000, vec![signed]), vec![true]);
+        let native = native(chain);
+        assert_eq!(native.escrows[0].settled, Some(AmxOutcomeV1::Commit));
+        assert_eq!(
+            balance(chain, id, principal(), native.custody),
+            Quantity::zero()
+        );
+        assert_eq!(
+            balance(chain, id, principal(), account(&receiver())),
+            100_u32.into()
+        );
+        let repeated = chain.sign(
+            &payer(),
+            [SettleAmxV1 {
+                dataspace: id,
+                decision: decision.clone(),
+            }
+            .into()],
+            6_099,
+        );
+        assert_eq!(chain.commit_at(6_100, vec![repeated]), vec![false]);
+    }
+    for (id, source) in [FIRST, SECOND].into_iter().zip(&roots.participants) {
+        let mut restored = CertifiedTestChain::start(private_config(&roots.global, id)).unwrap();
+        restored.replay_from(source).unwrap();
+        assert_eq!(native(&restored), native(source));
+        assert_eq!(
+            balance(&restored, id, principal(), account(&payer())),
+            900_u32.into()
+        );
+        assert_eq!(
+            balance(&restored, id, principal(), account(&receiver())),
+            100_u32.into()
+        );
+        assert_eq!(
+            balance(&restored, id, fee_asset(), account(&payer())),
+            balance(source, id, fee_asset(), account(&payer()))
+        );
+        let proof = super::super::amx_record_proof(
+            &restored.state().view(),
+            3,
+            AmxRecordKind::Prepared,
+            transaction.id().unwrap(),
+        )
+        .unwrap();
+        if id == FIRST {
+            assert!(
+                proof.is_some(),
+                "first prepared archive survives rejection and replay"
+            );
+        }
+    }
+}
+
+#[test]
+fn native_amx_certified_abort_returns_yes_escrow_and_held_decision_never_debits() {
+    let mut roots = Roots::new();
+    let mut transaction = roots.transaction(100, 2);
+    let second: AmxTransferLegV1 = norito::decode_canonical(&transaction.legs[1].payload).unwrap();
+    transaction.legs[1].payload = norito::encode_canonical(&AmxTransferLegV1 {
+        amount: 2_000_u32.into(),
+        ..second
+    })
+    .unwrap();
+    let begin = roots.begin(&transaction);
+    let first = roots.prepare(0, &transaction, &begin);
+    let second = roots.prepare(1, &transaction, &begin);
+    assert!(matches!(second.record,AmxRecordV1::Prepared(value) if value.vote==AmxVoteV1::No));
+    assert!(native(&roots.participants[1]).escrows.is_empty());
+    let decision = roots.decide([first, second], transaction.id().unwrap());
+    assert!(
+        matches!(decision.record,AmxRecordV1::Decision(value) if value.outcome==AmxOutcomeV1::Abort)
+    );
+    let signed = roots.participants[0].sign(
+        &payer(),
+        [SettleAmxV1 {
+            dataspace: FIRST,
+            decision: decision.clone(),
+        }
+        .into()],
+        5_999,
+    );
+    assert_eq!(
+        roots.participants[0].commit_at(6_000, vec![signed]),
+        vec![true]
+    );
+    assert_eq!(
+        balance(
+            &roots.participants[0],
+            FIRST,
+            principal(),
+            account(&payer())
+        ),
+        1_000_u32.into()
+    );
+    assert_eq!(
+        native(&roots.participants[0]).escrows[0].settled,
+        Some(AmxOutcomeV1::Abort)
+    );
+    // A separately authenticated root holds the decision before its first Prepare.
+    let mut fresh = CertifiedTestChain::start(private_config(&roots.global, FIRST)).unwrap();
+    let signed = fresh.sign(
+        &payer(),
+        [SettleAmxV1 {
+            dataspace: FIRST,
+            decision,
+        }
+        .into()],
+        6_999,
+    );
+    assert_eq!(fresh.commit_at(7_000, vec![signed]), vec![true]);
+    let signed = fresh.sign(
+        &payer(),
+        [PrepareAmxV1 {
+            dataspace: FIRST,
+            transaction: transaction.clone(),
+            begin,
+        }
+        .into()],
+        7_999,
+    );
+    assert_eq!(fresh.commit_at(8_000, vec![signed]), vec![true]);
+    assert!(native(&fresh).escrows.is_empty());
+    assert_eq!(
+        native(&fresh)
+            .participant
+            .entry(&transaction.id().unwrap())
+            .unwrap()
+            .vote,
+        AmxVoteV1::No
+    );
+    assert_eq!(
+        balance(&fresh, FIRST, principal(), account(&payer())),
+        1_000_u32.into()
+    );
+}
+
+#[test]
+fn native_amx_original_graph_refusal_preserves_committed_owner_and_exact_retry_capacity() {
+    let roots = Roots::new();
+    let source = native(&roots.participants[0]);
+    let budget = roots.participants[0].state().ivm_execution_budget();
+    let limit = budget.limit_bytes();
+    let retained = budget.reserved_bytes();
+    let owner = RetainedNativeAmx::admit(&source, &budget).unwrap();
+    assert_eq!(
+        norito::encode_canonical(&owner).unwrap(),
+        norito::encode_canonical(&Some(source.clone())).unwrap(),
+        "borrowed funded graph keeps the owned Option wire"
+    );
+    assert_eq!(
+        norito::encode_canonical(&RetainedNativeAmx::default()).unwrap(),
+        norito::encode_canonical(&None::<NativeAmxParticipantStateV1>).unwrap()
+    );
+    drop(owner);
+    assert_eq!(budget.reserved_bytes(), retained);
+    budget.set_limit_bytes(retained);
+    assert!(matches!(
+        Candidate::copy(&source, &budget, 1, 0, None, None),
+        Err(GraphError::Admission(_))
+    ));
+    assert_eq!(budget.reserved_bytes(), retained);
+    assert_eq!(native(&roots.participants[0]), source);
+    budget.set_limit_bytes(limit);
+    let candidate = Candidate::copy(&source, &budget, 1, 0, None, None).unwrap();
+    assert!(budget.reserved_bytes() > retained);
+    drop(candidate);
+    assert_eq!(budget.reserved_bytes(), retained);
+}
+
+#[test]
+fn native_amx_enrolled_receiver_records_certified_no_without_monetary_or_maintenance_effects() {
+    use iroha_data_model::validation_fee::RetailFeeAccountStateV1;
+    let mut roots = Roots::new();
+    let transaction = roots.transaction(100, 0x77);
+    let begin = roots.begin(&transaction);
+    let enrolled = account(&receiver());
+    let enrollment_ms = 1_793_451_600_000;
+    let clock = roots.participants[0].sign(
+        &payer(),
+        [iroha_data_model::isi::Log::new(
+            iroha_logger::Level::INFO,
+            "advance the original private root into the retail calendar".into(),
+        )
+        .into()],
+        enrollment_ms - 1,
+    );
+    assert_eq!(
+        roots.participants[0].commit_at(enrollment_ms, vec![clock]),
+        vec![true]
+    );
+    let record = RetailFeeAccountStateV1::enroll(enrolled.clone(), enrollment_ms, 0).unwrap();
+    let bytes = norito::to_bytes(&record).unwrap();
+    let key: iroha_model_base::state_path::StatePath = format!(
+        "retail_fee_v1/{}",
+        hex::encode(iroha_crypto::Hash::new(enrolled.to_string().as_bytes()).as_ref())
+    )
+    .parse()
+    .unwrap();
+    let chain = &roots.participants[0];
+    {
+        // Controlled negative business-state fixture only: the enrollment cannot authorize
+        // any movement. The real signed Prepare and its actual record archive still run below.
+        let budget = chain.state().ivm_execution_budget();
+        let mut world = chain.state().world.try_block(&budget).unwrap();
+        world
+            .smart_contract_state
+            .insert(key.clone(), bytes.clone());
+        world.commit();
+    }
+    let fee_before = balance(chain, FIRST, fee_asset(), account(&payer()));
+    let proof = roots.prepare_at(0, &transaction, &begin, enrollment_ms + 1_000);
+    let AmxRecordV1::Prepared(prepared) = proof.record else {
+        panic!("actual certified Prepared")
+    };
+    assert_eq!(prepared.vote, AmxVoteV1::No);
+    let chain = &roots.participants[0];
+    assert!(native(chain).escrows.is_empty());
+    assert!(balance(chain, FIRST, fee_asset(), account(&payer())) < fee_before);
+    assert_eq!(
+        balance(chain, FIRST, principal(), account(&payer())),
+        1_000_u32.into()
+    );
+    assert_eq!(
+        balance(chain, FIRST, principal(), enrolled),
+        Quantity::zero()
+    );
+    assert_eq!(
+        chain
+            .state()
+            .view()
+            .world()
+            .smart_contract_state()
+            .get(&key),
+        Some(&bytes)
+    );
+}
+
+#[test]
+fn native_amx_global_source_requires_signed_parent_real_h2_and_exact_instance() {
+    use crate::sumeragi::commitment::ExecutionResultCommitment;
+    use iroha_data_model::block::CommitCertificate;
+    let config = global_config();
+    let chain_id = config.chain_id.clone();
+    let key = config.genesis_key.clone();
+    let mut global = CertifiedTestChain::start(config).unwrap();
+    let transaction = global.sign(
+        &key,
+        [iroha_data_model::isi::Log::new(iroha_logger::Level::INFO, "real H2".into()).into()],
+        1_499,
+    );
+    assert_eq!(global.commit_at(1_500, vec![transaction]), vec![true]);
+    let genesis = global.committed(1).block().as_ref().clone();
+    let successor = global.committed(2).block().as_ref().clone();
+    let genesis_wire = genesis.encode_wire().unwrap();
+    let successor_wire = successor.encode_wire().unwrap();
+    let budget = global.state().ivm_execution_budget();
+    let mut registration = crate::unit_test_support::release_registration(&budget);
+    let authenticated_global_source = |chain: &ChainId,
+                                       parent,
+                                       genesis: &[u8],
+                                       successor: &[u8]| {
+        let before = budget.reserved_bytes();
+        let result = super::authenticated_global_source(chain, parent, genesis, successor, &budget);
+        assert_eq!(
+            budget.reserved_bytes(),
+            before,
+            "every completed source check or refusal must release its original shared controls and scratch slots"
+        );
+        result
+    };
+    let authenticated = authenticated_global_source(
+        &chain_id,
+        global.network_id(),
+        &genesis_wire,
+        &successor_wire,
+    )
+    .unwrap();
+    assert_eq!(authenticated.instance, global.instance().0);
+    assert_eq!(
+        authenticated.current,
+        genesis_epoch(global.genesis()).unwrap()
+    );
+    let before = budget.reserved_bytes();
+    let original_limit = budget.limit_bytes();
+    budget.set_limit_bytes(before);
+    let expected_slot_refusal =
+        match budget.try_reserve(iroha_data_model::block::SharedSignedBlock::allocation_layout()) {
+            Ok(_) => panic!("the occupied original pool must refuse the original block control"),
+            Err(original) => original,
+        };
+    let refused_slot = authenticated_global_source(
+        &chain_id,
+        global.network_id(),
+        &genesis_wire,
+        &successor_wire,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&refused_slot, crate::execution_attempt::ExecutionAttemptError::Deferred(reason)
+        if reason.allocation_refusal() == Some(&expected_slot_refusal)),
+        "the exact source block control must retain its original pool refusal: {refused_slot:?}"
+    );
+    assert_eq!(budget.reserved_bytes(), before);
+    budget.set_limit_bytes(original_limit);
+    let prefix_bytes =
+        std::alloc::Layout::new::<crate::sumeragi::certified_chain::CertifiedPrefix>().size();
+    let shared_bytes = iroha_data_model::block::SharedSignedBlock::allocation_layout().size();
+    let frame_bytes =
+        std::alloc::Layout::new::<crate::sumeragi::certified_chain::CommittedBlock>().size();
+    let result_bytes = std::alloc::Layout::new::<ExecutionResultCommitment>().size();
+    for (prior_slots, requested_slot_bytes) in [
+        (shared_bytes, prefix_bytes),
+        (shared_bytes + prefix_bytes, frame_bytes),
+        (shared_bytes + prefix_bytes + frame_bytes, result_bytes),
+    ] {
+        budget.set_limit_bytes(before + prior_slots);
+        let refused_frame = authenticated_global_source(
+            &chain_id,
+            global.network_id(),
+            &genesis_wire,
+            &successor_wire,
+        )
+        .unwrap_err();
+        let release = match &refused_frame {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                match reason.allocation_refusal() {
+                    Some(iroha_allocation::AllocationRefusal::Capacity {
+                        requested_bytes,
+                        reserved_bytes,
+                        limit_bytes,
+                        release,
+                    }) => {
+                        assert_eq!(*requested_bytes, requested_slot_bytes);
+                        assert_eq!(*reserved_bytes, before + prior_slots);
+                        assert_eq!(*limit_bytes, before + prior_slots);
+                        release.clone()
+                    }
+                    refusal => {
+                        panic!(
+                            "the prepaid slots must preserve the next exact refusal: {refusal:?}"
+                        )
+                    }
+                }
+            }
+            rejected => panic!("each physical slot refusal must remain local: {rejected:?}"),
+        };
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(
+            registration.poll_wait(&release, &mut context).is_ready(),
+            "dropping the failed original slots must wake their exact original result/frame refusal"
+        );
+        registration.cancel();
+        assert_eq!(budget.reserved_bytes(), before);
+        budget.set_limit_bytes(original_limit);
+    }
+    let refused = norito::core::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, 0, usize::MAX, usize::MAX, usize::MAX),
+        || {
+            authenticated_global_source(
+                &chain_id,
+                global.network_id(),
+                &genesis_wire,
+                &successor_wire,
+            )
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            refused,
+            crate::execution_attempt::ExecutionAttemptError::Deferred(_)
+        ),
+        "original source decoder refusal must remain local: {refused:?}"
+    );
+    assert_eq!(budget.reserved_bytes(), before);
+    assert_eq!(
+        authenticated_global_source(
+            &chain_id,
+            global.network_id(),
+            &genesis_wire,
+            &successor_wire
+        )
+        .unwrap(),
+        authenticated
+    );
+    let private = CertifiedTestChain::start(private_config(&global, FIRST)).unwrap();
+    assert!(
+        authenticated_global_source(
+            &chain_id,
+            private.network_id(),
+            &private.committed(1).block().encode_wire().unwrap(),
+            &successor_wire
+        )
+        .is_err(),
+        "a signed private genesis is never Global parent authority"
+    );
+    assert!(
+        authenticated_global_source(
+            &ChainId::from("foreign-global-instance"),
+            global.network_id(),
+            &genesis_wire,
+            &successor_wire
+        )
+        .is_err()
+    );
+    assert!(
+        authenticated_global_source(&chain_id, global.network_id(), &genesis_wire, &genesis_wire)
+            .is_err()
+    );
+    assert!(
+        authenticated_global_source(
+            &chain_id,
+            roots_foreign_network(),
+            &genesis_wire,
+            &successor_wire
+        )
+        .is_err()
+    );
+    let certificate = genesis.commit_certificate().unwrap();
+    let mut result = ExecutionResultCommitment::decode(certificate.result_preimage()).unwrap();
+    result.execution.world_state_root =
+        iroha_crypto::Hash::new(b"unsigned AMX genesis R substitution");
+    let changed =
+        genesis
+            .clone()
+            .with_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
+                Vec::new(),
+                Vec::new(),
+                result.preimage().unwrap(),
+                Vec::new(),
+            )));
+    assert_eq!(
+        changed.hash(),
+        genesis.hash(),
+        "genesis signatures do not authenticate R"
+    );
+    assert!(
+        authenticated_global_source(
+            &chain_id,
+            global.network_id(),
+            &changed.encode_wire().unwrap(),
+            &successor_wire
+        )
+        .is_err()
+    );
+    let certificate = successor.commit_certificate().unwrap();
+    let mut qc: iroha_sumeragi::message::Qc =
+        norito::decode_canonical(certificate.commit_qc()).unwrap();
+    qc.agg_sig.0[0] ^= 1;
+    let changed =
+        successor
+            .clone()
+            .with_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
+                certificate.consensus_header().to_vec(),
+                norito::encode_canonical(&qc).unwrap(),
+                certificate.result_preimage().to_vec(),
+                certificate.availability().to_vec(),
+            )));
+    assert!(
+        authenticated_global_source(
+            &chain_id,
+            global.network_id(),
+            &genesis_wire,
+            &changed.encode_wire().unwrap()
+        )
+        .is_err()
+    );
+}
+
+fn roots_foreign_network() -> iroha_data_model::NetworkId {
+    iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+        iroha_crypto::Hash::new(b"foreign AMX parent"),
+    ))
+}
+
+#[test]
+fn native_amx_edited_snapshot_admission_cannot_settle_without_original_replay() {
+    let mut roots = Roots::new();
+    let transaction = roots.transaction(100, 0x76);
+    let begin = roots.begin(&transaction);
+    let first = roots.prepare(0, &transaction, &begin);
+    let second = roots.prepare(1, &transaction, &begin);
+    let decision = roots.decide([first, second], transaction.id().unwrap());
+    let chain = &mut roots.participants[0];
+    let source = native(chain);
+    let decoded: NativeAmxParticipantStateV1 =
+        norito::json::from_str(&norito::json::to_json(&source).unwrap()).unwrap();
+    let budget = chain.state().ivm_execution_budget();
+    let restored = RetainedNativeAmx::admit(&decoded, &budget).unwrap();
+    assert!(
+        !restored.is_authenticated(),
+        "allocation admission is never execution authority"
+    );
+    let mut edited = decoded.clone();
+    edited.participant.global.instance = [0x91; 32];
+    let edited = RetainedNativeAmx::admit(&edited, &budget).unwrap();
+    assert!(
+        !edited.is_authenticated(),
+        "edited decoded authority cannot acquire provenance"
+    );
+    {
+        let mut world = chain.state().world.try_block(&budget).unwrap();
+        *world.sumeragi_amx_participant.get_mut() = restored;
+        world.commit();
+    }
+    let signed = chain.sign(
+        &payer(),
+        [SettleAmxV1 {
+            dataspace: FIRST,
+            decision,
+        }
+        .into()],
+        5_999,
+    );
+    assert_eq!(chain.commit_at(6_000, vec![signed]), vec![false]);
+    assert_eq!(native(chain).escrows[0].settled, None);
+    assert_eq!(
+        balance(chain, FIRST, principal(), account(&receiver())),
+        Quantity::zero()
+    );
+    assert_eq!(
+        balance(chain, FIRST, principal(), source.custody),
+        100_u32.into()
+    );
+}
+
+#[test]
+fn native_amx_new_state_cannot_inherit_live_authority_without_certified_replay() {
+    let mut roots = Roots::new();
+    let transaction = roots.transaction(100, 0x77);
+    let begin = roots.begin(&transaction);
+    let first = roots.prepare(0, &transaction, &begin);
+    let second = roots.prepare(1, &transaction, &begin);
+    let decision = roots.decide([first, second], transaction.id().unwrap());
+    let chain = &mut roots.participants[0];
+    let source = chain.state().world.sumeragi_amx_participant.view().clone();
+    assert!(source.is_authenticated());
+    let budget = chain.state().ivm_execution_budget();
+    let world = World::new();
+    {
+        let mut block = world.try_block(&budget).unwrap();
+        *block.sumeragi_amx_participant.get_mut() = source.clone();
+        block.commit();
+    }
+    let constructed =
+        crate::state::State::try_new_with_chain_and_network_id_with_default_telemetry(
+            budget.clone(),
+            world,
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+            private_config(&roots.global, FIRST).chain_id,
+            chain.network_id(),
+        )
+        .unwrap();
+    let admitted = constructed.world.sumeragi_amx_participant.view().clone();
+    assert_eq!(admitted.canonical(), source.canonical());
+    assert!(admitted.belongs_to(&budget));
+    assert!(
+        !admitted.is_authenticated(),
+        "a new State never inherits a different State's certified execution capability"
+    );
+    assert!(
+        source.is_authenticated(),
+        "the original owner remains usable"
+    );
+    // Use the original signed private root and the same physical pool. This actual settlement
+    // must fail specifically because construction stripped provenance, not a root/pool mismatch.
+    {
+        let mut block = chain.state().world.try_block(&budget).unwrap();
+        *block.sumeragi_amx_participant.get_mut() = admitted;
+        block.commit();
+    }
+    let signed = chain.sign(
+        &payer(),
+        [SettleAmxV1 {
+            dataspace: FIRST,
+            decision,
+        }
+        .into()],
+        5_999,
+    );
+    assert_eq!(chain.commit_at(6_000, vec![signed]), vec![false]);
+    assert_eq!(native(chain).escrows[0].settled, None);
+    assert_eq!(
+        balance(chain, FIRST, principal(), account(&receiver())),
+        Quantity::zero()
+    );
+    assert_eq!(
+        balance(chain, FIRST, principal(), native(chain).custody),
+        100_u32.into()
+    );
+}
+
+#[test]
+fn native_amx_global_handoff_requires_real_boundary_and_preserves_original_sources() {
+    use iroha_data_model::sumeragi_amx::{AmxCertifiedBlockV1, AmxHandoffProofV1};
+    let mut global = CertifiedTestChain::npos_boundary_fixture();
+    let mut participant = CertifiedTestChain::start(private_config(&global, FIRST)).unwrap();
+    let original = native(&participant);
+    assert_eq!(original.participant.global.epoch(), 0);
+    let early = AmxHandoffProofV1 {
+        block: AmxCertifiedBlockV1::from_certificate(
+            global.committed(9).block().commit_certificate().unwrap(),
+        ),
+    };
+    let signed = participant.sign(
+        &payer(),
+        [RelayGlobalAmxHandoffV1 {
+            dataspace: FIRST,
+            proof: early,
+        }
+        .into()],
+        1_999,
+    );
+    assert_eq!(participant.commit_at(2_000, vec![signed]), vec![false]);
+    assert_eq!(native(&participant), original);
+    global.commit(Vec::new());
+    assert_eq!(global.height(), 10);
+    let boundary = AmxHandoffProofV1 {
+        block: AmxCertifiedBlockV1::from_certificate(
+            global.committed(10).block().commit_certificate().unwrap(),
+        ),
+    };
+    let mut corrupt = boundary.clone();
+    corrupt.block.commit_qc[0] ^= 1;
+    let signed = participant.sign(
+        &payer(),
+        [RelayGlobalAmxHandoffV1 {
+            dataspace: FIRST,
+            proof: corrupt,
+        }
+        .into()],
+        2_099,
+    );
+    assert_eq!(participant.commit_at(2_100, vec![signed]), vec![false]);
+    assert_eq!(native(&participant), original);
+    let signed = participant.sign(
+        &payer(),
+        [RelayGlobalAmxHandoffV1 {
+            dataspace: FIRST,
+            proof: boundary.clone(),
+        }
+        .into()],
+        2_999,
+    );
+    assert_eq!(participant.commit_at(3_000, vec![signed]), vec![true]);
+    let next = native(&participant);
+    assert_eq!(next.participant.global.epoch(), 1);
+    assert_eq!(
+        next.participant.global.previous,
+        Some(original.participant.global.current.clone())
+    );
+    assert_eq!(next.global_genesis, original.global_genesis);
+    assert_eq!(next.global_successor, original.global_successor);
+    assert_eq!(next.global_chain_label, original.global_chain_label);
+    let signed = participant.sign(
+        &payer(),
+        [RelayGlobalAmxHandoffV1 {
+            dataspace: FIRST,
+            proof: boundary,
+        }
+        .into()],
+        3_099,
+    );
+    assert_eq!(participant.commit_at(3_100, vec![signed]), vec![true]);
+    assert_eq!(
+        native(&participant),
+        next,
+        "a valid old-epoch handoff is stale"
+    );
+    let mut restored = CertifiedTestChain::start(private_config(&global, FIRST)).unwrap();
+    restored.replay_from(&participant).unwrap();
+    assert_eq!(native(&restored), next);
+}
+
+#[test]
+fn native_amx_caught_completed_failure_cannot_publish_partial_world_effects() {
+    use iroha_data_model::{ValidationFail, block::BlockHeader, isi::SetKeyValue};
+    let chain = CertifiedTestChain::start(global_config()).unwrap();
+    let signer = global_config().genesis_key;
+    let key = "caught_native_amx_effect".parse().unwrap();
+    let write: InstructionBox = SetKeyValue::account(
+        account(&signer),
+        key,
+        iroha_primitives::json::Json::new(true),
+    )
+    .into();
+    let signed = chain.sign(&signer, [write.clone()], 1_499);
+    let mut block = chain.state().block(BlockHeader::new(
+        core::num::NonZeroU64::new(2).unwrap(),
+        Some(chain.genesis().hash()),
+        None,
+        1_500,
+        0,
+    ));
+    let fragments = block.committed_fragment_count();
+    let mut attempt = block.transaction();
+    attempt.current_entrypoint_index = Some(0);
+    attempt.current_tx_hash = Some(signed.hash());
+    attempt.tx_call_hash = Some(iroha_crypto::Hash::from(signed.hash_as_entrypoint()));
+    attempt.current_lane_id = Some(iroha_model_base::topology::LaneId::SINGLE);
+    attempt.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    attempt.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    attempt.begin_execution_effect_budget(&signed).unwrap();
+    attempt
+        .admit_authored_execution_effects(std::slice::from_ref(&write))
+        .unwrap();
+    write.execute(&account(&signer), &mut attempt).unwrap();
+    // Exercise the local failure-owner contract after a real staged effect. This unit control
+    // never claims that a fabricated error or manually bound source authorizes monetary work.
+    let error = invalid("completed native AMX monetary policy rejection");
+    attempt.reject_native_amx_effects(error.clone());
+    assert_eq!(
+        attempt.finish_execution_effect_budget(),
+        Err(ValidationFail::InstructionFailed(error))
+    );
+    assert!(!attempt.execution_effects_allow_apply());
+    attempt.apply();
+    assert_eq!(block.committed_fragment_count(), fragments);
+    assert!(
+        block
+            .world
+            .account(&account(&signer))
+            .unwrap()
+            .metadata()
+            .get("caught_native_amx_effect")
+            .is_none()
+    );
+}

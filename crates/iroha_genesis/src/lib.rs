@@ -283,12 +283,14 @@ pub fn validate_prepared_genesis_bundle(
     expected_hash: HashOf<BlockHeader>,
 ) -> Result<ValidatedGenesisBundle> {
     let block = decode_signed_genesis(signed_wire)?;
-    let canonical_wire = block
-        .encode_wire()
-        .map_err(|error| eyre!("re-encode signed genesis body: {error}"))?;
-    if canonical_wire != signed_wire {
-        return Err(eyre!("signed genesis body is not canonical framed Norito"));
-    }
+    // The sole framed decoder already compared the canonical writer against these exact
+    // source bytes. The validated bundle owns a source copy, not another encoding.
+    // TODO: this source backing needs an explicit retained caller-pool ledger.
+    let mut canonical_wire = Vec::new();
+    canonical_wire
+        .try_reserve_exact(signed_wire.len())
+        .wrap_err("retain authenticated signed genesis source")?;
+    canonical_wire.extend_from_slice(signed_wire);
     if block.hash() != expected_hash {
         return Err(eyre!(
             "signed genesis body hashes to {}, expected {}",
@@ -1814,6 +1816,48 @@ impl RawGenesisTransaction {
     #[must_use]
     pub fn transactions(&self) -> &[RawGenesisTx] {
         &self.transactions
+    }
+    /// Extend the existing nonempty instruction-only tail without changing any boundary.
+    ///
+    /// All manifest fields and prior transactions are preserved. Parameter updates
+    /// require the authoritative parameter snapshot and are not accepted here.
+    /// An empty addition leaves the manifest unchanged.
+    ///
+    /// # Errors
+    /// Refuses `SetParameter`, a missing or empty tail, or a tail containing
+    /// parameters, topology or IVM triggers.
+    pub fn append_instruction_only_tail(
+        mut self,
+        instructions: Vec<InstructionBox>,
+    ) -> Result<Self> {
+        if instructions.is_empty() {
+            return Ok(self);
+        }
+        if instructions.iter().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<SetParameter>()
+                .is_some()
+        }) {
+            return Err(eyre!(
+                "authored instruction tail cannot contain SetParameter; use the authoritative parameter snapshot"
+            ));
+        }
+        let tail = self
+            .transactions
+            .last_mut()
+            .ok_or_else(|| eyre!("authored instructions require an existing genesis tail"))?;
+        if tail.instructions.is_empty()
+            || tail.parameters.is_some()
+            || !tail.topology.is_empty()
+            || !tail.ivm_triggers.is_empty()
+        {
+            return Err(eyre!(
+                "authored instructions require an existing nonempty instruction-only genesis tail"
+            ));
+        }
+        tail.instructions.extend(instructions);
+        Ok(self)
     }
     /// Validate that the signed generation-zero KAGEMUSHA authority names the
     /// exact canonical validator topology which will enter genesis.

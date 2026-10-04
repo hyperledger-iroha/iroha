@@ -120,18 +120,25 @@ impl FairPass<'_> {
 }
 
 /// Physical health is independent of configuration epochs and pipeline handles.
+/// Both receipt banks are inline and prepaid with this original shared owner.
 pub(super) struct DeviceHealth {
     identity: u64,
     quarantined: AtomicBool,
     uncertain: AtomicBool,
     completions: [AtomicU64; super::MetalKernel::ALL.len()],
+    synthetic_completions: [AtomicU64; super::MetalKernel::ALL.len()],
 }
 impl DeviceHealth {
     pub(super) fn identity(&self) -> u64 {
         self.identity
     }
-    pub(super) fn record_completion(&self, kernel: usize) {
-        if let Some(count) = self.completions.get(kernel) {
+    pub(super) fn record_completion(&self, kernel: usize, synthetic: bool) {
+        let bank = if synthetic {
+            &self.synthetic_completions
+        } else {
+            &self.completions
+        };
+        if let Some(count) = bank.get(kernel) {
             let _ = count.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
                 Some(n.saturating_add(1))
             });
@@ -140,6 +147,13 @@ impl DeviceHealth {
     #[cfg(test)]
     pub(super) fn completions(&self, kernel: usize) -> u64 {
         self.completions
+            .get(kernel)
+            .map_or(0, |n| n.load(Ordering::Relaxed))
+    }
+
+    #[cfg(test)]
+    pub(super) fn synthetic_completions(&self, kernel: usize) -> u64 {
+        self.synthetic_completions
             .get(kernel)
             .map_or(0, |n| n.load(Ordering::Relaxed))
     }
@@ -284,6 +298,7 @@ impl<T> DeviceRegistry<T> {
                 quarantined: AtomicBool::new(false),
                 uncertain: AtomicBool::new(false),
                 completions: std::array::from_fn(|_| AtomicU64::new(0)),
+                synthetic_completions: std::array::from_fn(|_| AtomicU64::new(0)),
             },
             &mut credit,
         )
@@ -495,6 +510,42 @@ mod tests {
         let budget = AllocationBudget::new(16384);
         assert!(registry.prepare(3, |layout| budget.try_reserve(layout).ok()));
         (registry, budget)
+    }
+    #[test]
+    fn required_observation_retries_registry_contention_without_replacing_original_owner() {
+        use std::time::{Duration, Instant};
+
+        let (registry, budget) = setup();
+        let original = registry
+            .observe(11, 3, |n| budget.try_reserve_bytes(n).ok())
+            .unwrap();
+        assert!(original.initialize(|| Some(23)));
+        let before = budget.reserved_bytes();
+        let mut writer = Some(registry.records.get().unwrap().lock().unwrap());
+        let mut attempts = 0;
+        let observed = super::super::metal_qualification_wait::observe_until(
+            Instant::now() + Duration::from_secs(1),
+            || {
+                attempts += 1;
+                let lease = registry.record(0, 3);
+                if attempts == 1 {
+                    assert!(lease.is_none(), "the old one-shot observation must refuse");
+                    assert!(!registry.eligible(&original, 3, 1));
+                    drop(writer.take());
+                }
+                lease.filter(|lease| registry.eligible(lease, 3, 1))
+            },
+        )
+        .expect("the original healthy owner becomes observable after contention");
+        assert_eq!(attempts, 2);
+        assert!(ChargedShared::ptr_eq(&observed, &original));
+        assert_eq!(observed.health().identity(), 11);
+        assert_eq!(observed.value(), Some(&23));
+        assert!(observed.health().usable());
+        for kernel in 0..super::super::MetalKernel::ALL.len() {
+            assert_eq!(observed.health().completions(kernel), 0);
+        }
+        assert_eq!(budget.reserved_bytes(), before);
     }
     #[test]
     fn discovery_retry_and_concurrent_passes_are_bounded_without_health_reset() {
@@ -731,10 +782,58 @@ mod tests {
         assert!(!registry.all_quarantined(2));
         assert!(!registry.all_quarantined(0));
         assert_eq!(second.health().identity(), 22);
-        second.health().record_completion(0);
+        second.health().record_completion(0, false);
         assert_eq!(second.health().completions(0), 1);
         assert_eq!(first.health().completions(0), 0);
     }
+    #[test]
+    fn synthetic_receipts_use_original_funded_owner_without_production_credit() {
+        let (registry, budget) = setup();
+        let before = budget.reserved_bytes();
+        let first = registry
+            .observe(11, 3, |n| budget.try_reserve_bytes(n).ok())
+            .unwrap();
+        let retained = budget.reserved_bytes();
+        assert_eq!(
+            retained - before,
+            ChargedShared::<DeviceHealth>::allocation_layout().size()
+                + ChargedShared::<DeviceRecord<u32>>::allocation_layout().size()
+        );
+        let health = first.health();
+        for kernel in 0..super::super::MetalKernel::ALL.len() {
+            health.record_completion(kernel, true);
+            assert_eq!(health.synthetic_completions(kernel), 1);
+            assert_eq!(health.completions(kernel), 0);
+            health.record_completion(kernel, false);
+            assert_eq!(health.synthetic_completions(kernel), 1);
+            assert_eq!(health.completions(kernel), 1);
+        }
+        for synthetic in [false, true] {
+            let bank = if synthetic {
+                &health.synthetic_completions
+            } else {
+                &health.completions
+            };
+            bank[0].store(u64::MAX, Ordering::Relaxed);
+            health.record_completion(0, synthetic);
+            assert_eq!(bank[0].load(Ordering::Relaxed), u64::MAX);
+        }
+        let same = registry
+            .observe(11, 3, |_| panic!("existing owner"))
+            .unwrap();
+        assert!(ChargedShared::ptr_eq(&first, &same));
+        assert_eq!(budget.reserved_bytes(), retained);
+        drop(same);
+        drop(first);
+        drop(registry);
+        assert_eq!(
+            budget.reserved_bytes(),
+            ChargedShared::<DeviceHealth>::allocation_layout().size()
+        );
+        drop(health);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
     #[test]
     fn caps_and_pressure_preserve_borrowers_and_final_owner_credit() {
         let (registry, budget) = setup();
@@ -975,9 +1074,8 @@ mod tests {
 
     #[test]
     fn losing_record_refunds_after_registry_unlock_and_reentrant_observation() {
+        use iroha_allocation::release::ReleaseRegistration;
         use std::{
-            future::Future,
-            pin::Pin,
             sync::Arc,
             task::{Context, Wake, Waker},
         };
@@ -1001,13 +1099,18 @@ mod tests {
             }
         }
         let (registry, budget) = setup();
+        let registration_layout = ReleaseRegistration::allocation_layout();
+        let mut registration = ReleaseRegistration::from_reservation(
+            &mut budget.try_reserve(registration_layout).unwrap(),
+        )
+        .unwrap();
+        assert!(registration.belongs_to(&budget));
         let registry = Arc::new(registry);
         let wake = Arc::new(Reenter {
             registry: registry.clone(),
             calls: AtomicU64::new(0),
         });
         let waker = Waker::from(wake.clone());
-        let mut waiter = None;
         let record = registry
             .observe(11, 3, |bytes| {
                 let winner = registry
@@ -1019,20 +1122,29 @@ mod tests {
                 else {
                     panic!("occupied pool")
                 };
-                let mut future = release.wait_for_release();
                 assert!(
-                    Pin::new(&mut future)
-                        .poll(&mut Context::from_waker(&waker))
+                    registration
+                        .poll_wait(&release, &mut Context::from_waker(&waker))
                         .is_pending()
                 );
-                waiter = Some(future);
                 budget.try_reserve_bytes(bytes).ok()
             })
             .unwrap();
         assert_eq!(record.value(), Some(&9));
         assert_eq!(registry.len(), 1);
         assert!(wake.calls.load(Ordering::SeqCst) > 0);
-        drop(waiter);
+        registration.cancel();
+        let with_registration = budget.reserved_bytes();
+        drop(registration);
+        assert_eq!(
+            budget.reserved_bytes(),
+            with_registration - registration_layout.size()
+        );
+        drop(record);
+        drop(waker);
+        drop(wake);
+        drop(registry);
+        assert_eq!(budget.reserved_bytes(), 0);
     }
 
     #[test]

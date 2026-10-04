@@ -80,16 +80,6 @@ fn publish_configured_catalog_baseline(kura: &Kura, catalog: &LaneCatalog) {
     .expect("publish configured lane catalog baseline");
 }
 
-fn assert_catalog_paths_absent(store_root: &Path, _catalog: &LaneCatalog) {
-    assert!(
-        !store_root.join("blocks/instances").exists(),
-        "rejected startup must create no lane instance"
-    );
-    assert!(
-        !store_root.join("merge_ledger/instances").exists(),
-        "rejected startup must create no lane merge instance"
-    );
-}
 
 #[cfg(unix)]
 #[test]
@@ -396,12 +386,15 @@ fn unknown_hash_cannot_select_an_occupied_native_frame() {
     assert!(kura.native_frame_read(3, unknown_hash).unwrap().is_none());
 }
 
-fn store_dummy_block_arcs(kura: &Kura, count: usize) -> Vec<Arc<SignedBlock>> {
+fn store_dummy_block_arcs(
+    kura: &Kura,
+    count: usize,
+) -> Vec<iroha_data_model::block::SharedSignedBlock> {
     establish_dummy_store_primary_anchor(kura);
     let mut generator = NativeBlocks::new();
     let blocks: Vec<_> = (0..count).map(|_| generator.next()).collect();
     for block in &blocks {
-        kura.store_block(Arc::clone(block))
+        kura.store_block((block).clone())
             .expect("store original native block through durable Kura path");
     }
     blocks
@@ -529,8 +522,8 @@ fn canonical_transaction_index_keeps_empty_and_nonempty_resultless_bodies_incomp
                 .unwrap_or_else(|| {
                     HashOf::from_untyped_unchecked(Hash::new(b"absent index probe"))
                 });
-            let block = Arc::new(block);
-            kura.store_block(Arc::clone(&block))
+            let block = share_storage_fixture(block);
+            kura.store_block((block).clone())
                 .expect("store canonical body without panicking in the derived index");
             assert_eq!(
                 kura.canonical_block_wire_bytes_for_testing(nonzero!(1_usize))

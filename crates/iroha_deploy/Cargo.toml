@@ -18,9 +18,12 @@ categories.workspace = true
 workspace = true
 
 [dependencies]
+iroha_torii_shared = { workspace = true }
 iroha = { workspace = true }
 iroha_contract_deploy = { workspace = true }
+iroha_storage_client = { workspace = true }
 iroha_wallet = { workspace = true }
+iroha_musubi_service = { workspace = true }
 iroha_config = { workspace = true }
 iroha_core = { workspace = true, default-features = false, features = ["node"] }
 iroha_core_zk = { workspace = true, default-features = false }
@@ -34,12 +37,17 @@ iroha_crypto = { workspace = true, default-features = false, features = ["json"]
 iroha_data_model = { workspace = true, default-features = false }
 iroha_model_base = { workspace = true }
 iroha_primitives = { workspace = true }
+sorafs_manifest = { workspace = true }
+sorafs_node = { path = "../sorafs_node" }
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
 
 base64 = { workspace = true, features = ["std"] }
 blake3 = { workspace = true }
 hex = { workspace = true }
 rand = { workspace = true }
+rcgen = { version = "0.14.5", default-features = false, features = ["crypto", "ring"] }
+rustls = { workspace = true, features = ["ring"] }
+time = { workspace = true }
 error-stack = { workspace = true }
 humantime = { workspace = true }
 thiserror = { workspace = true }
@@ -57,7 +65,10 @@ tokio = { workspace = true, features = ["rt", "net", "io-util", "time"] }
 windows-sys = { version = "0.61.2", features = ["Win32_System_Pipes", "Win32_System_Threading", "Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
+iroha_operation_journal = { workspace = true }
+mv = { workspace = true }
 iroha_test_samples = { workspace = true }
+iroha_version = { workspace = true }
 iroha_core = { workspace = true, default-features = false, features = ["iroha-core-tests"] }
 iroha_allocation = { workspace = true }
 halo2curves = { workspace = true }

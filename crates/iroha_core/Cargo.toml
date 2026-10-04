@@ -103,8 +103,6 @@ profiling = []
 fastpq-gpu = ["fastpq_prover/fastpq-gpu"]
 # Enable benchmark-only helpers used by this crate's Criterion targets.
 bench = []
-# Enable IDs-only query projections
-ids_projection = ["iroha_data_model/ids_projection"]
 # ZK verifier feature flags ship enabled by default.
 zk-halo2 = ["dep:kaigi_zk"]
 zk-stark = ["iroha_core_zk/zk-stark", "iroha_core_privacy/zk-stark"]
@@ -161,9 +159,11 @@ is-it-maintained-open-issues = { repository = "https://github.com/hyperledger-ir
 maintenance = { status = "actively-developed" }
 
 [dependencies]
-iroha_core_privacy = { workspace = true }
+arrayvec = "0.7.6"
+iroha_core_privacy = { workspace = true, default-features = false }
 iroha_core_timed_ovn = { workspace = true }
 iroha_allocation = { workspace = true }
+iroha_fs = { workspace = true }
 iroha_model_base = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "governance", "http"] }
@@ -183,6 +183,7 @@ iroha_genesis = { workspace = true }
 iroha_torii_shared = { workspace = true }
 iroha_executor_data_model = { workspace = true }
 ivm = { workspace = true }
+ivm_abi = { workspace = true }
 fastpq_prover = { path = "../fastpq_prover" }
 fastpq_isi = { path = "../fastpq_isi" }
 mv = { workspace = true }
@@ -236,7 +237,8 @@ indexmap = "2.12.0"
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [dev-dependencies]
-iroha_core_privacy = { workspace = true, features = ["test-utils"] }
+mv = { workspace = true, features = ["test"] }
+iroha_core_privacy = { workspace = true, default-features = false, features = ["test-utils"] }
 iroha_core_timed_ovn = { workspace = true, features = ["test-utils"] }
 kotodama_lang = { workspace = true }
 iroha_core_zk = { workspace = true, default-features = false, features = ["test-utils"] }

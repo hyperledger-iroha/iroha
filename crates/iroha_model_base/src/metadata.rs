@@ -146,6 +146,27 @@ impl norito::json::JsonDeserialize for Metadata {
     }
 }
 impl Metadata {
+    /// Copy validated metadata while charging its complete retained graph.
+    ///
+    /// The tree and any long names are new owners; canonical JSON shares exact
+    /// backing or copies its text without spare capacity, with the full charge.
+    /// No sequence plan, staging vector or JSON parser graph is retained.
+    ///
+    /// # Errors
+    /// Returns an allocation refusal before the corresponding owner is created.
+    #[doc(hidden)]
+    pub fn try_clone_for_admission(&self) -> Result<Self, ncore::Error> {
+        ncore::reserve_decode_btree_allocation::<Name, Json>(self.0.len())?;
+        let mut map = BTreeMap::new();
+        for (name, json) in &self.0 {
+            map.insert(
+                name.try_clone_for_admission()?,
+                json.try_clone_for_admission()?,
+            );
+        }
+        Ok(Self(map))
+    }
+
     /// Returns `true` when the metadata map has no entries.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()

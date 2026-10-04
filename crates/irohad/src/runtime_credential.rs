@@ -35,6 +35,30 @@ pub(crate) fn load_bounded_runtime_credential_v1(
     }
     Ok(bytes)
 }
+/// Decode the sole canonical newline-terminated software key and require its exact public key.
+/// This grants key custody only; every consumer retains its native role/permission checks.
+pub(crate) fn load_bound_software_key_v1(
+    path: &Path,
+    expected: &iroha_crypto::PublicKey,
+) -> Result<iroha_crypto::KeyPair, RuntimeCredentialErrorV1> {
+    let invalid = RuntimeCredentialErrorV1::InvalidSource;
+    let bytes = load_bounded_runtime_credential_v1(path, 2, 16 * 1024 + 256)?;
+    let text = bytes
+        .strip_suffix(b"\n")
+        .and_then(|v| std::str::from_utf8(v).ok())
+        .ok_or(invalid)?;
+    let private: iroha_crypto::ExposedPrivateKey = text.parse().map_err(|_| invalid)?;
+    let canonical = Zeroizing::new(private.try_to_multihash_string().map_err(|_| invalid)?);
+    if canonical.as_str() != text {
+        return Err(invalid);
+    }
+    let key = iroha_crypto::KeyPair::from_private_key(private.0).map_err(|_| invalid)?;
+    if key.public_key() != expected {
+        return Err(invalid);
+    }
+    Ok(key)
+}
+
 /// Payload-free bounded runtime-credential source failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuntimeCredentialErrorV1 {
@@ -69,6 +93,32 @@ mod tests {
             .expect("private credential");
         let path = private.path().join("runtime-secret");
         (directory, path)
+    }
+
+    #[test]
+    fn bound_software_key_requires_canonical_original_and_exact_public_key() {
+        let key =
+            iroha_crypto::KeyPair::from_seed(vec![0x93; 32], iroha_crypto::Algorithm::Ed25519);
+        let text = format!(
+            "{}\n",
+            iroha_crypto::ExposedPrivateKey(key.private_key().clone())
+                .try_to_multihash_string()
+                .unwrap()
+        );
+        let (_root, path) = fixture(text.as_bytes());
+        assert_eq!(
+            load_bound_software_key_v1(&path, key.public_key())
+                .unwrap()
+                .public_key(),
+            key.public_key()
+        );
+        let foreign =
+            iroha_crypto::KeyPair::from_seed(vec![0x94; 32], iroha_crypto::Algorithm::Ed25519);
+        assert!(load_bound_software_key_v1(&path, foreign.public_key()).is_err());
+        let (_root, missing_newline) = fixture(text.trim_end().as_bytes());
+        assert!(load_bound_software_key_v1(&missing_newline, key.public_key()).is_err());
+        let (_root, extra) = fixture(format!("{text}\n").as_bytes());
+        assert!(load_bound_software_key_v1(&extra, key.public_key()).is_err());
     }
 
     #[test]

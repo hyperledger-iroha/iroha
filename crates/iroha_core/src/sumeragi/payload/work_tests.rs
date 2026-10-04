@@ -2,7 +2,7 @@
 use super::*;
 use iroha_data_model::block::{BlockHeader, builder::BlockBuilder as WireBlockBuilder};
 use iroha_model_base::topology::LaneId;
-use std::{collections::BTreeSet, num::NonZeroU64};
+use std::num::NonZeroU64;
 
 #[test]
 fn native_lane_merge_is_work_without_a_direct_network_execution_leaf() {
@@ -28,7 +28,7 @@ fn native_lane_merge_is_work_without_a_direct_network_execution_leaf() {
         merged_count: 0,
     });
     builder.set_execution_context(Some(context));
-    let block = builder.build(BTreeSet::new());
+    let block = builder.build(iroha_data_model::block::BlockSignatures::default());
     assert_eq!(block.network_entrypoint_count(), 0);
     assert!(block.has_consensus_work());
     let encoded = encode(&block).unwrap();
@@ -51,7 +51,7 @@ fn outputs_and_empty_context_cannot_create_proposal_work() {
         19,
     ));
     builder.set_execution_context(Some(BlockExecutionContextBundle::default()));
-    let block = builder.build(BTreeSet::new());
+    let block = builder.build(iroha_data_model::block::BlockSignatures::default());
     assert!(!block.has_consensus_work());
     assert_eq!(encode(&block), Err(PayloadError::EmptyBlock));
     assert!(matches!(
@@ -143,7 +143,12 @@ fn previous_two_build_reference(
 #[test]
 fn merge_floor_avoids_duplicate_original_parent_build_with_exact_wire_parity() {
     let chain = original_parent_chain();
-    let parent = chain.state().view().latest_block().unwrap();
+    let parent = chain
+        .state()
+        .view()
+        .latest_block()
+        .expect("original committed parent read completes")
+        .expect("fixture retains its actual committed parent");
     let assembly = Assembly {
         parent: &parent,
         view: 7,
@@ -216,7 +221,12 @@ fn merge_floor_avoids_duplicate_original_parent_build_with_exact_wire_parity() {
 #[test]
 fn empty_work_and_cadence_overflow_refuse_before_any_parent_build() {
     let chain = original_parent_chain();
-    let parent = chain.state().view().latest_block().unwrap();
+    let parent = chain
+        .state()
+        .view()
+        .latest_block()
+        .expect("original committed parent read completes")
+        .expect("fixture retains its actual committed parent");
     let assembly = Assembly {
         parent: &parent,
         view: 0,

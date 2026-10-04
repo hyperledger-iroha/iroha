@@ -242,11 +242,6 @@ capture_world_table_once!(
     "world.soradns_release_signers"
 );
 capture_world_table_once!(
-    pub(super) capture_repo_agreements_once,
-    repo_agreements,
-    "world.repo_agreements"
-);
-capture_world_table_once!(
     pub(super) capture_settlement_receipts_once,
     settlement_receipts,
     "world.settlement_receipts"
@@ -320,11 +315,6 @@ capture_world_table_once!(
     pub(super) capture_ministry_agenda_proposals_once,
     ministry_agenda_proposals,
     "world.ministry_agenda_proposals"
-);
-capture_world_table_once!(
-    pub(super) capture_governance_proposals_once,
-    governance_proposals,
-    "world.governance_proposals"
 );
 capture_world_table_once!(
     pub(super) capture_governance_referenda_once,

@@ -1804,7 +1804,7 @@ fn moderation_archive_fixture_is_preflighted_before_every_mutating_backend() {
         )
         .expect("decode archive install result")
     };
-    assert_eq!(state.decode_pool.used_bytes.load(Ordering::Acquire), 0);
+    assert_eq!(state.decode_pool.allocation.reserved_bytes(), 0);
     assert_eq!(install_result.signature, fixture.archive_signature);
     assert_eq!(archive.install_calls.load(Ordering::Acquire), 1);
     let read = operation_for_slot(
@@ -1833,7 +1833,7 @@ fn moderation_archive_fixture_is_preflighted_before_every_mutating_backend() {
         .expect("decode exact archive readback")
         .expect("installed fixture must be readable")
     };
-    assert_eq!(state.decode_pool.used_bytes.load(Ordering::Acquire), 0);
+    assert_eq!(state.decode_pool.allocation.reserved_bytes(), 0);
     assert_eq!(
         readback.canonical_artifact.as_slice(),
         fixture.canonical_artifact.as_slice()
@@ -1896,7 +1896,7 @@ fn moderation_archive_fixture_is_preflighted_before_every_mutating_backend() {
         )
         .expect("decode exact source attestation result")
     };
-    assert_eq!(state.decode_pool.used_bytes.load(Ordering::Acquire), 0);
+    assert_eq!(state.decode_pool.allocation.reserved_bytes(), 0);
     assert_eq!(
         attest_result.statement_digest,
         fixture.validation.source_attestation_digest
@@ -1980,7 +1980,7 @@ fn moderation_archive_fixture_is_preflighted_before_every_mutating_backend() {
         )
         .expect("decode empty archive-head readback")
     };
-    assert_eq!(state.decode_pool.used_bytes.load(Ordering::Acquire), 0);
+    assert_eq!(state.decode_pool.allocation.reserved_bytes(), 0);
     assert_eq!(
         empty_head_read_result.version,
         MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
@@ -2111,7 +2111,7 @@ fn moderation_archive_fixture_is_preflighted_before_every_mutating_backend() {
         )
         .expect("decode archive-head publication result")
     };
-    assert_eq!(state.decode_pool.used_bytes.load(Ordering::Acquire), 0);
+    assert_eq!(state.decode_pool.allocation.reserved_bytes(), 0);
     assert_eq!(publish_result.operation_id, fixture.validation.operation_id);
     assert_eq!(publish_result.head_digest, fixture.validation.head_digest);
     assert_eq!(
@@ -2149,7 +2149,7 @@ fn moderation_archive_fixture_is_preflighted_before_every_mutating_backend() {
         )
         .expect("decode published archive-head readback")
     };
-    assert_eq!(state.decode_pool.used_bytes.load(Ordering::Acquire), 0);
+    assert_eq!(state.decode_pool.allocation.reserved_bytes(), 0);
     assert_eq!(
         published_head_read_result.canonical_head.as_deref(),
         Some(fixture.canonical_signed_head.as_slice())
@@ -2699,13 +2699,23 @@ fn global_beacon_partial_signer_round_trips_over_authenticated_broker() {
 
 #[test]
 fn maximum_committee_global_beacon_proxy_round_trips_on_ordinary_stack() {
+    let fixture_started = std::time::Instant::now();
     let fixture = consensus_threshold_beacon_broker_max_committee_test_fixture_v1();
+    eprintln!(
+        "max31 fixture construction: {:?}",
+        fixture_started.elapsed()
+    );
+    let connection_started = std::time::Instant::now();
     assert_eq!(fixture.session.record().committee_size, 31);
     assert_eq!(fixture.session.record().threshold, 11);
     let (_directory, policy, shutdown, server) =
         start_signer(fixture.catalog.clone(), fixture.backends);
     let dependencies = resolve_test_process(&fixture.catalog, &policy)
         .expect("resolve maximum-committee beacon proxy");
+    eprintln!(
+        "max31 authenticated connection: {:?}",
+        connection_started.elapsed()
+    );
     let signer = dependencies
         .sumeragi_global_beacon_partial_signer
         .as_ref()
@@ -2724,12 +2734,18 @@ fn maximum_committee_global_beacon_proxy_round_trips_on_ordinary_stack() {
         iroha_core::beacon::pulse_context_fixture_v1(),
     )
     .expect("construct maximum-committee brokered beacon pulse");
+    let signing_started = std::time::Instant::now();
     let partial = iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1::sign_partial(
         signer.as_ref(),
         &fixture.session,
         verifier.payload(),
-    )
-    .expect("sign maximum-committee beacon partial on the ordinary client stack");
+    );
+    eprintln!(
+        "max31 authenticated partial-sign exchange: {:?}",
+        signing_started.elapsed()
+    );
+    let partial =
+        partial.expect("sign maximum-committee beacon partial on the ordinary client stack");
     assert!(
         verifier
             .accept_partial(partial)
@@ -3986,6 +4002,13 @@ fn correlated_truncated_beacon_capability_is_rejected_by_typed_proxy() {
 
 #[test]
 fn global_beacon_capability_request_rejects_foreign_network_transcript_and_invalid_seat() {
+    let pool = Arc::new(DecodeResourcePoolV1::new(MAX_BROKER_SHARED_DECODE_BYTES_V1));
+    let admission = DecodeResourceAdmissionV1::acquire_operation_from(
+        pool,
+        OPERATION_GLOBAL_BEACON_CAPABILITY_ATTEST_V1,
+    )
+    .unwrap();
+    let _scope = admission.enter();
     let fixture = consensus_threshold_beacon_broker_test_fixture_v1();
     let encode = |session, signer_index| {
         encode_canonical(
@@ -4169,4 +4192,600 @@ fn prepared_beacon_readiness_round_trips_over_its_typed_broker_domain() {
     drop(dependencies);
     shutdown.request_shutdown();
     server.join().unwrap().unwrap();
+}
+
+#[test]
+fn beacon_request_borrowed_views_emit_the_exact_canonical_owned_frames() {
+    let (fixture, authority, context) = crate::external_software_signer::consensus_threshold_beacon_readiness_broker_test_fixture_v1();
+    let public = fixture.session.record();
+    let anchor = iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
+        height: 50,
+        block_hash: iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
+            [0xB1; 32],
+        )),
+    };
+    let pulse_context = iroha_core::beacon::pulse_context_fixture_v1();
+    let owned = GlobalBeaconPartialSignRequestWireV1 {
+        session: public.clone(),
+        height: 51,
+        finalized_chain_anchor: anchor,
+        context: pulse_context,
+    };
+    let borrowed = GlobalBeaconPartialSignRequestRefV1 {
+        session: norito::core::PayloadRef(public),
+        height: 51,
+        finalized_chain_anchor: anchor,
+        context: pulse_context,
+    };
+    assert_eq!(
+        norito::encode_canonical(&owned).unwrap(),
+        norito::encode_canonical(&borrowed).unwrap()
+    );
+    let owned = GlobalBeaconSeatReadinessRequestWireV1 {
+        session: public.clone(),
+        authority: authority.clone(),
+        context,
+    };
+    let borrowed = GlobalBeaconSeatReadinessRequestRefV1 {
+        session: norito::core::PayloadRef(public),
+        authority: norito::core::PayloadRef(&authority),
+        context,
+    };
+    assert_eq!(
+        norito::encode_canonical(&owned).unwrap(),
+        norito::encode_canonical(&borrowed).unwrap()
+    );
+    let owned = GlobalBeaconCapabilityAttestRequestWireV1 {
+        session: public.clone(),
+        signer_index: 1,
+    };
+    let borrowed = GlobalBeaconCapabilityAttestRequestRefV1 {
+        session: norito::core::PayloadRef(public),
+        signer_index: 1,
+    };
+    assert_eq!(
+        norito::encode_canonical(&owned).unwrap(),
+        norito::encode_canonical(&borrowed).unwrap()
+    );
+}
+
+#[test]
+fn beacon_operation_graph_uses_the_original_process_pool_and_outlives_its_decode_permit() {
+    let fixture = consensus_threshold_beacon_broker_test_fixture_v1();
+    let public = fixture.session.record();
+    let binding = iroha_core::beacon::GlobalThresholdBeaconSessionBindingV1 {
+        network_id: public.network_id,
+        session_id: public.session_id,
+        roster_hash: public.roster_hash,
+        transcript_hash: public.transcript_hash,
+    };
+    let demand =
+        iroha_core::beacon::global_threshold_beacon_session_allocation_bytes_v1(public, &binding)
+            .unwrap();
+    let policy = operation_decode_policy(OPERATION_GLOBAL_BEACON_CAPABILITY_ATTEST_V1);
+    let pool = Arc::new(DecodeResourcePoolV1::new(
+        policy.max_composed_bytes + demand + 1,
+    ));
+    let admission = DecodeResourceAdmissionV1::acquire_operation_from(
+        pool.clone(),
+        OPERATION_GLOBAL_BEACON_CAPABILITY_ATTEST_V1,
+    )
+    .unwrap();
+    let blocker = pool.try_acquire(2).unwrap();
+    assert!(matches!(
+        admission.retain_beacon_session(public, &binding),
+        Err(BrokerError::Unavailable)
+    ));
+    assert_eq!(
+        pool.allocation.reserved_bytes(),
+        policy.max_composed_bytes + 2
+    );
+    assert!(admission.beacon_session.lock().unwrap().is_none());
+    assert!(matches!(
+        admission.retain_beacon_session(public, &binding),
+        Err(BrokerError::Unavailable)
+    ));
+    assert!(admission.beacon_session.lock().unwrap().is_none());
+    assert_eq!(
+        pool.allocation.reserved_bytes(),
+        policy.max_composed_bytes + 2
+    );
+    drop(blocker);
+    let session = admission.retain_beacon_session(public, &binding).unwrap();
+    assert!(session.belongs_to(&pool.allocation));
+    assert_eq!(session.record(), public);
+    assert!(
+        admission
+            .beacon_session
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .ptr_eq(&session)
+    );
+    let retained = session.retained_allocation_bytes();
+    assert_eq!(
+        pool.allocation.reserved_bytes(),
+        policy.max_composed_bytes + retained
+    );
+    let shared = session.clone();
+    assert!(shared.ptr_eq(&session));
+    drop(admission);
+    assert_eq!(pool.allocation.reserved_bytes(), retained);
+    drop(session);
+    assert_eq!(pool.allocation.reserved_bytes(), retained);
+    drop(shared);
+    assert_eq!(pool.allocation.reserved_bytes(), 0);
+    assert!(
+        matches!(
+            retain_operation_beacon_session(public, &binding),
+            Err(BrokerError::Unavailable)
+        ),
+        "an absent original operation never creates another pool"
+    );
+}
+
+#[test]
+fn beacon_operation_reuses_original_graph_across_ingress_dispatch_and_response() {
+    for committee in [4, 31] {
+        let fixture = if committee == 4 {
+            consensus_threshold_beacon_broker_test_fixture_v1()
+        } else {
+            consensus_threshold_beacon_broker_max_committee_test_fixture_v1()
+        };
+        let public = fixture.session.record();
+        let binding = iroha_core::beacon::GlobalThresholdBeaconSessionBindingV1 {
+            network_id: public.network_id,
+            session_id: public.session_id,
+            roster_hash: public.roster_hash,
+            transcript_hash: public.transcript_hash,
+        };
+        let graph_demand = iroha_core::beacon::global_threshold_beacon_session_allocation_bytes_v1(
+            public, &binding,
+        )
+        .unwrap();
+        let policy = operation_decode_policy(OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1);
+        let pool = Arc::new(DecodeResourcePoolV1::new(
+            policy.max_composed_bytes + graph_demand,
+        ));
+        let state =
+            prepare_server_state(&fixture.catalog, fixture.backends, Arc::clone(&pool)).unwrap();
+        let wire_binding =
+            ProviderBindingWireV1::try_from_binding(fixture.catalog.iter().next().unwrap())
+                .unwrap();
+        let metadata = configured_observation(&state, &wire_binding)
+            .unwrap()
+            .metadata_digest;
+        let anchor = iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
+            height: 50,
+            block_hash: iroha_crypto::HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::prehashed([0xB6; 32]),
+            ),
+        };
+        let payload = encode_canonical(
+            &GlobalBeaconPartialSignRequestRefV1 {
+                session: norito::core::PayloadRef(public),
+                height: 51,
+                finalized_chain_anchor: anchor,
+                context: iroha_core::beacon::pulse_context_fixture_v1(),
+            },
+            MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+        )
+        .unwrap();
+        // Exercise the exact authoritative decode policy before the transport
+        // boundary maps its original Norito cause to BrokerError::Protocol.
+        // Drop this independent probe before entering the real operation below.
+        {
+            let budget =
+                decode_resource_budget(payload.len(), MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1, policy)
+                    .expect("current global beacon operation decode geometry");
+            let limits = DecodeLimits::new(
+                budget.max_sequence_elements,
+                budget.max_blob_bytes,
+                budget.max_total_elements,
+                budget.max_total_allocated_bytes,
+                budget.max_nesting_depth,
+            );
+            let source_identity = (
+                payload.as_ptr(),
+                payload.len(),
+                iroha_crypto::Hash::new(&payload),
+            );
+            let (decoded, actual_work) = norito::core::with_decode_limits_measured(limits, || {
+                norito::decode_canonical_with_limits::<GlobalBeaconPartialSignRequestWireV1>(
+                    &payload, limits,
+                )
+            });
+            let decoded = decoded.unwrap_or_else(|original| {
+                panic!(
+                    "n{committee} exact broker policy canonical decode failed for {} bytes with {budget:?}: {original:?}",
+                    payload.len(),
+                )
+            });
+            // The measurement is actual cumulative codec work. It neither
+            // represents allocator residency nor replaces the retained graph
+            // charged to the original process pool below.
+            assert!(actual_work.total_allocated_bytes() > 0);
+            assert!(actual_work.total_allocated_bytes() <= budget.max_total_allocated_bytes);
+            assert!(actual_work.total_elements() <= budget.max_total_elements);
+            let retired_generic_budget = decode_resource_budget(
+                payload.len(),
+                MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+                STANDARD_DECODE_POLICY_V1,
+            )
+            .unwrap();
+            if committee == 31 {
+                assert!(
+                    actual_work.total_allocated_bytes()
+                        > retired_generic_budget.max_total_allocated_bytes,
+                    "the real maximum graph exceeds generic fixed headroom"
+                );
+                let retired_limits = DecodeLimits::new(
+                    retired_generic_budget.max_sequence_elements,
+                    retired_generic_budget.max_blob_bytes,
+                    retired_generic_budget.max_total_elements,
+                    retired_generic_budget.max_total_allocated_bytes,
+                    retired_generic_budget.max_nesting_depth,
+                );
+                let refusal = norito::decode_canonical_with_limits::<
+                    GlobalBeaconPartialSignRequestWireV1,
+                >(&payload, retired_limits)
+                .expect_err("same maximum graph reproduces the original generic resource refusal");
+                assert!(refusal.is_decode_resource_limit());
+            } else {
+                assert!(
+                    budget.max_total_allocated_bytes
+                        < retired_generic_budget.max_total_allocated_bytes,
+                    "actual small wire geometry reduces the four-seat quota"
+                );
+            }
+            let probe_pool = Arc::new(DecodeResourcePoolV1::new(policy.max_composed_bytes));
+            let narrow = DecodeLimits::new(
+                limits.max_sequence_elements(),
+                limits.max_field_bytes(),
+                limits.max_total_elements(),
+                actual_work.total_allocated_bytes() - 1,
+                limits.max_nesting_depth(),
+            );
+            assert_eq!(
+                norito::core::with_decode_limits_scope(narrow, || {
+                    decode_canonical_with_policy_from::<GlobalBeaconPartialSignRequestWireV1>(
+                        &payload,
+                        MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+                        policy,
+                        Arc::clone(&probe_pool),
+                    )
+                })
+                .err(),
+                Some(BrokerError::Unavailable),
+                "the actual final-prefix caller refusal stays local under the same protocol budget"
+            );
+            assert_eq!(probe_pool.allocation.reserved_bytes(), 0);
+            let retry = decode_canonical_with_policy_from::<GlobalBeaconPartialSignRequestWireV1>(
+                &payload,
+                MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+                policy,
+                Arc::clone(&probe_pool),
+            )
+            .expect("original full source retries after its enclosing quota retires");
+            assert_eq!(&retry.session, public);
+            assert_eq!(norito::encode_canonical(&retry).unwrap(), payload);
+            drop(retry);
+            assert_eq!(probe_pool.allocation.reserved_bytes(), 0);
+            let mut corrupted = payload.clone();
+            *corrupted.last_mut().unwrap() ^= 1;
+            assert_eq!(
+                decode_canonical_with_policy_from::<GlobalBeaconPartialSignRequestWireV1>(
+                    &corrupted,
+                    MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+                    policy,
+                    Arc::clone(&probe_pool),
+                )
+                .err(),
+                Some(BrokerError::Protocol),
+                "a completed canonical mismatch is still invalid"
+            );
+            assert_eq!(probe_pool.allocation.reserved_bytes(), 0);
+            assert_eq!(
+                (
+                    payload.as_ptr(),
+                    payload.len(),
+                    iroha_crypto::Hash::new(&payload)
+                ),
+                source_identity
+            );
+            assert_eq!(&decoded.session, public);
+            assert_eq!(decoded.height, 51);
+            assert_eq!(decoded.finalized_chain_anchor, anchor);
+            assert_eq!(
+                decoded.context,
+                iroha_core::beacon::pulse_context_fixture_v1()
+            );
+            assert_eq!(
+                norito::encode_canonical(&decoded).expect("sole canonical request layout"),
+                payload
+            );
+        }
+        let request = make_operation_request(
+            TEST_SESSION_ID,
+            1,
+            wire_binding,
+            metadata,
+            OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1,
+            payload,
+        )
+        .unwrap();
+        let admission = DecodeResourceAdmissionV1::acquire_operation_from(
+            Arc::clone(&pool),
+            OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1,
+        )
+        .unwrap();
+        let scope = admission.enter();
+        let ingress_started = std::time::Instant::now();
+        validate_operation_request_with_session(&request, None, fixture.catalog.network_id())
+            .expect("actual ingress authenticates and retains the complete session");
+        eprintln!(
+            "n{committee} original broker ingress validation: {:?}",
+            ingress_started.elapsed()
+        );
+        let original = admission
+            .beacon_session
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert!(original.belongs_to(&pool.allocation));
+        let retained = original.retained_allocation_bytes();
+        assert_eq!(
+            pool.allocation.reserved_bytes(),
+            policy.max_composed_bytes + retained
+        );
+        let blocker = pool
+            .try_acquire(pool.max_bytes - pool.allocation.reserved_bytes())
+            .unwrap();
+        assert_eq!(pool.allocation.reserved_bytes(), pool.max_bytes);
+
+        let dispatch_started = std::time::Instant::now();
+        let result = dispatch_server_operation(&state, &request)
+            .expect("the real signer dispatch shares the ingress graph under saturation");
+        eprintln!(
+            "n{committee} retained broker sign dispatch: {:?}",
+            dispatch_started.elapsed()
+        );
+        let response_started = std::time::Instant::now();
+        let response = make_operation_response_scrubbed(
+            &request,
+            STATUS_OK_V1,
+            result,
+            fixture.catalog.network_id(),
+        )
+        .expect("the real response verifier shares that identical authenticated graph");
+        validate_operation_response(&request, &response, fixture.catalog.network_id()).unwrap();
+        eprintln!(
+            "n{committee} retained broker response validation: {:?}",
+            response_started.elapsed()
+        );
+        let final_owner = admission
+            .beacon_session
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert!(final_owner.ptr_eq(&original));
+        assert_eq!(pool.allocation.reserved_bytes(), pool.max_bytes);
+        let signed = decode_canonical::<GlobalBeaconPartialSignResultWireV1>(
+            &response.result,
+            MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+        )
+        .unwrap();
+        let mut verifier = iroha_core::beacon::GlobalThresholdBeaconPulseAggregatorV1::new(
+            fixture.session.clone(),
+            51,
+            anchor,
+            iroha_core::beacon::pulse_context_fixture_v1(),
+        )
+        .unwrap();
+        assert!(verifier.accept_partial(signed.partial).unwrap());
+        drop(response);
+        drop(blocker);
+        drop(scope);
+        drop(admission);
+        assert_eq!(pool.allocation.reserved_bytes(), retained);
+        drop(original);
+        assert_eq!(pool.allocation.reserved_bytes(), retained);
+        drop(final_owner);
+        assert_eq!(pool.allocation.reserved_bytes(), 0);
+    }
+}
+
+#[test]
+fn beacon_operation_rejects_rebound_record_and_binding_without_replacing_original() {
+    let fixture = consensus_threshold_beacon_broker_test_fixture_v1();
+    let public = fixture.session.record();
+    let binding = iroha_core::beacon::GlobalThresholdBeaconSessionBindingV1 {
+        network_id: public.network_id,
+        session_id: public.session_id,
+        roster_hash: public.roster_hash,
+        transcript_hash: public.transcript_hash,
+    };
+    let pool = new_test_process_pool();
+    let admission = DecodeResourceAdmissionV1::acquire_operation_from(
+        Arc::clone(&pool),
+        OPERATION_GLOBAL_BEACON_CAPABILITY_ATTEST_V1,
+    )
+    .unwrap();
+    let original = admission.retain_beacon_session(public, &binding).unwrap();
+    let retained_total = pool.allocation.reserved_bytes();
+    let mut changed = public.clone();
+    changed.adaptive_dkg.event_hash[0] ^= 1;
+    assert_eq!(changed.session_id, public.session_id);
+    assert_eq!(changed.roster_hash, public.roster_hash);
+    assert_eq!(changed.transcript_hash, public.transcript_hash);
+    assert!(matches!(
+        admission.retain_beacon_session(&changed, &binding),
+        Err(BrokerError::Rejected)
+    ));
+    let mut foreign_binding = binding;
+    foreign_binding.transcript_hash[0] ^= 1;
+    assert!(matches!(
+        admission.retain_beacon_session(public, &foreign_binding),
+        Err(BrokerError::Rejected)
+    ));
+    assert_eq!(pool.allocation.reserved_bytes(), retained_total);
+    let same = admission
+        .retain_beacon_session(&public.clone(), &binding)
+        .unwrap();
+    assert!(same.ptr_eq(&original));
+    assert_eq!(pool.allocation.reserved_bytes(), retained_total);
+    drop(same);
+    drop(admission);
+    assert_eq!(
+        pool.allocation.reserved_bytes(),
+        original.retained_allocation_bytes()
+    );
+    drop(original);
+    assert_eq!(pool.allocation.reserved_bytes(), 0);
+}
+
+#[test]
+fn beacon_operation_does_not_retain_failed_authentication_before_exact_retry() {
+    let fixture = consensus_threshold_beacon_broker_test_fixture_v1();
+    let public = fixture.session.record();
+    let binding = iroha_core::beacon::GlobalThresholdBeaconSessionBindingV1 {
+        network_id: public.network_id,
+        session_id: public.session_id,
+        roster_hash: public.roster_hash,
+        transcript_hash: public.transcript_hash,
+    };
+    let pool = new_test_process_pool();
+    let admission = DecodeResourceAdmissionV1::acquire_operation_from(
+        Arc::clone(&pool),
+        OPERATION_GLOBAL_BEACON_CAPABILITY_ATTEST_V1,
+    )
+    .unwrap();
+    let before = pool.allocation.reserved_bytes();
+    let mut changed = public.clone();
+    changed.adaptive_dkg.event_hash[0] ^= 1;
+    assert!(matches!(
+        admission.retain_beacon_session(&changed, &binding),
+        Err(BrokerError::Rejected)
+    ));
+    assert!(admission.beacon_session.lock().unwrap().is_none());
+    assert_eq!(pool.allocation.reserved_bytes(), before);
+    let exact = admission.retain_beacon_session(public, &binding).unwrap();
+    assert!(exact.belongs_to(&pool.allocation));
+    assert_eq!(exact.record(), public);
+    drop(admission);
+    assert_eq!(
+        pool.allocation.reserved_bytes(),
+        exact.retained_allocation_bytes()
+    );
+    drop(exact);
+    assert_eq!(pool.allocation.reserved_bytes(), 0);
+}
+
+#[test]
+fn global_beacon_schema_work_quota_scales_wire_and_preserves_every_absolute_and_original_pool_cap()
+{
+    let policy = GLOBAL_BEACON_DECODE_POLICY_V1;
+    assert_eq!(policy.allocation_wire_passes, 5 + 6 + 2);
+    assert!(policy.allocation_headroom_bytes > 0);
+    assert!(policy.allocation_headroom_bytes < STANDARD_DECODE_POLICY_V1.allocation_headroom_bytes);
+    assert_eq!(
+        policy.max_sequence_elements,
+        STANDARD_DECODE_POLICY_V1.max_sequence_elements
+    );
+    assert_eq!(
+        policy.max_blob_bytes,
+        STANDARD_DECODE_POLICY_V1.max_blob_bytes
+    );
+    assert_eq!(
+        policy.max_total_elements,
+        STANDARD_DECODE_POLICY_V1.max_total_elements
+    );
+    assert_eq!(
+        policy.max_total_allocated_bytes,
+        STANDARD_DECODE_POLICY_V1.max_total_allocated_bytes
+    );
+    assert_eq!(
+        policy.max_nesting_depth,
+        STANDARD_DECODE_POLICY_V1.max_nesting_depth
+    );
+    assert_eq!(
+        policy.max_composed_bytes,
+        STANDARD_DECODE_POLICY_V1.max_composed_bytes
+    );
+    assert_eq!(
+        policy.max_cumulative_bytes,
+        STANDARD_DECODE_POLICY_V1.max_cumulative_bytes
+    );
+    for operation in 0..=u16::MAX {
+        if !operation_is_known(operation) {
+            continue;
+        }
+        if matches!(
+            operation,
+            OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1
+                | OPERATION_GLOBAL_BEACON_CAPABILITY_ATTEST_V1
+                | OPERATION_GLOBAL_BEACON_SEAT_READINESS_V1
+        ) {
+            assert_eq!(operation_decode_policy(operation), policy);
+            assert_eq!(
+                operation_semantic_frame_limit(operation),
+                MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1
+            );
+        } else {
+            assert_eq!(
+                operation_decode_policy(operation).allocation_wire_passes,
+                1,
+                "other existing operation profiles retain their original single wire pass"
+            );
+        }
+    }
+    for bytes in [1, 1024, MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1] {
+        let budget =
+            decode_resource_budget(bytes, MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1, policy).unwrap();
+        assert_eq!(
+            budget.max_total_allocated_bytes,
+            (bytes * GLOBAL_BEACON_DECODE_PROFILE_V1.allocation_wire_passes
+                + GLOBAL_BEACON_DECODE_PROFILE_V1.allocation_intrinsic_bytes)
+                .min(STANDARD_MAX_DECODE_ALLOCATION_BYTES_V1)
+        );
+        assert!(budget.max_total_allocated_bytes <= STANDARD_MAX_DECODE_ALLOCATION_BYTES_V1);
+        assert_eq!(
+            budget.composed_charge_bytes,
+            bytes + budget.max_total_allocated_bytes
+        );
+    }
+    assert_eq!(
+        decode_resource_budget(
+            MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1 + 1,
+            MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+            policy
+        ),
+        Err(BrokerError::Protocol)
+    );
+    let pool = Arc::new(DecodeResourcePoolV1::new(policy.max_composed_bytes));
+    let occupied = pool.try_acquire(1).unwrap();
+    assert_eq!(
+        DecodeResourceAdmissionV1::acquire_operation_from(
+            Arc::clone(&pool),
+            OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1,
+        )
+        .err(),
+        Some(BrokerError::Unavailable),
+        "genuine original pool saturation remains retryable"
+    );
+    assert_eq!(pool.allocation.reserved_bytes(), 1);
+    drop(occupied);
+    let admitted = DecodeResourceAdmissionV1::acquire_operation_from(
+        Arc::clone(&pool),
+        OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1,
+    )
+    .unwrap();
+    assert_eq!(pool.allocation.reserved_bytes(), policy.max_composed_bytes);
+    drop(admitted);
+    assert_eq!(pool.allocation.reserved_bytes(), 0);
 }

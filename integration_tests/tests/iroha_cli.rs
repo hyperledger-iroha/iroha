@@ -22,7 +22,7 @@ use iroha::{
         account::AccountId,
         asset::{AssetDefinitionId, AssetId},
         permission::Permission,
-        prelude::{FindAssetById, FindAssetsDefinitions, Grant, Json},
+        prelude::{FindAssetById, FindAssetDefinitions, Grant, Json},
         soracloud::{
             AgentApartmentManifestV1, SoraContainerManifestV1, SoraServiceManifestV1,
             SoraStateMutabilityV1,
@@ -133,7 +133,7 @@ fn assert_soracloud_hf_lease_asset_ready(
     let asset_definition_id = soracloud_hf_lease_asset_definition();
     let asset_definition_exists = client
         .client()
-        .query(FindAssetsDefinitions::new())
+        .query(FindAssetDefinitions::new())
         .execute_all()?
         .into_iter()
         .any(|definition| definition.id == asset_definition_id);
@@ -787,7 +787,6 @@ async fn reads_client_toml_by_default() -> eyre::Result<()> {
         .arg("ledger")
         .arg("domain")
         .arg("list")
-        .arg("all")
         .bounded_status()
         .await?;
     assert!(exit_status.success());
@@ -1318,8 +1317,7 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
     );
     let no_write_stderr = String::from_utf8_lossy(&no_write_deploy.stderr);
     assert!(
-        no_write_stderr.contains("returned 400")
-            || no_write_stderr.contains("Failed to run the command"),
+        no_write_stderr.contains("returned 400") || no_write_stderr.contains("\"command\""),
         "{}",
         no_write_stderr
     );

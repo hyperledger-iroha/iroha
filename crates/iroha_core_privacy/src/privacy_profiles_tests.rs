@@ -574,11 +574,11 @@ mod tests {
                     "3a7a880faf2b32775c1d0db22fef3543fadeddc3db8bcad21e4e3df0f87ae09e".to_owned(),
                 ),
                 PrivacyProtocolIdV1::PqMaspStarkV1 => (
-                    "31beb12e9a6eb02355375b0b91af88aaf1183cf659a8851f478e2d4f88e3f8f6".to_owned(),
-                    "667c838c011e61eaaca1508a1b7539b6010208eaca3c6c0ad78ee9fd0142ee7d".to_owned(),
-                    "2637d6dd033db92774ca67b5ebcaf7d366dafffe0876b5cad15ccf880369f7b0".to_owned(),
+                    "42e04aa67d09764cd49fe28d60e4ca9d6fafbbda622478386241afc930814018".to_owned(),
+                    "48c3e48e3bb822548a815c67996a1b94810e4cc41c73eb50d61af8e09f68bafe".to_owned(),
+                    "62b1ccc68615391c90f4e375b4e61ccf5d4bbce4bd5ef3077a4707c6628b6d6b".to_owned(),
                     "a6314323ab707a3766599aed2d109b3ada63acec793ff2a729c749cd951a332d".to_owned(),
-                    "f8f79f31be11929172b8acd1132038c6c2f3cfaeea0b663955ad19f1c4437eba".to_owned(),
+                    "aa2bcf7c8ffa58aeca8b1f84c96b75e405b10695e3b3084c70ec0c7e4ffee121".to_owned(),
                 ),
                 _ => unreachable!("the test covers only IVM private note and PQ-MASP"),
             };

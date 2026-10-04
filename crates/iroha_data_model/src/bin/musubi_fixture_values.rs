@@ -13,10 +13,11 @@ use iroha_data_model::{
         instruction_wire_id,
         musubi::{
             AcceptMusubiPackageMaintainerV1, AddMusubiArchiveLocationV1, AdvanceMusubiPinOutboxV1,
-            AssertMusubiReleaseDigestV1, InviteMusubiPackageMaintainerV1, PublishMusubiReleaseV1,
-            RecoverMusubiPackageV1, RegisterMusubiAliasV1, RegisterMusubiArchiveV1,
-            RegisterMusubiNamespaceBindingV1, RegisterMusubiProviderBundleAttestationV1,
-            RemoveMusubiPackageMaintainerV1, RetargetMusubiAliasV1, RetireMusubiArchiveLocationV1,
+            AssertMusubiReleaseDigestV1, CheckMusubiPinOutboxV1, InviteMusubiPackageMaintainerV1,
+            PublishMusubiReleaseV1, RecoverMusubiPackageV1, RegisterMusubiAliasV1,
+            RegisterMusubiArchiveV1, RegisterMusubiNamespaceBindingV1,
+            RegisterMusubiProviderBundleAttestationV1, RemoveMusubiPackageMaintainerV1,
+            RetargetMusubiAliasV1, RetireMusubiArchiveLocationV1,
             RevokeMusubiPackageMaintainerInvitationV1, SetMusubiArtifactTakedownV1,
             SetMusubiPackageMaintainerRoleV1, SetMusubiPackageMetadataV1,
             SetMusubiRegistryPolicyV1, SetMusubiReleaseYankV1,
@@ -266,7 +267,7 @@ where
         "standalone_instruction_box_frame_hex": (encode_hex(&standalone_instruction_box_frame)),
     })
 }
-/// Concrete Musubi instruction values missing from the generated-record capture.
+/// Concrete Musubi instruction values shared with generated-record captures.
 #[allow(
     dead_code,
     reason = "the generator and grouped tests render JSON; library identity tests read these fields"
@@ -276,6 +277,8 @@ pub struct MusubiGeneratedIdentityValues {
     pub(crate) register_namespace: RegisterMusubiNamespaceBindingV1,
     /// Archive-registration fixture with a verified seed-ingress receipt.
     pub(crate) register_archive: RegisterMusubiArchiveV1,
+    /// Signed provider-bundle attestation with its explicit completion signer.
+    pub(crate) register_provider_attestation: RegisterMusubiProviderBundleAttestationV1,
     /// Archive-location retirement fixture.
     pub(crate) retire_archive_location: RetireMusubiArchiveLocationV1,
     /// Package-metadata replacement fixture.
@@ -304,6 +307,46 @@ pub struct MusubiGeneratedIdentityValues {
 #[must_use]
 pub fn instruction_document() -> Value {
     instruction_document_and_generated_identity_values().0
+}
+
+/// Both closed native pin-outbox Check variants from typed first-release values.
+pub fn pin_outbox_checks() -> [CheckMusubiPinOutboxV1; 2] {
+    use iroha_data_model::{
+        block::consensus::HeightContextId,
+        musubi::{
+            MusubiPinOutboxCheckExpectationV1, MusubiPinOutboxCheckFloorV1,
+            MusubiPinOutboxHighWaterV1,
+        },
+    };
+    let absent = CheckMusubiPinOutboxV1 {
+        network_id: fixture_network_id(),
+        pin_authority: account(INSTRUCTION_PUBLISHER_SEED),
+        session_id: [0xb7; 32],
+        inventory_digest: [0xb8; 32],
+        challenge: [0xb9; 32],
+        floor: MusubiPinOutboxCheckFloorV1 {
+            height: 93,
+            block_hash: [0xba; 32],
+            context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new([0xbb; 32]))),
+        },
+        expected: MusubiPinOutboxCheckExpectationV1::Absent,
+    };
+    let mut present = absent.clone();
+    present.challenge = [0xbc; 32];
+    present.expected = MusubiPinOutboxCheckExpectationV1::Present(MusubiPinOutboxHighWaterV1 {
+        version: 1,
+        network_id: absent.network_id,
+        pin_authority: absent.pin_authority.clone(),
+        session_id: absent.session_id,
+        revision: 17,
+        inventory_digest: absent.inventory_digest,
+        recorded_at_height: 81,
+        transaction_hash: [0xbd; 32],
+    });
+    for check in [&absent, &present] {
+        check.validate().expect("typed Check fixture");
+    }
+    [absent, present]
 }
 
 /// Construct the typed values needed by the generated-record identity capture.
@@ -881,6 +924,7 @@ fn fixture_provider_attestations(
                 provider_id,
                 completed_by: owner.clone(),
                 completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                    owner.clone(),
                     owner,
                     ProviderIngestCompletionSignerPolicyV1 {
                         policy_id: [policy_byte; 32],
@@ -1421,6 +1465,7 @@ impl FixtureInstructions {
         let generated_identity_values = MusubiGeneratedIdentityValues {
             register_namespace: register_namespace.clone(),
             register_archive: register_archive.clone(),
+            register_provider_attestation: register_provider_attestation.clone(),
             retire_archive_location: retire.clone(),
             set_package_metadata: set_metadata.clone(),
             invite_package_maintainer: invite.clone(),
@@ -1455,6 +1500,14 @@ impl FixtureInstructions {
                 register_archive,
             ),
             render_instruction_case("advance-signed-pin-outbox-inventory", advance_pin_outbox),
+            render_instruction_case(
+                "check-authority-wide-pin-outbox-absent",
+                pin_outbox_checks()[0].clone(),
+            ),
+            render_instruction_case(
+                "check-complete-pin-outbox-present",
+                pin_outbox_checks()[1].clone(),
+            ),
             render_instruction_case(
                 "register-provider-bundle-attestation",
                 register_provider_attestation,

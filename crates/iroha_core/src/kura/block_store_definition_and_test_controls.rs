@@ -5,7 +5,10 @@ impl Kura {
     /// # Errors
     /// Returns an error if the block cannot be appended or the tracked block-store byte usage
     /// cannot be measured.
-    pub fn persist_block_immediate_for_bench(&self, block: &Arc<SignedBlock>) -> Result<()> {
+    pub fn persist_block_immediate_for_bench(
+        &self,
+        block: &iroha_data_model::block::SharedSignedBlock,
+    ) -> Result<()> {
         self.durable_mutation_authorized()?;
         let _write_guard = self.block_store_write_lock.lock();
         self.ensure_no_retired_rollback_intents()?;
@@ -21,7 +24,10 @@ impl Kura {
         Ok(())
     }
     /// Append an in-memory pending block for storage-budget benchmark scenarios.
-    pub fn append_pending_block_for_bench(&self, block: Arc<SignedBlock>) {
+    pub fn append_pending_block_for_bench(
+        &self,
+        block: iroha_data_model::block::SharedSignedBlock,
+    ) {
         if self.durable_mutation_authorized().is_err() {
             return;
         }
@@ -165,7 +171,10 @@ impl Kura {
 }
 #[cfg(test)]
 impl Kura {
-    pub(crate) fn persist_block_immediate_for_tests(&self, block: &Arc<SignedBlock>) {
+    pub(crate) fn persist_block_immediate_for_tests(
+        &self,
+        block: &iroha_data_model::block::SharedSignedBlock,
+    ) {
         let _write_guard = self.block_store_write_lock.lock();
         let mut store = self.block_store.lock();
         let before_bytes = Self::block_store_tracked_bytes(&mut store)
@@ -182,57 +191,6 @@ impl Kura {
             Err(_) => self.invalidate_durable_budget_snapshot(),
         }
         accounting_mutation.finish();
-    }
-    fn pause_next_eviction_after_snapshot_for_tests(&self) {
-        self.eviction_paused_after_snapshot
-            .store(false, Ordering::Release);
-        self.pause_eviction_after_snapshot
-            .store(true, Ordering::Release);
-    }
-    fn eviction_paused_after_snapshot_for_tests(&self) -> bool {
-        self.eviction_paused_after_snapshot.load(Ordering::Acquire)
-    }
-    fn resume_eviction_after_snapshot_for_tests(&self) {
-        self.eviction_paused_after_snapshot
-            .store(false, Ordering::Release);
-    }
-    fn pause_next_eviction_before_stage_publication_for_tests(&self) {
-        self.eviction_paused_before_stage_publication
-            .store(false, Ordering::Release);
-        self.pause_eviction_before_stage_publication
-            .store(true, Ordering::Release);
-    }
-    fn eviction_paused_before_stage_publication_for_tests(&self) -> bool {
-        self.eviction_paused_before_stage_publication
-            .load(Ordering::Acquire)
-    }
-    fn resume_eviction_before_stage_publication_for_tests(&self) {
-        self.eviction_paused_before_stage_publication
-            .store(false, Ordering::Release);
-    }
-    fn pause_next_block_read_before_cache_recheck_for_tests(&self) {
-        self.block_read_paused_before_cache_recheck
-            .store(false, Ordering::Release);
-        self.pause_block_read_before_cache_recheck
-            .store(true, Ordering::Release);
-    }
-    fn block_read_paused_before_cache_recheck_for_tests(&self) -> bool {
-        self.block_read_paused_before_cache_recheck
-            .load(Ordering::Acquire)
-    }
-    fn resume_block_read_before_cache_recheck_for_tests(&self) {
-        self.block_read_paused_before_cache_recheck
-            .store(false, Ordering::Release);
-    }
-    fn force_next_durable_blocks_count_fallback_for_tests(&self) {
-        self.durable_blocks_count_fallback_reached
-            .store(false, Ordering::Release);
-        self.force_durable_blocks_count_fallback
-            .store(true, Ordering::Release);
-    }
-    fn durable_blocks_count_fallback_reached_for_tests(&self) -> bool {
-        self.durable_blocks_count_fallback_reached
-            .load(Ordering::Acquire)
     }
     fn pause_next_total_disk_usage_scan_after_scan_for_tests(&self) {
         self.total_disk_usage_scan_paused
@@ -263,9 +221,6 @@ impl Kura {
     pub(crate) fn fail_next_store_for_tests(&self) {
         self.fail_next_block_write.store(true, Ordering::Relaxed);
     }
-    pub(crate) fn fail_next_block_write_for_tests(&self) {
-        self.fail_next_block_write.store(true, Ordering::Relaxed);
-    }
     #[cfg(test)]
     pub(crate) fn poison_canonical_storage_for_tests(&self) {
         self.poison_canonical_storage(
@@ -278,54 +233,6 @@ impl Kura {
         let store = self.block_store.lock();
         let path = store.commit_marker_path();
         std::fs::write(&path, bytes).map_err(|error| Error::IO(error, path))
-    }
-    #[cfg(test)]
-    pub(crate) fn publish_exact_commit_marker_for_tests(&self) -> Result<()> {
-        let mut store = self.block_store.lock();
-        let index_len = store.index_file_len()?;
-        let hashes_len = store.hashes_file_len()?;
-        if index_len % BlockIndex::SIZE != 0 || hashes_len % SIZE_OF_BLOCK_HASH != 0 {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "cannot publish a test marker for a partial canonical journal",
-                ),
-                store.path_to_blockchain.clone(),
-            ));
-        }
-        let index_count = index_len / BlockIndex::SIZE;
-        let hashes_count = hashes_len / SIZE_OF_BLOCK_HASH;
-        if index_count != hashes_count {
-            return Err(Error::HashesFileHeightMismatch);
-        }
-        store.write_commit_marker(index_count)?;
-        let marker = store.read_commit_marker()?.ok_or_else(|| {
-            Error::IO(
-                std::io::Error::new(ErrorKind::NotFound, "published commit marker is missing"),
-                store.commit_marker_path(),
-            )
-        })?;
-        store.validate_commit_marker_tip(&marker, hashes_count)?;
-        if marker.count != index_count {
-            return Err(Error::HashesFileHeightMismatch);
-        }
-        store.commit_marker_count = index_count;
-        Ok(())
-    }
-    pub(crate) fn fail_prune_after_stage_for_tests(&self, stage: usize) {
-        self.fail_prune_after_stage.store(stage, Ordering::Relaxed);
-    }
-    pub(crate) fn fail_prune_sidecar_promotion_for_tests(&self, stage: usize) {
-        self.fail_prune_sidecar_promotion_stage
-            .store(stage, Ordering::Relaxed);
-    }
-    #[cfg(test)]
-    pub(crate) fn fail_progress_sidecar_ancestor_sync_attempts_for_tests(
-        &self,
-        ancestor_index: usize,
-        failures: usize,
-    ) {
-        fail_progress_sidecar_ancestor_sync_for_tests(ancestor_index, failures);
     }
 }
 /// Loaded block count

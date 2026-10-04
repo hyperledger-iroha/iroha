@@ -130,6 +130,7 @@ pub(super) fn claim_plan(
         expected_state,
         records,
         sources,
+        fee_claim: None,
     };
     if !plan.has_canonical_shape(&intent.recipient) {
         return Err(invalid("reward preparation produced a non-canonical plan"));
@@ -165,7 +166,7 @@ fn check_deposit(
     validator: &AccountId,
     context: &StakeEscrowContext,
     amount: &Quantity,
-) -> Result<(), Error> {
+) -> Result<(), Attempt<Error>> {
     ensure_positive_amount(amount, "stake amount")?;
     let source_balance = balance(world, &context.staker_asset);
     let destination_after = if context.staker_asset == context.escrow_asset {
@@ -323,14 +324,21 @@ pub fn prepare_public_lane_plan(
             )
         }
         PublicLanePreparationOperationV1::ClaimRewards(intent) => {
-            PublicLanePreparedPlanV1::Claim(claim_plan(
+            let mut plan = claim_plan(
                 world,
                 &state.nexus().staking.reward_dust_threshold,
                 lane,
                 intent,
                 scope.clone(),
                 expiry,
-            )?)
+            )?;
+            plan.fee_claim = crate::validation_fee_rewards::fee_reward_claim_plan(
+                world,
+                assumed_execution_height,
+                &intent.recipient,
+                lane,
+            )?;
+            PublicLanePreparedPlanV1::Claim(plan)
         }
     };
     let mut assets = BTreeSet::new();
@@ -349,28 +357,38 @@ pub fn prepare_public_lane_plan(
                 assets.insert(source.source_asset.clone());
                 assets.insert(source.destination_asset.clone());
             }
+            if let Some(claim) = &plan.fee_claim {
+                assets.insert(claim.source_asset.clone());
+                assets.insert(claim.destination_asset.clone());
+            }
         }
     }
     for asset in &assets {
         ensure_committed_xor_asset(world, asset.definition())?;
+        crate::state::validate_xor_custody_shape(world, asset)?;
     }
     let balances = assets
         .into_iter()
-        .map(|asset| PublicLanePreparationBalanceV1 {
-            balance: balance(world, &asset),
-            stake_reserved: world
-                .public_lane_stake_reserves()
-                .get(&asset)
-                .cloned()
-                .unwrap_or_else(Quantity::zero),
-            rewards_reserved: world
-                .public_lane_reward_reserves()
-                .get(&asset)
-                .cloned()
-                .unwrap_or_else(Quantity::zero),
-            asset,
+        .map(|asset| -> Result<_, Attempt<Error>> {
+            Ok(PublicLanePreparationBalanceV1 {
+                balance: balance(world, &asset),
+                stake_reserved: world
+                    .public_lane_stake_reserves()
+                    .get(&asset)
+                    .cloned()
+                    .unwrap_or_else(Quantity::zero),
+                rewards_reserved: quantity_add(
+                    world
+                        .public_lane_reward_reserves()
+                        .get(&asset)
+                        .cloned()
+                        .unwrap_or_else(Quantity::zero),
+                    crate::validation_fee_rewards::reserved_fee_custody(world, &asset)?,
+                )?,
+                asset,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(PublicLanePreparationV1 {
         request,
         network_id: *state.network_id(),

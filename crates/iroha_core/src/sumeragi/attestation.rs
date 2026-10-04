@@ -6,8 +6,9 @@
 //! subset or obsolete height context grants verification authority.
 
 use iroha_allocation::{
-    AllocationBudget, AllocationRefusal, ChargedBuffer, ChargedShared, PrepaidSharedError,
-    RetainedPayload,
+    AllocationBudget, AllocationCharge, AllocationRefusal, ChargedBuffer, ChargedShared,
+    PrepaidSharedError, RetainedPayload,
+    release::{ReleaseNotification, ReleaseWait},
 };
 use iroha_data_model::{
     NetworkId,
@@ -451,6 +452,7 @@ struct Mailbox {
     provisioned: bool,
     budget: AllocationBudget,
     receipt: Mutex<Option<LocalCommitAttestation>>,
+    released: ReleaseNotification,
 }
 /// Nonblocking core adapter. It only borrows already-signed original execution receipts.
 pub(crate) struct NativePastaAttestor {
@@ -461,7 +463,8 @@ pub(crate) struct NativeAttestationPublisher {
     mailbox: ChargedShared<Mailbox>,
 }
 
-/// Admit one process-lived bounded mailbox from the original State pool.
+/// Admit one process-lived bounded mailbox and its release control from the original State pool.
+/// Native mutex storage and future waiter registrations remain separate allocation owners.
 ///
 /// # Errors
 /// Rejects a malformed consensus key or original-pool control allocation refusal.
@@ -475,9 +478,23 @@ pub(crate) fn channel(
         .as_bytes()
         .try_into()
         .map_err(|_| NativeAttestationError::Source)?;
+    let release_layout = ReleaseNotification::allocation_layout::<AllocationCharge>();
     let mut reservation = budget
-        .try_reserve(ChargedShared::<Mailbox>::allocation_layout())
+        .try_reserve_layouts([
+            ChargedShared::<Mailbox>::allocation_layout(),
+            release_layout,
+        ])
         .map_err(NativeAttestationError::Admission)?;
+    let release_charge = reservation.try_split(release_layout).map_err(|error| {
+        NativeAttestationError::Allocator(PrepaidSharedError::Reservation(error))
+    })?;
+    let released =
+        ReleaseNotification::try_new_charged(release_charge).map_err(|(charge, error)| {
+            drop(charge);
+            NativeAttestationError::Allocator(PrepaidSharedError::Allocator {
+                requested_bytes: error.layout().size(),
+            })
+        })?;
     let mailbox = ChargedShared::from_reservation(
         Mailbox {
             instance,
@@ -485,6 +502,7 @@ pub(crate) fn channel(
             provisioned,
             budget: budget.clone(),
             receipt: Mutex::new(None),
+            released,
         },
         &mut reservation,
     )
@@ -497,12 +515,12 @@ pub(crate) fn channel(
     ))
 }
 /// Publication refusal separates transient contention from terminal source/poison failures.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum AttestationPublishError {
     /// The exact original receipt does not belong to this mailbox.
     Source,
     /// A short concurrent nonblocking read currently owns the mailbox lock.
-    Busy,
+    Busy(ReleaseWait),
     /// A previous panic poisoned the publication owner; recovery is required.
     Poisoned,
 }
@@ -510,18 +528,6 @@ impl NativeAttestationPublisher {
     /// Exact local consensus key; observers must skip signing outside their authenticated seat.
     pub(crate) fn key(&self) -> &[u8; 48] {
         &self.mailbox.key
-    }
-
-    /// Hold the actual mailbox lock while a regression exercises nonblocking publication.
-    /// This changes no outcome and injects no receipt; callers must retry after the guard drops.
-    #[cfg(test)]
-    pub(crate) fn with_locked_receipt_for_test<T>(&self, action: impl FnOnce() -> T) -> T {
-        let _guard = self
-            .mailbox
-            .receipt
-            .lock()
-            .expect("fixture mailbox is not poisoned");
-        action()
     }
 
     /// Publish the same original source, preserving the receipt on every typed refusal.
@@ -538,26 +544,41 @@ impl NativeAttestationPublisher {
         {
             return Err((receipt, AttestationPublishError::Source));
         }
+        let release = self.mailbox.released.observe();
         let mut slot = match self.mailbox.receipt.try_lock() {
-            Ok(slot) => slot,
-            Err(TryLockError::WouldBlock) => return Err((receipt, AttestationPublishError::Busy)),
-            Err(TryLockError::Poisoned(_)) => {
+            Ok(slot) => self.mailbox.released.poisoning_guard(slot),
+            Err(TryLockError::WouldBlock) => {
+                return Err((receipt, AttestationPublishError::Busy(release)));
+            }
+            Err(TryLockError::Poisoned(error)) => {
+                drop(self.mailbox.released.poisoning_guard(error.into_inner()));
                 return Err((receipt, AttestationPublishError::Poisoned));
             }
         };
-        *slot = Some(receipt);
+        let retired = slot.replace(receipt);
+        drop(slot);
+        drop(retired);
         Ok(())
     }
     /// Discard a receipt before dropping its corresponding unretained original execution.
     pub(crate) fn discard(&self, height: u64, keep: &[Hash32]) -> bool {
-        let Ok(mut slot) = self.mailbox.receipt.lock() else {
-            return false;
+        let slot = match self.mailbox.receipt.lock() {
+            Ok(slot) => slot,
+            Err(error) => {
+                drop(self.mailbox.released.poisoning_guard(error.into_inner()));
+                return false;
+            }
         };
-        if slot.as_ref().is_some_and(|receipt| {
+        let mut slot = self.mailbox.released.poisoning_guard(slot);
+        let retired = if slot.as_ref().is_some_and(|receipt| {
             receipt.source.height != height || !keep.contains(&receipt.source.block_hash)
         }) {
-            *slot = None;
-        }
+            slot.take()
+        } else {
+            None
+        };
+        drop(slot);
+        drop(retired);
         true
     }
 }
@@ -565,11 +586,12 @@ impl NativePastaAttestor {
     /// Hold the actual shared mailbox lock while the attached worker retries publication.
     #[cfg(test)]
     pub(crate) fn with_locked_receipt_for_test<T>(&self, action: impl FnOnce() -> T) -> T {
-        let _guard = self
+        let guard = self
             .mailbox
             .receipt
             .lock()
             .expect("fixture mailbox is not poisoned");
+        let _guard = self.mailbox.released.poisoning_guard(guard);
         action()
     }
 }
@@ -585,9 +607,12 @@ impl Attestor for NativePastaAttestor {
             return AttestOutcome::NoAuthority;
         }
         let slot = match self.mailbox.receipt.try_lock() {
-            Ok(slot) => slot,
+            Ok(slot) => self.mailbox.released.poisoning_guard(slot),
             Err(TryLockError::WouldBlock) => return AttestOutcome::Pending,
-            Err(TryLockError::Poisoned(_)) => return AttestOutcome::NoAuthority,
+            Err(TryLockError::Poisoned(error)) => {
+                drop(self.mailbox.released.poisoning_guard(error.into_inner()));
+                return AttestOutcome::NoAuthority;
+            }
         };
         match slot.as_ref().filter(|receipt| receipt.source == source) {
             Some(receipt) => AttestOutcome::Attested(receipt.attestation.clone()),
@@ -605,6 +630,128 @@ mod tests {
     };
     use iroha_crypto::{Hash, HashOf};
     use iroha_sumeragi::preimage::att_preimage;
+
+    #[test]
+    fn mailbox_and_release_control_require_original_pool_admission_before_allocation() {
+        let mailbox_bytes = ChargedShared::<Mailbox>::allocation_layout().size();
+        let release_bytes = ReleaseNotification::allocation_layout::<AllocationCharge>().size();
+        let required = mailbox_bytes + release_bytes;
+        let budget = AllocationBudget::new(required - 1);
+        let key = PublicKey::new(vec![7; 48]).unwrap();
+        let Err(NativeAttestationError::Admission(AllocationRefusal::ExceedsLimit {
+            requested_bytes,
+            ..
+        })) = channel(Hash32([1; 32]), &key, true, &budget)
+        else {
+            panic!("the original pool must fund both controls before either allocation")
+        };
+        assert_eq!(requested_bytes, required);
+        assert_eq!(budget.reserved_bytes(), 0);
+        budget.set_limit_bytes(required);
+        let blocker = budget.try_reserve_bytes(1).unwrap();
+        let Err(NativeAttestationError::Admission(AllocationRefusal::Capacity {
+            requested_bytes,
+            ..
+        })) = channel(Hash32([1; 32]), &key, true, &budget)
+        else {
+            panic!("occupied original credits must refuse both controls atomically")
+        };
+        assert_eq!(requested_bytes, required);
+        assert_eq!(budget.reserved_bytes(), 1);
+        drop(blocker);
+        let (attestor, publisher) = channel(Hash32([1; 32]), &key, true, &budget).unwrap();
+        assert_eq!(budget.reserved_bytes(), required);
+        let release = publisher.mailbox.released.observe();
+        drop(attestor);
+        assert_eq!(budget.reserved_bytes(), required);
+        drop(publisher);
+        assert_eq!(budget.reserved_bytes(), release_bytes);
+        drop(release);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn mailbox_poison_is_observed_only_after_the_original_guard_releases() {
+        let budget = AllocationBudget::new(1 << 20);
+        let mut registration = crate::unit_test_support::release_registration(&budget);
+        let key = PublicKey::new(vec![7; 48]).unwrap();
+        let (attestor, publisher) = channel(Hash32([1; 32]), &key, true, &budget).unwrap();
+        let release = publisher.mailbox.released.observe();
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            attestor.with_locked_receipt_for_test(|| {
+                assert!(!release.is_poisoned());
+                panic!("release the actual poisoned mailbox guard")
+            });
+        }));
+        assert!(unwind.is_err());
+        assert!(release.is_poisoned());
+        use std::task::{Context, Poll, Waker};
+        let mut context = Context::from_waker(Waker::noop());
+        let discard_wait = publisher.mailbox.released.observe();
+        assert_eq!(
+            registration.poll_wait(&discard_wait, &mut context),
+            Poll::Pending
+        );
+        assert!(!publisher.discard(0, &[]));
+        assert_eq!(
+            registration.poll_wait(&discard_wait, &mut context),
+            Poll::Ready(())
+        );
+
+        let source = AttestationStatement {
+            instance: Hash32([1; 32]),
+            epoch: iroha_sumeragi::testing::TEST_EPOCH.id,
+            height: 10,
+            block_hash: Hash32([2; 32]),
+            result: Hash32([3; 32]),
+        };
+        let mut backing = ChargedBuffer::new(4, &budget).unwrap();
+        backing.append(&[1, 2, 3, 4]).unwrap();
+        let pointer = backing.as_slice().as_ptr();
+        let witness = ResultWitness::from_charged(backing, &budget)
+            .unwrap_or_else(|(_, error)| panic!("admit original witness: {error:?}"));
+        let receipt = LocalCommitAttestation {
+            source,
+            key: [7; 48],
+            attestation: CommitAttestation {
+                witness,
+                signature: AttestationSignature::try_from_slice(&[9]).unwrap(),
+            },
+        };
+        let publish_wait = publisher.mailbox.released.observe();
+        assert_eq!(
+            registration.poll_wait(&publish_wait, &mut context),
+            Poll::Pending
+        );
+        let (receipt, error) = publisher.publish(receipt).unwrap_err();
+        assert_eq!(error, AttestationPublishError::Poisoned);
+        assert_eq!(receipt.attestation.witness.as_slice().as_ptr(), pointer);
+        assert_eq!(
+            registration.poll_wait(&publish_wait, &mut context),
+            Poll::Ready(())
+        );
+
+        let statement = att_preimage(
+            &source.instance,
+            &source.epoch,
+            source.height,
+            &source.block_hash,
+            &source.result,
+        );
+        let attest_wait = publisher.mailbox.released.observe();
+        assert_eq!(
+            registration.poll_wait(&attest_wait, &mut context),
+            Poll::Pending
+        );
+        assert!(matches!(
+            attestor.attest(10, &key, &statement),
+            AttestOutcome::NoAuthority
+        ));
+        assert_eq!(
+            registration.poll_wait(&attest_wait, &mut context),
+            Poll::Ready(())
+        );
+    }
 
     #[test]
     fn native_mint_witness_requires_independent_tip_and_actual_pasta_equations() {
@@ -921,6 +1068,7 @@ mod tests {
     #[test]
     fn actual_mailbox_contention_retains_original_receipt_and_source() {
         let budget = AllocationBudget::new(1 << 20);
+        let mut registration = crate::unit_test_support::release_registration(&budget);
         let key = PublicKey::new(vec![7; 48]).unwrap();
         let source = AttestationStatement {
             instance: Hash32([1; 32]),
@@ -943,11 +1091,21 @@ mod tests {
                 signature: AttestationSignature::try_from_slice(&[9]).unwrap(),
             },
         };
-        let (receipt, error) = attestor
-            .with_locked_receipt_for_test(|| publisher.publish(receipt))
-            .err()
-            .unwrap();
-        assert_eq!(error, AttestationPublishError::Busy);
+        use std::task::{Context, Poll, Waker};
+        let mut context = Context::from_waker(Waker::noop());
+        let (receipt, wait) = attestor.with_locked_receipt_for_test(|| {
+            let (receipt, error) = publisher.publish(receipt).err().unwrap();
+            let AttestationPublishError::Busy(release) = error else {
+                panic!("actual mailbox lock must retain its original release source")
+            };
+            let wait = release;
+            assert_eq!(registration.poll_wait(&wait, &mut context), Poll::Pending);
+            let foreign = ReleaseNotification::default();
+            drop(foreign.guard(()));
+            assert_eq!(registration.poll_wait(&wait, &mut context), Poll::Pending);
+            (receipt, wait)
+        });
+        assert_eq!(registration.poll_wait(&wait, &mut context), Poll::Ready(()));
         assert_eq!(receipt.attestation.witness.as_slice().as_ptr(), pointer);
         assert!(publisher.publish(receipt).is_ok());
         let statement = att_preimage(

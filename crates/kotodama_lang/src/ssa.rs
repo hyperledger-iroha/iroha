@@ -20,6 +20,11 @@ use crate::{
     regalloc::{visit_instr_defs, visit_instr_uses, visit_terminator_uses},
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+
+mod literal_calls;
+mod single_use_calls;
+#[cfg(test)]
+pub(crate) use single_use_calls::with_private_calls_retained;
 /// Maximum control-flow blocks accepted in one V1 function.
 ///
 /// The bound keeps dominance construction and verification deterministic and
@@ -140,12 +145,19 @@ impl Program {
     /// Constant propagation is driven by executable CFG edges and explicit Phi inputs. Checked
     /// operations are folded only when evaluation succeeds; an overflow or division-by-zero
     /// operation remains in the MIR so its deterministic trap cannot be optimized away. The final
-    /// direct call graph is validated before any function is discarded.
-    pub(crate) fn optimize_and_retain(&mut self, roots: &BTreeSet<String>) -> Result<(), String> {
+    /// direct call graph is validated before any function is discarded. Numeric
+    /// literal-call substitution requires the exact typed declaration whitelist;
+    /// it cannot infer authority or secret-value eligibility from a leaf body.
+    pub(crate) fn optimize_and_retain(
+        &mut self,
+        roots: &BTreeSet<String>,
+        private_literals: &BTreeMap<String, ir::DataRefKind>,
+    ) -> Result<(), String> {
         self.verify()?;
         for function in &mut self.functions {
             function.optimize()?;
         }
+        self.fold_private_literal_calls(roots, private_literals);
         self.retain_reachable_functions(roots)?;
         self.verify()
     }
@@ -3526,7 +3538,7 @@ mod tests {
         ast::{BinaryOp, SourceLocation, UnaryOp},
         ir::{BasicBlock, Function, Instr, Label, Program as IrProgram, Temp, Terminator},
     };
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     fn function(blocks: Vec<BasicBlock>) -> Function {
         Function {
             name: "test".to_owned(),
@@ -4462,7 +4474,7 @@ mod tests {
         };
         let mut program = Program::from_ir(raw).expect("construct same-constant Phi SSA");
         program
-            .optimize_and_retain(&BTreeSet::from(["test".to_owned()]))
+            .optimize_and_retain(&BTreeSet::from(["test".to_owned()]), &BTreeMap::new())
             .expect("optimize same-constant Phi");
         let join = program.functions[0]
             .blocks
@@ -4516,7 +4528,7 @@ mod tests {
         };
         let mut program = Program::from_ir(raw).expect("construct branch-dependent Phi SSA");
         program
-            .optimize_and_retain(&BTreeSet::from(["test".to_owned()]))
+            .optimize_and_retain(&BTreeSet::from(["test".to_owned()]), &BTreeMap::new())
             .expect("optimize branch-dependent Phi");
         let function = &program.functions[0];
         assert_eq!(
@@ -4593,7 +4605,7 @@ mod tests {
         };
         let mut program = Program::from_ir(raw).expect("construct trapping SSA");
         program
-            .optimize_and_retain(&BTreeSet::from(["test".to_owned()]))
+            .optimize_and_retain(&BTreeSet::from(["test".to_owned()]), &BTreeMap::new())
             .expect("optimize trapping SSA");
         let operations = program.functions[0].blocks[0]
             .instructions
@@ -4646,7 +4658,7 @@ mod tests {
         };
         let mut program = Program::from_ir(raw).expect("construct algebraic SSA");
         program
-            .optimize_and_retain(&BTreeSet::from(["test".to_owned()]))
+            .optimize_and_retain(&BTreeSet::from(["test".to_owned()]), &BTreeMap::new())
             .expect("optimize algebraic SSA");
         let block = &program.functions[0].blocks[0];
         assert!(matches!(
@@ -4832,7 +4844,7 @@ mod tests {
         };
         let mut program = Program::from_ir(raw).expect("construct state-write SSA");
         program
-            .optimize_and_retain(&BTreeSet::from(["test".to_owned()]))
+            .optimize_and_retain(&BTreeSet::from(["test".to_owned()]), &BTreeMap::new())
             .expect("optimize state-write SSA");
         assert!(
             program.functions[0].blocks[0]
@@ -4887,7 +4899,7 @@ mod tests {
         })
         .expect("construct dead-call SSA");
         program
-            .optimize_and_retain(&BTreeSet::from(["root".to_owned()]))
+            .optimize_and_retain(&BTreeSet::from(["root".to_owned()]), &BTreeMap::new())
             .expect("optimize dead-call graph");
         assert_eq!(
             program
@@ -4917,7 +4929,7 @@ mod tests {
         })
         .expect("construct unresolved graph");
         let error = program
-            .optimize_and_retain(&BTreeSet::from(["root".to_owned()]))
+            .optimize_and_retain(&BTreeSet::from(["root".to_owned()]), &BTreeMap::new())
             .expect_err("unresolved call must fail closed");
         assert!(error.contains("unresolved SSA callee `missing`"), "{error}");
         let mut program = Program::from_ir(IrProgram {
@@ -4932,7 +4944,7 @@ mod tests {
         })
         .expect("construct missing-root graph");
         let error = program
-            .optimize_and_retain(&BTreeSet::from(["absent".to_owned()]))
+            .optimize_and_retain(&BTreeSet::from(["absent".to_owned()]), &BTreeMap::new())
             .expect_err("missing root must fail closed");
         assert!(
             error.contains("missing SSA root function `absent`"),
@@ -4963,7 +4975,7 @@ mod tests {
             functions: vec![first, second],
         };
         let error = duplicate
-            .optimize_and_retain(&BTreeSet::from(["first".to_owned()]))
+            .optimize_and_retain(&BTreeSet::from(["first".to_owned()]), &BTreeMap::new())
             .expect_err("duplicate symbols must fail before optimization");
         assert!(
             error.contains("duplicate SSA function symbol `first`"),
@@ -4975,7 +4987,7 @@ mod tests {
         let optimize = || {
             let mut program = Program::from_ir(branch_join_program()).expect("construct SSA");
             program
-                .optimize_and_retain(&BTreeSet::from(["test".to_owned()]))
+                .optimize_and_retain(&BTreeSet::from(["test".to_owned()]), &BTreeMap::new())
                 .expect("optimize SSA");
             program.into_ir().expect("destroy optimized SSA")
         };
@@ -4988,7 +5000,7 @@ mod tests {
                 value: 99,
             }));
         let error = corrupt
-            .optimize_and_retain(&BTreeSet::from(["test".to_owned()]))
+            .optimize_and_retain(&BTreeSet::from(["test".to_owned()]), &BTreeMap::new())
             .expect_err("duplicate SSA definition must fail before optimization");
         assert!(error.contains("defined more than once"), "{error}");
     }

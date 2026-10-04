@@ -47,7 +47,13 @@ fn derive_revision(intent: &ResetRevisionIntentV1) -> Result<(RevisionV1, Pinned
 fn derive_artifacts(
     intents: &[ResetArtifactIntentV1],
     revision: &RevisionV1,
+    target: &str,
 ) -> Result<(Vec<ArtifactV1>, Vec<PinnedInput>)> {
+    if !matches!(target, BUILD_TARGET | host_pair::NATIVE_EDGE_TARGET) {
+        return Err(eyre!(
+            "release artifact target is outside the admitted host pair"
+        ));
+    }
     let mut artifacts = Vec::new();
     let mut pins = Vec::new();
     for intent in intents {
@@ -76,7 +82,7 @@ fn derive_artifacts(
             size: input.snapshot.len,
             mode,
             source_commit: revision.commit.clone(),
-            target: BUILD_TARGET.into(),
+            target: target.into(),
         });
         pins.push(input);
     }
@@ -232,15 +238,37 @@ fn validate_shared_parts(validators: &[ValidatorV1], edge: &EdgeV1) -> Result<()
     }
     let first_cli = artifact(first, "iroha_cli")?;
     let edge_cli = artifact(&edge.artifacts, "iroha_cli")?;
-    if first_cli.sha256 != edge_cli.sha256
-        || first_cli.size != edge_cli.size
-        || first_cli.mode != edge_cli.mode
+    if first_cli.target != BUILD_TARGET
+        || edge_cli.target != host_pair::NATIVE_EDGE_TARGET
+        || first_cli.source_commit != edge_cli.source_commit
+        || first_cli.mode != 0o755
+        || edge_cli.mode != 0o755
     {
         return Err(eyre!(
-            "edge and validators must share one exact compiled CLI"
+            "guest and native edge CLI artifacts must share source with their own admitted targets"
         ));
     }
     Ok(())
+}
+
+fn derive_native_capability(
+    path: &Path,
+    hosts: &host_pair::ResetHostPairV1,
+) -> Result<(native_edge_protocol::NativeEdgeCapabilityV1, PinnedInput)> {
+    let pin = pin_public(path, "native edge capability")?;
+    #[cfg(unix)]
+    if pin.snapshot.uid != rustix::process::geteuid().as_raw()
+        || pin.snapshot.mode & 0o7777 != 0o600
+    {
+        return Err(eyre!(
+            "native edge capability lacks exact owner-private custody"
+        ));
+    }
+    let capability: native_edge_protocol::NativeEdgeCapabilityV1 =
+        json::from_slice(&pinned_bytes(&pin, 128 * 1024)?)?;
+    capability.validate(hosts)?;
+    revalidate_pinned(&pin, "native edge capability")?;
+    Ok((capability, pin))
 }
 
 #[cfg(unix)]
@@ -279,7 +307,8 @@ pub(super) fn derive_release(
         if validator.slug != expected_slug || client.slug != expected_slug {
             return Err(eyre!("validator order is canonical"));
         }
-        let (artifacts, mut artifact_pins) = derive_artifacts(&validator.artifacts, &revision)?;
+        let (artifacts, mut artifact_pins) =
+            derive_artifacts(&validator.artifacts, &revision, BUILD_TARGET)?;
         validate_public_genesis(&artifacts, &artifact_pins, public)?;
         let unit = artifact(&artifacts, "validator_unit")?;
         if Path::new(&unit.local_path) != unit_path || unit.sha256 != unit_hash(unit_path)? {
@@ -326,14 +355,14 @@ pub(super) fn derive_release(
         pins.append(&mut artifact_pins);
         validators.push(derived);
     }
-    let (artifacts, mut artifact_pins) = derive_artifacts(&intent.edge.artifacts, &revision)?;
-    let mut edge_unit_pin = pin_public(&inputs.edge_unit, "edge systemd unit")?;
-    if edge_unit_pin.snapshot.len == 0 || edge_unit_pin.snapshot.len > 1024 * 1024 {
-        return Err(eyre!("systemd unit is empty or oversized"));
-    }
-    let systemd_unit_sha256 = sha256_reader(&mut edge_unit_pin.file, &inputs.edge_unit)?;
-    revalidate_pinned(&edge_unit_pin, "edge systemd unit")?;
-    pins.push(edge_unit_pin);
+    let (artifacts, mut artifact_pins) = derive_artifacts(
+        &intent.edge.artifacts,
+        &revision,
+        host_pair::NATIVE_EDGE_TARGET,
+    )?;
+    let (native_capability, capability_pin) =
+        derive_native_capability(&inputs.native_edge_capability, &intent.hosts)?;
+    pins.push(capability_pin);
     pins.append(&mut artifact_pins);
     let edge = EdgeV1 {
         slug: intent.edge.slug.clone(),
@@ -344,10 +373,10 @@ pub(super) fn derive_release(
         reset_guard: intent.edge.reset_guard.clone(),
         nginx_config: intent.edge.nginx_config.clone(),
         artifacts,
-        systemd_unit_sha256,
+        native_capability,
         initial_state: intent.edge.initial_state.clone(),
     };
-    validate_edge(&edge, &revision)?;
+    validate_edge(&edge, &revision, &intent.hosts)?;
     validate_shared_parts(&validators, &edge)?;
     validate_source_closure(&revision)?;
     for pin in &pins {
@@ -397,7 +426,7 @@ mod tests {
             remote_path: "/srv/fixture/genesis.nrt".into(),
         };
         let revision = sample_inventory_fixture().revision;
-        let (artifacts, pins) = derive_artifacts(&[intent], &revision).unwrap();
+        let (artifacts, pins) = derive_artifacts(&[intent], &revision, BUILD_TARGET).unwrap();
         assert_eq!(artifacts[0].sha256, sha256_hex(b"public-fixture"));
         assert_eq!(artifacts[0].size, 14);
         assert_eq!(artifacts[0].source_commit, revision.commit);
@@ -418,11 +447,86 @@ mod tests {
             remote_path: "/srv/fixture/genesis.nrt".into(),
         };
         let revision = sample_inventory_fixture().revision;
-        assert!(derive_artifacts(&[intent.clone()], &revision).is_err());
+        assert!(derive_artifacts(&[intent.clone()], &revision, BUILD_TARGET).is_err());
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
         let link = dir.path().join("alias.nrt");
         symlink(&path, &link).unwrap();
         intent.local_path = link.to_str().unwrap().into();
-        assert!(derive_artifacts(&[intent], &revision).is_err());
+        assert!(derive_artifacts(&[intent], &revision, BUILD_TARGET).is_err());
+    }
+
+    #[test]
+    fn reset_context_native_artifact_uses_only_its_explicit_host_target() {
+        let dir = directory();
+        let path = dir.path().join("iroha");
+        fs::write(&path, b"native-darwin-public-artifact").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        let intent = ResetArtifactIntentV1 {
+            role: "iroha_cli".into(),
+            local_path: path.to_str().unwrap().into(),
+            remote_path: "/native/release/bin/iroha".into(),
+        };
+        let revision = sample_inventory_fixture().revision;
+        let (artifacts, _) =
+            derive_artifacts(&[intent.clone()], &revision, host_pair::NATIVE_EDGE_TARGET).unwrap();
+        assert_eq!(artifacts[0].target, host_pair::NATIVE_EDGE_TARGET);
+        assert_eq!(artifacts[0].source_commit, revision.commit);
+        assert!(derive_artifacts(&[intent], &revision, "x86_64-unknown-linux-gnu").is_err());
+    }
+
+    #[test]
+    fn reset_context_shared_source_allows_distinct_darwin_bytes_and_rejects_linux_edge() {
+        let _chain_guard = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
+        let mut inventory = sample_inventory_fixture();
+        let edge = inventory
+            .edge
+            .artifacts
+            .iter_mut()
+            .find(|artifact| artifact.role == "iroha_cli")
+            .unwrap();
+        edge.target = host_pair::NATIVE_EDGE_TARGET.into();
+        edge.sha256 = "e".repeat(64);
+        edge.size += 1;
+        assert!(validate_shared_parts(&inventory.validators, &inventory.edge).is_ok());
+        let edge = inventory
+            .edge
+            .artifacts
+            .iter_mut()
+            .find(|artifact| artifact.role == "iroha_cli")
+            .unwrap();
+        edge.target = BUILD_TARGET.into();
+        assert!(validate_shared_parts(&inventory.validators, &inventory.edge).is_err());
+    }
+
+    #[test]
+    fn reset_context_native_capability_retains_signed_host_binding_and_refuses_drift() {
+        let hosts = host_pair::fixture_pair();
+        let release = EdgeAdmittedReleaseV1 {
+            commit: "a".repeat(40),
+            release_root: format!(
+                "{}/.local/share/iroha/taira/edge/releases/{}",
+                hosts.native_edge.owner_home,
+                "a".repeat(40)
+            ),
+            cli_sha256: "b".repeat(64),
+            config_sha256: "c".repeat(64),
+        };
+        let capability = native_edge_protocol::fixture_capability(
+            &hosts,
+            release,
+            "native-context-fixture",
+            &Hash::new(b"genesis").to_string(),
+        );
+        let dir = directory();
+        let path = dir.path().join("native-edge-capability.json");
+        fs::write(&path, json::to_json(&capability).unwrap()).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let (_, pin) = derive_native_capability(&path, &hosts).unwrap();
+        let mut substituted = hosts.clone();
+        substituted.native_edge.endpoint.known_host_line_sha256 = "f".repeat(64);
+        assert!(derive_native_capability(&path, &substituted).is_err());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(derive_native_capability(&path, &hosts).is_err());
+        assert!(revalidate_pinned(&pin, "native capability").is_err());
     }
 }

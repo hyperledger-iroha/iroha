@@ -27,6 +27,99 @@ fn load_default_genesis_source_template_for_test() -> Result<RawGenesisTransacti
 }
 
 #[test]
+fn authored_instruction_tail_preserves_manifest_fields_order_and_phase_count() -> Result<()> {
+    use iroha_data_model::{isi::Log, level::Level};
+    init_instruction_registry();
+    let original = complete_test_builder(
+        GenesisBuilder::new_without_executor(ChainId::from("generic-authored-tail"), ".")
+            .append_instruction(Log::new(Level::INFO, "prefix".into()))
+            .next_transaction()
+            .append_instruction(Log::new(Level::INFO, "existing tail".into())),
+    )
+    .build_raw()?;
+    let additions = vec![
+        InstructionBox::from(Log::new(Level::INFO, "first authored".into())),
+        InstructionBox::from(Log::new(Level::INFO, "second authored".into())),
+    ];
+    let mut expected = original.clone();
+    expected
+        .transactions
+        .last_mut()
+        .unwrap()
+        .instructions
+        .extend(additions.clone());
+    let before_count = original.clone().parse()?.len();
+    let actual = original.clone().append_instruction_only_tail(additions)?;
+    assert_eq!(
+        norito::json::to_json(&actual)?,
+        norito::json::to_json(&expected)?
+    );
+    assert_eq!(actual.transactions.len(), original.transactions.len());
+    assert_eq!(actual.parse()?.len(), before_count);
+    assert_eq!(
+        norito::json::to_json(&original.clone().append_instruction_only_tail(Vec::new())?)?,
+        norito::json::to_json(&original)?,
+    );
+    Ok(())
+}
+
+#[test]
+fn authored_instruction_tail_refuses_parameters_topology_empty_tail_and_set_parameter() -> Result<()>
+{
+    use iroha_data_model::{isi::Log, level::Level};
+    init_instruction_registry();
+    let original = complete_test_builder(
+        GenesisBuilder::new_without_executor(ChainId::from("generic-authored-refusal"), ".")
+            .append_instruction(Log::new(Level::INFO, "prefix".into()))
+            .next_transaction()
+            .append_instruction(Log::new(Level::INFO, "existing tail".into())),
+    )
+    .build_raw()?;
+    let addition = || {
+        vec![InstructionBox::from(Log::new(
+            Level::INFO,
+            "authored".into(),
+        ))]
+    };
+    let mut parameters = original.clone();
+    parameters.transactions.last_mut().unwrap().parameters = Some(Parameters::default());
+    assert!(parameters.append_instruction_only_tail(addition()).is_err());
+    let mut topology = original.clone();
+    topology.transactions.last_mut().unwrap().topology =
+        deterministic_test_genesis_topology_entries();
+    assert!(topology.append_instruction_only_tail(addition()).is_err());
+    let mut trigger = original.clone();
+    trigger
+        .transactions
+        .last_mut()
+        .unwrap()
+        .ivm_triggers
+        .push(GenesisIvmTrigger::new(
+            "authored-tail-trigger".parse().unwrap(),
+            GenesisIvmAction::new(
+                "unread-fixture.to",
+                Repeats::Exactly(1),
+                iroha_test_samples::ALICE_ID.clone(),
+                iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new(),
+            ),
+        ));
+    assert!(trigger.append_instruction_only_tail(addition()).is_err());
+    let mut empty = original.clone();
+    empty.transactions.last_mut().unwrap().instructions.clear();
+    assert!(empty.append_instruction_only_tail(addition()).is_err());
+    let mut missing = original.clone();
+    missing.transactions.clear();
+    assert!(missing.append_instruction_only_tail(addition()).is_err());
+    let set = InstructionBox::from(SetParameter::new(Parameter::Transaction(
+        iroha_data_model::parameter::system::TransactionParameter::MaxInstructions(
+            NonZeroU64::new(7).unwrap(),
+        ),
+    )));
+    assert!(original.append_instruction_only_tail(vec![set]).is_err());
+    Ok(())
+}
+
+#[test]
 fn roundtrip_raw_genesis_serialization() -> Result<()> {
     let (_tmp_dir, builder) = test_builder();
     let raw = builder
@@ -581,4 +674,62 @@ fn uses_shared_instruction_registry() {
             "Rust type names are not wire ID aliases"
         );
     }
+}
+
+#[test]
+fn prepared_bundle_retains_original_decoder_refusal_and_rejects_noncanonical_source() {
+    let (manifest, key_pair, block, wire) = prepared_proposal_fixture();
+    let failure = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+        || validate_prepared_genesis_bundle(&wire, &manifest, key_pair.public_key(), block.hash()),
+    )
+    .unwrap_err();
+    let original = failure
+        .downcast_ref::<norito::core::DecodeAttemptError>()
+        .expect("actual decoder cause survives bundle boundary");
+    assert_eq!(
+        original.kind(),
+        norito::core::DecodeAttemptErrorKind::EnclosingLimit
+    );
+    let retried =
+        validate_prepared_genesis_bundle(&wire, &manifest, key_pair.public_key(), block.hash())
+            .unwrap();
+    assert_eq!(retried.canonical_wire(), wire);
+    assert_eq!(retried.block(), &block);
+    for offset in [0, 1, 23, norito::core::Header::SIZE] {
+        let mut changed = wire.clone();
+        changed[offset] ^= 0x80;
+        let error = validate_prepared_genesis_bundle(
+            &changed,
+            &manifest,
+            key_pair.public_key(),
+            block.hash(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error
+                .downcast_ref::<norito::core::DecodeAttemptError>()
+                .expect("canonical header rejection")
+                .kind(),
+            norito::core::DecodeAttemptErrorKind::Invalid
+        );
+    }
+    let mut trailing = wire.clone();
+    trailing.push(0);
+    let error =
+        validate_prepared_genesis_bundle(&trailing, &manifest, key_pair.public_key(), block.hash())
+            .unwrap_err();
+    assert_eq!(
+        error
+            .downcast_ref::<norito::core::DecodeAttemptError>()
+            .expect("canonical source exhaustion")
+            .kind(),
+        norito::core::DecodeAttemptErrorKind::Invalid
+    );
+    assert_eq!(
+        validate_prepared_genesis_bundle(&wire, &manifest, key_pair.public_key(), block.hash())
+            .unwrap()
+            .canonical_wire(),
+        wire
+    );
 }

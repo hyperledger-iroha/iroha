@@ -538,6 +538,10 @@ fn print_usage() {
         "    Produce a PolicyJurySortitionV1 manifest for roadmap item MINFO-5 (specs/ministry/policy_jury_ballots.md), wiring deterministic draws + waitlists into referendum packets."
     );
     eprintln!(
+        "  cargo xtask kagami-bundle [--out <fresh-directory>] [--profile debug|release] [--network-profiles <artifact>]"
+    );
+    eprintln!("    Build matching Kagami and iroha3d together and inventory a native CLI package.");
+    eprintln!(
         "  cargo xtask mochi-bundle [--out <path>] [--profile <name>] [--no-archive] [--network-profiles <path>] [--matrix <path>] [--smoke] [--stage <path>]"
     );
     eprintln!("  cargo xtask mochi-latency --bundle <directory> --out <new-sample-directory>");
@@ -546,6 +550,9 @@ fn print_usage() {
         "  cargo xtask mochi-latency-remote --bundle <directory> --driver <release-test-executable> --out <new-campaign-directory>"
     );
     eprintln!("    Build the MOCHI desktop bundle with a manifest and optional .tar.gz archive.");
+    eprintln!(
+        "    Release requires committed defaults/developer/network-profiles.nrt; --network-profiles is development-only."
+    );
     eprintln!(
         "    The bundler builds matching Mochi, Kagami and iroha3d together; latency commands observe an existing bundle and emit diagnostic samples only."
     );

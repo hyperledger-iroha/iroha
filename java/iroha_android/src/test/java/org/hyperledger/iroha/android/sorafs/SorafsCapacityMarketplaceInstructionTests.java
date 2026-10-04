@@ -13,7 +13,6 @@ import org.hyperledger.iroha.android.model.instructions.SetPricingScheduleInstru
 import org.hyperledger.iroha.android.model.instructions.SetPricingScheduleInstruction.DiscountSchedule;
 import org.hyperledger.iroha.android.model.instructions.SetPricingScheduleInstruction.StorageClass;
 import org.hyperledger.iroha.android.model.instructions.SetPricingScheduleInstruction.TierRate;
-import org.hyperledger.iroha.android.model.instructions.UpsertProviderCreditInstruction;
 
 /** Regression tests covering SoraFS capacity declaration/dispute instruction builders. */
 public final class SorafsCapacityMarketplaceInstructionTests {
@@ -32,9 +31,8 @@ public final class SorafsCapacityMarketplaceInstructionTests {
     testDisputeValidationFailure();
     testSetPricingScheduleBuilder();
     testPricingScheduleIntegerParsing();
-    testUpsertProviderCreditBuilder();
     System.out.println(
-        "[IrohaAndroid] SorafsCapacityMarketplaceInstructionTests passed (dispute/pricing/credit).");
+        "[IrohaAndroid] SorafsCapacityMarketplaceInstructionTests passed (dispute/pricing).");
   }
 
   // Capacity declaration coverage lives in the Kotlin-owned JDK-8 Java consumer:
@@ -203,30 +201,8 @@ public final class SorafsCapacityMarketplaceInstructionTests {
     }
   }
 
-  private static void testUpsertProviderCreditBuilder() {
-    final UpsertProviderCreditInstruction instruction =
-        UpsertProviderCreditInstruction.builder()
-            .setProviderIdHex(PROVIDER_ID)
-            .setAvailableCreditNano(new BigInteger("123456789000"))
-            .setBondedNano(new BigInteger("555000000000"))
-            .setRequiredBondNano(new BigInteger("777000000000"))
-            .setExpectedSettlementNano(new BigInteger("333000000000"))
-            .setOnboardingEpoch(1_700_000L)
-            .setLastSettlementEpoch(1_700_800L)
-            .setLowBalanceSinceEpoch(1_700_500L)
-            .setSlashedNano(new BigInteger("1000"))
-            .setUnderDeliveryStrikes(2)
-            .setLastPenaltyEpoch(1_700_600L)
-            .putMetadata("region", "jp")
-            .build();
-
-    final Map<String, String> args = instruction.toArguments();
-    assert "UpsertProviderCredit".equals(args.get("action")) : "action mismatch";
-    assert "123456789000".equals(args.get("record.available_credit_nano"))
-        : "available credit mismatch";
-    assert instruction.underDeliveryStrikes().equals(2) : "strikes mismatch";
-    assert "jp".equals(instruction.metadata().get("region")) : "metadata mismatch";
-  }
+  // Provider-credit coverage uses the canonical Kotlin API in
+  // SorafsProviderCreditJavaConsumerTest, including the required current-row guard.
 
   private static byte[] randomBytes(final int length) {
     final byte[] bytes = new byte[length];

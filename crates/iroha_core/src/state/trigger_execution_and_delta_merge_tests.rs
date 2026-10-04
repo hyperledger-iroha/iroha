@@ -203,6 +203,7 @@ fn time_trigger_revalidates_a_sibling_replaced_after_matching() {
         state
             .view()
             .latest_block()
+            .expect("completed original State read")
             .unwrap()
             .header()
             .creation_time()
@@ -312,6 +313,7 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
         state
             .view()
             .latest_block()
+            .expect("completed original State read")
             .unwrap()
             .header()
             .creation_time()
@@ -461,6 +463,7 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
         state
             .view()
             .latest_block()
+            .expect("completed original State read")
             .unwrap()
             .header()
             .creation_time()
@@ -593,6 +596,7 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         state
             .view()
             .latest_block()
+            .expect("completed original State read")
             .unwrap()
             .header()
             .creation_time()
@@ -782,6 +786,7 @@ fn ivm_trigger_respects_pipeline_cycle_cap() {
         state
             .view()
             .latest_block()
+            .expect("completed original State read")
             .expect("original trigger parent")
             .as_ref()
             .clone(),
@@ -840,6 +845,73 @@ fn ivm_trigger_respects_pipeline_cycle_cap() {
         other => panic!("unexpected rejection: {other:?}"),
     }
 }
+#[test]
+fn generic_trigger_resolution_retains_original_allocation_refusal() {
+    use iroha_allocation::AllocationRefusal;
+    use iroha_data_model::{
+        events::time::{ExecutionTime, TimeEventFilter},
+        transaction::{Executable, IvmBytecode},
+        trigger::{
+            Trigger,
+            action::{Action, Repeats},
+        },
+    };
+
+    let _limits = ivm::ivm_cache::CacheLimitsGuard::new(ivm::ivm_cache::CacheLimits {
+        capacity: 0,
+        max_bytes: 0,
+        max_decoded_ops: 0,
+    });
+    let state = State::new(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let block = new_dummy_block_with_payload(|header| {
+        header.set_height(NonZeroU64::new(1).unwrap());
+        header.creation_time_ms = 1;
+    });
+    let mut state_block = state.block(block.as_ref().header());
+    let mut transaction = state_block.transaction();
+    Register::account(new_sample_account(&ALICE_ID))
+        .execute(&ALICE_ID, &mut transaction)
+        .unwrap();
+    let bytecode = IvmBytecode::from_compiled(assemble_ivm_header(
+        &encoding::wide::encode_halt().to_le_bytes(),
+    ));
+    let blob_hash = HashOf::new(&bytecode);
+    Register::trigger(Trigger::new(
+        "generic_allocation_refusal".parse().unwrap(),
+        Action::new(
+            Executable::Ivm(bytecode),
+            Repeats::Exactly(1),
+            ALICE_ID.clone(),
+            TimeEventFilter::new(ExecutionTime::PreCommit),
+        )
+        .unwrap(),
+    ))
+    .execute(&ALICE_ID, &mut transaction)
+    .unwrap();
+    let budget = state.ivm_execution_budget();
+    let original_limit = budget.limit_bytes();
+    budget.set_limit_bytes(0);
+    assert!(transaction.resolve_ivm_trigger_program(&blob_hash).is_err());
+    let reason = transaction
+        .execution_deferral()
+        .expect("original local refusal");
+    assert!(matches!(
+        reason.allocation_refusal(),
+        Some(AllocationRefusal::ExceedsLimit { limit_bytes: 0, .. })
+    ));
+    assert_eq!(transaction.last_tx_gas_used, 0);
+    budget.set_limit_bytes(original_limit);
+    assert!(matches!(
+        transaction.resolve_ivm_trigger_program(&blob_hash),
+        Ok(Some(ResolvedIvmTriggerProgram::Generic(_)))
+    ));
+    assert_eq!(transaction.execution_deferral(), Some(reason));
+}
+
 #[test]
 fn ivm_time_trigger_reuses_cache_across_blocks() {
     if crate::unit_test_support::run_in_isolated_harness(
@@ -1802,6 +1874,7 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
     let header = state
         .view()
         .latest_block()
+        .expect("completed original State read")
         .expect("original trigger parent")
         .header();
     let mut state_block = state.block(header);

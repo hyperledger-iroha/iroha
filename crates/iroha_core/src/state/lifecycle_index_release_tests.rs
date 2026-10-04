@@ -1,9 +1,8 @@
 //! Real lifecycle index releases must follow every enclosing fence.
 
 use super::*;
-use iroha_allocation::release::{DeferredRelease, ReleaseFuture};
+use iroha_allocation::release::{DeferredRelease, ReleaseRegistration, ReleaseWait};
 use std::{
-    future::Future,
     sync::{
         Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -84,28 +83,32 @@ impl Wake for Probe {
     }
 }
 
-fn watch<T>(index: &PublicationRwLock<T>, probe: &Arc<Probe>) -> (ReleaseFuture, DeferredRelease) {
+fn watch<T>(
+    index: &PublicationRwLock<T>,
+    probe: &Arc<Probe>,
+) -> (ReleaseWait, ReleaseRegistration, DeferredRelease) {
+    let mut registration =
+        crate::unit_test_support::release_registration(&probe.state.ivm_execution_budget());
     let guard = index.read();
     let wait = index
         .try_write_or_wait()
         .err()
         .expect("original held reader");
     let release = guard.release_deferred();
-    let mut future = wait.wait_for_release();
     let waker = Waker::from(Arc::clone(probe));
     assert!(
-        std::pin::Pin::new(&mut future)
-            .poll(&mut Context::from_waker(&waker))
+        registration
+            .poll_wait(&wait, &mut Context::from_waker(&waker))
             .is_pending()
     );
-    (future, release)
+    (wait, registration, release)
 }
 
-fn ready(watches: &mut [(ReleaseFuture, DeferredRelease)], probe: &Arc<Probe>) {
+fn ready(watches: &mut [(ReleaseWait, ReleaseRegistration, DeferredRelease)], probe: &Arc<Probe>) {
     let waker = Waker::from(Arc::clone(probe));
-    assert!(watches.iter_mut().all(|(future, _)| {
-        std::pin::Pin::new(future)
-            .poll(&mut Context::from_waker(&waker))
+    assert!(watches.iter_mut().all(|(wait, registration, _)| {
+        registration
+            .poll_wait(wait, &mut Context::from_waker(&waker))
             .is_ready()
     }));
     probe.check();

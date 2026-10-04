@@ -160,7 +160,10 @@ pub fn commit_instructions(
     let height = chain.height();
     let created_ms = {
         let view = chain.state().view();
-        let tip = view.latest_block().expect("the chain has an applied tip");
+        let tip = view
+            .latest_block()
+            .expect("the chain tip can be read")
+            .expect("the chain has an applied tip");
         u64::try_from(tip.header().creation_time().as_millis()).expect("block time fits u64")
     };
     let transaction = chain.sign(authority, instructions, created_ms);
@@ -401,7 +404,11 @@ mod tests {
         assert_eq!(chain.height(), 1);
         let view = chain.state().view();
         assert_eq!(view.height(), 1);
-        assert!(view.latest_block().is_some());
+        assert!(
+            view.latest_block()
+                .expect("the benchmark genesis can be read")
+                .is_some()
+        );
         for domain_id in &domain_ids {
             assert!(view.world().domains().get(domain_id).is_some());
         }

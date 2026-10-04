@@ -21,6 +21,75 @@ final class PetalScanSessionTests: XCTestCase {
         return try PetalLuma(width: width, height: height, pixels: pixels)
     }
 
+    /// A 640×480 camera frame of a steady hand: `frame` rendered at 512 px,
+    /// shown about 400 px wide and turned by `degrees` about the frame centre
+    /// (bilinear resampling), on a dim background.
+    private func turnedFrame(_ encoder: PetalStreamEncoder, _ frame: UInt16, degrees: Double) throws -> PetalLuma {
+        let code = try Support.render(encoder, frame: frame, size: 512, supersample: 2)
+        let width = 640
+        let height = 480
+        let angle = degrees * Double.pi / 180
+        let scale = 400.0 / 512.0
+        var pixels = [UInt8](repeating: 9, count: width * height)
+        for y in 0..<height {
+            for x in 0..<width {
+                let u = Double(x) + 0.5 - 320
+                let v = Double(y) + 0.5 - 240
+                let sx = (cos(angle) * u + sin(angle) * v) / scale + 256
+                let sy = (-sin(angle) * u + cos(angle) * v) / scale + 256
+                if sx >= 0, sy >= 0, sx < 512, sy < 512 {
+                    pixels[y * width + x] = UInt8(code.sample(x: sx, y: sy).rounded())
+                }
+            }
+        }
+        return try PetalLuma(width: width, height: height, pixels: pixels)
+    }
+
+    func testASteadyCameraIsTrackedAfterTheFirstFrame() throws {
+        let encoder = try PetalStreamEncoder(payload: Support.payload(300, seed: 3), kind: 2)
+        var session = PetalScanSession()
+        for frame in UInt16(0)..<6 {
+            let outcome = session.push(try turnedFrame(encoder, frame, degrees: 8), nowMilliseconds: UInt64(frame) * 125)
+            XCTAssertNil(outcome.error, "frame \(frame)")
+        }
+        XCTAssertEqual(session.stats.readable, 6)
+        XCTAssertEqual(session.stats.tracked, 5, "every frame after the first follows the pose")
+        XCTAssertEqual(session.stats.inferred, 0)
+        // a pause longer than the tracking window forces a full search again
+        _ = session.push(
+            try turnedFrame(encoder, 6, degrees: 8),
+            nowMilliseconds: 5 * 125 + PetalScanSession.trackWindowMilliseconds + 1
+        )
+        XCTAssertEqual(session.stats.tracked, 5)
+        XCTAssertEqual(session.stats.readable, 7)
+        // a reset forgets the pose as well
+        session.reset()
+        _ = session.push(try turnedFrame(encoder, 7, degrees: 8), nowMilliseconds: 5 * 125 + 600)
+        XCTAssertEqual(session.stats.tracked, 5)
+        XCTAssertEqual(session.stats.readable, 8)
+    }
+
+    func testAHiddenBlossomIsCountedAsInferred() throws {
+        let encoder = try PetalStreamEncoder(payload: Support.payload(300, seed: 3), kind: 2)
+        let clean = try cameraFrame(encoder, 1)
+        // a thumb over the code's bottom-right blossom (pasted at 117, 41, 400 px wide)
+        var pixels = clean.pixels
+        let cx = 117 + 952.0 * 400 / 1024
+        let cy = 41 + 952.0 * 400 / 1024
+        for y in 0..<clean.height {
+            for x in 0..<clean.width {
+                let dx = Double(x) + 0.5 - cx
+                let dy = Double(y) + 0.5 - cy
+                if dx * dx + dy * dy <= 30 * 30 { pixels[y * clean.width + x] = 9 }
+            }
+        }
+        var session = PetalScanSession()
+        let outcome = session.push(try PetalLuma(width: clean.width, height: clean.height, pixels: pixels), nowMilliseconds: 0)
+        XCTAssertNil(outcome.error)
+        XCTAssertEqual(session.stats.inferred, 1)
+        XCTAssertEqual(session.stats.tracked, 0)
+    }
+
     func testASessionReceivesAPayloadFromCameraFrames() throws {
         let data = Support.payload(500, seed: 3)
         let encoder = try PetalStreamEncoder(payload: data, kind: 2)

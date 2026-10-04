@@ -8,10 +8,13 @@ struct AppRoutedReadHttpAdmission {
 tokio::task_local! {
     static APP_ROUTED_READ_HTTP_ADMISSION: AppRoutedReadHttpAdmission;
 }
-fn current_app_routed_read_fanout_reservation() -> Option<QueryFanoutMemoryReservation> {
+fn current_app_routed_read_fanout_reservation(
+    app: &SharedAppState,
+) -> Option<QueryFanoutMemoryReservation> {
     APP_ROUTED_READ_HTTP_ADMISSION
         .try_with(|admission| admission.reservation.clone())
         .ok()
+        .filter(|reservation| reservation.belongs_to(app))
 }
 fn current_app_routed_read_decode_plan() -> Option<ToriiRoutedReadRequestDecodePlan> {
     APP_ROUTED_READ_HTTP_ADMISSION
@@ -90,37 +93,39 @@ macro_rules! app_routed_read_endpoint {
         }
     };
 }
-const APP_ROUTED_READ_HTTP_ENDPOINTS_V1: [AppRoutedReadHttpEndpoint; 46] = [
+const APP_ROUTED_READ_HTTP_ENDPOINTS_V1: [AppRoutedReadHttpEndpoint; 49] = [
+    app_routed_read_endpoint!(AccountPermissionsQuery, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_QUERY_POST, AppRoutedReadHttpDecoder::Json("ListQuery")),
+    app_routed_read_endpoint!(UaidManifestsQuery, route_catalog::application_api::SPACE_DIRECTORY_UAIDS_BY_UAID_MANIFESTS_QUERY_POST, AppRoutedReadHttpDecoder::Json("ListQuery")),
     app_routed_read_endpoint!(AccountGet, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_GET, AppRoutedReadHttpDecoder::None),
     app_routed_read_endpoint!(ExplorerAccountDetail, route_catalog::application_api::EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_GET, AppRoutedReadHttpDecoder::None),
-    app_routed_read_endpoint!(AccountAssetsGet, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_ASSETS_GET, AppRoutedReadHttpDecoder::Query("AccountAssetsGetParams")),
-    app_routed_read_endpoint!(AccountAssetsQuery, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_ASSETS_QUERY_POST, AppRoutedReadHttpDecoder::JsonOrNorito("QueryEnvelope")),
-    app_routed_read_endpoint!(AccountPermissionsGet, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET, AppRoutedReadHttpDecoder::Query("PaginationParams")),
-    app_routed_read_endpoint!(AccountTransactionsGet, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_GET, AppRoutedReadHttpDecoder::Query("AccountTransactionsGetParams")),
-    app_routed_read_endpoint!(AccountTransactionsQuery, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST, AppRoutedReadHttpDecoder::JsonOrNorito("QueryEnvelope")),
-    app_routed_read_endpoint!(TransactionsQuery, route_catalog::application_api::TRANSACTIONS_QUERY_POST, AppRoutedReadHttpDecoder::JsonOrNorito("QueryEnvelope")),
+    app_routed_read_endpoint!(AccountAssetsGet, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_ASSETS_GET, AppRoutedReadHttpDecoder::Query("ListQuery")),
+    app_routed_read_endpoint!(AccountAssetsQuery, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_ASSETS_QUERY_POST, AppRoutedReadHttpDecoder::Json("ListQuery")),
+    app_routed_read_endpoint!(AccountPermissionsGet, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET, AppRoutedReadHttpDecoder::Query("ListQuery")),
+    app_routed_read_endpoint!(AccountTransactionsGet, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_GET, AppRoutedReadHttpDecoder::Query("ListQuery")),
+    app_routed_read_endpoint!(AccountTransactionsQuery, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST, AppRoutedReadHttpDecoder::Json("ListQuery")),
+    app_routed_read_endpoint!(TransactionsQuery, route_catalog::application_api::TRANSACTIONS_QUERY_POST, AppRoutedReadHttpDecoder::Json("ListQuery")),
     app_routed_read_endpoint!(PipelineTransactionStatusGet, route_catalog::pipeline::TRANSACTION_STATUS, AppRoutedReadHttpDecoder::StringQuery("PipelineStatusQuery")),
     app_routed_read_endpoint!(ProofRecordGet, route_catalog::pipeline::PROOF, AppRoutedReadHttpDecoder::None),
-    app_routed_read_endpoint!(AccountsList, route_catalog::application_api::ACCOUNTS_GET, AppRoutedReadHttpDecoder::Query("ListFilterParams")),
-    app_routed_read_endpoint!(AccountsQuery, route_catalog::application_api::ACCOUNTS_QUERY_POST, AppRoutedReadHttpDecoder::JsonOrNorito("QueryEnvelope")),
+    app_routed_read_endpoint!(AccountsList, route_catalog::application_api::ACCOUNTS_GET, AppRoutedReadHttpDecoder::Query("ListQuery")),
+    app_routed_read_endpoint!(AccountsQuery, route_catalog::application_api::ACCOUNTS_QUERY_POST, AppRoutedReadHttpDecoder::Json("ListQuery")),
     app_routed_read_endpoint!(AccountsPortfolio, route_catalog::application_api::ACCOUNTS_BY_UAID_PORTFOLIO_GET, AppRoutedReadHttpDecoder::Query("AccountsPortfolioQuery")),
-    app_routed_read_endpoint!(AssetDefinitionsList, route_catalog::application_api::ASSETS_DEFINITIONS_GET, AppRoutedReadHttpDecoder::Query("ListFilterParams")),
+    app_routed_read_endpoint!(AssetDefinitionsList, route_catalog::application_api::ASSETS_DEFINITIONS_GET, AppRoutedReadHttpDecoder::Query("ListQuery")),
     app_routed_read_endpoint!(AssetDefinitionGet, route_catalog::application_api::ASSETS_DEFINITIONS_BY_ASSET_GET, AppRoutedReadHttpDecoder::None),
-    app_routed_read_endpoint!(AssetDefinitionsQuery, route_catalog::application_api::ASSETS_DEFINITIONS_QUERY_POST, AppRoutedReadHttpDecoder::JsonOrNorito("QueryEnvelope")),
+    app_routed_read_endpoint!(AssetDefinitionsQuery, route_catalog::application_api::ASSETS_DEFINITIONS_QUERY_POST, AppRoutedReadHttpDecoder::Json("ListQuery")),
     app_routed_read_endpoint!(AssetHoldersGet, route_catalog::telemetry::ASSET_HOLDERS, AppRoutedReadHttpDecoder::Query("AssetHolderGetParams")),
-    app_routed_read_endpoint!(AssetHoldersQuery, route_catalog::telemetry::ASSET_HOLDERS_QUERY, AppRoutedReadHttpDecoder::JsonOrNorito("QueryEnvelope")),
+    app_routed_read_endpoint!(AssetHoldersQuery, route_catalog::telemetry::ASSET_HOLDERS_QUERY, AppRoutedReadHttpDecoder::Json("ListQuery")),
     app_routed_read_endpoint!(DomainsList, route_catalog::application_api::DOMAINS_GET, AppRoutedReadHttpDecoder::Query("Pagination")),
-    app_routed_read_endpoint!(DomainsQuery, route_catalog::application_api::DOMAINS_QUERY_POST, AppRoutedReadHttpDecoder::JsonOrNorito("QueryEnvelope")),
-    app_routed_read_endpoint!(NftsList, route_catalog::application_api::NFTS_GET, AppRoutedReadHttpDecoder::Query("ListFilterParams")),
-    app_routed_read_endpoint!(NftsQuery, route_catalog::application_api::NFTS_QUERY_POST, AppRoutedReadHttpDecoder::JsonOrNorito("QueryEnvelope")),
+    app_routed_read_endpoint!(DomainsQuery, route_catalog::application_api::DOMAINS_QUERY_POST, AppRoutedReadHttpDecoder::Json("ListQuery")),
+    app_routed_read_endpoint!(NftsList, route_catalog::application_api::NFTS_GET, AppRoutedReadHttpDecoder::Query("ListQuery")),
+    app_routed_read_endpoint!(NftsQuery, route_catalog::application_api::NFTS_QUERY_POST, AppRoutedReadHttpDecoder::Json("ListQuery")),
     app_routed_read_endpoint!(NexusPublicLaneValidators, route_catalog::application_api::NEXUS_PUBLIC_LANES_BY_LANE_ID_VALIDATORS_GET, AppRoutedReadHttpDecoder::Query("PublicLaneValidatorsQueryParams")),
     app_routed_read_endpoint!(NexusPublicLaneStake, route_catalog::application_api::NEXUS_PUBLIC_LANES_BY_LANE_ID_STAKE_GET, AppRoutedReadHttpDecoder::Query("PublicLaneStakeQueryParams")),
     app_routed_read_endpoint!(NexusPublicLaneRewards, route_catalog::application_api::NEXUS_PUBLIC_LANES_BY_LANE_ID_REWARDS_PENDING_GET, AppRoutedReadHttpDecoder::Query("PublicLaneRewardsQueryParams")),
     app_routed_read_endpoint!(NexusDataspacesAccountSummary, route_catalog::application_api::NEXUS_DATASPACES_ACCOUNTS_BY_LITERAL_SUMMARY_GET, AppRoutedReadHttpDecoder::Query("NexusDataspacesAccountSummaryQueryParams")),
     app_routed_read_endpoint!(SpaceDirectoryBindingsGet, route_catalog::application_api::SPACE_DIRECTORY_UAIDS_BY_UAID_GET, AppRoutedReadHttpDecoder::Query("SpaceDirectoryBindingsQuery")),
-    app_routed_read_endpoint!(SpaceDirectoryManifestsGet, route_catalog::application_api::SPACE_DIRECTORY_UAIDS_BY_UAID_MANIFESTS_GET, AppRoutedReadHttpDecoder::Query("SpaceDirectoryManifestQuery")),
-    app_routed_read_endpoint!(RwasList, route_catalog::application_api::RWAS_GET, AppRoutedReadHttpDecoder::Query("ListFilterParams")),
-    app_routed_read_endpoint!(RwasQuery, route_catalog::application_api::RWAS_QUERY_POST, AppRoutedReadHttpDecoder::JsonOrNorito("QueryEnvelope")),
+    app_routed_read_endpoint!(SpaceDirectoryManifestsGet, route_catalog::application_api::SPACE_DIRECTORY_UAIDS_BY_UAID_MANIFESTS_GET, AppRoutedReadHttpDecoder::Query("ListQuery")),
+    app_routed_read_endpoint!(RwasList, route_catalog::application_api::RWAS_GET, AppRoutedReadHttpDecoder::Query("ListQuery")),
+    app_routed_read_endpoint!(RwasQuery, route_catalog::application_api::RWAS_QUERY_POST, AppRoutedReadHttpDecoder::Json("ListQuery")),
     app_routed_read_endpoint!(AliasResolve, route_catalog::aliases::RESOLVE, AppRoutedReadHttpDecoder::Json("AliasResolveRequestDto")),
     app_routed_read_endpoint!(AliasResolveIndex, route_catalog::aliases::RESOLVE_INDEX, AppRoutedReadHttpDecoder::Json("AliasResolveIndexRequestDto")),
     app_routed_read_endpoint!(AliasLookupByAccount, route_catalog::aliases::BY_ACCOUNT, AppRoutedReadHttpDecoder::Json("AliasLookupByAccountRequestDto")),
@@ -131,17 +136,236 @@ const APP_ROUTED_READ_HTTP_ENDPOINTS_V1: [AppRoutedReadHttpEndpoint; 46] = [
     app_routed_read_endpoint!(ContractStateGet, route_catalog::contracts_and_verification_keys::CONTRACTS_STATE_GET, AppRoutedReadHttpDecoder::Query("ContractStateQuery")),
     app_routed_read_endpoint!(ContractViewPost, route_catalog::contracts_and_verification_keys::CONTRACTS_VIEW_POST, AppRoutedReadHttpDecoder::JsonOrNorito("ContractViewDto")),
     app_routed_read_endpoint!(ContractViewBatchPost, route_catalog::contracts_and_verification_keys::CONTRACTS_VIEW_BATCH_POST, AppRoutedReadHttpDecoder::JsonOrNorito("ContractViewBatchDto")),
-    app_routed_read_endpoint!(AccountHistoryGet, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_HISTORY_GET, AppRoutedReadHttpDecoder::Query("AccountHistoryGetParams")),
+    app_routed_read_endpoint!(AccountHistoryQuery, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_HISTORY_QUERY_POST, AppRoutedReadHttpDecoder::Json("ListQuery")),
+    app_routed_read_endpoint!(AccountHistoryGet, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_HISTORY_GET, AppRoutedReadHttpDecoder::Query("ListQuery")),
     app_routed_read_endpoint!(InternalAccountGet, route_catalog::application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_GET, AppRoutedReadHttpDecoder::None),
     app_routed_read_endpoint!(InternalAccountTransactionGet, route_catalog::application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_BY_ENTRYPOINT_HASH_GET, AppRoutedReadHttpDecoder::None),
     app_routed_read_endpoint!(InternalAccountAssetGet, route_catalog::application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_ASSETS_BY_ASSET_DEFINITION_ID_GET, AppRoutedReadHttpDecoder::ExactInternalAssetScope),
     app_routed_read_endpoint!(ContractDeploymentState, route_catalog::contracts_and_verification_keys::CONTRACTS_DEPLOYMENT_STATE_POST, AppRoutedReadHttpDecoder::Json("ContractDeploymentStateRequestDto")),
     app_routed_read_endpoint!(AccountOnboardingCurrentState, route_catalog::application_api::ACCOUNTS_ONBOARDING_CURRENT_STATE_POST, AppRoutedReadHttpDecoder::Json("AccountOnboardingCurrentStateRequestV1")),
 ];
-fn app_routed_read_http_endpoint(route_id: &str) -> Option<AppRoutedReadHttpEndpoint> {
+/// Closed local collections share the HTTP owner without inventing wire endpoints.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AppLocalCollectionRead {
+    ContractActivity,
+    ContractEvents,
+    RepoAgreements,
+    SubscriptionPlans,
+    Subscriptions,
+    ExplorerAccounts,
+    ExplorerDomains,
+    ExplorerAssetDefinitions,
+    ExplorerAssets,
+    ExplorerNfts,
+    ExplorerRwas,
+    ExplorerBlocks,
+    ExplorerTransactions,
+    ExplorerLatestTransactions,
+    ExplorerInstructions,
+    ExplorerLatestInstructions,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AppReadHttpIdentity {
+    Routed(ToriiReadEndpointV1),
+    LocalCollection(AppLocalCollectionRead),
+}
+#[derive(Clone, Copy, Debug)]
+struct AppReadHttpRoute {
+    endpoint: AppReadHttpIdentity,
+    route: iroha_torii_shared::route_catalog::RouteDescriptor,
+    decoder: AppRoutedReadHttpDecoder,
+}
+const APP_LOCAL_COLLECTION_HTTP_ROUTES_V1: [AppReadHttpRoute; 32] = [
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::ContractActivity),
+        route: route_catalog::application_api::CONTRACTS_ACTIVITY_GET,
+        decoder: AppRoutedReadHttpDecoder::Query("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::ContractActivity),
+        route: route_catalog::application_api::CONTRACTS_ACTIVITY_QUERY_POST,
+        decoder: AppRoutedReadHttpDecoder::Json("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::ContractEvents),
+        route: route_catalog::application_api::CONTRACTS_EVENTS_GET,
+        decoder: AppRoutedReadHttpDecoder::Query("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::ContractEvents),
+        route: route_catalog::application_api::CONTRACTS_EVENTS_QUERY_POST,
+        decoder: AppRoutedReadHttpDecoder::Json("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::RepoAgreements),
+        route: route_catalog::application_api::REPO_AGREEMENTS_GET,
+        decoder: AppRoutedReadHttpDecoder::Query("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::RepoAgreements),
+        route: route_catalog::application_api::REPO_AGREEMENTS_QUERY_POST,
+        decoder: AppRoutedReadHttpDecoder::Json("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::SubscriptionPlans),
+        route: route_catalog::application_api::SUBSCRIPTIONS_PLANS_GET,
+        decoder: AppRoutedReadHttpDecoder::Query("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::SubscriptionPlans),
+        route: route_catalog::application_api::SUBSCRIPTIONS_PLANS_QUERY_POST,
+        decoder: AppRoutedReadHttpDecoder::Json("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::Subscriptions),
+        route: route_catalog::application_api::SUBSCRIPTIONS_GET,
+        decoder: AppRoutedReadHttpDecoder::Query("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::Subscriptions),
+        route: route_catalog::application_api::SUBSCRIPTIONS_QUERY_POST,
+        decoder: AppRoutedReadHttpDecoder::Json("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::ExplorerAccounts),
+        route: route_catalog::application_api::EXPLORER_ACCOUNTS_GET,
+        decoder: AppRoutedReadHttpDecoder::Query("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::ExplorerAccounts),
+        route: route_catalog::application_api::EXPLORER_ACCOUNTS_QUERY_POST,
+        decoder: AppRoutedReadHttpDecoder::Json("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::ExplorerDomains),
+        route: route_catalog::application_api::EXPLORER_DOMAINS_GET,
+        decoder: AppRoutedReadHttpDecoder::Query("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::ExplorerDomains),
+        route: route_catalog::application_api::EXPLORER_DOMAINS_QUERY_POST,
+        decoder: AppRoutedReadHttpDecoder::Json("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(
+            AppLocalCollectionRead::ExplorerAssetDefinitions,
+        ),
+        route: route_catalog::application_api::EXPLORER_ASSET_DEFINITIONS_GET,
+        decoder: AppRoutedReadHttpDecoder::Query("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(
+            AppLocalCollectionRead::ExplorerAssetDefinitions,
+        ),
+        route: route_catalog::application_api::EXPLORER_ASSET_DEFINITIONS_QUERY_POST,
+        decoder: AppRoutedReadHttpDecoder::Json("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::ExplorerAssets),
+        route: route_catalog::application_api::EXPLORER_ASSETS_GET,
+        decoder: AppRoutedReadHttpDecoder::Query("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::ExplorerAssets),
+        route: route_catalog::application_api::EXPLORER_ASSETS_QUERY_POST,
+        decoder: AppRoutedReadHttpDecoder::Json("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::ExplorerNfts),
+        route: route_catalog::application_api::EXPLORER_NFTS_GET,
+        decoder: AppRoutedReadHttpDecoder::Query("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::ExplorerNfts),
+        route: route_catalog::application_api::EXPLORER_NFTS_QUERY_POST,
+        decoder: AppRoutedReadHttpDecoder::Json("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::ExplorerRwas),
+        route: route_catalog::application_api::EXPLORER_RWAS_GET,
+        decoder: AppRoutedReadHttpDecoder::Query("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::ExplorerRwas),
+        route: route_catalog::application_api::EXPLORER_RWAS_QUERY_POST,
+        decoder: AppRoutedReadHttpDecoder::Json("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::ExplorerBlocks),
+        route: route_catalog::application_api::EXPLORER_BLOCKS_GET,
+        decoder: AppRoutedReadHttpDecoder::Query("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(AppLocalCollectionRead::ExplorerBlocks),
+        route: route_catalog::application_api::EXPLORER_BLOCKS_QUERY_POST,
+        decoder: AppRoutedReadHttpDecoder::Json("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(
+            AppLocalCollectionRead::ExplorerTransactions,
+        ),
+        route: route_catalog::application_api::EXPLORER_TRANSACTIONS_GET,
+        decoder: AppRoutedReadHttpDecoder::Query("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(
+            AppLocalCollectionRead::ExplorerTransactions,
+        ),
+        route: route_catalog::application_api::EXPLORER_TRANSACTIONS_QUERY_POST,
+        decoder: AppRoutedReadHttpDecoder::Json("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(
+            AppLocalCollectionRead::ExplorerLatestTransactions,
+        ),
+        route: route_catalog::application_api::EXPLORER_TRANSACTIONS_LATEST_GET,
+        decoder: AppRoutedReadHttpDecoder::Query("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(
+            AppLocalCollectionRead::ExplorerLatestTransactions,
+        ),
+        route: route_catalog::application_api::EXPLORER_TRANSACTIONS_LATEST_QUERY_POST,
+        decoder: AppRoutedReadHttpDecoder::Json("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(
+            AppLocalCollectionRead::ExplorerInstructions,
+        ),
+        route: route_catalog::application_api::EXPLORER_INSTRUCTIONS_GET,
+        decoder: AppRoutedReadHttpDecoder::Query("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(
+            AppLocalCollectionRead::ExplorerInstructions,
+        ),
+        route: route_catalog::application_api::EXPLORER_INSTRUCTIONS_QUERY_POST,
+        decoder: AppRoutedReadHttpDecoder::Json("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(
+            AppLocalCollectionRead::ExplorerLatestInstructions,
+        ),
+        route: route_catalog::application_api::EXPLORER_INSTRUCTIONS_LATEST_GET,
+        decoder: AppRoutedReadHttpDecoder::Query("ListQuery"),
+    },
+    AppReadHttpRoute {
+        endpoint: AppReadHttpIdentity::LocalCollection(
+            AppLocalCollectionRead::ExplorerLatestInstructions,
+        ),
+        route: route_catalog::application_api::EXPLORER_INSTRUCTIONS_LATEST_QUERY_POST,
+        decoder: AppRoutedReadHttpDecoder::Json("ListQuery"),
+    },
+];
+fn app_routed_read_http_endpoint(route_id: &str) -> Option<AppReadHttpRoute> {
     APP_ROUTED_READ_HTTP_ENDPOINTS_V1
         .iter()
-        .copied()
+        .map(|entry| AppReadHttpRoute {
+            endpoint: AppReadHttpIdentity::Routed(entry.endpoint),
+            route: entry.route,
+            decoder: entry.decoder,
+        })
+        .chain(APP_LOCAL_COLLECTION_HTTP_ROUTES_V1.iter().copied())
         .find(|entry| entry.route.stable_route_id() == route_id)
 }
 async fn enforce_app_routed_read_http_admission(
@@ -159,7 +383,7 @@ async fn enforce_app_routed_read_http_admission(
     if let Err(response) = endpoint.decoder.preflight_media(request.headers()) {
         return response;
     }
-    let decode_plan = match torii_routed_read_request_decode_plan(&app) {
+    let decode_plan = match torii_routed_read_request_preflight_plan(&app) {
         Ok(plan) => plan,
         Err(response) => return response,
     };
@@ -180,7 +404,7 @@ async fn enforce_app_routed_read_http_admission(
     } else {
         0
     };
-    let declared_body_bytes = match if accepts_body {
+    let _preflight_declared_body_bytes = match if accepts_body {
         preflight_app_routed_read_content_length(request.headers(), body_limit)
     } else {
         preflight_bodyless_app_routed_read(request.headers())
@@ -196,6 +420,44 @@ async fn enforce_app_routed_read_http_admission(
     let reservation = match acquire_app_routed_read_http_memory(&app, accepts_body).await {
         Ok(reservation) => reservation,
         Err(response) => return response,
+    };
+    // From admission onward, every decoder uses the geometry owned by this
+    // permit. The earlier configuration-derived plan only preflights framing
+    // before acquisition; it cannot authorize a larger retained decode graph.
+    let decode_plan = match ToriiRoutedReadMemoryBudget::from_envelope(
+        match reservation.admitted_envelope(&app) {
+            Ok(envelope) => envelope,
+            Err(response) => {
+                return hold_query_fanout_memory_in_response_body(response, reservation);
+            }
+        },
+        app.torii_proxy_max_response_bytes,
+    )
+    .request_decode_plan()
+    {
+        Ok(plan) => plan,
+        Err(response) => return hold_query_fanout_memory_in_response_body(response, reservation),
+    };
+    if let Err(response) = decode_plan.admit_raw_input(target_bytes) {
+        return hold_query_fanout_memory_in_response_body(
+            map_app_routed_read_request_response(response),
+            reservation,
+        );
+    }
+    let body_limit = if accepts_body {
+        decode_plan
+            .raw_input_limit_bytes
+            .saturating_sub(target_bytes)
+    } else {
+        0
+    };
+    let declared_body_bytes = match if accepts_body {
+        preflight_app_routed_read_content_length(request.headers(), body_limit)
+    } else {
+        preflight_bodyless_app_routed_read(request.headers())
+    } {
+        Ok(declared) => declared,
+        Err(response) => return hold_query_fanout_memory_in_response_body(response, reservation),
     };
     let (parts, body) = request.into_parts();
     let body = match tokio::time::timeout(

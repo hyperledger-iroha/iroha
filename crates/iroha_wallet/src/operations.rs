@@ -1,5 +1,4 @@
 //! Account balances and exact, quoted native operations with durable submission evidence.
-use crate::operation_journal::Journal;
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
     blocking::{Client, funding::BalanceReport},
@@ -19,30 +18,79 @@ use iroha::{
     },
 };
 use iroha_model_base::metadata::Metadata;
+use iroha_operation_journal::Journal;
 use iroha_primitives::numeric::Quantity;
 use iroha_torii_shared::FeeQuoteResponse;
+#[cfg(test)]
 use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
 use norito::json::{JsonDeserialize, JsonSerialize, Value};
+#[cfg(test)]
+use std::time::Duration;
 use std::{
     collections::BTreeMap,
     path::Path,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
+#[path = "operations_preparation.rs"]
+mod preparation;
+pub use preparation::{NativePreparationPhase, RetiredNativeRequest, VerifiedNativePreparation};
+
+#[path = "operations_bounded.rs"]
+mod bounded;
 #[path = "operations_alias.rs"]
 mod bounded_alias;
+#[path = "operations_gateway_setup.rs"]
+mod gateway_setup;
+#[path = "operations_musubi_namespace.rs"]
+mod musubi_namespace;
 #[path = "operations_private_root.rs"]
 mod private_root;
+#[path = "operations_provider_capacity.rs"]
+mod provider_capacity;
+#[path = "operations_provider_credit.rs"]
+mod provider_credit;
+#[path = "operations_provider_ingest.rs"]
+mod provider_ingest;
+#[path = "operations_reputation_policy.rs"]
+mod reputation_policy;
+#[path = "operations_reserve_account.rs"]
+mod reserve_account;
+#[path = "operations_reserve_movement_decision.rs"]
+mod reserve_movement_decision;
+#[path = "operations_reserve_policy.rs"]
+mod reserve_policy;
+#[path = "operations_reserve_top_up.rs"]
+mod reserve_top_up;
+#[cfg(test)]
+#[path = "operations_setup_test_support.rs"]
+mod setup_test_support;
 #[path = "operations_stream_token_custody.rs"]
 mod stream_token_custody;
 use bounded_alias::AliasFeeBounds;
+pub use gateway_setup::{InitialGatewaySetupRequest, InitialGatewaySetupSelection};
 use iroha_data_model::private_dataspace::{
     PrivateDataspaceAnchor, PrivateDataspaceAnchorState, PrivateDataspaceRegistration,
+};
+pub use musubi_namespace::{
+    MusubiNamespaceBindingParent, MusubiNamespaceBindingRequest, MusubiNamespaceBindingSelection,
 };
 use private_root::BoundedTerms;
 pub use private_root::{
     BoundedTransactionOptions, PrivateRootAnchorRequest, PrivateRootRegistrationRequest,
 };
+pub use provider_capacity::{
+    ProviderCapacityDeclarationRequest, ProviderCapacityDeclarationSelection,
+};
+pub use provider_credit::{ProviderCreditUpsertRequest, ProviderCreditUpsertSelection};
+pub use provider_ingest::InitialProviderIngestAuthorityRequest;
+pub use reputation_policy::{InitialReputationPolicyRequest, InitialReputationPolicySelection};
+pub use reserve_account::{ReserveAccountRegistrationRequest, ReserveAccountRegistrationSelection};
+pub use reserve_movement_decision::{
+    ReserveMovementDecisionRequest, ReserveMovementDecisionSelection,
+};
+pub use reserve_policy::{InitialReservePolicyRequest, InitialReservePolicySelection};
+pub use reserve_top_up::{ReserveTopUpRequest, ReserveTopUpSelection};
 pub use stream_token_custody::{
     StreamTokenCustodyConfigureRequest, StreamTokenCustodyEnrollRequest,
     StreamTokenCustodySelection,
@@ -147,17 +195,90 @@ pub enum NativeOperationKind {
     StreamTokenCustodyConfigure,
     /// One independently attested StreamToken custody enrollment.
     StreamTokenCustodyEnroll,
+    /// One exact initial revision-one reserve governance policy.
+    InitialReservePolicy,
+    /// One exact initial provider reserve partition under its selected policy.
+    ReserveAccountRegistration,
+    /// One provider-owned TopUp movement request; approval and asset transfer are separate.
+    ReserveTopUpRequest,
+    /// One generic manager decision; movement provider, kind and amount are resolved natively.
+    ReserveMovementDecision,
+    /// One governed credit record replacement with explicit native absence/current row CAS.
+    ProviderCreditUpsert,
+    /// One provider-owner capacity declaration, with native replacement semantics and no CAS.
+    ProviderCapacityDeclaration,
+    /// Exact initial Configure followed by the selected gateway Operate and Check grants.
+    InitialGatewaySetup,
+    /// Sole initial recorder Set with the complete selected active gateway delivery template.
+    InitialReputationPolicy,
+    /// Sole owner-signed revision-one ingest authority Set with native absence CAS.
+    InitialProviderIngestAuthority,
+    /// Sole immutable Musubi namespace binding, authorized by its actual current native owner.
+    MusubiNamespaceBinding,
 }
 
 enum OperationExpectation<'a> {
+    MusubiNamespace(musubi_namespace::MusubiNamespaceExpectation<'a>),
+    Transfer(&'a TransferRequest),
+    Alias(&'a AliasSetupPlanRequestV1, &'a FeePaymentIntent),
+    ProviderIngest(provider_ingest::ProviderIngestExpectation<'a>),
+    GatewaySetup(gateway_setup::GatewaySetupExpectation<'a>),
+    ReputationPolicy(reputation_policy::ReputationPolicyExpectation<'a>),
     PrivateRoot(private_root::BoundedOperationExpectation<'a>),
     Custody(stream_token_custody::CustodyExpectation<'a>),
+    ReservePolicy(reserve_policy::ReservePolicyExpectation<'a>),
+    ReserveAccount(reserve_account::ReserveAccountExpectation<'a>),
+    ReserveTopUp(reserve_top_up::ReserveTopUpExpectation<'a>),
+    ReserveMovementDecision(reserve_movement_decision::ReserveMovementDecisionExpectation<'a>),
+    ProviderCredit(provider_credit::ProviderCreditExpectation<'a>),
+    ProviderCapacity(provider_capacity::ProviderCapacityExpectation<'a>),
 }
 impl OperationExpectation<'_> {
-    fn verify(&self, record: &TransactionJournal) -> Result<()> {
+    fn verify(&self, record: &preparation::Selection<'_>) -> Result<()> {
         match self {
+            Self::MusubiNamespace(expected) => expected.verify(record),
+            Self::Transfer(expected) => {
+                let NativeOperation::Transfer {
+                    destination,
+                    amount,
+                } = record.operation
+                else {
+                    eyre::bail!("different transfer preparation purpose");
+                };
+                eyre::ensure!(
+                    destination == &expected.destination
+                        && amount == &expected.amount
+                        && record.requested_fee == &expected.fee_payment,
+                    "changed original transfer request"
+                );
+                Ok(())
+            }
+            Self::Alias(expected, fee) => {
+                let NativeOperation::AliasSetup {
+                    request,
+                    bounds: AliasFeeBounds::Quoted,
+                    ..
+                } = record.operation
+                else {
+                    eyre::bail!("different alias preparation purpose");
+                };
+                eyre::ensure!(
+                    request == *expected && record.requested_fee == *fee,
+                    "changed original alias request"
+                );
+                Ok(())
+            }
+            Self::ProviderIngest(expected) => expected.verify(record),
+            Self::GatewaySetup(expected) => expected.verify(record),
+            Self::ReputationPolicy(expected) => expected.verify(record),
             Self::PrivateRoot(expected) => expected.verify(record),
             Self::Custody(expected) => expected.verify(record),
+            Self::ReservePolicy(expected) => expected.verify(record),
+            Self::ReserveAccount(expected) => expected.verify(record),
+            Self::ReserveTopUp(expected) => expected.verify(record),
+            Self::ReserveMovementDecision(expected) => expected.verify(record),
+            Self::ProviderCredit(expected) => expected.verify(record),
+            Self::ProviderCapacity(expected) => expected.verify(record),
         }
     }
 }
@@ -167,6 +288,7 @@ pub struct AccountService {
     config: Config,
     client: Client,
     deadline: Option<std::time::Instant>,
+    cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 impl AccountService {
     /// Bind a native client to one exact configured network, account and signing key.
@@ -180,7 +302,29 @@ impl AccountService {
             config,
             client,
             deadline: None,
+            cancellation: None,
         })
+    }
+    /// Bind the caller's existing cancellation signal to all subsequent paid work.
+    ///
+    /// Set this signal once when cancelling; callers must never reset it. Deadline-bounded
+    /// copies preserve the same signal. Cancellation is checked cooperatively before retaining
+    /// payloads, signing and dispatch; read-only canonical inspection remains available.
+    ///
+    /// # Errors
+    /// Refuses replacing an existing cancellation binding with a different signal.
+    pub fn with_cancellation(
+        mut self,
+        cancellation: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<Self> {
+        eyre::ensure!(
+            self.cancellation
+                .as_ref()
+                .is_none_or(|original| std::sync::Arc::ptr_eq(original, &cancellation)),
+            "wallet cancellation signal cannot be replaced"
+        );
+        self.cancellation = Some(cancellation);
+        Ok(self)
     }
     /// Read this account's exact XOR balance without preparing a transaction.
     ///
@@ -192,10 +336,68 @@ impl AccountService {
             self.config.account.clone(),
         ))
     }
-    /// Quote, sign once and privately persist one transfer before any transaction submission.
+    /// Inspect an exact transfer preparation without signing or network I/O.
+    /// # Errors
+    /// Refuses changed request or unsafe/malformed retained custody.
+    pub fn inspect_transfer_preparation(
+        &self,
+        journal: &Path,
+        expected: &TransferRequest,
+    ) -> Result<VerifiedNativePreparation> {
+        self.inspect_preparation(
+            journal,
+            NativeOperationKind::Transfer,
+            Some(OperationExpectation::Transfer(expected)),
+        )
+    }
+    /// Retire an exact transfer request only before its first retained payload.
+    /// # Errors
+    /// Refuses missing, changed or later-stage histories and unknown journal material.
+    pub fn retire_transfer_unprepared(
+        &self,
+        journal: &Path,
+        expected: &TransferRequest,
+    ) -> Result<RetiredNativeRequest> {
+        self.retire_preparation(
+            journal,
+            NativeOperationKind::Transfer,
+            OperationExpectation::Transfer(expected),
+        )
+    }
+    /// Inspect an exact ordinarily quoted alias preparation without calling its planner.
+    /// # Errors
+    /// Refuses changed plan/request, fee selection or unsafe/malformed custody.
+    pub fn inspect_alias_preparation(
+        &self,
+        journal: &Path,
+        request: &AliasSetupPlanRequestV1,
+        fee: &FeePaymentIntent,
+    ) -> Result<VerifiedNativePreparation> {
+        self.inspect_preparation(
+            journal,
+            NativeOperationKind::AliasSetup,
+            Some(OperationExpectation::Alias(request, fee)),
+        )
+    }
+    /// Retire an ordinarily quoted alias request only before a payload or dispatch exists.
+    /// # Errors
+    /// Refuses missing, changed or later-stage histories and unknown journal material.
+    pub fn retire_alias_unprepared(
+        &self,
+        journal: &Path,
+        request: &AliasSetupPlanRequestV1,
+        fee: &FeePaymentIntent,
+    ) -> Result<RetiredNativeRequest> {
+        self.retire_preparation(
+            journal,
+            NativeOperationKind::AliasSetup,
+            OperationExpectation::Alias(request, fee),
+        )
+    }
+    /// Retain a transfer request and quoted payload, then persist its signature before submission.
     ///
     /// # Errors
-    /// Returns invalid quantity/fee, quote/signing, or immutable-journal failures.
+    /// Returns invalid quantity/fee, quote/signing, expired original terms or journal failures.
     pub fn prepare_transfer(
         &self,
         request: &TransferRequest,
@@ -203,6 +405,13 @@ impl AccountService {
     ) -> Result<OperationReport> {
         let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
         validate_transfer_request(request, &self.config.account)?;
+        if let Some(report) = self.finish_existing_preparation(
+            journal,
+            NativeOperationKind::Transfer,
+            Some(OperationExpectation::Transfer(request)),
+        )? {
+            return Ok(report);
+        }
         self.prepare_native(
             NativeOperation::Transfer {
                 destination: request.destination.clone(),
@@ -222,6 +431,13 @@ impl AccountService {
         fee_payment: FeePaymentIntent,
         journal: &Path,
     ) -> Result<OperationReport> {
+        if let Some(report) = self.finish_existing_preparation(
+            journal,
+            NativeOperationKind::AliasSetup,
+            Some(OperationExpectation::Alias(request, &fee_payment)),
+        )? {
+            return Ok(report);
+        }
         self.prepare_alias_with_bounds(request, fee_payment, AliasFeeBounds::Quoted, journal)
     }
 
@@ -268,6 +484,13 @@ impl AccountService {
     }
     fn ensure_deadline(&self) -> Result<()> {
         if self
+            .cancellation
+            .as_ref()
+            .is_some_and(|signal| signal.load(std::sync::atomic::Ordering::Acquire))
+        {
+            eyre::bail!("wallet operation cancelled");
+        }
+        if self
             .deadline
             .is_some_and(|deadline| std::time::Instant::now() >= deadline)
         {
@@ -275,87 +498,7 @@ impl AccountService {
         }
         Ok(())
     }
-    fn prepare_native(
-        &self,
-        operation: NativeOperation,
-        requested_fee: FeePaymentIntent,
-        journal: &Path,
-    ) -> Result<OperationReport> {
-        self.ensure_deadline()?;
-        requested_fee.validate()?;
-        self.client
-            .refresh_capabilities()
-            .wrap_err("wallet transaction submission compatibility")?;
-        let instructions = operation.instructions(&self.config)?;
-        let mut draft =
-            AccountTransactionDraft::new(instructions, requested_fee.clone(), Metadata::default());
-        if let NativeOperation::AliasSetup { plan, .. } = &operation {
-            let remaining = plan
-                .body
-                .valid_until_ms
-                .checked_sub(current_unix_ms()?)
-                .filter(|remaining| *remaining > 0)
-                .ok_or_else(|| eyre!("alias plan expired before transaction preparation"))?;
-            draft = draft.with_time_to_live(
-                Duration::from_millis(remaining).min(self.config.transaction_ttl),
-            );
-        }
-        let mut payload = self.client.account_client().prepare_transaction(draft)?;
-        if let Some(terms) = operation.bounded_terms() {
-            terms.validate()?;
-            let remaining = terms
-                .deadline_ms
-                .checked_sub(payload.creation_time_ms)
-                .and_then(std::num::NonZeroU64::new)
-                .ok_or_else(|| eyre!("bounded transaction deadline elapsed before preparation"))?;
-            payload.time_to_live_ms = Some(
-                payload
-                    .time_to_live_ms
-                    .map_or(remaining, |ttl| ttl.min(remaining)),
-            );
-        }
-        let quote = self
-            .client
-            .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })?;
-        verify_quote_limits(&requested_fee, &quote)?;
-        if let Some(terms) = operation.bounded_terms() {
-            terms.verify_quote(&quote)?;
-        }
-        self.client.check_funding(
-            &operation.principal(&self.config.account)?,
-            std::slice::from_ref(&quote),
-        )?;
-        payload.fee_payment = quote.intent.clone();
-        let signed = self.client.account_client().sign_transaction(payload)?;
-        let record = TransactionJournal {
-            schema: "iroha.wallet.native-transaction.v1".to_owned(),
-            torii_url: self.config.torii_api_url.to_string(),
-            chain_id: self.config.chain.to_string(),
-            network_id: self.config.network_id,
-            chain_discriminant: (self.config.account_chain_discriminant),
-            account_id: self.config.account.clone(),
-            operation,
-            requested_fee,
-            quote,
-            transaction_hash: signed.hash().to_string(),
-            signed_transaction_hex: hex::encode(signed.encode_versioned()),
-            deadline_ms: transaction_deadline(&signed)?,
-        };
-        record.verify(&self.config)?;
-        if let Some(terms) = record.operation.bounded_terms()
-            && current_unix_ms()? >= terms.deadline_ms
-        {
-            eyre::bail!("bounded operation deadline elapsed before journal publication");
-        }
-        self.ensure_deadline()?;
-        let journal = Journal::create_prepared(journal, &record)?;
-        Ok(transfer_report(
-            &journal,
-            &record,
-            OperationStatus::Prepared,
-            None,
-        ))
-    }
+
     /// Submit a wholly unattempted saved transfer or alias operation once, then verify its wire.
     ///
     /// An existing attempt is reconciled by hash without another submission.
@@ -366,7 +509,7 @@ impl AccountService {
     pub fn submit(&self, journal: &Path, expected: NativeOperationKind) -> Result<OperationReport> {
         self.run_transaction(journal, expected, true, None)
     }
-    /// Read-only reconciliation of a saved transfer or alias operation without rebuilding or signing.
+    /// Read-only reconciliation of a native preparation without rebuilding, quoting or signing.
     ///
     /// Bounded operations require their request-bound recovery methods.
     ///
@@ -396,77 +539,76 @@ impl AccountService {
         submit: bool,
         expectation: Option<OperationExpectation<'_>>,
     ) -> Result<OperationReport> {
-        let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
-        let journal = Journal::open(path)?;
-        let record: TransactionJournal = journal.read_operation()?;
-        if record.operation.kind() != expected {
-            eyre::bail!(
-                "saved journal contains a different native operation than the selected command"
-            );
-        }
-        let transaction = record.verify(&self.config)?;
-        match expectation {
-            Some(expectation) => expectation.verify(&record)?,
-            None if record.operation.bounded_terms().is_some() => {
-                eyre::bail!(
-                    "bounded submission and recovery require the exact selected operation request"
+        norito::core::with_decode_limits_scope(preparation::LIMITS, || {
+            let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
+            let journal = Journal::open(path)?;
+            let retained = preparation::Retained::read(&journal, &self.config)?;
+            retained.verify_selection(expected, expectation.as_ref())?;
+            if let Some(report) = retained.partial_report(&journal)? {
+                eyre::ensure!(
+                    !submit,
+                    "explicit preparation must finish the original payload before submission"
                 );
+                return Ok(report);
             }
-            None => {}
-        }
-        let mut before = observe_transaction(self.client.client(), &transaction)?;
-        if before.status == OperationStatus::Absent && journal.submission_recorded(&record)? {
-            before.status = OperationStatus::Pending;
-        }
-        if !submit || before.status != OperationStatus::Absent {
-            return Ok(transfer_report(
+            let (record, transaction) = retained.into_record()?;
+            let mut before = observe_transaction(self.client.client(), &transaction)?;
+            if before.status == OperationStatus::Absent && journal.submission_recorded(&record)? {
+                before.status = OperationStatus::Pending;
+            }
+            if !submit || before.status != OperationStatus::Absent {
+                return Ok(transfer_report(
+                    &journal,
+                    &record,
+                    before.status,
+                    before.evidence.as_ref(),
+                ));
+            }
+            if transaction_expired(&transaction)? {
+                return Ok(transfer_report(
+                    &journal,
+                    &record,
+                    OperationStatus::Expired,
+                    None,
+                ));
+            }
+            self.client.refresh_capabilities().wrap_err(
+                "wallet transaction submission compatibility; saved operation remains unattempted",
+            )?;
+            self.ensure_deadline()?;
+            if !journal.record_submission(&record)? {
+                return Ok(transfer_report(
+                    &journal,
+                    &record,
+                    OperationStatus::Pending,
+                    None,
+                ));
+            }
+            // Cancellation during durable marker publication leaves an ambiguous retained attempt;
+            // it never grants a replacement dispatch on recovery.
+            self.ensure_deadline()?;
+            // The marker is durable before the only dispatch. Its existence permanently prevents replay.
+            let _submission = self.client.submit_transaction_and_wait(&transaction);
+            let after =
+                observe_transaction(self.client.client(), &transaction).unwrap_or(Observation {
+                    status: OperationStatus::Pending,
+                    evidence: None,
+                });
+            let status = if after.status == OperationStatus::Absent {
+                OperationStatus::Pending
+            } else {
+                after.status
+            };
+            if status == OperationStatus::Applied {
+                journal.write_applied_evidence(&after.evidence)?;
+            }
+            Ok(transfer_report(
                 &journal,
                 &record,
-                before.status,
-                before.evidence.as_ref(),
-            ));
-        }
-        if transaction_expired(&transaction)? {
-            return Ok(transfer_report(
-                &journal,
-                &record,
-                OperationStatus::Expired,
-                None,
-            ));
-        }
-        self.client.refresh_capabilities().wrap_err(
-            "wallet transaction submission compatibility; saved operation remains unattempted",
-        )?;
-        self.ensure_deadline()?;
-        if !journal.record_submission(&record)? {
-            return Ok(transfer_report(
-                &journal,
-                &record,
-                OperationStatus::Pending,
-                None,
-            ));
-        }
-        // The marker is durable before the only dispatch. Its existence permanently prevents replay.
-        let _submission = self.client.submit_transaction_and_wait(&transaction);
-        let after =
-            observe_transaction(self.client.client(), &transaction).unwrap_or(Observation {
-                status: OperationStatus::Pending,
-                evidence: None,
-            });
-        let status = if after.status == OperationStatus::Absent {
-            OperationStatus::Pending
-        } else {
-            after.status
-        };
-        if status == OperationStatus::Applied {
-            journal.write_applied_evidence(&after.evidence)?;
-        }
-        Ok(transfer_report(
-            &journal,
-            &record,
-            status,
-            after.evidence.as_ref(),
-        ))
+                status,
+                after.evidence.as_ref(),
+            ))
+        })
     }
 }
 
@@ -500,51 +642,26 @@ impl TransactionJournal {
                 "transfer journal differs from the exact wallet, endpoint or network, or exceeds its bound"
             );
         }
-        self.requested_fee.validate()?;
-        let expected_instructions = self.operation.instructions(config)?;
-        let bytes = hex::decode(&self.signed_transaction_hex)?;
-        let transaction = SignedTransaction::decode_all_versioned(&bytes)?;
+        let bytes = preparation::decode_hex(&self.signed_transaction_hex, 1024 * 1024)?;
+        let transaction: SignedTransaction = iroha_version::codec::decode_exact_versioned(&bytes)?;
         transaction.verify_signature()?;
-        if matches!(
-            self.operation,
-            NativeOperation::StreamTokenCustodyConfigure { .. }
-                | NativeOperation::StreamTokenCustodyEnroll { .. }
-        ) && (transaction.attachments().is_some() || transaction.multisig_signatures().is_some())
-        {
-            eyre::bail!(
-                "custody operations require the sole account-signature instruction profile"
-            );
-        }
-        let Executable::Instructions(instructions) = transaction.instructions() else {
-            eyre::bail!("transfer must contain native instructions");
-        };
-        if hex::encode(&bytes) != self.signed_transaction_hex
-            || transaction.encode_versioned() != bytes
-            || transaction_deadline(&transaction)? != self.deadline_ms
-            || transaction.hash().to_string() != self.transaction_hash
-            || transaction.authority() != &config.account
-            || transaction.network_id() != Some(&config.network_id)
-            || instructions.as_ref() != expected_instructions.as_slice()
-            || transaction.metadata() != &Metadata::default()
-            || !self
-                .requested_fee
-                .has_same_payer_and_gas_bound(&self.quote.intent)
-            || transaction.payload().fee_payment != self.quote.intent
-        {
-            eyre::bail!(
-                "transfer journal has substituted transaction, destination, amount, fee or signer evidence"
-            );
-        }
-        verify_quote_limits(&self.requested_fee, &self.quote)?;
-        if let Some(terms) = self.operation.bounded_terms() {
-            terms.verify_quote(&self.quote)?;
-            if self.deadline_ms > terms.deadline_ms {
-                eyre::bail!("saved bounded transaction exceeds its original operation deadline");
-            }
-        }
-        self.quote
-            .validate_for_draft(transaction.payload())
-            .map_err(|error| eyre!(error))?;
+        eyre::ensure!(
+            transaction.multisig_signatures().is_none()
+                && preparation::encode_signed(&transaction)? == bytes
+                && transaction_deadline(&transaction)? == self.deadline_ms
+                && transaction.try_hash_as_entrypoint()?.to_string() == self.transaction_hash,
+            "signed journal differs from its exact sole signature, wire or transaction identity"
+        );
+        preparation::verify_payload(
+            preparation::Selection {
+                operation: &self.operation,
+                requested_fee: &self.requested_fee,
+                deadline_ms: self.deadline_ms,
+            },
+            &self.quote,
+            transaction.payload(),
+            config,
+        )?;
         Ok(transaction)
     }
 }
@@ -586,6 +703,10 @@ pub(crate) fn verify_fee_intent_limits(
 }
 
 fn validate_transfer_request(request: &TransferRequest, authority: &AccountId) -> Result<()> {
+    eyre::ensure!(
+        request.fee_payment.charge_limits().len() <= 16,
+        "transfer fee authorization exceeds sixteen entries"
+    );
     request.fee_payment.validate()?;
     if request.amount.is_zero() || &request.destination == authority {
         eyre::bail!("transfer requires a positive amount and a different destination account");
@@ -600,6 +721,22 @@ fn validate_transfer_request(request: &TransferRequest, authority: &AccountId) -
     deny_unknown_fields
 )]
 enum NativeOperation {
+    MusubiNamespaceBinding {
+        plan: Vec<u8>,
+        terms: BoundedTerms,
+    },
+    InitialProviderIngestAuthority {
+        plan: Vec<u8>,
+        terms: BoundedTerms,
+    },
+    InitialGatewaySetup {
+        plan: Vec<u8>,
+        terms: BoundedTerms,
+    },
+    InitialReputationPolicy {
+        plan: Vec<u8>,
+        terms: BoundedTerms,
+    },
     Transfer {
         destination: AccountId,
         amount: Quantity,
@@ -628,6 +765,30 @@ enum NativeOperation {
         plan: Vec<u8>,
         terms: BoundedTerms,
     },
+    InitialReservePolicy {
+        plan: Vec<u8>,
+        terms: BoundedTerms,
+    },
+    ReserveAccountRegistration {
+        plan: Vec<u8>,
+        terms: BoundedTerms,
+    },
+    ReserveTopUpRequest {
+        plan: Vec<u8>,
+        terms: BoundedTerms,
+    },
+    ReserveMovementDecision {
+        plan: Vec<u8>,
+        terms: BoundedTerms,
+    },
+    ProviderCreditUpsert {
+        plan: Vec<u8>,
+        terms: BoundedTerms,
+    },
+    ProviderCapacityDeclaration {
+        plan: Vec<u8>,
+        terms: BoundedTerms,
+    },
 }
 impl NativeOperation {
     fn bounded_terms(&self) -> Option<&BoundedTerms> {
@@ -635,8 +796,18 @@ impl NativeOperation {
             Self::PrivateRootRegistration { terms, .. } | Self::PrivateRootAnchor { terms, .. } => {
                 Some(terms)
             }
-            Self::StreamTokenCustodyConfigure { terms, .. }
-            | Self::StreamTokenCustodyEnroll { terms, .. } => Some(terms),
+            Self::MusubiNamespaceBinding { terms, .. }
+            | Self::StreamTokenCustodyConfigure { terms, .. }
+            | Self::StreamTokenCustodyEnroll { terms, .. }
+            | Self::InitialReservePolicy { terms, .. }
+            | Self::ReserveAccountRegistration { terms, .. }
+            | Self::ReserveTopUpRequest { terms, .. }
+            | Self::ReserveMovementDecision { terms, .. }
+            | Self::ProviderCreditUpsert { terms, .. }
+            | Self::ProviderCapacityDeclaration { terms, .. }
+            | Self::InitialGatewaySetup { terms, .. }
+            | Self::InitialReputationPolicy { terms, .. }
+            | Self::InitialProviderIngestAuthority { terms, .. } => Some(terms),
             Self::AliasSetup {
                 bounds: AliasFeeBounds::Bounded(terms),
                 ..
@@ -646,10 +817,27 @@ impl NativeOperation {
     }
     fn principal(&self, authority: &AccountId) -> Result<BTreeMap<AssetId, Quantity>> {
         match self {
-            Self::PrivateRootRegistration { .. }
+            Self::MusubiNamespaceBinding { .. }
+            | Self::PrivateRootRegistration { .. }
             | Self::PrivateRootAnchor { .. }
             | Self::StreamTokenCustodyConfigure { .. }
-            | Self::StreamTokenCustodyEnroll { .. } => Ok(BTreeMap::new()),
+            | Self::StreamTokenCustodyEnroll { .. }
+            | Self::InitialReservePolicy { .. }
+            | Self::ReserveAccountRegistration { .. }
+            // A TopUp request pays fees only. Manager approval owns the later asset transfer.
+            | Self::ReserveTopUpRequest { .. }
+            // A manager decision pays only its own fees. Native execution owns the selected
+            // movement's provider/custody debit; it is never charged as manager principal here.
+            | Self::ReserveMovementDecision { .. }
+            // Governed credit projection has no asset transfer; its signer pays only fees.
+            | Self::ProviderCreditUpsert { .. }
+            // Capacity declares already-backed stake; the owner pays no principal here.
+            | Self::ProviderCapacityDeclaration { .. }
+            // Setup and scoped permission grants move no principal; the manager pays fees.
+            | Self::InitialGatewaySetup { .. }
+            | Self::InitialReputationPolicy { .. }
+            // Ingest Set is owner-signed and pays only that owner's fees.
+            | Self::InitialProviderIngestAuthority { .. } => Ok(BTreeMap::new()),
             Self::Transfer { amount, .. } => Ok(BTreeMap::from([(
                 AssetId::new(XOR_ASSET_DEFINITION.parse()?, authority.clone()),
                 amount.clone(),
@@ -669,6 +857,12 @@ impl NativeOperation {
     }
     fn kind(&self) -> NativeOperationKind {
         match self {
+            Self::MusubiNamespaceBinding { .. } => NativeOperationKind::MusubiNamespaceBinding,
+            Self::InitialGatewaySetup { .. } => NativeOperationKind::InitialGatewaySetup,
+            Self::InitialReputationPolicy { .. } => NativeOperationKind::InitialReputationPolicy,
+            Self::InitialProviderIngestAuthority { .. } => {
+                NativeOperationKind::InitialProviderIngestAuthority
+            }
             Self::Transfer { .. } => NativeOperationKind::Transfer,
             Self::AliasSetup { .. } => NativeOperationKind::AliasSetup,
             Self::PrivateRootRegistration { .. } => NativeOperationKind::PrivateRootRegistration,
@@ -677,10 +871,60 @@ impl NativeOperation {
                 NativeOperationKind::StreamTokenCustodyConfigure
             }
             Self::StreamTokenCustodyEnroll { .. } => NativeOperationKind::StreamTokenCustodyEnroll,
+            Self::InitialReservePolicy { .. } => NativeOperationKind::InitialReservePolicy,
+            Self::ReserveTopUpRequest { .. } => NativeOperationKind::ReserveTopUpRequest,
+            Self::ReserveMovementDecision { .. } => NativeOperationKind::ReserveMovementDecision,
+            Self::ProviderCreditUpsert { .. } => NativeOperationKind::ProviderCreditUpsert,
+            Self::ProviderCapacityDeclaration { .. } => {
+                NativeOperationKind::ProviderCapacityDeclaration
+            }
+            Self::ReserveAccountRegistration { .. } => {
+                NativeOperationKind::ReserveAccountRegistration
+            }
         }
     }
     fn instructions(&self, config: &Config) -> Result<Vec<InstructionBox>> {
         match self {
+            Self::MusubiNamespaceBinding { plan, terms } => {
+                terms.validate()?;
+                musubi_namespace::instructions(config, plan, terms.deadline_ms)
+            }
+            Self::InitialProviderIngestAuthority { plan, terms } => {
+                terms.validate()?;
+                provider_ingest::instructions(config, plan, terms.deadline_ms)
+            }
+            Self::InitialGatewaySetup { plan, terms } => {
+                terms.validate()?;
+                gateway_setup::instructions(config, plan, terms.deadline_ms)
+            }
+            Self::InitialReputationPolicy { plan, terms } => {
+                terms.validate()?;
+                reputation_policy::instructions(config, plan, terms.deadline_ms)
+            }
+            Self::ProviderCapacityDeclaration { plan, terms } => {
+                terms.validate()?;
+                provider_capacity::instructions(config, plan, terms.deadline_ms)
+            }
+            Self::ProviderCreditUpsert { plan, terms } => {
+                terms.validate()?;
+                provider_credit::instructions(config, plan, terms.deadline_ms)
+            }
+            Self::ReserveMovementDecision { plan, terms } => {
+                terms.validate()?;
+                reserve_movement_decision::instructions(config, plan, terms.deadline_ms)
+            }
+            Self::ReserveTopUpRequest { plan, terms } => {
+                terms.validate()?;
+                reserve_top_up::instructions(config, plan, terms.deadline_ms)
+            }
+            Self::ReserveAccountRegistration { plan, terms } => {
+                terms.validate()?;
+                reserve_account::instructions(config, plan, terms.deadline_ms)
+            }
+            Self::InitialReservePolicy { plan, terms } => {
+                terms.validate()?;
+                reserve_policy::instructions(config, plan, terms.deadline_ms)
+            }
             Self::StreamTokenCustodyConfigure { plan, terms }
             | Self::StreamTokenCustodyEnroll { plan, terms } => {
                 terms.validate()?;
@@ -754,6 +998,40 @@ fn transfer_report(
     evidence: Option<&Value>,
 ) -> OperationReport {
     let (kind, operation) = match &record.operation {
+        NativeOperation::MusubiNamespaceBinding { terms, .. } => {
+            ("musubi_namespace_binding", norito::json!({"terms": terms}))
+        }
+        NativeOperation::InitialProviderIngestAuthority { terms, .. } => (
+            "initial_provider_ingest_authority",
+            norito::json!({"terms": terms}),
+        ),
+        NativeOperation::InitialGatewaySetup { terms, .. } => {
+            ("initial_gateway_setup", norito::json!({"terms": terms}))
+        }
+        NativeOperation::InitialReputationPolicy { terms, .. } => {
+            ("initial_reputation_policy", norito::json!({"terms": terms}))
+        }
+        NativeOperation::ProviderCapacityDeclaration { terms, .. } => (
+            "provider_capacity_declaration",
+            norito::json!({"terms": terms}),
+        ),
+        NativeOperation::ProviderCreditUpsert { terms, .. } => {
+            ("provider_credit_upsert", norito::json!({"terms": terms}))
+        }
+        NativeOperation::ReserveMovementDecision { terms, .. } => {
+            ("reserve_movement_decision", norito::json!({"terms": terms}))
+        }
+        NativeOperation::ReserveTopUpRequest { terms, .. } => (
+            "reserve_top_up_request",
+            norito::json!({"terms": terms, "request_kind": "top_up", "transfers_reserve_assets": false}),
+        ),
+        NativeOperation::ReserveAccountRegistration { terms, .. } => (
+            "reserve_account_registration",
+            norito::json!({"terms": terms}),
+        ),
+        NativeOperation::InitialReservePolicy { terms, .. } => {
+            ("initial_reserve_policy", norito::json!({"terms": terms}))
+        }
         NativeOperation::StreamTokenCustodyConfigure { terms, .. } => (
             "stream_token_custody_configure",
             norito::json!({"terms": terms}),
@@ -932,3 +1210,7 @@ pub(crate) fn typed_not_found(error: &eyre::Report) -> bool {
 #[cfg(test)]
 #[path = "operations_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "operations_cancellation_tests.rs"]
+mod cancellation_tests;

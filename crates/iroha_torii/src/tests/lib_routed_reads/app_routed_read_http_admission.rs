@@ -24,6 +24,11 @@ mod app_routed_read_http_admission_tests {
             Poll::<Option<Result<Bytes, Infallible>>>::Pending
         }))
     }
+    fn occupy_fanout_pool(app: &SharedAppState) -> tokio::sync::OwnedSemaphorePermit {
+        app.query_fanout_inflight
+            .try_acquire_parts([app.query_fanout_inflight.capacity_bytes()])
+            .expect("fixture occupies the whole query pool")
+    }
     async fn insert_test_route_metadata(
         descriptor: iroha_torii_shared::route_catalog::RouteDescriptor,
         mut request: Request<Body>,
@@ -127,9 +132,12 @@ mod app_routed_read_http_admission_tests {
         InternalAccountAssetGet,
         ContractDeploymentState,
         AccountOnboardingCurrentState,
+        AccountPermissionsQuery,
+        UaidManifestsQuery,
+        AccountHistoryQuery,
     );
     #[test]
-    fn all_46_endpoint_and_stable_route_id_mappings_are_exact_and_unique() {
+    fn all_49_endpoint_and_stable_route_id_mappings_are_exact_and_unique() {
         let expected = ENDPOINT_INVENTORY;
         assert_eq!(APP_ROUTED_READ_HTTP_ENDPOINTS_V1.len(), expected.len());
         for &endpoint in expected {
@@ -150,7 +158,7 @@ mod app_routed_read_http_admission_tests {
                 app_routed_read_http_endpoint(entry.route.stable_route_id())
                     .expect("catalog route must resolve")
                     .endpoint,
-                entry.endpoint
+                AppReadHttpIdentity::Routed(entry.endpoint)
             );
             match entry.decoder {
                 AppRoutedReadHttpDecoder::None
@@ -166,8 +174,136 @@ mod app_routed_read_http_admission_tests {
                 }
             }
         }
-        assert_eq!(route_ids.len(), 46);
+        assert_eq!(route_ids.len(), expected.len());
     }
+    #[test]
+    fn every_direct_collection_get_and_post_has_the_same_closed_owner_path() {
+        let mut ids = std::collections::BTreeSet::new();
+        for entry in APP_LOCAL_COLLECTION_HTTP_ROUTES_V1 {
+            assert!(ids.insert(entry.route.stable_route_id()));
+            let resolved = app_routed_read_http_endpoint(entry.route.stable_route_id()).unwrap();
+            assert_eq!(resolved.endpoint, entry.endpoint);
+            assert_eq!(resolved.decoder, entry.decoder);
+            assert_eq!(entry.decoder.typed_request_name(), Some("ListQuery"));
+            assert!(
+                APP_ROUTED_READ_HTTP_ENDPOINTS_V1
+                    .iter()
+                    .all(|routed| routed.route.stable_route_id() != entry.route.stable_route_id())
+            );
+        }
+        for pair in APP_LOCAL_COLLECTION_HTTP_ROUTES_V1.chunks_exact(2) {
+            assert_eq!(pair[0].endpoint, pair[1].endpoint);
+            assert_eq!(
+                pair[0].decoder,
+                AppRoutedReadHttpDecoder::Query("ListQuery")
+            );
+            assert_eq!(pair[1].decoder, AppRoutedReadHttpDecoder::Json("ListQuery"));
+        }
+        assert_eq!(ids.len(), 32);
+    }
+
+    #[tokio::test]
+    async fn collection_execution_refuses_configuration_without_an_owner() {
+        let app = mk_app_state_for_tests();
+        assert!(current_routed_read_memory_envelope(&app).is_err());
+        assert!(torii_routed_read_request_decode_plan(&app).is_err());
+        assert!(routing::collection_sources::collection_execution_limits(Some(&app)).is_err());
+        assert!(torii_routed_read_request_preflight_plan(&app).is_ok());
+    }
+
+    #[tokio::test]
+    async fn every_direct_collection_rejects_busy_memory_before_body_polling() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app).unwrap().query_queue_timeout = Duration::ZERO;
+        let _occupied = occupy_fanout_pool(&app);
+        for entry in APP_LOCAL_COLLECTION_HTTP_ROUTES_V1 {
+            let polls = Arc::new(AtomicUsize::new(0));
+            let request = if entry.decoder.body_type_name().is_some() {
+                json_request(entry.route.path(), pending_body(&polls))
+            } else {
+                Request::builder()
+                    .uri(entry.route.path())
+                    .body(Body::empty())
+                    .unwrap()
+            };
+            let response = admission_router(Arc::clone(&app), entry.route, false)
+                .oneshot(request)
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::TOO_MANY_REQUESTS,
+                "{}",
+                entry.route.stable_route_id()
+            );
+            assert_eq!(polls.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn detached_collection_worker_keeps_its_actual_memory_owner() {
+        let app = mk_app_state_for_tests();
+        let before = app.query_fanout_inflight.available_bytes();
+        let owner = try_acquire_new_query_fanout_memory(&app).unwrap();
+        let admission = COLLECTION_READ_MEMORY_RESERVATION
+            .scope(owner.clone(), acquire_query_admission(app.as_ref(), true))
+            .await
+            .unwrap();
+        drop(owner);
+        assert_eq!(
+            app.query_fanout_inflight.available_bytes(),
+            before - 48_000_000
+        );
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (finish_tx, finish_rx) = std::sync::mpsc::channel();
+        let work = tokio::spawn(routing::run_admitted_blocking(
+            admission,
+            "test worker",
+            move || {
+                let _ = started_tx.send(());
+                finish_rx.recv().unwrap();
+                Ok(())
+            },
+        ));
+        started_rx.await.unwrap();
+        work.abort();
+        let _ = work.await;
+        assert_eq!(
+            app.query_fanout_inflight.available_bytes(),
+            before - 48_000_000
+        );
+        finish_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while app.query_fanout_inflight.available_bytes() != before {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("completed worker returns its owner");
+    }
+
+    #[tokio::test]
+    async fn producer_body_budget_requires_the_actual_query_owner() {
+        let app = mk_app_state_for_tests();
+        let owner = try_acquire_new_query_fanout_memory(&app).unwrap();
+        let expected = owner.admitted_envelope(&app).unwrap().route_body_bytes;
+        let mut admission = COLLECTION_READ_MEMORY_RESERVATION
+            .scope(owner, acquire_query_admission(app.as_ref(), false))
+            .await
+            .unwrap();
+        assert_eq!(admission.response_body_budget().unwrap(), expected);
+
+        let response_only = tokio::sync::Semaphore::new(1);
+        let response_only = Arc::new(response_only).acquire_owned().await.unwrap();
+        admission._fanout_memory = Some(QueryFanoutMemoryReservation::new(response_only));
+        assert!(matches!(
+            admission.response_body_budget(),
+            Err(Error::Query(iroha_data_model::ValidationFail::InternalError(_)))
+        ));
+        admission._fanout_memory = None;
+        assert!(admission.response_body_budget().is_err());
+    }
+
     #[test]
     fn catalog_bounds_axum_url_parameter_topology() {
         let mut maximum = 0;
@@ -260,7 +396,7 @@ mod app_routed_read_http_admission_tests {
         let reservation = try_acquire_new_query_fanout_memory(&app).expect("test reservation");
         let admission = AppRoutedReadHttpAdmission {
             reservation: reservation.clone(),
-            decode_plan: torii_routed_read_request_decode_plan(&app).expect("test request plan"),
+            decode_plan: torii_routed_read_request_preflight_plan(&app).expect("test request plan"),
         };
         let extension = APP_ROUTED_READ_HTTP_ADMISSION
             .scope(admission, async {
@@ -457,6 +593,10 @@ mod app_routed_read_http_admission_tests {
         let app = mk_app_state_for_tests();
         let reservation = try_acquire_new_query_fanout_memory(&app)
             .expect("fixture occupies complete fanout working set");
+        let _other_memory = app
+            .query_fanout_inflight
+            .try_acquire_parts([app.query_fanout_inflight.available_bytes()])
+            .expect("fixture occupies every other complete working set");
         let occupied = app.query_fanout_inflight.available_permits();
         let polls = Arc::new(AtomicUsize::new(0));
         let descriptor = route_catalog::application_api::ACCOUNTS_QUERY_POST;
@@ -467,7 +607,7 @@ mod app_routed_read_http_admission_tests {
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(polls.load(Ordering::SeqCst), 0);
         assert_eq!(app.query_fanout_inflight.available_permits(), occupied);
-        let plan = torii_routed_read_request_decode_plan(&app).expect("test request plan");
+        let plan = torii_routed_read_request_preflight_plan(&app).expect("test request plan");
         let admission = AppRoutedReadHttpAdmission {
             reservation: reservation.clone(),
             decode_plan: plan,
@@ -482,13 +622,119 @@ mod app_routed_read_http_admission_tests {
             .await;
         drop(reservation);
     }
+
+    #[tokio::test]
+    async fn default_pool_admits_eight_complete_owners_with_independent_ingress_and_body_custody() {
+        let app = mk_app_state_for_tests();
+        let before = app.query_fanout_inflight.available_bytes();
+        let ingress_before = app.query_ingress_inflight.available_permits();
+        assert_eq!(before, 384_000_000);
+        assert_eq!(app.query_fanout_working_set_bytes, 48_000_000);
+        let mut owners = (0..8)
+            .map(|_| try_acquire_new_query_fanout_memory(&app).unwrap())
+            .collect::<Vec<_>>();
+        for owner in &owners {
+            let envelope = owner.admitted_envelope(&app).unwrap();
+            assert_eq!(envelope.working_set_bytes, 48_000_000);
+            assert!(envelope.phases_fit());
+            let request = ToriiRoutedReadMemoryBudget::from_envelope(
+                envelope,
+                app.torii_proxy_max_response_bytes,
+            )
+            .request_decode_plan()
+            .unwrap();
+            assert!(request.raw_input_limit_bytes >= 8 * 1024);
+        }
+        assert_eq!(app.query_fanout_inflight.available_bytes(), 0);
+        assert_eq!(
+            app.query_ingress_inflight.available_permits(),
+            ingress_before
+        );
+        let ingress = acquire_query_ingress_memory(&app).await.unwrap();
+        assert_eq!(
+            app.query_ingress_inflight.available_permits(),
+            ingress_before - 1
+        );
+        assert!(try_acquire_new_query_fanout_memory(&app).is_err());
+        drop(ingress);
+        let response = hold_query_fanout_memory_in_response_body(
+            Response::new(Body::from("retained")),
+            owners.pop().unwrap(),
+        );
+        drop(owners);
+        assert_eq!(
+            app.query_fanout_inflight.available_bytes(),
+            before - 48_000_000
+        );
+        assert_eq!(
+            axum::body::to_bytes(response.into_body(), 8).await.unwrap(),
+            Bytes::from_static(b"retained")
+        );
+        assert_eq!(app.query_fanout_inflight.available_bytes(), before);
+        assert_eq!(
+            app.query_ingress_inflight.available_permits(),
+            ingress_before
+        );
+    }
+
+    #[tokio::test]
+    async fn admitted_geometry_reaches_decoder_coordinator_and_collection_source() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .unwrap()
+            .query_fanout_working_set_bytes = 36_000_000;
+        let owner = try_acquire_new_query_fanout_memory(&app).unwrap();
+        let envelope = owner.admitted_envelope(&app).unwrap();
+        Arc::get_mut(&mut app)
+            .unwrap()
+            .query_fanout_working_set_bytes = 48_000_000;
+        let expected = ToriiRoutedReadMemoryBudget::from_envelope(
+            envelope,
+            app.torii_proxy_max_response_bytes,
+        )
+        .request_decode_plan()
+        .unwrap();
+        let admission = AppRoutedReadHttpAdmission {
+            reservation: owner.clone(),
+            decode_plan: expected,
+        };
+        APP_ROUTED_READ_HTTP_ADMISSION
+            .scope(admission, async {
+                assert_eq!(current_routed_read_memory_envelope(&app).unwrap(), envelope);
+                let decoder = torii_routed_read_request_decode_plan(&app).unwrap();
+                assert_eq!(
+                    decoder.raw_input_limit_bytes,
+                    expected.raw_input_limit_bytes
+                );
+                assert_eq!(decoder.typed_limits, expected.typed_limits);
+                let source = routing::collection_sources::collection_execution_limits(Some(&app))
+                    .unwrap()
+                    .bytes;
+                assert_eq!(source.row_bytes, envelope.decode_allocated_bytes);
+                assert_eq!(source.source_frame_bytes, envelope.route_body_bytes);
+                COLLECTION_READ_MEMORY_RESERVATION
+                    .scope(owner.clone(), async {
+                        assert_eq!(current_routed_read_memory_envelope(&app).unwrap(), envelope);
+                    })
+                    .await;
+            })
+            .await;
+        let other = mk_app_state_for_tests();
+        assert!(!owner.belongs_to(&other));
+        assert!(owner.admitted_envelope(&other).is_err());
+        let custody = QueryFanoutMemoryReservation::new(
+            other.query_fanout_inflight.try_acquire_parts([1]).unwrap(),
+        );
+        assert!(!custody.belongs_to(&other));
+        assert!(custody.admitted_envelope(&other).is_err());
+    }
     #[tokio::test]
     async fn bodyless_read_waits_before_polling_and_releases_capacity_on_cancellation() {
         let mut app = mk_app_state_for_tests();
         Arc::get_mut(&mut app).unwrap().query_queue_timeout = Duration::from_secs(1);
         let before = app.query_fanout_inflight.available_permits();
         let waiters = app.app_routed_read_waiters.available_permits();
-        let occupied = try_acquire_new_query_fanout_memory(&app).unwrap();
+        let occupied = occupy_fanout_pool(&app);
         let polls = Arc::new(AtomicUsize::new(0));
         let descriptor = route_catalog::application_api::ACCOUNTS_GET;
         let router = admission_router(Arc::clone(&app), descriptor, false);
@@ -517,7 +763,7 @@ mod app_routed_read_http_admission_tests {
         let mut app = mk_app_state_for_tests();
         Arc::get_mut(&mut app).unwrap().query_queue_timeout = Duration::from_secs(5);
         let before = app.query_fanout_inflight.available_permits();
-        let occupied = try_acquire_new_query_fanout_memory(&app).unwrap();
+        let occupied = occupy_fanout_pool(&app);
         let descriptor = route_catalog::application_api::ACCOUNTS_GET;
         let mut reads = Vec::new();
         for _ in 0..12 {
@@ -551,7 +797,7 @@ mod app_routed_read_http_admission_tests {
         state.query_queue_timeout = Duration::from_millis(10);
         state.app_routed_read_waiters = Arc::new(tokio::sync::Semaphore::new(1));
         let before = app.query_fanout_inflight.available_permits();
-        let occupied = try_acquire_new_query_fanout_memory(&app).unwrap();
+        let occupied = occupy_fanout_pool(&app);
         let mut waiting = Box::pin(acquire_app_routed_read_http_memory(&app, false));
         assert!(futures::poll!(waiting.as_mut()).is_pending());
         let full = acquire_app_routed_read_http_memory(&app, false)
@@ -570,7 +816,7 @@ mod app_routed_read_http_admission_tests {
     fn dynamic_raw_target_exact_and_plus_one_precede_permit_acquisition() {
         let app = mk_app_state_for_tests();
         let before = app.query_fanout_inflight.available_permits();
-        let mut plan = torii_routed_read_request_decode_plan(&app).expect("test request plan");
+        let mut plan = torii_routed_read_request_preflight_plan(&app).expect("test request plan");
         // `http::Uri` itself has a u16-sized textual ceiling. A small synthetic
         // admission cap exercises exact/+1 accounting without hitting that
         // independent parser boundary first.

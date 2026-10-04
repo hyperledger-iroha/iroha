@@ -16,9 +16,8 @@ use std::io::Write as _;
 
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
-use iroha_petal::decode::{DecodeOptions, decode};
+use iroha_petal::decode::{DecodeOptions, DecodedFrame, decode, track};
 use iroha_petal::image::Luma;
-use iroha_petal::lanes::{Lane, encode_lane};
 use iroha_petal::render::{RenderOptions, render};
 use iroha_petal::sim::{CaptureConfig, capture, fit_to_frame};
 use iroha_petal::stream::StreamEncoder;
@@ -68,8 +67,89 @@ struct Case {
     mirrored: bool,
     /// Columns (as fractions of the width) that are dimmed to `factor` after capture.
     shadow: Option<(f64, f64, f64)>,
+    /// Canonical corner whose blossom is painted over before capture (a thumb).
+    hide: Option<usize>,
+    /// Whether the pose is fitted into the frame; `false` lets a corner leave it.
+    fit: bool,
     must: &'static str,
     note: &'static str,
+}
+
+/// Renders frame `frame` of the stream and photographs it as `case` says.
+fn shoot(encoder: &StreamEncoder, frame: u16, case: &Case) -> Luma {
+    let size = if case.config.is_none() { 512 } else { 768 };
+    let mut source = render(
+        &encoder.cells(frame),
+        &RenderOptions {
+            size,
+            supersample: 3,
+            ..RenderOptions::default()
+        },
+    );
+    if let Some(corner) = case.hide {
+        let scale = size as f64 / 1024.0;
+        let (cx, cy) = iroha_petal::layout::FINDER_CENTERS[corner];
+        let (cx, cy) = (f64::from(cx) * scale, f64::from(cy) * scale);
+        let radius = 80.0 * scale;
+        for y in 0..size {
+            for x in 0..size {
+                let (dx, dy) = (x as f64 + 0.5 - cx, y as f64 + 0.5 - cy);
+                if dx.hypot(dy) <= radius {
+                    source.data[(y * size + x) * 3..(y * size + x) * 3 + 3].fill(0);
+                }
+            }
+        }
+    }
+    let mut luma = case.config.map_or_else(
+        || source.to_luma(),
+        |config| {
+            if case.fit {
+                capture(&source, &fit_to_frame(&config, 4.0))
+            } else {
+                capture(&source, &config)
+            }
+        },
+    );
+    if case.mirrored {
+        luma = mirror(&luma);
+    }
+    if let Some((from, to, factor)) = case.shadow {
+        let (start, end) = (
+            (luma.width as f64 * from) as usize,
+            (luma.width as f64 * to) as usize,
+        );
+        for row in luma.data.chunks_mut(luma.width) {
+            for value in &mut row[start..end] {
+                *value = (f64::from(*value) * factor).round() as u8;
+            }
+        }
+    }
+    luma
+}
+
+/// Lane letters of a decoded frame, asserting every lane carries the right data.
+fn lanes(name: &str, frame: &DecodedFrame, truth: &(Vec<u8>, Vec<u8>, Vec<u8>)) -> String {
+    let mut flags = String::new();
+    for (letter, lane, data) in [
+        ('P', &frame.p, &truth.0),
+        ('K', &frame.k, &truth.1),
+        ('D', &frame.d, &truth.2),
+    ] {
+        if let Some(result) = lane {
+            assert_eq!(
+                &result.data, data,
+                "{name}: lane {letter} decoded to wrong data"
+            );
+            flags.push(letter);
+        }
+    }
+    flags
+}
+
+fn zlib64(luma: &Luma) -> String {
+    let mut zlib = ZlibEncoder::new(Vec::new(), Compression::best());
+    zlib.write_all(&luma.data).expect("compress");
+    base64(&zlib.finish().expect("finish"))
 }
 
 fn main() {
@@ -90,6 +170,8 @@ fn main() {
             config: None,
             mirrored: false,
             shadow: None,
+            hide: None,
+            fit: true,
             must: "PKD",
             note: "ideal render, no camera",
         },
@@ -107,6 +189,8 @@ fn main() {
             }),
             mirrored: false,
             shadow: None,
+            hide: None,
+            fit: true,
             must: "PKD",
             note: "sharp 720p, 37 degree rotation, mild tilt",
         },
@@ -124,6 +208,8 @@ fn main() {
             }),
             mirrored: false,
             shadow: None,
+            hide: None,
+            fit: true,
             must: "PD",
             note: "older phone: soft, noisy, barrel distortion, glare gradient; lane K optional",
         },
@@ -144,6 +230,8 @@ fn main() {
             }),
             mirrored: false,
             shadow: None,
+            hide: None,
+            fit: true,
             must: "PD",
             note: "out of focus 480p; lane K must not be reported unless correct",
         },
@@ -162,6 +250,8 @@ fn main() {
             }),
             mirrored: false,
             shadow: None,
+            hide: None,
+            fit: true,
             must: "PD",
             note: "low-end preview resolution and soft focus; lane K must not be reported unless correct",
         },
@@ -177,6 +267,8 @@ fn main() {
             }),
             mirrored: true,
             shadow: None,
+            hide: None,
+            fit: true,
             must: "PD",
             note: "horizontally mirrored preview (front camera)",
         },
@@ -195,6 +287,8 @@ fn main() {
             }),
             mirrored: false,
             shadow: None,
+            hide: None,
+            fit: true,
             must: "PKD",
             note: "auto-exposure blows the tiles out three-fold; only the normalised tile read gets P and K",
         },
@@ -209,6 +303,8 @@ fn main() {
             }),
             mirrored: false,
             shadow: None,
+            hide: None,
+            fit: true,
             must: "PKD",
             note: "older phone in a bright room: reflections lift the black level by half the lit level",
         },
@@ -223,63 +319,68 @@ fn main() {
             }),
             mirrored: false,
             shadow: Some((0.35, 0.6, 0.3)),
+            hide: None,
+            fit: true,
             must: "PK",
             note: "a band across the middle of the code in shadow (30 % light); finder levels cannot describe it",
         },
+        Case {
+            name: "hidden-corner-540p",
+            frame: 14,
+            config: Some(CaptureConfig {
+                noise: 2.0,
+                rotation_deg: 160.0,
+                tilt_x_deg: 5.0,
+                tilt_y_deg: -4.0,
+                seed: 17,
+                ..base(960, 540)
+            }),
+            mirrored: false,
+            shadow: None,
+            hide: Some(3),
+            fit: true,
+            must: "PKD",
+            note: "a thumb covers the bottom-left blossom; the fourth corner is inferred from the other three",
+        },
+        Case {
+            name: "cut-corner-720p",
+            frame: 15,
+            config: Some(CaptureConfig {
+                fill: 0.7,
+                rotation_deg: 45.0,
+                shift: (0.02, 0.12),
+                seed: 18,
+                ..base(1280, 720)
+            }),
+            mirrored: false,
+            shadow: None,
+            hide: None,
+            fit: false,
+            must: "PD",
+            note: "held too close: one corner of the code is outside the frame and is inferred",
+        },
     ];
     let mut entries = Vec::new();
-    for case in cases {
-        let cells = encoder.cells(case.frame);
-        let size = if case.config.is_none() { 512 } else { 768 };
-        let source = render(
-            &cells,
-            &RenderOptions {
-                size,
-                supersample: 3,
-                ..RenderOptions::default()
-            },
-        );
-        let mut luma = case.config.map_or_else(
-            || source.to_luma(),
-            |config| capture(&source, &fit_to_frame(&config, 4.0)),
-        );
-        if case.mirrored {
-            luma = mirror(&luma);
-        }
-        if let Some((from, to, factor)) = case.shadow {
-            let (start, end) = (
-                (luma.width as f64 * from) as usize,
-                (luma.width as f64 * to) as usize,
-            );
-            for row in luma.data.chunks_mut(luma.width) {
-                for value in &mut row[start..end] {
-                    *value = (f64::from(*value) * factor).round() as u8;
-                }
-            }
-        }
+    for case in &cases {
+        let luma = shoot(&encoder, case.frame, case);
         let decoded = decode(&luma, &DecodeOptions::default());
-        let (p_data, k_data, d_data) = encoder.lane_data(case.frame);
-        let mut flags = String::new();
-        if let Ok(frame) = &decoded {
-            for (letter, lane, data) in [
-                ('P', &frame.p, &p_data),
-                ('K', &frame.k, &k_data),
-                ('D', &frame.d, &d_data),
-            ] {
-                if let Some(result) = lane {
-                    assert_eq!(
-                        &result.data, data,
-                        "{}: lane {letter} decoded to wrong data",
-                        case.name
-                    );
-                    flags.push(letter);
-                }
-            }
-        }
+        let truth = encoder.lane_data(case.frame);
+        let flags = decoded
+            .as_ref()
+            .map_or_else(|_| String::new(), |frame| lanes(case.name, frame, &truth));
         for required in case.must.chars() {
             assert!(
                 flags.contains(required),
                 "{}: reference decoder lost required lane {required} (got {flags:?})",
+                case.name
+            );
+        }
+        let inferred = decoded.as_ref().ok().and_then(|f| f.inferred_corner);
+        if case.hide.is_some() {
+            assert_eq!(
+                inferred,
+                case.hide.map(|c| c as u8),
+                "{}: inferred corner",
                 case.name
             );
         }
@@ -294,15 +395,11 @@ fn main() {
             |f| (margin(&f.p), margin(&f.k), margin(&f.d)),
         );
         println!(
-            "{:<24} reference decoder reads lanes {flags:?} (corrected/erased P {p} K {k} D {d})",
+            "{:<24} reference decoder reads lanes {flags:?} inferred {inferred:?} (corrected/erased P {p} K {k} D {d})",
             case.name
         );
-        let mut zlib = ZlibEncoder::new(Vec::new(), Compression::best());
-        zlib.write_all(&luma.data).expect("compress");
-        let compressed = zlib.finish().expect("finish");
-        let (_, _, _) = (encode_lane(Lane::P, &p_data), 0, 0);
         entries.push(format!(
-            "    {{\n      \"name\": \"{}\", \"note\": \"{}\", \"stream\": \"one-pass\", \"frame\": {}, \"width\": {}, \"height\": {}, \"mirrored\": {},\n      \"must_decode\": \"{}\", \"reference_decoded\": \"{flags}\",\n      \"p_data\": \"{}\", \"k_data\": \"{}\", \"d_data\": \"{}\",\n      \"luma_zlib_base64\": \"{}\"\n    }}",
+            "    {{\n      \"name\": \"{}\", \"note\": \"{}\", \"stream\": \"one-pass\", \"frame\": {}, \"width\": {}, \"height\": {}, \"mirrored\": {},\n      \"must_decode\": \"{}\", \"reference_decoded\": \"{flags}\", \"inferred_corner\": {},\n      \"p_data\": \"{}\", \"k_data\": \"{}\", \"d_data\": \"{}\",\n      \"luma_zlib_base64\": \"{}\"\n    }}",
             case.name,
             case.note,
             case.frame,
@@ -310,10 +407,126 @@ fn main() {
             luma.height,
             case.mirrored,
             case.must,
-            hex(&p_data),
-            hex(&k_data),
-            hex(&d_data),
-            base64(&compressed)
+            inferred.map_or_else(|| "null".to_string(), |c| c.to_string()),
+            hex(&truth.0),
+            hex(&truth.1),
+            hex(&truth.2),
+            zlib64(&luma)
+        ));
+    }
+    // tracking pairs: decode `from`, then follow its pose into `to`
+    let steady = CaptureConfig {
+        noise: 2.0,
+        rotation_deg: 31.0,
+        tilt_x_deg: 4.0,
+        seed: 21,
+        ..base(960, 540)
+    };
+    let pairs = [
+        (
+            "steady-hand-540p",
+            "the next analysed frame after a small hand movement; tracking reuses the pose",
+            16u16,
+            Case {
+                name: "steady-hand-from",
+                frame: 0,
+                config: Some(steady),
+                mirrored: false,
+                shadow: None,
+                hide: None,
+                fit: true,
+                must: "",
+                note: "",
+            },
+            Case {
+                name: "steady-hand-to",
+                frame: 0,
+                config: Some(CaptureConfig {
+                    rotation_deg: 32.0,
+                    shift: (0.008, -0.006),
+                    seed: 22,
+                    ..steady
+                }),
+                mirrored: false,
+                shadow: None,
+                hide: None,
+                fit: true,
+                must: "",
+                note: "",
+            },
+            "PKD",
+            None,
+        ),
+        (
+            "thumb-arrives-540p",
+            "a thumb covers the top-right blossom between two frames; tracking infers it",
+            18u16,
+            Case {
+                name: "thumb-from",
+                frame: 0,
+                config: Some(steady),
+                mirrored: false,
+                shadow: None,
+                hide: None,
+                fit: true,
+                must: "",
+                note: "",
+            },
+            Case {
+                name: "thumb-to",
+                frame: 0,
+                config: Some(CaptureConfig {
+                    shift: (-0.006, 0.004),
+                    seed: 23,
+                    ..steady
+                }),
+                mirrored: false,
+                shadow: None,
+                hide: Some(1),
+                fit: true,
+                must: "",
+                note: "",
+            },
+            "PKD",
+            Some(1u8),
+        ),
+    ];
+    let mut tracks = Vec::new();
+    for (name, note, frame, from_case, to_case, must, inferred) in &pairs {
+        let from = shoot(&encoder, *frame, from_case);
+        let to = shoot(&encoder, *frame + 1, to_case);
+        let previous = decode(&from, &DecodeOptions::default()).expect("the first frame decodes");
+        let followed = track(&to, &previous, &DecodeOptions::default()).expect("tracking holds");
+        let truth = encoder.lane_data(*frame + 1);
+        let flags = lanes(name, &followed, &truth);
+        for required in must.chars() {
+            assert!(
+                flags.contains(required),
+                "{name}: tracking lost lane {required}"
+            );
+        }
+        assert_eq!(
+            followed.inferred_corner, *inferred,
+            "{name}: inferred corner"
+        );
+        println!(
+            "{name:<24} tracking reads lanes {flags:?} inferred {:?}",
+            followed.inferred_corner
+        );
+        tracks.push(format!(
+            "    {{\n      \"name\": \"{name}\", \"note\": \"{note}\", \"stream\": \"one-pass\", \"from_frame\": {}, \"to_frame\": {}, \"width\": {}, \"height\": {},\n      \"must_track\": \"{must}\", \"reference_tracked\": \"{flags}\", \"inferred_corner\": {},\n      \"p_data\": \"{}\", \"k_data\": \"{}\", \"d_data\": \"{}\",\n      \"from_luma_zlib_base64\": \"{}\",\n      \"to_luma_zlib_base64\": \"{}\"\n    }}",
+            frame,
+            frame + 1,
+            to.width,
+            to.height,
+            followed
+                .inferred_corner
+                .map_or_else(|| "null".to_string(), |c| c.to_string()),
+            hex(&truth.0),
+            hex(&truth.1),
+            hex(&truth.2),
+            zlib64(&from),
+            zlib64(&to)
         ));
     }
     // negative captures
@@ -345,9 +558,10 @@ fn main() {
         ));
     }
     let out = format!(
-        "{{\n  \"fixture_version\": 1,\n  \"format\": \"petal-captures-v1\",\n  \"payload_hex\": \"{}\",\n  \"payload_kind\": 2,\n  \"captures\": [\n{}\n  ],\n  \"negatives\": [\n{}\n  ]\n}}\n",
+        "{{\n  \"fixture_version\": 1,\n  \"format\": \"petal-captures-v1\",\n  \"payload_hex\": \"{}\",\n  \"payload_kind\": 2,\n  \"captures\": [\n{}\n  ],\n  \"tracks\": [\n{}\n  ],\n  \"negatives\": [\n{}\n  ]\n}}\n",
         hex(&payload),
         entries.join(",\n"),
+        tracks.join(",\n"),
         negatives.join(",\n")
     );
     std::fs::write(&path, out).expect("write fixture");

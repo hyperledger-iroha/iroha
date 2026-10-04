@@ -329,9 +329,9 @@ impl Targets {
 fn prepare_targets(
     view: &StateView<'_>,
     prepared: &PreparedStreamTokenGatewayCheckV1,
-) -> Result<Targets, Error> {
+) -> Result<Targets, crate::execution_attempt::ExecutionAttemptError<Error>> {
     let Action::Check(check_claim) = &prepared.instruction.request.action else {
-        return Err(Error::Invalid);
+        return Err(Error::Invalid.into());
     };
     let current = storage::read_current(
         view.world(),
@@ -341,11 +341,11 @@ fn prepare_targets(
     .map_err(|_| Error::Execution)?
     .ok_or(Error::Execution)?;
     if current.policy.policy.qualification != prepared.expected.qualification {
-        return Err(Error::Authority);
+        return Err(Error::Authority.into());
     }
     let tip = u64::try_from(view.block_hashes().len()).map_err(|_| Error::Finality)?;
     let now_ms = crate::sumeragi::certified_chain::committed_block(view, tip)
-        .map_err(|_| Error::Finality)?
+        .map_err(|error| error.map_rejection(|_| Error::Finality))?
         .block_time_ms();
     let mut targets = Targets::new();
     targets.policy(view, prepared, current.policy.policy.qualification.revision)?;
@@ -370,14 +370,14 @@ fn prepare_targets(
                 || transition::request_digest(&original.request).map_err(|_| Error::Execution)?
                     != *request_digest
             {
-                return Err(Error::Execution);
+                return Err(Error::Execution.into());
             }
             let original_request = match &prepared.expected.selector {
                 Selector::Admission(request) | Selector::Serving(request) => request,
-                _ => return Err(Error::Invalid),
+                _ => return Err(Error::Invalid.into()),
             };
             if original.request != *original_request {
-                return Err(Error::Execution);
+                return Err(Error::Execution.into());
             }
             if matches!(
                 result.delivery_state,
@@ -406,7 +406,7 @@ fn prepare_targets(
             .map_err(|_| Error::Execution)?
                 != *readback_digest
             {
-                return Err(Error::Execution);
+                return Err(Error::Execution.into());
             }
             for record in &pending.records {
                 let original = targets.admission(
@@ -417,7 +417,7 @@ fn prepare_targets(
                     now_ms,
                 )?;
                 if original.record != *record {
-                    return Err(Error::Execution);
+                    return Err(Error::Execution.into());
                 }
             }
             // Prefix endpoints remain authenticated even when the requested prefix is empty or
@@ -450,7 +450,7 @@ fn prepare_targets(
                 now_ms,
             )?;
             if original.record != *record {
-                return Err(Error::Execution);
+                return Err(Error::Execution.into());
             }
             targets.acknowledgement(
                 view,
@@ -469,7 +469,7 @@ fn prepare_targets(
                 now_ms,
             )?;
             if original.record != *record {
-                return Err(Error::Execution);
+                return Err(Error::Execution.into());
             }
             let lease_id = record.lease_id.ok_or(Error::Execution)?;
             let rows = WorldGatewayRows::new(
@@ -482,12 +482,12 @@ fn prepare_targets(
                 .read(&GatewayRowKey::LeaseTerminal(lease_id))
                 .map_err(|_| Error::Execution)?
             else {
-                return Err(Error::Execution);
+                return Err(Error::Execution.into());
             };
             if terminal.grant.sequence != record.outcome.binding.gateway_sequence
                 || Some(terminal.grant.expires_at_unix_ms) != record.lease_expires_at_unix_ms
             {
-                return Err(Error::Execution);
+                return Err(Error::Execution.into());
             }
             targets.policy(view, prepared, terminal.policy_revision)?;
             targets.charge(&terminal)?;
@@ -505,7 +505,7 @@ fn prepare_targets(
     if targets.targets.iter().any(|target| {
         target.execution.height == 0 || target.execution.height > check_claim.floor.height
     }) {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     }
     targets.targets.sort_by_key(|target| {
         (
@@ -523,10 +523,10 @@ fn exact_source(
     entry: &TransactionEntrypoint,
     prepared: &PreparedStreamTokenGatewayCheckV1,
     block_time: u64,
-) -> Result<(), Error> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
     let execution = &target.execution;
     let TransactionEntrypoint::External(signed) = entry else {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     };
     if let ExpectedAction::RecorderPolicy(record) = &target.action {
         use iroha_data_model::{
@@ -538,13 +538,15 @@ fn exact_source(
             || signed.authority() != &record.activated_by
             || block_time != record.activated_at_unix_ms
             || *entry.hash().as_ref() != execution.transaction_hash
-            || norito::canonical_frame_len(entry).map_err(|_| Error::Execution)? > MAX_TARGET_BYTES
+            || norito::canonical_frame_len(entry).map_err(|error| {
+                crate::execution_attempt::norito_decode_attempt_error(error, |_| Error::Execution)
+            })? > MAX_TARGET_BYTES
         {
-            return Err(Error::Execution);
+            return Err(Error::Execution.into());
         }
         signed.verify_signature().map_err(|_| Error::Execution)?;
         let Executable::Instructions(items) = signed.instructions() else {
-            return Err(Error::Execution);
+            return Err(Error::Execution.into());
         };
         match &record.origin {
             Origin::Genesis(_) if execution.height == 1 && signed.network_id().is_none() => {}
@@ -553,7 +555,7 @@ fn exact_source(
                     && items.len() == 1
                     && execution.instruction_index == 0
                     && signed.network_id() == Some(&prepared.expected.network_id) => {}
-            _ => return Err(Error::Execution),
+            _ => return Err(Error::Execution.into()),
         }
         let original = items
             .get(usize::try_from(execution.instruction_index).map_err(|_| Error::Execution)?)
@@ -566,17 +568,18 @@ fn exact_source(
         return if original.policy == record.policy {
             Ok(())
         } else {
-            Err(Error::Execution)
+            Err(Error::Execution.into())
         };
     }
-    native_signed_entry_frame_v1(entry).map_err(|_| Error::Execution)?;
+    native_signed_entry_frame_v1(entry)
+        .map_err(|error| error.map_rejection(|_| Error::Execution))?;
     if signed.network_id() != Some(&prepared.expected.network_id)
         || signed.authority() != &execution.authority
         || *entry.hash().as_ref() != execution.transaction_hash
         || signed.hash_as_entrypoint() != entry.hash()
         || block_time != execution.recorded_at_unix_ms
     {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     }
     if let ExpectedAction::ReputationAppend(source) = &target.action {
         let intent = source.intent.as_ref().ok_or(Error::Execution)?;
@@ -588,7 +591,7 @@ fn exact_source(
             || source.execution != intent.source_execution
             || source.recorder_policy != intent.recorder_policy
         {
-            return Err(Error::Execution);
+            return Err(Error::Execution.into());
         }
         return Ok(());
     }
@@ -614,7 +617,7 @@ fn exact_source(
     if request.network_id != prepared.expected.network_id
         || request.gateway_id != prepared.expected.qualification.gateway_id
     {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     }
     let policy = &policies
         .get(&target.policy_revision)
@@ -626,7 +629,7 @@ fn exact_source(
             || (!matches!(target.action, ExpectedAction::ReputationCancellation { .. })
                 && !policy.operators.contains(&execution.authority)))
     {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     }
     let matches = match (&target.action, &request.action) {
         (
@@ -669,7 +672,7 @@ fn exact_source(
         _ => false,
     };
     if !matches {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     }
     Ok(())
 }
@@ -680,7 +683,7 @@ fn authenticate_target(
     target: &Target,
     policies: &BTreeMap<u64, GatewayPolicyRecordV1>,
     block: &CertifiedBlock,
-) -> Result<(), Error> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
     let execution = &target.execution;
     let entry_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::prehashed(
         execution.transaction_hash,
@@ -692,7 +695,7 @@ fn authenticate_target(
             .map(|height| height.get())
             != usize::try_from(execution.height).ok()
     {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     }
     let anchor = block
         .entry_anchor(&entry_hash)
@@ -702,7 +705,7 @@ fn authenticate_target(
         .network_execution_proof(&entry_hash)
         .ok_or(Error::Execution)?;
     if !proof.verify(&anchor) || anchor.entry_index() != execution.entry_index {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     }
     let entry = body
         .network_entrypoint_at(
@@ -713,78 +716,87 @@ fn authenticate_target(
         .network_output_at(execution.entry_index)
         .ok_or(Error::Execution)?;
     if !output.result.is_ok() {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     }
     exact_source(target, policies, entry, prepared, block.block_time_ms())
 }
 
-pub(super) fn authenticate<'view, 'state>(
+pub(super) fn authenticate<'view, 'state, 'bound>(
     view: &'view StateView<'state>,
     prepared: &PreparedStreamTokenGatewayCheckV1,
-    bound: BoundNativeCheckV1,
+    bound: &'bound mut Option<BoundNativeCheckV1>,
 ) -> Result<
-    (
-        BorrowedCheckExecutionCutV1<'view, 'state>,
-        BoundNativeCheckV1,
-    ),
-    Error,
+    BorrowedCheckExecutionCutV1<'view, 'state, 'bound>,
+    crate::execution_attempt::ExecutionAttemptError<Error>,
 > {
-    let mut check = PreparedCheckExecutionV1::new(
-        view,
-        NativeCustodyCheckPurposeV1::StreamTokenGateway,
-        bound,
-        &prepared.round,
-    )?;
-    let targets = prepare_targets(view, prepared)?;
-    let start = targets
-        .targets
-        .first()
-        .map(|target| target.execution.height)
-        .unwrap_or(check.floor_height())
-        .min(check.floor_height());
-    let through = if start == 1 {
-        check.applied_height().max(2)
-    } else {
-        check.applied_height()
-    };
-    if through != check.applied_height() {
-        return Err(Error::Finality);
-    }
-    let chain = SignerCertifiedWalkV1::new(view)?;
-    let mut cursor = 0;
-    let mut finality_bytes = 0usize;
-    let mut next_height = Some(start);
-    for block in chain.walk(start, through) {
-        prepared.round.ensure_live()?;
-        let receipt = block?;
-        let block = receipt.in_view(view)?;
-        if next_height != Some(block.height())
-            || (block.height() > 1 && block.verification() != QcVerification::Verified)
-        {
-            return Err(Error::Finality);
-        }
-        finality_bytes = finality_bytes
-            .checked_add(block.certificate_len())
-            .filter(|total| *total <= MAX_FINALITY_BYTES)
-            .ok_or(Error::Finality)?;
-        while let Some(target) = targets.targets.get(cursor)
-            && target.execution.height == block.height()
-        {
-            authenticate_target(view, prepared, target, &targets.policies, block)?;
-            cursor += 1;
-        }
-        if block.height() >= check.floor_height() {
-            check.consume(&receipt)?;
-        }
-        next_height = if block.height() == through {
-            None
+    crate::query::signer_check::with_native_check_read_limits(|| {
+        let mut check = PreparedCheckExecutionV1::new(
+            view,
+            NativeCustodyCheckPurposeV1::StreamTokenGateway,
+            bound,
+            &prepared.round,
+        )
+        .map_err(|error| error.map_rejection(Error::from))?;
+        let targets = prepare_targets(view, prepared)?;
+        let start = targets
+            .targets
+            .first()
+            .map(|target| target.execution.height)
+            .unwrap_or(check.floor_height())
+            .min(check.floor_height());
+        let through = if start == 1 {
+            check.applied_height().max(2)
         } else {
-            block.height().checked_add(1)
+            check.applied_height()
         };
-    }
-    if next_height.is_some() || cursor != targets.targets.len() {
-        return Err(Error::Finality);
-    }
-    prepared.round.ensure_live()?;
-    check.finish_retaining_bound().map_err(Into::into)
+        if through != check.applied_height() {
+            return Err(Error::Finality.into());
+        }
+        let chain =
+            SignerCertifiedWalkV1::new(view).map_err(|error| error.map_rejection(Error::from))?;
+        let mut cursor = 0;
+        let mut finality_bytes = 0usize;
+        let mut next_height = Some(start);
+        for block in chain.walk(start, through) {
+            prepared.round.ensure_live().map_err(Error::from)?;
+            let receipt = block.map_err(|error| error.map_rejection(Error::from))?;
+            let block = receipt.in_view(view).map_err(Error::from)?;
+            if next_height != Some(block.height())
+                || (block.height() > 1 && block.verification() != QcVerification::Verified)
+            {
+                return Err(Error::Finality.into());
+            }
+            finality_bytes = finality_bytes
+                .checked_add(block.certificate_len())
+                .filter(|total| *total <= MAX_FINALITY_BYTES)
+                .ok_or_else(|| {
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(
+                        ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                    )
+                })?;
+            while let Some(target) = targets.targets.get(cursor)
+                && target.execution.height == block.height()
+            {
+                authenticate_target(view, prepared, target, &targets.policies, block)?;
+                cursor += 1;
+            }
+            if block.height() >= check.floor_height() {
+                check
+                    .consume(&receipt)
+                    .map_err(|error| error.map_rejection(Error::from))?;
+            }
+            next_height = if block.height() == through {
+                None
+            } else {
+                block.height().checked_add(1)
+            };
+        }
+        if next_height.is_some() || cursor != targets.targets.len() {
+            return Err(Error::Finality.into());
+        }
+        prepared.round.ensure_live().map_err(Error::from)?;
+        check
+            .finish()
+            .map_err(|error| error.map_rejection(Error::from))
+    })
 }

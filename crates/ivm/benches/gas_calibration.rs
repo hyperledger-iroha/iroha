@@ -22,7 +22,7 @@ use ivm::{
 fn assemble(code: &[u8]) -> Vec<u8> {
     let mut v = ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length: 0,
         max_cycles: 0,
@@ -103,7 +103,7 @@ fn wrap_v1(value: &BigInt) -> BigInt {
 fn bench_numeric_limb_work(c: &mut Criterion) {
     let mut group = c.benchmark_group("ivm-numeric-limb-cal");
     let entry_instruction = encoding::wide::encode_syscallx(ivm::syscalls::SYSCALL_INT_NEG);
-    let mut entry_program = ProgramMetadata::default_for(1, 0, 1).encode();
+    let mut entry_program = ProgramMetadata::default_for(1, 1, 1).encode();
     entry_program.extend_from_slice(&entry_instruction.to_le_bytes());
     entry_program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     // Keep the benchmark denominator scoped to the staged numeric lifecycle.
@@ -344,7 +344,7 @@ fn bench_numeric_limb_work(c: &mut Criterion) {
         |b, _| b.iter(|| std::hint::black_box(maximum.cmp(&scale_28))),
     );
     for (label, value) in [("minimum", BigInt::zero()), ("maximum", maximum_int)] {
-        let envelope = ivm::numeric_tlv::encode_int(&value).expect("numeric envelope");
+        let envelope = ivm_abi::numeric_tlv::encode_int(&value).expect("numeric envelope");
         let frame_bytes = envelope.len() - 39;
         let validation_work =
             ivm::numeric_gas::numeric_frame_validation_work(frame_bytes).expect("validation work");
@@ -405,7 +405,7 @@ fn bench_numeric_limb_work(c: &mut Criterion) {
                     || IVM::new(u64::MAX),
                     |mut vm| {
                         std::hint::black_box(value.twos_byte_len());
-                        let envelope = ivm::numeric_tlv::encode_int(value)
+                        let envelope = ivm_abi::numeric_tlv::encode_int(value)
                             .expect("encode calibration envelope");
                         // Output byte gas covers both canonical construction
                         // and publication into VM-owned memory.  Keep the

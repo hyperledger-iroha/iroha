@@ -9,6 +9,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import org.hyperledger.iroha.sdk.crypto.keystore.AndroidKeystoreAliasStateV1
+import org.hyperledger.iroha.sdk.crypto.keystore.AndroidKeystoreUnavailableExceptionV1
 import org.junit.jupiter.api.Test
 
 class AndroidPixel6TestnetStrongBoxObservationV1Test {
@@ -32,6 +34,7 @@ class AndroidPixel6TestnetStrongBoxObservationV1Test {
         var failSign = false
         var failDelete = false
         var aliasExists = false
+        var aliasProbeFails = false
         var observedChallenge: ByteArray? = null
         var observedMessage: ByteArray? = null
         override fun isPixel6(): Boolean = pixel6
@@ -40,7 +43,10 @@ class AndroidPixel6TestnetStrongBoxObservationV1Test {
             else userUnlocked
         override fun hasStrongBox(): Boolean = strongBox
         override fun newNonce(): ByteArray = ByteArray(32) { 0x31 }
-        override fun hasAlias(alias: String): Boolean = aliasExists
+        override fun aliasState(alias: String): AndroidKeystoreAliasStateV1 {
+            if (aliasProbeFails) throw AndroidKeystoreUnavailableExceptionV1("keystore2 binder failure")
+            return if (aliasExists) AndroidKeystoreAliasStateV1.PRESENT else AndroidKeystoreAliasStateV1.ABSENT
+        }
         override fun generate(alias: String, challenge: ByteArray): ProbeKeyMaterialV1 {
             generated++
             observedChallenge = challenge.copyOf()
@@ -223,6 +229,19 @@ class AndroidPixel6TestnetStrongBoxObservationV1Test {
         assertIs<Pixel6TestnetObservationResultV1.Frozen>(collect(device, store))
         assertEquals(1, device.generated)
         assertEquals(1, device.signed)
+    }
+
+    @Test fun occupiedOrUnanswerableAliasFreezesWithoutGeneratingOrDeleting() {
+        for (failure in listOf(true, false)) {
+            val device = Device().apply { if (failure) aliasProbeFails = true else aliasExists = true }
+            val store = Store()
+            val frozen = assertIs<Pixel6TestnetObservationResultV1.Frozen>(collect(device, store))
+            assertEquals("alias", frozen.stage)
+            assertEquals(1, store.reserves)
+            assertEquals(0, device.generated)
+            assertEquals(0, device.signed)
+            assertEquals(0, device.deleted)
+        }
     }
 
     @Test fun absentStrongBoxAndInvalidScopeNeverReserveOrGenerate() {

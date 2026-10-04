@@ -142,8 +142,8 @@ fn payout_contract_artifact() -> (
         callables: vec![ivm::call::EmbeddedCallableV1 {
             entry_pc: 0,
             frame_bytes: 0,
-            argument_words: Vec::new(),
-            result_words: vec![ivm::call::CallWordV1::Unit],
+            arguments: ivm::call::CallSchemaV1::empty(),
+            results: ivm::call::CallSchemaV1::unit(),
         }],
         seiyaku_name: "ValidationFeePayout".to_owned(),
         compiler_fingerprint: "validation-fee-admission-test".to_owned(),
@@ -220,8 +220,8 @@ fn pool_contract_artifact() -> (
         callables: vec![ivm::call::EmbeddedCallableV1 {
             entry_pc: 0,
             frame_bytes: 0,
-            argument_words: Vec::new(),
-            result_words: vec![ivm::call::CallWordV1::Unit],
+            arguments: ivm::call::CallSchemaV1::empty(),
+            results: ivm::call::CallSchemaV1::unit(),
         }],
         seiyaku_name: "ValidationFeePool".to_owned(),
         compiler_fingerprint: "validation-fee-pool-admission-test".to_owned(),
@@ -316,7 +316,7 @@ fn test_state() -> (
     let xor_asset_definition = AssetDefinition::new(
         xor_asset_definition_id(),
         "xor".to_owned(),
-        NumericSpec::fractional(u32::from(TEST_VALIDATION_FEE_ASSET_SCALE)),
+        NumericSpec::fractional(9),
         iroha_data_model::asset::AssetBalancePolicy::Global,
         None,
     )
@@ -338,7 +338,7 @@ fn test_state() -> (
         startup,
         test_chain::{CertifiedTestChain, TestChainConfig},
     };
-    let config = TestChainConfig::new(
+    let mut config = TestChainConfig::new(
         World::with_assets(
             [domain],
             accounts,
@@ -348,6 +348,31 @@ fn test_state() -> (
         ),
         1_700_000_000_000,
     );
+    // The native payout fixture requires the network currency in the actual signed genesis.
+    // The fee token keeps its independent scale; this component prestate qualifies no election.
+    let npos = iroha_data_model::parameter::system::SumeragiNposParameters {
+        xor_asset_definition_id: xor_asset_definition_id(),
+        ..Default::default()
+    };
+    npos.validate().expect("native currency fixture policy");
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.fees.fee_asset_id = npos.xor_asset_definition_id.canonical_address();
+    nexus.staking.stake_asset_id = npos.xor_asset_definition_id.canonical_address();
+    // Preserve the original component State fixture's zero generic fees.
+    nexus.fees.base_fee = Quantity::zero();
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
+    config.nexus = Some(nexus);
+    config.consensus_mode = iroha_data_model::parameter::system::SumeragiConsensusMode::Npos;
+    config.genesis_parameters.extend([
+        Parameter::Sumeragi(
+            iroha_data_model::parameter::system::SumeragiParameter::EpochLengthBlocks(
+                npos.epoch_length_blocks,
+            ),
+        ),
+        Parameter::Custom(npos.into_custom_parameter()),
+    ]);
     let genesis_authority = AccountId::new(config.genesis_key.public_key().clone());
     let mode = config.consensus_mode;
     let prepared =
@@ -368,6 +393,61 @@ fn test_state() -> (
         state.view().latest_block_hash().unwrap()
     );
     (state, user, user_key_pair, recipient, treasury, fee_asset)
+}
+
+#[test]
+fn admission_fixture_authenticates_network_xor_identity_and_precision_in_signed_genesis() {
+    let (state, _, _, _, _, fee_asset) = test_state();
+    let view = state.view();
+    let world = view.world();
+    let npos = world
+        .sumeragi_npos_parameters()
+        .expect("original committed parameter decoder completes")
+        .expect("actual signed genesis commits native currency identity");
+    assert_eq!(npos.xor_asset_definition_id, xor_asset_definition_id());
+    let nexus = state.nexus_snapshot();
+    assert_eq!(
+        nexus.fees.fee_asset_id,
+        npos.xor_asset_definition_id.canonical_address()
+    );
+    assert_eq!(
+        nexus.staking.stake_asset_id,
+        npos.xor_asset_definition_id.canonical_address()
+    );
+    assert_eq!(
+        AssetDefinitionId::parse_address_literal(&nexus.fees.fee_asset_id)
+            .expect("the fee selector is the canonical authenticated currency address"),
+        npos.xor_asset_definition_id
+    );
+    assert_eq!(nexus.fees.base_fee, Quantity::zero());
+    assert_eq!(nexus.fees.per_byte_fee, Quantity::zero());
+    assert_eq!(nexus.fees.per_instruction_fee, Quantity::zero());
+    assert_eq!(nexus.fees.per_gas_unit_fee, Quantity::zero());
+    // Inspect the committed native-currency definition through its public model
+    // contract; internal resolver and admission guards retain their own unit tests.
+    assert_eq!(
+        world
+            .asset_definition(&npos.xor_asset_definition_id)
+            .unwrap()
+            .balance_scope_policy(),
+        iroha_data_model::asset::AssetBalancePolicy::Global
+    );
+    assert_eq!(
+        world
+            .asset_definition(&npos.xor_asset_definition_id)
+            .unwrap()
+            .spec(),
+        NumericSpec::fractional(9)
+    );
+    assert_eq!(
+        world.asset_definition(&fee_asset).unwrap().spec(),
+        NumericSpec::fractional(u32::from(TEST_VALIDATION_FEE_ASSET_SCALE))
+    );
+    assert_eq!(view.height(), 1);
+    assert_eq!(
+        state.network_id_ref().into_genesis_hash(),
+        view.latest_block_hash().unwrap()
+    );
 }
 fn accept_transaction(state: &State, tx: SignedTransaction) -> AcceptedTransaction<'static> {
     let max_clock_drift = state

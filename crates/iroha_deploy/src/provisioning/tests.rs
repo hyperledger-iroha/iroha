@@ -9,7 +9,8 @@ use std::{
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, SignatureOf};
 use iroha_data_model::{
     alias_setup::{
-        AliasDataSpaceIntentV1, AliasLeaseAcquisitionV1, AliasQuoteGuardV1, ResolvedDataSpaceV1,
+        AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1, AliasDataSpaceIntentV1,
+        AliasLeaseAcquisitionV1, AliasQuoteGuardV1, ResolvedDataSpaceV1,
     },
     block::consensus::SumeragiRootScope,
     isi::alias_setup::EnsureAlias,
@@ -101,7 +102,6 @@ impl Fixture {
                 torii_url = "http://127.0.0.1:8080/"
                 [account]
                 chain_discriminant = 753
-                domain = "app.acme"
                 public_key = (owner.public_key().to_string())
                 private_key = (ExposedPrivateKey(owner.private_key().clone()).to_string())
             },
@@ -175,6 +175,7 @@ impl Fixture {
             &self.bootstrap,
             self.child.clone(),
             "acme".into(),
+            "admin".into(),
             self.registration.clone(),
         )
     }
@@ -261,6 +262,7 @@ struct Operations {
     reserve_status: Cell<OperationStatus>,
     lease_proof: SnsLeaseProofV1,
     forged_generation: Cell<bool>,
+    reserve_before_journal_failure: Cell<bool>,
 }
 impl Operations {
     fn new(store: &RemoteProvisioning, fixture: &Fixture) -> Self {
@@ -271,25 +273,48 @@ impl Operations {
             reserve_status: Cell::new(OperationStatus::Pending),
             lease_proof: fixture.lease_proof.clone(),
             forged_generation: Cell::new(false),
+            reserve_before_journal_failure: Cell::new(false),
         }
     }
     fn request(&self) -> AliasSetupPlanRequestV1 {
-        AliasSetupPlanRequestV1::new(vec![EnsureAlias::new(
-            AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
-                dataspace: ResolvedDataSpaceV1::new(
-                    "acme".parse().unwrap(),
-                    self.binding.registration.scope.dataspace_id(),
-                ),
-                owner: self.binding.owner.clone(),
-            }),
-            AliasLeaseAcquisitionV1::new(1, Some(0)),
-            AliasQuoteGuardV1 {
-                expected_policy_version: 1,
-                expected_payment_asset: self.binding.faucet.asset_definition_id.clone(),
-                max_amount: 10_u64.into(),
-                valid_until_ms: unix_ms().unwrap() + 120_000,
-            },
-        )])
+        let valid_until_ms = unix_ms().unwrap() + 120_000;
+        AliasSetupPlanRequestV1::new(vec![
+            EnsureAlias::new(
+                AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
+                    dataspace: ResolvedDataSpaceV1::new(
+                        "acme".parse().unwrap(),
+                        self.binding.registration.scope.dataspace_id(),
+                    ),
+                    owner: self.binding.owner.clone(),
+                }),
+                AliasLeaseAcquisitionV1::new(1, Some(0)),
+                AliasQuoteGuardV1 {
+                    expected_policy_version: 1,
+                    expected_payment_asset: self.binding.faucet.asset_definition_id.clone(),
+                    max_amount: 10_u64.into(),
+                    valid_until_ms,
+                },
+            ),
+            EnsureAlias::new(
+                AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+                    alias: iroha_wallet::namespace::resolve_private_owner_alias(
+                        &self.binding.alias,
+                        &self.binding.account_alias,
+                    )
+                    .unwrap(),
+                    target_account: self.binding.owner.clone(),
+                    provision: AccountProvisionV1::Existing,
+                    role: AccountAliasRoleV1::Additional,
+                }),
+                AliasLeaseAcquisitionV1::new(1, Some(0)),
+                AliasQuoteGuardV1 {
+                    expected_policy_version: 1,
+                    expected_payment_asset: self.binding.faucet.asset_definition_id.clone(),
+                    max_amount: 10_u64.into(),
+                    valid_until_ms,
+                },
+            ),
+        ])
     }
 }
 impl ProvisioningOperations for Operations {
@@ -314,9 +339,12 @@ impl ProvisioningOperations for Operations {
     fn namespace_request(
         &self,
         _: &Config,
-        _: &str,
+        alias: &str,
+        account_alias: &str,
         _: Instant,
     ) -> Result<AliasSetupPlanRequestV1> {
+        assert_eq!(alias, self.binding.alias);
+        assert_eq!(account_alias, self.binding.account_alias);
         self.calls.borrow_mut().push("quote");
         Ok(self.request())
     }
@@ -328,15 +356,18 @@ impl ProvisioningOperations for Operations {
         journal: &Path,
     ) -> Result<OperationStatus> {
         self.calls.borrow_mut().push("reserve");
+        if self.reserve_before_journal_failure.get() {
+            return Err(ProvisioningError::NamespacePreparation);
+        }
         assert_eq!(
             options.max_total_fees[&self.binding.faucet.asset_definition_id],
             self.binding.faucet.max_operation_fee
         );
         if !path_exists(journal)? {
-            let _held = iroha_wallet::operation_journal::Journal::create_prepared(journal, request)
-                .unwrap();
+            let _held =
+                iroha_operation_journal::Journal::create_prepared(journal, request).unwrap();
         } else {
-            let held = iroha_wallet::operation_journal::Journal::open(journal).unwrap();
+            let held = iroha_operation_journal::Journal::open(journal).unwrap();
             assert_eq!(
                 &held.read_operation::<AliasSetupPlanRequestV1>().unwrap(),
                 request
@@ -386,12 +417,16 @@ fn genuine_private_genesis_owner_is_imported_into_only_its_bound_parent_wallet()
     )
     .unwrap();
     let path = fixture.directory.path().join("provisioning");
-    assert!(RemoteProvisioning::load_parent_config(&path, &fixture.bootstrap, &prepared).is_err());
+    assert!(
+        RemoteProvisioning::load_parent_config(&path, &fixture.bootstrap, &prepared, "admin")
+            .is_err()
+    );
     assert!(!path.exists());
-    let service = RemoteProvisioning::open(&path, &fixture.bootstrap, &prepared).unwrap();
+    let service = RemoteProvisioning::open(&path, &fixture.bootstrap, &prepared, "admin").unwrap();
     let child = prepared.context.load_client_config().unwrap();
     let parent =
-        RemoteProvisioning::load_parent_config(&path, &fixture.bootstrap, &prepared).unwrap();
+        RemoteProvisioning::load_parent_config(&path, &fixture.bootstrap, &prepared, "admin")
+            .unwrap();
     assert_eq!(parent.key_pair, child.key_pair);
     assert_eq!(parent.account, child.account);
     assert_eq!(parent.network_id, fixture.parent.network_id());
@@ -406,11 +441,12 @@ fn genuine_private_genesis_owner_is_imported_into_only_its_bound_parent_wallet()
     let mut substituted = prepared.clone();
     substituted.context.dataspace_alias = "foreign".into();
     assert!(
-        RemoteProvisioning::load_parent_config(&path, &fixture.bootstrap, &substituted).is_err()
+        RemoteProvisioning::load_parent_config(&path, &fixture.bootstrap, &substituted, "admin")
+            .is_err()
     );
     drop(service);
     assert_eq!(
-        RemoteProvisioning::open(&path, &fixture.bootstrap, &prepared)
+        RemoteProvisioning::open(&path, &fixture.bootstrap, &prepared, "admin")
             .unwrap()
             .parent
             .key_pair,
@@ -450,6 +486,7 @@ fn exact_owner_import_and_exclusive_custody_survive_reopen_but_not_child_replace
             &fixture.bootstrap,
             child,
             "acme",
+            "admin",
             &fixture.registration,
         )
     };
@@ -493,6 +530,7 @@ fn exact_owner_import_and_exclusive_custody_survive_reopen_but_not_child_replace
             &fixture.bootstrap,
             changed,
             "acme".into(),
+            "admin".into(),
             fixture.registration.clone()
         )
         .is_err()
@@ -587,6 +625,90 @@ fn fresh_quorum_precedes_funding_and_pending_namespace_resumes_exact_original_re
 }
 
 #[test]
+fn retained_owner_alias_cannot_change_on_reopen_or_parent_wallet_read() {
+    let fixture = Fixture::new();
+    let store = fixture.open().unwrap();
+    let path = store.directory.path().to_path_buf();
+    let original = std::fs::read(path.join("provisioning.nrt")).unwrap();
+    assert_eq!(
+        decode_record(&original).unwrap().binding.account_alias,
+        "admin"
+    );
+    assert!(
+        RemoteProvisioning::load_parent_config_trusted(
+            &path,
+            &fixture.bootstrap,
+            &fixture.child,
+            "acme",
+            "treasury",
+            &fixture.registration,
+        )
+        .is_err()
+    );
+    drop(store);
+    assert!(
+        RemoteProvisioning::open_trusted(
+            &path,
+            &fixture.bootstrap,
+            fixture.child.clone(),
+            "acme".into(),
+            "treasury".into(),
+            fixture.registration.clone(),
+        )
+        .is_err()
+    );
+    assert_eq!(
+        std::fs::read(path.join("provisioning.nrt")).unwrap(),
+        original
+    );
+    let reopened = fixture.open().unwrap();
+    assert_eq!(reopened.record.binding.account_alias, "admin");
+    let mut missing = reopened.record.clone();
+    missing.binding.account_alias.clear();
+    assert!(record_bytes(&missing).is_err());
+}
+
+#[test]
+fn namespace_quote_survives_failure_before_journal_without_requoting_or_new_fees() {
+    let fixture = Fixture::new();
+    let mut store = fixture.open().unwrap();
+    let ops = Operations::new(&store, &fixture);
+    let source = Source {
+        chain: &fixture.parent,
+        offline: false,
+        reads: Cell::new(0),
+    };
+    let deadline = || Instant::now() + Duration::from_secs(30);
+    ops.reserve_before_journal_failure.set(true);
+    assert!(
+        store
+            .provision_with(&fixture.bootstrap, deadline(), &source, &ops)
+            .is_err()
+    );
+    assert_eq!(*ops.calls.borrow(), vec!["fund", "quote", "reserve"]);
+    let request = store.record.namespace.clone().unwrap();
+    assert_eq!(request.intents.len(), 2);
+    assert!(!store.directory.path().join("operations/namespace").exists());
+    drop(store);
+    let mut store = fixture.open().unwrap();
+    ops.calls.borrow_mut().clear();
+    ops.reserve_before_journal_failure.set(false);
+    store
+        .provision_with(&fixture.bootstrap, deadline(), &source, &ops)
+        .unwrap();
+    assert_eq!(*ops.calls.borrow(), vec!["reserve"]);
+    assert_eq!(store.record.namespace.as_ref(), Some(&request));
+    let journal = iroha_operation_journal::Journal::open(
+        &store.directory.path().join("operations/namespace"),
+    )
+    .unwrap();
+    assert_eq!(
+        journal.read_operation::<AliasSetupPlanRequestV1>().unwrap(),
+        request
+    );
+}
+
+#[test]
 fn namespace_allowance_and_authenticated_lease_bind_exact_identity_and_rent() {
     let fixture = Fixture::new();
     let store = fixture.open().unwrap();
@@ -594,16 +716,43 @@ fn namespace_allowance_and_authenticated_lease_bind_exact_identity_and_rent() {
     let binding = &store.record.binding;
     let original = ops.request();
     binding.validate_namespace(&original).unwrap();
-    for mutation in 0..5 {
+    for mutation in 0..14 {
         let mut changed = original.clone();
         match mutation {
             0 => changed.intents[0].quote_guard.max_amount = 101_u64.into(),
             1 => changed.intents[0].acquisition.term_years = 2,
             2 => changed.intents.push(changed.intents[0].clone()),
             3 => changed.schema_version = 2,
-            _ => {
+            4 => {
                 if let AliasIntentV1::Dataspace(value) = &mut changed.intents[0].intent {
                     value.owner = binding.faucet.issuer.clone();
+                }
+            }
+            5 => changed.intents[1].quote_guard.max_amount = 91_u64.into(),
+            6 => changed.intents[1].acquisition.term_years = 2,
+            7 => changed.intents[1].quote_guard.valid_until_ms += 1,
+            8 => changed.intents.swap(0, 1),
+            13 => {
+                let mut currency = [41; 16];
+                currency[6] = 0x49;
+                currency[8] = 0x89;
+                changed.intents[1].quote_guard.expected_payment_asset =
+                    iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes(currency).unwrap();
+            }
+            _ => {
+                if let AliasIntentV1::AccountAlias(value) = &mut changed.intents[1].intent {
+                    match mutation {
+                        9 => {
+                            value.alias = iroha_wallet::namespace::resolve_private_owner_alias(
+                                "acme", "treasury",
+                            )
+                            .unwrap()
+                        }
+                        10 => value.target_account = binding.faucet.issuer.clone(),
+                        11 => value.role = AccountAliasRoleV1::Primary,
+                        12 => value.provision = AccountProvisionV1::Create,
+                        _ => unreachable!(),
+                    }
                 }
             }
         }
@@ -648,7 +797,7 @@ fn namespace_allowance_and_authenticated_lease_bind_exact_identity_and_rent() {
     );
     assert!(
         NativeOperations
-            .namespace_request(&store.parent, "acme", Instant::now())
+            .namespace_request(&store.parent, "acme", "admin", Instant::now())
             .is_err()
     );
     assert!(

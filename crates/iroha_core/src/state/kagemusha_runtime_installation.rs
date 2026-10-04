@@ -39,7 +39,9 @@ impl State {
         let mut read_releases = StateViewReleases::new(self);
         let mut commit_releases = self.state_commit_lock.defer_notifications();
         let _state_commit_lock = commit_releases.lock();
-        let world = self.world.view();
+        let world = self
+            .world
+            .view_retaining(&mut read_releases.lifecycle.world);
         KagemushaV1RuntimeReloadHead {
             network_id: self.network_id,
             block_hash: self
@@ -78,7 +80,9 @@ impl State {
         let mut verifier_releases = self.kagemusha_v1_runtime_verifier.defer_notifications();
         let mut commit_releases = self.state_commit_lock.defer_notifications();
         let _state_commit_lock = commit_releases.lock();
-        let world = self.world.view();
+        let world = self
+            .world
+            .view_retaining(&mut read_releases.lifecycle.world);
         if self.network_id != expected.network_id
             || self
                 .block_hashes

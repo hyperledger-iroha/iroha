@@ -1,6 +1,10 @@
 //! Actual archive readers and writers drive retry without timers or publication.
 
 use super::*;
+use iroha_allocation::{
+    AllocationBudget,
+    release::{ReleaseFuture, ReleaseRegistration},
+};
 use std::{
     future::Future,
     pin::Pin,
@@ -20,28 +24,34 @@ impl Wake for WakeCount {
     }
 }
 
-fn poll(wait: &mut iroha_allocation::release::ReleaseFuture, count: &Arc<WakeCount>) -> Poll<()> {
+fn poll(wait: &mut ReleaseFuture<'_>, count: &Arc<WakeCount>) -> Poll<()> {
     let waker = Waker::from(Arc::clone(count));
     Pin::new(wait).poll(&mut Context::from_waker(&waker))
 }
 
-fn waiting<T>(index: &ArchiveIndexLock<T>) -> iroha_allocation::release::ReleaseFuture {
+fn waiting<'a, T>(
+    index: &ArchiveIndexLock<T>,
+    registration: &'a mut ReleaseRegistration,
+) -> ReleaseFuture<'a> {
     match index.try_write() {
-        Err(ArchiveIndexLockError::Busy(wait)) => wait.wait_for_release(),
+        Err(ArchiveIndexLockError::Busy(wait)) => wait.wait_for_release(registration),
         outcome => panic!("expected actual physical contention: {outcome:?}"),
     }
 }
 
 #[test]
 fn reader_release_before_registration_survives_successor_writer() {
+    let budget = AllocationBudget::new(2 * ReleaseRegistration::allocation_layout().size());
+    let mut first_registration = crate::unit_test_support::release_registration(&budget);
+    let mut second_registration = crate::unit_test_support::release_registration(&budget);
     let index = ArchiveIndexLock::new(7);
     let reader = index.read().unwrap();
     assert_eq!(*reader, 7);
-    let mut before_release = waiting(&index);
+    let mut before_release = waiting(&index, &mut first_registration);
     drop(reader);
     let mut successor = index.try_write().unwrap();
     *successor = 9;
-    let mut after_release = waiting(&index);
+    let mut after_release = waiting(&index, &mut second_registration);
     let count = Arc::new(WakeCount::default());
     assert!(poll(&mut before_release, &count).is_ready());
     assert!(poll(&mut after_release, &count).is_pending());
@@ -49,15 +59,21 @@ fn reader_release_before_registration_survives_successor_writer() {
     assert_eq!(count.0.load(Ordering::SeqCst), 1);
     assert!(poll(&mut after_release, &count).is_ready());
     assert_eq!(*index.read().unwrap(), 9);
+    drop((before_release, after_release));
+    drop((first_registration, second_registration));
+    assert_eq!(budget.reserved_bytes(), 0);
 }
 
 #[test]
 fn each_reader_release_wakes_only_its_index_and_retry_rechecks_remaining_readers() {
+    let budget = AllocationBudget::new(2 * ReleaseRegistration::allocation_layout().size());
+    let mut first_registration = crate::unit_test_support::release_registration(&budget);
+    let mut second_registration = crate::unit_test_support::release_registration(&budget);
     let index = ArchiveIndexLock::new(1);
     let foreign = ArchiveIndexLock::new(2);
     let first = index.read().unwrap();
     let second = index.read().unwrap();
-    let mut first_wait = waiting(&index);
+    let mut first_wait = waiting(&index, &mut first_registration);
     let count = Arc::new(WakeCount::default());
     assert!(poll(&mut first_wait, &count).is_pending());
     drop(foreign.read().unwrap());
@@ -67,12 +83,15 @@ fn each_reader_release_wakes_only_its_index_and_retry_rechecks_remaining_readers
     drop(first);
     assert_eq!(count.0.load(Ordering::SeqCst), 1);
     assert!(poll(&mut first_wait, &count).is_ready());
-    let mut second_wait = waiting(&index);
+    let mut second_wait = waiting(&index, &mut second_registration);
     assert!(poll(&mut second_wait, &count).is_pending());
     drop(second);
     assert_eq!(count.0.load(Ordering::SeqCst), 2);
     assert!(poll(&mut second_wait, &count).is_ready());
     assert!(index.try_write().is_ok());
+    drop((first_wait, second_wait));
+    drop((first_registration, second_registration));
+    assert_eq!(budget.reserved_bytes(), 0);
 }
 
 #[test]
@@ -90,10 +109,12 @@ fn notification_runs_only_after_the_physical_writer_is_unlocked() {
             self.unlocked.store(true, Ordering::SeqCst);
         }
     }
+    let budget = AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let index = Arc::new(ArchiveIndexLock::new(10));
     let mut writer = index.write().unwrap();
     *writer = 11;
-    let mut wait = waiting(&index);
+    let mut wait = waiting(&index, &mut registration);
     let probe = Arc::new(ProbeOnWake {
         index: Arc::clone(&index),
         unlocked: AtomicBool::new(false),
@@ -111,13 +132,18 @@ fn notification_runs_only_after_the_physical_writer_is_unlocked() {
             .poll(&mut Context::from_waker(&waker))
             .is_ready()
     );
+    drop(wait);
+    drop(registration);
+    assert_eq!(budget.reserved_bytes(), 0);
 }
 
 #[test]
 fn reader_unwind_notifies_without_poisoning_later_writers() {
+    let budget = AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let index = ArchiveIndexLock::new(3);
     let reader = index.read().unwrap();
-    let mut wait = waiting(&index);
+    let mut wait = waiting(&index, &mut registration);
     let count = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &count).is_pending());
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
@@ -129,13 +155,18 @@ fn reader_unwind_notifies_without_poisoning_later_writers() {
     assert!(poll(&mut wait, &count).is_ready());
     assert_eq!(*index.try_write().unwrap(), 3);
     assert_eq!(*index.write().unwrap(), 3);
+    drop(wait);
+    drop(registration);
+    assert_eq!(budget.reserved_bytes(), 0);
 }
 
 #[test]
 fn writer_unwind_notifies_and_poison_never_becomes_a_contention_retry() {
+    let budget = AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let index = ArchiveIndexLock::new(4);
     let writer = index.write().unwrap();
-    let mut wait = waiting(&index);
+    let mut wait = waiting(&index, &mut registration);
     let count = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &count).is_pending());
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
@@ -162,4 +193,7 @@ fn writer_unwind_notifies_and_poison_never_becomes_a_contention_retry() {
         Err(ArchiveIndexLockError::Poisoned)
     ));
     drop(erroneous_reader);
+    drop(wait);
+    drop(registration);
+    assert_eq!(budget.reserved_bytes(), 0);
 }

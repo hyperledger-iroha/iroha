@@ -13,8 +13,7 @@ use crate::taira_public_reset as reset;
 use iroha::client::Client;
 use iroha_core::beacon::{
     AdaptiveGlobalThresholdBeaconDkgCryptoV1, FinalizedGlobalThresholdBeaconKeySessionRecordV1,
-    GlobalThresholdBeaconDkgPhaseV1, GlobalThresholdBeaconDkgStateV1,
-    global_threshold_beacon_roster_hash_v1,
+    GlobalThresholdBeaconDkgStateV1, global_threshold_beacon_roster_hash_v1,
 };
 use iroha_crypto::{Hash, KeyPair, PublicKey};
 use iroha_data_model::{
@@ -22,7 +21,7 @@ use iroha_data_model::{
     isi::consensus_keys::ThresholdKeyLifecycleCertificateV1,
     sumeragi_finality::{FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier},
 };
-use std::num::NonZeroU64;
+use std::num::{NonZeroU64, NonZeroUsize};
 use zeroize::Zeroizing;
 
 #[path = "taira_public_reset_beacon/relay.rs"]
@@ -60,6 +59,45 @@ const PROVIDER_FIELDS: [&str; 3] = [
     "global_beacon_partial_signer_provider_revision",
     "global_beacon_partial_signer_provider_policy_digest_hex",
 ];
+
+/// Use the exact admitted validator policy, including only its canonical config defaults.
+/// Environment variables cannot override this signed source; private TOML values are scrubbed.
+fn configured_beacon_credential_memory(config: &[u8], path: &Path) -> Result<NonZeroUsize> {
+    use iroha_config::{base::toml::TomlSource, parameters::actual};
+    if config.len() > CONFIG_LIMIT as usize {
+        return Err(eyre!("beacon validator config exceeds its source bound"));
+    }
+    let text =
+        std::str::from_utf8(config).map_err(|_| eyre!("beacon validator config is not UTF-8"))?;
+    let mut table: toml::Table =
+        toml::from_str(text).map_err(|_| eyre!("beacon validator config is not TOML"))?;
+    // Project only the public broker policy. Reading Root would open unrelated
+    // node credential files which need not exist on the ceremony coordinator.
+    let broker = match table.get_mut("runtime_provider_broker") {
+        Some(toml::Value::Table(broker)) => Ok(std::mem::take(broker)),
+        None => Ok(toml::Table::new()),
+        Some(_) => Err(eyre!(
+            "beacon runtime-provider broker policy is not a table"
+        )),
+    };
+    crate::soracloud::zeroize_taira_toml_table(&mut table);
+    let policy = actual::RuntimeProviderBroker::from_toml_source(TomlSource::new_sensitive(
+        path.to_path_buf(),
+        broker?,
+        crate::soracloud::zeroize_taira_toml_table,
+    ))
+    .map_err(|_| eyre!("beacon broker policy failed current typed admission"))?;
+    Ok(policy.credential_max_memory_bytes)
+}
+
+fn beacon_native_args(memory: NonZeroUsize, subcommand: &str) -> Vec<OsString> {
+    vec![
+        "beacon-bootstrap".into(),
+        "--credential-max-memory-bytes".into(),
+        memory.get().to_string().into(),
+        subcommand.into(),
+    ]
+}
 
 /// A required part of the signed inventory, never populated after authorization.
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -336,8 +374,8 @@ fn derive_public_beacon_inputs_from_slots(
             .collect(),
         provider_revision: 1,
     };
-    GlobalThresholdBeaconDkgStateV1::new(
-        request.dkg_session,
+    GlobalThresholdBeaconDkgStateV1::validate_session(
+        &request.dkg_session,
         &AdaptiveGlobalThresholdBeaconDkgCryptoV1,
     )
     .map_err(|error| eyre!("native fresh beacon request is invalid: {error:?}"))?;
@@ -437,14 +475,12 @@ pub(in super::super) fn validate_plan(inventory: &InventoryV1) -> Result<()> {
             "beacon bootstrap plan differs from the exact signed four-validator deployment"
         ));
     }
-    let state = GlobalThresholdBeaconDkgStateV1::new(
-        request.dkg_session,
+    GlobalThresholdBeaconDkgStateV1::validate_session(
+        &request.dkg_session,
         &AdaptiveGlobalThresholdBeaconDkgCryptoV1,
     )
     .map_err(|_| eyre!("beacon bootstrap has invalid native DKG windows"))?;
-    if state.phase_at(request.dkg_session.start_height)
-        != GlobalThresholdBeaconDkgPhaseV1::Commitments
-    {
+    if request.dkg_session.start_height >= request.dkg_session.commitments_end_height {
         return Err(eyre!("beacon bootstrap must begin in native Commitments"));
     }
     // Unit interpretation remains the native renderer/loaded-systemd contract. This
@@ -657,6 +693,16 @@ pub(super) fn peers(inventory: &InventoryV1) -> Result<Vec<DeploymentPeerV1>> {
         .collect()
 }
 
+/// The authenticated finality roster reached through the four admitted public TLS origins.
+pub(super) fn public_peers(inventory: &InventoryV1) -> Result<Vec<DeploymentPeerV1>> {
+    let mut selected = peers(inventory)?;
+    for (peer, client) in selected.iter_mut().zip(&inventory.validator_clients) {
+        reset::validate_validator_public_origin(&client.torii_origin)?;
+        peer.torii_origin.clone_from(&client.torii_origin);
+    }
+    Ok(selected)
+}
+
 fn observe_new(
     observer: &mut AuthenticatedHeightObserverV1,
     clients: &[Client; 4],
@@ -741,11 +787,52 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         beacon_observation_clients(&config, &self.admitted.inventory, &operator_key, deadline)
     }
 
+    /// Use the same admitted signer and operator custody for public challenged finality.
+    pub(super) fn beacon_public_clients(&self, deadline: Instant) -> Result<[Client; 4]> {
+        let inventory = &self.admitted.inventory;
+        let operator_key =
+            retained_beacon_operator_key(self.runtime.validator_operator_key.as_ref(), inventory)?;
+        let config = load_client_config_for_inventory(
+            &self.runtime.client_config,
+            "public finality signer",
+            inventory,
+        )?;
+        inventory
+            .validator_clients
+            .iter()
+            .map(|selected| {
+                reset::validate_validator_public_origin(&selected.torii_origin)?;
+                let mut peer = config.clone();
+                peer.torii_api_url = selected.torii_origin.parse()?;
+                signed_beacon_client(peer, &operator_key, deadline)
+            })
+            .collect::<Result<Vec<_>>>()?
+            .try_into()
+            .map_err(|_| {
+                eyre!("public finality requires exactly four admitted TLS client contexts")
+            })
+    }
+
     fn beacon_daemon(&self) -> Result<PathBuf> {
         let validator = &self.admitted.inventory.validators[0];
         let path = self.closure.file(&validator.slug, "iroha3d")?;
         validate_snapshot_file(path, artifact(&validator.artifacts, "iroha3d")?)?;
         Ok(path.to_path_buf())
+    }
+
+    fn beacon_coordinator_credential_memory(&self) -> Result<NonZeroUsize> {
+        let validator = &self.admitted.inventory.validators[0];
+        let path = self.closure.file(&validator.slug, "config")?;
+        validate_snapshot_file(path, artifact(&validator.artifacts, "config")?)?;
+        let (file, snapshot) = open_pinned_regular(path, "beacon coordinator config")?;
+        let bytes = Zeroizing::new(read_pinned_bytes(
+            path,
+            "beacon coordinator config",
+            file,
+            &snapshot,
+            CONFIG_LIMIT,
+        )?);
+        configured_beacon_credential_memory(&bytes, path)
     }
 
     fn run_beacon_native(
@@ -807,13 +894,13 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             AuthenticatedHeightObserverV1::new(&genesis, &inventory.chain_id, peers(inventory)?)?;
         let initial = observe_new(&mut observer, &clients, inventory, deadline)?;
         let request = &inventory.beacon_bootstrap.request;
-        let state = GlobalThresholdBeaconDkgStateV1::new(
-            request.dkg_session,
+        GlobalThresholdBeaconDkgStateV1::validate_session(
+            &request.dkg_session,
             &AdaptiveGlobalThresholdBeaconDkgCryptoV1,
         )
         .map_err(|_| eyre!("invalid DKG session"))?;
-        if state.phase_at(initial.committed_height().get())
-            != GlobalThresholdBeaconDkgPhaseV1::Commitments
+        if !(request.dkg_session.start_height..request.dkg_session.commitments_end_height)
+            .contains(&initial.committed_height().get())
         {
             return Err(eyre!(
                 "actual committed height is outside the signed fresh DKG sharing window"
@@ -862,11 +949,17 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         let ceremony = root.join("ceremony");
         ensure_private_directory(&ceremony)?;
         let program = self.beacon_daemon()?;
+        // One pool belongs to the complete relay attempt, derived from the pinned
+        // coordinator policy before any mutable DKG owner is constructed.
+        let relay_budget = iroha_core::state::AllocationBudget::new(
+            self.beacon_coordinator_credential_memory()?.get(),
+        );
         let mut relay = GenesisRelay::new(
             request.dkg_session,
             h1,
             genesis_verifier(&genesis, &inventory.chain_id)?,
             deadline,
+            &relay_budget,
         )?;
         for (index, peer) in request.target_roster.iter().enumerate() {
             let selected = inventory
@@ -954,10 +1047,12 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         let public_session_path = ceremony.join("public-session.norito");
         reset::inputs::write_new_private(
             &public_session_path,
-            &norito::encode_canonical(&public_session)?,
+            &norito::encode_canonical(public_session.record())?,
         )?;
-        let mut assemble_args: Vec<OsString> =
-            vec!["beacon-bootstrap".into(), "assemble-genesis-dkg".into()];
+        let mut assemble_args = beacon_native_args(
+            self.beacon_coordinator_credential_memory()?,
+            "assemble-genesis-dkg",
+        );
         assemble_args.extend(proof_args);
         for phase_height in 2..=4 {
             assemble_args.extend([
@@ -992,7 +1087,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             "beacon public bundle",
         )?;
         validate_bundle_identity(&self.admitted.inventory, &bundle)?;
-        if bundle.record.session != public_session
+        if &bundle.record.session != public_session.record()
             || bundle.phase_proofs != phase_proofs
             || &bundle.genesis.first_finality != h1
         {
@@ -1123,6 +1218,7 @@ fn verify_native_install(
     authorization: &str,
     program: &Path,
     root: &Path,
+    credential_memory: NonZeroUsize,
     deadline: Instant,
     runner: &mut impl ProcessRunner,
 ) -> Result<VerifiedInstall> {
@@ -1133,9 +1229,8 @@ fn verify_native_install(
     verify_regular_hash(program, &artifact(&validator.artifacts, "iroha3d")?.sha256)?;
     let temporary = private_beacon_workdir(root, "native-bundle-check-")?;
     let output = temporary.path().join("instructions.json");
-    let mut args = vec![
-        "beacon-bootstrap".into(),
-        "assemble-genesis-install".into(),
+    let mut args = beacon_native_args(credential_memory, "assemble-genesis-install");
+    args.extend([
         "--network-id".into(),
         inventory
             .beacon_bootstrap
@@ -1148,7 +1243,7 @@ fn verify_native_install(
         inventory.chain_discriminant.to_string().into(),
         "--bundle".into(),
         bundle_path.clone().into_os_string(),
-    ];
+    ]);
     let mut certificate = bundle.finalization_draft.clone();
     certificate.signatures.clear();
     for seat in 0..3 {
@@ -1323,6 +1418,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 &snapshot,
                 CONFIG_LIMIT,
             )?);
+            let credential_memory = configured_beacon_credential_memory(&bytes, initial)?;
             // The existing native loader scrubs/truncates this disposable copy. It
             // never consumes the persistent signed config or prints private bytes.
             let temporary = private_beacon_workdir(root, "lifecycle-key-")?;
@@ -1342,9 +1438,8 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                     "reserved beacon lifecycle descriptor 198 is occupied"
                 ));
             }
-            let args = vec![
-                "beacon-bootstrap".into(),
-                "sign-genesis-install".into(),
+            let mut args = beacon_native_args(credential_memory, "sign-genesis-install");
+            args.extend([
                 "--network-id".into(),
                 self.admitted
                     .inventory
@@ -1368,7 +1463,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 "198".into(),
                 "--output".into(),
                 output.into_os_string(),
-            ];
+            ]);
             let result = self.run_beacon_native(args, vec![descriptor], deadline);
             // Child failure cannot leave a private launch copy available for reuse.
             let scrub = file.set_len(0).and_then(|_| file.sync_all());
@@ -1398,6 +1493,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             &self.admitted.authorization_sha256,
             &program,
             &root,
+            self.beacon_coordinator_credential_memory()?,
             deadline,
             &mut self.runner,
         )?;
@@ -1734,6 +1830,17 @@ fn provider_projection(
 ) -> Result<(ProviderActivationV1, Zeroizing<Vec<u8>>, PathBuf, Vec<u8>)> {
     let inventory = &admitted.inventory;
     let root = ceremony_root(inventory);
+    let source = artifact(&validator.artifacts, "config")?;
+    verify_regular_hash(Path::new(&source.remote_path), &source.sha256)?;
+    let (file, snapshot) =
+        open_pinned_regular(Path::new(&source.remote_path), "original validator config")?;
+    let bytes = Zeroizing::new(read_pinned_bytes(
+        Path::new(&source.remote_path),
+        "original validator config",
+        file,
+        &snapshot,
+        CONFIG_LIMIT,
+    )?);
     let daemon =
         PathBuf::from(&artifact(&inventory.validators[0].artifacts, "iroha3d")?.remote_path);
     let native = verify_native_install(
@@ -1741,6 +1848,7 @@ fn provider_projection(
         &admitted.authorization_sha256,
         &daemon,
         &root,
+        configured_beacon_credential_memory(&bytes, Path::new(&source.remote_path))?,
         admitted.action_deadline,
         &mut RealProcessRunner,
     )?;
@@ -1765,17 +1873,6 @@ fn provider_projection(
         .iter()
         .find(|provider| provider.validator == peer)
         .ok_or_else(|| eyre!("beacon public provider seat absent"))?;
-    let source = artifact(&validator.artifacts, "config")?;
-    verify_regular_hash(Path::new(&source.remote_path), &source.sha256)?;
-    let (file, snapshot) =
-        open_pinned_regular(Path::new(&source.remote_path), "original validator config")?;
-    let bytes = Zeroizing::new(read_pinned_bytes(
-        Path::new(&source.remote_path),
-        "original validator config",
-        file,
-        &snapshot,
-        CONFIG_LIMIT,
-    )?);
     let config = derive_config(&bytes, provider)?;
     let unit = &inventory.beacon_bootstrap.final_units[role];
     let projected = Path::new(&source.remote_path).with_file_name("beacon.toml");
@@ -2327,6 +2424,104 @@ pub(in super::super) fn derive_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn beacon_children_use_the_exact_typed_config_memory_bound_before_subcommand() {
+        let base = include_str!("../../iroha_config/tests/fixtures/base.toml");
+        let path = Path::new("signed-validator.toml");
+        let default = configured_beacon_credential_memory(base.as_bytes(), path).unwrap();
+        assert!(default.get() > 0);
+        for bytes in [1, 4097, default.get()] {
+            let source = format!(
+                "{base}\n[runtime_provider_broker]\ncredential_max_memory_bytes = {bytes}\n"
+            );
+            let digest = sha256_hex(source.as_bytes());
+            let admitted = configured_beacon_credential_memory(source.as_bytes(), path).unwrap();
+            assert_eq!(admitted.get(), bytes);
+            assert_eq!(sha256_hex(source.as_bytes()), digest);
+            for subcommand in [
+                "provision-genesis-seat",
+                "assemble-genesis-dkg",
+                "assemble-genesis-install",
+                "sign-genesis-install",
+            ] {
+                assert_eq!(
+                    beacon_native_args(admitted, subcommand),
+                    vec![
+                        OsString::from("beacon-bootstrap"),
+                        OsString::from("--credential-max-memory-bytes"),
+                        OsString::from(bytes.to_string()),
+                        OsString::from(subcommand)
+                    ],
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn beacon_policy_projection_does_not_open_unrelated_credential_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("absent-owner-private-key");
+        assert!(!missing.exists());
+        let path = directory.path().join("signed-validator.toml");
+        let mut table: toml::Table =
+            toml::from_str(include_str!("../../iroha_config/tests/fixtures/base.toml")).unwrap();
+        table.remove("private_key");
+        table.insert(
+            "private_key_file".into(),
+            toml::Value::String(missing.to_str().unwrap().into()),
+        );
+        table.remove("soranet_transport_private_key");
+        table.insert(
+            "soranet_transport_private_key_file".into(),
+            toml::Value::String(missing.to_str().unwrap().into()),
+        );
+        let default_source = toml::to_string(&table).unwrap();
+        let default =
+            configured_beacon_credential_memory(default_source.as_bytes(), &path).unwrap();
+        assert_eq!(
+            default,
+            configured_beacon_credential_memory(b"", &path).unwrap()
+        );
+        table.insert(
+            "runtime_provider_broker".into(),
+            toml::Value::Table(toml::from_str("credential_max_memory_bytes = 4097").unwrap()),
+        );
+        let source = toml::to_string(&table).unwrap();
+        let digest = sha256_hex(source.as_bytes());
+        assert_eq!(
+            configured_beacon_credential_memory(source.as_bytes(), &path)
+                .unwrap()
+                .get(),
+            4097
+        );
+        assert_eq!(sha256_hex(source.as_bytes()), digest);
+        assert!(!missing.exists());
+    }
+
+    #[test]
+    fn beacon_children_reject_invalid_config_memory_without_a_local_fallback() {
+        let base = include_str!("../../iroha_config/tests/fixtures/base.toml");
+        let path = Path::new("signed-validator.toml");
+        for value in ["0", "-1", "true", "\"4096\""] {
+            let source = format!(
+                "{base}\n[runtime_provider_broker]\ncredential_max_memory_bytes = {value}\n"
+            );
+            assert!(configured_beacon_credential_memory(source.as_bytes(), path).is_err());
+        }
+        let unknown =
+            format!("{base}\n[runtime_provider_broker]\ncredential_max_memroy_bytes = 4096\n");
+        assert!(configured_beacon_credential_memory(unknown.as_bytes(), path).is_err());
+        for value in ["false", "4096", "\"not-a-table\""] {
+            let source = format!("runtime_provider_broker = {value}\n");
+            assert!(configured_beacon_credential_memory(source.as_bytes(), path).is_err());
+        }
+        assert!(configured_beacon_credential_memory(&[0xff], path).is_err());
+        assert!(
+            configured_beacon_credential_memory(&vec![b' '; CONFIG_LIMIT as usize + 1], path)
+                .is_err()
+        );
+    }
 
     #[cfg(unix)]
     #[test]

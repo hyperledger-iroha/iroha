@@ -186,7 +186,7 @@ fn context(
         .unwrap();
     (
         ExecutorContext {
-            state: Arc::clone(chain.state()),
+            state: Clone::clone(chain.state()),
             native_context_archive: Arc::new(
                 NativeContextArchive::open(
                     chain.kura(),
@@ -212,6 +212,7 @@ fn context(
 fn worker(context: &ExecutorContext, archives: FinalizedArchives) -> Worker<'_> {
     Worker {
         payload_build: None,
+        signature_decode: None,
         routing_refusal: None,
         payload_refusal: None,
         context,
@@ -226,6 +227,7 @@ fn worker(context: &ExecutorContext, archives: FinalizedArchives) -> Worker<'_> 
         beacon: None,
         archives: Some(archives),
         pending_commit: None,
+        completed_replay: None,
         attestation: None,
         quarantine_context: None,
     }
@@ -250,9 +252,9 @@ fn prepare_and_append(worker: &mut Worker<'_>, block: &AvailableBody, qc: &Qc) -
         worker.state.ivm_execution_budget(),
         Arc::new(
             crate::sumeragi::runtime_availability::NativeGlobalAvailability::new(
-                Arc::clone(&worker.context.state),
+                Clone::clone(&worker.context.state),
                 block.header().instance,
-                Arc::clone(worker.context.crypto.as_ref().unwrap()),
+                Clone::clone(worker.context.crypto.as_ref().unwrap()),
             )
             .unwrap(),
         ),
@@ -309,6 +311,242 @@ fn partial_archive_failure_retains_exact_decision_and_retries_without_reexecutio
     run(partial_archive_failure_retains_exact_decision_and_retries_without_reexecution_or_notifications_case);
 }
 
+fn assert_pending_archive_owner(
+    worker: &mut Worker<'_>,
+    block: &AvailableBody,
+    qc: &Qc,
+    original: usize,
+    events: &mut tokio::sync::broadcast::Receiver<EventBox>,
+) -> usize {
+    let pending = worker.pending_commit.as_ref().unwrap();
+    let event_count = pending.events.len();
+    assert!(event_count > 0);
+    assert_eq!(
+        pending.native_contexts.canonical_bytes().as_ptr() as usize,
+        original
+    );
+    assert_eq!(worker.state.view().height(), 2);
+    assert_eq!(
+        worker.state.view().latest_block_hash(),
+        Some(pending.state_hash)
+    );
+    assert_eq!(worker.applied.0, 1);
+    assert!(events.try_recv().is_err());
+    assert!(worker.live.as_ref().unwrap().overlay.is_none());
+    assert!(worker.execute(block, qc.block_hash).is_none());
+    assert_eq!(worker.prepare(block, qc).unwrap(), Some(qc.result));
+    event_count
+}
+
+fn complete_archive_once(
+    worker: &mut Worker<'_>,
+    block: &AvailableBody,
+    qc: &Qc,
+    events: &mut tokio::sync::broadcast::Receiver<EventBox>,
+    expected_events: usize,
+) {
+    let state_hash = worker.pending_commit.as_ref().unwrap().state_hash;
+    let completed = worker.commit(block, qc).unwrap();
+    assert!(worker.pending_commit.is_none());
+    assert_eq!(worker.applied, (2, qc.block_hash));
+    assert_eq!(worker.state.view().height(), 2);
+    assert_eq!(worker.state.view().latest_block_hash(), Some(state_hash));
+    let mut emitted = 0;
+    while events.try_recv().is_ok() {
+        emitted += 1;
+    }
+    assert_eq!(
+        emitted, expected_events,
+        "each original notification is published once"
+    );
+    assert_eq!(worker.commit(block, qc).unwrap(), completed);
+    assert!(events.try_recv().is_err());
+}
+
+#[test]
+fn committed_archive_index_refusal_retains_original_release_and_exact_publication() {
+    run(|| {
+        use std::task::{Context, Waker};
+        for provider_busy in [true, false] {
+            let chain = chain();
+            let mut registration = crate::unit_test_support::release_registration(
+                &chain.state().ivm_execution_budget(),
+            );
+            let (_directory, archives) = archives();
+            archives.capture(&chain.state().view()).unwrap();
+            let provider = archives.provider_ingest.as_ref().unwrap();
+            let reputation = archives.reputation.as_ref().unwrap();
+            let provider_before = provider.health_generation().unwrap();
+            let reputation_before = reputation.health_generation().unwrap();
+            let (context, mut events) = context(&chain);
+            let mut worker = worker(&context, archives.clone());
+            let (block, qc) = super::publication_tests::executed(&chain, &mut worker);
+            let original = prepare_and_append(&mut worker, &block, &qc);
+            let mut probe = || {
+                let PublicationError::Deferred(reason) = worker.commit(&block, &qc).unwrap_err()
+                else {
+                    panic!("actual archive index contention must remain a typed deferral");
+                };
+                assert!(matches!(
+                    (&reason, provider_busy),
+                    (PublicationDeferral::ProviderArchiveBusy(_), true)
+                        | (PublicationDeferral::ReputationArchiveBusy(_), false)
+                ));
+                assert!(
+                    reason.execution().is_none(),
+                    "an index lock is not VM capacity"
+                );
+                assert_eq!(
+                    worker
+                        .pending_commit
+                        .as_ref()
+                        .unwrap()
+                        .archive_refusal
+                        .as_ref(),
+                    Some(&reason)
+                );
+                let expected_events =
+                    assert_pending_archive_owner(&mut worker, &block, &qc, original, &mut events);
+                let released = reason.release_wait().unwrap().clone();
+                let mut cx = Context::from_waker(Waker::noop());
+                assert!(registration.poll_wait(&released, &mut cx).is_pending());
+                let foreign = iroha_allocation::AllocationBudget::new(8);
+                drop(
+                    foreign
+                        .try_reserve(core::alloc::Layout::new::<u64>())
+                        .unwrap(),
+                );
+                assert!(
+                    registration.poll_wait(&released, &mut cx).is_pending(),
+                    "foreign pool release is not archive release"
+                );
+                assert!(matches!(
+                    worker.commit(&block, &qc),
+                    Err(PublicationError::Deferred(_))
+                ));
+                (reason, expected_events)
+            };
+            let (reason, expected_events) = if provider_busy {
+                provider.with_index_reader_for_testing(&mut probe).unwrap()
+            } else {
+                reputation
+                    .with_index_reader_for_testing(&mut probe)
+                    .unwrap()
+            };
+            let released = reason.release_wait().unwrap().clone();
+            let mut cx = Context::from_waker(Waker::noop());
+            assert!(
+                registration.poll_wait(&released, &mut cx).is_ready(),
+                "original reader dropped"
+            );
+            complete_archive_once(&mut worker, &block, &qc, &mut events, expected_events);
+            assert_eq!(provider.health_generation().unwrap(), provider_before + 1);
+            assert_eq!(
+                reputation.health_generation().unwrap(),
+                reputation_before + 1
+            );
+        }
+    });
+}
+
+#[test]
+fn committed_archive_cold_history_refusal_retains_original_pool_and_exact_publication() {
+    run(|| {
+        use iroha_allocation::AllocationBudget;
+        use iroha_data_model::block::SharedSignedBlock;
+        use std::task::{Context, Waker};
+        for provider_capture in [true, false] {
+            let chain = chain();
+            let mut registration = crate::unit_test_support::release_registration(
+                &chain.state().ivm_execution_budget(),
+            );
+            let (_directory, archives) = archives();
+            archives.capture(&chain.state().view()).unwrap();
+            let (context, mut events) = context(&chain);
+            let mut worker = worker(&context, archives.clone());
+            let (block, qc) = super::publication_tests::executed(&chain, &mut worker);
+            hold_archive_completion(&mut worker, &block, &qc);
+            worker.archives = Some(FinalizedArchives {
+                provider_ingest: provider_capture
+                    .then(|| archives.provider_ingest.as_ref().unwrap().clone()),
+                reputation: (!provider_capture)
+                    .then(|| archives.reputation.as_ref().unwrap().clone()),
+            });
+            let original = worker
+                .pending_commit
+                .as_ref()
+                .unwrap()
+                .native_contexts
+                .canonical_bytes()
+                .as_ptr() as usize;
+            let expected_events =
+                assert_pending_archive_owner(&mut worker, &block, &qc, original, &mut events);
+            let genesis = std::num::NonZeroUsize::MIN;
+            let original_wire = chain
+                .kura()
+                .canonical_block_wire_bytes_for_testing(genesis)
+                .unwrap();
+            chain
+                .kura()
+                .forget_cached_block_for_testing(genesis)
+                .unwrap();
+            let budget = chain.state().ivm_execution_budget();
+            let occupied = budget
+                .try_reserve(
+                    core::alloc::Layout::from_size_align(
+                        budget.limit_bytes() - budget.reserved_bytes(),
+                        1,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            let layout = SharedSignedBlock::allocation_layout();
+            let expected: crate::execution_attempt::ExecutionDeferred =
+                budget.try_reserve(layout).unwrap_err().into();
+            let PublicationError::Deferred(reason) = worker.commit(&block, &qc).unwrap_err() else {
+                panic!("original authenticated cold history read must remain deferred");
+            };
+            assert_eq!(reason.execution(), Some(&expected));
+            assert_eq!(
+                worker
+                    .pending_commit
+                    .as_ref()
+                    .unwrap()
+                    .archive_refusal
+                    .as_ref(),
+                Some(&reason)
+            );
+            assert_eq!(
+                assert_pending_archive_owner(&mut worker, &block, &qc, original, &mut events),
+                expected_events
+            );
+            assert_eq!(
+                chain
+                    .kura()
+                    .canonical_block_wire_bytes_for_testing(genesis)
+                    .unwrap(),
+                original_wire
+            );
+            let released = reason.release_wait().unwrap().clone();
+            let mut cx = Context::from_waker(Waker::noop());
+            assert!(registration.poll_wait(&released, &mut cx).is_pending());
+            let foreign = AllocationBudget::new(layout.size());
+            drop(foreign.try_reserve(layout).unwrap());
+            assert!(registration.poll_wait(&released, &mut cx).is_pending());
+            drop(occupied);
+            assert!(registration.poll_wait(&released, &mut cx).is_ready());
+            complete_archive_once(&mut worker, &block, &qc, &mut events, expected_events);
+            assert_eq!(
+                chain
+                    .kura()
+                    .canonical_block_wire_bytes_for_testing(genesis)
+                    .unwrap(),
+                original_wire
+            );
+        }
+    });
+}
+
 fn partial_archive_failure_retains_exact_decision_and_retries_without_reexecution_or_notifications_case()
  {
     let chain = chain();
@@ -344,7 +582,7 @@ fn partial_archive_failure_retains_exact_decision_and_retries_without_reexecutio
     )
     .unwrap();
     queue.push(accepted, chain.state().view()).unwrap();
-    worker.queue = Some(Arc::clone(&queue));
+    worker.queue = Some(Clone::clone(&queue));
     assert!(queue.contains_entrypoint_hash(entry_hash));
     let original_contexts = prepare_and_append(&mut worker, &block, &qc);
     let staged = context.staging.get(&qc.block_hash).unwrap();
@@ -492,7 +730,11 @@ fn pending_capture_rejects_substituted_header_qc_state_and_missing_certificate_c
         .unwrap();
     let stored = chain
         .kura()
-        .get_block(std::num::NonZeroUsize::new(2).unwrap())
+        .get_block(
+            std::num::NonZeroUsize::new(2).unwrap(),
+            &chain.state().ivm_execution_budget(),
+        )
+        .expect("original block read attempt")
         .unwrap();
     assert!(stored.commit_certificate().is_none());
     assert_eq!(
@@ -661,7 +903,11 @@ fn below_quorum_current_frame_cannot_finish_pending_archive_capture_case() {
         .unwrap();
     let stored = chain
         .kura()
-        .get_block(std::num::NonZeroUsize::new(2).unwrap())
+        .get_block(
+            std::num::NonZeroUsize::new(2).unwrap(),
+            &chain.state().ivm_execution_budget(),
+        )
+        .expect("original block read attempt")
         .unwrap();
     assert_eq!(stored.commit_certificate().unwrap().commit_qc(), bad_qc);
     assert_eq!(
@@ -680,8 +926,22 @@ fn below_quorum_current_frame_cannot_finish_pending_archive_capture_case() {
             .availability()
     );
     assert_eq!(Arc::as_ptr(&worker.context.state), original_state);
-    assert!(worker.commit(&block, &qc).is_err());
+    assert!(
+        matches!(
+            worker.commit(&block, &qc),
+            Err(PublicationError::Retryable(_))
+        ),
+        "an actually invalid certificate cannot become local resource deferral"
+    );
     assert!(worker.pending_commit.is_some());
+    assert!(
+        worker
+            .pending_commit
+            .as_ref()
+            .unwrap()
+            .archive_refusal
+            .is_none()
+    );
     assert_eq!(
         worker
             .pending_commit
@@ -738,11 +998,17 @@ fn restart_binds_archives_after_replay_and_captures_the_missing_tip_once_case() 
         let height = std::num::NonZeroUsize::new(usize::try_from(height).unwrap()).unwrap();
         restarted
             .kura
-            .store_block(chain.kura().get_block(height).unwrap())
+            .store_block(
+                chain
+                    .kura()
+                    .get_block(height, &chain.state().ivm_execution_budget())
+                    .expect("original block read attempt")
+                    .unwrap(),
+            )
             .unwrap();
     }
     let node = crate::sumeragi::node::prepare(crate::sumeragi::node::PrepareInputs {
-        state: Arc::clone(&restarted.state),
+        state: Clone::clone(&restarted.state),
         events: tokio::sync::broadcast::channel(1024).0,
         genesis: None,
         genesis_account: chain.genesis_account().clone(),
@@ -778,8 +1044,8 @@ fn restart_binds_archives_after_replay_and_captures_the_missing_tip_once_case() 
     assert!(!reconciliation.activation_floor_created());
     assert_eq!(provider.health_generation().unwrap(), before.0 + 1);
     let bound = FinalizedArchives {
-        provider_ingest: Some(Arc::clone(&provider)),
-        reputation: Some(Arc::clone(&reputation)),
+        provider_ingest: Some(Clone::clone(&provider)),
+        reputation: Some(Clone::clone(&reputation)),
     };
     node.attach_finalized_archives(bound.clone())
         .expect("the replayed, published tip is not an execution beyond the applied tip");

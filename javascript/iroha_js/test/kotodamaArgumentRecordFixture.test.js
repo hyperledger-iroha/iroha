@@ -15,7 +15,7 @@ const fixture = JSON.parse(
 
 test("contract call preserves the shared Rust argument-record fixture at the Torii boundary", async () => {
   assert.equal(fixture.codec, "EntrypointArgumentRecordV1");
-  assert.equal(fixture.generator, "ivm::encode_argument_record_from_json");
+  assert.equal(fixture.generator, "ivm_abi::arguments::encode_argument_record_from_json");
   assert.match(fixture.entrypoint_argument_schema_v1.schema_hash_hex, /^[0-9a-f]{64}$/u);
   assert.match(fixture.entrypoint_argument_record_v1.norito_hex, /^(?:[0-9a-f]{2})+$/u);
 

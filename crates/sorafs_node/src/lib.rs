@@ -31,6 +31,7 @@ pub mod potr;
 pub mod proof_outcome_forwarder;
 pub mod provider_attestation_clock;
 pub mod provider_attestation_journal;
+pub mod provider_attestation_native;
 // The file-backed journal adapter compiles only for tests until a daemon path opens it.
 #[cfg(test)]
 pub mod provider_attestation_journal_file_store;
@@ -15498,7 +15499,6 @@ impl NodeHandle {
     ///
     /// Returns a permanent error for an unbound or foreign-instance claim and
     /// a retryable error when admitted storage is temporarily unavailable.
-    #[cfg(test)]
     #[doc(hidden)]
     pub fn verify_provider_ingest_completed_musubi_capture_bundle(
         &self,

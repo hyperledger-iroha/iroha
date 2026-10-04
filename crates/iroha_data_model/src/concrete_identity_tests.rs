@@ -124,9 +124,15 @@ where
 /// Read the unchanged default/HTTP capture; feature flags describe its provenance.
 pub fn fixture_values(source: &str) -> Value {
     let fixture: Value = norito::json::from_str(source).expect("parse immutable concrete capture");
+    let keys: Vec<&str> = fixture
+        .as_object()
+        .expect("concrete capture is an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(keys, ["governance", "http", "values"]);
     assert_eq!(fixture["governance"], Value::Bool(true));
     assert_eq!(fixture["http"], Value::Bool(true));
-    assert_eq!(fixture["ids_projection"], Value::Bool(false));
     fixture["values"].clone()
 }
 
@@ -467,7 +473,11 @@ fn block_message_send_identity_projection() -> Value {
     use crate::block::stream::{BlockMessage, BlockMessageSend};
     let block = stream_block();
     let owner = BlockMessage(block.clone());
-    let projection = BlockMessageSend(std::sync::Arc::new(block));
+    let budget = iroha_allocation::AllocationBudget::new(
+        crate::block::SharedSignedBlock::allocation_layout().size(),
+    );
+    let projection =
+        BlockMessageSend(crate::block::SharedSignedBlock::try_new(block, &budget).unwrap());
     projected_record(&projection, &owner)
 }
 
@@ -482,24 +492,18 @@ fn block_message_send_identity_projection_matches_capture() {
     );
 }
 
-#[cfg(all(
-    feature = "http",
-    feature = "governance",
-    not(feature = "ids_projection")
-))]
+#[cfg(all(feature = "http", feature = "governance"))]
 #[test]
 #[ignore = "explicit fixture capture after reviewing an intentional wire-format change"]
 fn capture_current_concrete_identity_frames() {
     let frames = norito::json!({
         "governance": true,
         "http": true,
-        "ids_projection": false,
         "values": {"families": (concrete_identity_frames())},
     });
     let projection = norito::json!({
         "governance": true,
         "http": true,
-        "ids_projection": false,
         "values": (block_message_send_identity_projection()),
     });
     println!(

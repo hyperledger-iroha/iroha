@@ -80,6 +80,38 @@ pub struct ManagedStore {
     networks: PrivateDirectory,
 }
 
+/// Whether successful startup also changes the workspace's default environment.
+#[derive(Clone, Copy)]
+pub(super) enum StartupSelection {
+    Select,
+    Preserve,
+}
+
+impl StartupSelection {
+    pub(super) fn for_requested_context(requested: Option<&str>) -> Self {
+        if requested.is_some() {
+            Self::Preserve
+        } else {
+            Self::Select
+        }
+    }
+
+    pub(super) fn apply(self, store: &ManagedStore, name: &str) -> Result<()> {
+        if matches!(self, Self::Select) {
+            store.select(name)?;
+        }
+        Ok(())
+    }
+}
+
+/// Generation intent is enforced only while holding the named operation lock.
+#[derive(Clone, Copy)]
+enum GenerationPolicy {
+    CreateOrRetain,
+    RetainOnly,
+    CreateOnly,
+}
+
 impl ManagedStore {
     /// Open or create a private store at an explicit application-selected path.
     ///
@@ -110,7 +142,30 @@ impl ManagedStore {
     /// # Errors
     /// Invalid input, competing ownership, preparation, binary changes, startup or readiness failure.
     pub fn up(&self, request: &LocalnetRequest) -> Result<ManagedStatus> {
-        self.up_environment(request, RootKind::Global, true, |_| Ok(()))
+        self.up_environment(
+            request,
+            RootKind::Global,
+            GenerationPolicy::CreateOrRetain,
+            StartupSelection::Select,
+            |_| Ok(()),
+        )
+    }
+
+    /// Create and select a new global localnet, refusing an existing named generation.
+    ///
+    /// The name check and generation publication share the operation lock. A context created
+    /// concurrently by another frontend cannot turn this request into a restart or private root.
+    ///
+    /// # Errors
+    /// Invalid input, an existing or concurrently owned name, unsafe custody or failed startup.
+    pub fn create_localnet(&self, request: &LocalnetRequest) -> Result<ManagedStatus> {
+        self.up_environment(
+            request,
+            RootKind::Global,
+            GenerationPolicy::CreateOnly,
+            StartupSelection::Select,
+            |_| Ok(()),
+        )
     }
 
     /// Start or reconnect to an independently signed private root under the same native owner.
@@ -139,7 +194,8 @@ impl ManagedStore {
         self.up_environment(
             request,
             RootKind::Private { spec: spec.clone() },
-            true,
+            GenerationPolicy::CreateOrRetain,
+            StartupSelection::Select,
             retain_context,
         )
     }
@@ -149,16 +205,31 @@ impl ManagedStore {
     /// # Errors
     /// Rejects missing or malformed metadata, changed binaries, or failed native readiness.
     pub fn up_retained(&self, request: &LocalnetRequest) -> Result<ManagedStatus> {
+        self.up_retained_with_selection(request, StartupSelection::Select)
+    }
+
+    pub(super) fn up_retained_with_selection(
+        &self,
+        request: &LocalnetRequest,
+        selection: StartupSelection,
+    ) -> Result<ManagedStatus> {
         let directory = self.directory(&request.name)?;
         let retained = generation::read(&directory)?;
-        self.up_environment(request, retained.root_kind, false, |_| Ok(()))
+        self.up_environment(
+            request,
+            retained.root_kind,
+            GenerationPolicy::RetainOnly,
+            selection,
+            |_| Ok(()),
+        )
     }
 
     fn up_environment(
         &self,
         request: &LocalnetRequest,
         root_kind: RootKind,
-        allow_preparation: bool,
+        generation_policy: GenerationPolicy,
+        selection: StartupSelection,
         retain_context: impl FnOnce(&PreparedLocalnet) -> Result<()>,
     ) -> Result<ManagedStatus> {
         if matches!(root_kind, RootKind::Private { .. })
@@ -183,6 +254,12 @@ impl ManagedStore {
         let mut reservations = None;
         let retained = match generation::read(&directory) {
             Ok(retained) => {
+                if matches!(generation_policy, GenerationPolicy::CreateOnly) {
+                    return Err(Error::Invalid(format!(
+                        "managed environment `{}` already exists; select or start it explicitly",
+                        request.name
+                    )));
+                }
                 if retained.prepared.service_profile != request.service_profile {
                     return Err(Error::Invalid(
                         "managed generation has a different immutable service profile".into(),
@@ -207,7 +284,7 @@ impl ManagedStore {
                 retained
             }
             Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                if !allow_preparation {
+                if matches!(generation_policy, GenerationPolicy::RetainOnly) {
                     return Err(Error::Invalid(
                         "retained managed generation disappeared; refusing to replace its identity"
                             .into(),
@@ -235,7 +312,7 @@ impl ManagedStore {
                 true,
             )?;
             if status.phase == ManagedPhase::Ready {
-                self.select(&request.name)?;
+                selection.apply(self, &request.name)?;
                 return Ok(status);
             }
             if status.phase == ManagedPhase::Failed {
@@ -302,7 +379,7 @@ impl ManagedStore {
                 )?;
                 match status.phase {
                     ManagedPhase::Ready => {
-                        self.select(&request.name)?;
+                        selection.apply(self, &request.name)?;
                         return Ok(status);
                     }
                     ManagedPhase::Failed | ManagedPhase::Stopped => return Ok(status),
@@ -416,6 +493,7 @@ impl ManagedStore {
         let _operation = acquire(&directory, "operation.lock", name)?;
         let _runtime = acquire(&directory, "runtime.lock", name)?;
         directory.revalidate()?;
+        transport::clear_stopped_endpoint(&directory)?;
         directory.clear_contents_preserving(&["operation.lock", "runtime.lock"])?;
         // The ownership directory and locked files remain pinned on every platform. Keep
         // selection resolution explicit: a reset selection should report the missing

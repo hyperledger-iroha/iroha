@@ -4,15 +4,10 @@
 //! Configured, rotated, expired and revoked controls remain inspectable at a certified cut.
 
 use super::*;
-use crate::sorafs::stream_token_custody::{
-    STREAM_TOKEN_CUSTODY_MAX_RECORD_BYTES_V1, STREAM_TOKEN_CUSTODY_MAX_REVISIONS_V1,
-    StreamTokenCustodyControlRecordV1,
-    history::{StreamTokenCustodyControlIndexV1, head_key, height_key, record_key},
-};
+use crate::sorafs::stream_token_custody::StreamTokenCustodyControlRecordV1;
 use sorafs_manifest::signer::{
     custody::{SignerCustodyAnchorV1, SignerCustodyBindingV1},
     custody_control::SignerCustodyControlStateV1,
-    protocol::{SignerPurposeBindingV1, SignerRoleV1},
 };
 
 /// Current control authenticated under one independently selected native decision and binding.
@@ -54,26 +49,6 @@ impl VerifiedStreamTokenCustodyControlV1 {
     pub fn anchor(&self) -> SignerCustodyAnchorV1 {
         self.anchor
     }
-}
-
-fn decode<T>(bytes: &[u8]) -> Result<T, FinalityError>
-where
-    T: norito::core::NoritoSerialize + for<'de> norito::core::NoritoDeserialize<'de>,
-{
-    if bytes.is_empty() || bytes.len() > STREAM_TOKEN_CUSTODY_MAX_RECORD_BYTES_V1 {
-        return Err(invalid("Token custody projection exceeds its bound"));
-    }
-    norito::decode_canonical_with_limits(
-        bytes,
-        norito::DecodeLimits::new(
-            4096,
-            STREAM_TOKEN_CUSTODY_MAX_RECORD_BYTES_V1,
-            STREAM_TOKEN_CUSTODY_MAX_RECORD_BYTES_V1,
-            256 * 1024,
-            16,
-        ),
-    )
-    .map_err(map_invalid)
 }
 
 impl ProviderDiscoveryProofV1 {
@@ -139,68 +114,21 @@ impl ProviderDiscoveryProofV1 {
             .as_ref()
             .ok_or_else(|| invalid("Provider has no current token custody projection"))?;
         let world = self.world.authenticate(block)?;
-        let head: StreamTokenCustodyControlIndexV1 = decode(&proof.head)?;
-        let record: StreamTokenCustodyControlRecordV1 = decode(&proof.record)?;
-        let control: SignerCustodyControlStateV1 = decode(&record.control_state)?;
-        control.validate().map_err(map_invalid)?;
-        record
-            .validate_active_enrollment(&control)
-            .map_err(map_invalid)?;
-        let binding = &control.policy.binding;
-        if record.provider_id != expected_provider
-            || record.revision == 0
-            || record.revision > STREAM_TOKEN_CUSTODY_MAX_REVISIONS_V1
-            || record.execution_height == 0
-            || record.execution_height > world.height()
-            || record.recorded_at_unix_ms == 0
-            || record.recorded_at_unix_ms > world.block_time_ms()
-            || head.revision != record.revision
-            || head.height != record.execution_height
-            || head.ordinal != record.ordinal
-            || head.digest != record.canonical_digest().map_err(map_invalid)?
-            || binding.chain_id != expected_chain
-            || binding.network_id != *expected_network.as_bytes()
-            || binding.role != SignerRoleV1::StreamToken
-            || binding.purpose
-                != (SignerPurposeBindingV1::StreamToken {
-                    provider_id: *expected_provider.as_bytes(),
-                })
-        {
-            return Err(invalid(
-                "Token custody projection differs from its native provider scope",
-            ));
-        }
-        world.verify_table_value(
-            "world.smart_contract_state",
-            &head_key(expected_provider),
-            &proof.head,
-        )?;
-        world.verify_table_value(
-            "world.smart_contract_state",
-            &record_key(expected_provider, record.revision),
-            &proof.record,
-        )?;
-        world.verify_table_value(
-            "world.smart_contract_state",
-            &height_key(expected_provider, head.height, head.ordinal),
-            &proof.head,
-        )?;
-        world.verify_smart_contract_state_absent(&record_key(
+        let verified = proof.verify_current(
+            &world,
+            expected_chain,
+            expected_network,
             expected_provider,
-            record.revision + 1,
-        ))?;
+            block,
+        )?;
         Ok((
             VerifiedStreamTokenCustodyControlV1 {
                 discovery,
-                control,
-                revision: record.revision,
-                anchor: SignerCustodyAnchorV1 {
-                    height: world.height(),
-                    block_hash: *block.header().hash().as_ref(),
-                    state_digest: head.digest,
-                },
+                control: verified.control,
+                revision: verified.record.revision,
+                anchor: verified.anchor,
             },
-            record,
+            verified.record,
         ))
     }
 }

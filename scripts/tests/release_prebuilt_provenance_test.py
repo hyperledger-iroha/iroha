@@ -10,6 +10,8 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -24,6 +26,28 @@ CUDA_PUBLIC_KEY = bytes(range(32))
 CUDA_KEY_SHA256 = hashlib.sha256(CUDA_PUBLIC_KEY).hexdigest()
 CUDA_MANIFEST = b"unit-fixture signed-manifest identity; no release claim\n"
 CUDA_MANIFEST_SHA256 = hashlib.sha256(CUDA_MANIFEST).hexdigest()
+
+
+@pytest.fixture
+def tmp_path() -> Iterator[Path]:
+    """Keep authenticated snapshot fixtures beneath an owned checkout root.
+
+    Production custody rejects shared writable ancestors. Setup creates only
+    this test's private directory with 077; bodies use ordinary 022 so explicit
+    safe source and artifact modes retain their original coverage. Always
+    restore the caller mask, including creation, body and cleanup failures.
+    """
+    original_umask = os.umask(0o077)
+    try:
+        parent = REPO
+        for component in ("target", "unit-tests", "script-tests"):
+            parent /= component
+            parent.mkdir(mode=0o700, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="release-prebuilt-provenance-", dir=parent) as directory:
+            os.umask(0o022)
+            yield Path(directory).resolve()
+    finally:
+        os.umask(original_umask)
 
 
 def load_verifier():
@@ -50,6 +74,7 @@ def load_isolated_runner():
 
 def prepare_prebuilt(tmp_path: Path):
     verifier = load_verifier()
+    verifier.SOURCE_ROOT = tmp_path
     directory = tmp_path / "prebuilt"
     directory.mkdir()
     binary = directory / "iroha3d"
@@ -62,6 +87,8 @@ def prepare_prebuilt(tmp_path: Path):
     cuda_root.mkdir(parents=True)
     (cuda_root / "provenance.v1").write_bytes(CUDA_MANIFEST)
     (cuda_root / "provenance.v1.pub").write_bytes(CUDA_PUBLIC_KEY)
+    from scripts.tests.release_builder_fixture import write_cuda_approval_source
+    write_cuda_approval_source(tmp_path, CUDA_KEY_SHA256, CUDA_MANIFEST_SHA256)
 
     def write_manifest() -> str:
         payload = verifier.canonical_json_bytes(
@@ -75,7 +102,7 @@ def prepare_prebuilt(tmp_path: Path):
                 "target": TARGET,
                 "cargo_profile": "deploy",
                 "default_features": True,
-                "selected_features": ["irohad/ivm-cuda"],
+                "selected_features": [],
                 "acceleration": {
                     "ivm_features": ["cuda", "default", "metal"],
                     "cuda_trusted_key_sha256": CUDA_KEY_SHA256,
@@ -108,7 +135,6 @@ def verify(verifier, directory, cargo_lock, digest, output):
         target=TARGET,
         cargo_profile="deploy",
         selected_features=(),
-        trusted_cuda_key_sha256=CUDA_KEY_SHA256,
         binaries={"iroha3d": "irohad"},
         output_directory=output,
     )
@@ -182,7 +208,6 @@ def test_prebuilt_provenance_binds_release_metadata_and_closed_inventory(
             target=TARGET,
             cargo_profile="deploy",
             selected_features=(),
-        trusted_cuda_key_sha256=CUDA_KEY_SHA256,
             binaries={"iroha3d": "irohad"},
             output_directory=tmp_path / "metadata-snapshot",
         )
@@ -813,7 +838,7 @@ def test_target_policy_uses_target_geometry_and_preserves_selected_features(targ
     selected = ("irohad/external-software-signer-bin",)
     actual = contract.release_acceleration_features(target, selected)
     assert set(selected) <= set(actual)
-    assert ("irohad/ivm-cuda" in actual) == (backend == "cuda")
+    assert actual == selected
     assert contract.release_acceleration_features(target, actual) == actual
 
 
@@ -846,3 +871,111 @@ def test_release_feature_geometry_is_rejected_before_hashing(selected) -> None:
     verifier = load_verifier()
     with pytest.raises(verifier.ReleaseArtifactError):
         verifier._CONTRACT.release_acceleration_features(TARGET, selected)
+
+
+def test_prebuilt_snapshot_still_rejects_a_shared_ancestor(tmp_path: Path) -> None:
+    verifier, directory, _binary, cargo_lock, write_manifest = prepare_prebuilt(tmp_path)
+    shared = tmp_path / "deliberately-shared"
+    shared.mkdir()
+    shared.chmod(0o777)
+    output = shared / "snapshot"
+    with pytest.raises(verifier.ReleaseArtifactError, match="group- or world-writable"):
+        verify(verifier, directory, cargo_lock, write_manifest(), output)
+    assert shared.stat().st_mode & 0o777 == 0o777
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("declaration", (
+    'None',
+    'Some(ReviewedCudaBundlePins { public_key_sha256: "' + "a" * 64 + '", manifest_sha256: "' + "b" * 64 + '" })',
+))
+def test_source_approval_reader_accepts_only_closed_optional_literal(tmp_path: Path, declaration: str) -> None:
+    contract = load_verifier()._CONTRACT
+    owner = tmp_path / "crates/ivm/src/cuda_build_policy.rs"
+    owner.parent.mkdir(parents=True)
+    owner.write_text('pub(crate) const REVIEWED_CUDA_BUNDLE_PINS: Option<ReviewedCudaBundlePins> = ' + declaration + ';\n')
+    pins = contract.read_reviewed_cuda_bundle_pins(tmp_path)
+    assert (pins is None) is (declaration == "None")
+    if pins is not None:
+        assert pins.public_key_sha256 == "a" * 64
+        assert pins.manifest_sha256 == "b" * 64
+
+
+@pytest.mark.parametrize("mutation", ("duplicate", "dynamic", "computed", "static", "uppercase", "zero-key", "zero-manifest", "reordered", "missing-field", "extra-field", "wrong-type"))
+def test_source_approval_reader_rejects_noncanonical_or_ambiguous_authority(tmp_path: Path, mutation: str) -> None:
+    from scripts.tests.release_builder_fixture import write_cuda_approval_source
+    contract = load_verifier()._CONTRACT
+    owner = write_cuda_approval_source(tmp_path, "a" * 64, "b" * 64)
+    source = owner.read_text()
+    if mutation == "duplicate":
+        source += source
+    elif mutation == "dynamic":
+        source = source.replace('Some(ReviewedCudaBundlePins', 'approval_from_env(ReviewedCudaBundlePins')
+    elif mutation == "computed":
+        source = source.replace('});', '}).or(None);')
+    elif mutation == "static":
+        source = source.replace('const REVIEWED', 'static REVIEWED')
+    elif mutation == "uppercase":
+        source = source.replace("a" * 64, "A" * 64)
+    elif mutation == "zero-key":
+        source = source.replace("a" * 64, "0" * 64)
+    elif mutation == "zero-manifest":
+        source = source.replace("b" * 64, "0" * 64)
+    elif mutation == "reordered":
+        source = source.replace('public_key_sha256:', 'temporary:').replace('manifest_sha256:', 'public_key_sha256:').replace('temporary:', 'manifest_sha256:')
+    elif mutation == "missing-field":
+        source = source.replace(', manifest_sha256: "' + "b" * 64 + '"', '')
+    elif mutation == "extra-field":
+        source = source.replace(' })', ', extra: true })')
+    else:
+        source = source.replace('Option<ReviewedCudaBundlePins>', 'ReviewedCudaBundlePins')
+    assert source != owner.read_text()
+    owner.write_text(source)
+    with pytest.raises(contract.ReleaseArtifactError, match="CUDA"):
+        contract.read_reviewed_cuda_bundle_pins(tmp_path)
+
+
+@pytest.mark.parametrize("ambient", (None, "a" * 64, "0" * 64, "A" * 64))
+def test_none_approval_refuses_shipping_before_binary_or_output_even_with_ambient_key(tmp_path: Path, monkeypatch, ambient) -> None:
+    verifier, directory, _binary, lock, manifest = prepare_prebuilt(tmp_path)
+    from scripts.tests.release_builder_fixture import write_cuda_approval_source
+    write_cuda_approval_source(tmp_path, present=False)
+    if ambient is None:
+        monkeypatch.delenv("IVM_CUDA_TRUSTED_KEY_SHA256", raising=False)
+    else:
+        monkeypatch.setenv("IVM_CUDA_TRUSTED_KEY_SHA256", ambient)
+    output = tmp_path / "snapshot"
+    with pytest.raises(verifier.ReleaseArtifactError, match="current None"):
+        verify(verifier, directory, lock, manifest(), output)
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("field", ("public-key", "manifest"))
+def test_source_pin_mutation_cannot_match_a_self_endorsed_prebuilt(tmp_path: Path, field: str) -> None:
+    verifier, directory, _binary, lock, manifest = prepare_prebuilt(tmp_path)
+    if field == "public-key":
+        (tmp_path / "crates/ivm/cuda/provenance.v1.pub").write_bytes(b"x" * 32)
+    else:
+        (tmp_path / "crates/ivm/cuda/provenance.v1").write_bytes(b"mutated source")
+    with pytest.raises(verifier.ReleaseArtifactError, match="source approval"):
+        verify(verifier, directory, lock, manifest(), tmp_path / "snapshot")
+    assert not (tmp_path / "snapshot").exists()
+
+
+@pytest.mark.parametrize("selected", (("irohad/ivm-cuda",), ("irohad_lib/ivm-cuda",), ("ivm-cuda",)))
+def test_retired_daemon_alias_is_rejected_by_closed_release_feature_metadata(selected) -> None:
+    contract = load_verifier()._CONTRACT
+    with pytest.raises(contract.ReleaseArtifactError, match="retired"):
+        contract.release_acceleration_features(TARGET, selected)
+
+
+
+def test_prebuilt_cannot_select_another_source_approval_root(tmp_path: Path) -> None:
+    verifier, directory, _binary, lock, manifest = prepare_prebuilt(tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    alternate = other / "Cargo.lock"
+    alternate.write_bytes(lock.read_bytes())
+    with pytest.raises(verifier.ReleaseArtifactError, match="executing reviewed source owner"):
+        verify(verifier, directory, alternate, manifest(), tmp_path / "snapshot")
+    assert not (tmp_path / "snapshot").exists()

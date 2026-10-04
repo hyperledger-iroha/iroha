@@ -24,7 +24,7 @@ use iroha_data_model::{
     query::{
         ErasedIterQuery, QueryBox, QueryRequest, QueryResponse, QueryWithParams,
         account::prelude::{FindAccounts, FindAccountsWithAsset},
-        asset::prelude::{FindAssets, FindAssetsDefinitions},
+        asset::prelude::{FindAssetDefinitions, FindAssets},
         domain::prelude::FindDomains,
         dsl::CompoundPredicate,
         nft::prelude::FindNfts,
@@ -231,7 +231,7 @@ fn raw_core_query_response(
         CoreQueryEntityTagV1::Account => request_for!(Account, FindAccounts),
         CoreQueryEntityTagV1::Asset => request_for!(Asset, FindAssets),
         CoreQueryEntityTagV1::AssetDefinition => {
-            request_for!(AssetDefinition, FindAssetsDefinitions)
+            request_for!(AssetDefinition, FindAssetDefinitions)
         }
         CoreQueryEntityTagV1::Domain => request_for!(Domain, FindDomains),
         CoreQueryEntityTagV1::Nft => request_for!(Nft, FindNfts),
@@ -747,7 +747,7 @@ fn bench_snapshot_vs_live_find_assets_first_batch(c: &mut Criterion) {
     });
 }
 fn bench_snapshot_sorted_asset_defs_first_batch(c: &mut Criterion) {
-    use iroha_data_model::query::asset::prelude::FindAssetsDefinitions;
+    use iroha_data_model::query::asset::prelude::FindAssetDefinitions;
     // Build world with 10k asset defs and rank metadata
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let _guard = RUNTIME.enter();
@@ -789,7 +789,7 @@ fn bench_snapshot_sorted_asset_defs_first_batch(c: &mut Criterion) {
     let mut params = iroha_data_model::query::parameters::QueryParams::default();
     params.sorting =
         iroha_data_model::query::parameters::Sorting::by_metadata_key("rank".parse().unwrap());
-    let payload = norito::codec::Encode::encode(&FindAssetsDefinitions);
+    let payload = norito::codec::Encode::encode(&FindAssetDefinitions);
     let erased = iroha_data_model::query::ErasedIterQuery::<AssetDefinition>::new(
         iroha_data_model::query::dsl::CompoundPredicate::PASS,
         iroha_data_model::query::dsl::SelectorTuple::default(),
@@ -1128,7 +1128,7 @@ fn bench_find_asset_defs_iter(c: &mut Criterion) {
         b.iter(|| {
             let v = state.view();
             let iter =
-                ValidQuery::execute(FindAssetsDefinitions::new(), CompoundPredicate::PASS, &v)
+                ValidQuery::execute(FindAssetDefinitions::new(), CompoundPredicate::PASS, &v)
                     .expect("query execute");
             let count = iter.count();
             std::hint::black_box(count);

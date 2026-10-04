@@ -10,7 +10,7 @@ implementation of RuntimeProviderBrokerBackendRegistryV1.
 
 The service CLI requires two public inputs:
 
-    --catalog ABSOLUTE_PATH --broker-endpoint ABSOLUTE_SOCKET_PATH
+    --catalog ABSOLUTE_PATH --broker-policy ABSOLUTE_TOML_PATH
 
 That canonical catalog includes a mandatory genesis-derived `NetworkId` in
 addition to the display chain label. Catalogs exported with the retired
@@ -18,8 +18,17 @@ optional-network schema are rejected; regenerate the artifact for the exact
 deployment and roll broker and clients together.
 
 Do not add credential, private-key, token, plugin, or test-provider arguments.
-The endpoint argument must match the validated public path configured by every
-stock client. Provider objects retain private material internally.
+The public policy file contains the fields of `[runtime_provider_broker]`
+directly, without a section header. Install `policy.linux.toml` or
+`policy.macos.toml` as the fixed `policy.toml` below. Its endpoint must match
+every stock client. `observer_operation_timeout_ms` defaults to 15000 and
+accepts only 1 through 15000; ambient environment values cannot override it.
+This allowance starts at authenticated observer-operation admission before
+provider dispatch and spans completed-reply encoding and publication. Local
+continuation retains that same absolute deadline. Socket ingress and handshake
+retain their separate transport bounds. A synchronous provider already running
+cannot be forcibly cancelled; a late returned reply cannot be published.
+Provider objects retain private material internally.
 
 ## Fixed paths and identity
 
@@ -28,6 +37,7 @@ stock client. Provider objects retain private material internally.
 | Service identity | iroha:iroha | iroha:iroha |
 | Executable | /usr/local/libexec/iroha-runtime-provider-broker-v1 | /usr/local/libexec/iroha-runtime-provider-broker-v1 |
 | Public catalog | /etc/iroha/runtime-provider-broker/catalog.norito | /private/etc/iroha/runtime-provider-broker/catalog.norito |
+| Public broker policy | /etc/iroha/runtime-provider-broker/policy.toml | /private/etc/iroha/runtime-provider-broker/policy.toml |
 | Threshold credential handoff | systemd `CREDENTIALS_DIRECTORY` | launchd-opened `/private/var/run/iroha-runtime-provider-broker-credentials-v1/threshold.bundle` FIFO |
 | Runtime directory | /run/iroha-runtime-provider-broker-v1, mode 0700 | /private/var/iroha/run, mode 0700 |
 | Broker socket | /run/iroha-runtime-provider-broker-v1/runtime-provider-broker-v1.sock | /private/var/iroha/run/runtime-provider-broker-v1.sock |
@@ -51,6 +61,24 @@ owner, mode, and stable device/inode identity before rebinding. Every other
 pre-existing entry fails startup without being removed.
 
 ## Consensus threshold-signer credentials
+
+The standalone software-signer broker requires `credential_max_memory_bytes`
+to match the positive bound exported in its canonical catalog. A mismatch fails
+startup before credential input or backend assembly. Credential imports and
+serving retain the same initially loaded catalog; executable assembly does not
+reopen it. Accepted startup creates one original pool from the parsed policy and
+passes it through both platform threshold handoffs; currently admitted transcript
+owners retain its charges. Parliament TLE imports reserve the decoded handle,
+nested session buffers, charge ledger and prepared decoder controls before their
+physical allocation. The private backend retains decoded-graph charges through
+its final reader; clones share those charges. Public inventory hashing borrows
+the original graph and transcript validation uses bounded inline scratch.
+TODO: fund supervisor input buffers, outer `std::Arc` controls and Core custody-map
+nodes with exact original owners before full memory qualification can pass.
+These remaining allocations are not covered by the decoded-graph reservation.
+A zero catalog bound is valid only for an inventory without either threshold
+slot, and grants no threshold custody. This is a local operational admission
+policy; it does not change transaction validity or gas accounting.
 
 Global-beacon and Parliament timed-release credentials bind their public
 `policy_digest` to the complete provisioned signer inventory. The digest uses
@@ -119,11 +147,11 @@ by the shared validator UID. Even a catalog with neither threshold slot receives
 and validates the exact header-only bundle on each launch, keeping one immutable
 launchd service contract.
 
-Install the executable, catalog, supervisor asset, and Linux consumer drop-ins
+Install the executable, catalog, public policy, supervisor asset, and Linux consumer drop-ins
 as single-link, non-symlink regular files owned by root. They must have no
 owner/group/other write bit and no set-user-ID, set-group-ID, or sticky bit. A
 typical installation uses mode 0555 for the executable, root:iroha mode 0440
-for the catalog, and mode 0444 for the supervisor assets. Their parent
+for the catalog and policy, and mode 0444 for the supervisor assets. Their parent
 directories must be root-owned and not group/world writable. The installation
 gate additionally binds the executable to the SHA-256 obtained from the
 externally verified signed release provenance; a correctly named arbitrary
@@ -137,7 +165,7 @@ Install systemd/iroha-runtime-provider-broker-v1.service as:
 
 The unit creates its dedicated `/run/iroha-runtime-provider-broker-v1`
 directory with the service UID and mode 0700, passes the packaged public
-catalog and endpoint paths, and gives the process no environment-based provider selector.
+catalog and policy paths, and gives the process no environment-based provider selector.
 The broker is the sole unit that manages this directory; the validator's
 separate `/run/iroha` directory has an independent lifetime. The broker
 directory is recreated across broker restarts. The unit uses `Type=notify`:

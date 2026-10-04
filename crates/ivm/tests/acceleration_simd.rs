@@ -26,6 +26,9 @@ fn disabling_simd_forces_scalar_and_preserves_outputs() {
     // Clear any existing overrides so policy toggles are authoritative.
     let prev_override = set_forced_simd(None);
     let baseline_choice = ivm::simd_choice();
+    // Resolve the field backend before reload: this used to permanently cache
+    // the first SIMD choice even after the file policy disabled acceleration.
+    let baseline_field = ivm::field_dispatch::field_impl().type_id();
     let baseline_sum = ivm::vadd32([1, 2, 3, 4], [5, 6, 7, 8]);
     // Disable SIMD via config and assert we force scalar with a clear reason.
     set_acceleration_config(AccelerationConfig {
@@ -33,6 +36,10 @@ fn disabling_simd_forces_scalar_and_preserves_outputs() {
         ..original_cfg
     });
     assert_eq!(ivm::simd_choice(), SimdChoice::Scalar);
+    assert_eq!(
+        ivm::field_dispatch::field_impl().type_id(),
+        std::any::TypeId::of::<ivm::field_dispatch::ScalarField>()
+    );
     let disabled_status = acceleration_runtime_status();
     assert!(!disabled_status.simd.configured);
     assert!(!disabled_status.simd.available);
@@ -58,6 +65,7 @@ fn disabling_simd_forces_scalar_and_preserves_outputs() {
     if baseline_choice != SimdChoice::Scalar {
         assert_eq!(ivm::simd_choice(), baseline_choice);
     }
+    assert_eq!(ivm::field_dispatch::field_impl().type_id(), baseline_field);
     assert_eq!(ivm::vadd32([1, 2, 3, 4], [5, 6, 7, 8]), baseline_sum);
 }
 #[test]
@@ -72,6 +80,10 @@ fn forced_scalar_override_reports_error_and_clears() {
         ..original_cfg
     });
     set_forced_simd(Some(SimdChoice::Scalar));
+    assert_eq!(
+        ivm::field_dispatch::field_impl().type_id(),
+        std::any::TypeId::of::<ivm::field_dispatch::ScalarField>()
+    );
     let forced_status = acceleration_runtime_status();
     assert!(forced_status.simd.configured);
     assert!(!forced_status.simd.available);

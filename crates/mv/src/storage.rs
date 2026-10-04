@@ -17,6 +17,9 @@ mod frozen_read;
 #[path = "storage/original_read.rs"]
 mod original_read;
 pub use original_read::CommittedStorageView;
+#[path = "storage/original_images.rs"]
+mod original_images;
+pub use original_images::FrozenStorageImages;
 #[path = "storage/physical.rs"]
 mod physical;
 pub use detached_publication::DetachedPublicationSlot;
@@ -175,7 +178,57 @@ impl<K: Key, V: Value, M: StorageMode<K, V>> Storage<K, V, M> {
     /// Retain a read-only view of the current original allocation owners.
     /// This does not copy map entries or create an admitted iteration workspace.
     pub fn view(&self) -> View<'_, K, V, M> {
-        View::from_read_txn(self.blocks.read())
+        let mut releases = self.reader_releases();
+        self.view_retaining(&mut releases)
+    }
+
+    /// Retry the sole current-reader kernel while retaining its original notices.
+    /// The caller drops this allocation-free holder after any enclosing fences.
+    pub fn view_retaining(
+        &self,
+        releases: &mut iroha_allocation::release::DeferredReleaseBatch,
+    ) -> View<'_, K, V, M> {
+        loop {
+            match self.try_view_retaining(releases) {
+                Ok(view) => return view,
+                Err(PublicationPreparationError::Busy(_)) => std::thread::yield_now(),
+                Err(error) => panic!("original storage reader refused: {error:?}"),
+            }
+        }
+    }
+
+    /// Retain original reader notifications beyond an enclosing physical owner.
+    /// This clones only the existing control; no bookkeeping allocation is made.
+    pub fn reader_releases(&self) -> iroha_allocation::release::DeferredReleaseBatch {
+        self.blocks.reader_release_batch()
+    }
+
+    /// Observe this current-generation reader's actual physical release source.
+    /// This allocation-free observation grants no authority to read the storage.
+    pub fn observe_reader_release(&self) -> iroha_allocation::release::ReleaseWait {
+        self.blocks.observe_reader_release()
+    }
+
+    /// Pin the original current generation without waiting for its reader mutex.
+    /// Actual unlock notifications remain in the caller's original release owner.
+    ///
+    /// # Errors
+    /// Preserves the exact busy source, poison, or a foreign release owner.
+    pub fn try_view_retaining(
+        &self,
+        releases: &mut iroha_allocation::release::DeferredReleaseBatch,
+    ) -> Result<View<'_, K, V, M>, PublicationPreparationError<std::convert::Infallible>> {
+        let wait = self.blocks.observe_reader_release();
+        self.blocks
+            .try_read_retaining(releases)
+            .map(View::from_read_txn)
+            .map_err(|error| match error {
+                concread::bptree::OwnedWriteError::Busy => PublicationPreparationError::Busy(wait),
+                concread::bptree::OwnedWriteError::Poisoned => {
+                    PublicationPreparationError::Poisoned
+                }
+                concread::bptree::OwnedWriteError::Changed => PublicationPreparationError::Changed,
+            })
     }
 }
 
@@ -1978,3 +2031,7 @@ mod quantity_write_observation_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "storage/current_reader_tests.rs"]
+mod current_reader_tests;

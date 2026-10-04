@@ -7,7 +7,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
-    block::{CommitCertificate, decode_versioned_signed_block},
+    block::{CommitCertificate, decode_framed_signed_block},
     sumeragi::{SumeragiFootprint, SumeragiStatus},
     sumeragi_finality::SumeragiFinalityAttestationBody,
 };
@@ -135,7 +135,7 @@ impl Fixture {
         proof: &mut SumeragiFinalityProof,
         edit: impl FnOnce(&mut CommitCertificate),
     ) {
-        let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
+        let mut block = decode_framed_signed_block(&proof.block_wire).unwrap();
         let mut certificate = block.commit_certificate().unwrap().clone();
         edit(&mut certificate);
         block.set_commit_certificate(Some(certificate));

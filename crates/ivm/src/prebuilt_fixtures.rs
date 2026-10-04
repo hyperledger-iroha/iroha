@@ -115,7 +115,7 @@ pub fn build_encoded_result_program(result_bytes: &[u8]) -> Vec<u8> {
     );
     let mut program = ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length: 0,
         max_cycles: DEFAULT_MAX_CYCLES,
@@ -163,7 +163,7 @@ mod tests {
         let program = build_default_executor_program();
         let parsed = ProgramMetadata::parse(&program).expect("default executor metadata parses");
         assert_eq!(parsed.header_len, crate::HEADER_SIZE);
-        assert_eq!(parsed.metadata.version_minor, 0);
+        assert_eq!(parsed.metadata.version_minor, 1);
         assert!(parsed.literal_section.is_some());
         assert!(parsed.code_offset > parsed.header_len);
         let mut vm = IVM::new(DEFAULT_MAX_CYCLES);

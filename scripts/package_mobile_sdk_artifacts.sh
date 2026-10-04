@@ -187,7 +187,7 @@ if [[ -z "$ROOT_ARG" ]]; then
 fi
 ROOT_DIR="$(cd "$ROOT_ARG" && pwd -P)"
 APPLE_ARCHIVE_OWNER="$ROOT_DIR/scripts/archive_norito_xcframework.py"
-COCOAPODS_SPEC_RENDERER="$ROOT_DIR/scripts/render_norito_bridge_podspec.py"
+APPLE_ARCHIVE_VALIDATOR="$ROOT_DIR/scripts/validate_norito_bridge_archive.py"
 APPLE_ARTIFACT_DIR="${MOBILE_SDK_APPLE_ARTIFACT_DIR:-}"
 
 if [[ "$PACKAGE_APPLE" == "0" && "$PACKAGE_ANDROID" == "0" ]]; then
@@ -588,7 +588,7 @@ record_artifact() {
 
 
 write_manifest() {
-  local index count pod_version
+  local index count bridge_version
   count="${#ARTIFACT_RECORDS[@]}"
   if [[ "$count" -eq 0 ]]; then
     echo "[mobile-sdk-package] ERROR: no artifacts were packaged" >&2
@@ -599,8 +599,8 @@ write_manifest() {
     printf '{\n'
     printf '  "version": "%s",\n' "$VERSION"
     if [[ "$PACKAGE_APPLE" == "1" ]]; then
-      pod_version="$(<"$ROOT_DIR/IrohaSwift/VERSION")"
-      printf '  "apple_sdk_semver": "%s",\n' "$pod_version"
+      bridge_version="$(<"$ROOT_DIR/IrohaSwift/VERSION")"
+      printf '  "apple_sdk_semver": "%s",\n' "$bridge_version"
     fi
     printf '  "mode": "%s",\n' "$MODE_LABEL"
     printf '  "artifacts": [\n'
@@ -628,7 +628,17 @@ from pathlib import Path
 import pwd
 print(Path(pwd.getpwuid(os.getuid()).pw_dir).resolve(strict=True))
 ')}"
-  cargo_home="${NORITO_BRIDGE_SEAL_CARGO_HOME:-$user_home/.cargo}"
+  cargo_home="${NORITO_BRIDGE_SEAL_CARGO_HOME:-${MOBILE_SDK_CARGO_HOME:-$user_home/.cargo}}"
+  if [[ -n "${MOBILE_SDK_CARGO_HOME+x}" ]]; then
+    cargo_home="$(run_isolated_python "$ROOT_DIR/scripts/norito_bridge_local_integration.py" \
+      --root "$ROOT_DIR" --path "$cargo_home" --role cargo-home)" || exit 66
+  fi
+  ARCHIVE_SEAL_CARGO_INVOCATION_DIR="${NORITO_BRIDGE_SEAL_CARGO_INVOCATION_DIR:-${MOBILE_SDK_CARGO_INVOCATION_DIR:-$ROOT_DIR}}"
+  if [[ "$ARCHIVE_SEAL_CARGO_INVOCATION_DIR" != "$ROOT_DIR" ]]; then
+    ARCHIVE_SEAL_CARGO_INVOCATION_DIR="$(run_isolated_python \
+      "$ROOT_DIR/scripts/norito_bridge_local_integration.py" --root "$ROOT_DIR" \
+      --path "$ARCHIVE_SEAL_CARGO_INVOCATION_DIR" --role cargo-invocation)" || exit 66
+  fi
   rustup_home="${NORITO_BRIDGE_SEAL_RUSTUP_HOME:-$user_home/.rustup}"
   temporary_dir="${NORITO_BRIDGE_SEAL_TMPDIR:-/tmp}"
   cargo_target="${NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR:-${CARGO_TARGET_DIR:-}}"
@@ -753,32 +763,30 @@ package_apple() {
   local artifact_root
   local xcframework
   local bridge_manifest
-  local pod_version
+  local bridge_version
   local release_label
   local apple_zip
   local versioned_manifest
-  local podspec
 
   if [[ ! -f "$ROOT_DIR/IrohaSwift/VERSION" || -L "$ROOT_DIR/IrohaSwift/VERSION" ]]; then
     echo "[mobile-sdk-package] ERROR: IrohaSwift VERSION must be a regular non-symbolic file" >&2
     exit 66
   fi
-  pod_version="$(<"$ROOT_DIR/IrohaSwift/VERSION")"
-  if [[ ! "$pod_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+  bridge_version="$(<"$ROOT_DIR/IrohaSwift/VERSION")"
+  if [[ ! "$bridge_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
     echo "[mobile-sdk-package] ERROR: IrohaSwift VERSION must be canonical SemVer" >&2
     exit 66
   fi
-  release_label="v${pod_version}"
+  release_label="v${bridge_version}"
   apple_zip="$OUT_DIR/NoritoBridge-${release_label}.xcframework.zip"
   versioned_manifest="$OUT_DIR/NoritoBridge-${release_label}.artifacts.json"
-  podspec="$OUT_DIR/NoritoBridge-${pod_version}.podspec"
 
   if [[ ! -f "$APPLE_ARCHIVE_OWNER" || -L "$APPLE_ARCHIVE_OWNER" ]]; then
     echo "[mobile-sdk-package] ERROR: deterministic Apple archive owner is unavailable: $APPLE_ARCHIVE_OWNER" >&2
     exit 66
   fi
-  if [[ ! -f "$COCOAPODS_SPEC_RENDERER" || -L "$COCOAPODS_SPEC_RENDERER" ]]; then
-    echo "[mobile-sdk-package] ERROR: CocoaPods spec renderer is unavailable: $COCOAPODS_SPEC_RENDERER" >&2
+  if [[ ! -f "$APPLE_ARCHIVE_VALIDATOR" || -L "$APPLE_ARCHIVE_VALIDATOR" ]]; then
+    echo "[mobile-sdk-package] ERROR: Apple archive validator is unavailable: $APPLE_ARCHIVE_VALIDATOR" >&2
     exit 66
   fi
   require_dir "$APPLE_ARTIFACT_DIR" "Apple artifact directory"
@@ -798,6 +806,8 @@ package_apple() {
 
   MOBILE_SDK_APPLE_ARTIFACT_DIR="$artifact_root" \
     MOBILE_SDK_RUSTUP_BINARY="$ARCHIVE_SEAL_RUSTUP" \
+    MOBILE_SDK_CARGO_HOME="$ARCHIVE_SEAL_CARGO_HOME" \
+    MOBILE_SDK_CARGO_INVOCATION_DIR="$ARCHIVE_SEAL_CARGO_INVOCATION_DIR" \
     bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --lockfile-path "$CARGO_LOCKFILE" --apple-only
   require_dir "$xcframework" "NoritoBridge XCFramework"
   require_file "$bridge_manifest" "NoritoBridge artifact manifest"
@@ -812,6 +822,7 @@ package_apple() {
     NORITO_BRIDGE_OUTPUT_LOCK_FD="$APPLE_SOURCE_LOCK_FD" \
     NORITO_BRIDGE_SEAL_HOME="$ARCHIVE_SEAL_HOME" \
     NORITO_BRIDGE_SEAL_CARGO_HOME="$ARCHIVE_SEAL_CARGO_HOME" \
+    NORITO_BRIDGE_SEAL_CARGO_INVOCATION_DIR="$ARCHIVE_SEAL_CARGO_INVOCATION_DIR" \
     NORITO_BRIDGE_SEAL_RUSTUP_HOME="$ARCHIVE_SEAL_RUSTUP_HOME" \
     NORITO_BRIDGE_SEAL_TMPDIR="$ARCHIVE_SEAL_TMPDIR" \
     NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR="$ARCHIVE_SEAL_CARGO_TARGET_DIR" \
@@ -825,7 +836,7 @@ package_apple() {
       --xcframework "$xcframework" \
       --output "$apple_zip" \
       --scratch-dir "$OUT_PARENT"
-  run_isolated_python - "$apple_zip" "$versioned_manifest" "$pod_version" <<'PY'
+  run_isolated_python - "$apple_zip" "$versioned_manifest" "$bridge_version" <<'PY'
 import json
 import os
 from pathlib import Path
@@ -873,14 +884,31 @@ except BaseException:
     raise
 PY
 
-  run_isolated_python "$COCOAPODS_SPEC_RENDERER" \
-    --root "$ROOT_DIR" \
-    --archive "$apple_zip" \
-    --output "$podspec"
+  env -i \
+    HOME="$ARCHIVE_SEAL_HOME" \
+    PATH="${PYTHON_BINARY%/*}:${ARCHIVE_SEAL_CARGO%/*}:${ARCHIVE_SEAL_RUSTC%/*}:${ARCHIVE_SEAL_RUSTDOC%/*}:/usr/bin:/bin" \
+    TMPDIR="$ARCHIVE_SEAL_TMPDIR" \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    NORITO_BRIDGE_SEAL_HOME="$ARCHIVE_SEAL_HOME" \
+    NORITO_BRIDGE_SEAL_CARGO_HOME="$ARCHIVE_SEAL_CARGO_HOME" \
+    NORITO_BRIDGE_SEAL_CARGO_INVOCATION_DIR="$ARCHIVE_SEAL_CARGO_INVOCATION_DIR" \
+    NORITO_BRIDGE_SEAL_RUSTUP_HOME="$ARCHIVE_SEAL_RUSTUP_HOME" \
+    NORITO_BRIDGE_SEAL_TMPDIR="$ARCHIVE_SEAL_TMPDIR" \
+    NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR="$ARCHIVE_SEAL_CARGO_TARGET_DIR" \
+    NORITO_BRIDGE_SEAL_CARGO="$ARCHIVE_SEAL_CARGO" \
+    NORITO_BRIDGE_SEAL_RUSTC="$ARCHIVE_SEAL_RUSTC" \
+    NORITO_BRIDGE_SEAL_RUSTDOC="$ARCHIVE_SEAL_RUSTDOC" \
+    NORITO_BRIDGE_SEAL_RUSTUP="$ARCHIVE_SEAL_RUSTUP" \
+    NORITO_BRIDGE_SEAL_DEVELOPER_DIR="$ARCHIVE_SEAL_DEVELOPER_DIR" \
+    "$PYTHON_BINARY" -I -S -B "$APPLE_ARCHIVE_VALIDATOR" \
+      --root "$ROOT_DIR" \
+      --archive "$apple_zip" \
+      --lockfile-path "$CARGO_LOCKFILE" \
+      --scratch-dir "$OUT_PARENT"
 
   record_artifact "$apple_zip" "apple-xcframework"
   record_artifact "$versioned_manifest" "apple-manifest"
-  record_artifact "$podspec" "apple-cocoapods-podspec"
 }
 
 ANDROID_INPUT_SNAPSHOT=""
@@ -955,7 +983,7 @@ lock_path = Path(sys.argv[5])
 raw_lock_descriptor = sys.argv[6]
 mode = sys.argv[7]
 diagnostic_version = sys.argv[8]
-pod_version = sys.argv[9]
+bridge_version = sys.argv[9]
 
 
 def fail(message: str) -> None:
@@ -1131,9 +1159,8 @@ if directory_identity(final) != expected_final_identity:
     fail("package destination changed while the package was being assembled")
 if mode == "apple":
     expected_names = {
-        f"NoritoBridge-v{pod_version}.xcframework.zip",
-        f"NoritoBridge-v{pod_version}.artifacts.json",
-        f"NoritoBridge-{pod_version}.podspec",
+        f"NoritoBridge-v{bridge_version}.xcframework.zip",
+        f"NoritoBridge-v{bridge_version}.artifacts.json",
         f"SHA256SUMS-apple-{diagnostic_version}.txt",
         f"mobile-sdk-apple-{diagnostic_version}.artifacts.json",
     }
@@ -1145,9 +1172,8 @@ elif mode == "android":
     }
 elif mode == "all":
     expected_names = {
-        f"NoritoBridge-v{pod_version}.xcframework.zip",
-        f"NoritoBridge-v{pod_version}.artifacts.json",
-        f"NoritoBridge-{pod_version}.podspec",
+        f"NoritoBridge-v{bridge_version}.xcframework.zip",
+        f"NoritoBridge-v{bridge_version}.artifacts.json",
         f"iroha-mobile-sdk-android-{diagnostic_version}.zip",
         f"SHA256SUMS-all-{diagnostic_version}.txt",
         f"mobile-sdk-all-{diagnostic_version}.artifacts.json",

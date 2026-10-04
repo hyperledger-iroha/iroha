@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from iroha_app_attestation.attestation import (
+    AndroidPatchLevels,
     AttestationRejected,
     GOOGLE_FACTORY_2016_ROOT_SHA256,
     GOOGLE_FACTORY_2016_VERIFICATION_TIME_MS,
@@ -23,6 +24,9 @@ from iroha_app_attestation.attestation import (
     encode_android_chain,
     explicit_tags,
     oid,
+    android_patch_policy_met,
+    patch_level_yyyymm,
+    validate_android_patch_floor,
     verify_apple_raw,
     verify_android_raw,
     verify_issuer_preparation,
@@ -196,6 +200,51 @@ class AttestationTests(unittest.TestCase):
         self.assertTrue(_certificate_valid_at(root, GOOGLE_FACTORY_2016_VERIFICATION_TIME_MS))
         self.assertFalse(_certificate_valid_at(root, GOOGLE_FACTORY_2016_VERIFICATION_TIME_MS
                                                 + 30 * 86_400_000))
+
+    def test_patch_levels_normalize_only_documented_keymint_forms(self) -> None:
+        for value, expected in ((202609, 202609), (20260905, 202609), (20260900, 202609),
+                                (190001, 190001), (999912, 999912)):
+            with self.subTest(value=value):
+                self.assertEqual(patch_level_yyyymm(value), expected)
+        for value in (0, 202600, 202613, 189912, 2026, 20261301, 100000000, True, "202609", None, 202609.0):
+            with self.subTest(value=value):
+                self.assertIsNone(patch_level_yyyymm(value))
+
+    def test_patch_policy_fact_uses_every_reported_hardware_level(self) -> None:
+        current = AndroidPatchLevels(300, 150000, 202609, 20260905, 20260901)
+        self.assertIs(android_patch_policy_met(current, 202609), True)
+        self.assertIs(android_patch_policy_met(current, 202601), True)
+        # Vendor and boot levels that are absent or zero are "not reported".
+        self.assertIs(android_patch_policy_met(AndroidPatchLevels(3, None, 202609, None, 0), 202609), True)
+        # An unmet policy is the recorded PATCH_POLICY_MET fact, never an error.
+        for levels in (
+            AndroidPatchLevels(300, 150000, None, 20260905, 20260901),  # OS level absent
+            AndroidPatchLevels(300, 150000, 0, 20260905, 20260901),     # OS level not reported
+            AndroidPatchLevels(300, 150000, 202608, 20260905, 20260901),
+            AndroidPatchLevels(300, 150000, 202609, 20260805, 20260901),
+            AndroidPatchLevels(300, 150000, 202609, 20260905, 20260801),
+            AndroidPatchLevels(300, 150000, 202613, 20260905, 20260901),  # unparsable OS
+            AndroidPatchLevels(300, 150000, 202609, 2026, 20260901),      # unparsable vendor
+            AndroidPatchLevels(300, 150000, 202609, 20260905, 20261301),  # unparsable boot
+        ):
+            with self.subTest(levels=levels):
+                self.assertIs(android_patch_policy_met(levels, 202609), False)
+
+    def test_bad_patch_floor_or_levels_raise_instead_of_reading_as_unmet(self) -> None:
+        current = AndroidPatchLevels(300, 150000, 202609, 20260905, 20260901)
+        self.assertEqual(validate_android_patch_floor(202609), 202609)
+        for floor in (0, 20260901, 202613, 2026, True, "202609", None):
+            with self.subTest(floor=floor):
+                with self.assertRaisesRegex(AttestationRejected, "patch floor"):
+                    validate_android_patch_floor(floor)
+                # A misconfigured floor must not be recorded as policy-not-met.
+                with self.assertRaisesRegex(AttestationRejected, "patch floor"):
+                    android_patch_policy_met(current, floor)
+        for levels in ((300, 150000, 202609, 20260905, 20260901), None,
+                       AndroidPatchLevels(300, 150000, "202609", 20260905, 20260901),
+                       AndroidPatchLevels(300, 150000, 202609, 20260905.0, 20260901)):
+            with self.subTest(levels=levels), self.assertRaisesRegex(AttestationRejected, "patch levels absent"):
+                android_patch_policy_met(levels, 202609)
 
     def test_issuer_preparation_signature_binds_nonce_account_profile_lane_key_and_release(self) -> None:
         executable = shutil.which("openssl")

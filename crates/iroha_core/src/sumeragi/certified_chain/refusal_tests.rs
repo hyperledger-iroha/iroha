@@ -64,17 +64,21 @@ fn original_successor_history_refusal_is_local_and_same_source_retries() {
 #[test]
 fn original_result_frame_refusal_is_local_and_same_bytes_retry() {
     let chain = original_chain();
-    let frame = Arc::clone(
+    let frame = Clone::clone(
         chain
             .kura()
-            .get_block(NonZeroUsize::new(1).unwrap())
+            .get_block(
+                NonZeroUsize::new(1).unwrap(),
+                &chain.state().ivm_execution_budget(),
+            )
+            .expect("original block read attempt")
             .as_ref()
             .unwrap(),
     );
     let wire = frame.encode_wire().unwrap();
-    let original = read_frame(Arc::clone(&frame), 1).unwrap();
+    let original = read_frame(Clone::clone(&frame), 1).unwrap();
     let error: ExecutionAttemptError<ChainReadError> =
-        no_decode_allocation(|| read_frame(Arc::clone(&frame), 1))
+        no_decode_allocation(|| read_frame(Clone::clone(&frame), 1))
             .unwrap_err()
             .into();
     let ExecutionAttemptError::Deferred(local) = error else {
@@ -86,33 +90,42 @@ fn original_result_frame_refusal_is_local_and_same_bytes_retry() {
     );
     assert!(local.allocation_refusal().is_none());
     assert_eq!(frame.encode_wire().unwrap(), wire);
-    let retry = read_frame(Arc::clone(&frame), 1).unwrap();
+    let retry = read_frame(Clone::clone(&frame), 1).unwrap();
     assert_eq!(retry.result(), original.result());
     assert_eq!(retry.core_hash(), original.core_hash());
-    assert!(Arc::ptr_eq(retry.block(), &frame));
+    assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+        retry.block(),
+        &frame
+    ));
 }
 
 #[test]
 fn malformed_original_result_frame_is_a_completed_rejection() {
     let chain = original_chain();
-    let original = Arc::clone(
+    let original = Clone::clone(
         chain
             .kura()
-            .get_block(NonZeroUsize::new(1).unwrap())
+            .get_block(
+                NonZeroUsize::new(1).unwrap(),
+                &chain.state().ivm_execution_budget(),
+            )
+            .expect("original block read attempt")
             .as_ref()
             .unwrap(),
     );
     let certificate = original.commit_certificate().unwrap();
     let mut malformed = certificate.result_preimage().to_vec();
     malformed.push(0);
-    let changed = Arc::new(original.as_ref().clone().with_commit_certificate(Some(
-        iroha_data_model::block::CommitCertificate::from_untrusted_parts(
-            certificate.consensus_header().to_vec(),
-            certificate.commit_qc().to_vec(),
-            malformed,
-            certificate.availability().to_vec(),
-        ),
-    )));
+    let changed = crate::block::reserve_block_for_tests().initialize(
+        original.as_ref().clone().with_commit_certificate(Some(
+            iroha_data_model::block::CommitCertificate::from_untrusted_parts(
+                certificate.consensus_header().to_vec(),
+                certificate.commit_qc().to_vec(),
+                malformed,
+                certificate.availability().to_vec(),
+            ),
+        )),
+    );
     let error: ExecutionAttemptError<ChainReadError> = read_frame(changed, 1).unwrap_err().into();
     assert!(matches!(
         error,
@@ -146,38 +159,41 @@ fn original_durable_certificate_refusal_preserves_local_reason_and_retries() {
 }
 
 #[test]
-fn original_versioned_frame_distinguishes_surviving_and_dropped_decoder_limits() {
+fn original_canonical_frame_preserves_refusal_after_decoder_scope_retirement() {
     let chain = original_chain();
     let bytes = chain.committed(1).block().encode_wire().unwrap();
     no_decode_allocation(|| {
         let error = iroha_data_model::block::decode_framed_signed_block(&bytes).unwrap_err();
-        let mapped = crate::execution_attempt::versioned_decode_attempt_error(error, |error| error);
+        let mapped = crate::execution_attempt::canonical_decode_attempt_error(error, |error| error);
         assert!(matches!(mapped, ExecutionAttemptError::Deferred(_)));
     });
-    norito::with_decode_limits_scope(
-        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 64),
-        || {
-            let error = no_decode_allocation(|| {
-                iroha_data_model::block::decode_framed_signed_block(&bytes).unwrap_err()
-            });
-            let mapped =
-                crate::execution_attempt::versioned_decode_attempt_error(error, |error| error);
-            assert!(
-                matches!(
-                    mapped,
-                    ExecutionAttemptError::Rejected(
-                        iroha_version::error::Error::NoritoResourceLimit(
-                            norito::core::DecodeResourceError::TotalAllocationExceeded {
-                                limit: 0,
-                                ..
-                            }
-                        )
-                    )
-                ),
-                "a wider remaining scope must not adopt the inner decoder's format ceiling"
-            );
-        },
+    let original =
+        no_decode_allocation(|| iroha_data_model::block::decode_framed_signed_block(&bytes))
+            .unwrap_err();
+    assert_eq!(
+        original.kind(),
+        norito::core::DecodeAttemptErrorKind::EnclosingLimit
     );
+    assert!(matches!(
+        crate::execution_attempt::canonical_decode_attempt_error(original, |e| e),
+        ExecutionAttemptError::Deferred(_)
+    ));
+    // A limit introduced inside the owner is intrinsic even if its numeric fields match.
+    let intrinsic = norito::core::classify_decode_attempt(|| {
+        no_decode_allocation(|| {
+            iroha_data_model::block::decode_framed_signed_block(&bytes)
+                .map_err(norito::core::DecodeAttemptError::into_error)
+        })
+    })
+    .unwrap_err();
+    assert_eq!(
+        intrinsic.kind(),
+        norito::core::DecodeAttemptErrorKind::Invalid
+    );
+    assert!(matches!(
+        crate::execution_attempt::canonical_decode_attempt_error(intrinsic, |e| e),
+        ExecutionAttemptError::Rejected(_)
+    ));
     assert!(iroha_data_model::block::decode_framed_signed_block(&bytes).is_ok());
 }
 

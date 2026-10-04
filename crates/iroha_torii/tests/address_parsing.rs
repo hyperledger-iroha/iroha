@@ -24,7 +24,7 @@ use iroha_primitives::time::TimeSource;
 use iroha_telemetry::metrics::Metrics;
 use iroha_torii::{
     Torii,
-    filter::{FieldPath, FilterExpr, Pagination, QueryEnvelope},
+    filter::{FieldPath, FilterExpr, ListQuery},
 };
 use norito::json;
 use prometheus::core::Collector;
@@ -36,13 +36,7 @@ mod fixtures;
 const ACCOUNT_SIGNATORY: &str =
     "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
 const I105_PREFIX: u16 = 0x002A;
-const EMPTY_QUERY_ENVELOPE: &str = r#"{
-    "filter": null,
-    "sort": [],
-    "pagination": {"limit": 1, "offset": 0},
-    "fetch_size": null,
-    "select": null
-}"#;
+const EMPTY_QUERY_ENVELOPE: &str = r#"{"limit": 1}"#;
 const ACCOUNTS_TRANSACTIONS_CTX: &str = "/v1/accounts/{account_id}/transactions";
 const ACCOUNTS_TRANSACTIONS_QUERY_CTX: &str = "/v1/accounts/{account_id}/transactions/query";
 const ACCOUNTS_PERMISSIONS_CTX: &str = "/v1/accounts/{account_id}/permissions";
@@ -53,15 +47,8 @@ const NEXUS_PUBLIC_LANE_STAKE_CTX: &str = "/v1/nexus/public-lanes/{lane_id}/stak
 const REPO_AGREEMENTS_ENDPOINT: &str = "/v1/repo/agreements";
 fn query_envelope_with_account_filter(field: &str, literal: &str) -> Vec<u8> {
     let filter = FilterExpr::Eq(FieldPath(field.to_string()), json::Value::from(literal));
-    let envelope = QueryEnvelope {
-        filter: Some(filter),
-        pagination: Pagination {
-            limit: Some(1),
-            ..Pagination::default()
-        },
-        ..QueryEnvelope::default()
-    };
-    norito::json::to_vec(&envelope).expect("serialize envelope")
+    let query = ListQuery::new().filter(filter).limit(1);
+    norito::json::to_vec(&query.to_json_value()).expect("serialize collection query")
 }
 fn encode_query_value(value: &str) -> String {
     encode(value).into_owned()
@@ -775,7 +762,10 @@ async fn explorer_domains_query_accepts_encoded_account_params() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(format!("/v1/explorer/domains?limit=1&owned_by={literal}"))
+                    .uri(format!(
+                        "/v1/explorer/domains?limit=1&filter={}",
+                        encode_query_value(&format!("owned_by = \"{literal}\""))
+                    ))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -799,7 +789,7 @@ async fn explorer_domains_query_invalid_account_param_records_metric() {
     let reason = AccountId::parse_encoded(literal)
         .expect_err("literal must fail to parse")
         .reason();
-    let context = "/v1/explorer/domains?owned_by";
+    let context = "/v1/explorer?filter";
     let before = metrics
         .torii_address_invalid_total
         .with_label_values(&[context, reason])
@@ -808,7 +798,10 @@ async fn explorer_domains_query_invalid_account_param_records_metric() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v1/explorer/domains?limit=1&owned_by={literal}"))
+                .uri(format!(
+                    "/v1/explorer/domains?limit=1&filter={}",
+                    encode_query_value(&format!("owned_by = \"{literal}\""))
+                ))
                 .body(Body::empty())
                 .unwrap(),
         )

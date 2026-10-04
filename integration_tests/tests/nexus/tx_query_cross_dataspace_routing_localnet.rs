@@ -1624,29 +1624,32 @@ mod tests {
     #[test]
     fn multilane_da_policy_bundle_matches_wrong_ingress_topology() {
         let bundle = multilane_da_proof_policy_bundle();
-        let expected_hash = DaProofPolicyBundle::new(bundle.policies.clone()).policy_hash;
-        assert_eq!(bundle.version, DaProofPolicyBundle::VERSION_V1);
-        assert_eq!(bundle.policy_hash, expected_hash);
-        assert_eq!(bundle.policies.len(), 3);
-        assert_eq!(bundle.policies[0].lane_id.as_u32(), NEXUS_LANE_INDEX);
-        assert_eq!(bundle.policies[0].dataspace_id.as_u64(), NEXUS_ID_U64);
-        assert_eq!(bundle.policies[0].alias, "lane-nexus");
-        assert_eq!(bundle.policies[0].proof_scheme, DaProofScheme::MerkleSha256);
-        assert_eq!(bundle.policies[1].lane_id.as_u32(), DS1_LANE_INDEX);
-        assert_eq!(bundle.policies[1].dataspace_id.as_u64(), DS1_ID_U64);
-        assert_eq!(bundle.policies[1].alias, "lane-ds1");
-        assert_eq!(bundle.policies[2].lane_id.as_u32(), DS2_LANE_INDEX);
-        assert_eq!(bundle.policies[2].dataspace_id.as_u64(), DS2_ID_U64);
-        assert_eq!(bundle.policies[2].alias, "lane-ds2");
+        let expected_hash = DaProofPolicyBundle::new(bundle.policies().to_vec()).policy_hash();
+        assert_eq!(bundle.version(), DaProofPolicyBundle::VERSION_V1);
+        assert_eq!(bundle.policy_hash(), expected_hash);
+        assert_eq!(bundle.policies().len(), 3);
+        assert_eq!(bundle.policies()[0].lane_id.as_u32(), NEXUS_LANE_INDEX);
+        assert_eq!(bundle.policies()[0].dataspace_id.as_u64(), NEXUS_ID_U64);
+        assert_eq!(bundle.policies()[0].alias, "lane-nexus");
+        assert_eq!(
+            bundle.policies()[0].proof_scheme,
+            DaProofScheme::MerkleSha256
+        );
+        assert_eq!(bundle.policies()[1].lane_id.as_u32(), DS1_LANE_INDEX);
+        assert_eq!(bundle.policies()[1].dataspace_id.as_u64(), DS1_ID_U64);
+        assert_eq!(bundle.policies()[1].alias, "lane-ds1");
+        assert_eq!(bundle.policies()[2].lane_id.as_u32(), DS2_LANE_INDEX);
+        assert_eq!(bundle.policies()[2].dataspace_id.as_u64(), DS2_ID_U64);
+        assert_eq!(bundle.policies()[2].alias, "lane-ds2");
     }
     #[test]
     fn multilane_da_policy_bundle_hash_changes_when_policy_order_changes() {
         let bundle = multilane_da_proof_policy_bundle();
-        let mut reversed_policies = bundle.policies.clone();
+        let mut reversed_policies = bundle.policies().to_vec();
         reversed_policies.reverse();
-        let reversed_hash = DaProofPolicyBundle::new(reversed_policies).policy_hash;
+        let reversed_hash = DaProofPolicyBundle::new(reversed_policies).policy_hash();
         assert_eq!(bundle, multilane_da_proof_policy_bundle());
-        assert_ne!(bundle.policy_hash, reversed_hash);
+        assert_ne!(bundle.policy_hash(), reversed_hash);
     }
     #[test]
     fn genesis_post_topology_builder_requires_full_wrong_ingress_roster() {

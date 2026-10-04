@@ -1,7 +1,7 @@
 //! Immutable Sumeragi certificate bytes and their original allocation custody.
 //!
 //! The sole canonical record contains the consensus header, CommitQC, result preimage and original availability frame.
-//! Runtime ownership is never encoded. Decoding produces untrusted bytes; publication requires
+//! Runtime ownership is never encoded. Ordinary decoding produces untrusted bytes; publication requires
 //! explicit admission against the original execution budget. Shared clones keep each exact
 //! backing allocation and its prepaid control allocation alive through the last retained block.
 
@@ -40,7 +40,7 @@ enum Storage {
 
 // Exactly the canonical four-field record. No storage-state tag is serialized or accepted.
 #[derive(Encode, Decode, DeriveJsonSerialize, DeriveJsonDeserialize)]
-#[norito(deny_unknown_fields)]
+#[norito(deny_unknown_fields, decode_fields)]
 struct CanonicalParts {
     #[norito(
         with = "crate::json_helpers::base64_vec",
@@ -62,6 +62,32 @@ struct CanonicalParts {
         bounded_with = "crate::json_helpers::base64_vec::serialize_bounded"
     )]
     availability: Vec<u8>,
+}
+
+mod prepared;
+pub use prepared::{CertificateCustodyError, PreparedCommitCertificate};
+
+impl<D> ncore::DecodeRecordFields<D> for CommitCertificate
+where
+    D: ncore::FieldDestination
+        + ncore::DecodeField<0, Vec<u8>>
+        + ncore::DecodeField<1, Vec<u8>>
+        + ncore::DecodeField<2, Vec<u8>>
+        + ncore::DecodeField<3, Vec<u8>>,
+{
+    // Spell the destination outputs directly; the canonical storage record stays private.
+    type Values = (
+        <D as ncore::DecodeField<0, Vec<u8>>>::Value,
+        <D as ncore::DecodeField<1, Vec<u8>>>::Value,
+        <D as ncore::DecodeField<2, Vec<u8>>>::Value,
+        <D as ncore::DecodeField<3, Vec<u8>>>::Value,
+    );
+    fn decode_fields(
+        bytes: &[u8],
+        destination: &mut D,
+    ) -> Result<(Self::Values, usize), ncore::DecodeIntoError<D::Error>> {
+        <CanonicalParts as ncore::DecodeRecordFields<D>>::decode_fields(bytes, destination)
+    }
 }
 
 /// Original fixed allocations awaiting one immutable certificate control owner.
@@ -265,6 +291,18 @@ impl CommitCertificate {
             // Only from_charged_owner constructs this state, checking every backing source
             // before allocating this control from the very same supplied budget.
             Storage::Admitted(parts) => parts.belongs_to(budget),
+        }
+    }
+
+    /// Whether both admitted values retain the same immutable original allocation.
+    /// Equal untrusted bytes never establish physical custody identity.
+    #[must_use]
+    pub fn ptr_eq(left: &Self, right: &Self) -> bool {
+        match (&left.storage, &right.storage) {
+            (Storage::Admitted(left), Storage::Admitted(right)) => {
+                ChargedShared::ptr_eq(left, right)
+            }
+            _ => false,
         }
     }
 

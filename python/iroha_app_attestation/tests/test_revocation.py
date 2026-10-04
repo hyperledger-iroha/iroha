@@ -1,5 +1,6 @@
 """Google attestation revocation schema, serial and live-source boundaries."""
 
+import http.client
 import json
 import unittest
 import urllib.error
@@ -7,7 +8,7 @@ from unittest.mock import patch
 
 from iroha_app_attestation.attestation import AttestationRejected
 from iroha_app_attestation.revocation import (
-    GOOGLE_STATUS_URL, certificate_serial, fetch_google_revocation_status,
+    GOOGLE_STATUS_URL, RevocationUnavailable, certificate_serial, fetch_google_revocation_status,
     parse_google_revocation_status, verify_google_chain_not_revoked,
 )
 
@@ -71,8 +72,10 @@ class RevocationTests(unittest.TestCase):
             b'{"entries":{},"extra":true}',
             b'{"entries":{}} trailing',
         ):
-            with self.subTest(bad=bad), self.assertRaises(AttestationRejected):
+            with self.subTest(bad=bad), self.assertRaises(AttestationRejected) as raised:
                 parse_google_revocation_status(bad)
+            # Parsing a supplied body judges that body; only fetching classifies.
+            self.assertNotIsInstance(raised.exception, RevocationUnavailable)
 
     def test_certificate_serial_and_every_chain_member(self) -> None:
         chain = [certificate(0x2a), certificate(0x3b), certificate(0x4c)]
@@ -93,19 +96,49 @@ class RevocationTests(unittest.TestCase):
             FakeResponse(b'{"entries":{}}', url="https://other.example/status"),
             FakeResponse(b'{"entries":{}}', content_type="text/plain"),
             FakeResponse(b"x" * (2 * 1024 * 1024 + 1)),
+            FakeResponse(b'{"entries":{"2a":{"status":"VALID"}}}'),
+            FakeResponse(b'{"entries":{}} trailing'),
         ):
+            # No current well-formed list: retryable unavailability, which
+            # still fails closed as an AttestationRejected.
             with self.subTest(response=response), patch(
                 "iroha_app_attestation.revocation.urllib.request.build_opener", return_value=FakeOpener(response)
-            ), self.assertRaises(AttestationRejected):
+            ), self.assertRaises(RevocationUnavailable):
                 fetch_google_revocation_status()
+        self.assertTrue(issubclass(RevocationUnavailable, AttestationRejected))
         with patch("iroha_app_attestation.revocation.urllib.request.build_opener", return_value=FakeOpener(
             FakeResponse(b'{"entries":{"2a":{"status":"REVOKED"}}}')
         )):
             self.assertEqual(fetch_google_revocation_status(), frozenset({0x2a}))
         with patch("iroha_app_attestation.revocation.urllib.request.build_opener") as build:
             build.return_value.open.side_effect = urllib.error.URLError("offline")
-            with self.assertRaisesRegex(AttestationRejected, "unavailable"):
+            with self.assertRaisesRegex(RevocationUnavailable, "unavailable"):
                 fetch_google_revocation_status()
+            with self.assertRaises(RevocationUnavailable):
+                verify_google_chain_not_revoked([certificate(0x2a), certificate(0x3b)])
+
+    def test_http_protocol_failures_outside_oserror_are_unavailable(self) -> None:
+        # http.client raises these outside OSError; they must not escape the
+        # check (an unclassified exception would end the issuer worker).
+        self.assertFalse(issubclass(http.client.HTTPException, OSError))
+
+        class TruncatedResponse(FakeResponse):
+            def read(self, length):
+                raise http.client.IncompleteRead(b"")
+
+        with patch("iroha_app_attestation.revocation.urllib.request.build_opener",
+                   return_value=FakeOpener(TruncatedResponse(b'{"entries":{}}'))), \
+                self.assertRaisesRegex(RevocationUnavailable, "unavailable"):
+            fetch_google_revocation_status()
+        for failure in (http.client.BadStatusLine("x"), http.client.LineTooLong("header line")):
+            with self.subTest(failure=type(failure).__name__), patch(
+                "iroha_app_attestation.revocation.urllib.request.build_opener"
+            ) as build:
+                build.return_value.open.side_effect = failure
+                with self.assertRaisesRegex(RevocationUnavailable, "unavailable"):
+                    fetch_google_revocation_status()
+                with self.assertRaises(RevocationUnavailable):
+                    verify_google_chain_not_revoked([certificate(0x2a), certificate(0x3b)])
 
 
 if __name__ == "__main__":

@@ -147,19 +147,21 @@ fn minimal_config_snapshot() {
 }
 /// A minimal node config inherits application-sized budgets without deployment overrides.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn minimal_config_inherits_large_application_rate_budgets() {
     let config = load_config_from_fixtures("minimal_with_trusted_peers.toml")
         .expect("minimal node configuration");
+    assert_eq!(config.compute.slo.max_requests_per_second.get(), 1_000_000);
     let content = &config.content.limits;
-    assert_eq!(content.max_requests_per_second.get(), 10_000);
-    assert_eq!(content.request_burst.get(), 100_000);
+    assert_eq!(content.max_requests_per_second.get(), 1_000_000);
+    assert_eq!(content.request_burst.get(), 10_000_000);
     assert_eq!(content.max_egress_bytes_per_second.get(), 256 * 1024 * 1024);
     assert_eq!(content.egress_burst_bytes.get(), 1024 * 1024 * 1024);
     let torii = config.torii;
     let gateway = &torii.sorafs_gateway.rate_limit;
     assert_eq!(
         gateway.max_requests.map(std::num::NonZeroU32::get),
-        Some(600_000)
+        Some(60_000_000)
     );
     assert_eq!(gateway.window, Duration::from_secs(60));
     for rate in [
@@ -169,8 +171,9 @@ fn minimal_config_inherits_large_application_rate_budgets() {
         torii.preauth_rate_per_ip_per_sec,
         torii.soracloud_public_rate_per_ip_per_sec,
         torii.soracloud_mutation_rate_per_account_origin_per_sec,
+        torii.soranet_privacy_ingest.rate_per_sec,
     ] {
-        assert_eq!(rate.map(std::num::NonZeroU32::get), Some(10_000));
+        assert_eq!(rate.map(std::num::NonZeroU32::get), Some(1_000_000));
     }
     for burst in [
         torii.query_burst_per_authority,
@@ -182,19 +185,23 @@ fn minimal_config_inherits_large_application_rate_budgets() {
         torii.proof_api.burst,
         torii.mcp.burst,
         torii.push.burst,
+        torii.operator_auth.burst,
+        torii.soranet_privacy_ingest.burst,
     ] {
-        assert_eq!(burst.map(std::num::NonZeroU32::get), Some(100_000));
+        assert_eq!(burst.map(std::num::NonZeroU32::get), Some(10_000_000));
     }
-    assert_eq!(torii.connect.ws_rate_per_ip_per_min, 600_000);
+    assert_eq!(torii.connect.ws_rate_per_ip_per_min, 60_000_000);
     assert_eq!(torii.connect.ws_per_ip_max_sessions, 10);
     assert_eq!(torii.connect.ws_max_sessions, 10_000);
     for rate in [
         torii.proof_api.rate_per_minute,
         torii.mcp.rate_per_minute,
         torii.push.rate_per_minute,
+        torii.operator_auth.rate_per_minute,
     ] {
-        assert_eq!(rate.map(std::num::NonZeroU32::get), Some(600_000));
+        assert_eq!(rate.map(std::num::NonZeroU32::get), Some(60_000_000));
     }
+    assert_eq!(torii.recipient_lookup.requests_per_minute, 60_000_000);
     assert_eq!(
         torii
             .proof_api
@@ -209,6 +216,51 @@ fn minimal_config_inherits_large_application_rate_budgets() {
             .map(std::num::NonZeroU64::get),
         Some(1024 * 1024 * 1024)
     );
+
+    // Raising defaults must still respect budgets deliberately chosen by the operator.
+    let overrides = r#"
+[torii]
+tx_rate_per_authority_per_sec = 3
+tx_burst_per_authority = 7
+preauth_rate_per_ip_per_sec = 3
+preauth_burst_per_ip = 7
+[torii.operator_auth]
+rate_per_minute = 5
+burst = 9
+[torii.recipient_lookup]
+policy_id = "cbuae_aed_sbp_pkr"
+requests_per_minute = 30
+request_timeout_ms = 4000
+routes = []
+[torii.soranet_privacy_ingest]
+rate_per_sec = 2
+burst = 4
+"#;
+    let explicit = ConfigReader::new()
+        .without_env()
+        .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+        .expect("minimal node fixture")
+        .with_toml_source(TomlSource::inline(
+            overrides.parse().expect("rate overrides"),
+        ))
+        .read_and_complete::<UserConfig>()
+        .expect("explicit budgets")
+        .parse()
+        .expect("small operator-selected budgets remain valid")
+        .torii;
+    for (configured, expected) in [
+        (explicit.tx_rate_per_authority_per_sec, 3),
+        (explicit.tx_burst_per_authority, 7),
+        (explicit.preauth_rate_per_ip_per_sec, 3),
+        (explicit.preauth_burst_per_ip, 7),
+        (explicit.operator_auth.rate_per_minute, 5),
+        (explicit.operator_auth.burst, 9),
+        (explicit.soranet_privacy_ingest.rate_per_sec, 2),
+        (explicit.soranet_privacy_ingest.burst, 4),
+    ] {
+        assert_eq!(configured.map(std::num::NonZeroU32::get), Some(expected));
+    }
+    assert_eq!(explicit.recipient_lookup.requests_per_minute, 30);
 }
 #[test]
 fn torii_receipt_signer_parses() {
@@ -273,6 +325,23 @@ fn torii_max_content_len_defaults_to_sixty_four_megabytes() {
         config.torii.max_content_len.0,
         defaults::torii::MAX_CONTENT_LEN.0,
         "minimal configs should inherit the runtime Torii body-cap default"
+    );
+    assert_eq!(
+        config.torii.query_fanout_max_retained_bytes.get(),
+        512_000_000
+    );
+    assert_eq!(
+        config.torii.query_fanout_max_working_set_bytes.get(),
+        48_000_000
+    );
+    assert_eq!(
+        defaults::torii::app_api_routed_read_route_body_phase_bytes(
+            config.torii.query_fanout_max_retained_bytes.get(),
+            config.torii.query_fanout_max_working_set_bytes.get(),
+            config.torii.max_content_len.get(),
+        ),
+        Some(2_562_487),
+        "minimal configs must retain the per-query phase when aggregate concurrency increases"
     );
 }
 #[test]
@@ -2341,11 +2410,19 @@ fn nexus_evidence_preparation_pool_covers_all_offenders_and_local_observations()
     assert_eq!(prune_plan, 3_968);
     assert_eq!(
         pending_plan,
-        4 * 31 * 31 * std::mem::size_of::<defaults::nexus::storage::ConsensusPenaltyPendingEntry>()
+        4 * 31
+            * iroha_data_model::sumeragi_lanes::MAX_LANE_CUSTODY_SIGNERS
+            * std::mem::size_of::<defaults::nexus::storage::ConsensusPenaltyPendingEntry>()
+    );
+    assert_eq!(
+        defaults::nexus::storage::CONSENSUS_EVIDENCE_PENDING_PEER_KEY_BYTES,
+        49
     );
     assert_eq!(
         pending_peer_keys,
-        4 * 31 * 31 * (1 + iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES)
+        4 * 31
+            * iroha_data_model::sumeragi_lanes::MAX_LANE_CUSTODY_SIGNERS
+            * defaults::nexus::storage::CONSENSUS_EVIDENCE_PENDING_PEER_KEY_BYTES
     );
     assert_eq!(one_plan, prune_plan + pending_plan + pending_peer_keys);
     assert_eq!(
@@ -2462,4 +2539,191 @@ fn sumeragi_seed_custody_and_local_overrides_are_validated_together() {
 
     let error = parse("observer", 199).expect_err("observer cannot hold a validator seed");
     assert!(format!("{error:?}").contains("observer must not configure a mint-finality seed"));
+}
+
+#[test]
+fn credential_registry_memory_budget_is_configured_and_nonzero() {
+    let parse = |extra: &str| {
+        ConfigReader::new()
+            .without_env()
+            .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+            .unwrap()
+            .with_toml_source(TomlSource::inline(extra.parse().unwrap()))
+            .read_and_complete::<UserConfig>()
+            .map(|user| user.parse())
+    };
+    let default = parse("").unwrap().unwrap();
+    assert_eq!(
+        default.runtime_provider_broker.credential_max_memory_bytes,
+        defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES
+    );
+    let explicit = parse("[runtime_provider_broker]\ncredential_max_memory_bytes = 123456\n")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        explicit
+            .runtime_provider_broker
+            .credential_max_memory_bytes
+            .get(),
+        123456
+    );
+    assert!(parse("[runtime_provider_broker]\ncredential_max_memory_bytes = 0\n").is_err());
+}
+
+#[test]
+fn standalone_credential_registry_policy_matches_root_and_is_strict() {
+    use iroha_config::parameters::actual::RuntimeProviderBroker;
+
+    let parse = |table: &str| {
+        RuntimeProviderBroker::from_toml_source(TomlSource::inline(table.parse().unwrap()))
+    };
+    let default = parse("").expect("default broker policy without a node config");
+    assert_eq!(
+        default.credential_max_memory_bytes,
+        defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES
+    );
+    let table = "credential_max_memory_bytes = 123456\nendpoint_path = '/tmp/runtime-provider-broker-v1.sock'\n";
+    let standalone = parse(table).expect("standalone broker policy");
+    let root = ConfigReader::new()
+        .without_env()
+        .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+        .unwrap()
+        .with_toml_source(TomlSource::inline(
+            format!("[runtime_provider_broker]\n{table}")
+                .parse()
+                .unwrap(),
+        ))
+        .read_and_complete::<UserConfig>()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(standalone, root.runtime_provider_broker);
+    for invalid in [
+        "credential_max_memory_bytes = 0",
+        "credential_max_memory_byte = 123456",
+        "endpoint_path = 'relative/runtime-provider-broker-v1.sock'",
+        "endpoint_path = '/tmp/wrong.sock'",
+        "extends = '/missing/broker-policy.toml'",
+        "private_key_file = '/missing/private-key'",
+    ] {
+        assert!(
+            parse(invalid).is_err(),
+            "accepted invalid broker table: {invalid}"
+        );
+    }
+}
+
+/// Node and standalone broker policies share one finite file-configured operation bound.
+#[test]
+fn broker_observer_operation_timeout_is_finite_and_shared_with_standalone_policy() {
+    use iroha_config::parameters::actual::RuntimeProviderBroker;
+
+    let parse = |milliseconds: Option<u64>| {
+        let fields = milliseconds.map_or_else(String::new, |value| {
+            format!("observer_operation_timeout_ms = {value}\n")
+        });
+        RuntimeProviderBroker::from_toml_source(TomlSource::inline(
+            fields.parse().expect("broker policy TOML"),
+        ))
+    };
+    assert_eq!(
+        parse(None).unwrap().observer_operation_timeout,
+        defaults::runtime_provider_broker::OBSERVER_OPERATION_TIMEOUT
+    );
+    for milliseconds in [1, 4_000, 15_000] {
+        let standalone = parse(Some(milliseconds)).unwrap();
+        let root = ConfigReader::new()
+            .without_env()
+            .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+            .unwrap()
+            .with_toml_source(TomlSource::inline(
+                format!(
+                    "[runtime_provider_broker]\nobserver_operation_timeout_ms = {milliseconds}\n"
+                )
+                .parse()
+                .unwrap(),
+            ))
+            .read_and_complete::<UserConfig>()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(standalone, root.runtime_provider_broker);
+        assert_eq!(
+            standalone.observer_operation_timeout,
+            Duration::from_millis(milliseconds)
+        );
+    }
+    for milliseconds in [0, 15_001, 9_223_372_036_854_775_807] {
+        assert!(parse(Some(milliseconds)).is_err());
+        let parsed = ConfigReader::new()
+            .without_env()
+            .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+            .unwrap()
+            .with_toml_source(TomlSource::inline(
+                format!(
+                    "[runtime_provider_broker]\nobserver_operation_timeout_ms = {milliseconds}\n"
+                )
+                .parse()
+                .unwrap(),
+            ))
+            .read_and_complete::<UserConfig>()
+            .unwrap()
+            .parse();
+        assert!(
+            parsed.is_err(),
+            "node policy accepted invalid operation bound {milliseconds}"
+        );
+    }
+    assert!(
+        RuntimeProviderBroker::from_toml_source(TomlSource::inline(
+            "observer_operation_timeout = 1".parse().unwrap(),
+        ))
+        .is_err()
+    );
+}
+
+/// Runtime broker policy values have no environment selector or override.
+#[test]
+fn broker_observer_operation_timeout_ignores_environment_overrides() {
+    let env = MockEnv::new()
+        .set("RUNTIME_PROVIDER_BROKER_OBSERVER_OPERATION_TIMEOUT_MS", "1")
+        .set("RUNTIME_PROVIDER_BROKER_ENDPOINT_PATH", "/tmp/wrong.sock")
+        .set("RUNTIME_PROVIDER_BROKER_CREDENTIAL_MAX_MEMORY_BYTES", "0");
+    for (table, expected) in [
+        ("", 15_000),
+        (
+            "[runtime_provider_broker]\nobserver_operation_timeout_ms = 4000\n",
+            4_000,
+        ),
+    ] {
+        let root = ConfigReader::new()
+            .with_env(env.clone())
+            .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+            .unwrap()
+            .with_toml_source(TomlSource::inline(table.parse().unwrap()))
+            .read_and_complete::<UserConfig>()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            root.runtime_provider_broker.observer_operation_timeout,
+            Duration::from_millis(expected)
+        );
+        assert_eq!(
+            root.runtime_provider_broker.endpoint_path.as_path(),
+            defaults::runtime_provider_broker::endpoint_path()
+        );
+        assert_eq!(
+            root.runtime_provider_broker.credential_max_memory_bytes,
+            defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES
+        );
+    }
+    assert_eq!(
+        env.unvisited(),
+        std::collections::HashSet::from([
+            "RUNTIME_PROVIDER_BROKER_OBSERVER_OPERATION_TIMEOUT_MS".to_owned(),
+            "RUNTIME_PROVIDER_BROKER_ENDPOINT_PATH".to_owned(),
+            "RUNTIME_PROVIDER_BROKER_CREDENTIAL_MAX_MEMORY_BYTES".to_owned(),
+        ])
+    );
 }

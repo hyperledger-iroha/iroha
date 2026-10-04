@@ -170,7 +170,7 @@ fn network_start_rejects_closed_retained_actor_before_driver_files() {
         .block_on(supervisor.start())
         .expect("normal network shutdown");
     assert!(
-        matches!(error, Some(NodeError::Driver(ref text)) if text.contains("P2P network refused")),
+        matches!(error, Some(NodeError::Subscription(_))),
         "a separate live subscription actor cannot authorize a closed retained sender: {error:?}; files={files_created:?}"
     );
     assert!(!dir.path().join("records").exists());

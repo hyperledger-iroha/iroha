@@ -32,10 +32,10 @@ python -m pip install dist/python-native/*.whl dist/python-sdk/*.whl
 
 ```python
 from iroha_python import (
-    ToriiClient,
     Instruction,
     NetworkId,
-    build_signed_transaction,
+    ToriiClient,
+    authority_fee_payment,
     derive_ed25519_keypair_from_seed,
 )
 
@@ -44,18 +44,20 @@ authority = pair.account_id()  # Canonical domainless I105 account id
 network_id = NetworkId.parse(
     "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
 )
-instruction = Instruction.register_domain("wonderland")
 
 with ToriiClient("http://127.0.0.1:8080", auth_token="dev-token") as client:
-    envelope, status = client.build_and_submit_transaction(
+    envelope, final = client.build_and_submit_transaction(
         network_id=network_id,
         authority=authority,
         private_key=pair.private_key,
-        instructions=[instruction],
+        fee_payment=authority_fee_payment(charge_limits=[]),
+        instructions=[Instruction.register_domain("wonderland")],
         wait=True,
     )
 
-print("Final status:", status)
+# `wait=True` returns only after the transaction is authoritatively applied;
+# a rejected or expired transaction raises `TransactionStatusError`.
+assert final["status"]["kind"] == "Applied"
 
 # Config-aware client creation
 
@@ -147,6 +149,122 @@ else:
         expected_authority=configured_onboarding_authority,
         network_id=network_id,
     )
+```
+
+## Collection queries
+
+Every Torii collection is read with one query language
+([`specs/torii/collection_queries.md`](../../specs/torii/collection_queries.md))
+through one client surface: `client.domains`, `client.accounts`,
+`client.asset_definitions`, `client.nfts`, `client.rwas`,
+`client.transactions`, `client.repo_agreements`, `client.subscription_plans`,
+`client.subscriptions`, `client.contract_activity`, `client.contract_events`,
+`client.uaid_manifests(uaid)`, and the nested
+`client.accounts.assets(account_id)`, `client.accounts.transactions(account_id)`,
+`client.accounts.permissions(account_id)`, `client.accounts.history(account_id)`
+and `client.asset_definitions.holders(definition_id)`. Each collection offers
+`list` (one typed page), `iter` (every row, following `next_cursor`), `pages`,
+`rows`/`iter_rows` (JSON objects; the calls that accept `select` and
+`aggregate`) and `count`. Requests are signed when `canonical_request_auth` is
+configured (a signature only widens visibility into restricted dataspaces) and
+are anonymous otherwise.
+
+Explorer uses the same surface through `client.explorer_accounts`,
+`client.explorer_domains`, `client.explorer_asset_definitions`,
+`client.explorer_assets`, `client.explorer_nfts`, `client.explorer_rwas`,
+`client.explorer_blocks`, `client.explorer_transactions`,
+`client.explorer_latest_transactions`, `client.explorer_instructions` and
+`client.explorer_latest_instructions`. Explorer and history collections have a
+fixed server order and reject `sort`, `include_total=True` and `aggregate`.
+An empty page may carry a continuation cursor; the iterators follow it.
+
+```python
+from decimal import Decimal
+
+from iroha_python import F, ListQuery, ListQueryError, ToriiClient, ToriiError
+
+with ToriiClient("https://taira.sora.org") as client:
+    # One page: build filters with F and Python operators (parenthesize comparisons).
+    query = ListQuery(
+        filter=(F.owned_by == owner) & F.metadata.tier.in_(1, 2),
+        sort=["-alias_binding.bound_at_ms", "id"],   # "-field" sorts descending
+        limit=50,
+    )
+    page = client.asset_definitions.list(query)
+    for definition in page.items:
+        print(definition.id, definition.alias)
+    if page.has_more:  # a cursor only continues the query that produced it
+        page = client.asset_definitions.list(query.next_page(page))
+
+    # Every row, lazily, page by page; quantities are exact Decimal values.
+    total = sum(bucket.quantity for bucket in client.accounts.assets(owner).iter(
+        filter=F.quantity > Decimal("0"),
+    ))
+
+    # Text filters are accepted unchanged; Torii explains what is wrong.
+    try:
+        client.accounts.list(filter='owned_by == "x" && quantity > 1')
+    except ListQueryError as error:            # client-side or HTTP 400 invalid_* errors
+        print(error.code, error.parameter, error)
+    except ToriiError as error:                # any other status: .status, .code, .details
+        print(error.status, error.code)
+
+    # Live events use the same grammar over event fields and decode to typed records.
+    for event in client.stream_events(
+        filter=(F.tx_hash == tx_hash) & F.tx_status.in_("Approved", "Rejected"),
+    ):
+        print(event.status, event.rejection_code)   # a TransactionEvent
+        break
+```
+
+`filter.to_text()` is the canonical text form (`str(filter)` renders the same
+text for display) and `filter.to_json()` the JSON form; `parse_filter(text)`
+turns text into a `Filter`. Integers that fit `u64`/`i64` are JSON numbers,
+decimals and wider integers are exact decimal strings, and `float` literals
+are rejected. Object and array literals (`F.metadata.tags == ["a", "b"]`,
+valid only against `metadata.<key>`) exist only in the JSON form: collection
+queries send every `Filter` as JSON, while `to_text()`, `GET` parameters
+(`ListQuery.to_query_pairs()`) and `stream_events` reject them with
+`FilterError`/`invalid_filter`. Rows decode the fields that identify them
+strictly (`id`; `account_id`, `asset`, `scope` and `quantity` for balances;
+`entrypoint_hash`, `block_height` and `block_index` for transactions); every
+other field may be null or absent and decodes as `None`.
+
+Torii executes each collection query once over the caller-visible global state.
+For collections that support totals and `POST` aggregates, visible rows contribute
+exactly once even when they span several dataspace routes.
+
+### Transaction history
+
+`client.transactions` (every committed transaction) and
+`client.accounts.transactions(account_id)` (transactions the account signed or
+that reference it) are history collections of `CommittedTransaction` rows
+(`entrypoint_hash`, `block_height`, `block_index`, `block_hash`, `authority`,
+`timestamp_ms`, `entrypoint_kind`, `result_ok`, `asset_ids`,
+`asset_definition_ids`, `metadata`):
+
+- Rows come newest first by (`block_height`, `block_index`); cursors hold
+  block coordinates, so transactions committed while paging never shift later
+  pages.
+- `sort`, `include_total` and `aggregate` would scan the whole history and are
+  rejected before any request with `invalid_sort`, `invalid_include_total` and
+  `invalid_aggregate`.
+- Each page has a bounded scan budget, so a selective filter can return fewer
+  than `limit` rows, even none, together with a `next_cursor`. `iter`,
+  `pages`, `iter_rows` and `count` follow `next_cursor` until it is null; a
+  short or empty page is not the end.
+- `asset_ids` and `asset_definition_ids` match element-wise:
+  `F.asset_definition_ids == definition_id` selects transactions that touched
+  the definition.
+- Bounds on `block_height` in the filter's top-level `and` also bound the
+  server's scan: `(F.block_height >= 1200) & (F.result_ok == True)` reads only
+  heights from 1200 up.
+
+```python
+for tx in client.accounts.transactions(owner).iter(
+    filter=(F.block_height >= 1200) & (F.asset_definition_ids == definition_id),
+):
+    print(tx.block_height, tx.block_index, tx.entrypoint_hash, tx.result_ok)
 ```
 
 ## Exact Kotodama numbers
@@ -356,6 +474,11 @@ client never substitutes a network prefix and never retries an alternate ID.
 `find_account` and `account_exists` use only that exact account route. A `404`
 reports absence; every other failure, including route unavailability or a
 wrong-network-prefix rejection, propagates without fallback.
+`asset_balance(account_id, definition, scope=None)` sums the exact quantities
+of every matching balance bucket across all pages of the account-assets
+collection (filtering on `asset` for Base58 definition ids and on
+`asset_alias` for `name#domain.dataspace` aliases); pass `scope` to read one
+bucket.
 
 ```python
 from iroha_python import ToriiClient, account_faucet_claim_hash_v1, authority_fee_payment
@@ -709,54 +832,29 @@ draft.register_rwa(
 )
 ```
 
-`ToriiClient` also exposes the chain-state and explorer RWA read surfaces:
-
-The nine existing high-level Python callers for ledger-wide JSON query POSTs
-(account transactions/assets, domains, accounts, transactions,
-repo agreements, asset holders/definitions, and RWAs) require an immutable
-genesis-derived `LocalSigningContext` plus matching `canonical_request_auth`.
-They sign the final method, percent-encoded path, query, and compact JSON body,
-then dispatch exactly once without redirects or retries. Aliases in the
-authenticating account, foreign genesis identities, precomputed auth headers,
-and inline secret arguments fail before dispatch. This package does not expose
-an NFT query method; use the Node SDK for that existing route.
+`ToriiClient` also exposes the chain-state and explorer RWA read surfaces.
+RWA lots are the `client.rwas` collection (see [Collection queries](#collection-queries));
+the explorer keeps its own cursor pages:
 
 ```python
-from iroha_python import (
-    LocalSigningContext,
-    NetworkId,
-    ToriiCanonicalRequestAuth,
-    ToriiClient,
-    rwa_query_envelope,
-)
+from decimal import Decimal
 
-network_id = NetworkId.parse(exact_genesis_network_id)
-client = ToriiClient(
-    "https://torii.example",
-    local_signing_context=LocalSigningContext(network_id),
-    canonical_request_auth=ToriiCanonicalRequestAuth(
-        network_id=network_id.literal,
-        account_id=canonical_i105_account_id,
-        signer=wallet.sign,
-    ),
-)
+from iroha_python import F, ToriiClient
 
-chain_page = client.list_rwas_typed(limit=20, offset=0)
-detail_page = client.list_explorer_rwas_typed(domain="commodities", limit=25)
-if detail_page.pagination.has_more:
-    next_page = client.list_explorer_rwas_typed(
-        domain="commodities",
+client = ToriiClient("https://torii.example")
+
+lots = client.rwas.list(filter=(F.status == "active") & (F.quantity > Decimal("10")), sort="id")
+for lot in client.rwas.iter(filter=F.owned_by == canonical_i105_account_id):
+    print(lot.id, lot.quantity, lot.is_frozen)
+
+detail_page = client.explorer_rwas.list(filter=F.domain == "commodities", limit=25)
+if detail_page.next_cursor is not None:
+    next_page = client.explorer_rwas.list(
+        filter=F.domain == "commodities",
         limit=25,
-        cursor=detail_page.pagination.next_cursor,
+        cursor=detail_page.next_cursor,
     )
 detail = client.get_explorer_rwa_detail_typed("lot-001$commodities")
-filtered = client.query_rwas_typed(
-    filter={"eq": [{"name": "id"}, "lot-001$commodities"]},
-    sort=[{"key": "id", "order": "asc"}],
-)
-
-envelope = rwa_query_envelope(limit=10, offset=0)
-print(envelope["pagination"])
 ```
 
 ## CUDA helpers
@@ -836,6 +934,25 @@ All streaming helpers decode JSON payloads by default. Pass `with_metadata=True`
 mirrors this behaviour: it receives a decoded payload when metadata is disabled and the full
 `SseEvent` when metadata is requested.
 
+`stream_events` decodes each `/v1/events/sse` payload (one JSON object with `category` and
+`event`) into a typed record: `TransactionEvent` (`hash`, `status` of `Queued`, `Expired`,
+`Approved` or `Rejected`, `lane_id`, `dataspace_id`, `block_height`, and `rejection_code` plus the
+fixed public `rejection_reason` when rejected), `BlockEvent` (`status` of `Created`, `Approved`,
+`Rejected`, `Committed` or `Applied`; `rejection_code` when rejected), `PipelineWarningEvent`,
+`WitnessEvent`, `ProofVerifiedEvent`, `ProofRejectedEvent` and `ProofPrunedEvent`. Every other
+kind (data events such as `Asset`, the `Other` category, and kinds newer than the SDK) decodes
+as `GenericEvent(category, event, summary)`, so new server events never break a stream;
+`summary` is diagnostic text without a stable format. Every record keeps the payload in `raw`.
+A payload that is not such an object raises `ValueError`; `decode_json=False` yields the raw
+`data` text instead, and `decode_event()` decodes a payload received elsewhere.
+
+Event filters use the collection-query text grammar, restricted to what subscriptions can match:
+`=` and `in [...]` over `tx_status`, `tx_hash`, `tx_block_height`, `tx_lane_id`,
+`tx_dataspace_id`, `block_status`, `block_height`, `proof_backend`, `proof_call_hash` and
+`proof_envelope_hash`, combined with `and`/`or`; `not` only over `tx_status = ...` or
+`block_status = ...`; and `tx_block_height is null`. Torii rejects anything else with
+`invalid_filter`, raised as `ToriiQueryError` when the stream opens.
+
 The canonical `/v1/events/sse` feed is live-only: it emits no SSE ids and retains no replay log.
 Its helpers therefore expose no cursor, resume flag, or `last_event_id` argument. A transport
 reconnect establishes a new live subscription and can have a gap. Use `/v1/blocks/stream` from a
@@ -848,12 +965,14 @@ for explicitly replayable feeds such as the SoraFS event logs.
 import os
 
 from iroha_python import (
-    DataEventFilter,
     Ed25519KeyPair,
+    F,
     NetworkId,
     OperatorSigningContext,
+    ProofVerifiedEvent,
     SseStreamError,
     ToriiCanonicalRequestAuth,
+    TransactionEvent,
     create_torii_client,
 )
 
@@ -867,28 +986,26 @@ client = create_torii_client(
     operator_signing_context=OperatorSigningContext(network_id, operator_key_pair),
 )
 
-# Stream verifying-key registry updates
-for event in client.stream_verifying_key_events(updated=True):
-    print("Verifying key event", event)
-
-# Stream proof verification results for a specific proof id
-proof_filter = DataEventFilter.proof(backend="halo2/ipa", proof_hash_hex="deadbeef" * 8)
+# Event filters use the collection-query grammar over the event fields listed above.
+proof_filter = (F.proof_backend == "halo2/ipa") & (F.proof_call_hash == "deadbeef" * 8)
 try:
     for event in client.stream_events(filter=proof_filter):
-        print("Proof event", event)
+        if isinstance(event, ProofVerifiedEvent):
+            print("Proof verified", event.proof_hash, event.vk_ref)
 except SseStreamError as error:
     print("Event stream terminated", error.code, error.dropped_messages)
 
-# Stream pipeline activity with typed helpers
-for event in client.stream_pipeline_transactions(status="Queued"):
-    print("Queued tx event", event)
+for event in client.stream_events(filter=F.tx_status.in_("Approved", "Rejected")):
+    if isinstance(event, TransactionEvent):
+        print(event.hash, event.status, event.rejection_code)
 
-for block_event in client.stream_pipeline_blocks(status="Committed"):
-    print("Committed block", block_event)
+# Text filters are sent unchanged.
+for block_event in client.stream_events(filter='block_status = "Committed"'):
+    print("Committed block", block_event.status)
 
-# Structured live events include framing metadata but no replay cursor.
-for evt in client.stream_events(filter=proof_filter, with_metadata=True):
-    print(evt.id, evt.event, evt.data)
+# Framing metadata (SSE event name, id, raw frame) with the typed event in `data`.
+for frame in client.stream_events(filter=proof_filter, with_metadata=True):
+    print(frame.event, frame.data.event, frame.raw)
 
 # Inspect the operator-only Connect aggregate with typed helpers.
 status = client.get_connect_status_typed()
@@ -921,13 +1038,11 @@ print(params.block_cadence_ms, params.max_clock_drift_ms, params.chain_height)
 # Manage triggers
 trigger_payload = {
     "id": "notify-admins",
-    "action": {"Mint": {"asset_id": "norito:<alert-asset-id-hex>", "value": 1}},
+    "action": {"Mint": {"asset_id": "<base58-asset-definition-id>#<i105-account-id>", "value": 1}},
     "authority": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
     "filter": {"ByTime": {"schedule_ms": 60_000}},
 }
 client.register_trigger(trigger_payload)
-for row in client.query_triggers(filter={"authority": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"})["items"]:
-    print("Trigger row", row)
 client.delete_trigger("notify-admins")
 
 # Submit authenticated SoraFS PoR lifecycle evidence. Challenge issuance is
@@ -1086,25 +1201,19 @@ pdp_outcome = validate_pdp_bundle(
 )
 print(order_outcome["status"], pdp_outcome["code"])
 
-# Account listings
-assets = client.list_account_assets(
-    "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-    limit=10,
-    asset_id="norito:<asset-id-hex>",
-)
-txs = client.list_account_transactions(
-    "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-    limit=5,
-    asset_id="norito:<asset-id-hex>",
-)
-query_txs = client.query_account_transactions(
-    "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-    filter={"status": {"Eq": "Committed"}},
-    select=["authority", {"metadata": {"amount": True}}],
-    sort={"timestamp": "DESC"},
+# Account listings (collection queries; see "Collection queries" above)
+from iroha_python import F
+
+account = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
+assets = client.accounts.assets(account).list(filter=F.asset_alias == "xor#wonderland", limit=10)
+# History is newest first; a page may hold fewer rows than `limit` while next_cursor continues.
+txs = client.accounts.transactions(account).list(filter=F.result_ok == True, limit=5)
+projected = client.accounts.transactions(account).rows(
+    filter=F.block_height >= 1200,
+    select=["entrypoint_hash", "block_height", "timestamp_ms"],
     limit=3,
 )
-print(assets, txs, query_txs)
+print(assets.items, txs.items, projected.items)
 
 ```
 
@@ -1243,7 +1352,11 @@ draft.register_domain("wonderland") \
         mintable="Infinitely",
         metadata={"sym": "ROS"},
      ) \
-     .mint_asset_quantity("norito:<asset-id-hex>", 10)
+     .mint_asset_quantity(
+        # Balance buckets are `<base58-definition-id>#<i105-account-id>[#dataspace:<id>]`.
+        "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
+        10,
+     )
 
 # The transaction authority in ``config`` owns the registered definition.
 
@@ -1501,11 +1614,11 @@ agreement = RepoAgreementRecord.from_payload(repo_payload)
 next_margin = agreement.next_margin_check_after(at_timestamp_ms=now_ms)
 
 # Discover agreements directly from Torii
-from iroha_python import ToriiClient
+from iroha_python import F, ToriiClient
 
 client = ToriiClient("http://localhost:8080")
-page = client.list_repo_agreements(limit=10)
-for agreement in page.items:
+page = client.repo_agreements.list(filter=F.status == "active", sort="-maturity_timestamp_ms", limit=10)
+for agreement in page.items:  # RepoAgreementRecord values
     print(agreement.agreement_id, agreement.counterparty)
 ```
 
@@ -1792,7 +1905,11 @@ pipeline events. This node-local helper requires the client's immutable
 `OperatorSigningContext`; it signs the exact height-substituted `GET` path and
 empty body, then dispatches once without redirects or retries.
 
-Use the typed account helpers (`list_account_assets_typed`, `list_account_transactions_typed`, and their query counterparts) to receive structured paginated results instead of raw JSON blobs when working with account inventories. The list endpoints accept an optional `asset_id` for pre-filtering.
+Account inventories are the `client.accounts.assets(account_id)` and
+`client.accounts.transactions(account_id)` collections: typed `AccountAsset` and
+`CommittedTransaction` rows, filters such as `F.asset_alias == "xor#wonderland"`,
+and cursor iteration (see [Collection queries](#collection-queries) and
+[Transaction history](#transaction-history)).
 
 
 
@@ -2087,14 +2204,12 @@ bindings = client.get_uaid_bindings_typed(uaid_literal)
 for slice in bindings.dataspaces:
     print(slice.dataspace_alias, slice.accounts)
 
-manifests = client.list_space_directory_manifests_typed(
-    uaid_literal,
-    dataspace=11,
-    status="active",
-    count_mode="exact",
+manifests = client.uaid_manifests(uaid_literal).list(
+    filter=(F.dataspace_id == 11) & (F.status == "Active"),
+    include_total=True,
 )
 print("total", manifests.total, "has more", manifests.has_more)
-for record in manifests.manifests:
+for record in manifests.items:
     print(record.dataspace_alias, record.status, record.manifest_hash)
 
 # Torii returns canonical transaction drafts; the client must already have an
@@ -2121,13 +2236,13 @@ revoke_draft = client.revoke_space_directory_manifest(
 
 All helpers require exact lowercase `uaid:<64-hex>` literals with LSB=1, validate query parameters, and
 return rich dataclasses (`UaidPortfolioSnapshot`, `UaidBindingsSnapshot`,
-`SpaceDirectoryManifestList`) so callers can render dashboards or build evidence bundles for the
+`Page[SpaceDirectoryManifestRecord]`) so callers can render dashboards or build evidence bundles for the
 NX-16 rollout with deterministic parsing.
 
 ## Trigger lifecycle walkthrough
 
 ```python
-from iroha_python import Instruction, NetworkId, ToriiClient
+from iroha_python import F, Instruction, NetworkId, ToriiClient, authority_fee_payment
 
 client = ToriiClient("http://127.0.0.1:8080", auth_token="admin-token")
 trigger_id = "hourly-reward"
@@ -2137,7 +2252,7 @@ register = Instruction.register_time_trigger(
     trigger_id=trigger_id,
     authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
     action=Instruction.mint_asset(
-        asset_id="norito:<reward-asset-id-hex>",
+        asset_id="<base58-asset-definition-id>#<i105-account-id>",
         account_id="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
         value=1,
     ),
@@ -2152,33 +2267,29 @@ envelope, status = client.build_and_submit_transaction(
     ),
     authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
     private_key=bytes.fromhex("11" * 32),
+    fee_payment=authority_fee_payment(charge_limits=[]),
     instructions=[register],
     wait=True,
 )
-assert status["kind"] == "Committed"
+assert status["status"]["kind"] == "Applied"  # rejection or expiry raises
 
 # 3) Inspect the registered trigger via REST.
 details = client.get_trigger(trigger_id)
 print(details["status"])
 
-# 4) Stream live trigger execution events with the typed filter.
-for event in client.stream_trigger_events(trigger_id=trigger_id):
-    print("Trigger event:", event)
+# 4) Watch pipeline outcomes with the event-stream filter grammar.
+for event in client.stream_events(filter=F.tx_status.in_("Approved", "Rejected")):
+    print("Transaction outcome:", event.hash, event.status, event.rejection_code)
     break  # demonstration
 
-# 5) Query triggers with pagination helpers.
-page = client.query_triggers(filter={"authority": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"}, limit=10)
-for item in page["items"]:
-    print(item["id"])
-
-# 6) Unregister the trigger when no longer needed.
+# 5) Unregister the trigger when no longer needed.
 client.delete_trigger(trigger_id)
 ```
 
 ## Pipeline monitoring & SSE playbook
 
 ```python
-from iroha_python import DataEventFilter, ToriiClient
+from iroha_python import F, ToriiClient
 
 client = ToriiClient("http://127.0.0.1:8080", auth_token="admin-token")
 operator_client = ToriiClient(
@@ -2187,30 +2298,22 @@ operator_client = ToriiClient(
 )
 
 # Batched history: inspect the latest committed blocks.
-recent_blocks = client.list_blocks(limit=5)
-print([row["height"] for row in recent_blocks.get("items", [])])
+recent_blocks = client.explorer_blocks.list(limit=5)
+print([row["height"] for row in recent_blocks.items])
 
 # Detailed recovery snapshot for a specific height.
 sidecar = operator_client.get_pipeline_recovery(height=42)
 print(sidecar.get("transactions", []))
 
-# Subscribe to live pipeline transaction events (Queued → Executed → Committed).
-for event in client.stream_pipeline_transactions(status="Queued"):
-    tx = event["payload"]
-    print("Queued tx:", tx["hash_hex"], tx["status"]["kind"])
+# Subscribe to live pipeline transaction events; the feed is live-only and cannot replay gaps.
+for event in client.stream_events(filter=F.tx_status == "Queued"):
+    print("Queued tx:", event.hash, event.lane_id, event.dataspace_id)
     break
 
-# Watch committed blocks and snapshot metadata.
-for block_event in client.stream_pipeline_blocks(status="Committed"):
-    block = block_event["payload"]
-    print("Committed block", block["height"], block["hash_hex"])
+# Watch committed blocks (event filters match `=`/`in`, not ranges).
+for block_event in client.stream_events(filter=F.block_status == "Committed"):
+    print("Committed block", block_event.status)
     break
-
-# Watch execution-witness events. The canonical feed is live-only and cannot replay gaps.
-client.stream_pipeline_witnesses(
-    height=42,
-    on_event=lambda payload, eid: print("Witness", payload["id"], eid),
-)
 ```
 
 Connect frame encoding and crypto helpers require the compiled
@@ -2478,6 +2581,7 @@ complete = CompleteReplicationOrderInstruction(
     completion_epoch=27,
     expected_authority=ProviderIngestCompletionAuthorityV1(
         provider_owner=provider_owner,
+        completion_signer=completion_signer,
         signer_policy=ProviderIngestCompletionSignerPolicyV1(
             policy_id=policy_id,
             revision=2,
@@ -2502,8 +2606,12 @@ creates the immutable Musubi purpose binding. The retired four-field shape is
 rejected. Completion always requires the exact six-field hard cut:
 `order_id`, `provider_id`, `completion_epoch`, `expected_authority`,
 `expected_assignment_revision`, and `finalized_anchor`. The authority retains
-the provider owner and four-part signer-policy chain; legacy, missing, and
-unknown fields fail decoding. Call `.to_payload()` for the schema-closed SDK
+the separately selected `provider_owner`, mandatory `completion_signer`, and
+four-part signer-policy chain. Both account IDs must be exact canonical I105
+spellings. The native commit checks the registered provider owner independently
+from the transaction authority, which must match the exact registered completion
+signer and retained governed policy. The SDK never supplies the owner as a missing
+completion signer. Owner-only, null, missing, and unknown fields fail decoding. Call `.to_payload()` for the schema-closed SDK
 JSON model or `.to_instruction()` for canonical Norito after rebuilding the
 native extension from the same source revision.
 
@@ -2617,20 +2725,22 @@ no environment variables need to be exported.
   listings (`TriggerRecord`, `TriggerListPage`) and mutation responses
   (`TriggerMutationResponse` via `register_trigger_typed`/`delete_trigger_typed`) surface structured results and
   governance drafts for `/v1/triggers`, `/v1/triggers/query`, and the lifecycle endpoints.
-- Add Torii trigger lifecycle wrappers (`register_trigger`, `register_trigger_typed`, `query_triggers`,
+- Add Torii trigger lifecycle wrappers (`register_trigger`, `register_trigger_typed`,
   `delete_trigger`, `delete_trigger_typed`, `get_trigger`, `list_triggers`)
   so automation flows can manage schedules directly from Python while validating governance payloads when desired.
-- Add typed account asset/transaction listings (`list_account_assets`, `list_account_transactions`) and JSON query helpers
-  (`query_account_assets`, `query_account_transactions`) to cover the remaining Torii account endpoints.
-- Provide typed query and list wrappers for accounts/domains/asset definitions/holders/permissions
-  (`query_accounts_typed`, `list_accounts_typed`, `query_domains_typed`, `list_domains_typed`,
-  `query_asset_definitions_typed`, `list_asset_definitions_typed`, `query_asset_holders_typed`,
-  `list_asset_holders_typed`, `list_account_permissions_typed`) so pagination metadata and core
-  fields (ids, ownership, balances, permission payloads) are validated before reaching downstream automation.
-- Offer event filter builders (verifying key, proof, trigger) plus streaming helpers so Torii SSE integrations avoid hand-crafted JSON payloads.
-- Surface pipeline recovery sidecars (`/v1/pipeline/recovery/{height}`), Sumeragi evidence listing/counting,
-  and pipeline/witness event filters with streaming helpers so Python operators can monitor ledger history
-  without reimplementing the Rust toolchain.
+- Read every Torii collection (domains, accounts, asset definitions, NFTs, RWA lots,
+  account assets, asset holders, account transactions, repo agreements) through one
+  `Collection` surface (`list`, `iter`, `pages`, `rows`, `iter_rows`, `count`) built on the
+  shared query core in `iroha_torii_client.list_query`: a typed filter builder (`F`),
+  canonical text and JSON forms checked against the shared golden vectors, cursor pages
+  and typed rows with exact `Decimal` quantities. Query errors raise `ToriiQueryError`
+  (`code`, `parameter`, `details`); every other unexpected status raises a `ToriiError`
+  subclass.
+- Filter live `/v1/events/sse` events with the same text grammar and decode them into typed
+  event records (`stream_events(filter=...)`, `decode_event`).
+- Surface pipeline recovery sidecars (`/v1/pipeline/recovery/{height}`) and Sumeragi evidence
+  listing/counting so Python operators can monitor ledger history without reimplementing
+  the Rust toolchain.
   Evidence reads use the closed first-release `NativeSumeragiEvidence` shape,
   retain exact instance/context/generation attribution and ordered historical offenders,
   require a non-null consensus admission height and an exact penalty lifecycle,
@@ -2668,3 +2778,62 @@ no environment variables need to be exported.
   instruction in the shared deployment workflow.
 - Ship optional Norito RPC helpers (`iroha_python.norito_rpc`) so callers can
   invoke Norito-encoded RPC endpoints without vendor-specific transports.
+
+The `validator_staking` module exposes immutable `StakingMonetaryPlanV1`,
+`StakingRewardClaimPlanV1`, `StakingAuthorityGenerationV1` and
+`StakingEpochAuthorizationV1` values with `from_norito` / `to_norito`. The sole
+compact layout uses the existing Norito codec and mandatory native identity
+validation. Monetary preconditions are typed; `fee_claim` is a required argument
+whose `None` means no fee reward effects. Amounts use `KotodamaQuantity`. These
+codecs do not authenticate preparation observations, the network's pinned XOR,
+custody, signatures or finality; those remain execution/evidence checks.
+
+### Staking preparation observations
+
+The client exposes the canonical `/v1/nexus/staking/prepare` read as
+`preparePublicLanePlan(request, xorAssetDefinitionId)` in JavaScript and
+`prepare_public_lane_plan(request, xor_asset_definition_id)` in Python. It uses
+the client's immutable local signing context only to pin the expected network;
+the read signs and submits no transaction. Supply the network's genesis-pinned
+XOR definition explicitly. All proposed balances must use that definition and
+Global scope. The response is a server observation, including its reported
+block identity; it is not an independently authenticated state proof.
+
+Requests and responses use exact bounded Norito frames. The client checks the
+echoed request, epoch cut, expiry, recipients, selected accruals, and complete
+ordered balance set before returning the plan for review. There is one dispatch
+with no retry or redirect. Execution must recompute all monetary effects and
+preconditions before any signed plan changes ledger balances.
+
+Python preparation uses one original absolute deadline, including request
+preparation, worker startup, headers, body and validation. On POSIX, its owned
+Requests worker prepares the request and resolves the original Session and
+ambient authentication, proxy, TLS and certificate settings exactly once, so
+NETRC reads and system proxy discovery share the same deadline. A bounded Norito
+pipe returns the exact prepared request metadata and at most
+256 KiB. Deadline expiry terminates and reaps only that worker. Cleanup allows
+up to 1.2 seconds beyond the deadline. Before starting the worker, the parent
+requires the exact ToriiClient and rejects relevant instance method overrides,
+custom client/default-header storage and altered request graphs before parent
+header copying, formatting or virtual dispatch. The original request graph is
+admitted against the existing staking schemas before its sole canonical codec
+runs. It requires exact standard Session and nested storage types and rejects custom
+adapters, hooks, cookies, authentication callbacks, non-string Session parameter
+mappings and modified pool settings without invoking their methods. Scalar and
+collection bounds, including the 512 KiB IPC envelope, are checked before the
+full encoder runs. The worker bounds the prepared URL before dispatch and rejects
+compressed responses and response cookie mutation before reading their bodies.
+The same worker runs the canonical native SoraFS alias-proof policy. Successful
+outcomes retain the exact alias evaluation and increment the current client
+counters once. Standard warning logging runs only in that worker, through owned
+duplicates of the admitted stream descriptors; the parent never writes, flushes
+or closes the original log stream. A blocked log sink shares the original
+deadline. Timed-out operations do not publish a completed alias evaluation.
+Custom warning callbacks, logger/handler/filter subclasses, nonstandard streams,
+custom formatters and custom counter storage are rejected before dispatch. The
+bounded route supports standard Logger/RootLogger chains, NullHandler and
+StreamHandler with the default message formatter, including the standard
+last-resort stderr handler. Other client routes retain their configured hooks.
+Configured ordinary request headers (including API authorization) are preserved.
+Other platforms are explicitly unsupported by this bounded owner. There are no
+redirects, retries, transport fallback or credentials in IPC files/arguments.

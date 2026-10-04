@@ -98,7 +98,9 @@ impl AuthorizedFinalPromotionAccountTransactionV1 {
     /// A failed or ambiguous provider call consumes this owner and is never retried here.
     ///
     /// # Errors
-    /// Rejects expiry, receipt changes, failed/substituted signatures or failed Check preparation.
+    /// Returns semantic errors for expiry, receipt changes, substituted signatures or failed Check
+    /// preparation, and `LocalCapacity` for local canonical-frame refusal. This boundary does not
+    /// return a reusable signed continuation after refusal.
     pub fn sign_with(
         self,
         state: Arc<State>,
@@ -147,10 +149,7 @@ impl AuthorizedFinalPromotionAccountTransactionV1 {
             .verify(&self.prepared.binding.public_key, &message)
             .map_err(|_| Error::Provider)?;
         let signed = builder.build_with_signature(signature);
-        final_promotion_native_signed_entry_frame_v1(&TransactionEntrypoint::External(
-            signed.clone(),
-        ))
-        .map_err(|_| Error::Payload)?;
+        validate_native_frame(&TransactionEntrypoint::External(signed.clone()))?;
         if signed.payload() != &self.prepared.payload {
             return Err(Error::Payload);
         }
@@ -379,4 +378,68 @@ fn validate_account_check(
         return Err(Error::Authority);
     }
     Ok(())
+}
+
+// This fixed service boundary distinguishes local refusal, but does not preserve a retry owner.
+// TODO: Retain the pre-return signed custody through operational recovery without re-signing.
+fn validate_native_frame(entry: &TransactionEntrypoint) -> Result<(), Error> {
+    use iroha_core::execution_attempt::ExecutionAttemptError;
+    final_promotion_native_signed_entry_frame_v1(entry)
+        .map(|_| ())
+        .map_err(|error| match error {
+            ExecutionAttemptError::Deferred(_) => Error::LocalCapacity,
+            ExecutionAttemptError::Rejected(_) => Error::Payload,
+        })
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_data_model::{
+        Level, NetworkId, block::BlockHeader, isi::Log, transaction::FeePaymentIntent,
+    };
+
+    #[test]
+    fn native_frame_refusal_is_operational_while_forged_and_missing_ttl_are_payload_rejections() {
+        let key = KeyPair::try_from_seed(vec![0x35; 32], Algorithm::Ed25519).unwrap();
+        let network = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0x49; 32]),
+        ));
+        let mut builder = TransactionBuilder::new(
+            network,
+            AccountId::new(key.public_key().clone()),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "canonical frame".to_owned())]);
+        builder.set_ttl(Duration::from_secs(60));
+        let signed = builder.try_sign(key.private_key()).unwrap();
+        let entry = TransactionEntrypoint::External(signed.clone());
+        assert_eq!(validate_native_frame(&entry), Ok(()));
+        let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
+        assert_eq!(
+            norito::core::with_decode_limits_scope(limits, || validate_native_frame(&entry)),
+            Err(Error::LocalCapacity)
+        );
+        // A refused attempt neither alters the borrowed input nor releases any signed result.
+        assert_eq!(entry, TransactionEntrypoint::External(signed.clone()));
+        assert_eq!(validate_native_frame(&entry), Ok(()));
+        let forged = TransactionBuilder::from_payload(signed.payload().clone())
+            .unwrap()
+            .build_with_signature(Signature::from_bytes(&[1; 64]));
+        assert_eq!(
+            validate_native_frame(&TransactionEntrypoint::External(forged)),
+            Err(Error::Payload)
+        );
+        let mut missing_ttl = TransactionBuilder::from_payload(signed.payload().clone()).unwrap();
+        missing_ttl.set_ttl(Duration::ZERO);
+        let signature =
+            Signature::try_new(key.private_key(), &missing_ttl.payload_hash_bytes()).unwrap();
+        let missing_ttl = missing_ttl.build_with_signature(signature);
+        missing_ttl.verify_signature().unwrap();
+        assert_eq!(
+            validate_native_frame(&TransactionEntrypoint::External(missing_ttl)),
+            Err(Error::Payload)
+        );
+    }
 }

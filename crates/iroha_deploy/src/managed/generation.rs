@@ -65,6 +65,17 @@ pub(super) fn prepare(
             Some(&published_path),
         )?,
     };
+    // Only this unpublished generation owns newly randomized, never-launched keys. Publish
+    // their one-shot launch fences together with those keys; installed generations never
+    // infer fresh provenance from a missing file or recreate a lost fence.
+    if prepared.peers.len() != 4 {
+        return Err(Error::Invalid(
+            "managed generation requires four fresh peer launch fences".into(),
+        ));
+    }
+    for index in 0..4 {
+        stage.write_atomic(format!("peer{index}.launch"), b"0", PublishMode::CreateNew)?;
+    }
     let retained = RetainedLocalnet {
         root_kind,
         prepared,

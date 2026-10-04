@@ -165,6 +165,7 @@ fn completion_record(
         completion_epoch,
         assignment_revision: 1,
         completion_authority: ProviderIngestCompletionAuthorityV1::new(
+            (completed_by).clone(),
             completed_by,
             completion_signer_policy(1),
         ),
@@ -254,6 +255,7 @@ fn fixture_row(order_seed: u8) -> ProviderIngestFinalizedAssignmentV1 {
         completed_musubi_archive: None,
         provider_owner: Some(account(8)),
         completion_authority: Some(ProviderIngestCompletionAuthorityV1::new(
+            (account(8)).clone(),
             account(8),
             completion_signer_policy(1),
         )),

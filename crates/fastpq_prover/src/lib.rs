@@ -85,6 +85,8 @@ mod keccak_batch;
 mod keccak_gpu;
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 mod metal;
+#[cfg(any(test, all(feature = "fastpq-gpu", target_os = "macos")))]
+mod metal_artifact;
 mod metal_config;
 mod ordering;
 pub(crate) mod overrides;
@@ -201,3 +203,9 @@ pub use poseidon_manifest::{
     PoseidonManifest, poseidon_manifest, poseidon_manifest_sha256, poseidon_profile_id,
     poseidon_profile_sha256,
 };
+
+#[cfg(test)]
+use crate as test_prover;
+#[cfg(test)]
+#[path = "../tests/support/producer_funding.rs"]
+mod test_producer_funding;

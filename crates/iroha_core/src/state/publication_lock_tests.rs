@@ -2,9 +2,8 @@
 
 use crate::publication_lock::*;
 use crate::state::{State, World};
+use iroha_allocation::release::{ReleaseRegistration, ReleaseWait};
 use std::{
-    future::Future,
-    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -35,15 +34,20 @@ impl Wake for WakeCount {
         self.0.fetch_add(1, Ordering::SeqCst);
     }
 }
-fn poll(wait: &mut iroha_allocation::release::ReleaseFuture, count: &Arc<WakeCount>) -> Poll<()> {
-    let waker = Waker::from(Arc::clone(count));
-    Pin::new(wait).poll(&mut Context::from_waker(&waker))
+struct FenceWatch {
+    observation: ReleaseWait,
+    registration: ReleaseRegistration,
 }
-fn waiting(lock: &PublicationMutex) -> iroha_allocation::release::ReleaseFuture {
-    lock.try_lock_or_wait()
-        .err()
-        .expect("actual mutex is held")
-        .wait_for_release()
+fn poll(wait: &mut FenceWatch, count: &Arc<WakeCount>) -> Poll<()> {
+    let waker = Waker::from(Arc::clone(count));
+    wait.registration
+        .poll_wait(&wait.observation, &mut Context::from_waker(&waker))
+}
+fn waiting(lock: &PublicationMutex, registration: ReleaseRegistration) -> FenceWatch {
+    FenceWatch {
+        observation: lock.try_lock_or_wait().err().expect("actual mutex is held"),
+        registration,
+    }
 }
 
 #[test]
@@ -63,18 +67,29 @@ fn fair_unlock_releases_the_physical_mutex_before_waking_publication_retries() {
     }
 
     let lock = Arc::new(PublicationMutex::default());
+    let budget =
+        iroha_allocation::AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let registration = crate::unit_test_support::release_registration(&budget);
     let guard = lock.lock();
-    let mut wait = waiting(&lock);
+    let mut wait = waiting(&lock, registration);
     let check = Arc::new(CheckUnlocked {
         lock: Arc::clone(&lock),
         count: AtomicUsize::new(0),
     });
     let waker = Waker::from(Arc::clone(&check));
     let mut context = Context::from_waker(&waker);
-    assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
+    assert!(
+        wait.registration
+            .poll_wait(&wait.observation, &mut context)
+            .is_pending()
+    );
     guard.unlock_fair();
     assert_eq!(check.count.load(Ordering::SeqCst), 1);
-    assert!(Pin::new(&mut wait).poll(&mut context).is_ready());
+    assert!(
+        wait.registration
+            .poll_wait(&wait.observation, &mut context)
+            .is_ready()
+    );
     assert!(lock.try_lock_or_wait().is_ok());
 }
 
@@ -85,8 +100,10 @@ fn every_state_fence_wakes_on_normal_and_aborted_release_without_publication() {
     let generation = state.state_view_generation();
     for lock in locks(&state) {
         for aborted in [false, true] {
+            let registration =
+                crate::unit_test_support::release_registration(&state.ivm_execution_budget());
             let guard = lock.lock();
-            let mut wait = waiting(lock);
+            let mut wait = waiting(lock, registration);
             let count = Arc::new(WakeCount::default());
             assert!(poll(&mut wait, &count).is_pending());
             if aborted {
@@ -108,7 +125,8 @@ fn every_state_fence_wakes_on_normal_and_aborted_release_without_publication() {
                 .err()
                 .expect("ordinary contention after unwind");
             drop(retry);
-            assert!(poll(&mut next_wait.wait_for_release(), &count).is_ready());
+            wait.observation = next_wait;
+            assert!(poll(&mut wait, &count).is_ready());
         }
     }
     assert_eq!(state.committed_height(), height);
@@ -120,11 +138,15 @@ fn state_fence_release_before_registration_survives_a_successor_guard() {
     let state = state();
     let generation = state.state_view_generation();
     for lock in locks(&state) {
+        let original_registration =
+            crate::unit_test_support::release_registration(&state.ivm_execution_budget());
+        let successor_registration =
+            crate::unit_test_support::release_registration(&state.ivm_execution_budget());
         let original = lock.lock();
-        let mut original_wait = waiting(lock);
+        let mut original_wait = waiting(lock, original_registration);
         drop(original);
         let successor = lock.lock();
-        let mut successor_wait = waiting(lock);
+        let mut successor_wait = waiting(lock, successor_registration);
         let count = Arc::new(WakeCount::default());
         assert!(poll(&mut original_wait, &count).is_ready());
         assert!(poll(&mut successor_wait, &count).is_pending());
@@ -140,8 +162,10 @@ fn state_fence_waits_are_independent_of_other_fences_and_other_states() {
     let state = state();
     let other = self::state();
     for (index, lock) in locks(&state).into_iter().enumerate() {
+        let registration =
+            crate::unit_test_support::release_registration(&state.ivm_execution_budget());
         let guard = lock.lock();
-        let mut wait = waiting(lock);
+        let mut wait = waiting(lock, registration);
         let count = Arc::new(WakeCount::default());
         assert!(poll(&mut wait, &count).is_pending());
         for (other_index, other_lock) in locks(&state).into_iter().enumerate() {
@@ -165,10 +189,14 @@ fn real_consensus_and_lifecycle_leases_signal_the_same_original_fences() {
     let state = state();
     let generation = state.state_view_generation();
     let count = Arc::new(WakeCount::default());
+    let commit_registration =
+        crate::unit_test_support::release_registration(&state.ivm_execution_budget());
+    let lifecycle_registration =
+        crate::unit_test_support::release_registration(&state.ivm_execution_budget());
     let consensus = state.consensus_publication_lease();
-    let mut commit_wait = waiting(&state.state_commit_lock);
+    let mut commit_wait = waiting(&state.state_commit_lock, commit_registration);
     let lifecycle = state.lock_lane_lifecycle_work_admission();
-    let mut lifecycle_wait = waiting(&state.lane_lifecycle_lock);
+    let mut lifecycle_wait = waiting(&state.lane_lifecycle_lock, lifecycle_registration);
     assert!(poll(&mut commit_wait, &count).is_pending());
     assert!(poll(&mut lifecycle_wait, &count).is_pending());
     drop(consensus);
@@ -185,8 +213,10 @@ fn shared_commit_mutex_and_replay_swap_keep_the_actual_release_source() {
     let mut state = state();
     let mut replacement = self::state();
     let original_commit = Arc::clone(&state.state_commit_lock);
+    let registration =
+        crate::unit_test_support::release_registration(&state.ivm_execution_budget());
     let guard = original_commit.lock();
-    let mut wait = waiting(&state.state_commit_lock);
+    let mut wait = waiting(&state.state_commit_lock, registration);
     // The production replay handoff swaps these exact fields to preserve their
     // physical owners. Notification must follow the mutex, not the State address.
     std::mem::swap(
@@ -201,13 +231,15 @@ fn shared_commit_mutex_and_replay_swap_keep_the_actual_release_source() {
     assert!(poll(&mut wait, &count).is_ready());
     assert!(replacement.state_commit_lock.try_lock_or_wait().is_ok());
     for lifecycle in [false, true] {
+        let registration =
+            crate::unit_test_support::release_registration(&state.ivm_execution_budget());
         let original = if lifecycle {
             &state.lane_lifecycle_lock
         } else {
             &state.state_write_lock
         };
         let guard = original.lock();
-        let mut wait = waiting(original);
+        let mut wait = waiting(original, registration);
         drop(guard);
         if lifecycle {
             std::mem::swap(
@@ -228,9 +260,13 @@ fn shared_commit_mutex_and_replay_swap_keep_the_actual_release_source() {
 fn cancelling_one_state_fence_waiter_preserves_other_waiters() {
     let state = state();
     for lock in locks(&state) {
+        let canceled_registration =
+            crate::unit_test_support::release_registration(&state.ivm_execution_budget());
+        let retained_registration =
+            crate::unit_test_support::release_registration(&state.ivm_execution_budget());
         let guard = lock.lock();
-        let mut canceled = waiting(lock);
-        let mut retained = waiting(lock);
+        let mut canceled = waiting(lock, canceled_registration);
+        let mut retained = waiting(lock, retained_registration);
         let canceled_count = Arc::new(WakeCount::default());
         let retained_count = Arc::new(WakeCount::default());
         assert!(poll(&mut canceled, &canceled_count).is_pending());
@@ -248,15 +284,19 @@ fn fair_unlock_releases_actual_state_fence_before_notification() {
     let state = state();
     let generation = state.state_view_generation();
     for lock in locks(&state) {
+        let registration =
+            crate::unit_test_support::release_registration(&state.ivm_execution_budget());
+        let successor_registration =
+            crate::unit_test_support::release_registration(&state.ivm_execution_budget());
         let guard = lock.lock();
-        let mut wait = waiting(lock);
+        let mut wait = waiting(lock, registration);
         let count = Arc::new(WakeCount::default());
         assert!(poll(&mut wait, &count).is_pending());
         guard.unlock_fair();
         assert_eq!(count.0.load(Ordering::SeqCst), 1);
         assert!(poll(&mut wait, &count).is_ready());
         let successor = lock.try_lock_or_wait().expect("physical guard released");
-        let mut successor_wait = waiting(lock);
+        let mut successor_wait = waiting(lock, successor_registration);
         assert!(poll(&mut successor_wait, &count).is_pending());
         drop(successor);
         assert!(poll(&mut successor_wait, &count).is_ready());

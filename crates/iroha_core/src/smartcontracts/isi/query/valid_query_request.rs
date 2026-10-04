@@ -10,13 +10,26 @@ impl ValidQueryRequest {
         state_ro: &impl StateReadOnly,
         limits: QueryLimits,
     ) -> Result<Self, ValidationFail> {
-        let latest_block = state_ro.latest_block().map(|block| block.header());
+        let latest_block = state_ro
+            .latest_block()
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                    ValidationFail::QueryFailed(
+                        iroha_data_model::query::error::QueryExecutionFail::CanonicalHistory(error),
+                    )
+                }
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    ValidationFail::InternalError(format!("query execution unavailable: {reason}"))
+                }
+            })?
+            .map(|block| block.header());
         Self::validate_for_client_world_parts(
             request,
             authority,
             state_ro.world(),
             latest_block,
             limits,
+            &state_ro.execution_budget(),
         )
     }
     /// Validate a query for an API client using world-state and latest committed block header.
@@ -30,11 +43,12 @@ impl ValidQueryRequest {
         world_ro: &impl WorldReadOnly,
         latest_block: Option<BlockHeader>,
         limits: QueryLimits,
+        budget: &iroha_allocation::AllocationBudget,
     ) -> Result<Self, ValidationFail> {
         validate_query_request_limits(&request, limits)?;
         world_ro
             .executor()
-            .validate_query_with_world_parts(world_ro, latest_block, authority, &request)
+            .validate_query_with_world_parts(world_ro, latest_block, authority, &request, budget)
             .map_err(|error| match error {
                 crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
                 // API-client queries have no transaction output. Report an operational
@@ -279,7 +293,7 @@ impl ValidQueryRequest {
                     }
                     QueryItemKind::AssetDefinition => run_query!(
                         iroha_data_model::asset::definition::AssetDefinition,
-                        iroha_data_model::query::asset::prelude::FindAssetsDefinitions
+                        iroha_data_model::query::asset::prelude::FindAssetDefinitions
                     ),
                     QueryItemKind::RepoAgreement => run_query!(
                         iroha_data_model::repo::RepoAgreement,
@@ -686,7 +700,7 @@ impl ValidQueryRequest {
                     }
                     QueryItemKind::AssetDefinition => run_query!(
                         iroha_data_model::asset::definition::AssetDefinition,
-                        iroha_data_model::query::asset::prelude::FindAssetsDefinitions
+                        iroha_data_model::query::asset::prelude::FindAssetDefinitions
                     ),
                     QueryItemKind::RepoAgreement => run_query!(
                         iroha_data_model::repo::RepoAgreement,

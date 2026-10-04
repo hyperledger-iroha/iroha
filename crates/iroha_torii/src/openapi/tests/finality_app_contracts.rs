@@ -137,7 +137,7 @@ fn native_finality_schemas_are_exact_closed_and_bounded() {
 #[test]
 fn native_finality_schema_matches_executed_norito_json_and_rejects_retired_fields() {
     use iroha_core::{state::World, sumeragi::{finality::{build_checkpoint, build_proof}, test_chain::{CertifiedTestChain, TestChainConfig}}};
-    use iroha_data_model::{block::{CommitCertificate, decode_versioned_signed_block}, parameter::{Parameter, system::{ConsensusMode, SumeragiConsensusMode, SumeragiNposParameters}}, sumeragi_finality::{SumeragiFinalityProof, SumeragiFinalityVerifier}};
+    use iroha_data_model::{block::{CommitCertificate, decode_framed_signed_block}, parameter::{Parameter, system::{ConsensusMode, SumeragiConsensusMode, SumeragiNposParameters}}, sumeragi_finality::{SumeragiFinalityProof, SumeragiFinalityVerifier}};
     let mut config = TestChainConfig::new(World::new(), 1_000);
     config.consensus_mode = SumeragiConsensusMode::Npos;
     config.genesis_parameters.push(Parameter::Custom(SumeragiNposParameters::default().into_custom_parameter()));
@@ -184,15 +184,15 @@ fn native_finality_schema_matches_executed_norito_json_and_rejects_retired_field
     let wire = verified.canonical_executed_wire().unwrap();
     assert_eq!(verified.execution().executed_block_wire_len, wire.len() as u64);
     assert_eq!(verified.execution().executed_block_wire_hash, iroha_crypto::Hash::new(&wire));
-    let mut missing_result = proof.clone(); let mut block = decode_versioned_signed_block(&missing_result.block_wire).unwrap();
+    let mut missing_result = proof.clone(); let mut block = decode_framed_signed_block(&missing_result.block_wire).unwrap();
     block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(certificate.consensus_header().to_vec(), certificate.commit_qc().to_vec(), Vec::new(), certificate.availability().to_vec())));
     missing_result.block_wire = block.encode_wire().unwrap();
     assert!(verifier.verify_retained_decision(&missing_result).is_err(), "missing canonical execution preimage");
-    let mut missing_availability = proof.clone(); let mut block = decode_versioned_signed_block(&missing_availability.block_wire).unwrap();
+    let mut missing_availability = proof.clone(); let mut block = decode_framed_signed_block(&missing_availability.block_wire).unwrap();
     block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(certificate.consensus_header().to_vec(), certificate.commit_qc().to_vec(), certificate.result_preimage().to_vec(), Vec::new())));
     missing_availability.block_wire = block.encode_wire().unwrap();
     assert!(verifier.verify_retained_decision(&missing_availability).is_err(), "missing signed payload availability");
-    let mut forged_qc = proof.clone(); let mut block = decode_versioned_signed_block(&forged_qc.block_wire).unwrap();
+    let mut forged_qc = proof.clone(); let mut block = decode_framed_signed_block(&forged_qc.block_wire).unwrap();
     let mut qc = qc; qc.agg_sig.0[0] ^= 0x80;
     block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(certificate.consensus_header().to_vec(), norito::encode_canonical(&qc).unwrap(), certificate.result_preimage().to_vec(), certificate.availability().to_vec())));
     forged_qc.block_wire = block.encode_wire().unwrap(); assert!(verifier.verify_retained_decision(&forged_qc).is_err(), "forged exact native QC");
@@ -460,30 +460,54 @@ fn generated_spec_documents_exact_soracloud_priority_contracts() {
     );
 }
 #[test]
-fn generated_spec_documents_app_query_page_metadata() {
+fn generated_spec_documents_collection_pages_and_queries() {
     let document = generate_spec();
     assert_operation_response_contracts(
         &document,
         &response_rows! {
-        "/v1/accounts", "get", "200", "#/components/schemas/AccountListResponse";
-        "/v1/accounts/query", "post", "200", "#/components/schemas/AccountQueryResponse";
-        "/v1/domains", "get", "200", "#/components/schemas/DomainListResponse";
-        "/v1/domains/query", "post", "200", "#/components/schemas/DomainQueryResponse";
-        "/v1/accounts/{account_id}/assets", "get", "200", "#/components/schemas/AccountAssetListResponse";
-        "/v1/accounts/{account_id}/assets/query", "post", "200", "#/components/schemas/AccountAssetQueryResponse";
-        "/v1/assets/definitions", "get", "200", "#/components/schemas/AssetDefinitionListResponse";
-        "/v1/assets/definitions/query", "post", "200", "#/components/schemas/AssetDefinitionQueryResponse";
-        "/v1/assets/{definition_id}/holders", "get", "200", "#/components/schemas/AssetHolderListResponse";
-        "/v1/assets/{definition_id}/holders/query", "post", "200", "#/components/schemas/AssetHolderQueryResponse";
-        "/v1/nfts", "get", "200", "#/components/schemas/NftListResponse";
-        "/v1/nfts/query", "post", "200", "#/components/schemas/NftQueryResponse";
-        "/v1/rwas", "get", "200", "#/components/schemas/RwaListResponse";
-        "/v1/rwas/query", "post", "200", "#/components/schemas/RwaQueryResponse";
-        "/v1/repo/agreements", "get", "200", "#/components/schemas/RepoAgreementListResponse";
-        "/v1/repo/agreements/query", "post", "200", "#/components/schemas/RepoAgreementListResponse";
+        "/v1/accounts", "get", "200", "#/components/schemas/AccountPage";
+        "/v1/accounts/query", "post", "200", "#/components/schemas/AccountPage";
+        "/v1/domains", "get", "200", "#/components/schemas/DomainPage";
+        "/v1/domains/query", "post", "200", "#/components/schemas/DomainPage";
+        "/v1/accounts/{account_id}/assets", "get", "200", "#/components/schemas/AccountAssetPage";
+        "/v1/accounts/{account_id}/assets/query", "post", "200", "#/components/schemas/AccountAssetPage";
+        "/v1/assets/definitions", "get", "200", "#/components/schemas/AssetDefinitionPage";
+        "/v1/assets/definitions/query", "post", "200", "#/components/schemas/AssetDefinitionPage";
+        "/v1/assets/{definition_id}/holders", "get", "200", "#/components/schemas/AssetHolderPage";
+        "/v1/assets/{definition_id}/holders/query", "post", "200", "#/components/schemas/AssetHolderPage";
+        "/v1/nfts", "get", "200", "#/components/schemas/NftPage";
+        "/v1/nfts/query", "post", "200", "#/components/schemas/NftPage";
+        "/v1/rwas", "get", "200", "#/components/schemas/RwaPage";
+        "/v1/rwas/query", "post", "200", "#/components/schemas/RwaPage";
+        "/v1/accounts/{account_id}/transactions", "get", "200", "#/components/schemas/TransactionPage";
+        "/v1/accounts/{account_id}/transactions/query", "post", "200", "#/components/schemas/TransactionPage";
+        "/v1/transactions/query", "post", "200", "#/components/schemas/TransactionPage";
+        "/v1/accounts/{account_id}/history", "get", "200", "#/components/schemas/AccountHistoryPage";
+        "/v1/accounts/{account_id}/history/query", "post", "200", "#/components/schemas/AccountHistoryPage";
+        "/v1/contracts/activity", "get", "200", "#/components/schemas/ContractActivityPage";
+        "/v1/contracts/activity/query", "post", "200", "#/components/schemas/ContractActivityPage";
+        "/v1/contracts/events", "get", "200", "#/components/schemas/ContractEventPage";
+        "/v1/contracts/events/query", "post", "200", "#/components/schemas/ContractEventPage";
+        "/v1/repo/agreements", "get", "200", "#/components/schemas/RepoAgreementPage";
+        "/v1/repo/agreements/query", "post", "200", "#/components/schemas/RepoAgreementPage";
     },
     );
     let schemas = component_schemas(&document);
+    for page in contract_words("AccountPage AccountAssetPage AssetDefinitionPage AssetHolderPage DomainPage NftPage RepoAgreementPage RwaPage TransactionPage AccountHistoryPage ContractActivityPage ContractEventPage") {
+        let schema = contract_schema(schemas, page);
+        let required = schema_fields(schema, "required", page);
+        string_members! { required; Present => &["items", "next_cursor"]; };
+        let properties = contract_object(schema.get("properties"), page);
+        member_contracts! { properties; Absent => &["has_more", "count_mode", "offset"]; }
+    }
+    for path in contract_words("/v1/accounts/query /v1/domains/query /v1/repo/agreements/query") {
+        text_contracts! { operation_request_schema_ref(openapi_operation(&document, path, "post"), path) => "#/components/schemas/CollectionQuery"; }
+    }
+    text_contracts! { operation_request_schema_ref(openapi_operation(&document, "/v1/transactions/query", "post"), "/v1/transactions/query") => "#/components/schemas/HistoryQuery"; }
+    let query = contract_object(contract_schema(schemas, "CollectionQuery").get("properties"), "collection query properties");
+    member_contracts! { query; Present => contract_strings("collection.query.fields"); }
+    let history = contract_object(contract_schema(schemas, "HistoryQuery").get("properties"), "history query properties");
+    member_contracts! { history; Absent => &["sort", "aggregate", "include_total"]; }
     let metadata = contract_schema(schemas, "AppPageMetadata");
     assert_required_inventory(metadata, "app.page.required");
     let required = schema_fields(metadata, "required", "app page metadata");
@@ -497,8 +521,6 @@ fn generated_spec_documents_app_query_page_metadata() {
         string_members! { repo_required; Present => &[field]; };
         member_contracts! { repo_properties; Present => [field]; }
     }
-    let query = contract_object(contract_schema(schemas, "RepoAgreementsQueryRequest").get("properties"), "repo query properties");
-    member_contracts! { query; Present => contract_strings("repo.query.fields"); }
 }
 #[test]
 fn alias_openapi_documents_optional_public_and_exact_restricted_auth() {

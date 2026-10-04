@@ -34,8 +34,9 @@ impl InstalledRuntime {
 
     /// Resolve matching programs in a canonical package or an explicit loose development directory.
     ///
-    /// macOS applications use only their `.app/Contents/MacOS` directory; resources belong in
-    /// `Contents/Resources`. Loose developer binaries load profiles from their own directory.
+    /// macOS desktop applications use only `.app/Contents/MacOS` and `Contents/Resources`.
+    /// The native CLI package and explicit loose developer binaries load profiles beside their
+    /// two matching programs. A desktop UI is never a CLI runtime prerequisite.
     ///
     /// # Errors
     /// Missing binaries and indirect or nonregular program files are rejected.
@@ -60,10 +61,25 @@ impl InstalledRuntime {
         })
     }
 
-    /// Construct a startup request with the same installed worker and daemon.
+    /// Construct a fresh global startup request with the installed worker and daemon.
+    ///
+    /// Service-authority prerequisites are generated in the original genesis; services stay disabled.
     #[must_use]
     pub fn localnet_request(&self, name: &str, timeout: std::time::Duration) -> LocalnetRequest {
         let mut request = LocalnetRequest::new(self.kagami.clone(), self.daemon.clone());
+        request.name = name.into();
+        request.startup_timeout = timeout;
+        request
+    }
+
+    /// Construct a private-root startup request with no global service-authority profile.
+    #[must_use]
+    pub fn private_root_request(
+        &self,
+        name: &str,
+        timeout: std::time::Duration,
+    ) -> LocalnetRequest {
+        let mut request = LocalnetRequest::private_root(self.kagami.clone(), self.daemon.clone());
         request.name = name.into();
         request.startup_timeout = timeout;
         request
@@ -85,8 +101,9 @@ impl InstalledRuntime {
 impl ManagedStore {
     /// Ensure a selected developer environment is ready, creating the default only when none exists.
     ///
-    /// An explicit unknown context is an error. A retained selection restarts the exact same
-    /// generation; no frontend substitutes a fresh network after failed startup or corrupt state.
+    /// An explicit context starts without changing the workspace selection; an unknown one is
+    /// an error. A retained selection restarts the exact same generation; no frontend substitutes
+    /// a fresh network after failed startup or corrupt state.
     ///
     /// # Errors
     /// Returns context, custody, startup or readiness errors without replacing retained state.
@@ -104,7 +121,10 @@ impl ManagedStore {
         let mut request = runtime.localnet_request(&name, timeout);
         let status = if retained {
             request.service_profile = self.prepared(&name)?.service_profile;
-            self.up_retained(&request)?
+            self.up_retained_with_selection(
+                &request,
+                super::store::StartupSelection::for_requested_context(requested),
+            )?
         } else {
             self.up(&request)?
         };
@@ -233,6 +253,19 @@ mod tests {
         assert_eq!(request.name, "named");
         assert_eq!(request.startup_timeout, std::time::Duration::from_secs(7));
         assert_eq!(request.launcher.parent(), request.daemon.parent());
+        assert_eq!(
+            request.service_profile,
+            crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities
+        );
+        let private = runtime.private_root_request("private", std::time::Duration::from_secs(9));
+        assert_eq!(private.name, "private");
+        assert_eq!(private.startup_timeout, std::time::Duration::from_secs(9));
+        assert_eq!(private.launcher, request.launcher);
+        assert_eq!(private.daemon, request.daemon);
+        assert_eq!(
+            private.service_profile,
+            crate::localnet::LocalnetServiceProfile::Standard
+        );
         let store = ManagedStore::open(&temporary.path().join("state")).unwrap();
         assert!(
             store
@@ -449,7 +482,6 @@ chain = "00000000-0000-0000-0000-000000000000"
 network_id = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
 torii_url = "http://127.0.0.1:9/"
 [account]
-domain = "wonderland.universal"
 chain_discriminant = 753
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
 private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"

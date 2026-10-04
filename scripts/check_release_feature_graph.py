@@ -130,7 +130,7 @@ AUTOLOADED_BUILD_CONTROL_PATHSPECS = (
     ":(top,icase)csharp/NuGet.Config",
 )
 TRUSTED_RELEASE_SURFACE_SHA256 = (
-    "b5597e8812bd464c23f4b1cd4594854ff95aa6a421e88762b346c1b5d167d14a"
+    "764493ca996861079788bfe15607311c250a6890c3226ac28626b5d8b5beba2a"
 )
 HOSTILE_CARGO_ENVIRONMENT = frozenset(
     {
@@ -146,6 +146,7 @@ HOSTILE_CARGO_ENVIRONMENT = frozenset(
     }
 )
 FORBIDDEN_FEATURES = (
+    'irohad_lib feature "mutation-testing"',
     'iroha feature "test-fixtures"',
     'iroha_core feature "iroha-core-tests"',
     'iroha_core_zk feature "test-utils"',
@@ -225,7 +226,6 @@ SHIPPING_ROOT_FEATURE_ALLOWLIST = {
             "expensive-telemetry",
             "external-software-signer-bin",
             "gost",
-            "ivm-cuda",
             "schema-endpoint",
             "sm",
             "telemetry",
@@ -498,8 +498,60 @@ def trusted_release_surface_paths(repo: Path) -> tuple[Path, ...]:
     return ordered
 
 
+def _normalize_swift_native_bridge_hash_pins(contents: bytes) -> bytes:
+    """Normalize only the three canonical generated Swift fallback digests.
+
+    Keep this byte grammar aligned with the native source-seal owner. Importing
+    that candidate-owned module here would execute it before release admission.
+    Native artifact validation independently authenticates all three pin values;
+    every other loader byte remains part of the reviewed source digest.
+    """
+
+    block_pattern = re.compile(
+        rb'^    private static let expectedHashes: \[String: String\] = \[\n'
+        rb'(?P<body>(?:[ \t]+"(?:macos-arm64_x86_64|ios-arm64|ios-arm64_x86_64-simulator)"'
+        rb': "[0-9a-f]{64}",\n){2}'
+        rb'[ \t]+"(?:macos-arm64_x86_64|ios-arm64|ios-arm64_x86_64-simulator)"'
+        rb': "[0-9a-f]{64}"\n)'
+        rb'^    \]$',
+        re.MULTILINE,
+    )
+    pin_pattern = re.compile(
+        rb'^(?P<prefix>[ \t]+)"(?P<key>macos-arm64_x86_64|ios-arm64|ios-arm64_x86_64-simulator)"'
+        rb': "(?P<digest>[0-9a-f]{64})"(?P<suffix>,?)$',
+        re.MULTILINE,
+    )
+    blocks = list(block_pattern.finditer(contents))
+    if len(blocks) != 1:
+        raise RuntimeError(
+            "trusted release source surface drifted: NativeBridge.swift must "
+            "contain exactly one canonical expectedHashes block"
+        )
+    block = blocks[0]
+    body = block.group("body")
+    matches = list(pin_pattern.finditer(body))
+    if (
+        len(matches) != 3
+        or {match.group("key") for match in matches}
+        != {b"macos-arm64_x86_64", b"ios-arm64", b"ios-arm64_x86_64-simulator"}
+        or [match.group("suffix") for match in matches] != [b",", b",", b""]
+    ):
+        raise RuntimeError(
+            "trusted release source surface drifted: NativeBridge.swift must "
+            "contain exactly one canonical fallback hash for every Apple artifact slice"
+        )
+    for match in reversed(matches):
+        start, end = match.span("digest")
+        body = body[:start] + (b"0" * 64) + body[end:]
+    start, end = block.span("body")
+    return contents[:start] + body + contents[end:]
+
+
 def _release_surface_contents(relative: Path, contents: bytes) -> bytes:
-    """Normalize the seal value embedded in this guard before hashing it."""
+    """Normalize exact generated pins and this guard's own embedded seal."""
+
+    if relative == Path("IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"):
+        return _normalize_swift_native_bridge_hash_pins(contents)
 
     if relative != Path("scripts/check_release_feature_graph.py"):
         return contents
@@ -868,6 +920,20 @@ def _cargo_subprocess_environment() -> dict[str, str]:
         if _hostile_cargo_environment_name(name):
             environment.pop(name, None)
     return environment
+
+
+def validate_daemon_cuda_target_dependency(repo: Path) -> None:
+    """Require the sole mandatory Linux/Windows IVM CUDA target dependency."""
+    runtime = tomllib.loads((repo / "crates/irohad/Cargo.toml").read_text(encoding="utf-8"))
+    binary = tomllib.loads((repo / "crates/irohad/bins/Cargo.toml").read_text(encoding="utf-8"))
+    scope = 'cfg(any(target_os = "linux", target_os = "windows"))'
+    expected = {"workspace": True, "features": ["cuda"]}
+    targets = runtime.get("target", {})
+    if (runtime.get("dependencies", {}).get("ivm") != {"workspace": True}
+            or targets.get(scope, {}).get("dependencies", {}).get("ivm") != expected
+            or any("ivm" in value.get("dependencies", {}) for key, value in targets.items() if key != scope)
+            or any("ivm-cuda" in document.get("features", {}) for document in (runtime, binary))):
+        raise RuntimeError("daemon CUDA must use the exact mandatory Linux/Windows target dependency; aliases are retired")
 
 
 def workspace_catalog(repo: Path) -> WorkspaceCatalog:
@@ -1673,10 +1739,6 @@ def docker_publish_invocations(repo: Path) -> tuple[DockerInvocation, ...]:
                     f"{relative}: Docker build arguments are not declared by "
                     f"{dockerfile_relative}: {', '.join(sorted(undeclared_args))}"
                 )
-            if "ARG IVM_CUDA_TRUSTED_KEY_SHA256" in dockerfile_source and args.get(
-                "IVM_CUDA_TRUSTED_KEY_SHA256"
-            ) != "${{ vars.IVM_CUDA_TRUSTED_KEY_SHA256 }}":
-                raise RuntimeError(f"{relative}: reviewed CUDA public-key configuration is not forwarded")
             if "USE_PREBUILT" in args:
                 raise RuntimeError(
                     f"{relative}: official workflow may not override USE_PREBUILT"
@@ -1721,15 +1783,12 @@ def _validate_docker_acceleration_inputs(source: str, path: Path) -> None:
     """Keep every Linux image build bound to its signed bundled CUDA input."""
 
     markers = (
-        "ARG IVM_CUDA_TRUSTED_KEY_SHA256",
-        "ENV IVM_CUDA_TRUSTED_KEY_SHA256=${IVM_CUDA_TRUSTED_KEY_SHA256}",
-        "ENV IVM_CUDA_PTX_MODE=bundled",
-        'case ",${FEATURES}," in *,irohad/ivm-cuda,*)',
-        'test "${#IVM_CUDA_TRUSTED_KEY_SHA256}" -eq 64',
-        '*[!0-9a-f]*|0000000000000000000000000000000000000000000000000000000000000000)',
+        "for input in aes.ptx bitonic_sort.ptx bn254.ptx poseidon.ptx sha256.ptx sha256_leaves.ptx sha256_pairs_reduce.ptx sha3.ptx signature.ptx vector.ptx provenance.v1 provenance.v1.pub provenance.v1.sig; do",
+        'test -f "crates/ivm/cuda/${input}" && test ! -L "crates/ivm/cuda/${input}" || exit 1;',
     )
-    if any(source.count(marker) != 1 for marker in markers):
-        raise RuntimeError(f"{path}: signed CUDA build-input handoff changed")
+    if (any(source.count(marker) != 1 for marker in markers)
+            or any(token in source for token in ("ivm-cuda", "IVM_CUDA_TRUSTED_KEY_SHA256", "IVM_CUDA_PTX_MODE"))):
+        raise RuntimeError(f"{path}: fixed CUDA inventory preflight or retired input changed")
 
 
 def docker_shipping_targets(
@@ -1758,8 +1817,6 @@ def docker_shipping_targets(
         pair for value in global_features for pair in declared_feature_owners(value, catalog)
     }
     if any(target.package == "irohad" for target in resolved):
-        if ("irohad", "ivm-cuda") not in owned_features:
-            raise RuntimeError(f"{dockerfile}: shipping daemon omits mandatory CUDA")
         _validate_docker_acceleration_inputs(source, dockerfile)
 
     targets: list[ShippingTarget] = []
@@ -2118,14 +2175,14 @@ def _validate_nix_cargo_envelope(source: str, relative: Path) -> None:
     capability_markers = (
         'includesDaemon = builtins.any (binary: binary.package == "irohad") binaries;',
         'needsCuda = includesDaemon && (lib.hasInfix "-linux-" targetTriple || lib.hasInfix "-windows-" targetTriple);',
-        'releaseFeatures = lib.unique (features ++ lib.optional needsCuda "irohad/ivm-cuda");',
-        'IVM_CUDA_PTX_MODE = "bundled";',
-        'IVM_CUDA_TRUSTED_KEY_SHA256 = checkedCudaKey;',
-        'builtins.match "[0-9a-f]{64}" cudaTrustedKeySha256 != null',
-        'cudaTrustedKeySha256 != "0000000000000000000000000000000000000000000000000000000000000000"',
+        'releaseFeatures = lib.unique features;',
+        "preBuild = lib.optionalString needsCuda ''",
+        "test -f \"crates/ivm/cuda/''${input}\" && test ! -L \"crates/ivm/cuda/''${input}\" || exit 1",
+        'for input in aes.ptx bitonic_sort.ptx bn254.ptx poseidon.ptx sha256.ptx sha256_leaves.ptx sha256_pairs_reduce.ptx sha3.ptx signature.ptx vector.ptx provenance.v1 provenance.v1.pub provenance.v1.sig; do',
     )
-    if any(source.count(marker) != 1 for marker in capability_markers):
-        raise RuntimeError(f"{relative}: target-qualified acceleration or reviewed CUDA trust input changed")
+    if (any(source.count(marker) != 1 for marker in capability_markers)
+            or any(token in source for token in ("ivm-cuda", "IVM_CUDA_PTX_MODE", "IVM_CUDA_TRUSTED_KEY_SHA256", "cudaTrustedKeySha256"))):
+        raise RuntimeError(f"{relative}: target-qualified acceleration inventory preflight changed")
 
     rustflag_assignments = tuple(
         re.findall(
@@ -2312,10 +2369,6 @@ def nix_shipping_targets(
         for package, binary in pairs:
             resolved = _resolve_binary(catalog, binary, package)
             features = set(feature_sets[package])
-            if package == "irohad":
-                if "ivm-cuda" not in catalog.package_features[package]:
-                    raise RuntimeError(f"{relative}: daemon lacks mandatory shipping CUDA feature")
-                features.add("ivm-cuda")
             features.update(resolved.required_features)
             targets.append(
                 ShippingTarget(
@@ -2503,15 +2556,48 @@ def android_native_artifact_targets(
         raise RuntimeError(
             f"{ANDROID_NATIVE_BUILD_OWNER}: Android Cargo feature scope is not exact"
         )
+    # Cargo uses the authenticated workspace root lock through the canonical
+    # root manifest. --lockfile-path belongs to the source-seal helper only;
+    # the hermetic Cargo owner deliberately rejects alternate lock authorities.
     required_markers = (
         'tools.hermeticRunner.toString()',
         '"--profile",\n                        "android-cargo"',
-        '"--locked",\n                        "--offline"',
-        '"--lockfile-path",\n                        tools.cargoLock.toString()',
     )
-    if any(marker not in command for marker in required_markers):
+    cargo_envelope = (
+        r'"build",\s*"--locked",\s*"--offline",\s*'
+        r'"--jobs",\s*"1",\s*"--manifest-path",\s*'
+        r'irohaRoot\.resolve\("Cargo\.toml"\)\.absolutePath'
+    )
+    if (
+        any(marker not in command for marker in required_markers)
+        or len(re.findall(cargo_envelope, command)) != 1
+    ):
         raise RuntimeError(
             f"{ANDROID_NATIVE_BUILD_OWNER}: Android Cargo envelope is incomplete"
+        )
+    command_literals = re.findall(r'"([^"\n]*)"', command)
+    if (
+        any(command_literals.count(value) != 1 for value in (
+            "build", "--locked", "--offline", "--jobs", "--manifest-path",
+        ))
+        or any(
+            value.startswith(("-j", "-Z", "--jobs=", "--manifest-path=",
+                              "--lockfile-path", "--config"))
+            for value in command_literals
+        )
+    ):
+        raise RuntimeError(
+            f"{ANDROID_NATIVE_BUILD_OWNER}: Android Cargo envelope is not exact"
+        )
+    root_lock_markers = (
+        'val cargoLock = canonicalIrohaRoot.resolve("Cargo.lock")',
+        "Files.isRegularFile(cargoLock, LinkOption.NOFOLLOW_LINKS)",
+        "!Files.isSymbolicLink(cargoLock)",
+        "cargoLock.toRealPath(LinkOption.NOFOLLOW_LINKS) == cargoLock",
+    )
+    if any(marker not in source for marker in root_lock_markers):
+        raise RuntimeError(
+            f"{ANDROID_NATIVE_BUILD_OWNER}: Android root Cargo.lock custody changed"
         )
     packaging_markers = (
         "inputDirectory.set(compileNativeLibs.flatMap { it.outputDirectory })",
@@ -2526,10 +2612,25 @@ def android_native_artifact_targets(
     runner = (repo / ANDROID_HERMETIC_RUNNER).read_text(encoding="utf-8")
     runner_markers = (
         'if args.profile == "android-cargo":',
-        'authenticate_android_cargo_arguments(\n            args.command',
+        'root_lock, lock_identity = authenticate_regular_file(\n'
+        '        "Android root Cargo.lock",\n'
+        '        canonical_workspace / "Cargo.lock",',
+        'manifest_position = exact_pair("--manifest-path", '
+        'str(canonical_workspace / "Cargo.toml"))',
+        'value == "--lockfile-path"',
+        'for name, (path, expected_identity) in authenticated_files.items():',
+        '_, current_identity = authenticate_regular_file(name, path)',
+        'if current_identity != expected_identity:',
         'resolved != authenticated_tools["CARGO"][0]',
     )
-    if any(marker not in runner for marker in runner_markers):
+    tracked_lock_call = (
+        r'authenticated_files\["Android root Cargo\.lock"\]\s*=\s*'
+        r'authenticate_android_cargo_arguments\(\s*args\.command\s*\)'
+    )
+    if (
+        any(marker not in runner for marker in runner_markers)
+        or len(re.findall(tracked_lock_call, runner)) != 1
+    ):
         raise RuntimeError(
             f"{ANDROID_HERMETIC_RUNNER}: Android Cargo authentication changed"
         )
@@ -2601,7 +2702,6 @@ def canonical_release_bundle_policy(repo: Path) -> str:
         "--cargo-profile",
         "--features",
         '"${provenance_binaries[@]}"',
-        '"${cuda_provenance_args[@]}"',
         "--output-directory",
     )
     for script, source in (
@@ -2611,7 +2711,7 @@ def canonical_release_bundle_policy(repo: Path) -> str:
         capability_markers = (
             "from release_artifact_contract import release_acceleration_features",
             'release_acceleration_features(sys.argv[2], filter(None, sys.argv[3].split(",")))',
-            'cuda_provenance_args=(--trusted-cuda-key-sha256 "$trusted_cuda_key_sha256")',
+            'require_release_cuda_source_inputs(Path(sys.argv[1]).parent, sys.argv[2])',
         )
         if any(source.count(marker) != 1 for marker in capability_markers):
             raise RuntimeError(f"{script}: target acceleration or independent CUDA trust handoff changed")
@@ -2838,11 +2938,7 @@ def release_bundle_targets(
             catalog, target.package, fixed_features, RELEASE_BUNDLE_SCRIPT
         )
         features.update(target.required_features)
-        # This graph is the union over canonical Linux/macOS/Windows targets.
-        if target.package == "irohad":
-            if "ivm-cuda" not in catalog.package_features[target.package]:
-                raise RuntimeError("canonical daemon lacks required shipping CUDA feature")
-            features.add("ivm-cuda")
+        # Mandatory platform dependencies carry the canonical target union.
         targets.append(
             ShippingTarget(
                 package=target.package,
@@ -3047,6 +3143,7 @@ def main() -> int:
         )
         print("trusted release source commit and surface passed")
         return 0
+    validate_daemon_cuda_target_dependency(repo)
     profiles = shipping_profiles(repo)
     if args.packages:
         selected: list[ShippingProfile] = []

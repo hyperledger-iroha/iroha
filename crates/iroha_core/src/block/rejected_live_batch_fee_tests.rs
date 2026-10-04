@@ -52,7 +52,11 @@ fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
     };
     let native_chain = component_chain(state);
     let state = native_chain.state();
-    let latest_signed = state.view().latest_block().expect("original genesis");
+    let latest_signed = state
+        .view()
+        .latest_block()
+        .expect("original block read attempt")
+        .expect("original genesis");
     let marker: Name = "rejected_batch_business_effect"
         .parse()
         .expect("metadata key");
@@ -228,10 +232,20 @@ ledger::account::set_detail(
         [payer_asset, sink_asset],
         [],
     );
-    world.contract_code.insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash), program);
-    world
-        .contract_manifests
-        .insert(iroha_data_model::smart_contract::ContractArtifactId::new(iroha_model_base::topology::DataSpaceId::UNIVERSAL, code_hash), manifest.signed(&payer_keypair));
+    world.contract_code.insert(
+        iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
+        program,
+    );
+    world.contract_manifests.insert(
+        iroha_data_model::smart_contract::ContractArtifactId::new(
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            code_hash,
+        ),
+        manifest.signed(&payer_keypair),
+    );
     world
         .contract_instances
         .insert(contract_address.clone(), code_hash);
@@ -272,7 +286,11 @@ ledger::account::set_detail(
     };
     let native_chain = component_chain(state);
     let state = native_chain.state();
-    let latest_signed = state.view().latest_block().expect("original genesis");
+    let latest_signed = state
+        .view()
+        .latest_block()
+        .expect("original block read attempt")
+        .expect("original genesis");
     let invocation = iroha_data_model::transaction::executable::ContractInvocation {
         contract_address,
         expected_code_hash: code_hash,
@@ -420,7 +438,14 @@ fn successful_live_batches_accumulate_parent_block_gas() {
             transactions,
             TimeSource::new_fixed(Duration::from_millis(10)),
         )
-        .chain(0, state.view().latest_block().as_deref())
+        .chain(
+            0,
+            state
+                .view()
+                .latest_block()
+                .expect("original block read attempt")
+                .as_deref(),
+        )
         .sign(keypair.private_key())
         .unpack(|_| {});
         let (mut state_block, state_block_recorder) =

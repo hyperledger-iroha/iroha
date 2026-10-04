@@ -343,6 +343,7 @@ impl FinalPromotionSubmittedReserveV1 {
             .map_err(|error| match error {
                 FinalPromotionObserverTransactionErrorV1::Provider => Error::Provider,
                 FinalPromotionObserverTransactionErrorV1::Payload => Error::Payload,
+                FinalPromotionObserverTransactionErrorV1::Unavailable => Error::LocalCapacity,
                 _ => Error::Check,
             })?;
         pending.ensure_live().map_err(|_| Error::Check)?;
@@ -356,21 +357,16 @@ impl FinalPromotionSubmittedReserveV1 {
                 .map_err(|_| Error::Submission)?;
         }
         pending.ensure_live().map_err(|_| Error::Check)?;
-        let verified = pending
-            .verify_finalized(
-                FinalPromotionCheckSourceV1::Reserved(
-                    owner.signed_reserve.reconciliation_transaction(),
-                ),
-                || {
-                    clock
-                        .sample()
-                        .map_err(|_| FinalPromotionObservationErrorV1::Clock)
-                },
+        let mut verify = |pending: iroha_core::query::final_promotion_authority::observation::PendingFinalPromotionCheckV1| {
+            pending.verify_finalized(
+                FinalPromotionCheckSourceV1::Reserved(owner.signed_reserve.reconciliation_transaction()),
+                || clock.sample().map_err(|_| FinalPromotionObservationErrorV1::Clock),
             )
-            .map_err(|error| match error {
-                FinalPromotionObservationErrorV1::Clock => Error::Clock,
-                _ => Error::Check,
-            })?;
+        };
+        let verified = crate::native_check_binding::complete_check(verify(pending), |failure| {
+            verify(failure.into_pending())
+        })
+        .map_err(super::current_observation::verification_error)?;
         if verified.applied_floor().height <= owner.pre_reserve_floor.height {
             return Err(Error::Floor);
         }

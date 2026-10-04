@@ -9,6 +9,9 @@ use std::{
 use tempfile::{NamedTempFile, TempDir};
 use zeroize::Zeroizing;
 
+const PRIVATE_DIRECTORY_PREFIX: &str = ".iroha-b-";
+const PRIVATE_DIRECTORY_RANDOM_BYTES: usize = 6;
+const BROKER_SOCKET_BASENAME: &str = "runtime-provider-broker-v1.sock";
 const PUBLIC_CATALOG_MAX_BYTES: usize = 256 * 1024;
 const CREDENTIAL_BUNDLE_MAX_BYTES: usize = 2 * 16 * 1024 * 1024 + 28;
 const BROKER_READY_TOKEN: &[u8; 6] = b"READY\n";
@@ -49,6 +52,7 @@ pub(super) struct DisposableBrokerConfig {
     directory: Arc<TempDir>,
     endpoint: RuntimeProviderBrokerEndpointPath,
     catalog_path: PathBuf,
+    policy_path: PathBuf,
     credential_bundle: Zeroizing<Vec<u8>>,
     beacon_binding: DisposableBeaconProviderBinding,
 }
@@ -59,6 +63,7 @@ impl fmt::Debug for DisposableBrokerConfig {
             .debug_struct("DisposableBrokerConfig")
             .field("endpoint", &self.endpoint)
             .field("catalog_path", &self.catalog_path)
+            .field("policy_path", &self.policy_path)
             .field("beacon_binding", &self.beacon_binding)
             .field("credential_bundle", &"[REDACTED]")
             .finish()
@@ -84,26 +89,54 @@ fn verify_trusted_directory_chain(path: &Path, immediate_owner: u32) -> Result<(
 }
 
 fn create_private_directory() -> Result<Arc<TempDir>> {
-    let uid = nix::unistd::Uid::effective();
-    let owner = nix::unistd::User::from_uid(uid)?
-        .ok_or_else(|| eyre!("cannot resolve current service UID for broker custody"))?;
-    if !owner.dir.is_absolute()
-        || owner
-            .dir
-            .components()
-            .any(|component| !matches!(component, Component::RootDir | Component::Normal(_)))
+    let parent = match std::env::var_os(TEMPDIR_IN_ENV) {
+        Some(configured) => PathBuf::from(configured),
+        None => {
+            let uid = nix::unistd::Uid::effective();
+            nix::unistd::User::from_uid(uid)?
+                .ok_or_else(|| eyre!("cannot resolve current service UID for broker custody"))?
+                .dir
+        }
+    };
+    create_private_directory_in(&parent)
+}
+
+fn create_private_directory_in(parent: &Path) -> Result<Arc<TempDir>> {
+    let uid = nix::unistd::Uid::effective().as_raw();
+    let raw = parent
+        .to_str()
+        .ok_or_else(|| eyre!("disposable broker root must be canonical absolute UTF-8"))?;
+    if !raw.starts_with('/')
+        || raw.split('/').skip(1).any(|component| {
+            component.is_empty()
+                || matches!(component, "." | "..")
+                || component.contains('\\')
+                || component.chars().any(char::is_control)
+        })
     {
         return Err(eyre!(
-            "current service UID has a noncanonical home directory"
+            "disposable broker root must be canonical absolute UTF-8"
         ));
     }
-    verify_trusted_directory_chain(&owner.dir, uid.as_raw())?;
+    verify_trusted_directory_chain(parent, uid)?;
+    // Reserve the real fixed-width directory suffix in the same endpoint bound
+    // before creating anything. Long configured test roots must fail explicitly.
+    RuntimeProviderBrokerEndpointPath::try_new(
+        parent
+            .join(format!(
+                "{PRIVATE_DIRECTORY_PREFIX}{}",
+                "x".repeat(PRIVATE_DIRECTORY_RANDOM_BYTES)
+            ))
+            .join(BROKER_SOCKET_BASENAME),
+    )
+    .map_err(|_| eyre!("disposable broker root makes the canonical socket path too long"))?;
     // Created owner-private: without explicit permissions the directory gets the process umask.
     let directory = tempfile::Builder::new()
-        .prefix(".iroha-b-")
+        .prefix(PRIVATE_DIRECTORY_PREFIX)
+        .rand_bytes(PRIVATE_DIRECTORY_RANDOM_BYTES)
         .permissions(Permissions::from_mode(0o700))
-        .tempdir_in(owner.dir)?;
-    verify_trusted_directory_chain(directory.path(), uid.as_raw())?;
+        .tempdir_in(parent)?;
+    verify_trusted_directory_chain(directory.path(), uid)?;
     if fs::symlink_metadata(directory.path())?.permissions().mode() & 0o7777 != 0o700 {
         return Err(eyre!("disposable broker directory must be mode 0700"));
     }
@@ -112,15 +145,15 @@ fn create_private_directory() -> Result<Arc<TempDir>> {
 
 /// Create one owner-private root for a disposable peer's native DKG attempt.
 ///
-/// Its parent is resolved from the effective UID rather than process environment,
-/// and every ancestor is checked against the stock broker's ownership and mode
-/// policy. Each call gives the caller a distinct root; dropping the returned
-/// handle removes the attempt material after the network qualification run.
+/// The existing developer-only `TEST_NETWORK_TMP_DIR` chooses its parent when
+/// set; otherwise the effective service UID's home is used. Every ancestor must
+/// satisfy the stock broker's ownership and mode policy. Each call creates a
+/// distinct root; dropping the handle removes that attempt's material.
 ///
 /// # Errors
 ///
-/// Rejects an unresolved service UID, an unsafe home ancestry, or a directory
-/// that was not created with exact owner-only permissions.
+/// Rejects an unresolved service UID, a noncanonical or unsafe parent, an
+/// oversized socket path, or a directory without exact owner-only permissions.
 pub fn new_disposable_owner_private_root() -> Result<Arc<TempDir>> {
     create_private_directory()
 }
@@ -158,15 +191,37 @@ impl DisposableBrokerConfig {
         };
         verify_trusted_directory_chain(directory.path(), nix::unistd::Uid::effective().as_raw())?;
         let endpoint = RuntimeProviderBrokerEndpointPath::try_new(
-            directory.path().join("runtime-provider-broker-v1.sock"),
+            directory.path().join(BROKER_SOCKET_BASENAME),
         )
         .map_err(|_| eyre!("owner-private broker socket path is not canonical or is too long"))?;
         let catalog_path = directory.path().join("catalog.norito");
         publish_public_catalog(directory.path(), &catalog_path, catalog)?;
+        let policy_path = directory.path().join("broker-policy.toml");
+        let mut policy = toml::Table::new();
+        policy.insert(
+            "endpoint_path".into(),
+            toml::Value::String(
+                endpoint
+                    .as_path()
+                    .to_str()
+                    .ok_or_else(|| eyre!("broker endpoint must be UTF-8"))?
+                    .into(),
+            ),
+        );
+        policy.insert(
+            "observer_operation_timeout_ms".into(),
+            toml::Value::Integer(15_000),
+        );
+        publish_public_catalog(
+            directory.path(),
+            &policy_path,
+            toml::to_string(&policy)?.as_bytes(),
+        )?;
         Ok(Self {
             directory,
             endpoint,
             catalog_path,
+            policy_path,
             credential_bundle,
             beacon_binding,
         })
@@ -265,8 +320,8 @@ impl NetworkPeer {
         command
             .arg("--catalog")
             .arg(&configured.catalog_path)
-            .arg("--broker-endpoint")
-            .arg(configured.endpoint.as_path())
+            .arg("--broker-policy")
+            .arg(&configured.policy_path)
             .current_dir(configured.directory.path())
             .env_clear()
             .stdin(Stdio::piped())
@@ -362,6 +417,18 @@ mod tests {
             Some("runtime-provider-broker-v1.sock")
         );
         assert_eq!(fs::read(&prepared.catalog_path)?, b"public-catalog");
+        let policy = iroha_config::parameters::actual::RuntimeProviderBroker::from_toml_source(
+            iroha_config::base::toml::TomlSource::inline(
+                fs::read_to_string(&prepared.policy_path)?.parse()?,
+            ),
+        )
+        .map_err(|error| eyre!("parse staged disposable broker policy: {error:?}"))?;
+        assert_eq!(policy.endpoint_path, prepared.endpoint);
+        assert_eq!(policy.observer_operation_timeout, Duration::from_secs(15));
+        assert_eq!(
+            fs::symlink_metadata(&prepared.policy_path)?.mode() & 0o7777,
+            0o400
+        );
         assert_eq!(
             fs::symlink_metadata(&prepared.catalog_path)?.mode() & 0o7777,
             0o400
@@ -392,6 +459,78 @@ mod tests {
             assert_eq!(fs::symlink_metadata(root.path())?.mode() & 0o7777, 0o700);
             verify_trusted_directory_chain(root.path(), nix::unistd::Uid::effective().as_raw())?;
         }
+        Ok(())
+    }
+
+    fn configured_root_fixture() -> Result<TempDir> {
+        // A short checkout-local parent also leaves room for the full canonical
+        // Unix socket basename on macOS; no home or system-temp file is created.
+        Ok(tempfile::Builder::new()
+            .prefix("")
+            .rand_bytes(6)
+            .permissions(Permissions::from_mode(0o700))
+            .tempdir_in(repo_root().join("target"))?)
+    }
+
+    #[test]
+    fn configured_broker_root_retains_exact_parent_owner_and_endpoint_bound() -> Result<()> {
+        let parent = configured_root_fixture()?;
+        let first = create_private_directory_in(parent.path())?;
+        let second = create_private_directory_in(parent.path())?;
+        assert_ne!(first.path(), second.path());
+        for child in [&first, &second] {
+            assert_eq!(child.path().parent(), Some(parent.path()));
+            assert_eq!(fs::symlink_metadata(child.path())?.mode() & 0o7777, 0o700);
+            verify_trusted_directory_chain(child.path(), nix::unistd::Uid::effective().as_raw())?;
+            RuntimeProviderBrokerEndpointPath::try_new(child.path().join(BROKER_SOCKET_BASENAME))?;
+        }
+        drop(first);
+        drop(second);
+        assert_eq!(fs::read_dir(parent.path())?.count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn configured_broker_root_rejects_noncanonical_mutable_and_symlink_parents() -> Result<()> {
+        let parent = configured_root_fixture()?;
+        for bad in [
+            PathBuf::new(),
+            PathBuf::from("relative"),
+            PathBuf::from(format!("{}/", parent.path().display())),
+            PathBuf::from(format!("{}/./child", parent.path().display())),
+            PathBuf::from(format!("{}/../child", parent.path().display())),
+            PathBuf::from(format!("{}//child", parent.path().display())),
+            PathBuf::from(format!("{}/bad\\child", parent.path().display())),
+            PathBuf::from(format!("{}/bad\nchild", parent.path().display())),
+        ] {
+            let error = create_private_directory_in(&bad).unwrap_err();
+            assert!(
+                error.to_string().contains("canonical absolute"),
+                "{error:?}"
+            );
+        }
+        assert_eq!(fs::read_dir(parent.path())?.count(), 0);
+        fs::set_permissions(parent.path(), Permissions::from_mode(0o770))?;
+        let error = create_private_directory_in(parent.path()).unwrap_err();
+        fs::set_permissions(parent.path(), Permissions::from_mode(0o700))?;
+        assert!(error.to_string().contains("untrusted directory ancestor"));
+        let link = parent.path().join("link");
+        std::os::unix::fs::symlink(parent.path(), &link)?;
+        let error = create_private_directory_in(&link).unwrap_err();
+        assert!(error.to_string().contains("untrusted directory ancestor"));
+        assert_eq!(fs::read_dir(parent.path())?.count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn configured_broker_root_rejects_oversized_endpoint_before_creating_custody() -> Result<()> {
+        let parent = configured_root_fixture()?;
+        let long = parent.path().join("x".repeat(64));
+        fs::create_dir(&long)?;
+        fs::set_permissions(&long, Permissions::from_mode(0o700))?;
+        let error = create_private_directory_in(&long).unwrap_err();
+        assert!(error.to_string().contains("socket path too long"));
+        assert_eq!(fs::read_dir(&long)?.count(), 0);
         Ok(())
     }
 

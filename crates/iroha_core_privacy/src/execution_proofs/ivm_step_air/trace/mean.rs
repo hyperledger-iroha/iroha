@@ -50,7 +50,7 @@ pub(in super::super) fn result_witness(left: u64, right: u64) -> [F; WIDTH] {
 }
 
 pub(super) fn append_residues(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     bank: &[F],
     gas: &[F],
     sum: &[F],
@@ -79,7 +79,7 @@ pub(super) fn append_residues(
 /// Shared exact 65-bit signed sum, arithmetic shift and negative-odd correction.
 /// Callers own unconditional result ranges, carry bits and canonical inactive cells.
 pub(in super::super) fn append_arithmetic_residues(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     bank: &[F],
     sum: &[F],
     sources: Sources<'_>,

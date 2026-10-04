@@ -9,7 +9,25 @@
 //! Kotodama targets the IVM bytecode format exclusively. All helpers in this
 //! module emit the canonical wide encoding introduced for the first release; no
 //! alternate instruction layouts are generated.
+mod access_hint_normalization;
+mod compact_emission;
+#[cfg(test)]
+mod emission_profile;
 mod entrypoint_descriptors;
+mod frame_emission;
+mod local_emission;
+#[cfg(test)]
+mod local_structural_controls;
+#[cfg(test)]
+mod numeric_operands;
+mod numeric_zero;
+#[cfg(test)]
+mod single_use_fixtures;
+#[cfg(test)]
+mod single_use_private;
+#[cfg(test)]
+mod state_operands;
+use access_hint_normalization::canonical_state_hint_keys;
 use entrypoint_descriptors::build_entrypoint_descriptors;
 
 /// Opaque phase boundaries used by the compiler regression benchmark.
@@ -1715,7 +1733,7 @@ pub struct CompilerOptions {
     /// Selects production artifact compilation or explicit local-test compilation.
     ///
     /// Production mode rejects test declarations and test-capable typed HIR; it never silently
-    /// strips them from a deployable artifact. Test mode emits an ABI-authenticated generic IVM 1.0
+    /// strips them from a deployable artifact. Test mode emits an ABI-authenticated generic IVM 1.1
     /// harness without a deployable CNTR section.
     pub mode: CompilerMode,
 }
@@ -1864,7 +1882,7 @@ mod test_mode_tests {
             .compile_source_with_manifest_and_report(src)
             .expect("compile in test mode");
         let parsed = ProgramMetadata::parse(&code).expect("parse test harness metadata");
-        assert_eq!(parsed.metadata.version_minor, 0);
+        assert_eq!(parsed.metadata.version_minor, 1);
         assert_eq!(parsed.metadata.abi_version, KOTODAMA_ABI_VERSION);
         assert!(
             parsed.contract_interface.is_none(),
@@ -2486,99 +2504,13 @@ mod test_mode_tests {
     }
     #[test]
     fn leaf_identity_uses_the_same_bounded_table_frame_as_all_functions() {
-        let source = include_str!("compiler/fixtures/v1/c186.ko");
-        let (artifact, _manifest, report) = Compiler::new()
-            .compile_source_with_manifest_and_report(source)
-            .expect("compile leaf table fixture");
-        let identity = report
-            .budget_report
-            .iter()
-            .find(|entry| entry.function_name == "identity")
-            .unwrap();
-        assert_eq!(
-            identity.frame_bytes, 16,
-            "only saved argument/result bases are needed"
-        );
-        let metadata = ProgramMetadata::parse(&artifact).unwrap();
-        let callable = metadata
-            .contract_interface
-            .as_ref()
-            .unwrap()
-            .callables
-            .iter()
-            .find(|callable| callable.entry_pc == identity.pc_start)
-            .unwrap();
-        assert_eq!(callable.argument_words.len(), 1);
-        assert_eq!(callable.result_words.len(), 1);
-        let words = artifact[metadata.code_offset + identity.pc_start as usize
-            ..metadata.code_offset + identity.pc_end as usize]
-            .chunks_exact(4)
-            .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            words
-                .iter()
-                .filter(
-                    |word| instruction::wide::opcode(**word) == instruction::wide::memory::LOAD64
-                )
-                .count(),
-            3
-        );
-        assert_eq!(
-            words
-                .iter()
-                .filter(
-                    |word| instruction::wide::opcode(**word) == instruction::wide::memory::STORE64
-                )
-                .count(),
-            3
-        );
-        assert_eq!(
-            instruction::wide::opcode(*words.last().unwrap()),
-            instruction::wide::control::JALR
-        );
+        super::local_structural_controls::leaf_identity(include_str!(
+            "compiler/fixtures/v1/c186.ko"
+        ));
     }
     #[test]
     fn call_local_values_avoid_callee_save_and_spill_stack_traffic() {
-        let source = include_str!("compiler/fixtures/v1/c187.ko");
-        let (artifact, _manifest, report) = Compiler::new()
-            .compile_source_with_manifest_and_report(source)
-            .expect("compile call-aware allocation fixture");
-        assert_eq!(
-            artifact,
-            Compiler::new()
-                .compile_source(source)
-                .expect("repeat call-aware allocation fixture"),
-            "call-aware allocation and ABI shuffles must be deterministic"
-        );
-        let implementation = report
-            .budget_report
-            .iter()
-            .find(|entry| entry.function_name == "run")
-            .expect("run implementation budget report");
-        assert_eq!(
-            implementation.frame_bytes, 64,
-            "calls reserve only the return link, saved table bases, and reusable outgoing tables"
-        );
-        let metadata = ProgramMetadata::parse(&artifact).expect("parse call-aware artifact");
-        let words = artifact[metadata.code_offset + implementation.pc_start as usize
-            ..metadata.code_offset + implementation.pc_end as usize]
-            .chunks_exact(4)
-            .map(|word| u32::from_le_bytes(word.try_into().expect("instruction word")))
-            .collect::<Vec<_>>();
-        let loads = words
-            .iter()
-            .filter(|word| instruction::wide::opcode(**word) == instruction::wide::memory::LOAD64)
-            .count();
-        let stores = words
-            .iter()
-            .filter(|word| instruction::wide::opcode(**word) == instruction::wide::memory::STORE64)
-            .count();
-        assert_eq!(
-            (loads, stores),
-            (5, 7),
-            "table traffic includes no additional value spills: {words:08x?}"
-        );
+        super::local_structural_controls::call_local(include_str!("compiler/fixtures/v1/c187.ko"));
     }
     #[test]
     fn whole_program_dce_removes_unused_private_code_and_extra_dispatch_wrappers() {
@@ -2694,100 +2626,7 @@ mod test_mode_tests {
     }
     #[test]
     fn split_spill_cluster_reloads_once_and_reuses_a_real_register() {
-        let source = include_str!("compiler/fixtures/v1/c190.ko");
-        let parsed = crate::parser::parse(source).expect("parse split-spill fixture");
-        let typed = crate::semantic::analyze(&parsed).expect("analyze split-spill fixture");
-        let implementation_name = typed
-            .items
-            .iter()
-            .find_map(|item| {
-                let semantic::TypedItem::Function(function) = item;
-                (function.name == "reuse").then(|| super::entrypoint_ir_symbol_name(function))
-            })
-            .expect("reuse typed function");
-        let lowered = crate::ir::lower(&typed).expect("lower split-spill fixture");
-        let mut optimized = crate::ssa::Program::from_ir(lowered).expect("construct SSA fixture");
-        optimized
-            .optimize_and_retain(&std::collections::BTreeSet::from([
-                implementation_name.clone()
-            ]))
-            .expect("optimize SSA fixture");
-        let lowered = optimized.into_ir().expect("destroy SSA fixture");
-        let function = lowered
-            .functions
-            .iter()
-            .find(|function| function.name == implementation_name)
-            .expect("reuse implementation IR function");
-        let a0 = function
-            .blocks
-            .iter()
-            .flat_map(|block| &block.instrs)
-            .find_map(|instruction| match instruction {
-                ir::Instr::LoadVar { dest, name } if name == "a0" => Some(*dest),
-                _ => None,
-            })
-            .expect("a0 parameter temporary");
-        let plan = crate::regalloc::allocate_with_splitting(function);
-        let split_stack_offset = *plan.stack.get(&a0).expect("a0 stack home");
-        assert!(
-            !crate::regalloc::has_internal_calls(function),
-            "fixture spill offsets assume no return-address prefix"
-        );
-        let split_register = plan.first_split_register(a0).expect("a0 split register");
-        let (artifact, _manifest, report) = Compiler::new()
-            .compile_source_with_manifest_and_report(source)
-            .expect("compile split-spill fixture");
-        let second = Compiler::new()
-            .compile_source(source)
-            .expect("repeat split-spill compile");
-        assert_eq!(
-            artifact, second,
-            "split code generation must be deterministic"
-        );
-        let metadata = ProgramMetadata::parse(&artifact).expect("parse split-spill artifact");
-        let budget = report
-            .budget_report
-            .iter()
-            .find(|entry| entry.function_name == implementation_name)
-            .expect("reuse implementation budget report");
-        let words = artifact[metadata.code_offset + budget.pc_start as usize
-            ..metadata.code_offset + budget.pc_end as usize]
-            .chunks_exact(4)
-            .map(|word| u32::from_le_bytes(word.try_into().expect("instruction word")))
-            .collect::<Vec<_>>();
-        let split_register = split_register as u8;
-        let split_reloads = words
-            .iter()
-            .enumerate()
-            .filter_map(|(index, word)| {
-                let (opcode, destination, base, offset) = encoding::wide::decode_mem(*word);
-                (opcode == instruction::wide::memory::LOAD64
-                    && destination == split_register
-                    && base == crate::regalloc::SP_REG as u8
-                    && i64::from(offset) == (16 + split_stack_offset) as i64)
-                    .then_some(index)
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            split_reloads.len(),
-            1,
-            "the a0 stack home must be reloaded once for its split segment: {words:08x?}"
-        );
-        let reload = split_reloads[0];
-        let arithmetic_uses = words[reload + 1..]
-            .iter()
-            .filter(|word| {
-                if instruction::wide::opcode(**word) != instruction::wide::arithmetic::ADDI {
-                    return false;
-                }
-                let (_, _, source, immediate) = encoding::wide::decode_ri(**word);
-                source == split_register && immediate == 0
-            })
-            .count();
-        assert!(
-            arithmetic_uses >= 3,
-            "the split register must feed every clustered checked numeric syscall: {words:08x?}"
-        );
+        super::local_structural_controls::split_spill(include_str!("compiler/fixtures/v1/c190.ko"));
     }
     #[test]
     fn structured_branches_use_two_words_and_fuse_signed_comparisons() {
@@ -3320,7 +3159,18 @@ impl Compiler {
             source_name,
         } = ssa;
         ssa_program
-            .optimize_and_retain(&executable_roots)
+            .optimize_and_retain(&executable_roots, &private_literal_candidates(&typed))
+            .map_err(|message| {
+                native_diagnostic_bundle(
+                    "K3004",
+                    DiagnosticPhase::Lowering,
+                    source_name.as_deref(),
+                    None,
+                    message,
+                )
+            })?;
+        ssa_program
+            .inline_single_use_private_calls(&executable_roots, &private_inline_candidates(&typed))
             .map_err(|message| {
                 native_diagnostic_bundle(
                     "K3004",
@@ -4019,6 +3869,12 @@ impl Compiler {
         let mut uses_vector_global = false;
         let mut call_fixups: Vec<(usize, String, String)> = Vec::new();
         let mut deferred_transfers: Vec<DeferredTransfer> = Vec::new();
+        // Each branch evaluates and stages its original descriptor/code first.
+        // The terminal body belongs to the first emitting function's complete
+        // byte range, and every other site reaches it with a normal relaxed jump.
+        let share_nominal_abort = compact_emission::share_nominal_abort(&ir_prog);
+        let mut nominal_abort_sites = Vec::new();
+        let mut nominal_abort_tail = None;
         let mut func_start_offsets: HashMap<String, usize> = HashMap::new();
         let mut function_debug_seeds: Vec<FunctionDebugSeed> = Vec::new();
         let signatures = typed
@@ -4055,10 +3911,12 @@ impl Compiler {
             // Record start offset for call patching
             func_start_offsets.insert(func.name.clone(), code.len());
             let func_base = *func_start_offsets.get(&func.name).unwrap();
+            let initial_nominal_abort_sites = nominal_abort_sites.len();
             // Every retained function has one table ABI and an authenticated callable root.
             let is_entry = false;
             let saves_return_address = !is_entry && regalloc::has_internal_calls(func);
             let alloc = regalloc::allocate_with_splitting(func);
+            let local_sources = local_emission::Plan::new(func, &alloc)?;
             let mut saved_regs: Vec<u8> = if is_entry {
                 Vec::new()
             } else {
@@ -4092,13 +3950,13 @@ impl Compiler {
                     let signature = signatures
                         .get(callee)
                         .ok_or_else(|| format!("missing call signature for `{callee}`"))?;
-                    if args.len() != signature.arguments.len() {
+                    if args.len() != signature.argument_word_count() {
                         return Err(format!(
                             "call to `{callee}` has an inconsistent argument table"
                         ));
                     }
                     max_argument_words = max_argument_words.max(args.len());
-                    max_result_words = max_result_words.max(signature.results.len());
+                    max_result_words = max_result_words.max(signature.result_word_count());
                 }
                 match instruction {
                     Instr::InvokeEntrypointAs { .. } => max_result_words = max_result_words.max(1),
@@ -4126,8 +3984,8 @@ impl Compiler {
             callables.push(ivm_abi::call::EmbeddedCallableV1 {
                 entry_pc: func_base as u64,
                 frame_bytes: local_frame as u32,
-                argument_words: signature.arguments.clone(),
-                result_words: signature.results.clone(),
+                arguments: signature.arguments.clone(),
+                results: signature.results.clone(),
             });
             let debug_seed_index = function_debug_seeds.len();
             function_debug_seeds.push(FunctionDebugSeed {
@@ -4145,6 +4003,12 @@ impl Compiler {
             let scratchd: u8 = 29;
             let sp = regalloc::SP_REG as u8;
             let allocation_position = std::cell::Cell::new(0usize);
+            let retained_result = std::cell::Cell::new(None::<local_emission::RetainedResult>);
+            let retained_register = |value: ir::Temp| {
+                retained_result
+                    .get()
+                    .and_then(|result| result.register(value, allocation_position.get()))
+            };
             let publish_tlv_word = encoding::wide::encode_sys(
                 instruction::wide::system::SCALL,
                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
@@ -4195,7 +4059,10 @@ impl Compiler {
             };
             // Helpers to handle spilled temporaries at use/def sites
             let src_reg = |t: &ir::Temp, scratch: u8, code: &mut Vec<u8>| -> Result<u8, String> {
-                if let Some(register) = alloc.register_for_use(*t, allocation_position.get()) {
+                if let Some(register) = retained_register(*t) {
+                    Ok(register)
+                } else if let Some(register) = alloc.register_for_use(*t, allocation_position.get())
+                {
                     Ok(register as u8)
                 } else if let Some(off) = alloc.stack.get(t) {
                     let total = stack_slot_offset_bytes(spill_base, *off);
@@ -4217,8 +4084,9 @@ impl Compiler {
                     data_key_for_pointer(kind, value)
                 }
             };
-            let emit_values_to_syscall_registers = |values: &[ir::Temp],
-                                                    code: &mut Vec<u8>|
+            let emit_syscall_values_with_kinds = |values: &[ir::Temp],
+                                                  pointer_kinds: Option<&[DataKind]>,
+                                                  code: &mut Vec<u8>|
              -> Result<(), String> {
                 let mut register_moves = Vec::new();
                 let mut literal_loads = Vec::new();
@@ -4230,10 +4098,27 @@ impl Compiler {
                         .copied()
                         .ok_or_else(|| "syscall argument register window is exhausted".to_owned())?
                         as u8;
-                    if let Some(kind) = dataref_kind_map.get(&(func_idx, *temp)).copied()
+                    if let Some(kinds) = pointer_kinds
+                        && let Some(value) = string_map.get(&(func_idx, *temp)).cloned()
+                    {
+                        // Preserve each pointer emitter's exact literal kind, including
+                        // StatePath/NoritoBytes and Name map bases. Dynamic sources still
+                        // use the same parallel register/spill custody below.
+                        literal_loads.push((
+                            target,
+                            DataKey(
+                                *kinds.get(index).ok_or_else(|| {
+                                    "syscall pointer argument kind is missing".to_owned()
+                                })?,
+                                value,
+                            ),
+                        ));
+                    } else if let Some(kind) = dataref_kind_map.get(&(func_idx, *temp)).copied()
                         && let Some(value) = string_map.get(&(func_idx, *temp)).cloned()
                     {
                         literal_loads.push((target, literal_data_key(temp, kind, &value)));
+                    } else if let Some(source) = retained_register(*temp) {
+                        register_moves.push((target, source));
                     } else if let Some(source) =
                         alloc.register_for_use(*temp, allocation_position.get())
                     {
@@ -4259,6 +4144,64 @@ impl Compiler {
                 }
                 Ok(())
             };
+            let emit_values_to_syscall_registers = |values: &[ir::Temp], code: &mut Vec<u8>| {
+                emit_syscall_values_with_kinds(values, None, code)
+            };
+            let emit_numeric_operands =
+                |left: &ir::Temp, right: &ir::Temp, code: &mut Vec<u8>| -> Result<(), String> {
+                    // Preserve the original codegen rejection before loading either
+                    // operand. This does not replace canonical literal validation.
+                    for temp in [left, right] {
+                        if string_map.contains_key(&(func_idx, *temp))
+                            && !dataref_kind_map.contains_key(&(func_idx, *temp))
+                        {
+                            return Err(i18n::translate(
+                                self.lang,
+                                Message::SemanticError(
+                                    "numeric literal missing ABI metadata during numeric lowering",
+                                ),
+                            ));
+                        }
+                    }
+                    // Only the test binary retains the former publication sequence,
+                    // to measure the same compiler before/after this lowering change.
+                    #[cfg(test)]
+                    if numeric_operands::retain_publication() {
+                        for (index, temp) in [left, right].into_iter().enumerate() {
+                            if let Some(kind) = dataref_kind_map.get(&(func_idx, *temp)).copied()
+                                && let Some(value) = string_map.get(&(func_idx, *temp))
+                            {
+                                emit_literal_load(
+                                    code,
+                                    &fixups,
+                                    10,
+                                    literal_data_key(temp, kind, value),
+                                );
+                            } else {
+                                let source = src_reg(temp, scratch1, code)?;
+                                push_word(code, encode_addi(10, source, 0)?);
+                            }
+                            code.extend_from_slice(&publish_tlv);
+                            if index == 0 {
+                                push_word(code, encode_addi(scratch2, 10, 0)?);
+                            } else {
+                                push_word(code, encode_addi(11, 10, 0)?);
+                                push_word(code, encode_addi(10, scratch2, 0)?);
+                            }
+                        }
+                        return Ok(());
+                    }
+                    // The canonical numeric syscall snapshots both public operands
+                    // through numeric_tlv::snapshot_metered. It admits loader-validated
+                    // immutable literals, INPUT and owned HEAP; checks pointer type,
+                    // complete envelope/hash/frame, and charges its original work.
+                    // It retains no pointer after the synchronous operation. Passing
+                    // these pointers directly removes only the preceding redundant
+                    // INPUT_PUBLISH and its shuffles, not the typed numeric boundary.
+                    // Existing parallel staging consumes all register sources before
+                    // materializing literals/spills, including swapped/aliased inputs.
+                    emit_values_to_syscall_registers(&[*left, *right], code)
+                };
             let dst_reg = |t: &ir::Temp| -> (u8, bool, i64) {
                 if let Some(r) = alloc.regs.get(t) {
                     (*r as u8, false, 0)
@@ -4302,10 +4245,15 @@ impl Compiler {
             };
             let spill_syscall_result =
                 |dest: &ir::Temp, code: &mut Vec<u8>| -> Result<(), String> {
+                    if let Some(result) = local_sources.output(*dest, allocation_position.get()) {
+                        retained_result.set(Some(result));
+                        return Ok(());
+                    }
                     let (rd, spilled, offset) = dst_reg(dest);
-                    push_word(code, encode_addi(rd, 10, 0)?);
+                    local_emission::emit_move(code, rd, 10)?;
                     spill_back(dest, rd, spilled, offset, code)
                 };
+            let shared_epilogue = frame_emission::shared_epilogue_label(func, saved_regs.len());
             let mut block_offsets: HashMap<usize, usize> = HashMap::new();
             let mut jump_fixups: Vec<JumpFixup> = Vec::new();
             let mut branch_fixups: Vec<BranchFixup> = Vec::new();
@@ -4314,6 +4262,8 @@ impl Compiler {
                 Default::default();
             let mut next_allocation_position = 0usize;
             for (block_index, bb) in func.blocks.iter().enumerate() {
+                // This block begins with no inherited physical-register facts.
+                let mut numeric_zero = numeric_zero::Block::new(code.len());
                 let next_label = func.blocks.get(block_index + 1).map(|next| next.label);
                 block_offsets.insert(bb.label.0, code.len() - func_base);
                 // Emit a frame only when spills, callee-saved registers, or a
@@ -4333,14 +4283,16 @@ impl Compiler {
                         let ra = 1u8;
                         emit_store64(&mut code, &fixups, sp, ra, 0, scratch_base)?;
                     }
-                    emit_store64(
-                        &mut code,
-                        &fixups,
-                        sp,
-                        10,
-                        frame.argument_base_slot as i64,
-                        scratch_base,
-                    )?;
+                    if local_sources.stores_argument_base {
+                        emit_store64(
+                            &mut code,
+                            &fixups,
+                            sp,
+                            10,
+                            frame.argument_base_slot as i64,
+                            scratch_base,
+                        )?;
+                    }
                     emit_store64(
                         &mut code,
                         &fixups,
@@ -4349,10 +4301,19 @@ impl Compiler {
                         frame.result_base_slot as i64,
                         scratch_base,
                     )?;
-                    for (idx, reg) in saved_regs.iter().copied().enumerate() {
-                        let offset = (save_base + idx * 8) as i64;
-                        emit_store64(&mut code, &fixups, sp, reg, offset, scratch_base)?;
-                    }
+                    frame_emission::emit_saved_registers(
+                        &mut code,
+                        &fixups,
+                        &saved_regs,
+                        save_base,
+                        false,
+                    )?;
+                }
+                if bb.label == func.entry && local_sources.parameter_prefix_words > 0 {
+                    // The incoming authenticated table is already captured by
+                    // the original call kernel. Keep its exact base through the
+                    // consecutive parameter reads; private frame geometry stays.
+                    local_emission::emit_move(&mut code, scratch1, 10)?;
                 }
                 let fused_relational = match (&bb.terminator, bb.instrs.last()) {
                     (
@@ -4373,7 +4334,16 @@ impl Compiler {
                     }
                     _ => None,
                 };
+                #[cfg(test)]
+                let mut emission_observation = None;
                 for (instruction_index, instr) in bb.instrs.iter().enumerate() {
+                    #[cfg(test)]
+                    emission_profile::advance(
+                        &mut emission_observation,
+                        &func.name,
+                        instr,
+                        code.len(),
+                    );
                     allocation_position.set(next_allocation_position);
                     emit_split_reloads(next_allocation_position, &tuple_map, &mut code)?;
                     next_allocation_position = next_allocation_position.saturating_add(1);
@@ -4727,14 +4697,18 @@ impl Compiler {
                                 func.params.iter().position(|p| p == name).ok_or_else(|| {
                                     i18n::translate(self.lang, Message::UnknownParam(name))
                                 })?;
-                            emit_load64(
-                                &mut code,
-                                &fixups,
-                                scratch1,
-                                sp,
-                                frame.argument_base_slot as i64,
-                                Some(scratch2),
-                            )?;
+                            if bb.label != func.entry
+                                || instruction_index >= local_sources.parameter_prefix_words
+                            {
+                                emit_load64(
+                                    &mut code,
+                                    &fixups,
+                                    scratch1,
+                                    sp,
+                                    frame.argument_base_slot as i64,
+                                    Some(scratch2),
+                                )?;
+                            }
                             emit_load64(
                                 &mut code,
                                 &fixups,
@@ -6147,7 +6121,7 @@ impl Compiler {
                                 &mut code,
                                 &fixups,
                                 13,
-                                signature.results.len() as i64,
+                                signature.result_word_count() as i64,
                             );
                             let at = reserve_word(&mut code);
                             call_fixups.push((at, callee.clone(), func.name.clone()));
@@ -6159,7 +6133,7 @@ impl Compiler {
                                 _ => unreachable!("call instruction selected above"),
                             };
                             if !destinations.is_empty()
-                                && destinations.len() != signature.results.len()
+                                && destinations.len() != signature.result_word_count()
                             {
                                 return Err(format!(
                                     "call to `{callee}` has an inconsistent result table"
@@ -6455,11 +6429,11 @@ impl Compiler {
                                 &[*descriptor, *error_code],
                                 &mut code,
                             )?;
-                            code.extend_from_slice(&publish_tlv);
-                            for reserved in 12..=15 {
-                                push_word(&mut code, encode_addi(reserved, 0, 0)?);
+                            if share_nominal_abort {
+                                nominal_abort_sites.push(reserve_word(&mut code));
+                            } else {
+                                compact_emission::emit_nominal_abort_tail(&mut code)?;
                             }
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_CONTRACT_ABORT);
                             let distance = i16::try_from(code.len() - branch_offset)
                                 .map_err(|_| "nominal abort branch exceeds encoding range")?;
                             let branch = encode_branch_rv(0x0, rs, 0, distance)?;
@@ -6543,9 +6517,14 @@ impl Compiler {
                                     ));
                                 }
                                 let rs = src_reg(value, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(10, rs, 0)?);
+                                local_emission::emit_move(&mut code, 10, rs)?;
                             }
-                            code.extend_from_slice(&publish_tlv);
+                            // The existing synchronous consumer validates the original owned
+                            // public envelope before reading it; no pointer escapes this call.
+                            #[cfg(test)]
+                            if state_operands::retain_publication() {
+                                code.extend_from_slice(&publish_tlv);
+                            }
                             code.extend_from_slice(&pointer_to_bytes);
                             spill_syscall_result(dest, &mut code)?;
                         }
@@ -6796,8 +6775,8 @@ impl Compiler {
                             spill_back(dest_val, rd_v, spilled_v, imm_v, &mut code)?;
                         }
                         Instr::StateGet { dest, path } => {
-                            // Load framed StatePath bytes into x10; publish into INPUT;
-                            // SCALL STATE_GET; move x10 to dest.
+                            // Borrow framed StatePath bytes in x10 through the canonical
+                            // STATE_GET consumer; move the independently owned result to dest.
                             if let Some(key) = state_path_literal_data_key(
                                 func_idx,
                                 *path,
@@ -6807,35 +6786,65 @@ impl Compiler {
                                 emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
                                 let r = src_reg(path, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(10, r, 0)?);
+                                local_emission::emit_move(&mut code, 10, r)?;
                             }
-                            code.extend_from_slice(&publish_tlv);
+                            // The existing synchronous consumer validates the original owned
+                            // public envelope before reading it; no pointer escapes this call.
+                            #[cfg(test)]
+                            if state_operands::retain_publication() {
+                                code.extend_from_slice(&publish_tlv);
+                            }
                             push_syscall_imm8(&mut code, syscalls::SYSCALL_STATE_GET);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::StateSet { path, value } => {
-                            // r10=&NoritoBytes(StatePath); r11=&NoritoBytes value;
-                            // publish both to INPUT then SCALL.
-                            if let Some(key) = state_path_literal_data_key(
+                            // Baseline emission exists only in tests. The production consumer
+                            // still validates/copies its owned result or durable value before
+                            // returning; borrowing here removes no retaining-boundary clone.
+                            #[cfg(test)]
+                            if state_operands::retain_publication() {
+                                // r10=&NoritoBytes(StatePath); r11=&NoritoBytes value;
+                                // publish both to INPUT then SCALL.
+                                if let Some(key) = state_path_literal_data_key(
+                                    func_idx,
+                                    *path,
+                                    &string_map,
+                                    &dataref_kind_map,
+                                )? {
+                                    emit_literal_load(&mut code, &fixups, 10, key);
+                                } else {
+                                    let r = src_reg(path, scratch1, &mut code)?;
+                                    push_word(&mut code, encode_addi(10, r, 0)?);
+                                }
+                                // Load value into r11
+                                load_pointer(
+                                    value,
+                                    11,
+                                    scratch1,
+                                    DataKind::NoritoBytes,
+                                    &mut code,
+                                )?;
+                                // Publish both; preserve published path for the final syscall.
+                                code.extend_from_slice(&publish_tlv); // r10
+                                push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                                push_word(&mut code, encode_addi(10, 11, 0)?);
+                                code.extend_from_slice(&publish_tlv);
+                                push_word(&mut code, encode_addi(11, 10, 0)?);
+                                push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                                push_syscall_imm8(&mut code, syscalls::SYSCALL_STATE_SET);
+                                continue;
+                            }
+                            let _ = state_path_literal_data_key(
                                 func_idx,
                                 *path,
                                 &string_map,
                                 &dataref_kind_map,
-                            )? {
-                                emit_literal_load(&mut code, &fixups, 10, key);
-                            } else {
-                                let r = src_reg(path, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(10, r, 0)?);
-                            }
-                            // Load value into r11
-                            load_pointer(value, 11, scratch1, DataKind::NoritoBytes, &mut code)?;
-                            // Publish both; preserve published path for the final syscall.
-                            code.extend_from_slice(&publish_tlv); // r10
-                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
-                            push_word(&mut code, encode_addi(10, 11, 0)?);
-                            code.extend_from_slice(&publish_tlv);
-                            push_word(&mut code, encode_addi(11, 10, 0)?);
-                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                            )?;
+                            emit_syscall_values_with_kinds(
+                                &[*path, *value],
+                                Some(&[DataKind::NoritoBytes, DataKind::NoritoBytes]),
+                                &mut code,
+                            )?;
                             push_syscall_imm8(&mut code, syscalls::SYSCALL_STATE_SET);
                         }
                         Instr::StateDel { path } => {
@@ -7244,46 +7253,8 @@ impl Compiler {
                             right_kind,
                             result_kind,
                         } => {
-                            let load_ptr = |temp: &ir::Temp,
-                                            target: u8,
-                                            scratch: u8,
-                                            code: &mut Vec<u8>|
-                             -> Result<(), String> {
-                                if let Some(kind) =
-                                    dataref_kind_map.get(&(func_idx, *temp)).copied()
-                                    && let Some(lit) = string_map.get(&(func_idx, *temp)).cloned()
-                                {
-                                    let key = literal_data_key(temp, kind, &lit);
-                                    emit_literal_load(code, &fixups, target, key);
-                                } else {
-                                    if string_map.contains_key(&(func_idx, *temp))
-                                        && !dataref_kind_map.contains_key(&(func_idx, *temp))
-                                    {
-                                        return Err(i18n::translate(
-                                            self.lang,
-                                            Message::SemanticError(
-                                                "numeric literal missing ABI metadata during numeric lowering",
-                                            ),
-                                        ));
-                                    }
-                                    let rs = src_reg(temp, scratch, code)?;
-                                    push_word(code, encode_addi(target, rs, 0)?);
-                                }
-                                Ok(())
-                            };
-                            // Load/publish lhs
-                            load_ptr(left, 10, scratch1, &mut code)?;
-                            code.extend_from_slice(&publish_tlv);
-                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
-                            // Load/publish rhs
-                            load_ptr(right, 10, scratch1, &mut code)?;
-                            code.extend_from_slice(&publish_tlv);
-                            push_word(&mut code, encode_addi(11, 10, 0)?);
-                            // Restore lhs into r10
-                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
-                            for register in 12..=14 {
-                                push_word(&mut code, encode_addi(register, 0, 0)?);
-                            }
+                            emit_numeric_operands(left, right, &mut code)?;
+                            numeric_zero.emit_trap_inputs(&mut code, &fixups)?;
                             let num = match (left_kind, op, right_kind, result_kind) {
                                 (
                                     ir::WideNumericKind::Int,
@@ -7396,14 +7367,19 @@ impl Compiler {
                                     &[*dividend, *multiplier, *divisor, *scale, *mode],
                                     &mut code,
                                 )?;
-                                code.extend_from_slice(&publish_tlv);
-                                push_word(&mut code, encode_addi(scratch2, 10, 0)?);
-                                for register in 11..=13 {
-                                    push_word(&mut code, encode_addi(10, register, 0)?);
+                                #[cfg(test)]
+                                if compact_emission::retain_scalar() {
                                     code.extend_from_slice(&publish_tlv);
-                                    push_word(&mut code, encode_addi(register, 10, 0)?);
+                                    push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                                    for register in 11..=13 {
+                                        push_word(&mut code, encode_addi(10, register, 0)?);
+                                        code.extend_from_slice(&publish_tlv);
+                                        push_word(&mut code, encode_addi(register, 10, 0)?);
+                                    }
+                                    push_word(&mut code, encode_addi(10, scratch2, 0)?);
                                 }
-                                push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                                // The original numeric consumer snapshots, authenticates and
+                                // meters each owned public envelope, including the scale Int.
                                 push_word(&mut code, encode_addi(15, 0, 0)?);
                                 let syscall = match op {
                                     ir::NumericRoundOp::DecimalMulDiv => {
@@ -7421,41 +7397,55 @@ impl Compiler {
                                 push_syscall(&mut code, syscall);
                                 spill_syscall_result(dest, &mut code)?;
                             } else {
-                                let load_ptr =
-                                    |temp: &ir::Temp,
-                                     target: u8,
-                                     scratch: u8,
-                                     code: &mut Vec<u8>|
-                                     -> Result<(), String> {
-                                        if let Some(kind) =
-                                            dataref_kind_map.get(&(func_idx, *temp)).copied()
-                                            && let Some(lit) =
-                                                string_map.get(&(func_idx, *temp)).cloned()
-                                        {
-                                            emit_literal_load(
-                                                code,
-                                                &fixups,
-                                                target,
-                                                literal_data_key(temp, kind, &lit),
-                                            );
-                                        } else {
-                                            let rs = src_reg(temp, scratch, code)?;
-                                            push_word(code, encode_addi(target, rs, 0)?);
-                                        }
-                                        Ok(())
-                                    };
-                                load_ptr(dividend, 10, scratch1, &mut code)?;
-                                code.extend_from_slice(&publish_tlv);
-                                push_word(&mut code, encode_addi(scratch2, 10, 0)?);
-                                load_ptr(divisor, 10, scratch1, &mut code)?;
-                                code.extend_from_slice(&publish_tlv);
-                                push_word(&mut code, encode_addi(11, 10, 0)?);
-                                load_ptr(scale, 10, scratch1, &mut code)?;
-                                code.extend_from_slice(&publish_tlv);
-                                push_word(&mut code, encode_addi(12, 10, 0)?);
-                                push_word(&mut code, encode_addi(10, scratch2, 0)?);
-                                let rounding = src_reg(mode, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(13, rounding, 0)?);
+                                #[cfg(test)]
+                                let scalar_arguments = if compact_emission::retain_scalar() {
+                                    let load_ptr =
+                                        |temp: &ir::Temp,
+                                         target: u8,
+                                         scratch: u8,
+                                         code: &mut Vec<u8>|
+                                         -> Result<(), String> {
+                                            if let Some(kind) =
+                                                dataref_kind_map.get(&(func_idx, *temp)).copied()
+                                                && let Some(lit) =
+                                                    string_map.get(&(func_idx, *temp)).cloned()
+                                            {
+                                                emit_literal_load(
+                                                    code,
+                                                    &fixups,
+                                                    target,
+                                                    literal_data_key(temp, kind, &lit),
+                                                );
+                                            } else {
+                                                let rs = src_reg(temp, scratch, code)?;
+                                                push_word(code, encode_addi(target, rs, 0)?);
+                                            }
+                                            Ok(())
+                                        };
+                                    load_ptr(dividend, 10, scratch1, &mut code)?;
+                                    code.extend_from_slice(&publish_tlv);
+                                    push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                                    load_ptr(divisor, 10, scratch1, &mut code)?;
+                                    code.extend_from_slice(&publish_tlv);
+                                    push_word(&mut code, encode_addi(11, 10, 0)?);
+                                    load_ptr(scale, 10, scratch1, &mut code)?;
+                                    code.extend_from_slice(&publish_tlv);
+                                    push_word(&mut code, encode_addi(12, 10, 0)?);
+                                    push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                                    let rounding = src_reg(mode, scratch1, &mut code)?;
+                                    push_word(&mut code, encode_addi(13, rounding, 0)?);
+                                    true
+                                } else {
+                                    false
+                                };
+                                #[cfg(not(test))]
+                                let scalar_arguments = false;
+                                if !scalar_arguments {
+                                    emit_values_to_syscall_registers(
+                                        &[*dividend, *divisor, *scale, *mode],
+                                        &mut code,
+                                    )?;
+                                }
                                 push_word(&mut code, encode_addi(14, 0, 0)?);
                                 let syscall = match op {
                                     ir::NumericRoundOp::DecimalMulDiv
@@ -7526,40 +7516,7 @@ impl Compiler {
                             right,
                             kind,
                         } => {
-                            let load_ptr = |temp: &ir::Temp,
-                                            target: u8,
-                                            scratch: u8,
-                                            code: &mut Vec<u8>|
-                             -> Result<(), String> {
-                                if let Some(kind) =
-                                    dataref_kind_map.get(&(func_idx, *temp)).copied()
-                                    && let Some(lit) = string_map.get(&(func_idx, *temp)).cloned()
-                                {
-                                    let key = literal_data_key(temp, kind, &lit);
-                                    emit_literal_load(code, &fixups, target, key);
-                                } else {
-                                    if string_map.contains_key(&(func_idx, *temp))
-                                        && !dataref_kind_map.contains_key(&(func_idx, *temp))
-                                    {
-                                        return Err(i18n::translate(
-                                            self.lang,
-                                            Message::SemanticError(
-                                                "numeric literal missing ABI metadata during numeric lowering",
-                                            ),
-                                        ));
-                                    }
-                                    let rs = src_reg(temp, scratch, code)?;
-                                    push_word(code, encode_addi(target, rs, 0)?);
-                                }
-                                Ok(())
-                            };
-                            load_ptr(left, 10, scratch1, &mut code)?;
-                            code.extend_from_slice(&publish_tlv);
-                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
-                            load_ptr(right, 10, scratch1, &mut code)?;
-                            code.extend_from_slice(&publish_tlv);
-                            push_word(&mut code, encode_addi(11, 10, 0)?);
-                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                            emit_numeric_operands(left, right, &mut code)?;
                             let num = match (kind, op) {
                                 (ir::WideNumericKind::Int, BinaryOp::Eq) => {
                                     syscalls::SYSCALL_INT_EQ
@@ -7632,35 +7589,47 @@ impl Compiler {
                             syscall,
                             args,
                         } => {
-                            // Typed integer helpers publish each canonical operand before
-                            // invoking the shared, staged full-width implementation.
+                            // Typed integer helpers use the existing synchronous metered
+                            // snapshots. Stage every register source in parallel before
+                            // materializing literals/spills; no pointer survives the call.
                             if matches!(
                                 *syscall,
                                 syscalls::SYSCALL_INT_ISQRT..=syscalls::SYSCALL_INT_MEAN
                             ) {
-                                for (index, arg) in args.iter().enumerate() {
-                                    if let Some(kind) =
-                                        dataref_kind_map.get(&(func_idx, *arg)).copied()
-                                        && let Some(lit) =
-                                            string_map.get(&(func_idx, *arg)).cloned()
-                                    {
-                                        emit_literal_load(
-                                            &mut code,
-                                            &fixups,
-                                            10,
-                                            literal_data_key(arg, kind, &lit),
-                                        );
-                                    } else {
-                                        let source = src_reg(arg, scratch1, &mut code)?;
-                                        push_word(&mut code, encode_addi(10, source, 0)?);
+                                #[cfg(test)]
+                                let scalar_arguments = if compact_emission::retain_scalar() {
+                                    for (index, arg) in args.iter().enumerate() {
+                                        if let Some(kind) =
+                                            dataref_kind_map.get(&(func_idx, *arg)).copied()
+                                            && let Some(lit) =
+                                                string_map.get(&(func_idx, *arg)).cloned()
+                                        {
+                                            emit_literal_load(
+                                                &mut code,
+                                                &fixups,
+                                                10,
+                                                literal_data_key(arg, kind, &lit),
+                                            );
+                                        } else {
+                                            let source = src_reg(arg, scratch1, &mut code)?;
+                                            push_word(&mut code, encode_addi(10, source, 0)?);
+                                        }
+                                        code.extend_from_slice(&publish_tlv);
+                                        if index == 0 && args.len() == 2 {
+                                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                                        } else if index == 1 {
+                                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                                        }
                                     }
-                                    code.extend_from_slice(&publish_tlv);
-                                    if index == 0 && args.len() == 2 {
-                                        push_word(&mut code, encode_addi(scratch2, 10, 0)?);
-                                    } else if index == 1 {
-                                        push_word(&mut code, encode_addi(11, 10, 0)?);
-                                        push_word(&mut code, encode_addi(10, scratch2, 0)?);
-                                    }
+                                    true
+                                } else {
+                                    false
+                                };
+                                #[cfg(not(test))]
+                                let scalar_arguments = false;
+                                if !scalar_arguments {
+                                    emit_values_to_syscall_registers(args, &mut code)?;
                                 }
                                 for register in (10 + args.len() as u8)..=14 {
                                     push_word(&mut code, encode_addi(register, 0, 0)?);
@@ -7668,8 +7637,13 @@ impl Compiler {
                                 push_syscall(&mut code, *syscall);
                                 spill_syscall_result(dest, &mut code)?;
                             } else {
-                                for (idx, arg) in args.iter().enumerate() {
-                                    let target = 10u8.checked_add(idx as u8).ok_or_else(|| {
+                                if local_emission::parallel_state_decode(*syscall, args.len()) {
+                                    // The original schema/data decoder consumes its owned
+                                    // canonical inputs after every register source is staged.
+                                    emit_values_to_syscall_registers(args, &mut code)?;
+                                } else {
+                                    for (idx, arg) in args.iter().enumerate() {
+                                        let target = 10u8.checked_add(idx as u8).ok_or_else(|| {
                                         i18n::translate(
                                             self.lang,
                                             Message::SemanticError(
@@ -7677,21 +7651,22 @@ impl Compiler {
                                             ),
                                         )
                                     })?;
-                                    if let Some(kind) =
-                                        dataref_kind_map.get(&(func_idx, *arg)).copied()
-                                        && let Some(lit) =
-                                            string_map.get(&(func_idx, *arg)).cloned()
-                                    {
-                                        let key = literal_data_key(arg, kind, &lit);
-                                        emit_literal_load(&mut code, &fixups, target, key);
-                                    } else {
-                                        let scratch = if target == scratch1 {
-                                            scratch2
+                                        if let Some(kind) =
+                                            dataref_kind_map.get(&(func_idx, *arg)).copied()
+                                            && let Some(lit) =
+                                                string_map.get(&(func_idx, *arg)).cloned()
+                                        {
+                                            let key = literal_data_key(arg, kind, &lit);
+                                            emit_literal_load(&mut code, &fixups, target, key);
                                         } else {
-                                            scratch1
-                                        };
-                                        let r = src_reg(arg, scratch, &mut code)?;
-                                        push_word(&mut code, encode_addi(target, r, 0)?);
+                                            let scratch = if target == scratch1 {
+                                                scratch2
+                                            } else {
+                                                scratch1
+                                            };
+                                            let r = src_reg(arg, scratch, &mut code)?;
+                                            push_word(&mut code, encode_addi(target, r, 0)?);
+                                        }
                                     }
                                 }
                                 push_syscall(&mut code, *syscall);
@@ -7727,30 +7702,47 @@ impl Compiler {
                             base,
                             key_blob,
                         } => {
-                            // r10=&Name base; publish; r11=&NoritoBytes blob; publish;
-                            // SCALL BUILD_PATH_KEY_NORITO -> &NoritoBytes(StatePath).
-                            if let Some(s) = string_map.get(&(func_idx, *base)) {
-                                let kb = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &fixups, 10, kb);
-                            } else {
-                                let r = src_reg(base, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            // Baseline emission exists only in tests. The production consumer
+                            // still validates/copies its owned result or durable value before
+                            // returning; borrowing here removes no retaining-boundary clone.
+                            #[cfg(test)]
+                            if state_operands::retain_publication() {
+                                // r10=&Name base; publish; r11=&NoritoBytes blob; publish;
+                                // SCALL BUILD_PATH_KEY_NORITO -> &NoritoBytes(StatePath).
+                                if let Some(s) = string_map.get(&(func_idx, *base)) {
+                                    let kb = DataKey(DataKind::Name, s.clone());
+                                    emit_literal_load(&mut code, &fixups, 10, kb);
+                                } else {
+                                    let r = src_reg(base, scratch1, &mut code)?;
+                                    push_word(&mut code, encode_addi(10, r, 0)?);
+                                }
+                                code.extend_from_slice(&publish_tlv);
+                                if let Some(s) = string_map.get(&(func_idx, *key_blob)) {
+                                    let kb = DataKey(DataKind::NoritoBytes, s.clone());
+                                    emit_literal_load(&mut code, &fixups, 11, kb);
+                                } else {
+                                    let r = src_reg(key_blob, scratch1, &mut code)?;
+                                    push_word(&mut code, encode_addi(11, r, 0)?);
+                                }
+                                // INPUT_PUBLISH_TLV always operates on r10, so preserve the published
+                                // base pointer while mirroring the key blob through r10.
+                                push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                                push_word(&mut code, encode_addi(10, 11, 0)?);
+                                code.extend_from_slice(&publish_tlv);
+                                push_word(&mut code, encode_addi(11, 10, 0)?);
+                                push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                                push_syscall_imm8(
+                                    &mut code,
+                                    syscalls::SYSCALL_BUILD_PATH_KEY_NORITO,
+                                );
+                                spill_syscall_result(dest, &mut code)?;
+                                continue;
                             }
-                            code.extend_from_slice(&publish_tlv);
-                            if let Some(s) = string_map.get(&(func_idx, *key_blob)) {
-                                let kb = DataKey(DataKind::NoritoBytes, s.clone());
-                                emit_literal_load(&mut code, &fixups, 11, kb);
-                            } else {
-                                let r = src_reg(key_blob, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(11, r, 0)?);
-                            }
-                            // INPUT_PUBLISH_TLV always operates on r10, so preserve the published
-                            // base pointer while mirroring the key blob through r10.
-                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
-                            push_word(&mut code, encode_addi(10, 11, 0)?);
-                            code.extend_from_slice(&publish_tlv);
-                            push_word(&mut code, encode_addi(11, 10, 0)?);
-                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                            emit_syscall_values_with_kinds(
+                                &[*base, *key_blob],
+                                Some(&[DataKind::Name, DataKind::NoritoBytes]),
+                                &mut code,
+                            )?;
                             push_syscall_imm8(&mut code, syscalls::SYSCALL_BUILD_PATH_KEY_NORITO);
                             spill_syscall_result(dest, &mut code)?;
                         }
@@ -8025,6 +8017,8 @@ impl Compiler {
                     }
                 }
                 // end for instr in &bb.instrs
+                #[cfg(test)]
+                emission_profile::finish(emission_observation, code.len());
                 allocation_position.set(next_allocation_position);
                 emit_split_reloads(next_allocation_position, &tuple_map, &mut code)?;
                 next_allocation_position = next_allocation_position.saturating_add(1);
@@ -8039,7 +8033,7 @@ impl Compiler {
                             _ => unreachable!("return terminator selected above"),
                         };
                         let result_count = values.len().max(1);
-                        if result_count != signature.results.len() {
+                        if result_count != signature.result_word_count() {
                             return Err(format!(
                                 "function `{}` has an inconsistent result table",
                                 func.name
@@ -8084,31 +8078,22 @@ impl Compiler {
                         // validation independently checks ownership, coverage, and role tags.
                         push_word(&mut code, encode_addi(10, scratchd, 0)?);
                         emit_i64_literal_load(&mut code, &fixups, 11, result_count as i64);
-                        for (index, register) in saved_regs.iter().copied().enumerate() {
-                            emit_load64(
+                        if let Some(label) = shared_epilogue {
+                            let at = reserve_word(&mut code);
+                            jump_fixups.push(JumpFixup {
+                                at,
+                                target_label: label,
+                            });
+                        } else {
+                            frame_emission::emit_epilogue(
                                 &mut code,
                                 &fixups,
-                                register,
-                                sp,
-                                (save_base + index * 8) as i64,
-                                Some(scratch1),
+                                &saved_regs,
+                                save_base,
+                                saves_return_address,
+                                local_frame,
                             )?;
                         }
-                        if saves_return_address {
-                            emit_load64(&mut code, &fixups, 1, sp, 0, Some(scratch1))?;
-                        }
-                        emit_bounded_add(
-                            &mut code,
-                            &fixups,
-                            sp,
-                            sp,
-                            local_frame as i64,
-                            LITERAL_SHIFT_REG,
-                        )?;
-                        push_word(
-                            &mut code,
-                            encoding::wide::encode_rr(instruction::wide::control::JALR, 0, 1, 0),
-                        );
                     }
                     Terminator::Jump(target) => {
                         if next_label != Some(*target) {
@@ -8170,6 +8155,17 @@ impl Compiler {
                     .sum::<usize>(),
                 "code generation and live-interval positions diverged"
             );
+            if let Some(label) = shared_epilogue {
+                block_offsets.insert(label, code.len() - func_base);
+                frame_emission::emit_epilogue(
+                    &mut code,
+                    &fixups,
+                    &saved_regs,
+                    save_base,
+                    saves_return_address,
+                    local_frame,
+                )?;
+            }
             for fix in jump_fixups {
                 let target_off = *block_offsets.get(&fix.target_label).ok_or_else(|| {
                     format!(
@@ -8208,10 +8204,31 @@ impl Compiler {
                     }
                 }
             }
+            if share_nominal_abort
+                && nominal_abort_tail.is_none()
+                && nominal_abort_sites.len() > initial_nominal_abort_sites
+            {
+                // Every source terminator above already returns or transfers.
+                // Only a taken nominal-abort edge reaches this compiler-owned
+                // tail; the canonical syscall marks the VM halted before return.
+                nominal_abort_tail = Some(code.len());
+                compact_emission::emit_nominal_abort_tail(&mut code)?;
+            }
             let function_end = code.len() as u64;
             let debug_seed = &mut function_debug_seeds[debug_seed_index];
             debug_seed.pc_end = function_end;
             uses_zk_global |= uses_zk;
+        }
+        if let Some(target) = nominal_abort_tail {
+            for at in nominal_abort_sites {
+                patch_or_defer_transfer(
+                    &mut code,
+                    at,
+                    target,
+                    TransferKind::Jump,
+                    &mut deferred_transfers,
+                )?;
+            }
         }
         // Patch call sites now that function offsets are known.
         for (at, callee, _caller) in &call_fixups {
@@ -8266,16 +8283,10 @@ impl Compiler {
         }
         let meta = ProgramMetadata {
             version_major: 1,
-            // Local test harnesses are executable tooling images, not
-            // deployable contracts. Keep them on the authenticated generic
-            // 1.0 profile so the VM does not interpret their private test
-            // functions as a production CNTR interface. The separately
-            // projected runtime artifact is compiled in Production mode and
-            // therefore remains a self-describing 1.1 contract.
-            version_minor: match self.opts.mode {
-                CompilerMode::Production => 1,
-                CompilerMode::Test => 0,
-            },
+            // Every profile uses the sole current header. Test harnesses omit
+            // CNTR and require the explicit compiler-owned test capability;
+            // production artifacts embed their admitted contract interface.
+            version_minor: 1,
             mode,
             vector_length: 0,
             max_cycles: self.opts.max_cycles,
@@ -9126,8 +9137,8 @@ fn build_access_set_hints(
         reads.insert(key);
     }
     Ok(Some(AccessSetHints {
-        read_keys: reads.into_iter().collect(),
-        write_keys: writes.into_iter().collect(),
+        read_keys: canonical_state_hint_keys(reads.into_iter().collect()),
+        write_keys: canonical_state_hint_keys(writes.into_iter().collect()),
         dynamic_reads,
         dynamic_writes,
     }))
@@ -9409,6 +9420,88 @@ fn executable_ir_roots(typed: &TypedProgram, include_tests: bool) -> BTreeSet<St
             (function.modifiers.kind != FunctionKind::Private
                 || (include_tests && function.modifiers.is_test))
                 .then(|| function.name.clone())
+        })
+        .collect()
+}
+/// Declarations whose literal leaf bodies may replace an ordinary private call.
+///
+/// Keep this whitelist in typed HIR: SSA does not retain permission/test metadata
+/// or distinguish public numeric values from secret witnesses. The full linked
+/// semantic, policy and codegen validation still precedes SSA optimization.
+fn private_literal_candidates(typed: &TypedProgram) -> BTreeMap<String, ir::DataRefKind> {
+    typed
+        .items
+        .iter()
+        .filter_map(|item| {
+            let TypedItem::Function(function) = item;
+            let crate::ast::FunctionModifiers {
+                kind,
+                permission,
+                is_test,
+                test_fixture,
+            } = &function.modifiers;
+            if *kind != FunctionKind::Private
+                || permission.is_some()
+                || *is_test
+                || test_fixture.is_some()
+                || !function.params.is_empty()
+                || !function.param_types.is_empty()
+            {
+                return None;
+            }
+            let kind = match function.ret_ty.as_ref()? {
+                semantic::Type::Int => ir::DataRefKind::Int,
+                semantic::Type::Decimal => ir::DataRefKind::Decimal,
+                semantic::Type::Quantity => ir::DataRefKind::Quantity,
+                _ => return None,
+            };
+            Some((function.name.clone(), kind))
+        })
+        .collect()
+}
+/// Private declarations whose exact body can be moved once into one caller.
+///
+/// Eligibility comes from validated HIR, rather than guessing source authority
+/// from SSA. Keep public roots, attributes, secrets and aggregate/state handles
+/// out of this pass; the complete original source validation precedes it.
+fn private_inline_candidates(typed: &TypedProgram) -> BTreeMap<String, bool> {
+    fn scalar(ty: &semantic::Type) -> bool {
+        matches!(
+            ty,
+            semantic::Type::Int
+                | semantic::Type::Decimal
+                | semantic::Type::Quantity
+                | semantic::Type::Bool
+                | semantic::Type::String
+                | semantic::Type::Bytes
+                | semantic::Type::DataSpaceId
+                | semantic::Type::AccountId
+                | semantic::Type::AssetDefinitionId
+                | semantic::Type::AssetId
+                | semantic::Type::NftId
+                | semantic::Type::DomainId
+                | semantic::Type::Name
+                | semantic::Type::Json
+                | semantic::Type::Unit
+        )
+    }
+    typed
+        .items
+        .iter()
+        .filter_map(|item| {
+            let TypedItem::Function(function) = item;
+            let modifiers = &function.modifiers;
+            let result = function.ret_ty.as_ref().unwrap_or(&semantic::Type::Unit);
+            (modifiers.kind == FunctionKind::Private
+                && modifiers.permission.is_none()
+                && !modifiers.is_test
+                && modifiers.test_fixture.is_none()
+                && function
+                    .param_types
+                    .iter()
+                    .all(|param| !param.is_state && scalar(&param.ty))
+                && scalar(result))
+            .then(|| (function.name.clone(), *result == semantic::Type::Unit))
         })
         .collect()
 }

@@ -49,19 +49,20 @@ fn fuzz_envelope(envelope: &[u8]) {
         return;
     }
     if let Ok(value) = numeric_tlv::decode_int_bytes(envelope) {
-        let canonical = numeric_tlv::encode_int(&value).expect("decoded int must re-encode");
+        let canonical =
+            ivm_abi::numeric_tlv::encode_int(&value).expect("decoded int must re-encode");
         assert_eq!(canonical, envelope);
         assert_eq!(numeric_tlv::decode_int_bytes(&canonical), Ok(value));
     }
     if let Ok(value) = numeric_tlv::decode_decimal_bytes(envelope) {
         let canonical =
-            numeric_tlv::encode_decimal(&value).expect("decoded decimal must re-encode");
+            ivm_abi::numeric_tlv::encode_decimal(&value).expect("decoded decimal must re-encode");
         assert_eq!(canonical, envelope);
         assert_eq!(numeric_tlv::decode_decimal_bytes(&canonical), Ok(value));
     }
     if let Ok(value) = numeric_tlv::decode_quantity_bytes(envelope) {
         let canonical =
-            numeric_tlv::encode_quantity(&value).expect("decoded quantity must re-encode");
+            ivm_abi::numeric_tlv::encode_quantity(&value).expect("decoded quantity must re-encode");
         assert_eq!(canonical, envelope);
         assert_eq!(numeric_tlv::decode_quantity_bytes(&canonical), Ok(value));
     }
@@ -110,7 +111,7 @@ fn fuzz_valid_int(payload: &[u8]) {
         IntValueV1::decode_frame(&frame).map(IntValueV1::into_int),
         Ok(value.clone())
     );
-    let envelope = numeric_tlv::encode_int(&value).expect("valid int envelope encodes");
+    let envelope = ivm_abi::numeric_tlv::encode_int(&value).expect("valid int envelope encodes");
     assert_eq!(numeric_tlv::decode_int_bytes(&envelope), Ok(value));
     exercise_envelope_corruptions(&envelope);
 }
@@ -134,7 +135,8 @@ fn fuzz_valid_decimal(payload: &[u8]) {
         DecimalValueV1::decode_frame(&frame).map(DecimalValueV1::into_numeric),
         Ok(value.clone())
     );
-    let envelope = numeric_tlv::encode_decimal(&value).expect("valid decimal envelope encodes");
+    let envelope =
+        ivm_abi::numeric_tlv::encode_decimal(&value).expect("valid decimal envelope encodes");
     assert_eq!(numeric_tlv::decode_decimal_bytes(&envelope), Ok(value));
     exercise_envelope_corruptions(&envelope);
 }
@@ -169,7 +171,8 @@ fn fuzz_valid_quantity(payload: &[u8]) {
         QuantityValueV1::decode_frame(&frame).map(QuantityValueV1::into_quantity),
         Ok(value.clone())
     );
-    let envelope = numeric_tlv::encode_quantity(&value).expect("valid quantity envelope encodes");
+    let envelope =
+        ivm_abi::numeric_tlv::encode_quantity(&value).expect("valid quantity envelope encodes");
     assert_eq!(numeric_tlv::decode_quantity_bytes(&envelope), Ok(value));
     exercise_envelope_corruptions(&envelope);
 }
@@ -256,7 +259,7 @@ fn fuzz_decimal_arithmetic(payload: &[u8]) {
     }
 }
 fn numeric_program(syscall: u32) -> Vec<u8> {
-    let mut program = ProgramMetadata::default_for(1, 0, 1).encode();
+    let mut program = ProgramMetadata::default_for(1, 1, 1).encode();
     program.extend_from_slice(&encoding::wide::encode_syscallx(syscall).to_le_bytes());
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     program
@@ -268,10 +271,10 @@ fn wrapping_add_vm(lhs: &BigInt, rhs: &BigInt, gas: u64) -> (IVM, u64) {
         .expect("load numeric fuzz program");
     vm.set_host(DefaultHost::new());
     let lhs_pointer = vm
-        .alloc_host_tlv(&numeric_tlv::encode_int(lhs).expect("encode lhs"))
+        .alloc_host_tlv(&ivm_abi::numeric_tlv::encode_int(lhs).expect("encode lhs"))
         .expect("install lhs");
     let rhs_pointer = vm
-        .alloc_host_tlv(&numeric_tlv::encode_int(rhs).expect("encode rhs"))
+        .alloc_host_tlv(&ivm_abi::numeric_tlv::encode_int(rhs).expect("encode rhs"))
         .expect("install rhs");
     vm.set_register(10, lhs_pointer);
     vm.set_register(11, rhs_pointer);

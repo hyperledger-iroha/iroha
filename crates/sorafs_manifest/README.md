@@ -41,6 +41,16 @@ audit digests, and deal/snapshot/settlement identifiers have the same invariant.
 Use `norito::canonical_frame_len` when enforcing a full canonical frame-size
 limit; payload length hints and ambient-layout encoders do not define that size.
 
+### Provider endpoint material
+
+`EndpointAttestationKind::Tls` identifies admitted X.509 server certificate material
+for Torii and Norito-RPC endpoints; the provider-admission CLI accepts `tls` or `quic`.
+Signed genesis or governance authenticates the selected material. Structural admission
+validation does not prove a live handshake, current reachability or client certificate
+authentication. TLS clients validate the selected trust root, server name and certificate
+lifetime when connecting. Separate operator and Norito-RPC mTLS ingress policies remain
+independent requirements.
+
 ### Public signer identities
 
 Signer identities use the shared
@@ -224,3 +234,8 @@ sets `signature_verified=true` when the signature check succeeds. Pass
 The command rejects symlinks, hard links, unsafe permissions, path replacement,
 malformed raw material, and signer/fingerprint mismatches before printing the
 same JSON payload.
+
+Signed gateway-compliance trust policies, catalogs, acknowledgements, rollback authorizations and
+feed documents use the canonical `sorafs_manifest::gateway_compliance` types and bounded signature
+preimages. Torii owns durable promotion, replay protection, runtime feed transport and serving state;
+a valid protocol signature alone does not establish current serving readiness.

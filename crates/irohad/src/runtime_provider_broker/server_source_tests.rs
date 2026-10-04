@@ -2179,7 +2179,7 @@ fn source_handoff_decode_uses_selected_pool_and_releases_before_streaming() {
             .expect("decode selected source handoff"),
         fetch
     );
-    assert_eq!(pool.used_bytes.load(Ordering::Acquire), 0);
+    assert_eq!(pool.allocation.reserved_bytes(), 0);
     let full = pool
         .try_acquire(pool.max_bytes)
         .expect("fill selected pool");
@@ -2194,7 +2194,7 @@ fn source_handoff_decode_uses_selected_pool_and_releases_before_streaming() {
         Err(BrokerError::Protocol),
         "the original raw-frame reservation still enforces the exact semantic bound"
     );
-    assert_eq!(pool.used_bytes.load(Ordering::Acquire), 0);
+    assert_eq!(pool.allocation.reserved_bytes(), 0);
     assert_eq!(
         decode(
             &bytes[..bytes.len() - 1],
@@ -2202,14 +2202,14 @@ fn source_handoff_decode_uses_selected_pool_and_releases_before_streaming() {
         ),
         Err(BrokerError::Protocol)
     );
-    assert_eq!(pool.used_bytes.load(Ordering::Acquire), 0);
+    assert_eq!(pool.allocation.reserved_bytes(), 0);
     let mut trailing = bytes;
     trailing.push(0);
     assert_eq!(
         decode(&trailing, MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1),
         Err(BrokerError::Protocol)
     );
-    assert_eq!(pool.used_bytes.load(Ordering::Acquire), 0);
+    assert_eq!(pool.allocation.reserved_bytes(), 0);
     assert!(current_decode_resource_admission().is_none());
 }
 
@@ -2286,16 +2286,13 @@ fn source_handoff_decode_preserves_enclosing_admission_and_cumulative_usage() {
                 .consumed_bytes,
             bytes.len() + 2 * charge
         );
-        assert_eq!(
-            selected.used_bytes.load(Ordering::Acquire),
-            selected.max_bytes
-        );
+        assert_eq!(selected.allocation.reserved_bytes(), selected.max_bytes);
     }
     assert!(current_decode_resource_admission().is_none());
     drop(outer);
     drop(full);
-    assert_eq!(outer_pool.used_bytes.load(Ordering::Acquire), 0);
-    assert_eq!(selected.used_bytes.load(Ordering::Acquire), 0);
+    assert_eq!(outer_pool.allocation.reserved_bytes(), 0);
+    assert_eq!(selected.allocation.reserved_bytes(), 0);
 }
 
 #[test]
@@ -2429,11 +2426,11 @@ fn source_streams_transfer_to_actual_retained_plan_reservations() {
         SOURCE_STREAM_FRAME_DECODE_POLICY_V1,
     )
     .expect("admit transient chunk beside retained plans");
-    assert_eq!(pool.used_bytes.load(Ordering::Acquire), pool_bytes);
+    assert_eq!(pool.allocation.reserved_bytes(), pool_bytes);
     drop(chunk);
     drop(second);
     drop(first);
-    assert_eq!(pool.used_bytes.load(Ordering::Acquire), 0);
+    assert_eq!(pool.allocation.reserved_bytes(), 0);
 }
 #[test]
 fn native_gateway_authority_has_no_broker_binding() {

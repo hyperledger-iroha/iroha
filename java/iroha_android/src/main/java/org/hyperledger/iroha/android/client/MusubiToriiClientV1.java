@@ -27,8 +27,8 @@ import org.hyperledger.iroha.android.client.MusubiModelsV1.OrderedPrefixPage;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PackagePageQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PackageRecord;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.Page;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleAttestationKey;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleAttestationRecord;
+import org.hyperledger.iroha.sdk.musubi.MusubiProviderBundleAttestationKeyV1;
+import org.hyperledger.iroha.sdk.musubi.MusubiProviderBundleAttestationRecordV1;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ResolverIndexQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ResolverIndexPage;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.SearchPage;
@@ -111,16 +111,16 @@ public final class MusubiToriiClientV1 {
   }
 
   /** Fetches one immutable provider proof by its archive/order/provider identity. */
-  public CompletableFuture<ProviderBundleAttestationRecord> findProviderBundleAttestation(
-      final ProviderBundleAttestationKey request, final ToriiCanonicalRequestAuth canonicalAuth) {
-    final ProviderBundleAttestationKey checked = required(request);
+  public CompletableFuture<MusubiProviderBundleAttestationRecordV1> findProviderBundleAttestation(
+      final MusubiProviderBundleAttestationKeyV1 request, final ToriiCanonicalRequestAuth canonicalAuth) {
+    final MusubiProviderBundleAttestationKeyV1 checked = required(request);
     return executePost(
         PROVIDER_BUNDLE_ATTESTATION_PATH,
         checked.toJsonBytes(),
         requiredAuth(canonicalAuth),
         payload -> {
-          final ProviderBundleAttestationRecord record =
-              MusubiJsonV1.parseProviderBundleAttestation(payload);
+          final MusubiProviderBundleAttestationRecordV1 record =
+              MusubiProviderBundleAttestationRecordV1.fromJsonBytes(payload);
           record.requireMatches(checked);
           return record;
         });

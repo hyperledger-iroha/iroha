@@ -526,6 +526,15 @@ fn init_from_the_block_store() {
         (0, Hash32([1; 32]))
     );
     assert!(empty.recent_headers.is_empty());
+    assert!(
+        matches!(
+            super::super::startup_entry(&FakeBlocks::default(), 1),
+            Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                super::super::StartupHistoryError::Missing { height: 1 }
+            ))
+        ),
+        "a completed absent read remains distinct from local read refusal"
+    );
 }
 
 /// §12.5: backends that panic — a record write, a block-store append and read — fail like I/O
@@ -584,12 +593,17 @@ fn a_stopped_worker_stops_the_instance() {
 /// reached is reported by the dispatch rather than dropping the operation silently.
 #[test]
 fn worker_exits_and_unreachable_workers_are_detected() {
+    let budget = iroha_allocation::AllocationBudget::new(
+        iroha_allocation::ChargedShared::<super::super::ThreadWake>::allocation_layout().size(),
+    );
+    let wake = super::super::ThreadWake::admit(&budget).unwrap();
     let (tx, rx) = mpsc::channel();
     drop(ExitGuard {
         worker: Worker::Persist,
-        tx,
+        tx: super::super::DriverInputs { sender: tx, wake },
     });
     assert!(matches!(rx.try_recv(), Ok(Input::Exited(Worker::Persist))));
+    assert_eq!(budget.reserved_bytes(), 0);
     let (persist, _) = mpsc::channel();
     let (exec, exec_rx) = mpsc::channel();
     let (serve, serve_rx) = mpsc::channel();
@@ -772,12 +786,70 @@ fn serving_flood_does_not_delay_the_nodes_fetch() {
     assert!(asked.elapsed() < Duration::from_secs(3));
     let backlog = handle.backlog();
     assert!(backlog.serve <= 2 * 50, "{backlog:?}");
-    for message in super::row_messages(&b1) {
-        handle.deliver_message(vals.key(1), message);
+    let response = super::row_messages(&b1);
+    let matching_requests = || {
+        net.sent()
+            .iter()
+            .filter(|(to, message)| {
+                *to == vals.key(1)
+                    && matches!(message, WireMessage::PayloadRequest(request)
+                        if request.instance == instance
+                            && request.height == 1
+                            && request.block_hash == hash(&b1))
+            })
+            .count()
+    };
+    let mut answered_requests = matching_requests();
+    assert!(
+        answered_requests > 0,
+        "the peer answers an actual body request"
+    );
+    // Preserve the original burst as a real transport-pressure probe. Local ingress
+    // refusal is not a promise of delivery; the peer must answer later exact fetches.
+    let initial_admission: Vec<_> = response
+        .iter()
+        .map(|message| handle.deliver_message(vals.key(1), message.clone()))
+        .collect();
+    let applied_start = Instant::now();
+    let mut next_response_frame = None;
+    let mut retry_attempts = 0;
+    let mut retry_admitted = 0;
+    while !handle
+        .status()
+        .is_some_and(|status| status.applied_height >= 1)
+    {
+        let requests = matching_requests();
+        assert!(
+            applied_start.elapsed() < Duration::from_secs(5),
+            "timed out waiting for height 1 applied; initial admission={initial_admission:?}, \
+             requests={requests}, answered={answered_requests}, retry attempts={retry_attempts}, \
+             retry admitted={retry_admitted}, status={:?}, halt={:?}, stopped={:?}, backlog={:?}",
+            handle.status(),
+            handle.halted(),
+            handle.stopped(),
+            handle.backlog(),
+        );
+        if next_response_frame.is_none() && requests > answered_requests {
+            answered_requests = requests;
+            next_response_frame = Some(0);
+        }
+        // Stream one unchanged signed manifest/actual row per turn. A rejected local
+        // delivery retains that exact response frame; no new fetch or body is invented.
+        if let Some(index) = next_response_frame {
+            retry_attempts += 1;
+            if handle.deliver_message(vals.key(1), response[index].clone()) {
+                retry_admitted += 1;
+                next_response_frame = (index + 1 < response.len()).then_some(index + 1);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(5));
     }
-    wait_until("height 1 applied", Duration::from_secs(5), || {
-        handle.status().is_some_and(|s| s.applied_height >= 1)
-    });
+    eprintln!(
+        "serving-flood response: initial admission={initial_admission:?}, \
+         answered requests={answered_requests}, retry attempts={retry_attempts}, \
+         retry admitted={retry_admitted}, apply elapsed={:?}",
+        applied_start.elapsed(),
+    );
     assert!(blocks.reads() < 10_000, "most requests were never read");
     let dropped = handle.backlog().serve_dropped;
     assert!(dropped > 0, "the flood was dropped, not queued");
@@ -959,3 +1031,6 @@ fn storage_closure_refuses_buffered_dispatch_and_each_physical_send() {
     assert!(serve_rx.try_recv().is_err());
     assert_eq!(net.sent().len(), 1);
 }
+
+#[path = "threaded_transactions.rs"]
+mod transactions;

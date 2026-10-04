@@ -253,3 +253,96 @@ fn wide_limb_split_preserves_low_word_and_carry() {
     assert_eq!(&scaled.limbs()[..2], &[0xffff_fff6, 9]);
     assert_eq!(scaled.to_quantity(), Some(value));
 }
+
+fn bigint_from_limbs(limbs: [u32; FASTPQ_QUANTITY_UNIT_LIMBS]) -> BigInt {
+    let mut bytes = [0_u8; FASTPQ_QUANTITY_UNIT_BYTES + 1];
+    for (chunk, limb) in bytes[..FASTPQ_QUANTITY_UNIT_BYTES]
+        .chunks_exact_mut(4)
+        .zip(limbs)
+    {
+        chunk.copy_from_slice(&limb.to_le_bytes());
+    }
+    BigInt::from_twos_bytes(&bytes).unwrap()
+}
+
+#[test]
+fn decimal_division_matches_bigint_and_reconstructs_every_remainder() {
+    let mut seed = 0x2413_5917_c123_9931_u64;
+    for _ in 0..512 {
+        let mut limbs = [0; FASTPQ_QUANTITY_UNIT_LIMBS];
+        for limb in &mut limbs {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            *limb = split_wide_limb(seed).0;
+        }
+        let (quotient, remainder) = divide_by_ten(limbs);
+        let (expected, rest) = bigint_from_limbs(limbs)
+            .checked_div_rem(&BigInt::from(10_u32))
+            .unwrap();
+        assert_eq!(bigint_from_limbs(quotient), expected);
+        assert_eq!(BigInt::from(remainder), rest);
+        assert!(remainder < 10);
+    }
+}
+
+#[test]
+fn exact_trailing_zero_boundary_and_arbitrary_limbs_match_numeric_domain() {
+    let bound = maximum_quantity()
+        .mantissa()
+        .checked_add(&BigInt::one())
+        .unwrap();
+    let mut cases = Vec::new();
+    for zeros in 0..=MAX_DECIMAL_SCALE {
+        let power = BigInt::pow10(zeros).unwrap();
+        for offset in [-1_i32, 0, 1] {
+            let center = bound
+                .checked_add(&BigInt::from(offset))
+                .unwrap()
+                .checked_mul(&power)
+                .unwrap();
+            for final_offset in [-1_i32, 0, 1] {
+                cases.push(center.checked_add(&BigInt::from(final_offset)).unwrap());
+            }
+        }
+    }
+    let mut seed = 0xf130_7021_1219_cda1_u64;
+    for _ in 0..512 {
+        let mut limbs = [0; FASTPQ_QUANTITY_UNIT_LIMBS];
+        for limb in &mut limbs {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            *limb = split_wide_limb(seed).0;
+        }
+        cases.push(bigint_from_limbs(limbs));
+    }
+    cases.push(BigInt::zero());
+    for value in cases {
+        let signed = value.to_twos_bytes();
+        assert!(
+            signed
+                .iter()
+                .skip(FASTPQ_QUANTITY_UNIT_BYTES)
+                .all(|byte| *byte == 0)
+        );
+        let mut bytes = [0_u8; FASTPQ_QUANTITY_UNIT_BYTES];
+        let copied = signed.len().min(bytes.len());
+        bytes[..copied].copy_from_slice(&signed[..copied]);
+        let limbs = core::array::from_fn(|index| {
+            u32::from_le_bytes(bytes[index * 4..index * 4 + 4].try_into().unwrap())
+        });
+        for scale in 0..=MAX_DECIMAL_SCALE {
+            let expected = Numeric::try_new(value.clone(), scale)
+                .ok()
+                .and_then(|numeric| Quantity::from_canonical_numeric(numeric).ok());
+            let actual = FastpqQuantityUnits::from_limbs(limbs, scale);
+            assert_eq!(actual.map(|units| units.to_quantity().unwrap()), expected);
+            assert_eq!(canonical_magnitude_fits(limbs, scale), expected.is_some());
+            if let Some(actual) = actual {
+                assert_eq!(actual.limbs(), &limbs);
+                assert_eq!(actual.scale(), scale);
+            }
+        }
+    }
+}

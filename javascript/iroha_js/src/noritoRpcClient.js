@@ -129,7 +129,7 @@ export class NoritoRpcClient {
       options.insecureTransportTelemetryHook,
       "options.insecureTransportTelemetryHook",
     );
-    this.#fetch = options.fetchImpl ?? globalThis.fetch;
+    this.#fetch = options.fetchImpl ?? globalThis.fetch?.bind(globalThis);
     if (typeof this.#fetch !== "function") {
       throw new TypeError("options.fetchImpl must be a function");
     }
@@ -337,14 +337,14 @@ export class NoritoRpcClient {
     if (timeoutMs == null) {
       const finalInit =
         externalSignal == null ? init : { ...init, signal: externalSignal };
-      return this.#fetch(url, finalInit);
+      return Reflect.apply(this.#fetch, undefined, [url, finalInit]);
     }
     const abortController = new AbortController();
     const signal = combineAbortSignals(externalSignal, abortController.signal);
     const finalInit = { ...init, signal };
     const timer = setTimeout(() => abortController.abort(), timeoutMs);
     try {
-      return await this.#fetch(url, finalInit);
+      return await Reflect.apply(this.#fetch, undefined, [url, finalInit]);
     } finally {
       clearTimeout(timer);
     }

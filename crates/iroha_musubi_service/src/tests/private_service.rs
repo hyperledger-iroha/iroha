@@ -1,5 +1,23 @@
 // Private HTTP service test body included from the parent module.
 #[test]
+fn backend_errors_are_closed_standard_errors_without_diagnostic_sources() {
+    for (error, expected) in [
+        (
+            MusubiPublicationServiceBackendErrorV1::Retryable,
+            "Musubi publication backend is temporarily unavailable",
+        ),
+        (
+            MusubiPublicationServiceBackendErrorV1::Permanent,
+            "Musubi publication backend requires configuration or state changes",
+        ),
+    ] {
+        let standard: &(dyn std::error::Error + Send + Sync) = &error;
+        assert_eq!(standard.to_string(), expected);
+        assert!(standard.source().is_none());
+    }
+}
+
+#[test]
 fn authorization_is_domain_bound_and_verifiable() {
     let (client, _) = client();
     let runtime = AuthenticatedMusubiPublicationRuntimeClientV1::from_iroha_client(
@@ -1816,6 +1834,7 @@ fn authenticated_staging_receipt_failures_have_exact_deadletter_reasons() {
                 body: &invalid_body,
             },
             2_001,
+            std::time::Instant::now(),
         )
         .expect_err("authenticated invalid staging receipt");
     assert_eq!(
@@ -1847,6 +1866,7 @@ fn authenticated_staging_receipt_failures_have_exact_deadletter_reasons() {
                 body: &future_body,
             },
             2,
+            std::time::Instant::now(),
         )
         .expect_err("authenticated future-skewed staging receipt");
     assert_eq!(
@@ -1880,6 +1900,7 @@ fn storage_coordination_accepts_an_expired_receipt_for_the_exact_finalized_archi
                 body: &body,
             },
             120_001,
+            std::time::Instant::now(),
         )
         .expect("finalized archive outlives its registration receipt");
     let decoded: MusubiStorageCoordinationResponseV1 =
@@ -1957,7 +1978,7 @@ fn cached_storage_response_rechecks_finalized_registration_without_replaying_eff
 
         fn coordinate_storage(
             &mut self,
-            _request: &MusubiStorageCoordinationRequestV1,
+            _request: &VerifiedStorageCoordinationRequestV1<'_>,
         ) -> Result<MusubiStorageCoordinationResponseV1, MusubiPublicationServiceBackendErrorV1>
         {
             panic!("cached replay must not repeat storage effects");
@@ -2179,13 +2200,13 @@ fn storage_response_requires_replication_quorum_and_exact_lock_digest() {
     let fixture = control_service_fixture(false, false);
     let mut below_quorum = fixture.storage_response.clone();
     let MusubiStorageLocationDispositionV1::NeedsRegistration {
-        provider_attestations,
+        completed_providers,
         ..
     } = &mut below_quorum.disposition
     else {
         panic!("fixture requires location registration")
     };
-    provider_attestations.truncate(usize::from(MUSUBI_MIN_HEALTHY_REPLICAS_V1).saturating_sub(1));
+    completed_providers.truncate(usize::from(MUSUBI_MIN_HEALTHY_REPLICAS_V1).saturating_sub(1));
     assert!(below_quorum.validate_for(&fixture.storage_request).is_err());
     let mut wrong_lock = fixture.storage_request.clone();
     wrong_lock.verification_lock_digest = MusubiVerificationLockDigestV1::new([0xee; 32]);
@@ -2229,6 +2250,11 @@ fn storage_response_never_reuses_a_prior_location_generation() {
     );
     let mut replacement = fixture.storage_response;
     replacement.location_id = MusubiArchiveLocationIdV1::new([0xee; 32]);
+    assert!(
+        replacement.validate_for(&replacement_request).is_err(),
+        "a new location still requires the exact replacement request digest"
+    );
+    replacement.request_digest = replacement_request.canonical_request_digest().unwrap();
     replacement
         .validate_for(&replacement_request)
         .expect("a never-before-used replacement identity remains valid");
@@ -2447,4 +2473,47 @@ fn restored_journal_preserves_completed_idempotency_and_replay_state() {
         restored.begin(&replay, 10_003),
         Err(MusubiPublicationServiceJournalErrorV1::Replay)
     );
+}
+
+#[test]
+fn storage_request_digest_uses_exact_canonical_authorization_domain() {
+    let fixture = control_service_fixture(false, false);
+    let request = &fixture.storage_request;
+    let canonical = norito::encode_canonical(request).unwrap();
+    let digest = request.canonical_request_digest().unwrap();
+    assert_eq!(
+        digest,
+        request_digest(
+            MusubiPublicationRuntimeOperationV1::StorageCoordination,
+            &canonical
+        )
+        .unwrap()
+    );
+    assert_eq!(fixture.storage_response.request_digest, digest);
+    {
+        let _ambient = norito::core::DecodeFlagsGuard::enter(
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN,
+        );
+        assert_eq!(request.canonical_request_digest().unwrap(), digest);
+        fixture.storage_response.validate_for(request).unwrap();
+    }
+    let mut changed = request.clone();
+    changed.verification_lock_digest = MusubiVerificationLockDigestV1::new([0xee; 32]);
+    assert_ne!(changed.canonical_request_digest().unwrap(), digest);
+    assert!(fixture.storage_response.validate_for(&changed).is_err());
+    changed.operation_id = [0; 32];
+    assert!(changed.canonical_request_digest().is_err());
+    let mut changed_response = fixture.storage_response.clone();
+    changed_response.request_digest = [0; 32];
+    assert!(changed_response.validate_for(request).is_err());
+    let mut duplicates = fixture.storage_response.clone();
+    let MusubiStorageLocationDispositionV1::NeedsRegistration {
+        completed_providers,
+        ..
+    } = &mut duplicates.disposition
+    else {
+        panic!("registration fixture");
+    };
+    completed_providers[1] = completed_providers[0];
+    assert!(duplicates.validate_for(request).is_err());
 }

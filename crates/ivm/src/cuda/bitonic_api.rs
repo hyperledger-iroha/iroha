@@ -1,30 +1,18 @@
 //! Bitonic qualification and all-or-nothing publication to original caller buffers.
 
 use super::policy::{Kernel, public_workload_task_id};
-use iroha_accel::{PtxArtifact, cuda::CudaFailure};
-use std::ffi::CStr;
+use iroha_accel::cuda::CudaFailure;
 #[path = "bitonic_launch.rs"]
 mod launch;
-static ARTIFACT: PtxArtifact = PtxArtifact::new(
-    match CStr::from_bytes_with_nul(
-        concat!(
-            include_str!(concat!(env!("OUT_DIR"), "/bitonic_sort.ptx")),
-            "\0"
-        )
-        .as_bytes(),
-    ) {
-        Ok(bytes) => bytes,
-        Err(_) => panic!("bitonic artifact must have one terminal NUL"),
-    },
-);
 
 fn stage(hi: &[u64], lo: &[u64]) -> Result<launch::Sorted, CudaFailure> {
-    match crate::cuda_dispatch::with_selected(Kernel::Bitonic, ARTIFACT, |device| {
+    let artifact = crate::cuda_artifact::artifact(Kernel::Bitonic)?;
+    match crate::cuda_dispatch::with_selected(Kernel::Bitonic, artifact, |device| {
         // SAFETY: this module owns the exact artifact and checked paired arrays.
-        unsafe { launch::output(device, ARTIFACT, hi, lo) }
+        unsafe { launch::output(device, artifact, hi, lo) }
     }) {
         Ok(result) if result.hi.len() == hi.len() && result.lo.len() == lo.len() => {
-            super::imp::record_completed_cuda_dispatch();
+            super::imp::record_completed_cuda_dispatch(Kernel::Bitonic, artifact);
             Ok(result)
         }
         Ok(_) => {
@@ -44,7 +32,10 @@ fn stage(hi: &[u64], lo: &[u64]) -> Result<launch::Sorted, CudaFailure> {
 }
 
 pub(super) fn admit() -> bool {
-    crate::cuda_dispatch::admit_kernel(Kernel::Bitonic, ARTIFACT, || {
+    let Ok(artifact) = crate::cuda_artifact::artifact(Kernel::Bitonic) else {
+        return false;
+    };
+    crate::cuda_dispatch::admit_kernel(Kernel::Bitonic, artifact, || {
         let Some(_guard) = super::imp::SelftestRunningGuard::enter() else {
             return Err(CudaFailure::Busy);
         };

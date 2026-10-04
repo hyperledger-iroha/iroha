@@ -31,7 +31,10 @@ pub async fn handler_list_pin_intents(
     let snapshot = list_snapshot_for_state(app.state.as_ref());
     let nexus = app.state.nexus_snapshot();
     let page = {
-        let store = app.state.da_pin_intents();
+        let store = app
+            .state
+            .da_pin_intents()
+            .map_err(crate::canonical_history::da_hydration_error)?;
         list_active_from_store(&store, &request, &nexus, snapshot).map_err(pin_list_error)?
     };
     if list_snapshot_for_state(app.state.as_ref()) != snapshot {
@@ -52,7 +55,7 @@ pub async fn handler_prove_pin_intent(
 ) -> Result<JsonBody<Option<DaPinIntentProof>>, Error> {
     request.validate().map_err(pin_query_error)?;
     let nexus = app.state.nexus_snapshot();
-    let proof = build_active_proof_from_state(&request, &nexus, app.state.as_ref());
+    let proof = build_active_proof_from_state(&request, &nexus, app.state.as_ref())?;
     Ok(JsonBody(proof))
 }
 /// HTTP handler for `/v1/da/pin-intents/verify`.
@@ -60,7 +63,7 @@ pub async fn handler_verify_pin_intent(
     State(app): State<SharedAppState>,
     NoritoJson(proof): NoritoJson<DaPinIntentProof>,
 ) -> Result<JsonBody<DaPinIntentVerifyResponse>, Error> {
-    let response = verify_against_kura_block(&proof, app.state.as_ref());
+    let response = verify_against_kura_block(&proof, app.state.as_ref())?;
     Ok(JsonBody(response))
 }
 fn list_active_from_store(
@@ -243,57 +246,76 @@ fn build_active_proof_from_state(
     request: &DaPinIntentQueryRequest,
     nexus: &Nexus,
     state: &iroha_core::state::State,
-) -> Option<DaPinIntentProof> {
+) -> Result<Option<DaPinIntentProof>, Error> {
     let policy_context = ActiveLaneProofPolicyContext::new(nexus);
     let target = {
-        let store = state.da_pin_intents();
-        find_active_in_store(&store, request, &policy_context)?
+        let store = state
+            .da_pin_intents()
+            .map_err(crate::canonical_history::da_hydration_error)?;
+        find_active_in_store(&store, request, &policy_context)
     };
-    let block_height = usize::try_from(target.location.block_height).ok()?;
-    let block_height = NonZeroUsize::new(block_height)?;
-    let block = state.block_by_height(block_height)?;
-    let bundle = block.as_ref().da_pin_intents()?;
-    let index = usize::try_from(target.location.index_in_bundle).ok()?;
-    if bundle.intents.get(index) != Some(&target.intent) {
-        return None;
-    }
-    build_da_pin_intent_proof(bundle, target.location.block_height, index)
+    let Some(target) = target else {
+        return Ok(None);
+    };
+    let Some(block_height) = usize::try_from(target.location.block_height)
+        .ok()
+        .and_then(NonZeroUsize::new)
+    else {
+        return Ok(None);
+    };
+    let Some(block) = state
+        .block_by_height(block_height)
+        .map_err(crate::canonical_history::canonical_attempt_error)?
+    else {
+        return Ok(None);
+    };
+    Ok((|| {
+        let bundle = block.as_ref().da_pin_intents()?;
+        let index = usize::try_from(target.location.index_in_bundle).ok()?;
+        if bundle.intents.get(index) != Some(&target.intent) {
+            return None;
+        }
+        build_da_pin_intent_proof(bundle, target.location.block_height, index)
+    })())
 }
 fn verify_against_kura_block(
     proof: &DaPinIntentProof,
     state: &iroha_core::state::State,
-) -> DaPinIntentVerifyResponse {
+) -> Result<DaPinIntentVerifyResponse, Error> {
     let Ok(block_height) = usize::try_from(proof.location.block_height) else {
-        return DaPinIntentVerifyResponse {
+        return Ok(DaPinIntentVerifyResponse {
             valid: false,
             error: Some("DA pin-intent proof block height does not fit usize".to_owned()),
-        };
+        });
     };
     let Some(block_height) = NonZeroUsize::new(block_height) else {
-        return DaPinIntentVerifyResponse {
+        return Ok(DaPinIntentVerifyResponse {
             valid: false,
             error: Some("DA pin-intent proof cannot reference block height 0".to_owned()),
-        };
+        });
     };
-    let Some(block) = state.block_by_height(block_height) else {
-        return DaPinIntentVerifyResponse {
+    let Some(block) = state
+        .block_by_height(block_height)
+        .map_err(crate::canonical_history::canonical_attempt_error)?
+    else {
+        return Ok(DaPinIntentVerifyResponse {
             valid: false,
             error: Some(format!(
                 "block {} is not available in Kura",
                 proof.location.block_height
             )),
-        };
+        });
     };
     if block.as_ref().da_pin_intents().is_none() {
-        return DaPinIntentVerifyResponse {
+        return Ok(DaPinIntentVerifyResponse {
             valid: false,
             error: Some(format!(
                 "block {} does not contain a DA pin-intent bundle",
                 proof.location.block_height
             )),
-        };
+        });
     }
-    match verify_da_pin_intent_proof(proof, &block.header()) {
+    Ok(match verify_da_pin_intent_proof(proof, &block.header()) {
         Ok(()) => DaPinIntentVerifyResponse {
             valid: true,
             error: None,
@@ -302,7 +324,7 @@ fn verify_against_kura_block(
             valid: false,
             error: Some(err.to_string()),
         },
-    }
+    })
 }
 #[cfg(all(test, feature = "app_api"))]
 mod tests {
@@ -545,7 +567,11 @@ mod tests {
     fn seed_pin_store(app: &mut crate::SharedAppState, store: DaPinStore) {
         let app = std::sync::Arc::get_mut(app).expect("unique app state");
         let state = std::sync::Arc::get_mut(&mut app.state).expect("unique core state");
-        drop(state.da_pin_intents());
+        drop(
+            state
+                .da_pin_intents()
+                .expect("hydrate original DA fixture index"),
+        );
         *state.da_pin_intents.write() = store;
     }
     fn app_with_pin_intent_bundle(intents: Vec<DaPinIntent>) -> crate::SharedAppState {
@@ -583,7 +609,13 @@ mod tests {
         let header = block.header();
         let block_hash = block.hash();
         app.kura
-            .store_block(Arc::new(block))
+            .store_block(
+                iroha_data_model::block::SharedSignedBlock::try_new(
+                    block,
+                    &app.state.ivm_execution_budget(),
+                )
+                .expect("fund DA fixture block"),
+            )
             .expect("store DA pin-intent block");
         let mut block_hashes = app.state.block_hashes.block();
         block_hashes.push_for_tests(block_hash);
@@ -609,6 +641,7 @@ mod tests {
         let block = app
             .state
             .block_by_height(NonZeroUsize::new(1).expect("nonzero height"))
+            .expect("funded canonical history read")
             .expect("historical signed block must remain available");
         build_da_pin_intent_proof(
             block
@@ -946,6 +979,47 @@ mod tests {
             .await
             .expect("pin intent verification should succeed");
         assert!(response.valid);
+    }
+    #[tokio::test]
+    async fn original_pin_history_capacity_is_retryable_for_prove_and_verify() {
+        use axum::response::IntoResponse as _;
+        let app = app_with_pin_intent_bundle(vec![sample_intent(1, 1, 1)]);
+        let request = DaPinIntentQueryRequest {
+            lane_id: Some(1),
+            epoch: Some(1),
+            sequence: Some(1),
+            ..DaPinIntentQueryRequest::default()
+        };
+        let proof = historical_pin_proof(&app);
+        app.kura
+            .forget_cached_block_for_testing(NonZeroUsize::new(1).unwrap())
+            .unwrap();
+        let pool = app.state.ivm_execution_budget();
+        let held = pool
+            .try_reserve_bytes(pool.limit_bytes() - pool.reserved_bytes())
+            .unwrap();
+        for error in [
+            handler_prove_pin_intent(State(app.clone()), NoritoJson(request.clone()))
+                .await
+                .unwrap_err(),
+            handler_verify_pin_intent(State(app.clone()), NoritoJson(proof.clone()))
+                .await
+                .unwrap_err(),
+        ] {
+            assert_eq!(
+                error.into_response().status(),
+                axum::http::StatusCode::TOO_MANY_REQUESTS
+            );
+        }
+        drop(held);
+        let JsonBody(retried) = handler_prove_pin_intent(State(app.clone()), NoritoJson(request))
+            .await
+            .unwrap();
+        assert_eq!(retried.unwrap(), proof);
+        let JsonBody(verified) = handler_verify_pin_intent(State(app), NoritoJson(proof))
+            .await
+            .unwrap();
+        assert!(verified.valid);
     }
     #[tokio::test]
     async fn handler_verify_rejects_tampered_indexed_pin_intent() {

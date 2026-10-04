@@ -2010,6 +2010,11 @@ mod identity_preparation_tests {
 
     #[test]
     fn retained_predecessor_observation_defers_only_the_original_acquired_reader() {
+        let release_budget = iroha_allocation::AllocationBudget::new(
+            iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        );
+        let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
         use std::{
             future::Future,
             pin::Pin,
@@ -2018,7 +2023,9 @@ mod identity_preparation_tests {
         let cell = tree();
         let foreign = tree();
         let owned = cell.write().detach();
-        let mut wait = cell.observe_reader_release().wait_for_release();
+        let mut wait = cell
+            .observe_reader_release()
+            .wait_for_release(&mut release_registration_1);
         assert!(Pin::new(&mut wait)
             .poll(&mut Context::from_waker(Waker::noop()))
             .is_pending());
@@ -2073,6 +2080,12 @@ mod identity_preparation_tests {
 
     #[test]
     fn reader_wait_survives_refused_writer_release_and_registration_races() {
+        let release_budget = iroha_allocation::AllocationBudget::new(
+            2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        );
+        let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+        let mut release_registration_2 = crate::release_test_support::registration(&release_budget);
+
         use std::{
             future::Future,
             pin::Pin,
@@ -2083,7 +2096,9 @@ mod identity_preparation_tests {
         let pinned = cell.read();
         let active = cell.lock_active();
         let observation = without_allocations(|| cell.observe_reader_release());
-        let mut wait = observation.clone().wait_for_release();
+        let mut wait = observation
+            .clone()
+            .wait_for_release(&mut release_registration_1);
         assert!(Pin::new(&mut wait)
             .poll(&mut Context::from_waker(Waker::noop()))
             .is_pending());
@@ -2104,7 +2119,7 @@ mod identity_preparation_tests {
                 .is_pending(),
             "neither writer release, snapshot retirement nor another map releases this mutex"
         );
-        let mut late = observation.wait_for_release();
+        let mut late = observation.wait_for_release(&mut release_registration_2);
         drop(active);
         assert!(Pin::new(&mut wait)
             .poll(&mut Context::from_waker(Waker::noop()))
@@ -2130,6 +2145,12 @@ mod identity_preparation_tests {
 
     #[test]
     fn reader_release_covers_reads_advice_abort_and_both_commit_paths() {
+        let release_budget = iroha_allocation::AllocationBudget::new(
+            2 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        );
+        let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+        let mut release_registration_2 = crate::release_test_support::registration(&release_budget);
+
         use std::{
             future::Future,
             pin::Pin,
@@ -2139,7 +2160,9 @@ mod identity_preparation_tests {
         let owned = cell.write().detach();
         for mode in 0..6 {
             let prepared = (mode >= 3).then(|| cell.write().prepare_commit());
-            let mut wait = cell.observe_reader_release().wait_for_release();
+            let mut wait = cell
+                .observe_reader_release()
+                .wait_for_release(&mut release_registration_1);
             assert!(Pin::new(&mut wait)
                 .poll(&mut Context::from_waker(Waker::noop()))
                 .is_pending());
@@ -2166,7 +2189,9 @@ mod identity_preparation_tests {
                 .poll(&mut Context::from_waker(Waker::noop()))
                 .is_ready());
         }
-        let mut wait = cell.observe_reader_release().wait_for_release();
+        let mut wait = cell
+            .observe_reader_release()
+            .wait_for_release(&mut release_registration_2);
         cell.write().commit();
         assert!(Pin::new(&mut wait)
             .poll(&mut Context::from_waker(Waker::noop()))
@@ -2177,6 +2202,11 @@ mod identity_preparation_tests {
 
     #[test]
     fn reader_abort_retains_notification_until_the_original_writer_releases() {
+        let release_budget = iroha_allocation::AllocationBudget::new(
+            iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        );
+        let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
         use std::{
             future::Future,
             pin::Pin,
@@ -2187,7 +2217,9 @@ mod identity_preparation_tests {
         writer.insert(1, 17);
         let cursor = &*writer.work as *const _;
         let prepared = writer.prepare_commit();
-        let mut wait = cell.observe_reader_release().wait_for_release();
+        let mut wait = cell
+            .observe_reader_release()
+            .wait_for_release(&mut release_registration_1);
         assert!(Pin::new(&mut wait)
             .poll(&mut Context::from_waker(Waker::noop()))
             .is_pending());
@@ -2219,6 +2251,11 @@ mod identity_preparation_tests {
 
     #[test]
     fn reader_wake_unwind_preserves_physical_poison_and_original_commit() {
+        let release_budget = iroha_allocation::AllocationBudget::new(
+            iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        );
+        let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
         use std::{
             future::Future,
             pin::Pin,
@@ -2241,7 +2278,9 @@ mod identity_preparation_tests {
             let mut writer = cell.write();
             writer.insert(1, 7);
             let observation = cell.observe_reader_release();
-            let mut wait = observation.clone().wait_for_release();
+            let mut wait = observation
+                .clone()
+                .wait_for_release(&mut release_registration_1);
             let probe = Arc::new(Probe {
                 cell: Arc::clone(&cell),
                 calls: AtomicUsize::new(0),

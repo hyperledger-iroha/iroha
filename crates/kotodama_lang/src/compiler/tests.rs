@@ -1,5 +1,16 @@
 //! Compiler bytecode, source-policy, and access-hint regressions.
 
+#[path = "tests/dead_operands.rs"]
+mod dead_operands;
+#[path = "tests/literal_helpers.rs"]
+mod literal_helpers;
+#[path = "tests/numeric_operands.rs"]
+mod numeric_operands;
+#[path = "tests/rematerialized.rs"]
+mod rematerialized;
+#[path = "tests/state_operands.rs"]
+mod state_operands;
+
 use super::{
     ACCOUNT_WILDCARD_KEY, AUTHORITY_ACCOUNT_KEY, AccessHintDiagnostics, AccessSets,
     COLLECTION_ITERATION_CAP, Compiler, CompilerMode, CompilerOptions, DEFAULT_MAX_CYCLES,
@@ -2957,10 +2968,23 @@ fn debug_info_emits_full_width_pointer_codec_and_complete_access() {
         ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
     )
     .to_le_bytes();
-    assert!(
-        code.windows(publish_needle.len())
-            .any(|window| window == publish_needle),
-        "full-width numeric logging must publish the pointer TLV"
+    let pointer_codec = encoding::wide::encode_sys(
+        instruction::wide::system::SCALL,
+        ivm_abi::syscalls::SYSCALL_POINTER_TO_NORITO as u8,
+    )
+    .to_le_bytes();
+    let logging_codec_calls: Vec<_> = code
+        .chunks_exact(4)
+        .filter(|word| *word == needle || *word == pointer_codec || *word == publish_needle)
+        .map(|word| <[u8; 4]>::try_from(word).expect("one complete instruction"))
+        .collect();
+    // The synchronous pointer codec validates the original owned public TLV.
+    // String logging needs no conversion; numeric logging must encode the full
+    // typed value before DEBUG_LOG, without an intermediate publication copy.
+    assert_eq!(
+        logging_codec_calls,
+        [needle, pointer_codec, needle],
+        "string log, full-width pointer codec, and numeric log must stay ordered"
     );
     let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
     let inspect = entrypoints
@@ -5435,15 +5459,19 @@ seiyaku ExactScanProvenance {{
 fn entrypoint_hints_distinguish_dynamic_and_literal_state_map_paths() {
     let src = include_str!("fixtures/v1/c141.ko");
     let compiler = Compiler::new();
-    let (_bytes, manifest) = compiler
+    let (bytes, manifest) = compiler
         .compile_source_with_manifest(src)
         .expect("compile manifest");
+    let embedded = ProgramMetadata::parse(&bytes)
+        .expect("parse exact embedded interface")
+        .contract_interface
+        .expect("embedded interface");
     let hints = manifest
         .access_set_hints
         .expect("expected access_set_hints");
     let literal_key = canonical_numeric_state_key("Foo", ir::DataRefKind::Int, "1");
-    assert!(hints.read_keys.contains(&STATE_WILDCARD_KEY.to_string()));
-    assert!(hints.read_keys.contains(&literal_key), "{hints:?}");
+    assert_eq!(hints.read_keys, vec![STATE_WILDCARD_KEY.to_string()]);
+    assert_eq!(embedded.access_set_hints.as_ref(), Some(&hints));
     assert!(hints.write_keys.is_empty());
     let entrypoints = manifest.entrypoints.expect("entrypoints present");
     let read_dyn = entrypoints
@@ -5465,6 +5493,20 @@ fn entrypoint_hints_distinguish_dynamic_and_literal_state_map_paths() {
     assert!(read_lit.write_keys.is_empty());
     assert_eq!(read_lit.access_hints_complete, Some(true));
     assert!(read_lit.access_hints_skipped.is_empty());
+    for entrypoint in [read_dyn, read_lit] {
+        let actual = embedded
+            .entrypoints
+            .iter()
+            .find(|entry| entry.name == entrypoint.name)
+            .expect("the same public entrypoint is embedded");
+        assert_eq!(actual.read_keys, entrypoint.read_keys);
+        assert_eq!(actual.write_keys, entrypoint.write_keys);
+        assert_eq!(
+            actual.access_hints_complete,
+            entrypoint.access_hints_complete
+        );
+        assert_eq!(actual.access_hints_skipped, entrypoint.access_hints_skipped);
+    }
 }
 #[test]
 fn manifest_build_rejects_dynamic_state_iteration_bounds() {
@@ -7220,20 +7262,13 @@ fn entry_spills_use_stack_frame() {
         .name("kotodama_entry_spills_use_stack_frame".to_owned())
         .stack_size(8 * 1024 * 1024)
         .spawn(|| {
-            let mut src = String::from("seiyaku SpillTest {\n  fn main() -> int {\n");
+            // Literal table references intentionally need no stack homes. Use
+            // genuine runtime parameters all live at one call to test spills.
             let count = 32;
-            for i in 0..count {
-                let value = i + 1;
-                src.push_str(&format!("    let a{i} = {value};\n"));
-            }
-            src.push_str("    let sum = ");
-            for i in 0..count {
-                if i > 0 {
-                    src.push_str(" + ");
-                }
-                src.push_str(&format!("a{i}"));
-            }
-            src.push_str(";\n    return sum;\n  }\n}\n");
+            let parameters = (0..count).map(|index| format!("int a{index}")).collect::<Vec<_>>().join(", ");
+            let arguments = (0..count).map(|index| format!("a{index}")).collect::<Vec<_>>().join(", ");
+            let sum = (0..count).map(|index| format!("a{index}")).collect::<Vec<_>>().join(" + ");
+            let src = format!("seiyaku SpillTest {{ fn sum({parameters}) -> int {{ return {sum}; }} fn main({parameters}) -> int {{ return sum({arguments}); }} }}");
             let parsed = crate::parser::parse(&src).expect("parse spill test");
             let typed = crate::semantic::analyze(&parsed).expect("type spill test");
             let ir_prog = crate::ir::lower(&typed).expect("lower spill test");

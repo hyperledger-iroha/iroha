@@ -5,6 +5,7 @@
 //! certified by the same Kura/native execution. Offered finality or a DATA decoder cannot
 //! construct this capability. Old signed windows are checked at their authentic original
 //! clock endpoints; no current financial/effect authority is lent by this source.
+use super::kagemusha_v1_reserve::ordinary_top_up::read_finalized_ordinary_top_up_v1;
 use super::ordinary_mint_clock::admit_retained_ordinary_mint_signed_clock_v1;
 use super::ordinary_mint_permission::{
     KagemushaWorldOrdinaryMintIssuerPurposeV1, admit_retained_ordinary_mint_issuer_purpose_v1,
@@ -14,17 +15,16 @@ use super::ordinary_mint_submission::{
 };
 use super::*;
 use crate::{
-    state::{StateReadOnly, StateView, WorldReadOnly as _},
+    state::{StateReadOnly, StateView},
     sumeragi::certified_chain::committed_block,
 };
 use iroha_core_zk::kagemusha_v1_recursion::KagemushaVerifiedOrdinaryMintAuthorizationV1;
 use iroha_data_model::{
-    block::SignedBlock,
+    block::{SharedSignedBlock, SignedBlock},
     isi::kagemusha_v1::TopUpKagemushaOrdinaryV1,
     kagemusha::*,
     transaction::{Executable, ExecutableBatchItem, TransactionEntrypoint},
 };
-use mv::storage::StorageReadOnly as _;
 use std::{any::Any, num::NonZeroUsize};
 
 /// Closed proof-publication source owned by the authentic native State/Kura snapshot.
@@ -37,7 +37,7 @@ pub struct KagemushaAuthenticatedOrdinaryNodeFinalizedMintSourceV1<'state> {
     submission: KagemushaOrdinaryNodeMintSubmissionV1,
     authorization: KagemushaVerifiedOrdinaryMintAuthorizationV1,
     purpose: KagemushaWorldOrdinaryMintIssuerPurposeV1,
-    carrier: Arc<SignedBlock>,
+    carrier: SharedSignedBlock,
 }
 impl<'state> KagemushaAuthenticatedOrdinaryNodeFinalizedMintSourceV1<'state> {
     pub(super) fn authenticate(
@@ -55,9 +55,8 @@ impl<'state> KagemushaAuthenticatedOrdinaryNodeFinalizedMintSourceV1<'state> {
             _ => return Err("ordinary publication has no actual ordinary operation".into()),
         };
         record.validate_basic().map_err(|e| e.to_string())?;
-        let finalized =
-            kagemusha_v1_reserve::read_finalized_ordinary_top_up_v1(&view, height, operation_id)?
-                .ok_or("ordinary publication lacks authentic finalized source")?;
+        let finalized = read_finalized_ordinary_top_up_v1(&view, height, operation_id)?
+            .ok_or("ordinary publication lacks authentic finalized source")?;
         let anchor = KagemushaFinalityTrustAnchorV1 {
             network_id: *view.network_id(),
             checkpoint: crate::sumeragi::finality::build_checkpoint(&view, height)
@@ -65,7 +64,7 @@ impl<'state> KagemushaAuthenticatedOrdinaryNodeFinalizedMintSourceV1<'state> {
         };
         finalized.validate_against(&anchor)?;
         let actual = committed_block(&view, height).map_err(|e| e.to_string())?;
-        let carrier = Arc::clone(actual.block());
+        let carrier = actual.block().clone();
         let submission = archived_submission(&carrier, &record, view.network_id())?;
         let token = decode_issuer_purpose_original(&submission.issuer_purpose_original)?;
         let purpose = admit_retained_ordinary_mint_issuer_purpose_v1(&view, &token)?;

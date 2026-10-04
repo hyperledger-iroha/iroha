@@ -1,4 +1,8 @@
 //! Conversion provenance and protected runtime fixture tests.
+#[path = "permission_guard_tests.rs"]
+mod permission_guard_tests;
+#[path = "registry_refusal_tests.rs"]
+mod registry_refusal_tests;
 #[path = "runtime_dlmm_tests.rs"]
 mod runtime_dlmm_tests;
 #[path = "runtime_wrapper_tests.rs"]
@@ -55,7 +59,7 @@ fn validation_fee_test_network_id() -> iroha_data_model::NetworkId {
 }
 
 fn xor_asset() -> AssetDefinitionId {
-    asset_definition("xor")
+    iroha_data_model::parameter::system::SumeragiNposParameters::default().xor_asset_definition_id
 }
 
 fn test_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
@@ -187,7 +191,7 @@ fn minimal_bound_contract_artifact() -> (
     (artifact, verified.manifest)
 }
 
-fn validation_fee_payout_world(deployer: &AccountId) -> crate::state::World {
+pub(crate) fn validation_fee_payout_world(deployer: &AccountId) -> crate::state::World {
     use iroha_data_model::prelude::{Account, AssetDefinition, Domain};
     let contract_domain =
         Domain::new(DomainId::try_new("contracts", "universal").expect("contract domain id"))
@@ -207,7 +211,7 @@ fn validation_fee_payout_world(deployer: &AccountId) -> crate::state::World {
     let xor_definition = AssetDefinition::new(
         xor_asset(),
         "xor".to_owned(),
-        NumericSpec::fractional(u32::from(TEST_VALIDATION_FEE_ASSET_SCALE)),
+        NumericSpec::fractional(9),
         iroha_data_model::asset::AssetBalancePolicy::Global,
         None,
     )
@@ -220,11 +224,20 @@ fn validation_fee_payout_world(deployer: &AccountId) -> crate::state::World {
         None,
     )
     .build(deployer);
-    crate::state::World::with(
+    let world = crate::state::World::with(
         [contract_domain, fee_domain],
         accounts,
         [fee_definition, successor_fee_definition, xor_definition],
-    )
+    );
+    {
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                .into_custom_parameter(),
+        ));
+        parameters.commit();
+    }
+    world
 }
 
 pub(crate) fn register_bound_payout_time_trigger(
@@ -279,26 +292,98 @@ pub(crate) fn with_validation_fee_payout_state_at_time(
     timestamp_ms: u64,
     test: impl FnOnce(&mut StateTransaction<'_, '_>, &AccountId, &[u8], Hash),
 ) {
-    let deployer_key = key_pair(55);
-    let deployer = AccountId::new(deployer_key.public_key().clone());
-    let state = crate::state::State::new_with_chain_and_network_id_for_testing(
-        validation_fee_payout_world(&deployer),
-        crate::kura::Kura::blank_kura_for_testing(),
-        crate::query::store::LiveQueryStore::start_test(),
-        "generic-testnet".parse().expect("chain id"),
-        validation_fee_test_network_id(),
+    with_validation_fee_payout_component_state(
+        height,
+        timestamp_ms,
+        PayoutComponentSource::Unowned,
+        test,
     );
+}
+
+/// Retain a finite invocation owner before opening a direct component fixture.
+/// This does not authenticate a Network input or authorize publication.
+pub(crate) fn with_validation_fee_payout_invocation_at_time(
+    height: u64,
+    timestamp_ms: u64,
+    invocation: Hash,
+    test: impl FnOnce(&mut StateTransaction<'_, '_>, &AccountId, &[u8], Hash),
+) {
+    with_validation_fee_payout_component_state(
+        height,
+        timestamp_ms,
+        PayoutComponentSource::Invocation(invocation),
+        test,
+    );
+}
+
+/// Own only the finite mandatory-purpose component scope for an idle maintenance test.
+/// This grants neither complete carrier inventory nor publication authority.
+pub(crate) fn with_validation_fee_payout_protocol_at_time(
+    height: u64,
+    timestamp_ms: u64,
+    test: impl FnOnce(&mut StateTransaction<'_, '_>, &AccountId, &[u8], Hash),
+) {
+    with_validation_fee_payout_component_state(
+        height,
+        timestamp_ms,
+        PayoutComponentSource::Mandatory,
+        test,
+    );
+}
+
+pub(crate) fn with_validation_fee_payout_block_at_time(
+    height: u64,
+    timestamp_ms: u64,
+    test: impl FnOnce(&mut crate::state::StateBlock<'_>, &AccountId, &[u8], Hash),
+) {
+    // Contract reads require immutable scope authenticated by the actual root.
+    // The later header remains an isolated component fixture, not certified history.
+    let (chain, deployer, code, code_hash) =
+        signed_original_fixtures::signed_fee_registry_root_fixture();
+    let state = chain.state();
     let header = BlockHeader::new(
         std::num::NonZeroU64::new(height).expect("test height is non-zero"),
-        None,
+        state.view().latest_block_hash(),
         None,
         timestamp_ms,
         0,
     );
     let mut block = state.block(header);
-    // Component execution retains its finite invocation before borrowing State. This
-    // authenticates no Network input and grants no block publication authority.
-    let mut state_tx = block.transaction_for_callback_testing();
+    test(&mut block, &deployer, &code, code_hash);
+}
+
+enum PayoutComponentSource {
+    Unowned,
+    Invocation(Hash),
+    Mandatory,
+}
+
+fn with_validation_fee_payout_component_state(
+    height: u64,
+    timestamp_ms: u64,
+    invocation: PayoutComponentSource,
+    test: impl FnOnce(&mut StateTransaction<'_, '_>, &AccountId, &[u8], Hash),
+) {
+    // Execute the original signed genesis; committed root metadata is never seeded by hand.
+    // The requested height is only this component projection, not certified native history.
+    let (chain, deployer, code, code_hash) =
+        signed_original_fixtures::signed_fee_registry_root_fixture();
+    let state = std::sync::Arc::clone(chain.state());
+    let header = BlockHeader::new(
+        std::num::NonZeroU64::new(height).expect("test height is non-zero"),
+        state.view().latest_block_hash(),
+        None,
+        timestamp_ms,
+        0,
+    );
+    let mut block = state.block(header);
+    // Retain each component's explicit finite purpose before borrowing State.
+    // This grants no Network admission or block publication authority.
+    let mut state_tx = match invocation {
+        PayoutComponentSource::Invocation(hash) => block.transaction_for_fastpq_testing(hash),
+        PayoutComponentSource::Mandatory => block.transaction_for_fastpq_protocol_testing(),
+        PayoutComponentSource::Unowned => block.transaction(),
+    };
     let deployment_permission: iroha_data_model::permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
     crate::smartcontracts::Execute::execute(
@@ -307,22 +392,70 @@ pub(crate) fn with_validation_fee_payout_state_at_time(
         &mut state_tx,
     )
     .expect("grant contract lifecycle authority");
-    let (code, manifest) = minimal_bound_contract_artifact();
-    let code_hash = crate::smartcontracts::code::register_code_bytes(
-        &deployer,
-        DataSpaceId::UNIVERSAL,
-        code.clone(),
-        &mut state_tx,
-    )
-    .expect("register payout contract bytes");
-    crate::smartcontracts::code::register_manifest(
-        &deployer,
-        DataSpaceId::UNIVERSAL,
-        manifest.signed(&deployer_key),
-        &mut state_tx,
-    )
-    .expect("register payout contract manifest");
     test(&mut state_tx, &deployer, &code, code_hash);
+}
+
+#[test]
+fn payout_component_quantity_requires_exact_retained_invocation() {
+    use crate::smartcontracts::Execute;
+    let invocation = Hash::new(b"payout component quantity source");
+    let check = |state_tx: &mut StateTransaction<'_, '_>, retained: bool| {
+        assert_eq!(
+            crate::sumeragi::lanes::routing::read_committed_root_scope(&state_tx.world).unwrap(),
+            Some(iroha_data_model::block::consensus::SumeragiRootScope::Global)
+        );
+        let owner = account(2);
+        let recipient = account(3);
+        let source = AssetId::new(fee_asset(), owner.clone());
+        let destination = AssetId::new(fee_asset(), recipient.clone());
+        **state_tx
+            .world
+            .asset_or_insert_exact(&source, Quantity::zero())
+            .unwrap() = Quantity::from(10_u32);
+        let result =
+            Transfer::asset_quantity(source.clone(), 1_u32, recipient).execute(&owner, state_tx);
+        if retained {
+            result.expect("the original finite component invocation owns its transfer");
+            assert_eq!(state_tx.tx_call_hash, Some(invocation));
+            assert_eq!(state_tx.retail_fee_transcripts_for_test().len(), 1);
+            assert_eq!(
+                state_tx.retail_fee_transcripts_for_test()[0].batch_hash,
+                invocation
+            );
+            assert_eq!(
+                state_tx.world.assets.get(&source).unwrap().as_ref(),
+                &Quantity::from(9_u32)
+            );
+            assert_eq!(
+                state_tx.world.assets.get(&destination).unwrap().as_ref(),
+                &Quantity::one()
+            );
+        } else {
+            let error = result.expect_err("a copied or substituted hash cannot grant custody");
+            assert!(
+                error
+                    .to_string()
+                    .contains("FASTPQ source has no retained producer invocation")
+            );
+            assert_eq!(
+                state_tx.world.assets.get(&source).unwrap().as_ref(),
+                &Quantity::from(10_u32)
+            );
+            assert!(state_tx.world.assets.get(&destination).is_none());
+            assert!(state_tx.retail_fee_transcripts_for_test().is_empty());
+        }
+    };
+    with_validation_fee_payout_state_at_time(2, 0, |state_tx, _, _, _| {
+        state_tx.tx_call_hash = Some(invocation);
+        check(state_tx, false);
+    });
+    with_validation_fee_payout_invocation_at_time(2, 0, invocation, |state_tx, _, _, _| {
+        state_tx.tx_call_hash = Some(Hash::new(b"substituted component source"));
+        check(state_tx, false);
+    });
+    with_validation_fee_payout_invocation_at_time(2, 0, invocation, |state_tx, _, _, _| {
+        check(state_tx, true);
+    });
 }
 
 pub(crate) fn activate_bound_payout_runtime(
@@ -467,7 +600,7 @@ fn assert_treasury_payout_plan_mismatch(
     let terms = ValidationFeePayoutTerms {
         debit_ds: "10".parse().expect("SBD"),
         min_xor_out: "19.8".parse().expect("reference minimum"),
-        xor_scale: 2,
+        xor_scale: 9,
     };
     assert!(matches!(
         validate_treasury_payout_effect_plan(groups, ordered, binding, &terms),
@@ -546,7 +679,7 @@ fn treasury_payout_effect_plan_rejects_every_unbound_substitution() {
     let terms = ValidationFeePayoutTerms {
         debit_ds: "10".parse().expect("SBD"),
         min_xor_out: "19.8".parse().expect("minimum"),
-        xor_scale: 2,
+        xor_scale: 9,
     };
     assert!(
         validate_treasury_payout_effect_plan(

@@ -11,7 +11,7 @@ use iroha_crypto::{
 };
 use iroha_data_model::{
     account::AccountId,
-    block::{CommitCertificate, builder::BlockBuilder, decode_versioned_signed_block},
+    block::{CommitCertificate, builder::BlockBuilder, decode_framed_signed_block},
     consensus::{
         FinalizedGlobalThresholdBeaconPulseV1, GlobalThresholdBeaconChainAnchorV1,
         GlobalThresholdBeaconPulseContextV1,
@@ -100,7 +100,7 @@ fn pasta(keys: &[KeyPair], generation: u64) -> Vec<KagemushaMintFinalityValidato
         .collect()
 }
 fn block(proof: &SumeragiFinalityProof) -> SignedBlock {
-    decode_versioned_signed_block(&proof.block_wire).unwrap()
+    decode_framed_signed_block(&proof.block_wire).unwrap()
 }
 fn result(proof: &SumeragiFinalityProof) -> ExecutionResultCommitment {
     ExecutionResultCommitment::decode(block(proof).commit_certificate().unwrap().result_preimage())
@@ -327,7 +327,7 @@ impl Chain {
                     )])
                     .sign(authority.private_key()),
                 );
-                builder.build(BTreeSet::new())
+                builder.build(iroha_data_model::block::BlockSignatures::default())
             };
             NativeFinalityFixture::install_network_results(&mut b, vec![Ok(Vec::default())]);
             let context = chain.epochs[index].context.clone();
@@ -1810,6 +1810,132 @@ fn catch_up_publishes_bounded_verified_pages_explicitly() {
 }
 
 #[test]
+fn managed_custody_retains_catching_up_prefix_without_claiming_freshness() {
+    use crate::managed::native_operation::retain_observation;
+    let chain = Chain::constant(4, 8);
+    let source = Source::new(&chain);
+    let temporary = tempfile::tempdir().unwrap();
+    let directory =
+        iroha_fs::PrivateDirectory::open_or_create(temporary.path().join("custody")).unwrap();
+    let mut verifier = chain.verifier_at(2);
+    for expected in [4, 6] {
+        let result = verifier.observe_with_budget(
+            &source,
+            &CHALLENGE,
+            &mut Budget {
+                proofs: 2,
+                bytes: MAX_ADVANCE_BYTES,
+            },
+        );
+        assert!(
+            matches!(&result, Err(FinalityError::CatchingUp { verified, .. }) if *verified == expected)
+        );
+        assert!(retain_observation(&directory, &mut verifier, result).is_err());
+        let bytes = directory
+            .read("current-checkpoint.nrt", 32 * 1024 * 1024)
+            .unwrap();
+        let checkpoint = SumeragiFinalityCheckpoint::decode_canonical(&bytes).unwrap();
+        verifier =
+            FinalityVerifier::from_checkpoint(checkpoint, chain.anchor.network_id, CHAIN).unwrap();
+        assert_eq!(verifier.checkpoint().height(), expected);
+        let mut offline = Source::new(&chain);
+        offline.faults.extend(chain.epoch(8).keys.iter().map(peer));
+        let failure = verifier.observe(&offline, &CHALLENGE);
+        assert!(retain_observation(&directory, &mut verifier, failure).is_err());
+        assert_eq!(
+            directory
+                .read("current-checkpoint.nrt", 32 * 1024 * 1024)
+                .unwrap()
+                .as_slice(),
+            bytes.as_slice()
+        );
+    }
+    let observed = verifier.observe_with_budget(
+        &source,
+        &CHALLENGE,
+        &mut Budget {
+            proofs: 2,
+            bytes: MAX_ADVANCE_BYTES,
+        },
+    );
+    retain_observation(&directory, &mut verifier, observed).unwrap();
+    assert_eq!(verifier.checkpoint().height(), 8);
+    assert_eq!(*source.proof_calls.borrow(), [3, 4, 5, 6, 7]);
+}
+
+#[test]
+fn managed_custody_false_carrier_hint_cannot_pin_original_recovery() {
+    use crate::managed::native_operation::{replay_start, verify_carrier};
+    let chain = Chain::constant(4, 8);
+    let source = Source::new(&chain);
+    let original = chain.verifier_at(2);
+    let carrier = block(chain.proof(4));
+    let transaction = carrier.external_transactions().next().unwrap();
+    let wire = transaction.encode_wire_v1().unwrap();
+    let false_progress = chain.verifier_at(7);
+    assert!(verify_carrier(&false_progress, transaction).is_err());
+    let mut replay = replay_start(original.clone(), Some(false_progress), 4).unwrap();
+    assert_eq!(replay.checkpoint().height(), 2);
+    replay.catch_up(&source, nz(4)).unwrap();
+    let confirmed = verify_carrier(&replay, transaction).unwrap();
+    assert_eq!(confirmed.height, 4);
+    assert_eq!(confirmed.block_time_ms, carrier.header().creation_time_ms);
+    assert_eq!(confirmed.transaction_hash, transaction.hash());
+    assert_eq!(transaction.encode_wire_v1().unwrap(), wire);
+    assert!(replay_start(original, Some(replay), 2).is_err());
+}
+
+#[test]
+fn managed_custody_original_carrier_survives_unavailable_current_quorum() {
+    use crate::managed::native_operation::retained_carrier;
+    let chain = Chain::constant(4, 5);
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("custody");
+    let directory = iroha_fs::PrivateDirectory::open_or_create(&path).unwrap();
+    let carrier = chain.verifier_at(4);
+    let block = block(chain.proof(4));
+    let transaction = block.external_transactions().next().unwrap();
+    directory
+        .write_atomic(
+            "carrier.nrt",
+            &carrier.checkpoint().encode_canonical().unwrap(),
+            iroha_fs::PublishMode::CreateNew,
+        )
+        .unwrap();
+    drop(directory);
+    let directory = iroha_fs::PrivateDirectory::open(&path).unwrap();
+    let mut offline = Source::new(&chain);
+    offline.faults.extend(chain.epoch(5).keys.iter().map(peer));
+    let mut observed = carrier;
+    assert!(observed.observe(&offline, &CHALLENGE).is_err());
+    let retained = retained_carrier(&directory, chain.anchor.network_id, CHAIN, transaction)
+        .unwrap()
+        .unwrap();
+    assert_eq!(retained.height, 4);
+    assert_eq!(retained.transaction_hash, transaction.hash());
+    let other = chain.verifier_at(5).verified_tip().unwrap();
+    let different_transaction = other.block().external_transactions().next().unwrap();
+    assert!(
+        retained_carrier(
+            &directory,
+            chain.anchor.network_id,
+            CHAIN,
+            different_transaction
+        )
+        .is_err()
+    );
+    assert!(
+        retained_carrier(
+            &directory,
+            chain.anchor.network_id,
+            "another-chain",
+            transaction
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn catch_up_stops_before_the_byte_budget_and_publishes_only_verified_pages() {
     let chain = Chain::constant(4, 5);
     let source = Source::new(&chain);
@@ -2084,14 +2210,17 @@ fn original_genesis_policy_decode_refusal_preserves_exact_source_and_retry() {
         )
     })
     .unwrap_err();
+    let FinalityError::DecodeResource(original) = refusal else {
+        panic!("{refusal:?}");
+    };
+    assert_eq!(
+        original.kind(),
+        norito::core::DecodeAttemptErrorKind::EnclosingLimit
+    );
     assert!(
-        matches!(
-            refusal,
-            FinalityError::DecodeResource(
-                norito::core::DecodeResourceError::TotalAllocationExceeded { attempted, limit: 0 }
-            ) if attempted > 0
-        ),
-        "{refusal:?}"
+        matches!(original.into_error().decode_resource_error(), Some(
+        norito::core::DecodeResourceError::TotalAllocationExceeded { attempted, limit: 0 }
+    ) if attempted > 0)
     );
     let retried = FinalityVerifier::from_checkpoint(
         checkpoint.clone(),
@@ -2122,7 +2251,7 @@ fn checkpoint_npos_refusal_follows_a_completed_original_binary_read() {
         |allocation| norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, allocation, 64);
     let decode = || {
         norito::with_decode_limits_scope(norito::canonical_decode_limits(wire.len()), || {
-            decode_versioned_signed_block(&wire)
+            decode_framed_signed_block(&wire)
         })
     };
     let original_binary_cost = norito::with_decode_limits_scope(limits(ceiling), || {

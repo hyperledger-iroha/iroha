@@ -30,6 +30,11 @@ pub(super) type Map = BptreeMap<Key, Value, Mode>;
 pub(super) type Work = BptreeMapOwned<Key, Value, Mode>;
 pub(super) type Reader<'a> = BptreeMapReadTxn<'a, Key, Value, Mode>;
 
+/// Exact allocation of either independent membership release control.
+pub(super) fn release_control_layout() -> Layout {
+    iroha_allocation::release::ReleaseNotification::allocation_layout::<AllocationCharge>()
+}
+
 /// Local resource refusal, never a deterministic transaction or block verdict.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum MembershipAdmissionError {
@@ -196,7 +201,11 @@ impl Pending {
         }
         self.lease_release.take()
     }
-    fn advance(&mut self, storage: &TransactionsStorage) -> Result<(), MembershipAdmissionError> {
+    fn advance(
+        &mut self,
+        storage: &TransactionsStorage,
+        releases: &mut iroha_allocation::release::DeferredReleaseBatch,
+    ) -> Result<(), MembershipAdmissionError> {
         if self.work.is_none() {
             let len = if self.replacement {
                 0
@@ -207,103 +216,102 @@ impl Pending {
                 MembershipAdmissionError::Capacity(AllocationRefusal::DemandOverflow)
             })?;
             let identity_layout = Identity::layout();
-            let wait = storage.released.observe();
-            let writer = storage
-                .blocks
-                .try_write_admitted_with_footprint(|existing, additional| {
-                    let required = existing
-                        .bytes()
-                        .checked_add(additional.bytes())
-                        .and_then(|n| n.checked_add(batch_layout.size()))
-                        .and_then(|n| n.checked_add(identity_layout.size().checked_mul(2)?))
-                        .ok_or(MembershipAdmissionError::Capacity(
-                            AllocationRefusal::DemandOverflow,
-                        ))?;
-                    if required > storage.budget.limit_bytes() {
-                        return Err(MembershipAdmissionError::Capacity(
-                            AllocationRefusal::ExceedsLimit {
-                                requested_bytes: required,
-                                limit_bytes: storage.budget.limit_bytes(),
-                            },
-                        ));
-                    }
-                    // The callback precedes every cursor shell allocation. Fund
-                    // its exact demand with the missing original batch and next
-                    // identity in one pool acquisition before sorting or building
-                    // any of them. Already retained siblings remain owned by this
-                    // Pending across a later private-tree insertion refusal.
-                    let initial_bytes = additional
-                        .bytes()
-                        .checked_add(if self.batch.is_none() {
-                            batch_layout.size()
+            let writer = storage.try_history_writer(releases, |existing, additional| {
+                let required = existing
+                    .bytes()
+                    .checked_add(additional.bytes())
+                    .and_then(|n| n.checked_add(batch_layout.size()))
+                    .and_then(|n| n.checked_add(identity_layout.size().checked_mul(2)?))
+                    .and_then(|n| n.checked_add(release_control_layout().size().checked_mul(2)?))
+                    .ok_or(MembershipAdmissionError::Capacity(
+                        AllocationRefusal::DemandOverflow,
+                    ))?;
+                if required > storage.budget.limit_bytes() {
+                    return Err(MembershipAdmissionError::Capacity(
+                        AllocationRefusal::ExceedsLimit {
+                            requested_bytes: required,
+                            limit_bytes: storage.budget.limit_bytes(),
+                        },
+                    ));
+                }
+                // The callback precedes every cursor shell allocation. Fund
+                // its exact demand with the missing original batch and next
+                // identity in one pool acquisition before sorting or building
+                // any of them. Already retained siblings remain owned by this
+                // Pending across a later private-tree insertion refusal.
+                let initial_bytes = additional
+                    .bytes()
+                    .checked_add(if self.batch.is_none() {
+                        batch_layout.size()
+                    } else {
+                        0
+                    })
+                    .and_then(|n| {
+                        n.checked_add(if self.next_identity.is_none() {
+                            identity_layout.size()
                         } else {
                             0
                         })
-                        .and_then(|n| {
-                            n.checked_add(if self.next_identity.is_none() {
-                                identity_layout.size()
-                            } else {
-                                0
-                            })
-                        })
-                        .ok_or(MembershipAdmissionError::Capacity(
-                            AllocationRefusal::DemandOverflow,
-                        ))?;
-                    let mut reservation = storage
-                        .budget
-                        .try_reserve_bytes(initial_bytes)
-                        .map_err(MembershipAdmissionError::Capacity)?;
-                    if self.next_identity.is_none() {
-                        let charge = reservation
-                            .try_split(identity_layout)
-                            .expect("complete original identity layout was admitted");
-                        let shell = Reserved::<IdentityState, AllocationCharge>::try_new(charge)
-                            .map_err(|(_charge, error)| MembershipAdmissionError::Allocator {
-                                requested_bytes: error.layout().size(),
-                            })?;
-                        self.next_identity = Some(shell.initialize(IdentityState::default()));
-                    }
-                    if self.batch.is_none() {
-                        let charge = reservation
-                            .try_split(batch_layout)
-                            .expect("complete original batch layout was admitted");
-                        let mut batch = ChargedBuffer::try_from_charge(len, charge).map_err(
-                            |(_charge, error)| match error {
-                                ChargedBufferFromChargeError::Allocator { layout } => {
-                                    MembershipAdmissionError::Allocator {
-                                        requested_bytes: layout.size(),
-                                    }
+                    })
+                    .ok_or(MembershipAdmissionError::Capacity(
+                        AllocationRefusal::DemandOverflow,
+                    ))?;
+                let mut reservation = storage
+                    .budget
+                    .try_reserve_bytes(initial_bytes)
+                    .map_err(MembershipAdmissionError::Capacity)?;
+                if self.next_identity.is_none() {
+                    let charge = reservation
+                        .try_split(identity_layout)
+                        .expect("complete original identity layout was admitted");
+                    let shell = Reserved::<IdentityState, AllocationCharge>::try_new(charge)
+                        .map_err(|(_charge, error)| MembershipAdmissionError::Allocator {
+                            requested_bytes: error.layout().size(),
+                        })?;
+                    self.next_identity = Some(shell.initialize(IdentityState::default()));
+                }
+                if self.batch.is_none() {
+                    let charge = reservation
+                        .try_split(batch_layout)
+                        .expect("complete original batch layout was admitted");
+                    let mut batch = ChargedBuffer::try_from_charge(len, charge).map_err(
+                        |(_charge, error)| match error {
+                            ChargedBufferFromChargeError::Allocator { layout } => {
+                                MembershipAdmissionError::Allocator {
+                                    requested_bytes: layout.size(),
                                 }
-                                ChargedBufferFromChargeError::DemandOverflow
-                                | ChargedBufferFromChargeError::LayoutMismatch { .. } => {
-                                    unreachable!("checked original batch layout and charge")
-                                }
-                            },
-                        )?;
-                        if !self.replacement
-                            && let Some(latest) = &self.latest
-                        {
-                            for key in &latest.transactions {
-                                batch
-                                    .append(std::slice::from_ref(key))
-                                    .expect("exact preceding tip count");
                             }
+                            ChargedBufferFromChargeError::DemandOverflow
+                            | ChargedBufferFromChargeError::LayoutMismatch { .. } => {
+                                unreachable!("checked original batch layout and charge")
+                            }
+                        },
+                    )?;
+                    if !self.replacement
+                        && let Some(latest) = &self.latest
+                    {
+                        for key in &latest.transactions {
+                            batch
+                                .append(std::slice::from_ref(key))
+                                .expect("exact preceding tip count");
                         }
-                        batch.as_mut_slice().sort_unstable();
-                        self.batch = Some(batch);
                     }
-                    debug_assert_eq!(reservation.remaining_bytes(), additional.bytes());
-                    Ok(Policy(reservation))
-                })
-                .map_err(|error| match error {
-                    MapAdmissionError::Busy => MembershipAdmissionError::Busy(wait.clone()),
-                    MapAdmissionError::Poisoned => MembershipAdmissionError::Poisoned,
-                    MapAdmissionError::Changed => MembershipAdmissionError::Changed(wait.clone()),
-                    MapAdmissionError::Planning(e) => MembershipAdmissionError::Planning(e),
-                    MapAdmissionError::Refused(e) => e,
-                })?;
+                    batch.as_mut_slice().sort_unstable();
+                    self.batch = Some(batch);
+                }
+                debug_assert_eq!(reservation.remaining_bytes(), additional.bytes());
+                Ok(Policy(reservation))
+            })?;
             self.baseline = Some(writer.predecessor().retain());
-            self.work = Some(writer.detach());
+            self.work = Some(
+                writer
+                    .try_release_into_observed(
+                        releases,
+                        |writer| writer.detach(),
+                        || storage.blocks.is_poisoned(),
+                    )
+                    .unwrap_or_else(|_| unreachable!("original physical history release family")),
+            );
         }
         let batch = self.batch.as_ref().expect("original funded batch");
         let work = self.work.as_mut().expect("original successor");
@@ -338,6 +346,9 @@ impl Pending {
                     let required = floor
                         .checked_add(batch_bytes)
                         .and_then(|n| n.checked_add(Identity::layout().size() * 2))
+                        .and_then(|n| {
+                            n.checked_add(release_control_layout().size().checked_mul(2)?)
+                        })
                         .and_then(|n| n.checked_add(requested_bytes))
                         .ok_or(MembershipAdmissionError::Capacity(
                             AllocationRefusal::DemandOverflow,
@@ -369,25 +380,97 @@ impl Drop for Pending {
 }
 
 impl TransactionsStorage {
+    /// Admit under the original physical writer and preserve its source through
+    /// success, refusal and unwind. The caller owns the batch before logical locks.
+    pub(super) fn try_history_writer<'a>(
+        &'a self,
+        releases: &mut iroha_allocation::release::DeferredReleaseBatch,
+        admit: impl FnOnce(
+            AllocationDemand,
+            AllocationDemand,
+        ) -> Result<Policy, MembershipAdmissionError>,
+    ) -> Result<
+        iroha_allocation::release::ReleaseGuard<
+            'a,
+            concread::bptree::BptreeMapWriteTxn<'a, Key, Value, Mode>,
+        >,
+        MembershipAdmissionError,
+    > {
+        let wait = self.history_release_wait();
+        let acquired = self
+            .blocks
+            .try_acquire_writer()
+            .ok_or_else(|| MembershipAdmissionError::Busy(wait.clone()))?;
+        let writer = self
+            .history_released
+            .guard(acquired)
+            .try_map_preserving_release_into(
+                releases,
+                |acquired| acquired.try_write_admitted_with_footprint(admit),
+                || self.blocks.is_poisoned(),
+            )
+            .unwrap_or_else(|_| unreachable!("original physical history release family"));
+        match writer {
+            Ok(writer) => Ok(writer),
+            Err((acquired, error)) => {
+                acquired
+                    .try_release_into_observed(releases, drop, || self.blocks.is_poisoned())
+                    .unwrap_or_else(|_| unreachable!("original physical history release family"));
+                Err(match error {
+                    MapAdmissionError::Busy => MembershipAdmissionError::Busy(wait.clone()),
+                    MapAdmissionError::Poisoned => MembershipAdmissionError::Poisoned,
+                    MapAdmissionError::Changed => MembershipAdmissionError::Changed(wait),
+                    MapAdmissionError::Planning(error) => MembershipAdmissionError::Planning(error),
+                    MapAdmissionError::Refused(error) => error,
+                })
+            }
+        }
+    }
+
     /// Construct the sole historical representation from an explicit original pool.
     pub fn try_new(budget: AllocationBudget) -> Result<Self, MembershipAdmissionError> {
         budget.with_deferred_refund_notifications(|_| {
             let mut identity_charge = None;
+            let mut history_released = None;
+            let mut released = None;
             let identity_layout = Identity::layout();
+            let release_layout = release_control_layout();
             let blocks = Map::try_new_with_node_custody(|demand| {
                 let bytes = demand
                     .bytes()
                     .checked_add(identity_layout.size())
-                    .ok_or(AllocationRefusal::DemandOverflow)?;
-                let mut reservation = budget.try_reserve_bytes(bytes)?;
+                    .and_then(|bytes| bytes.checked_add(release_layout.size().checked_mul(2)?))
+                    .ok_or(MembershipAdmissionError::Capacity(
+                        AllocationRefusal::DemandOverflow,
+                    ))?;
+                let mut reservation = budget
+                    .try_reserve_bytes(bytes)
+                    .map_err(MembershipAdmissionError::Capacity)?;
+                let release_charge = reservation
+                    .try_split(release_layout)
+                    .expect("exact physical history notification layout");
+                history_released = Some(
+                    iroha_allocation::release::ReleaseNotification::try_new_charged(release_charge)
+                        .map_err(|(_charge, error)| MembershipAdmissionError::Allocator {
+                            requested_bytes: error.layout().size(),
+                        })?,
+                );
+                let logical_charge = reservation
+                    .try_split(release_layout)
+                    .expect("exact logical membership notification layout");
+                released = Some(
+                    iroha_allocation::release::ReleaseNotification::try_new_charged(logical_charge)
+                        .map_err(|(_charge, error)| MembershipAdmissionError::Allocator {
+                            requested_bytes: error.layout().size(),
+                        })?,
+                );
                 identity_charge = Some(
                     reservation
                         .try_split(identity_layout)
                         .expect("exact initial identity"),
                 );
-                Ok::<_, AllocationRefusal>(Policy(reservation))
-            })
-            .map_err(MembershipAdmissionError::Capacity)?;
+                Ok::<_, MembershipAdmissionError>(Policy(reservation))
+            })?;
             let identity = Identity::new(
                 IdentityState::default(),
                 identity_charge.expect("initial identity admitted with native root"),
@@ -396,7 +479,9 @@ impl TransactionsStorage {
                 latest_block: TipStore::default(),
                 blocks,
                 write_lock: Mutex::new(identity),
-                released: Default::default(),
+                released: released.expect("logical notification admitted with original root"),
+                history_released: history_released
+                    .expect("physical notification admitted with original root"),
                 budget: budget.clone(),
                 pending: Mutex::new(None),
                 publication_sequence: AtomicU64::new(0),
@@ -446,6 +531,7 @@ impl TransactionsStorage {
         self.budget.with_deferred_refund_notifications(|_| {
             // This custody is declared before either lock so actual retained
             // notices also retire after both locks on unwind, not only success.
+            let mut physical_releases = self.history_released.deferred_batch();
             let mut retired = None;
             let wait = self.released.observe();
             let guard = self
@@ -489,7 +575,7 @@ impl TransactionsStorage {
             });
             #[cfg(test)]
             tests::panic_before_advance();
-            let result = original.advance(self);
+            let result = original.advance(self, &mut physical_releases);
             let mut ready = result
                 .is_ok()
                 .then(|| pending.take().expect("completed original preparation"));

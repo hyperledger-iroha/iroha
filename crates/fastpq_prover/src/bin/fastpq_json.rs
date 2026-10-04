@@ -1,4 +1,7 @@
 //! JSON CLI for FASTPQ measurement, proof generation, and verification.
+//! Prove and Measure own one finite touched-tree pool sized from the existing
+//! default SMT limits. Repeated proofs reserve from the same original pool.
+//! Other request, public preparation, frame and proof allocations are separate.
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Parser, Subcommand};
 use fastpq_prover::gadgets::transfer::decode_transcripts;
@@ -10,6 +13,7 @@ use fastpq_prover::{
 };
 #[cfg(test)]
 use fastpq_prover::{OperationKind, PublicInputs, StateTransition};
+use iroha_allocation::{AllocationBudget, AllocationReservation};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     fastpq::{FastpqTransitionBatch, normalized_numeric_to_u64},
@@ -226,13 +230,23 @@ fn main() -> Result<(), String> {
     let cli = Cli::parse();
     match cli.command {
         Command::Measure { input } => {
+            let limits = fastpq_prover::offline_compact::ProvingLimits::default().private_smt;
+            let tree_bytes = limits
+                .allocation_bytes(limits.max_updates, limits.max_unique_keys)
+                .map_err(|err| format!("FASTPQ tree demand failed: {err}"))?;
+            let budget = AllocationBudget::new(tree_bytes);
             let request: MeasureInput = read_json(&input)?;
-            let response = handle_measure(request)?;
+            let response = handle_measure(request, &budget, tree_bytes)?;
             print_json(&response)
         }
         Command::Prove { input } => {
+            let limits = fastpq_prover::offline_compact::ProvingLimits::default().private_smt;
+            let tree_bytes = limits
+                .allocation_bytes(limits.max_updates, limits.max_unique_keys)
+                .map_err(|err| format!("FASTPQ tree demand failed: {err}"))?;
+            let budget = AllocationBudget::new(tree_bytes);
             let request: ProofRequest = read_json(&input)?;
-            let response = handle_prove(request)?;
+            let response = handle_prove(request, &budget, tree_bytes)?;
             print_json(&response)
         }
         Command::Verify { input } => {
@@ -258,7 +272,11 @@ fn print_json<T: json::JsonSerialize>(payload: &T) -> Result<(), String> {
     println!("{encoded}");
     Ok(())
 }
-fn handle_measure(request: MeasureInput) -> Result<MeasureOutput, String> {
+fn handle_measure(
+    request: MeasureInput,
+    budget: &AllocationBudget,
+    tree_bytes: usize,
+) -> Result<MeasureOutput, String> {
     let parameter = normalized_parameter(&request.parameter);
     let verifier_id = normalized_verifier_id(&request.verifier_id);
     let verifier_version = normalized_verifier_version(&request.verifier_version);
@@ -296,7 +314,11 @@ fn handle_measure(request: MeasureInput) -> Result<MeasureOutput, String> {
         let mut prove_ms = Vec::with_capacity(proof_requests.len());
         let mut verify_ms = Vec::with_capacity(proof_requests.len());
         for proof_request in &proof_requests {
-            let prove = prove_request(proof_request)?;
+            let mut reservation = budget
+                .try_reserve_bytes(tree_bytes)
+                .map_err(|err| format!("FASTPQ tree admission failed: {err}"))?;
+            let prove = prove_request(proof_request, budget, &mut reservation)?;
+            drop(reservation);
             proof_sizes.push(prove.0.len());
             prove_ms.push(prove.1.as_secs_f64() * 1000.0);
             verify_ms.push(prove.2.as_secs_f64() * 1000.0);
@@ -327,15 +349,23 @@ fn handle_measure(request: MeasureInput) -> Result<MeasureOutput, String> {
         benchmarks,
     })
 }
-fn handle_prove(request: ProofRequest) -> Result<ProofResponse, String> {
+fn handle_prove(
+    request: ProofRequest,
+    budget: &AllocationBudget,
+    tree_bytes: usize,
+) -> Result<ProofResponse, String> {
     let parameter = normalized_parameter(&request.parameter);
     let response_parameter = parameter.clone();
     let normalized_request = ProofRequest {
         parameter,
         ..request
     };
+    let mut reservation = budget
+        .try_reserve_bytes(tree_bytes)
+        .map_err(|err| format!("FASTPQ tree admission failed: {err}"))?;
     let (proof_bytes, prove_time, verify_time, batch_manifest_sha256) =
-        prove_request(&normalized_request)?;
+        prove_request(&normalized_request, budget, &mut reservation)?;
+    drop(reservation);
     let axt = build_axt_materials(&normalized_request, &proof_bytes)?;
     Ok(ProofResponse {
         passed: true,
@@ -468,11 +498,18 @@ fn trimmed_filter(value: Option<String>) -> Option<String> {
         .map(|item| item.trim().to_string())
         .filter(|item| !item.is_empty())
 }
-fn prove_request(request: &ProofRequest) -> Result<(Vec<u8>, Duration, Duration, String), String> {
+fn prove_request(
+    request: &ProofRequest,
+    budget: &AllocationBudget,
+    reservation: &mut AllocationReservation,
+) -> Result<(Vec<u8>, Duration, Duration, String), String> {
+    if !reservation.belongs_to(budget) {
+        return Err("FASTPQ tree reservation belongs to another pool".to_owned());
+    }
     let binding = request_to_binding(request)?;
     let batch = build_batch_from_request(request)?;
     let prove_started = Instant::now();
-    let proof = prove_axt_bound_batch(&batch, &binding)
+    let proof = prove_axt_bound_batch(&batch, &binding, budget, reservation)
         .map_err(|err| format!("FASTPQ prove failed: {err}"))?;
     let prove_time = prove_started.elapsed();
     let verify_started = Instant::now();
@@ -1075,8 +1112,10 @@ mod tests {
         request.target_dsids = vec![12];
         request.claim_type = "authorization".to_owned();
         request.verified_effect_type = "fixture_effect".to_owned();
-        let error =
-            prove_request(&request).expect_err("metadata-only effects have no transfer relation");
+        let budget = AllocationBudget::new(0);
+        let mut reservation = budget.try_reserve_bytes(0).unwrap();
+        let error = prove_request(&request, &budget, &mut reservation)
+            .expect_err("metadata-only effects have no transfer relation");
         assert!(error.contains("axt_opaque_effect"), "{error}");
         let bytes = vec![0; 40];
         assert!(
@@ -1087,5 +1126,59 @@ mod tests {
             .is_err()
         );
         assert!(build_axt_materials(&request, &bytes).is_err());
+    }
+
+    #[test]
+    fn command_pool_is_reused_after_each_refused_proof_and_foreign_pool_is_rejected() {
+        let limits = fastpq_prover::offline_compact::ProvingLimits::default().private_smt;
+        let demand = limits
+            .allocation_bytes(limits.max_updates, limits.max_unique_keys)
+            .unwrap();
+        let budget = AllocationBudget::new(demand);
+        let request = proof_request("");
+        for _ in 0..2 {
+            let mut reservation = budget.try_reserve_bytes(demand).unwrap();
+            let error = prove_request(&request, &budget, &mut reservation).unwrap_err();
+            assert!(error.contains("execution-captured batch_base64"));
+            assert_eq!(reservation.remaining_bytes(), demand);
+            drop(reservation);
+            assert_eq!(budget.reserved_bytes(), 0);
+        }
+        let foreign_pool = AllocationBudget::new(demand);
+        let mut foreign = foreign_pool.try_reserve_bytes(demand).unwrap();
+        assert_eq!(
+            prove_request(&request, &budget, &mut foreign).unwrap_err(),
+            "FASTPQ tree reservation belongs to another pool"
+        );
+        assert_eq!(foreign.remaining_bytes(), demand);
+    }
+
+    #[test]
+    fn command_handlers_preserve_policy_errors_and_original_pool_credit() {
+        let limits = fastpq_prover::offline_compact::ProvingLimits::default().private_smt;
+        let demand = limits
+            .allocation_bytes(limits.max_updates, limits.max_unique_keys)
+            .unwrap();
+        let budget = AllocationBudget::new(demand);
+        let measure = MeasureInput {
+            dataspace: String::new(),
+            verifier_id: String::new(),
+            verifier_version: String::new(),
+            claim_types: Vec::new(),
+            fixtures: Vec::new(),
+            parameter: String::new(),
+        };
+        assert!(
+            handle_measure(measure, &budget, demand)
+                .unwrap_err()
+                .contains("measure requires maintained fixtures")
+        );
+        assert_eq!(budget.reserved_bytes(), 0);
+        assert!(
+            handle_prove(proof_request(""), &budget, demand)
+                .unwrap_err()
+                .contains("execution-captured batch_base64")
+        );
+        assert_eq!(budget.reserved_bytes(), 0);
     }
 }

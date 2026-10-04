@@ -10,8 +10,12 @@ use std::{
 
 use ivm::cache_memory::{SharedAllocation, SharedValue, memory_stats};
 
+#[path = "shared_owner_custody/diagnostics.rs"]
+mod diagnostics;
 #[path = "shared_owner_custody/read_log.rs"]
 mod read_log;
+#[path = "shared_owner_custody/register_paths.rs"]
+mod register_paths;
 
 struct ObservedAllocator;
 
@@ -355,6 +359,22 @@ fn runtime_template_frees_prepaid_owner_before_refunding_final_borrower() {
 #[test]
 fn canonical_memory_node_backing_is_prepaid_and_never_reallocated_by_commit_or_reset() {
     let _serial = SERIAL.lock().unwrap();
+    // This allocator census covers the VM and template's canonical CPU node
+    // owners. Automatic GPU calibration owns two separately funded synthetic
+    // trees with this same layout; its original process custody is exercised by
+    // the required physical rehash tests, not counted as VM reallocation here.
+    struct RestoreAcceleration(ivm::AccelerationConfig);
+    impl Drop for RestoreAcceleration {
+        fn drop(&mut self) {
+            ivm::set_acceleration_config(self.0);
+        }
+    }
+    let restore = RestoreAcceleration(ivm::acceleration_config());
+    ivm::set_acceleration_config(ivm::AccelerationConfig {
+        enable_metal: false,
+        enable_cuda: false,
+        ..restore.0
+    });
     let gas = 257;
     let stack = ivm::IvmStackPolicy::V1.stack_limit_for_gas(gas);
     let image_bytes =

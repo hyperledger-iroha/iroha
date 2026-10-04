@@ -52,7 +52,7 @@ fn argument_host(program: &[u8]) -> DefaultHost {
         .and_then(|entrypoint| entrypoint.argument_schema.as_ref())
         .expect("benchmark entrypoint has an argument schema");
     let json = Json::from(norito::json!({"a": "4", "b": "7"}));
-    let record = ivm::encode_argument_record_from_json(schema, &json)
+    let record = ivm_abi::arguments::encode_argument_record_from_json(schema, &json)
         .expect("encode canonical benchmark argument record");
     let key: Name = "trigger_event_json"
         .parse()

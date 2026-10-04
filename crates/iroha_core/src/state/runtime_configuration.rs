@@ -2,11 +2,10 @@ impl State {
     /// Return a handle to the original State-owned execution allocation pool.
     ///
     /// Cloning this handle preserves pool identity across pipeline reloads;
-    /// observed counters do not grant an execution reservation.
-    pub(crate) fn ivm_execution_budget(&self) -> iroha_allocation::AllocationBudget {
-        // Cache locking may allocate per-thread deadlock-tracking state. The
-        // permanent pool handle is an immutable clone of the same original owner.
-        self.ivm_execution_pool.clone()
+    /// observed counters do not grant an execution reservation. Accessing the
+    /// immutable owner acquires no cache lock or notifying reader.
+    pub fn ivm_execution_budget(&self) -> iroha_allocation::AllocationBudget {
+        self.ivm_execution_budget.clone()
     }
 
     /// Update pipeline preferences using a loaded configuration.

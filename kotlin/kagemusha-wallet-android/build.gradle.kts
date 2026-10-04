@@ -109,6 +109,16 @@ tasks.withType<Test>().configureEach {
     useJUnitPlatform {
         if (name != "testDebugHostNative") excludeTags("host-native")
     }
+    // The wallet custody backup test asserts the processed library manifest, not only its source.
+    if (name == "testDebugUnitTest") {
+        dependsOn("processDebugManifest")
+        systemProperty(
+            "iroha.kagemushaWalletAndroid.mergedManifest",
+            layout.buildDirectory.file(
+                "intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml",
+            ).get().asFile.absolutePath,
+        )
+    }
 }
 
 // Execute only the actual main-wallet JNI owner against an explicitly supplied

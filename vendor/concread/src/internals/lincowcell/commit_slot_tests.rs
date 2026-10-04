@@ -70,6 +70,11 @@ impl Clone for CloneFault {
 
 #[test]
 fn commit_slot_failed_cursor_keeps_both_locks_until_caller_abandons_original() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     let fault = Arc::new(AtomicBool::new(false));
     let cell = tree::<CloneFault>();
     let mut first = cell.write();
@@ -85,7 +90,9 @@ fn commit_slot_failed_cursor_keeps_both_locks_until_caller_abandons_original() {
     .is_err());
     fault.store(false, SeqCst);
     let observation = cell.observe_reader_release();
-    let mut wait = observation.clone().wait_for_release();
+    let mut wait = observation
+        .clone()
+        .wait_for_release(&mut release_registration_1);
     let mut context = Context::from_waker(Waker::noop());
     assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
     let mut slot = writer.commit_slot();

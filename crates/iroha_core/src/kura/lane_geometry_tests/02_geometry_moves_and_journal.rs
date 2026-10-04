@@ -4,9 +4,6 @@ impl Drop for GeometryReferenceResumeGuard<'_> {
         self.0.store(false, Ordering::Release);
     }
 }
-fn initial_primary_dataspace_for_pair_fixture() -> DataSpaceId {
-    ModelLaneConfig::default().dataspace_id
-}
 
 fn authenticate_transition_fixture_primary(
     kura: &Kura,
@@ -353,13 +350,18 @@ fn two_lane_alias_update_and_restart_preserve_exact_instances_and_chain() {
     kura.mark_lane_geometry_catalog_published(&initial, &incarnations, &activations, None)
         .expect("publish the exact configured instance references");
     let _ = store_structural_geometry_chain(&kura, 3);
+    let history_budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     let exact_chain = |kura: &Kura| {
         (1..=kura.exact_durable_blocks_count().unwrap())
             .map(|height| {
-                kura.get_block(NonZeroUsize::new(height).expect("non-zero block height"))
-                    .expect("durable block")
-                    .encode_wire()
-                    .expect("encode canonical block wire")
+                kura.get_block(
+                    NonZeroUsize::new(height).expect("non-zero block height"),
+                    &history_budget,
+                )
+                .expect("funded offline fixture read")
+                .expect("durable block")
+                .encode_wire()
+                .expect("encode canonical block wire")
             })
             .collect::<Vec<_>>()
     };
@@ -482,7 +484,11 @@ fn reference_publication_does_not_lock_canonical_block_store() {
             .expect("transition thread")
             .expect("journaled reference publication");
         let block = kura
-            .get_block(nonzero!(1_usize))
+            .get_block(
+                nonzero!(1_usize),
+                &iroha_allocation::AllocationBudget::new(64 * 1024 * 1024),
+            )
+            .expect("funded offline fixture read")
             .expect("canonical block remains readable");
         assert_eq!(block.hash(), expected);
     });

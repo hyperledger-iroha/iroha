@@ -545,8 +545,120 @@ public enum ValidatorStakingNoritoV1 {
         public var noritoPayload: Data { record.encode() }
     }
 
-    /// Signed operation-specific staking precondition.
-    public struct MonetaryPrecondition: Sendable {
+    /// Exact peer identity bound by a bond. Key admission uses the existing SDK validator;
+    /// possession and the retained validator tenure remain native execution checks.
+    public struct PeerID: Sendable {
+        private let record: Record
+        public let algorithm: SigningAlgorithm
+        public let publicKey: Data
+
+        public init(noritoPayload: Data) throws {
+            let record = try Record(noritoPayload, fields: 1)
+            let key: [UInt8] = try record.vector(0, limit: 8_259) { byte in
+                guard byte.count == 1 else {
+                    throw CanonicalNoritoDecodingError.invalidField("non-canonical peer public-key byte")
+                }
+                return byte.first!
+            }
+            guard let tag = key.first, let algorithm = SigningAlgorithm(noritoDiscriminant: tag) else {
+                throw CanonicalNoritoDecodingError.invalidField("unknown peer public-key algorithm")
+            }
+            let publicKey = Data(key.dropFirst())
+            // Reuse the canonical algorithm envelope and native key admission. SM2's
+            // Norito key includes the signed identifier, unlike fromAccount's SEC1 input.
+            _ = try governanceKagemushaPublicKeyOrderV1(
+                CanonicalNorito.publicKeyMultihash(algorithm: algorithm, payload: publicKey), codingPath: []
+            )
+            if algorithm == .sm2 {
+                let length = Int(publicKey[0]) << 8 | Int(publicKey[1])
+                guard let identifier = String(data: publicKey.subdata(in: 2..<(2 + length)), encoding: .utf8) else {
+                    throw CanonicalNoritoDecodingError.invalidField("invalid peer SM2 identifier")
+                }
+                _ = try AccountAddress.fromAccount(publicKey: publicKey.subdata(in: (2 + length)..<publicKey.count),
+                                                   algorithm: algorithm.wireName, distid: identifier)
+            } else {
+                _ = try AccountAddress.fromAccount(publicKey: publicKey, algorithm: algorithm.wireName)
+            }
+            self.record = record
+            self.algorithm = algorithm
+            self.publicKey = publicKey
+        }
+
+        public var noritoPayload: Data { record.encode() }
+    }
+
+    /// Exact new-validator eligibility boundary.
+    public struct MonetaryRegistration: Sendable {
+        private let record: Record
+        public let activationHeight: UInt64
+
+        public init(noritoPayload: Data) throws {
+            let record = try Record(noritoPayload, fields: 1)
+            activationHeight = try record.u64(0)
+            self.record = record
+        }
+
+        public var noritoPayload: Data { record.encode() }
+    }
+
+    /// Exact validator tenure and peer observed by an additional stake operation.
+    public struct MonetaryBond: Sendable {
+        private let record: Record
+        public let activationHeight: UInt64
+        public let peerID: PeerID
+
+        public init(noritoPayload: Data) throws {
+            let record = try Record(noritoPayload, fields: 2)
+            activationHeight = try record.u64(0)
+            peerID = try PeerID(noritoPayload: record.field(1))
+            self.record = record
+        }
+
+        public var noritoPayload: Data { record.encode() }
+    }
+
+    /// Exact retained withdrawal request, including Rust Hash's marked 32-byte encoding.
+    public struct MonetaryUnbond: Sendable {
+        private let record: Record
+        public let activationHeight: UInt64
+        public let requestHash: Data
+
+        public init(noritoPayload: Data) throws {
+            let record = try Record(noritoPayload, fields: 2)
+            activationHeight = try record.u64(0)
+            requestHash = try record.fixed(1, count: 32)
+            guard requestHash[31] & 1 == 1 else {
+                throw CanonicalNoritoDecodingError.invalidField("withdrawal request hash lacks the Iroha marker")
+            }
+            self.record = record
+        }
+
+        public var noritoPayload: Data { record.encode() }
+    }
+
+    /// Exact tenure and complete eligible custody exposure before a privileged slash.
+    public struct MonetarySlash: Sendable {
+        private let record: Record
+        public let activationHeight: UInt64
+        public let slashableExposure: Quantity
+
+        public init(noritoPayload: Data) throws {
+            let record = try Record(noritoPayload, fields: 2)
+            activationHeight = try record.u64(0)
+            slashableExposure = try Quantity(noritoPayload: record.field(1))
+            self.record = record
+        }
+
+        public var noritoPayload: Data { record.encode() }
+    }
+
+    /// Signed operation-specific staking precondition. Each case owns its exact Rust layout.
+    public enum MonetaryPrecondition: Sendable {
+        case registration(MonetaryRegistration)
+        case bond(MonetaryBond)
+        case unbond(MonetaryUnbond)
+        case slash(MonetarySlash)
+
         public enum Kind: UInt32, Sendable {
             case registration = 0
             case bond = 1
@@ -554,27 +666,48 @@ public enum ValidatorStakingNoritoV1 {
             case slash = 3
         }
 
-        public let kind: Kind
-        public let activationHeight: UInt64
-        public let binding: Data?
-        public let slashableExposure: Quantity?
-        private let payload: Data
-
         public init(noritoPayload: Data) throws {
-            payload = noritoPayload
             let variant = try Record.decodeVariant(noritoPayload)
-            guard let kind = Kind(rawValue: variant.tag) else {
-                throw CanonicalNoritoDecodingError.invalidField("unknown staking monetary precondition")
+            switch variant.tag {
+            case 0: self = .registration(try MonetaryRegistration(noritoPayload: variant.value))
+            case 1: self = .bond(try MonetaryBond(noritoPayload: variant.value))
+            case 2: self = .unbond(try MonetaryUnbond(noritoPayload: variant.value))
+            case 3: self = .slash(try MonetarySlash(noritoPayload: variant.value))
+            default: throw CanonicalNoritoDecodingError.invalidField("unknown staking monetary precondition")
             }
-            self.kind = kind
-            let record = try Record(variant.value, fields: kind == .registration ? 1 : 2)
-            activationHeight = try record.u64(0)
-            binding = kind == .bond || kind == .unbond ? record.field(1) : nil
-            slashableExposure = kind == .slash
-                ? try Quantity(noritoPayload: record.field(1)) : nil
+            guard self.noritoPayload == noritoPayload else {
+                throw CanonicalNoritoDecodingError.invalidField("non-canonical staking precondition length")
+            }
         }
 
-        public var noritoPayload: Data { payload }
+        public var kind: Kind {
+            switch self {
+            case .registration: return .registration
+            case .bond: return .bond
+            case .unbond: return .unbond
+            case .slash: return .slash
+            }
+        }
+
+        public var activationHeight: UInt64 {
+            switch self {
+            case .registration(let value): return value.activationHeight
+            case .bond(let value): return value.activationHeight
+            case .unbond(let value): return value.activationHeight
+            case .slash(let value): return value.activationHeight
+            }
+        }
+
+        public var noritoPayload: Data {
+            let value: Data
+            switch self {
+            case .registration(let binding): value = binding.noritoPayload
+            case .bond(let binding): value = binding.noritoPayload
+            case .unbond(let binding): value = binding.noritoPayload
+            case .slash(let binding): value = binding.noritoPayload
+            }
+            return Data([UInt8(kind.rawValue), 0, 0, 0]) + Record.varint(UInt64(value.count)) + value
+        }
     }
 
     /// Exact signed source, destination, amount and custody-state plan.
@@ -616,6 +749,204 @@ public enum ValidatorStakingNoritoV1 {
         }
 
         public var noritoPayload: Data { record.encode() }
+    }
+
+    /// Retained reward-processing cursor; epoch zero is a valid completed epoch.
+    public struct RewardClaimState: Sendable {
+        private let record: Record
+        public let throughEpoch: UInt64?
+
+        public init(noritoPayload: Data) throws {
+            let record = try Record(noritoPayload, fields: 1)
+            self.record = record
+            throughEpoch = try record.option(0, Record.decodeU64)
+        }
+
+        public var noritoPayload: Data { record.encode() }
+    }
+
+    /// Exact immutable reward record selected by a signed claim.
+    public struct RewardRecordRef: Sendable {
+        private let record: Record
+        public let epoch: UInt64
+        public let recordHash: Data
+
+        public init(noritoPayload: Data) throws {
+            let record = try Record(noritoPayload, fields: 2)
+            self.record = record
+            epoch = try record.u64(0)
+            recordHash = try record.fixed(1, count: 32)
+        }
+
+        public var noritoPayload: Data { record.encode() }
+    }
+
+    /// One exact reward custody source, previous accrual and signed payout.
+    public struct RewardClaimSource: Sendable {
+        private let record: Record
+        public let sourceAsset: AssetID
+        public let destinationAsset: AssetID
+        public let expectedAccrued: Quantity?
+        public let payout: Quantity
+
+        public init(noritoPayload: Data) throws {
+            let record = try Record(noritoPayload, fields: 4)
+            self.record = record
+            sourceAsset = try AssetID(noritoPayload: record.field(0))
+            destinationAsset = try AssetID(noritoPayload: record.field(1))
+            expectedAccrued = try record.option(2, Quantity.init(noritoPayload:))
+            payout = try Quantity(noritoPayload: record.field(3))
+            guard sourceAsset.definition == destinationAsset.definition,
+                  sourceAsset.scopeDataspace == destinationAsset.scopeDataspace,
+                  expectedAccrued?.mantissaLittleEndian.isEmpty != true else {
+                throw CanonicalNoritoDecodingError.invalidField("invalid reward source asset or prior accrual")
+            }
+        }
+
+        public var noritoPayload: Data { record.encode() }
+    }
+
+    /// Independently accrued fee reward payment, bound to its custody and receipt sequence.
+    /// Authenticated beneficiary ownership and the signing recipient are verified by native execution.
+    public struct FeeRewardClaim: Sendable {
+        private let record: Record
+        public let lifecycleSeal: Data
+        public let beneficiaryID: Data
+        public let beneficiaryRevision: UInt64
+        public let sourceAsset: AssetID
+        public let destinationAsset: AssetID
+        public let amount: Quantity
+        public let expectedClaimSequence: UInt64
+
+        public init(noritoPayload: Data) throws {
+            let record = try Record(noritoPayload, fields: 7)
+            self.record = record
+            lifecycleSeal = try record.fixed(0, count: 32)
+            beneficiaryID = record.field(1)
+            beneficiaryRevision = try record.u64(2)
+            sourceAsset = try AssetID(noritoPayload: record.field(3))
+            destinationAsset = try AssetID(noritoPayload: record.field(4))
+            amount = try Quantity(noritoPayload: record.field(5))
+            expectedClaimSequence = try record.u64(6)
+            guard lifecycleSeal.contains(where: { $0 != 0 }),
+                  !beneficiaryID.isEmpty,
+                  !amount.mantissaLittleEndian.isEmpty,
+                  sourceAsset.scopeDataspace == nil, destinationAsset.scopeDataspace == nil,
+                  sourceAsset.definition == destinationAsset.definition else {
+                throw CanonicalNoritoDecodingError.invalidField("invalid fee reward claim custody or amount")
+            }
+        }
+
+        public var noritoPayload: Data { record.encode() }
+    }
+
+    /// Bounded reward plan with an explicit optional fee reward payment.
+    /// Sources retain Rust AssetId order; native execution authenticates the signer and ledger preconditions.
+    public struct RewardClaimPlan: Sendable {
+        private let record: Record
+        public let networkScope: NetworkId?
+        public let validUntilHeight: UInt64
+        public let expectedState: RewardClaimState?
+        public let records: [RewardRecordRef]
+        public let sources: [RewardClaimSource]
+        public let feeClaim: FeeRewardClaim?
+
+        public init(noritoPayload: Data) throws {
+            let record = try Record(noritoPayload, fields: 6)
+            self.record = record
+            let scope = try record.variant(0)
+            switch scope.tag {
+            case 0:
+                guard record.field(0).count == 4 else {
+                    throw CanonicalNoritoDecodingError.invalidField("genesis monetary scope must be a unit variant")
+                }
+                networkScope = nil
+            case 1: networkScope = try NetworkId(bytes: scope.value)
+            default: throw CanonicalNoritoDecodingError.invalidField("unknown staking monetary scope")
+            }
+            validUntilHeight = try record.u64(1)
+            expectedState = try record.option(2, RewardClaimState.init(noritoPayload:))
+            records = try record.vector(3, limit: 64, RewardRecordRef.init(noritoPayload:))
+            sources = try record.vector(4, limit: 64, RewardClaimSource.init(noritoPayload:))
+            feeClaim = try record.option(5, FeeRewardClaim.init(noritoPayload:))
+            guard validUntilHeight > 0 else {
+                throw CanonicalNoritoDecodingError.invalidField("reward plan expiry must be positive")
+            }
+            var previous = expectedState?.throughEpoch
+            for reward in records {
+                if let prior = previous, prior >= reward.epoch {
+                    throw CanonicalNoritoDecodingError.invalidField("reward epochs must advance the retained cursor")
+                }
+                previous = reward.epoch
+            }
+            var previousSource: AssetID?
+            let recipient = sources.first?.destinationAsset.account ?? feeClaim?.destinationAsset.account
+            for source in sources {
+                if let previousSource, try !ValidatorStakingNoritoV1.assetPrecedes(previousSource, source.sourceAsset) {
+                    throw CanonicalNoritoDecodingError.invalidField("reward sources must use strict AssetId order")
+                }
+                guard source.destinationAsset.account == recipient else {
+                    throw CanonicalNoritoDecodingError.invalidField("reward plan changes recipient")
+                }
+                previousSource = source.sourceAsset
+            }
+            if let feeClaim, feeClaim.destinationAsset.account != recipient {
+                throw CanonicalNoritoDecodingError.invalidField("fee reward claim changes recipient")
+            }
+        }
+
+        public var noritoPayload: Data { record.encode() }
+    }
+
+    // AccountId orders controller fields, not their variable-length Norito frames.
+    // Integer order components use big endian; public keys use algorithm then key bytes.
+    private static func accountOrderKey(_ payload: Data) throws -> [Data] {
+        let controller = try Record.decodeVariant(payload)
+        switch controller.tag {
+        case 0: return [Data([0]), try publicKeyOrderKey(controller.value)]
+        case 1:
+            let policy = try Record(controller.value, fields: 3)
+            let version = try policy.fixed(0, count: 1)
+            let threshold = try policy.u16(1)
+            guard version == Data([1]), threshold > 0 else {
+                throw CanonicalNoritoDecodingError.invalidField("invalid multisig ordering fields")
+            }
+            let members = try policy.vector(2, limit: 65535) { bytes -> [Data] in
+                let member = try Record(bytes, fields: 2)
+                let weight = try member.u16(1)
+                return [try publicKeyOrderKey(member.field(0)),
+                        Data([UInt8(weight >> 8), UInt8(truncatingIfNeeded: weight)])]
+            }
+            return [Data([1]), version,
+                    Data([UInt8(threshold >> 8), UInt8(truncatingIfNeeded: threshold)])] + members.flatMap { $0 }
+        default:
+            throw CanonicalNoritoDecodingError.invalidField("unknown account controller")
+        }
+    }
+
+    private static func publicKeyOrderKey(_ payload: Data) throws -> Data {
+        var reader = CanonicalNoritoReader(data: payload)
+        let count = try reader.readUInt64LE()
+        guard (2...65536).contains(count) else {
+            throw CanonicalNoritoDecodingError.invalidField("invalid public key ordering bytes")
+        }
+        return try Record.fixedByteArray(reader.readBytes(reader.remaining()), count: Int(count))
+    }
+
+    private static func assetPrecedes(_ left: AssetID, _ right: AssetID) throws -> Bool {
+        let leftAccount = try accountOrderKey(left.account)
+        let rightAccount = try accountOrderKey(right.account)
+        if leftAccount != rightAccount {
+            return leftAccount.lexicographicallyPrecedes(rightAccount) { $0.lexicographicallyPrecedes($1) }
+        }
+        if left.definition != right.definition {
+            return left.definition.lexicographicallyPrecedes(right.definition)
+        }
+        switch (left.scopeDataspace, right.scopeDataspace) {
+        case (nil, .some): return true
+        case let (.some(lhs), .some(rhs)): return lhs < rhs
+        default: return false
+        }
     }
 
     /// Exact validator rebind with mandatory replacement-peer signature.
@@ -789,7 +1120,7 @@ private struct Record: Sendable {
         return value
     }
 
-    private static func varint(_ value: UInt64) -> Data {
+    static func varint(_ value: UInt64) -> Data {
         var remaining = value
         var output = Data()
         while remaining >= 0x80 {

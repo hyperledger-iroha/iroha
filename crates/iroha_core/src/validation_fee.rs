@@ -6,7 +6,7 @@ use crate::{
         specialized::LoadedActionTrait as _,
         trigger_is_enabled,
     },
-    state::{StateReadOnly, StateTransaction, WorldReadOnly},
+    state::{StateReadOnly, StateTransaction, WorldReadOnly, validate_network_xor_asset},
     tx::TransactionRejectionReason,
 };
 use iroha_data_model::{
@@ -294,46 +294,62 @@ pub(crate) fn is_enacted_validation_fee_payout_invocation(
 }
 
 fn trigger_id_from_permission(
+    state_transaction: &StateTransaction<'_, '_>,
     permission: &iroha_data_model::permission::Permission,
-) -> Option<iroha_data_model::trigger::TriggerId> {
-    iroha_executor_data_model::permission::trigger::CanUnregisterTrigger::try_from(permission)
-        .map(|token| token.trigger)
-        .or_else(|_| {
-            iroha_executor_data_model::permission::trigger::CanModifyTrigger::try_from(permission)
-                .map(|token| token.trigger)
-        })
-        .or_else(|_| {
-            iroha_executor_data_model::permission::trigger::CanExecuteTrigger::try_from(permission)
-                .map(|token| token.trigger)
-        })
-        .or_else(|_| {
-            iroha_executor_data_model::permission::trigger::CanModifyTriggerMetadata::try_from(
-                permission,
-            )
-            .map(|token| token.trigger)
-        })
-        .ok()
+) -> Result<
+    Option<iroha_data_model::trigger::TriggerId>,
+    iroha_data_model::isi::error::InstructionExecutionError,
+> {
+    use iroha_executor_data_model::permission::{
+        Permission as _,
+        trigger::{
+            CanExecuteTrigger, CanModifyTrigger, CanModifyTriggerMetadata, CanUnregisterTrigger,
+        },
+    };
+    if permission.name() == CanUnregisterTrigger::name() {
+        return decode_payout_runtime_permission(state_transaction, permission)
+            .map(|token: CanUnregisterTrigger| Some(token.trigger));
+    }
+    if permission.name() == CanModifyTrigger::name() {
+        return decode_payout_runtime_permission(state_transaction, permission)
+            .map(|token: CanModifyTrigger| Some(token.trigger));
+    }
+    if permission.name() == CanExecuteTrigger::name() {
+        return decode_payout_runtime_permission(state_transaction, permission)
+            .map(|token: CanExecuteTrigger| Some(token.trigger));
+    }
+    if permission.name() == CanModifyTriggerMetadata::name() {
+        return decode_payout_runtime_permission(state_transaction, permission)
+            .map(|token: CanModifyTriggerMetadata| Some(token.trigger));
+    }
+    Ok(None)
 }
 
 pub(crate) fn permission_targets_enacted_validation_fee_payout_trigger(
     state_transaction: &StateTransaction<'_, '_>,
     permission: &iroha_data_model::permission::Permission,
-) -> bool {
-    trigger_id_from_permission(permission).is_some_and(|trigger_id| {
+) -> Result<bool, iroha_data_model::isi::error::InstructionExecutionError> {
+    let trigger_id = match trigger_id_from_permission(state_transaction, permission) {
+        Ok(trigger_id) => trigger_id,
+        Err(_) if cfg!(all(test, sumeragi_core_mutation = "HC97")) => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    Ok(trigger_id.is_some_and(|trigger_id| {
         is_enacted_validation_fee_payout_trigger(state_transaction, &trigger_id)
-    })
+    }))
 }
 
 pub(crate) fn enacted_validation_fee_payout_runtime_permission_owner(
     state_transaction: &StateTransaction<'_, '_>,
     permission: &iroha_data_model::permission::Permission,
-) -> Option<AccountId> {
-    if let Ok(scoped) =
-        iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint::try_from(
-            permission,
-        )
-    {
-        return state_transaction
+) -> Result<Option<AccountId>, iroha_data_model::isi::error::InstructionExecutionError> {
+    use iroha_executor_data_model::permission::{
+        Permission as _, asset::CanTransferAsset, smart_contract::CanInvokeContractEntrypoint,
+    };
+    if permission.name() == CanInvokeContractEntrypoint::name() {
+        let scoped: CanInvokeContractEntrypoint =
+            decode_payout_runtime_permission(state_transaction, permission)?;
+        return Ok(state_transaction
             .world
             .governance_proposals
             .iter()
@@ -353,28 +369,62 @@ pub(crate) fn enacted_validation_fee_payout_runtime_permission_owner(
                 let pool_selector = scoped.contract.subject_id() == binding.pool_vault_account_id
                     && scoped.entrypoint == VALIDATION_FEE_POOL_SWAP_ENTRYPOINT;
                 (wrapper_selector || pool_selector).then(|| binding.treasury_account_id.clone())
-            });
+            }));
     }
-    let transfer =
-        iroha_executor_data_model::permission::asset::CanTransferAsset::try_from(permission)
-            .ok()?;
+    if permission.name() != CanTransferAsset::name() {
+        return Ok(None);
+    }
+    let transfer: CanTransferAsset =
+        decode_payout_runtime_permission(state_transaction, permission)?;
     // Enactment atomically replaces derived permissions. Its new head owns this
     // permission immediately, even though conversion eligibility begins next block.
     // Historical proposal iteration cannot select a retired pool as the holder.
     let registry = match validated_policy_registry_in_world(&state_transaction.world) {
-        Ok(registry) => registry?,
-        Err(ExecutionAttemptError::Rejected(_)) => return None,
-        Err(ExecutionAttemptError::Deferred(reason)) => {
-            let _ = state_transaction.world.defer_execution(reason);
-            return None;
+        Ok(Some(registry)) => registry,
+        Ok(None) => return Ok(None),
+        Err(error) => {
+            if cfg!(all(test, sumeragi_core_mutation = "HC96")) {
+                return Ok(None);
+            }
+            return Err(state_transaction.world.attempt_error_to_instruction_error(
+                error.map_rejection(|error| {
+                    iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
+                        format!("validation-fee permission guard rejected registry: {error}")
+                            .into(),
+                    )
+                }),
+            ));
         }
     };
-    let binding = &registry.payout_policies.head()?.payout_binding;
+    let Some(head) = registry.payout_policies.head() else {
+        return Ok(None);
+    };
+    let binding = &head.payout_binding;
     let wrapper_ds_asset = AssetId::new(
         binding.ds_asset_id.clone(),
         binding.treasury_account_id.clone(),
     );
-    (transfer.asset == wrapper_ds_asset).then(|| binding.pool_vault_account_id.clone())
+    Ok((transfer.asset == wrapper_ds_asset).then(|| binding.pool_vault_account_id.clone()))
+}
+
+/// Decode only a recognized runtime permission, retaining its original local refusal.
+fn decode_payout_runtime_permission<P: norito::json::JsonDeserialize>(
+    state_transaction: &StateTransaction<'_, '_>,
+    permission: &iroha_data_model::permission::Permission,
+) -> Result<P, iroha_data_model::isi::error::InstructionExecutionError> {
+    norito::json::from_str(permission.payload().get()).map_err(|error| {
+        state_transaction.world.attempt_error_to_instruction_error(
+            crate::execution_attempt::json_decode_attempt_error(error, |error| {
+                iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "validation-fee payout runtime permission {} is malformed: {error}",
+                        permission.name()
+                    )
+                    .into(),
+                )
+            }),
+        )
+    })
 }
 
 pub(crate) fn enforce_validation_fee_admission(
@@ -438,20 +488,15 @@ pub(crate) fn enforce_deferred_instruction_list(
 fn validation_fee_payout_xor_scale(
     state_transaction: &StateTransaction<'_, '_>,
     binding: &ValidationFeeTreasuryPayoutBindingV1,
-) -> Result<u32, ValidationFeeAdmissionError> {
-    let definition = state_transaction
-        .world
-        .asset_definition(&binding.xor_asset_id)
-        .map_err(
-            |_| ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
-                reason: "the bound XOR asset definition is missing",
-            },
-        )?;
-    definition.spec().scale().ok_or(
-        ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
-            reason: "the bound XOR asset must have a fixed minor-unit scale",
+) -> Result<u32, ExecutionAttemptError<ValidationFeeAdmissionError>> {
+    validate_network_xor_asset(&state_transaction.world, &binding.xor_asset_id).map_err(
+        |error| {
+            error.map_rejection(|error| {
+                ValidationFeeAdmissionError::InvalidPolicyRegistry(error.to_string())
+            })
         },
-    )
+    )?;
+    Ok(9)
 }
 
 fn quantity_to_minor_units_u128(
@@ -520,14 +565,39 @@ pub(crate) fn active_payout_binding_at_height(
     Option<ValidationFeeTreasuryPayoutBindingV1>,
     ExecutionAttemptError<TransactionRejectionReason>,
 > {
-    Ok(
-        validated_policy_registry(state_transaction)?.and_then(|registry| {
+    active_payout_binding_in_world_at_height(&state_transaction.world, height)
+}
+
+/// Read the same authenticated payout lifecycle for execution and signing preparation.
+pub(crate) fn active_payout_binding_in_world_at_height(
+    world: &impl WorldReadOnly,
+    height: u64,
+) -> Result<
+    Option<ValidationFeeTreasuryPayoutBindingV1>,
+    ExecutionAttemptError<TransactionRejectionReason>,
+> {
+    Ok(validated_policy_registry_in_world(world)
+        .map_err(|error| error.map_rejection(admission_rejection))?
+        .and_then(|registry| {
             registry
                 .payout_policies
                 .effective_entry_at_height(height)
                 .map(|entry| entry.payout_binding.clone())
-        }),
-    )
+        }))
+}
+
+/// Return the authenticated immutable custody coordinates retained by every lifecycle revision.
+pub(crate) fn retained_payout_custody_binding(
+    world: &impl WorldReadOnly,
+) -> Result<Option<ValidationFeeTreasuryPayoutBindingV1>, ExecutionAttemptError<String>> {
+    Ok(validated_policy_registry_in_world(world)
+        .map_err(|error| error.map_rejection(|error| error.to_string()))?
+        .and_then(|registry| {
+            registry
+                .payout_policies
+                .head()
+                .map(|entry| entry.payout_binding.clone())
+        }))
 }
 
 fn validated_policy_registry(
@@ -576,6 +646,11 @@ fn validated_policy_registry_in_world<W: WorldReadOnly + ?Sized>(
         validate_registry_entry_governance(entry, world)?;
     }
     for entry in &registry.payout_policies.entries {
+        validate_network_xor_asset(world, &entry.payout_binding.xor_asset_id).map_err(|error| {
+            error.map_rejection(|error| {
+                ValidationFeeAdmissionError::InvalidPolicyRegistry(error.to_string())
+            })
+        })?;
         let exact_kind = ProposalKind::ValidationFeePayoutLifecycle(
             iroha_data_model::governance::types::ValidationFeePayoutLifecycleProposal {
                 proposal_operator: entry.parliament_authorization.proposal_operator.clone(),
@@ -615,6 +690,7 @@ pub(crate) fn validate_persisted_policy_registry_runtime_v1(
     }
     let restored_timestamp_ms = state
         .latest_block()
+        .map_err(|error| error.map_rejection(|error| error.to_string()))?
         .ok_or_else(|| {
             "active fee policy restoration requires its retained block timestamp".to_owned()
         })?
@@ -784,6 +860,11 @@ fn validate_treasury_payout_contract_subject(
     state: &impl StateReadOnly,
 ) -> Result<(), ExecutionAttemptError<ValidationFeeAdmissionError>> {
     let custody = &policy.reward_custody;
+    validate_network_xor_asset(state.world(), &custody.xor_asset_id).map_err(|error| {
+        error.map_rejection(|error| {
+            ValidationFeeAdmissionError::InvalidPolicyRegistry(error.to_string())
+        })
+    })?;
     let record =
         crate::smartcontracts::code::fetch_bound_contract_record(state, &custody.contract_address)
             .map_err(|error| {
@@ -852,6 +933,11 @@ fn validate_treasury_payout_binding_contract_subject(
     ds_scale: u8,
     state: &impl StateReadOnly,
 ) -> Result<(), ExecutionAttemptError<ValidationFeeAdmissionError>> {
+    validate_network_xor_asset(state.world(), &binding.xor_asset_id).map_err(|error| {
+        error.map_rejection(|error| {
+            ValidationFeeAdmissionError::InvalidPolicyRegistry(error.to_string())
+        })
+    })?;
     let Some(record) =
         crate::smartcontracts::code::fetch_bound_contract_record(state, &binding.contract_address)
             .map_err(|error| {
@@ -919,22 +1005,6 @@ fn validate_treasury_payout_binding_contract_subject(
         return Err(
             ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
                 reason: "the governed SBD scale differs",
-            }
-            .into(),
-        );
-    }
-    let xor_definition = state
-        .world()
-        .asset_definition(&binding.xor_asset_id)
-        .map_err(
-            |_| ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
-                reason: "the bound XOR asset definition is missing",
-            },
-        )?;
-    if xor_definition.spec().scale().is_none() {
-        return Err(
-            ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
-                reason: "the bound XOR asset must have a fixed minor-unit scale",
             }
             .into(),
         );
@@ -1133,7 +1203,7 @@ pub(crate) fn encode_conversion_quantity_state_value(
 ) -> Result<Vec<u8>, ivm::VMError> {
     let schema_payload = norito::to_bytes(&conversion_quantity_state_schema())
         .map_err(|_| ivm::VMError::NoritoInvalid)?;
-    let envelope = ivm::numeric_tlv::encode_quantity(value)?;
+    let envelope = ivm_abi::numeric_tlv::encode_quantity(value)?;
     norito::to_bytes(&StateValueRecordV1 {
         schema_hash: state_value_schema_hash_v1(&schema_payload),
         atoms: vec![StateValueAtomV1::Pointer(envelope)],
@@ -1241,7 +1311,8 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
 ) -> Result<OpaqueDeferredValidationOutcome, TransactionRejectionReason> {
     // Committee and monetary staking authority are independent of native fee
     // accounting. Resolve deferred approvals against this execution overlay first.
-    crate::deferred_authority::reject_opaque_deferred_authority(groups, stx)?;
+    crate::deferred_authority::reject_opaque_deferred_authority(groups, stx)
+        .map_err(|error| transaction_attempt_rejection(stx, error))?;
     let registry = validated_policy_registry(stx)
         .map_err(|error| transaction_attempt_rejection(stx, error))?;
     let _ = active_policy_from_validated_registry(registry.as_ref(), stx)
@@ -1258,14 +1329,15 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
         return Ok(OpaqueDeferredValidationOutcome::NoOp);
     }
     let binding = &lifecycle.binding;
-    let scale = validation_fee_payout_xor_scale(stx, binding).map_err(admission_rejection)?;
+    let scale = validation_fee_payout_xor_scale(stx, binding)
+        .map_err(|error| fee_attempt_rejection(stx, error))?;
     let rewards_error = |error: iroha_data_model::isi::error::InstructionExecutionError| {
         admission_rejection(ValidationFeeAdmissionError::InvalidPolicyRegistry(
             error.to_string(),
         ))
     };
-    let Some(offer) = crate::validation_fee_rewards::conversion_offer(stx, binding, scale)
-        .map_err(rewards_error)?
+    let Some(offer) =
+        crate::validation_fee_rewards::conversion_offer(stx, binding).map_err(rewards_error)?
     else {
         return Ok(OpaqueDeferredValidationOutcome::NoOp);
     };

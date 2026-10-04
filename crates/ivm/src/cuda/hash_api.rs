@@ -2,33 +2,24 @@
 
 use super::policy::Kernel;
 use iroha_accel::{HostOutput, PtxArtifact, cuda::CudaFailure};
-use std::ffi::CStr;
 
 #[path = "hash_launch.rs"]
 mod launch;
 
-static SHA256: PtxArtifact = PtxArtifact::new(
-    match CStr::from_bytes_with_nul(
-        concat!(include_str!(concat!(env!("OUT_DIR"), "/sha256.ptx")), "\0").as_bytes(),
-    ) {
-        Ok(bytes) => bytes,
-        Err(_) => panic!("embedded SHA-256 artifact must contain exactly one terminal NUL"),
-    },
-);
-static KECCAK: PtxArtifact = PtxArtifact::new(
-    match CStr::from_bytes_with_nul(
-        concat!(include_str!(concat!(env!("OUT_DIR"), "/sha3.ptx")), "\0").as_bytes(),
-    ) {
-        Ok(bytes) => bytes,
-        Err(_) => panic!("embedded Keccak artifact must contain exactly one terminal NUL"),
-    },
-);
-
-fn complete<T>(result: Result<HostOutput<T>, CudaFailure>) -> Result<HostOutput<T>, CudaFailure> {
+fn complete<T>(
+    kernel: Kernel,
+    artifact: PtxArtifact,
+    expected_count: usize,
+    result: Result<HostOutput<T>, CudaFailure>,
+) -> Result<HostOutput<T>, CudaFailure> {
     match result {
-        Ok(output) => {
-            super::imp::record_completed_cuda_dispatch();
+        Ok(output) if output.len() == expected_count => {
+            super::imp::record_completed_cuda_dispatch(kernel, artifact);
             Ok(output)
+        }
+        Ok(_) => {
+            crate::cuda_dispatch::quarantine_current_kernel();
+            Err(CudaFailure::Quarantined)
         }
         Err(error) => {
             if !matches!(
@@ -43,31 +34,36 @@ fn complete<T>(result: Result<HostOutput<T>, CudaFailure>) -> Result<HostOutput<
 }
 
 fn sha256_staging(state: &[u32; 8], block: &[u8; 64]) -> Result<HostOutput<u32>, CudaFailure> {
-    complete(crate::cuda_dispatch::with_selected(
+    let artifact = crate::cuda_artifact::artifact(Kernel::Sha256)?;
+    complete(
         Kernel::Sha256,
-        SHA256,
-        |device| {
+        artifact,
+        state.len(),
+        crate::cuda_dispatch::with_selected(Kernel::Sha256, artifact, |device| {
             // SAFETY: this module supplies the exact immutable artifact and fixed ABI.
-            unsafe { launch::sha256_output(device, SHA256, state, block) }
-        },
-    ))
+            unsafe { launch::sha256_output(device, artifact, state, block) }
+        }),
+    )
 }
 fn keccak_staging(state: &[u64; 25]) -> Result<HostOutput<u64>, CudaFailure> {
-    complete(crate::cuda_dispatch::with_selected(
+    let artifact = crate::cuda_artifact::artifact(Kernel::Keccak)?;
+    complete(
         Kernel::Keccak,
-        KECCAK,
-        |device| {
+        artifact,
+        state.len(),
+        crate::cuda_dispatch::with_selected(Kernel::Keccak, artifact, |device| {
             // SAFETY: this module supplies the exact immutable artifact and fixed ABI.
-            unsafe { launch::keccak_output(device, KECCAK, state) }
-        },
-    ))
+            unsafe { launch::keccak_output(device, artifact, state) }
+        }),
+    )
 }
 
 pub(super) fn admit(kernel: Kernel) -> bool {
-    let artifact = match kernel {
-        Kernel::Sha256 => SHA256,
-        Kernel::Keccak => KECCAK,
-        _ => return false,
+    if !matches!(kernel, Kernel::Sha256 | Kernel::Keccak) {
+        return false;
+    }
+    let Ok(artifact) = crate::cuda_artifact::artifact(kernel) else {
+        return false;
     };
     crate::cuda_dispatch::admit_kernel(kernel, artifact, || {
         let Some(_guard) = super::imp::SelftestRunningGuard::enter() else {

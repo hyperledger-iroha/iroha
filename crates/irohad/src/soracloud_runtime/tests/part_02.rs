@@ -966,7 +966,7 @@ fn remote_hydration_sources_exclude_noncompleted_orders_and_prefer_newest() -> R
         |fixture| fixture.issued_epoch != 45,
     )?;
     let view = state.view();
-    let sources = collect_remote_hydration_sources(&view, &state);
+    let sources = collect_remote_hydration_sources(&view, &state)?;
     assert_eq!(sources.len(), 2);
     assert_eq!(
         sources[0].manifest_digest_hex,
@@ -1906,7 +1906,7 @@ fn test_provider_cache_with_transport_hints(
             endpoint,
             attestation: EndpointAttestationV1 {
                 version: sorafs_manifest::ENDPOINT_ATTESTATION_VERSION_V1,
-                kind: EndpointAttestationKind::Mtls,
+                kind: EndpointAttestationKind::Tls,
                 attested_at: issued_at.saturating_sub(10),
                 expires_at: expires_at + 60,
                 leaf_certificate: vec![0xAA],
@@ -2622,15 +2622,12 @@ fn approve_remote_hydration_sources_with_status_and_finalization(
                             completed_by: (*ALICE_ID).clone(),
                             completion_epoch: fixture.issued_epoch + 1,
                             assignment_revision: 1,
-                            completion_authority: iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionAuthorityV1::new(
-                                (*ALICE_ID).clone(),
-                                iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
+                            completion_authority: iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionAuthorityV1::new(((*ALICE_ID).clone()).clone(), (*ALICE_ID).clone(), iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
                                     policy_id: [0xA1; 32],
                                     revision: 1,
                                     predecessor_digest: None,
                                     policy_digest: [0xA2; 32],
-                                },
-                            ),
+                                }),
                             finalized_anchor: if finalized_for(fixture) {
                                 iroha_data_model::sorafs::pin_registry::ProviderIngestFinalizedAnchorV1 {
                                     height: fixture.issued_epoch,

@@ -88,7 +88,9 @@
       "values": [
         "fresh committed registry projection",
         "assignment revision",
-        "provider-owner signer-policy",
+        "provider owner",
+        "governed completion signer",
+        "signer-policy identity/revision/digest chain",
         "finalized block anchor",
         "unknown, duplicate, empty, aliased, or out-of-range"
       ]
@@ -368,13 +370,15 @@
       ]
     },
     {
-      "id": "repo.query.fields",
+      "id": "collection.query.fields",
       "values": [
         "filter",
+        "sort",
         "select",
         "aggregate",
-        "fetch_size",
-        "count_mode"
+        "limit",
+        "cursor",
+        "include_total"
       ]
     },
     {

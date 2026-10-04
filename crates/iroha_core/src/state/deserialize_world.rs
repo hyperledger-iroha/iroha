@@ -5727,11 +5727,12 @@ mod global_beacon_persistence_tests {
 
     #[test]
     fn restore_rejects_pulse_after_sortition_slot_was_terminally_unavailable() {
+        let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
         let network_id = iroha_data_model::NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC1; 32])),
         );
         let (key_record, pulse) =
-            crate::beacon::signed_persisted_pulse_fixture_for_world(network_id, 41);
+            crate::beacon::signed_persisted_pulse_fixture_for_world(network_id, 41, &budget);
         let roster = (1_u8..=4)
             .map(|marker| {
                 KeyPair::try_from_seed(vec![marker; 32], Algorithm::Ed25519)
@@ -7019,6 +7020,44 @@ mod validation_fee_registry_restore_tests {
             );
         }
         let mut world = World::default();
+        let npos = iroha_data_model::parameter::system::SumeragiNposParameters::default();
+        assert_eq!(binding.xor_asset_id, npos.xor_asset_definition_id);
+        world.accounts.insert(
+            proposal_operator.clone(),
+            iroha_data_model::account::AccountValue::new(
+                iroha_data_model::account::AccountDetails::default(),
+            ),
+        );
+        world.asset_definitions.insert(
+            binding.xor_asset_id.clone(),
+            iroha_data_model::asset::AssetDefinition::new(
+                binding.xor_asset_id.clone(),
+                "XOR".to_owned(),
+                iroha_primitives::numeric::NumericSpec::fractional(9),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&proposal_operator),
+        );
+        // This World projection contains a live definition, so it must retain
+        // its registration incarnation just as a committed registration does.
+        let registration_header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(1).expect("registration height"),
+            None,
+            None,
+            0,
+            0,
+        );
+        world.axt_asset_incarnations.insert(
+            binding.xor_asset_id.clone(),
+            iroha_data_model::nexus::AxtAssetIncarnationV1::derive(
+                &parliament_network_id,
+                &binding.xor_asset_id,
+                &registration_header.hash(),
+                &Hash::new(b"validation-fee restore fixture XOR registration"),
+                0,
+            ),
+        );
         world.governance_proposals.insert(
             lifecycle_kind.fingerprint(),
             GovernanceProposalRecord {
@@ -7079,6 +7118,9 @@ mod validation_fee_registry_restore_tests {
         }
         {
             let mut parameters = world.parameters.block();
+            parameters
+                .get_mut()
+                .set_parameter(Parameter::Custom(npos.into_custom_parameter()));
             parameters
                 .get_mut()
                 .set_parameter(Parameter::Custom(registry.clone().into_custom_parameter()));
@@ -7635,8 +7677,143 @@ fn take_native_lane_custody(
 }
 
 #[cfg(test)]
+#[path = "deserialize_world_beacon_custody_tests.rs"]
+mod native_beacon_custody_tests;
+#[cfg(test)]
 #[path = "deserialize_world_lane_custody_tests.rs"]
 mod native_lane_custody_tests;
+
+/// Canonical DTO input only: runtime rows cannot be decoded without original admission.
+#[derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct NativeBeaconSessionSnapshot {
+    revert: std::collections::BTreeMap<
+        [u8; 32],
+        Option<crate::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1>,
+    >,
+    blocks: std::collections::BTreeMap<
+        [u8; 32],
+        crate::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+    >,
+}
+fn take_native_beacon_sessions(
+    map: &mut SnapshotJsonMap<'_>,
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<
+    Storage<[u8; 32], crate::beacon::RetainedFinalizedGlobalThresholdBeaconSessionV1>,
+    StateRestoreError,
+> {
+    use crate::beacon::{
+        GlobalThresholdBeaconSessionError, RetainedFinalizedGlobalThresholdBeaconSessionV1,
+    };
+    let field = map
+        .fields
+        .get("global_beacon_key_sessions")
+        .ok_or_else(|| json::Error::missing_field("global_beacon_key_sessions"))?;
+    let snapshot: NativeBeaconSessionSnapshot = match field {
+        SnapshotJsonField::Borrowed { raw } => {
+            let value: NativeBeaconSessionSnapshot = json::from_str(raw)?;
+            if json::to_json(&value)?.as_bytes() != raw.as_bytes() {
+                return Err(invalid_global_beacon_persistence(
+                    "beacon session snapshot field is not canonical",
+                )
+                .into());
+            }
+            value
+        }
+        #[cfg(test)]
+        SnapshotJsonField::Owned(value) => json::value::from_value(value.clone())?,
+    };
+    let admit = |key: &[u8; 32],
+                 value: &crate::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1|
+     -> Result<
+        crate::beacon::RetainedFinalizedGlobalThresholdBeaconSessionV1,
+        StateRestoreError,
+    > {
+        if key != &value.session.session_id {
+            return Err(invalid_global_beacon_persistence(
+                "beacon snapshot storage key differs from its canonical session identity",
+            )
+            .into());
+        }
+        RetainedFinalizedGlobalThresholdBeaconSessionV1::admit(value, budget).map_err(|error| {
+            match error {
+                GlobalThresholdBeaconSessionError::Invalid(error) => {
+                    invalid_global_beacon_persistence(error.to_string()).into()
+                }
+                local => StateRestoreError::BeaconSession(local),
+            }
+        })
+    };
+    let mut current = std::collections::BTreeMap::new();
+    for (key, value) in &snapshot.blocks {
+        current.insert(*key, admit(key, value)?);
+    }
+    let mut undo = std::collections::BTreeMap::new();
+    for (key, value) in &snapshot.revert {
+        undo.insert(
+            *key,
+            value.as_ref().map(|value| admit(key, value)).transpose()?,
+        );
+    }
+    map.remove("global_beacon_key_sessions");
+    // Both authenticated graph generations are complete before installing either map.
+    // Input JSON graphs, outer maps/EBR and decoder scratch remain separate explicit
+    // ownership obligations; none is claimed by these retained graph ledgers.
+    Ok(Storage::from_snapshot_parts(current, undo))
+}
+
+/// Decode explicit current/undo claims, then admit both original graph and Cell generations.
+fn take_native_amx_participant(
+    map: &mut SnapshotJsonMap<'_>,
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<
+    Cell<crate::sumeragi::amx::RetainedNativeAmx, iroha_allocation::AllocationCharge>,
+    StateRestoreError,
+> {
+    #[derive(norito::json::JsonSerialize, norito::json::JsonDeserialize)]
+    #[norito(deny_unknown_fields)]
+    struct Snapshot {
+        // Preserve the original Cell encoder's declaration order during the
+        // canonical comparison; both current and explicit undo remain required.
+        #[norito(required)]
+        revert: Option<Undo>,
+        blocks: Undo,
+    }
+    #[derive(norito::json::JsonSerialize, norito::json::JsonDeserialize)]
+    #[norito(deny_unknown_fields)]
+    struct Undo {
+        #[norito(required)]
+        value: Option<iroha_data_model::sumeragi_amx::NativeAmxParticipantStateV1>,
+    }
+    let snapshot: Snapshot = take_required(map, "sumeragi_amx_participant")?;
+    let admit = |source: Option<&iroha_data_model::sumeragi_amx::NativeAmxParticipantStateV1>| {
+        source
+            .map(|source| crate::sumeragi::amx::RetainedNativeAmx::admit(source, budget))
+            .transpose()
+            .map(|value| value.unwrap_or_default())
+            .map_err(|error| match error {
+                local @ (crate::sumeragi::amx::NativeAmxAdmissionError::Admission(_)
+                | crate::sumeragi::amx::NativeAmxAdmissionError::Allocator { .. }
+                | crate::sumeragi::amx::NativeAmxAdmissionError::Codec(_)) => {
+                    StateRestoreError::NativeAmx(local)
+                }
+                invalid => StateRestoreError::Serialization(json::Error::InvalidField {
+                    field: "world.sumeragi_amx_participant".into(),
+                    message: invalid.to_string(),
+                }),
+            })
+    };
+    let current = admit(snapshot.blocks.value.as_ref())?;
+    let previous = snapshot
+        .revert
+        .as_ref()
+        .map(|undo| admit(undo.value.as_ref()))
+        .transpose()?;
+    let initial = mv::cell::CellInitialization::try_reserve(budget)
+        .map_err(crate::state::scalar_cell_custody::admission_error)?;
+    Ok(initial.initialize(current, previous))
+}
 
 fn take_native_consensus_schedule(
     map: &mut SnapshotJsonMap<'_>,
@@ -8053,6 +8230,7 @@ fn decode_world_fields(
             field: "world.sumeragi_amx".to_owned(),
             message: error.to_string(),
         })?;
+    let sumeragi_amx_participant = take_native_amx_participant(&mut map, execution_budget)?;
     let private_dataspaces: Cell<iroha_data_model::private_dataspace::PrivateDataspaceRegistry> =
         take_required(&mut map, "private_dataspaces")?;
     private_dataspaces
@@ -8346,7 +8524,7 @@ fn decode_world_fields(
     let validator_committee_transitions =
         take_required(&mut map, "validator_committee_transitions")?;
     let global_beacon_dkg = take_required(&mut map, "global_beacon_dkg")?;
-    let global_beacon_key_sessions = take_required(&mut map, "global_beacon_key_sessions")?;
+    let global_beacon_key_sessions = take_native_beacon_sessions(&mut map, execution_budget)?;
     let global_beacon_active_session = take_required(&mut map, "global_beacon_active_session")?;
     let global_beacon_latest_pulse = take_required(&mut map, "global_beacon_latest_pulse")?;
     let global_beacon_pulses = take_required(&mut map, "global_beacon_pulses")?;
@@ -8564,6 +8742,7 @@ fn decode_world_fields(
         consensus_keys_by_pk,
         sumeragi_lanes,
         sumeragi_amx,
+        sumeragi_amx_participant,
         private_dataspaces,
         pedersen_params,
         poseidon_params,
@@ -8783,6 +8962,19 @@ fn parse_world(
     ivm_seed: &IvmSeed<'_, World>,
 ) -> Result<World, StateRestoreError> {
     let mut world = decode_world_fields(execution_budget, map, ivm_seed)?;
+    crate::smartcontracts::isi::multisig::validate_persisted_proposals(&world.view()).map_err(
+        |error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                StateRestoreError::Serialization(json::Error::InvalidField {
+                    field: "world.smart_contract_state.multisig/proposal".into(),
+                    message: error.to_string(),
+                })
+            }
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                StateRestoreError::ExecutionDeferred(reason)
+            }
+        },
+    )?;
     world
         .try_block_and_revert(execution_budget)?
         .kagemusha_verifier_registry
@@ -9324,8 +9516,12 @@ fn build_state(
         ))
     })?;
     let initial_crypto = iroha_config::parameters::actual::Crypto::default();
-    let da_receipt_cursors = PublicationRwLock::new(DaReceiptCursorIndex::default());
-    let da_shard_cursors = PublicationRwLock::new(DaShardCursorIndex::default());
+    let da_receipt_cursors =
+        PublicationRwLock::try_new(DaReceiptCursorIndex::default(), &execution_budget)
+            .map_err(StateStorageAdmissionError::World)?;
+    let da_shard_cursors =
+        PublicationRwLock::try_new(DaShardCursorIndex::default(), &execution_budget)
+            .map_err(StateStorageAdmissionError::World)?;
     let restored_height = u64::try_from(block_hashes.committed_height()).map_err(|error| {
         MergeLedgerCommitError::ExecutionStatePublication(format!(
             "restored committed height does not fit the Parliament height domain: {error}"
@@ -9424,7 +9620,19 @@ fn build_state(
         None
     } else {
         NonZeroUsize::new(durable_blocks)
-            .and_then(|height| kura.get_block(height))
+            .map(|height| kura.get_block(height, &execution_budget))
+            .transpose()
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    MergeLedgerCommitError::ExecutionDeferred(reason)
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                    MergeLedgerCommitError::ExecutionStatePublication(format!(
+                        "cannot read original latest block: {error}"
+                    ))
+                }
+            })?
+            .flatten()
             .map(|block| block.header())
     };
     let evidence_preparation_bytes = nexus.storage.consensus_evidence_preparation_bytes;
@@ -9432,13 +9640,19 @@ fn build_state(
     let mut state = Box::new(State {
         world,
         block_hashes,
-        latest_block_header: PublicationRwLock::new(latest_block_header),
+        latest_block_header: PublicationRwLock::try_new(latest_block_header, &execution_budget)
+            .map_err(StateStorageAdmissionError::World)?,
 
         transactions,
         commit_topology,
         prev_commit_topology,
-        da_commitments: PublicationRwLock::new(DaCommitmentStore::default()),
-        da_confidential_compute: PublicationRwLock::new(ConfidentialComputeStore::default()),
+        da_commitments: PublicationRwLock::try_new(DaCommitmentStore::default(), &execution_budget)
+            .map_err(StateStorageAdmissionError::World)?,
+        da_confidential_compute: PublicationRwLock::try_new(
+            ConfidentialComputeStore::default(),
+            &execution_budget,
+        )
+        .map_err(StateStorageAdmissionError::World)?,
         da_receipt_cursors,
         da_shard_cursors,
         da_shard_cursor_persistor: DaShardCursorJournalPersistor::new(),
@@ -9448,14 +9662,21 @@ fn build_state(
             query_projection_checkpoint_journal,
         ),
         query_projection_checkpoint_journal_persistence_lock: parking_lot::Mutex::new(()),
-        da_pin_intents: PublicationRwLock::new(DaPinStore::default()),
+        da_pin_intents: PublicationRwLock::try_new(DaPinStore::default(), &execution_budget)
+            .map_err(StateStorageAdmissionError::World)?,
 
-        lane_manifests: PublicationRwLock::new(lane_manifests),
+        lane_manifests: PublicationRwLock::try_new(lane_manifests, &execution_budget)
+            .map_err(StateStorageAdmissionError::World)?,
         provisional_emergency_lane_manifests_consumed: false,
-        lane_privacy_registry: PublicationRwLock::new(Arc::new(LanePrivacyRegistry::empty())),
+        lane_privacy_registry: PublicationRwLock::try_new(
+            Arc::new(LanePrivacyRegistry::empty()),
+            &execution_budget,
+        )
+        .map_err(StateStorageAdmissionError::World)?,
         lane_compliance: parking_lot::RwLock::new(None),
         da_index_hydration_fence: parking_lot::Mutex::new(()),
-        da_indexes_hydrated: PublicationRwLock::new(None),
+        da_indexes_hydrated: PublicationRwLock::try_new(None, &execution_budget)
+            .map_err(StateStorageAdmissionError::World)?,
         ivm,
         kura,
         query_handle,
@@ -9480,12 +9701,19 @@ fn build_state(
                 execution_budget.clone(),
             ),
         )),
-        ivm_execution_pool: execution_budget.clone(),
-        pipeline_ivm_prepared_cache: parking_lot::RwLock::new(
-            PreparedContractCache::with_execution_budget(pipeline_cache_size, execution_budget),
-        ),
-        crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
-        nexus: parking_lot::RwLock::new(nexus),
+        ivm_execution_budget: execution_budget.clone(),
+        pipeline_ivm_prepared_cache: PublicationRwLock::try_new(
+            PreparedContractCache::with_execution_budget(
+                pipeline_cache_size,
+                execution_budget.clone(),
+            ),
+            &execution_budget,
+        )
+        .map_err(StateStorageAdmissionError::World)?,
+        crypto: PublicationRwLock::try_new(Arc::new(initial_crypto.clone()), &execution_budget)
+            .map_err(StateStorageAdmissionError::World)?,
+        nexus: PublicationRwLock::try_new(nexus, &execution_budget)
+            .map_err(StateStorageAdmissionError::World)?,
         canonical_runtime,
         native_execution_tip,
         // Decoded claims cannot recreate original pre-tail journal custody.
@@ -9506,9 +9734,13 @@ fn build_state(
         gov: default_governance(),
         content: default_content_cfg(),
         settlement: iroha_config::parameters::actual::Settlement::default(),
-        kagemusha_v1_runtime_verifier: PublicationRwLock::new(Arc::new(
-            crate::smartcontracts::isi::kagemusha::RejectAllKagemushaV1RuntimeVerifier,
-        )),
+        kagemusha_v1_runtime_verifier: PublicationRwLock::<
+            Arc<dyn crate::smartcontracts::isi::kagemusha::KagemushaV1RuntimeVerifier>,
+        >::try_new(
+            Arc::new(crate::smartcontracts::isi::kagemusha::RejectAllKagemushaV1RuntimeVerifier),
+            &execution_budget,
+        )
+        .map_err(StateStorageAdmissionError::World)?,
         settlement_engine: SettlementEngine::new_roadmap_default(),
         chain_id,
         network_id,
@@ -9519,7 +9751,8 @@ fn build_state(
         tiered_startup_geometry: None,
 
         state_commit_lock: Arc::new(PublicationMutex::default()),
-        state_write_lock: PublicationMutex::default(),
+        state_write_lock: PublicationMutex::try_new((), &execution_budget)
+            .map_err(StateStorageAdmissionError::World)?,
         view_generation: AtomicU64::new(0),
         publication_notify: tokio::sync::Notify::new(),
         view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
@@ -11352,6 +11585,152 @@ mod decode_tests {
         );
     }
 
+    #[test]
+    fn restored_multisig_proposals_require_exact_body_and_preserve_local_read_refusal() {
+        use iroha_data_model::{
+            isi::InstructionBox,
+            prelude::{Level, Log},
+        };
+        use iroha_executor_data_model::isi::multisig::MultisigProposalState;
+        let signer =
+            iroha_crypto::KeyPair::from_seed(vec![77; 32], iroha_crypto::Algorithm::Ed25519);
+        let account = iroha_data_model::account::AccountId::new(signer.public_key().clone());
+        let instructions = vec![InstructionBox::from(Log::new(
+            Level::INFO,
+            "restored approved body".into(),
+        ))];
+        let hash = iroha_crypto::HashOf::new(&instructions);
+        let key: iroha_model_base::state_path::StatePath = format!(
+            "multisig/proposal/{}/{hash}",
+            iroha_crypto::HashOf::new(&account)
+        )
+        .parse()
+        .unwrap();
+        let proposal = MultisigProposalState::new(
+            account.clone(),
+            hash,
+            instructions,
+            1,
+            10_000,
+            std::collections::BTreeSet::new(),
+            None,
+        );
+        let mut world = World::with(
+            [],
+            [iroha_data_model::account::Account::new(account.clone()).build(&account)],
+            [],
+        );
+        let original = norito::to_bytes(&proposal).unwrap();
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(key.clone(), original.clone());
+        let encoded = json::to_json(&world).unwrap();
+        let ivm = IVM::new(0);
+        let operation_index_budget = crate::state::kagemusha_operation_indexes::default_budget();
+        let operation_index_refusal = std::cell::RefCell::new(None);
+        let seed = IvmSeed {
+            operation_index_budget: &operation_index_budget,
+            operation_index_refusal: &operation_index_refusal,
+            ivm: &ivm,
+            _marker: PhantomData,
+        };
+        let budget = iroha_allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        );
+        const CEILING: usize = 64 * 1024 * 1024;
+        let fields = SnapshotJsonMap::parse(&encoded, "world").unwrap();
+        let prefix_allocation = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, CEILING, usize::MAX),
+            || {
+                decode_world_fields(&budget, fields, &seed)
+                    .expect("fund the entire original World decoder before proposal validation");
+                let norito::Error::TotalAllocationExceeded { attempted, .. } =
+                    norito::core::reserve_decode_allocation(CEILING + 1).unwrap_err()
+                else {
+                    panic!("cumulative decode usage probe");
+                };
+                usize::try_from(attempted).unwrap() - CEILING - 1
+            },
+        );
+        let fields = SnapshotJsonMap::parse(&encoded, "world").unwrap();
+        norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                prefix_allocation,
+                usize::MAX,
+            ),
+            || {
+                let decoded = decode_world_fields(&budget, fields, &seed)
+                    .expect("World fields finish within their measured budget");
+                assert!(matches!(
+                    crate::smartcontracts::isi::multisig::validate_persisted_proposals(
+                        &decoded.view()
+                    ),
+                    Err(crate::execution_attempt::ExecutionAttemptError::Deferred(_))
+                ));
+            },
+        );
+        let fields = SnapshotJsonMap::parse(&encoded, "world").unwrap();
+        let error = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                prefix_allocation,
+                usize::MAX,
+            ),
+            || parse_world(&budget, fields, &seed),
+        )
+        .err()
+        .expect("unfinished proposal validation cannot publish a restored World");
+        assert!(
+            matches!(error, StateRestoreError::ExecutionDeferred(_)),
+            "{error:?}"
+        );
+        let restored = parse_world(
+            &budget,
+            SnapshotJsonMap::parse(&encoded, "world").unwrap(),
+            &seed,
+        )
+        .expect("retry identical serialized World with available decoder capacity");
+        assert_eq!(
+            restored.smart_contract_state.view().get(&key),
+            Some(&original)
+        );
+        for rebound in [false, true] {
+            let mut altered = proposal.clone();
+            if rebound {
+                altered.multisig_account_id = iroha_data_model::account::AccountId::new(
+                    iroha_crypto::KeyPair::from_seed(
+                        vec![78; 32],
+                        iroha_crypto::Algorithm::Ed25519,
+                    )
+                    .public_key()
+                    .clone(),
+                );
+            } else {
+                altered.instructions = Vec::new();
+            }
+            world
+                .smart_contract_state_mut_for_testing()
+                .insert(key.clone(), norito::to_bytes(&altered).unwrap());
+            let encoded = json::to_json(&world).unwrap();
+            let error = parse_world(
+                &budget,
+                SnapshotJsonMap::parse(&encoded, "world").unwrap(),
+                &seed,
+            )
+            .err()
+            .expect("an inconsistent retained row is a completed restore rejection");
+            assert!(
+                matches!(&error, StateRestoreError::Serialization(json::Error::InvalidField { field, .. })
+                    if field == "world.smart_contract_state.multisig/proposal"),
+                "the exact retained proposal validation boundary rejects restoration: {error:?}"
+            );
+        }
+    }
     #[test]
     fn first_release_world_decoder_requires_every_canonical_field() {
         let encoded = json::to_json(&World::default()).expect("serialize default World");

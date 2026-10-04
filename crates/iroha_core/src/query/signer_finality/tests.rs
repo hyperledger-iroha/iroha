@@ -146,7 +146,7 @@ fn identical_blocks_and_certificates_cannot_authorize_a_foreign_state_network() 
     for height in 1..=3 {
         let block = chain.committed(height).block().clone();
         assert!(block.commit_certificate().is_some());
-        kura.store_block(Arc::clone(&block)).unwrap();
+        kura.store_block(block.clone()).unwrap();
         foreign.push_block_hash_for_testing(block.hash());
     }
     assert!(
@@ -249,8 +249,12 @@ fn genesis_execution_finality_requires_a_verified_successor() {
                 .expect("change only the unsigned local result after genuine publication");
             let changed = chain
                 .kura()
-                .get_block(std::num::NonZeroUsize::new(1).unwrap())
-                .unwrap();
+                .get_block(
+                    std::num::NonZeroUsize::new(1).unwrap(),
+                    &chain.state().ivm_execution_budget(),
+                )
+                .expect("changed canonical history read completes")
+                .expect("changed genesis is retained");
             assert_eq!(changed.hash(), genesis.hash());
             assert_eq!(
                 changed.signatures().collect::<Vec<_>>(),
@@ -355,7 +359,7 @@ fn imported_genesis_frame_and_hash_journal_cannot_replace_original_execution() {
         chain.state().chain_id_ref().clone(),
         chain.network_id(),
     );
-    kura.store_block(std::sync::Arc::clone(&genesis)).unwrap();
+    kura.store_block(genesis.clone()).unwrap();
     state.push_block_hash_for_testing(genesis.hash());
     let view = state.view();
     assert!(committed_block(&view, 1).is_err());

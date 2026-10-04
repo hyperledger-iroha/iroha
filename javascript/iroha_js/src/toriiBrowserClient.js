@@ -1,5 +1,10 @@
 import { requireNetworkPrefix } from "./networkPrefix.js";
 import { rejectError, rejectRange, rejectType } from "./validationThrow.js";
+import { ToriiHttpError, ToriiStreamGapError, toriiHttpErrorFromResponseText } from "./toriiErrors.js";
+import { createToriiCollections } from "./query/collections.js";
+import { decodePageText, stringifyRequestJson } from "./query/page.js";
+import { filterQueryText } from "./query/listQuery.js";
+import { decodeEventFrames } from "./toriiEventStream.js";
 import { Buffer } from "buffer";
 
 import { blake2b256 } from "./blake2b.js";
@@ -43,6 +48,15 @@ import {
   AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1,
 } from "./authenticatedBlockProofs.browser.js";
 
+export {
+  FilterSyntaxError,
+  ListQueryError,
+  ToriiError,
+  ToriiHttpError,
+  ToriiStreamGapError,
+} from "./toriiErrors.js";
+export * from "./query/index.js";
+
 const TEXT_MUST_BE_AN = " must be an ";
 const TEXT_MUST_BE_A_2 = " must be a ";
 const TEXT_DOES_NOT_MATCH_THE = " does not match the ";
@@ -60,7 +74,6 @@ const TEXT_GET_CONTRACT_DEPLOYMENT_STATE = "getContractDeploymentState ";
 const TEXT_MUST_BE_A = TEXT_MUST_BE_A_2;
 const TEXT_CONTRACT_DEPLOYMENT_STATE = "contract deployment-state ";
 const TEXT_TORII_ONE_SHOT_REQUEST_MUST_NOT_ACCEPT_A_REDIRECTED_RESPONSE = "Torii one-shot request must not accept a redirected response";
-const TEXT_LIMIT_MUST_BE_BETWEEN_1_AND = ".limit must be between 1 and ";
 const TEXT_STATUS_BLOCK_HEIGHT_MUST_BE_A_POSITIVE_SAFE_INTEGER = (".status.block_height" + TEXT_MUST_BE_A_2 + "positive safe integer");
 const TEXT_SUBMIT_MULTISIG_CONTRACT_CALL_PROPOSE = "submitMultisigContractCallPropose ";
 const TEXT_SUBMIT_MULTISIG_CONTRACT_CALL_APPROVE = "submitMultisigContractCallApprove ";
@@ -68,20 +81,14 @@ const TEXT_SUBMIT_TRANSACTION_AND_WAIT = "submitTransactionAndWait ";
 const TEXT_CONTAINS_UNSUPPORTED_OPTION = " contains unsupported option ";
 const TEXT_STATUS_KIND_IS_NOT_A_CURRENT_PIPELINE_STATUS = ".status.kind is not a current pipeline status";
 const TEXT_RESOLVED_FROM_IS_NOT_A_CURRENT_STATUS_SOURCE = ".resolved_from is not a current status source";
-const TEXT_HAS_MORE_MUST_MATCH_NEXT_CURSOR_AVAILABILITY = ".has_more must match next_cursor availability";
 const TEXT_V1_ACCOUNTS = "/v1/accounts/";
-const TEXT_ITEMS_MUST_BE_AN_ARRAY = (".items" + TEXT_MUST_BE_AN + "array");
-const TEXT_ITEMS_MUST_NOT_EXCEED_PAGINATION_LIMIT = ".items must not exceed pagination.limit";
 const TEXT_V1_CONTRACTS = "/v1/contracts/";
-const TEXT_THE_CONTRACT_EVENT_STREAM = "The contract event stream ";
-const TEXT_LIST_EXPLORER_ASSET_DEFINITIONS_OPTIONS = "listExplorerAssetDefinitions options";
 
 
 // Reuse exact wire names and diagnostic fields throughout this module.
 const FIELD_AUTHORITY = "authority";
 const WIRE_FIELD_ASSET_ID = "asset_id";
 const FIELD_TRANSACTION_HASH = "transactionHash";
-const FIELD_COUNT_MODE = "countMode";
 const FIELD_RESULT_OK = "resultOk";
 const FIELD_SINCE_TIMESTAMP_MS = "sinceTimestampMs";
 const FIELD_UNTIL_TIMESTAMP_MS = "untilTimestampMs";
@@ -97,7 +104,6 @@ const FIELD_FUNCTION = "function";
 const WIRE_FIELD_TOTAL_QUANTITY = "total_quantity";
 const WIRE_FIELD_LOCKED_QUANTITY = "locked_quantity";
 const WIRE_FIELD_CIRCULATING_QUANTITY = "circulating_quantity";
-const WIRE_FIELD_TIMESTAMP_MS = "timestamp_ms";
 const FIELD_APPLICATION_JSON = "application/json";
 const CONTEXT_KAIGI_RELAY_LIST_RESPONSE = "kaigi relay list response";
 const WIRE_FIELD_REGISTRATIONS_TOTAL = "registrations_total";
@@ -122,33 +128,6 @@ const KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS = 500;
 const MAX_UINT64_BIGINT = (1n << 64n) - 1n;
 const MAX_SAFE_INTEGER_BIGINT = 9_007_199_254_740_991n;
 const KAIGI_HEALTH_STATUS_VALUES = new Set(["healthy", "degraded", "unavailable"]);
-const EXPLORER_CURSOR_DEFAULT_LIMIT = 25;
-const EXPLORER_CURSOR_MAX_LIMIT = 100;
-const EXPLORER_CURSOR_MAX_LENGTH = 1_424;
-const EXPLORER_CURSOR_PATTERN = /^[A-Za-z0-9_-]+$/u;
-const EXPLORER_CURSOR_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-const EXPLORER_HISTORY_OPTION_KEYS = new Set(["cursor", "limit", "signal"]);
-const EXPLORER_TRANSACTION_HISTORY_OPTION_KEYS = new Set([
-  ...EXPLORER_HISTORY_OPTION_KEYS,
-  FIELD_AUTHORITY,
-  "block",
-  "status",
-  "assetId",
-  WIRE_FIELD_ASSET_ID,
-]);
-const EXPLORER_INSTRUCTION_HISTORY_OPTION_KEYS = new Set([
-  ...EXPLORER_HISTORY_OPTION_KEYS,
-  "account",
-  FIELD_AUTHORITY,
-  "kind",
-  FIELD_TRANSACTION_HASH,
-  "transaction_hash",
-  "transactionStatus",
-  "transaction_status",
-  "block",
-  "assetId",
-  WIRE_FIELD_ASSET_ID,
-]);
 const PIPELINE_SUCCESS_STATUS = "Applied";
 const PIPELINE_STATUS_VALUES = new Set([
   "Queued",
@@ -191,40 +170,6 @@ const MULTISIG_PROPOSAL_STATUS_VALUES = new Set([
   "CANCELED",
   "EXPIRED",
 ]);
-const COUNTED_LIST_OPTION_KEYS = new Set([
-  "limit",
-  "offset",
-  FIELD_COUNT_MODE,
-  "count_mode",
-  "signal",
-]);
-const ACCOUNT_HISTORY_OPTION_KEYS = new Set([
-  ...COUNTED_LIST_OPTION_KEYS,
-  "assetId",
-  WIRE_FIELD_ASSET_ID,
-]);
-const TRANSACTION_QUERY_OPTION_KEYS = new Set([
-  "limit", "offset", "filter", "sort", "fetch_size", FIELD_COUNT_MODE, "count_mode",
-  "queryName", "query_name", "select", "assetId", FIELD_AUTHORITY, FIELD_RESULT_OK,
-  FIELD_SINCE_TIMESTAMP_MS, FIELD_UNTIL_TIMESTAMP_MS, "authAccountId", "sign", "timestampMs",
-  "nonce", "headers", "signal",
-]);
-const CONTRACT_ACTIVITY_OPTION_KEYS = new Set([
-  ...COUNTED_LIST_OPTION_KEYS,
-  FIELD_AUTHORITY,
-  FIELD_CONTRACT_ADDRESS,
-  WIRE_FIELD_CONTRACT_ADDRESS,
-  FIELD_CONTRACT_ALIAS,
-  WIRE_FIELD_CONTRACT_ALIAS,
-  "contractEntrypoint",
-  "contract_entrypoint",
-  FIELD_SINCE_TIMESTAMP_MS,
-  WIRE_FIELD_SINCE_TIMESTAMP_MS,
-  FIELD_UNTIL_TIMESTAMP_MS,
-  WIRE_FIELD_UNTIL_TIMESTAMP_MS,
-  FIELD_RESULT_OK,
-  WIRE_FIELD_RESULT_OK,
-]);
 const CONTRACT_EVENT_FILTER_OPTION_KEYS = new Set([
   FIELD_AUTHORITY,
   FIELD_CONTRACT_ADDRESS,
@@ -245,10 +190,8 @@ const CONTRACT_EVENT_FILTER_OPTION_KEYS = new Set([
   FIELD_RESULT_OK,
   WIRE_FIELD_RESULT_OK,
 ]);
-const CONTRACT_EVENT_LIST_OPTION_KEYS = new Set([
-  ...COUNTED_LIST_OPTION_KEYS,
-  ...CONTRACT_EVENT_FILTER_OPTION_KEYS,
-]);
+const EVENT_STREAM_OPTION_KEYS = new Set(["signal", "filter"]);
+const COLLECTION_QUERY_OPTION_KEYS = new Set(["signal", "headers"]);
 const CONTRACT_EVENT_STREAM_OPTION_KEYS = new Set([
   "signal",
   ...CONTRACT_EVENT_FILTER_OPTION_KEYS,
@@ -708,19 +651,6 @@ function normalizeQuantityRecord(value, context, fields, { optional = false } = 
   return normalized;
 }
 
-function normalizeQuantityPage(value, context, fields, options) {
-  const page = requireObject(value, context);
-  if (!Array.isArray(page.items)) {
-    rejectType(`${context}${TEXT_ITEMS_MUST_BE_AN_ARRAY}`);
-  }
-  return {
-    ...page,
-    items: page.items.map((item, index) =>
-      normalizeQuantityRecord(item, `${context}.items[${index}]`, fields, options),
-    ),
-  };
-}
-
 function normalizeExplorerAssetDefinitionRecord(value, context) {
   if (!isPlainObject(value)) {
     rejectType(`${context}${TEXT_MUST_BE_AN}object`);
@@ -779,155 +709,6 @@ function normalizeExplorerAssetDefinitionRecord(value, context) {
   return normalized;
 }
 
-function normalizeExplorerCursor(value, context, { nullable = false } = {}) {
-  if (value === null && nullable) return null;
-  if (typeof value !== "string" || value.length === 0) {
-    rejectType(`${context}${TEXT_MUST_BE_A}non-empty base64url string`);
-  }
-  const remainder = value.length % 4;
-  const trailingSextet = EXPLORER_CURSOR_ALPHABET.indexOf(value[value.length - 1]);
-  const hasNonCanonicalTrailingBits =
-    (remainder === 2 && (trailingSextet & 0x0f) !== 0) ||
-    (remainder === 3 && (trailingSextet & 0x03) !== 0);
-  if (
-    value.length > EXPLORER_CURSOR_MAX_LENGTH ||
-    remainder === 1 ||
-    !EXPLORER_CURSOR_PATTERN.test(value) ||
-    hasNonCanonicalTrailingBits
-  ) {
-    rejectType(`${context} must be canonical base64url without padding and at most ${EXPLORER_CURSOR_MAX_LENGTH} characters`);
-  }
-  return value;
-}
-
-function requireExactExplorerCursorFields(record, expectedFields, context) {
-  const expected = new Set(expectedFields);
-  const unknown = Object.keys(record).find((field) => !expected.has(field));
-  if (unknown !== undefined) {
-    rejectType(`${context} contains unknown field ${unknown}`);
-  }
-  const missing = expectedFields.find(
-    (field) => !Object.prototype.hasOwnProperty.call(record, field),
-  );
-  if (missing !== undefined) {
-    rejectType(`${context} is missing required field ${missing}`);
-  }
-  return record;
-}
-
-function normalizeExplorerCursorMeta(value, context) {
-  const meta = requireObject(value, context);
-  requireExactExplorerCursorFields(meta, ["limit", "next_cursor", "has_more"], context);
-  const limit = normalizePositiveInteger(meta.limit, `${context}.limit`, undefined);
-  if (limit === undefined || limit > EXPLORER_CURSOR_MAX_LIMIT) {
-    rejectType(`${context}${TEXT_LIMIT_MUST_BE_BETWEEN_1_AND}${EXPLORER_CURSOR_MAX_LIMIT}`);
-  }
-  if (typeof meta.has_more !== "boolean") {
-    rejectType(`${context}.has_more${TEXT_MUST_BE_A_2}boolean`);
-  }
-  if (meta.next_cursor === undefined) {
-    rejectType(`${context}.next_cursor${TEXT_MUST_BE_A_2}string or null`);
-  }
-  const nextCursor = normalizeExplorerCursor(meta.next_cursor, `${context}.next_cursor`, {
-    nullable: true,
-  });
-  if (meta.has_more !== (nextCursor !== null)) {
-    rejectType(`${context}${TEXT_HAS_MORE_MUST_MATCH_NEXT_CURSOR_AVAILABILITY}`);
-  }
-  return { limit, next_cursor: nextCursor, has_more: meta.has_more };
-}
-
-function normalizeExplorerCursorPage(value, context, normalizeItem = (item) => item) {
-  const page = requireObject(value, context);
-  requireExactExplorerCursorFields(page, ["pagination", "items"], context);
-  if (!Array.isArray(page.items)) {
-    rejectType(`${context}${TEXT_ITEMS_MUST_BE_AN_ARRAY}`);
-  }
-  const pagination = normalizeExplorerCursorMeta(page.pagination, `${context}.pagination`);
-  if (page.items.length > pagination.limit) {
-    rejectType(`${context}${TEXT_ITEMS_MUST_NOT_EXCEED_PAGINATION_LIMIT}`);
-  }
-  return {
-    pagination,
-    items: page.items.map((item, index) => normalizeItem(item, index)),
-  };
-}
-
-function normalizeExplorerHistoryCursorMeta(value, context) {
-  const meta = requireObject(value, context);
-  requireExactExplorerCursorFields(
-    meta,
-    ["limit", "snapshot_height", "snapshot_hash", "next_cursor", "has_more"],
-    context,
-  );
-  if (!Number.isSafeInteger(meta.limit) || meta.limit < 1 || meta.limit > EXPLORER_CURSOR_MAX_LIMIT) {
-    rejectType(`${context}${TEXT_LIMIT_MUST_BE_BETWEEN_1_AND}${EXPLORER_CURSOR_MAX_LIMIT}`);
-  }
-  if (!Number.isSafeInteger(meta.snapshot_height) || meta.snapshot_height < 0) {
-    rejectType(`${context}.snapshot_height${TEXT_MUST_BE_A_2}non-negative safe integer`);
-  }
-  let snapshotHash = null;
-  if (meta.snapshot_hash !== null) {
-    if (typeof meta.snapshot_hash !== "string" || !/^[0-9a-f]{64}$/u.test(meta.snapshot_hash)) {
-      rejectType(`${context}.snapshot_hash must be exact lowercase 32-byte hex or null`);
-    }
-    snapshotHash = meta.snapshot_hash;
-  }
-  if ((meta.snapshot_height === 0) !== (snapshotHash === null)) {
-    rejectType(`${context}.snapshot_hash must be null exactly when snapshot_height is zero`);
-  }
-  if (typeof meta.has_more !== "boolean") {
-    rejectType(`${context}.has_more${TEXT_MUST_BE_A_2}boolean`);
-  }
-  const nextCursor = normalizeExplorerCursor(meta.next_cursor, `${context}.next_cursor`, {
-    nullable: true,
-  });
-  if (meta.has_more !== (nextCursor !== null)) {
-    rejectType(`${context}${TEXT_HAS_MORE_MUST_MATCH_NEXT_CURSOR_AVAILABILITY}`);
-  }
-  return {
-    limit: meta.limit,
-    snapshot_height: meta.snapshot_height,
-    snapshot_hash: snapshotHash,
-    next_cursor: nextCursor,
-    has_more: meta.has_more,
-  };
-}
-
-function normalizeExplorerHistoryPage(value, context, normalizeItem = (item) => item) {
-  const page = requireObject(value, context);
-  requireExactExplorerCursorFields(page, ["pagination", "items"], context);
-  if (!Array.isArray(page.items)) {
-    rejectType(`${context}${TEXT_ITEMS_MUST_BE_AN_ARRAY}`);
-  }
-  const pagination = normalizeExplorerHistoryCursorMeta(
-    page.pagination,
-    `${context}.pagination`,
-  );
-  if (page.items.length > pagination.limit) {
-    rejectType(`${context}${TEXT_ITEMS_MUST_NOT_EXCEED_PAGINATION_LIMIT}`);
-  }
-  return {
-    pagination,
-    items: page.items.map((item, index) => normalizeItem(item, index)),
-  };
-}
-
-function normalizeExplorerLatestHistoryPage(value, context, normalizeItem = (item) => item) {
-  const page = requireObject(value, context);
-  requireExactExplorerCursorFields(page, ["sampled_at", "pagination", "items"], context);
-  const sampledAt = requireNonEmptyString(page.sampled_at, `${context}.sampled_at`);
-  if (sampledAt !== page.sampled_at) {
-    rejectType(`${context}.sampled_at${TEXT_MUST_BE_AN}exact non-empty string`);
-  }
-  const normalized = normalizeExplorerHistoryPage(
-    { pagination: page.pagination, items: page.items },
-    context,
-    normalizeItem,
-  );
-  return { sampled_at: sampledAt, ...normalized };
-}
-
 function normalizePositiveInteger(value, context, fallback) {
   if (value === undefined || value === null) return fallback;
   const numeric = normalizeSafeInteger(value, context);
@@ -971,134 +752,6 @@ function normalizeBoolean(value, context) {
   return value;
 }
 
-function normalizeExplorerCursorPagination(options, context) {
-  for (const removed of ["page", "perPage", "per_page", "offset", "pageSize"]) {
-    if (Object.prototype.hasOwnProperty.call(options, removed)) {
-      rejectType(`${context}.${removed} is not supported; use cursor and limit`);
-    }
-  }
-  const limit = normalizePositiveInteger(
-    options.limit,
-    `${context}.limit`,
-    EXPLORER_CURSOR_DEFAULT_LIMIT,
-  );
-  if (limit > EXPLORER_CURSOR_MAX_LIMIT) {
-    rejectType(`${context}${TEXT_LIMIT_MUST_BE_BETWEEN_1_AND}${EXPLORER_CURSOR_MAX_LIMIT}`);
-  }
-  const params = { limit };
-  if (options.cursor !== undefined && options.cursor !== null) {
-    params.cursor = normalizeExplorerCursor(options.cursor, `${context}.cursor`);
-  }
-  return params;
-}
-
-function normalizeExplorerHistoryOptionalString(value, context) {
-  if (value === undefined || value === null) return undefined;
-  const normalized = requireNonEmptyString(value, context);
-  if (normalized !== value) {
-    rejectType(`${context}${TEXT_MUST_BE_AN}exact non-empty string`);
-  }
-  return value;
-}
-
-function normalizeExplorerHistoryStatus(value, context) {
-  const status = normalizeExplorerHistoryOptionalString(value, context);
-  if (status !== undefined && status !== "committed" && status !== "rejected") {
-    rejectType(`${context} must be committed or rejected`);
-  }
-  return status;
-}
-
-function normalizeExplorerHistoryBlock(value, context) {
-  return value === undefined || value === null
-    ? undefined
-    : normalizeLedgerHeight(value, context);
-}
-
-function normalizeIterablePagination(options, context) {
-  const params = {};
-  if (options.limit !== undefined && options.limit !== null) {
-    params.limit = normalizePositiveInteger(options.limit, `${context}.limit`, undefined);
-  }
-  if (options.offset !== undefined && options.offset !== null) {
-    params.offset = normalizeOffset(options.offset, `${context}.offset`);
-  }
-  return params;
-}
-
-function normalizeTransactionQuerySort(sort) {
-  if (sort === undefined || sort === null) {
-    return [];
-  }
-  if (typeof sort === "string") {
-    const normalized = sort.trim().toLowerCase();
-    if (normalized === "newest") {
-      return [
-        { key: WIRE_FIELD_TIMESTAMP_MS, order: "desc" },
-        { key: "entrypoint_hash", order: "desc" },
-      ];
-    }
-    if (normalized === "oldest") {
-      return [
-        { key: WIRE_FIELD_TIMESTAMP_MS, order: "asc" },
-        { key: "entrypoint_hash", order: "asc" },
-      ];
-    }
-    return normalized
-      .split(",")
-      .map((token) => token.trim())
-      .filter(Boolean)
-      .map((token) => {
-        const parts = token.split(":");
-        if (parts.length > 2) {
-          rejectType("sort entries must use key or key:asc/key:desc form");
-        }
-        const [key, order = "asc"] = parts;
-        return {
-          key: normalizeQueryFieldName(requireNonEmptyString(key, "sort key"), "sort key"),
-          order: normalizeSortOrder(order, "sort order"),
-        };
-      });
-  }
-  if (Array.isArray(sort)) {
-    return sort.map((entry, index) => {
-      const item = requireObject(entry, `sort[${index}]`);
-      return {
-        key: normalizeQueryFieldName(requireNonEmptyString(item.key, `sort[${index}].key`), `sort[${index}].key`),
-        order: normalizeSortOrder(item.order ?? "asc", `sort[${index}].order`),
-      };
-    });
-  }
-  rejectType(("sort" + TEXT_MUST_BE_A_2 + "string or array"));
-}
-
-function normalizeQueryFieldName(value, context) {
-  const field = requireNonEmptyString(value, context);
-  if (!/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(field)) {
-    rejectType(`${context}${TEXT_MUST_BE_AN}ASCII field name`);
-  }
-  return field;
-}
-
-function normalizeSortOrder(value, context) {
-  const order = requireNonEmptyString(String(value ?? ""), context).toLowerCase();
-  if (order !== "asc" && order !== "desc") {
-    rejectType(`${context} must be asc or desc`);
-  }
-  return order;
-}
-
-function normalizeCountMode(value, context) {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  const mode = requireNonEmptyString(String(value), context).toLowerCase();
-  if (mode !== "bounded" && mode !== "exact") {
-    rejectType(`${context} must be bounded or exact`);
-  }
-  return mode;
-}
-
 function requireSupportedOptions(value, context, supportedKeys) {
   const options = requireObject(value, context);
   const unsupported = Object.keys(options).find((key) => !supportedKeys.has(key));
@@ -1110,16 +763,6 @@ function requireSupportedOptions(value, context, supportedKeys) {
 
 function optionAlias(options, camelCase, snakeCase) {
   return options[camelCase] ?? options[snakeCase];
-}
-
-function normalizeCountedListParams(options, context) {
-  return {
-    ...normalizeIterablePagination(options, context),
-    count_mode: normalizeCountMode(
-      optionAlias(options, FIELD_COUNT_MODE, "count_mode"),
-      `${context}.countMode`,
-    ),
-  };
 }
 
 function normalizeOptionalString(value, context) {
@@ -1212,77 +855,6 @@ function normalizeContractEventFilterParams(options, context) {
       `${context}.resultOk`,
     ),
   };
-}
-
-function normalizeSelectEntry(entry, context) {
-  if (typeof entry === "string") {
-    const fieldPath = entry.trim();
-    if (!fieldPath) {
-      rejectType(`${context}${TEXT_MUST_BE_A}non-empty field path`);
-    }
-    return fieldPath;
-  }
-  if (isPlainObject(entry)) {
-    return entry;
-  }
-  rejectType(`${context}${TEXT_MUST_BE_A}field-path string or plain object`);
-}
-
-function transactionFilter(op, field, value) {
-  return { op, args: [field, value] };
-}
-
-function normalizeTransactionQueryEnvelope(options, context) {
-  const opts = requireObject(options, `${context} options`);
-  const pagination = normalizeIterablePagination(opts, `${context} options`);
-  const filters = [];
-  if (opts.filter !== undefined && opts.filter !== null) {
-    filters.push(requireObject(opts.filter, `${context}.filter`));
-  }
-  if (opts.assetId !== undefined && opts.assetId !== null) {
-    filters.push(transactionFilter("eq", WIRE_FIELD_ASSET_ID, requireNonEmptyString(opts.assetId, "assetId")));
-  }
-  if (opts.authority !== undefined && opts.authority !== null) {
-    filters.push(transactionFilter("eq", FIELD_AUTHORITY, requireNonEmptyString(opts.authority, FIELD_AUTHORITY)));
-  }
-  if (opts.resultOk !== undefined && opts.resultOk !== null) {
-    filters.push(transactionFilter("eq", WIRE_FIELD_RESULT_OK, normalizeBoolean(opts.resultOk, FIELD_RESULT_OK)));
-  }
-  if (opts.sinceTimestampMs !== undefined && opts.sinceTimestampMs !== null) {
-    filters.push(transactionFilter("gte", WIRE_FIELD_TIMESTAMP_MS, normalizeOffset(opts.sinceTimestampMs, FIELD_SINCE_TIMESTAMP_MS)));
-  }
-  if (opts.untilTimestampMs !== undefined && opts.untilTimestampMs !== null) {
-    filters.push(transactionFilter("lte", WIRE_FIELD_TIMESTAMP_MS, normalizeOffset(opts.untilTimestampMs, FIELD_UNTIL_TIMESTAMP_MS)));
-  }
-  const envelope = {
-    pagination,
-    sort: normalizeTransactionQuerySort(opts.sort),
-  };
-  if (filters.length === 1) {
-    envelope.filter = filters[0];
-  } else if (filters.length > 1) {
-    envelope.filter = { op: "and", args: filters };
-  }
-  if (opts.fetch_size !== undefined && opts.fetch_size !== null) {
-    envelope.fetch_size = normalizePositiveInteger(opts.fetch_size, "fetch_size", undefined);
-  }
-  const countMode = normalizeCountMode(opts.countMode ?? opts.count_mode, FIELD_COUNT_MODE);
-  if (countMode !== undefined) {
-    envelope.count_mode = countMode;
-  }
-  const queryName = opts.queryName ?? opts.query_name;
-  if (queryName !== undefined && queryName !== null) {
-    envelope.query = requireNonEmptyString(queryName, "queryName");
-  }
-  if (opts.select !== undefined && opts.select !== null) {
-    if (!Array.isArray(opts.select)) {
-      rejectType(("select" + TEXT_MUST_BE_AN + "array"));
-    }
-    envelope.select = opts.select.map((entry, index) =>
-      normalizeSelectEntry(entry, `select[${index}]`),
-    );
-  }
-  return envelope;
 }
 
 function signalFrom(options) {
@@ -1478,6 +1050,11 @@ function normalizeSuccessStatuses(value, context) {
   });
 }
 
+/**
+ * Dispatch one request. On success the caller owns `cleanupSignal` and must
+ * call it once the body has been read, so the timeout and the caller's abort
+ * signal keep covering the body; on failure it is released here.
+ */
 async function fetchToriiResponse(
   fetchImpl,
   url,
@@ -1487,20 +1064,36 @@ async function fetchToriiResponse(
 ) {
   let response;
   try {
-    response = await fetchImpl(url, init);
-  } finally {
+    response = await Reflect.apply(fetchImpl, undefined, [url, init]);
+  } catch (error) {
     cleanupSignal();
+    throw error;
   }
   if (init.redirect === "error" && response?.redirected === true) {
+    cleanupSignal();
     rejectType(TEXT_TORII_ONE_SHOT_REQUEST_MUST_NOT_ACCEPT_A_REDIRECTED_RESPONSE);
   }
   const status = responseStatus(response);
   if (!successStatuses.includes(status)) {
-    const errorResponse = typeof response?.clone === FIELD_FUNCTION ? response.clone() : response;
-    const bodyText = await responseText(response);
-    throw new ToriiBrowserHttpError(errorResponse, bodyText, status);
+    try {
+      throw await toriiHttpErrorFromResponse(response, status, successStatuses);
+    } finally {
+      cleanupSignal();
+    }
   }
   return { response, status };
+}
+
+async function toriiHttpErrorFromResponse(response, status, expected) {
+  const bodyText = await responseText(response);
+  return toriiHttpErrorFromResponseText({
+    status,
+    statusText: typeof response?.statusText === "string" && response.statusText ? response.statusText : null,
+    expected,
+    bodyText,
+    contentType: response?.headers?.get?.(FIELD_CONTENT_TYPE) ?? null,
+    rejectCodeHeader: response?.headers?.get?.("x-iroha-reject-code") ?? null,
+  });
 }
 
 function requireExactJsonContentType(contentType, context) {
@@ -1810,7 +1403,7 @@ function normalizeBrowserKaigiHealth(value) {
   return snapshot;
 }
 
-async function readBoundedResponseBytes(response, maximumBodyBytes, context) {
+async function readBoundedResponseBytes(response, maximumBodyBytes, context, signal) {
   if (!Number.isSafeInteger(maximumBodyBytes) || maximumBodyBytes < 0) {
     rejectType(`${context} response byte-size bound is invalid`);
   }
@@ -1839,9 +1432,19 @@ async function readBoundedResponseBytes(response, maximumBodyBytes, context) {
   const chunks = [];
   let totalBytes = 0;
   let complete = false;
+  let rejectAbort;
+  const aborted = new Promise((_, reject) => {
+    rejectAbort = reject;
+  });
+  aborted.catch(() => {});
+  const onAbort = () => rejectAbort(abortReasonOf(signal));
+  if (signal) {
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  }
   try {
     while (true) {
-      const result = await reader.read();
+      const result = await Promise.race([reader.read(), aborted]);
       if (!result || typeof result.done !== "boolean") {
         rejectType(`${context} returned an invalid response stream result`);
       }
@@ -1871,7 +1474,14 @@ async function readBoundedResponseBytes(response, maximumBodyBytes, context) {
     }
     throw error;
   } finally {
-    if (typeof reader.releaseLock === FIELD_FUNCTION) reader.releaseLock();
+    signal?.removeEventListener?.("abort", onAbort);
+    if (typeof reader.releaseLock === FIELD_FUNCTION) {
+      try {
+        reader.releaseLock();
+      } catch {
+        // A cancelled reader may still hold a settled read request.
+      }
+    }
   }
 
   const bytes = new Uint8Array(totalBytes);
@@ -1886,33 +1496,19 @@ async function readBoundedResponseBytes(response, maximumBodyBytes, context) {
   return bytes;
 }
 
-async function readBoundedResponseText(response, maximumBodyBytes, context) {
-  const bytes = await readBoundedResponseBytes(response, maximumBodyBytes, context);
+function abortReasonOf(signal) {
+  if (signal?.reason !== undefined) return signal.reason;
+  const error = new Error("The operation was aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+async function readBoundedResponseText(response, maximumBodyBytes, context, signal) {
+  const bytes = await readBoundedResponseBytes(response, maximumBodyBytes, context, signal);
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch (error) {
     rejectType(`${context} must be valid UTF-8`, { cause: error });
-  }
-}
-
-export class ToriiBrowserHttpError extends Error {
-  constructor(response, bodyText, status = responseStatus(response)) {
-    super(`Torii request failed with status ${status}`);
-    this.name = "ToriiBrowserHttpError";
-    this.response = response;
-    this.status = status;
-    this.bodyText = bodyText;
-  }
-}
-
-export class ToriiBrowserStreamGapError extends Error {
-  constructor(message, options = {}) {
-    super(message);
-    this.name = "ToriiBrowserStreamGapError";
-    this.code = options.code ?? "stream_gap";
-    this.droppedMessages = options.droppedMessages ?? null;
-    this.replayAvailable = options.replayAvailable === true;
-    this.payload = options.payload ?? null;
   }
 }
 
@@ -1975,7 +1571,7 @@ function extractSseFrames(buffer) {
   return { frames, remainder };
 }
 
-function streamGapFromEvent(event) {
+function streamGapFromEvent(event, label) {
   const payload = isPlainObject(event.data) ? event.data : null;
   const code =
     typeof payload?.code === "string" && payload.code.trim() !== ""
@@ -1984,13 +1580,13 @@ function streamGapFromEvent(event) {
   const message =
     typeof payload?.message === "string" && payload.message.trim() !== ""
       ? payload.message
-      : (TEXT_THE_CONTRACT_EVENT_STREAM + "reported a non-replayable gap.");
+      : `${label}reported a non-replayable gap.`;
   const droppedMessages =
     Number.isSafeInteger(payload?.dropped_messages) && payload.dropped_messages >= 0
       ? payload.dropped_messages
       : null;
   const replayAvailable = payload?.replay_available === true;
-  return new ToriiBrowserStreamGapError(message, {
+  return new ToriiStreamGapError(message, {
     code,
     droppedMessages,
     replayAvailable,
@@ -2009,6 +1605,7 @@ function streamGapFromEvent(event) {
 export class ToriiBrowserClient {
   #baseUrl;
   #canonicalRequestAuth;
+  #collections;
   #defaultHeaders;
   #fetchImpl;
   #networkId;
@@ -2068,6 +1665,14 @@ export class ToriiBrowserClient {
           operatorSigningContext,
           (TEXT_TORII_BROWSER_CLIENT + "options.operatorSigningContext"),
         );
+    this.#collections = createToriiCollections((path, query, requestOptions) =>
+      this.#queryCollection(path, query, requestOptions),
+      {
+        explorerAssetDefinitions: (row) => normalizeExplorerAssetDefinitionRecord(row, "explorer asset definition row"),
+        explorerAssets: (row) => normalizeQuantityRecord(row, "explorer asset row", ["value"]),
+        explorerRwas: (row) => normalizeQuantityRecord(row, "explorer rwa row", ["quantity", "held_quantity"]),
+      },
+    );
   }
 
   get baseUrl() {
@@ -2078,19 +1683,177 @@ export class ToriiBrowserClient {
     return this.#networkId;
   }
 
+  /** Domains (`POST /v1/domains/query`). */
+  get domains() {
+    return this.#collections.domains;
+  }
+
+  /** Accounts (`POST /v1/accounts/query`). */
+  get accounts() {
+    return this.#collections.accounts;
+  }
+
+  /** Asset definitions (`POST /v1/assets/definitions/query`). */
+  get assetDefinitions() {
+    return this.#collections.assetDefinitions;
+  }
+
+  /** NFTs (`POST /v1/nfts/query`). */
+  get nfts() {
+    return this.#collections.nfts;
+  }
+
+  /** RWA lots (`POST /v1/rwas/query`). */
+  get rwas() {
+    return this.#collections.rwas;
+  }
+
+  /** Committed contract calls, newest first, with history cursors. */
+  /** Bounded Explorer accounts collection with shared query controls. */
+  get explorerAccounts() { return this.#collections.explorerAccounts; }
+
+  /** Bounded Explorer domains collection with shared query controls. */
+  get explorerDomains() { return this.#collections.explorerDomains; }
+
+  /** Bounded Explorer asset-definitions collection with shared query controls. */
+  get explorerAssetDefinitions() { return this.#collections.explorerAssetDefinitions; }
+
+  /** Bounded Explorer assets collection with shared query controls. */
+  get explorerAssets() { return this.#collections.explorerAssets; }
+
+  /** Bounded Explorer nfts collection with shared query controls. */
+  get explorerNfts() { return this.#collections.explorerNfts; }
+
+  /** Bounded Explorer rwas collection with shared query controls. */
+  get explorerRwas() { return this.#collections.explorerRwas; }
+
+  /** Bounded Explorer blocks collection with shared query controls. */
+  get explorerBlocks() { return this.#collections.explorerBlocks; }
+
+  /** Bounded Explorer transactions collection with shared query controls. */
+  get explorerTransactions() { return this.#collections.explorerTransactions; }
+
+  /** Bounded Explorer transactions/latest collection with shared query controls. */
+  get explorerLatestTransactions() { return this.#collections.explorerLatestTransactions; }
+
+  /** Bounded Explorer instructions collection with shared query controls. */
+  get explorerInstructions() { return this.#collections.explorerInstructions; }
+
+  /** Bounded Explorer instructions/latest collection with shared query controls. */
+  get explorerLatestInstructions() { return this.#collections.explorerLatestInstructions; }
+
+  get contractActivity() {
+    return this.#collections.contractActivity;
+  }
+
+  /** Committed contract events, newest first, with history cursors. */
+  get contractEvents() {
+    return this.#collections.contractEvents;
+  }
+
+  /** Subscription plans (`POST /v1/subscriptions/plans/query`). */
+  get subscriptionPlans() {
+    return this.#collections.subscriptionPlans;
+  }
+
+  /** Subscriptions (`POST /v1/subscriptions/query`). */
+  get subscriptions() {
+    return this.#collections.subscriptions;
+  }
+
+  /** Effective direct and role-inherited permissions for one account. */
+  /** Indexed account movements, newest first by block and movement position. */
+  accountHistory(accountId) {
+    return this.#collections.accountHistory(accountId);
+  }
+
+  accountPermissions(accountId) {
+    return this.#collections.accountPermissions(accountId);
+  }
+
+  /** Space Directory manifest rows for one UAID. */
+  uaidManifests(uaid) {
+    return this.#collections.uaidManifests(uaid);
+  }
+
+  /** Repo agreements (`POST /v1/repo/agreements/query`). */
+  get repoAgreements() {
+    return this.#collections.repoAgreements;
+  }
+
+  /** Committed transactions, newest first (`POST /v1/transactions/query`); a history collection. */
+  get transactions() {
+    return this.#collections.transactions;
+  }
+
+  /** Asset balances of one account (`POST /v1/accounts/{account_id}/assets/query`). */
+  accountAssets(accountId) {
+    return this.#collections.accountAssets(accountId);
+  }
+
+  /** Holders of one asset definition (`POST /v1/assets/{definition_id}/holders/query`). */
+  assetHolders(assetDefinitionId) {
+    return this.#collections.assetHolders(assetDefinitionId);
+  }
+
+  /** Transactions of one account, newest first (`POST /v1/accounts/{account_id}/transactions/query`); a history collection. */
+  accountTransactions(accountId) {
+    return this.#collections.accountTransactions(accountId);
+  }
+
+  /**
+   * Execute one collection query, signing it with the configured canonical
+   * account credentials when present (collection routes never require them).
+   */
+  async #queryCollection(path, query, options) {
+    const context = `${path} query options`;
+    const opts = requireSupportedOptions(options ?? {}, context, COLLECTION_QUERY_OPTION_KEYS);
+    const target = `${path}/query`;
+    const bodyText = stringifyRequestJson(query.toJSON(), `${target} body`);
+    let headers = opts.headers;
+    let oneShot = false;
+    if (this.#canonicalRequestAuth !== null) {
+      rejectPrecomputedCanonicalHeaders({ ...this.#defaultHeaders, ...(opts.headers ?? {}) });
+      const signed = await buildCanonicalJsonRequest({
+        accountId: this.#canonicalRequestAuth.accountId,
+        networkId: this.#networkId,
+        method: "POST",
+        path: target,
+        baseUrl: this.#baseUrl,
+        bodyText,
+        headers: opts.headers,
+        sign: this.#canonicalRequestAuth.sign,
+      });
+      headers = signed.headers;
+      oneShot = true;
+    }
+    return this._json("POST", target, {
+      rawBody: bodyText,
+      contentType: FIELD_APPLICATION_JSON,
+      headers,
+      oneShot,
+      omitCredentials: true,
+      signal: signalFrom(opts),
+      jsonParser: (text) => decodePageText(text, `${target} response`),
+    });
+  }
+
   /** Discover account bootstrap policy without using configured credentials or signing callbacks. */
   async getAccountCapabilities(options = {}) {
     const opts = signalOnlyOptions(options, "getAccountCapabilities options");
     const { signal, cleanup } = requestSignal(opts, this.#timeoutMs);
     try {
-      const response = await this.#fetchImpl(this._url((TEXT_V1_ACCOUNTS + "capabilities")), {
-        method: "GET",
-        headers: { Accept: FIELD_APPLICATION_JSON },
-        credentials: "omit",
-        cache: "no-store",
-        redirect: "error",
-        signal,
-      });
+      const response = await Reflect.apply(this.#fetchImpl, undefined, [
+        this._url((TEXT_V1_ACCOUNTS + "capabilities")),
+        {
+          method: "GET",
+          headers: { Accept: FIELD_APPLICATION_JSON },
+          credentials: "omit",
+          cache: "no-store",
+          redirect: "error",
+          signal,
+        },
+      ]);
       return await readAccountCapabilitiesResponseV1(response, { signal });
     } finally {
       cleanup();
@@ -2271,6 +2034,9 @@ export class ToriiBrowserClient {
       };
     }
     const url = this._url(path, normalizedOptions.params);
+    if (normalizedOptions.omitCredentials === true) {
+      init.credentials = "omit";
+    }
     if (normalizedOptions.dataspaceVisible === true) {
       await this._applyDataspaceReadIdentity(url, init);
     }
@@ -2296,27 +2062,32 @@ export class ToriiBrowserClient {
       successStatuses,
       cleanup,
     );
-    if (normalizedOptions.responseObserver !== undefined) {
-      if (typeof normalizedOptions.responseObserver !== FIELD_FUNCTION) {
-        rejectType(`${method} ${path} responseObserver${TEXT_MUST_BE_A_2}function`);
+    try {
+      if (normalizedOptions.responseObserver !== undefined) {
+        if (typeof normalizedOptions.responseObserver !== FIELD_FUNCTION) {
+          rejectType(`${method} ${path} responseObserver${TEXT_MUST_BE_A_2}function`);
+        }
+        normalizedOptions.responseObserver(response);
       }
-      normalizedOptions.responseObserver(response);
+      if (
+        status === 204
+        || normalizedOptions.nullStatuses?.includes(status)
+      ) return null;
+      const jsonParser = normalizedOptions.jsonParser ?? JSON.parse;
+      if (typeof jsonParser !== FIELD_FUNCTION) {
+        rejectType(`${method} ${path} jsonParser${TEXT_MUST_BE_A_2}function`);
+      }
+      const text = await readBoundedResponseText(
+        response,
+        normalizedOptions.maximumBodyBytes ?? DEFAULT_JSON_RESPONSE_MAX_BYTES,
+        `${method} ${path}`,
+        signal,
+      );
+      if (text === "" && normalizedOptions.jsonParser === undefined) return null;
+      return jsonParser(text);
+    } finally {
+      cleanup();
     }
-    if (
-      status === 204
-      || normalizedOptions.nullStatuses?.includes(status)
-    ) return null;
-    const jsonParser = normalizedOptions.jsonParser ?? JSON.parse;
-    if (typeof jsonParser !== FIELD_FUNCTION) {
-      rejectType(`${method} ${path} jsonParser${TEXT_MUST_BE_A_2}function`);
-    }
-    const text = await readBoundedResponseText(
-      response,
-      normalizedOptions.maximumBodyBytes ?? DEFAULT_JSON_RESPONSE_MAX_BYTES,
-      `${method} ${path}`,
-    );
-    if (text === "" && normalizedOptions.jsonParser === undefined) return null;
-    return jsonParser(text);
   }
 
   async _bytes(method, path, options = {}) {
@@ -2339,17 +2110,22 @@ export class ToriiBrowserClient {
       DEFAULT_SUCCESS_STATUSES,
       cleanup,
     );
-    const contentType = response.headers?.get?.(FIELD_CONTENT_TYPE) ?? "";
-    if (!/^application\/x-norito(?:\s*;|$)/iu.test(contentType)) {
-      rejectType(`${method} ${path} must return application/x-norito`);
+    try {
+      const contentType = response.headers?.get?.(FIELD_CONTENT_TYPE) ?? "";
+      if (!/^application\/x-norito(?:\s*;|$)/iu.test(contentType)) {
+        rejectType(`${method} ${path} must return application/x-norito`);
+      }
+      return Buffer.from(
+        await readBoundedResponseBytes(
+          response,
+          normalizedOptions.maximumBodyBytes ?? DEFAULT_BINARY_RESPONSE_MAX_BYTES,
+          `${method} ${path}`,
+          signal,
+        ),
+      );
+    } finally {
+      cleanup();
     }
-    return Buffer.from(
-      await readBoundedResponseBytes(
-        response,
-        normalizedOptions.maximumBodyBytes ?? DEFAULT_BINARY_RESPONSE_MAX_BYTES,
-        `${method} ${path}`,
-      ),
-    );
   }
 
   async _canonicalJson(method, path, body, options) {
@@ -2380,16 +2156,6 @@ export class ToriiBrowserClient {
       oneShot: true,
       signal: signalFrom(opts),
     });
-  }
-
-  _canonicalQueryJson(path, options, body) {
-    const opts = requireSupportedOptions(options, `${path} query options`, TRANSACTION_QUERY_OPTION_KEYS);
-    const accountId = ensureCanonicalAccountId(opts.authAccountId, `${path} query options.authAccountId`);
-    if (accountId !== opts.authAccountId) {
-      rejectType(`${path} query authAccountId${TEXT_MUST_BE_AN}exact canonical I105 account id`);
-    }
-    rejectPrecomputedCanonicalHeaders({ ...this.#defaultHeaders, ...(opts.headers ?? {}) });
-    return this._canonicalJson("POST", path, body, opts);
   }
 
   /** Submit exact locally signed version-1 transaction bytes to the pipeline. */
@@ -2455,7 +2221,7 @@ export class ToriiBrowserClient {
         "pipeline transaction status",
       );
     } catch (error) {
-      if (error instanceof ToriiBrowserHttpError && error.status === 404) {
+      if (error instanceof ToriiHttpError && error.status === 404) {
         return null;
       }
       throw error;
@@ -2568,10 +2334,17 @@ export class ToriiBrowserClient {
     });
   }
 
-  /** Read the node compatibility advert before constructing deployment bytes. */
-  getNodeCapabilities(options) {
-    const opts = requireObject(options, "getNodeCapabilities options");
-    return this._canonicalJson("GET", "/v1/node/capabilities", undefined, opts);
+  /**
+   * Read the public node capability advert (`GET /v1/node/capabilities`)
+   * before constructing deployment bytes. The route needs no credentials and
+   * none are sent.
+   */
+  async getNodeCapabilities(options = {}) {
+    const opts = requireSupportedOptions(options, "getNodeCapabilities options", LEDGER_READ_OPTION_KEYS);
+    return this._json("GET", "/v1/node/capabilities", {
+      signal: signalFrom(opts),
+      omitCredentials: true,
+    });
   }
 
   /** Resolve a contract alias; caller-supplied canonical signing headers are preserved. */
@@ -2643,21 +2416,6 @@ export class ToriiBrowserClient {
     );
   }
 
-  listExplorerAccounts(options = {}) {
-    const opts = requireObject(options, "listExplorerAccounts options");
-    return this._json("GET", (TEXT_V1_EXPLORER + "accounts"), {
-      params: {
-        ...normalizeExplorerCursorPagination(opts, "listExplorerAccounts options"),
-        domain: opts.domain,
-        with_asset: opts.withAsset ?? opts.with_asset,
-        address_format: opts.addressFormat ?? opts.address_format,
-      },
-      dataspaceVisible: true,
-      signal: signalFrom(opts),
-    }).then((payload) =>
-      normalizeExplorerCursorPage(payload, "explorer accounts response"),
-    );
-  }
 
   getExplorerAccount(accountId, options = {}) {
     const opts = requireObject(options, "getExplorerAccount options");
@@ -2668,19 +2426,6 @@ export class ToriiBrowserClient {
     });
   }
 
-  listExplorerDomains(options = {}) {
-    const opts = requireObject(options, "listExplorerDomains options");
-    return this._json("GET", (TEXT_V1_EXPLORER + "domains"), {
-      params: {
-        ...normalizeExplorerCursorPagination(opts, "listExplorerDomains options"),
-        owned_by: opts.ownedBy ?? opts.owned_by,
-      },
-      dataspaceVisible: true,
-      signal: signalFrom(opts),
-    }).then((payload) =>
-      normalizeExplorerCursorPage(payload, "explorer domains response"),
-    );
-  }
 
   getExplorerDomain(domainId, options = {}) {
     const opts = requireObject(options, "getExplorerDomain options");
@@ -2690,24 +2435,6 @@ export class ToriiBrowserClient {
     });
   }
 
-  listExplorerAssets(options = {}) {
-    const opts = requireObject(options, "listExplorerAssets options");
-    return this._json("GET", (TEXT_V1_EXPLORER + "assets"), {
-      params: {
-        ...normalizeExplorerCursorPagination(opts, "listExplorerAssets options"),
-        owned_by: opts.ownedBy ?? opts.owned_by,
-        definition: opts.definition,
-        asset_id: opts.assetId ?? opts.asset_id,
-      },
-      dataspaceVisible: true,
-      signal: signalFrom(opts),
-    }).then((payload) => {
-      const context = "explorer assets response";
-      return normalizeExplorerCursorPage(payload, context, (item, index) =>
-        normalizeQuantityRecord(item, `${context}.items[${index}]`, ["value"]),
-      );
-    });
-  }
 
   getExplorerAsset(assetId, options = {}) {
     const opts = requireObject(options, "getExplorerAsset options");
@@ -2719,119 +2446,6 @@ export class ToriiBrowserClient {
     );
   }
 
-  listAccountAssets(accountId, options = {}) {
-    const opts = requireObject(options, "listAccountAssets options");
-    return this._json("GET", `${TEXT_V1_ACCOUNTS}${encodeURIComponent(requireNonEmptyString(accountId, FIELD_ACCOUNT_ID))}/assets`, {
-      params: {
-        ...normalizeIterablePagination(opts, "listAccountAssets options"),
-        asset: opts.asset ?? opts.assetId,
-        scope: opts.scope,
-        count_mode: normalizeCountMode(opts.countMode ?? opts.count_mode, FIELD_COUNT_MODE),
-      },
-      dataspaceVisible: true,
-      signal: signalFrom(opts),
-    }).then((payload) =>
-      normalizeQuantityPage(payload, "account assets response", [FIELD_QUANTITY]),
-    );
-  }
-
-  /** List effective direct and role-inherited permissions for an account. */
-  listAccountPermissions(accountId, options = {}) {
-    const context = "listAccountPermissions options";
-    const opts = requireSupportedOptions(options, context, COUNTED_LIST_OPTION_KEYS);
-    return this._json(
-      "GET",
-      `${TEXT_V1_ACCOUNTS}${encodeURIComponent(requireNonEmptyString(accountId, FIELD_ACCOUNT_ID))}/permissions`,
-      {
-        params: normalizeCountedListParams(opts, context),
-        dataspaceVisible: true,
-        signal: signalFrom(opts),
-      },
-    );
-  }
-
-  /** List indexed value movement and affected-transaction history for an account. */
-  listAccountHistory(accountId, options = {}) {
-    const context = "listAccountHistory options";
-    const opts = requireSupportedOptions(options, context, ACCOUNT_HISTORY_OPTION_KEYS);
-    return this._json(
-      "GET",
-      `${TEXT_V1_ACCOUNTS}${encodeURIComponent(requireNonEmptyString(accountId, FIELD_ACCOUNT_ID))}/history`,
-      {
-        params: {
-          ...normalizeCountedListParams(opts, context),
-          asset_id: normalizeOptionalString(
-            optionAlias(opts, "assetId", WIRE_FIELD_ASSET_ID),
-            `${context}.assetId`,
-          ),
-        },
-        dataspaceVisible: true,
-        signal: signalFrom(opts),
-      },
-    );
-  }
-
-  queryAccountTransactions(accountId, options) {
-    const path = `${TEXT_V1_ACCOUNTS}${encodeURIComponent(requireNonEmptyString(accountId, FIELD_ACCOUNT_ID))}/transactions/query`;
-    return this._canonicalQueryJson(path, options, normalizeTransactionQueryEnvelope(options, "queryAccountTransactions"));
-  }
-
-  queryTransactions(options) {
-    return this._canonicalQueryJson("/v1/transactions/query", options, normalizeTransactionQueryEnvelope(options, "queryTransactions"));
-  }
-
-  /** List committed contract-call activity using Torii's route-specific filters. */
-  listContractActivity(options = {}) {
-    const context = "listContractActivity options";
-    const opts = requireSupportedOptions(options, context, CONTRACT_ACTIVITY_OPTION_KEYS);
-    return this._json("GET", (TEXT_V1_CONTRACTS + "activity"), {
-      params: {
-        ...normalizeCountedListParams(opts, context),
-        authority: normalizeOptionalString(opts.authority, `${context}.authority`),
-        contract_address: normalizeOptionalString(
-          optionAlias(opts, FIELD_CONTRACT_ADDRESS, WIRE_FIELD_CONTRACT_ADDRESS),
-          `${context}.contractAddress`,
-        ),
-        contract_alias: normalizeOptionalString(
-          optionAlias(opts, FIELD_CONTRACT_ALIAS, WIRE_FIELD_CONTRACT_ALIAS),
-          `${context}.contractAlias`,
-        ),
-        contract_entrypoint: normalizeOptionalString(
-          optionAlias(opts, "contractEntrypoint", "contract_entrypoint"),
-          `${context}.contractEntrypoint`,
-        ),
-        since_timestamp_ms: normalizeOptionalUnsignedInteger(
-          optionAlias(opts, FIELD_SINCE_TIMESTAMP_MS, WIRE_FIELD_SINCE_TIMESTAMP_MS),
-          `${context}.sinceTimestampMs`,
-        ),
-        until_timestamp_ms: normalizeOptionalUnsignedInteger(
-          optionAlias(opts, FIELD_UNTIL_TIMESTAMP_MS, WIRE_FIELD_UNTIL_TIMESTAMP_MS),
-          `${context}.untilTimestampMs`,
-        ),
-        result_ok: normalizeOptionalBoolean(
-          optionAlias(opts, FIELD_RESULT_OK, WIRE_FIELD_RESULT_OK),
-          `${context}.resultOk`,
-        ),
-      },
-      dataspaceVisible: true,
-      signal: signalFrom(opts),
-    });
-  }
-
-  /** List indexed generic contract events using Torii's route-specific filters. */
-  listContractEvents(options = {}) {
-    const context = "listContractEvents options";
-    const opts = requireSupportedOptions(options, context, CONTRACT_EVENT_LIST_OPTION_KEYS);
-    return this._json("GET", (TEXT_V1_CONTRACTS + "events"), {
-      params: {
-        ...normalizeCountedListParams(opts, context),
-        ...normalizeContractEventFilterParams(opts, context),
-      },
-      dataspaceVisible: true,
-      signal: signalFrom(opts),
-    });
-  }
-
   /**
    * Open one non-replayable fetch stream for generic contract events.
    * Stream gaps and an unrequested EOF are terminal; callers must explicitly resubscribe.
@@ -2840,9 +2454,36 @@ export class ToriiBrowserClient {
     const context = "streamContractEvents options";
     const opts = requireSupportedOptions(options, context, CONTRACT_EVENT_STREAM_OPTION_KEYS);
     const params = normalizeContractEventFilterParams(opts, context);
+    return this.#streamSse(TEXT_V1_CONTRACTS + "events/sse", params, opts, "The contract event stream ");
+  }
+
+  /**
+   * Stream pipeline and data events from `/v1/events/sse`. `options.filter`
+   * uses the collection-query text grammar over event fields (`tx_hash`,
+   * `tx_status`, `block_height`, ...): a `Filter`, a text filter or the JSON
+   * form. Each frame's `data` is one JSON object with `category` and
+   * `event`; integers beyond `Number.MAX_SAFE_INTEGER` are `bigint`. A
+   * `stream_error` event or an unexpected end of the stream raises a
+   * `ToriiStreamGapError`.
+   */
+  streamEvents(options = {}) {
+    const opts = requireSupportedOptions(options, "streamEvents options", EVENT_STREAM_OPTION_KEYS);
+    const filter = filterQueryText(opts.filter);
+    return decodeEventFrames(
+      this.#streamSse(
+        "/v1/events/sse",
+        filter === undefined ? {} : { filter },
+        opts,
+        "The event stream ",
+      ),
+      "The event stream",
+    );
+  }
+
+  #streamSse(path, params, opts, label) {
     const client = this;
-    return (async function* contractEventIterator() {
-      const url = client._url((TEXT_V1_CONTRACTS + "events/sse"), params);
+    return (async function* sseIterator() {
+      const url = client._url(path, params);
       const init = {
         method: "GET",
         cache: "no-store",
@@ -2850,19 +2491,17 @@ export class ToriiBrowserClient {
         signal: signalFrom(opts),
       };
       await client._applyDataspaceReadIdentity(url, init);
-      const response = await client.#fetchImpl(url, init);
+      const response = await Reflect.apply(client.#fetchImpl, undefined, [url, init]);
       if (init.redirect === "error" && response?.redirected === true) {
         rejectType(TEXT_TORII_ONE_SHOT_REQUEST_MUST_NOT_ACCEPT_A_REDIRECTED_RESPONSE);
       }
       const status = responseStatus(response);
       if (status !== 200) {
-        const errorResponse = typeof response?.clone === FIELD_FUNCTION ? response.clone() : response;
-        const bodyText = await responseText(response);
-        throw new ToriiBrowserHttpError(errorResponse, bodyText, status);
+        throw await toriiHttpErrorFromResponse(response, status, [200]);
       }
       if (typeof response?.body?.getReader !== FIELD_FUNCTION) {
-        throw new ToriiBrowserStreamGapError(
-          (TEXT_THE_CONTRACT_EVENT_STREAM + "ended without a readable response body."),
+        throw new ToriiStreamGapError(
+          `${label}ended without a readable response body.`,
           { code: "stream_unexpected_eof" },
         );
       }
@@ -2871,9 +2510,22 @@ export class ToriiBrowserClient {
       const decoder = new TextDecoder();
       let buffer = "";
       let ended = false;
+      // Abort pending reads even when the fetch implementation does not tie
+      // the body to the request signal.
+      const signal = init.signal;
+      let rejectAbort;
+      const aborted = new Promise((_, reject) => {
+        rejectAbort = reject;
+      });
+      aborted.catch(() => {});
+      const onAbort = () => rejectAbort(abortReasonOf(signal));
+      if (signal) {
+        if (signal.aborted) onAbort();
+        else signal.addEventListener("abort", onAbort, { once: true });
+      }
       try {
         while (!ended) {
-          const chunk = await reader.read();
+          const chunk = await Promise.race([reader.read(), aborted]);
           ended = chunk.done === true;
           if (chunk.value !== undefined) {
             buffer += decoder.decode(chunk.value, { stream: !ended });
@@ -2882,16 +2534,17 @@ export class ToriiBrowserClient {
           const parsed = extractSseFrames(buffer);
           buffer = parsed.remainder;
           for (const event of parsed.frames) {
-            if (event.event === "stream_error") throw streamGapFromEvent(event);
+            if (event.event === "stream_error") throw streamGapFromEvent(event, label);
             yield event;
           }
         }
         if (opts.signal?.aborted === true) return;
-        throw new ToriiBrowserStreamGapError(
-          (TEXT_THE_CONTRACT_EVENT_STREAM + "ended unexpectedly and cannot be resumed."),
+        throw new ToriiStreamGapError(
+          `${label}ended unexpectedly and cannot be resumed.`,
           { code: "stream_unexpected_eof" },
         );
       } finally {
+        signal?.removeEventListener("abort", onAbort);
         if (!ended && typeof reader.cancel === FIELD_FUNCTION) {
           try {
             await reader.cancel();
@@ -2899,42 +2552,15 @@ export class ToriiBrowserClient {
             // Preserve the stream error or consumer cancellation that entered this block.
           }
         }
-        if (typeof reader.releaseLock === FIELD_FUNCTION) reader.releaseLock();
+        if (typeof reader.releaseLock === FIELD_FUNCTION) {
+          try {
+            reader.releaseLock();
+          } catch {
+            // A cancelled reader may still hold a settled read request.
+          }
+        }
       }
     })();
-  }
-
-  listAssetHolders(assetDefinitionId, options = {}) {
-    const opts = requireObject(options, "listAssetHolders options");
-    return this._json("GET", `/v1/assets/${encodeURIComponent(requireNonEmptyString(assetDefinitionId, FIELD_ASSET_DEFINITION_ID))}/holders`, {
-      params: {
-        ...normalizeIterablePagination(opts, "listAssetHolders options"),
-        account_id: opts.accountId ?? opts.account_id,
-        scope: opts.scope,
-        count_mode: normalizeCountMode(opts.countMode ?? opts.count_mode, FIELD_COUNT_MODE),
-      },
-      signal: signalFrom(opts),
-    }).then((payload) =>
-      normalizeQuantityPage(payload, "asset holders response", [FIELD_QUANTITY]),
-    );
-  }
-
-  listAssetDefinitions(options = {}) {
-    const opts = requireObject(options, "listAssetDefinitions options");
-    return this._json("GET", "/v1/assets/definitions", {
-      params: {
-        ...normalizeIterablePagination(opts, "listAssetDefinitions options"),
-        count_mode: normalizeCountMode(opts.countMode ?? opts.count_mode, FIELD_COUNT_MODE),
-      },
-      signal: signalFrom(opts),
-    }).then((payload) =>
-      normalizeQuantityPage(
-        payload,
-        "asset definitions response",
-        [WIRE_FIELD_TOTAL_QUANTITY],
-        { optional: true },
-      ),
-    );
   }
 
   getAssetDefinition(assetDefinitionId, options = {}) {
@@ -2975,23 +2601,6 @@ export class ToriiBrowserClient {
     });
   }
 
-  listExplorerAssetDefinitions(options = {}) {
-    const opts = requireObject(options, TEXT_LIST_EXPLORER_ASSET_DEFINITIONS_OPTIONS);
-    return this._json("GET", (TEXT_V1_EXPLORER + "asset-definitions"), {
-      params: {
-        ...normalizeExplorerCursorPagination(opts, TEXT_LIST_EXPLORER_ASSET_DEFINITIONS_OPTIONS),
-        owning_domain: opts.owningDomain ?? opts.owning_domain,
-        owned_by: opts.ownedBy ?? opts.owned_by,
-      },
-      dataspaceVisible: true,
-      signal: signalFrom(opts),
-    }).then((payload) => {
-      const context = "explorer asset definitions response";
-      return normalizeExplorerCursorPage(payload, context, (item, index) =>
-        normalizeExplorerAssetDefinitionRecord(item, `${context}.items[${index}]`),
-      );
-    });
-  }
 
   getExplorerAssetDefinitionEconometrics(assetDefinitionId, options = {}) {
     const opts = requireObject(options, "getExplorerAssetDefinitionEconometrics options");
@@ -3009,20 +2618,6 @@ export class ToriiBrowserClient {
     });
   }
 
-  listExplorerNfts(options = {}) {
-    const opts = requireObject(options, "listExplorerNfts options");
-    return this._json("GET", (TEXT_V1_EXPLORER + "nfts"), {
-      params: {
-        ...normalizeExplorerCursorPagination(opts, "listExplorerNfts options"),
-        owned_by: opts.ownedBy ?? opts.owned_by,
-        domain: opts.domain,
-      },
-      dataspaceVisible: true,
-      signal: signalFrom(opts),
-    }).then((payload) =>
-      normalizeExplorerCursorPage(payload, "explorer nfts response"),
-    );
-  }
 
   getExplorerNft(nftId, options = {}) {
     const opts = requireObject(options, "getExplorerNft options");
@@ -3032,27 +2627,6 @@ export class ToriiBrowserClient {
     });
   }
 
-  listExplorerRwas(options = {}) {
-    const opts = requireObject(options, "listExplorerRwas options");
-    return this._json("GET", (TEXT_V1_EXPLORER + "rwas"), {
-      params: {
-        ...normalizeExplorerCursorPagination(opts, "listExplorerRwas options"),
-        owned_by: opts.ownedBy ?? opts.owned_by,
-        domain: opts.domain,
-      },
-      dataspaceVisible: true,
-      signal: signalFrom(opts),
-    }).then((payload) => {
-      const context = "explorer rwas response";
-      return normalizeExplorerCursorPage(payload, context, (item, index) =>
-        normalizeQuantityRecord(
-          item,
-          `${context}.items[${index}]`,
-          [FIELD_QUANTITY, "held_quantity"],
-        ),
-      );
-    });
-  }
 
   getExplorerRwa(rwaId, options = {}) {
     const opts = requireObject(options, "getExplorerRwa options");
@@ -3064,15 +2638,6 @@ export class ToriiBrowserClient {
     );
   }
 
-  listExplorerBlocks(options = {}) {
-    const context = "listExplorerBlocks options";
-    const opts = requireSupportedOptions(options, context, EXPLORER_HISTORY_OPTION_KEYS);
-    return this._json("GET", (TEXT_V1_EXPLORER + "blocks"), {
-      params: normalizeExplorerCursorPagination(opts, context),
-      dataspaceVisible: true,
-      signal: signalFrom(opts),
-    }).then((payload) => normalizeExplorerHistoryPage(payload, "explorer blocks response"));
-  }
 
   getExplorerBlock(identifier, options = {}) {
     const opts = requireObject(options, "getExplorerBlock options");
@@ -3174,64 +2739,7 @@ export class ToriiBrowserClient {
     return this._json("GET", (TEXT_V1_EXPLORER + "health"), { signal: signalFrom(opts) });
   }
 
-  listExplorerTransactions(options = {}) {
-    const context = "listExplorerTransactions options";
-    const opts = requireSupportedOptions(
-      options,
-      context,
-      EXPLORER_TRANSACTION_HISTORY_OPTION_KEYS,
-    );
-    return this._json("GET", (TEXT_V1_EXPLORER + "transactions"), {
-      params: {
-        ...normalizeExplorerCursorPagination(opts, context),
-        authority: normalizeExplorerHistoryOptionalString(
-          opts.authority,
-          `${context}.authority`,
-        ),
-        block: normalizeExplorerHistoryBlock(opts.block, `${context}.block`),
-        status: normalizeExplorerHistoryStatus(opts.status, `${context}.status`),
-        asset_id: normalizeExplorerHistoryOptionalString(
-          opts.assetId ?? opts.asset_id,
-          `${context}.assetId`,
-        ),
-      },
-      dataspaceVisible: true,
-      signal: signalFrom(opts),
-    }).then((payload) =>
-      normalizeExplorerHistoryPage(payload, "explorer transactions response"),
-    );
-  }
 
-  listLatestExplorerTransactions(options = {}) {
-    const context = "listLatestExplorerTransactions options";
-    const opts = requireSupportedOptions(
-      options,
-      context,
-      EXPLORER_TRANSACTION_HISTORY_OPTION_KEYS,
-    );
-    return this._json("GET", (TEXT_V1_EXPLORER + "transactions/latest"), {
-      params: {
-        ...normalizeExplorerCursorPagination(opts, context),
-        authority: normalizeExplorerHistoryOptionalString(
-          opts.authority,
-          `${context}.authority`,
-        ),
-        block: normalizeExplorerHistoryBlock(opts.block, `${context}.block`),
-        status: normalizeExplorerHistoryStatus(opts.status, `${context}.status`),
-        asset_id: normalizeExplorerHistoryOptionalString(
-          opts.assetId ?? opts.asset_id,
-          `${context}.assetId`,
-        ),
-      },
-      dataspaceVisible: true,
-      signal: signalFrom(opts),
-    }).then((payload) =>
-      normalizeExplorerLatestHistoryPage(
-        payload,
-        "explorer latest transactions response",
-      ),
-    );
-  }
 
   getExplorerTransaction(hash, options = {}) {
     const opts = requireObject(options, "getExplorerTransaction options");
@@ -3242,88 +2750,7 @@ export class ToriiBrowserClient {
     });
   }
 
-  listExplorerInstructions(options = {}) {
-    const context = "listExplorerInstructions options";
-    const opts = requireSupportedOptions(
-      options,
-      context,
-      EXPLORER_INSTRUCTION_HISTORY_OPTION_KEYS,
-    );
-    return this._json("GET", (TEXT_V1_EXPLORER + "instructions"), {
-      params: {
-        ...normalizeExplorerCursorPagination(opts, context),
-        account: normalizeExplorerHistoryOptionalString(
-          opts.account,
-          `${context}.account`,
-        ),
-        authority: normalizeExplorerHistoryOptionalString(
-          opts.authority,
-          `${context}.authority`,
-        ),
-        kind: normalizeExplorerHistoryOptionalString(opts.kind, `${context}.kind`),
-        transaction_hash: normalizeExplorerHistoryOptionalString(
-          opts.transactionHash ?? opts.transaction_hash,
-          `${context}.transactionHash`,
-        ),
-        transaction_status: normalizeExplorerHistoryStatus(
-          opts.transactionStatus ?? opts.transaction_status,
-          `${context}.transactionStatus`,
-        ),
-        block: normalizeExplorerHistoryBlock(opts.block, `${context}.block`),
-        asset_id: normalizeExplorerHistoryOptionalString(
-          opts.assetId ?? opts.asset_id,
-          `${context}.assetId`,
-        ),
-      },
-      dataspaceVisible: true,
-      signal: signalFrom(opts),
-    }).then((payload) =>
-      normalizeExplorerHistoryPage(payload, "explorer instructions response"),
-    );
-  }
 
-  listLatestExplorerInstructions(options = {}) {
-    const context = "listLatestExplorerInstructions options";
-    const opts = requireSupportedOptions(
-      options,
-      context,
-      EXPLORER_INSTRUCTION_HISTORY_OPTION_KEYS,
-    );
-    return this._json("GET", (TEXT_V1_EXPLORER + "instructions/latest"), {
-      params: {
-        ...normalizeExplorerCursorPagination(opts, context),
-        account: normalizeExplorerHistoryOptionalString(
-          opts.account,
-          `${context}.account`,
-        ),
-        authority: normalizeExplorerHistoryOptionalString(
-          opts.authority,
-          `${context}.authority`,
-        ),
-        kind: normalizeExplorerHistoryOptionalString(opts.kind, `${context}.kind`),
-        transaction_hash: normalizeExplorerHistoryOptionalString(
-          opts.transactionHash ?? opts.transaction_hash,
-          `${context}.transactionHash`,
-        ),
-        transaction_status: normalizeExplorerHistoryStatus(
-          opts.transactionStatus ?? opts.transaction_status,
-          `${context}.transactionStatus`,
-        ),
-        block: normalizeExplorerHistoryBlock(opts.block, `${context}.block`),
-        asset_id: normalizeExplorerHistoryOptionalString(
-          opts.assetId ?? opts.asset_id,
-          `${context}.assetId`,
-        ),
-      },
-      dataspaceVisible: true,
-      signal: signalFrom(opts),
-    }).then((payload) =>
-      normalizeExplorerLatestHistoryPage(
-        payload,
-        "explorer latest instructions response",
-      ),
-    );
-  }
 
   getExplorerInstruction(transactionHash, index, options = {}) {
     const opts = requireObject(options, "getExplorerInstruction options");

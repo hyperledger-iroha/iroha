@@ -12,7 +12,10 @@ use crate::sim::{
 struct NoncommittingHost(FakeHost);
 
 impl Host for NoncommittingHost {
-    fn start(&mut self, start: Start) -> Result<Vec<crate::api::Action>, crate::api::ConfigError> {
+    fn start(
+        &mut self,
+        start: Start,
+    ) -> Result<Vec<crate::api::Action>, Box<dyn std::error::Error>> {
         self.0.start(start)
     }
     fn crash(&mut self) {

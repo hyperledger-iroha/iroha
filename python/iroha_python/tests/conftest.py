@@ -16,23 +16,24 @@ def _add_path(path: Path) -> None:
 
 
 _ROOT = Path(__file__).resolve().parents[2]
-_add_path(_ROOT)
-_add_path(_ROOT / "norito_py" / "src")
-_add_path(_ROOT / "iroha_torii_client")
-_add_path(_ROOT / "iroha_python" / "tests")
-
 _INSTALLED_PACKAGE_MODE = os.environ.get("IROHA_PYTHON_TEST_INSTALLED_PACKAGE")
 if _INSTALLED_PACKAGE_MODE not in {None, "1"}:
     raise RuntimeError("IROHA_PYTHON_TEST_INSTALLED_PACKAGE must be unset or 1")
 
 if _INSTALLED_PACKAGE_MODE == "1":
-    for module_name in ("iroha_python", "iroha_native", "iroha_native._crypto"):
-        if module_name in sys.modules:
+    _PACKAGE_NAMES = ("iroha_python", "iroha_native", "norito", "iroha_torii_client")
+    for module_name in sorted(name for name in tuple(sys.modules) if type(name) is str):
+        if any(
+            module_name == name or module_name.startswith(name + ".")
+            for name in _PACKAGE_NAMES
+        ):
             raise RuntimeError(
                 f"installed-package tests reject pre-seeded module {module_name}"
             )
 
     environment_root = Path(sys.prefix).resolve(strict=True)
+    if environment_root == Path(sys.base_prefix).resolve(strict=True):
+        raise RuntimeError("installed-package tests require a private venv")
     site_package_roots = {
         Path(path).resolve(strict=True)
         for path in (
@@ -79,8 +80,10 @@ if _INSTALLED_PACKAGE_MODE == "1":
             raise RuntimeError(f"{name} source loader must match its trusted origin")
         return spec, origin
 
-    package_spec, package_origin = _package_spec("iroha_python")
-    owner_spec, owner_origin = _package_spec("iroha_native")
+    # Admit every package without executing an initializer or its dependencies.
+    # In particular, importing iroha_python first would already import Norito/Torii.
+    _package_specs = {name: _package_spec(name) for name in _PACKAGE_NAMES}
+    owner_spec, owner_origin = _package_specs["iroha_native"]
     native_spec = importlib.machinery.PathFinder.find_spec(
         "iroha_native._crypto", [str(owner_origin.parent)]
     )
@@ -94,19 +97,12 @@ if _INSTALLED_PACKAGE_MODE == "1":
     if native_spec.loader.name != "iroha_native._crypto" or Path(native_spec.loader.path) != native_origin:
         raise RuntimeError("iroha_native._crypto loader must match its trusted origin")
 
-    owner = importlib.util.module_from_spec(owner_spec)
-    sys.modules["iroha_native"] = owner
-    owner_spec.loader.exec_module(owner)
-    native = owner.load_crypto_extension()
-    package = importlib.util.module_from_spec(package_spec)
-    sys.modules["iroha_python"] = package
-    package_spec.loader.exec_module(package)
-
-    def _assert_loaded(module, name: str, origin: Path, loader_type: type) -> None:
+    def _assert_loaded(module, name: str, origin: Path, loader_type: type, expected_spec=None) -> None:
         spec = module.__spec__
         if (
             sys.modules.get(name) is not module
             or spec is None
+            or (expected_spec is not None and spec is not expected_spec)
             or spec.loader_state is not None
             or module.__loader__ is not spec.loader
             or not isinstance(getattr(module, "__file__", None), str)
@@ -116,10 +112,151 @@ if _INSTALLED_PACKAGE_MODE == "1":
             or Path(spec.loader.path) != origin
         ):
             raise RuntimeError(f"loaded {name} spec changed from its trusted origin")
+        if expected_spec is not None and (
+            spec.submodule_search_locations != [str(origin.parent)]
+            or getattr(module, "__path__", None) != [str(origin.parent)]
+        ):
+            raise RuntimeError(f"loaded {name} package search path changed")
 
-    _assert_loaded(owner, "iroha_native", owner_origin, importlib.machinery.SourceFileLoader)
-    _assert_loaded(package, "iroha_python", package_origin, importlib.machinery.SourceFileLoader)
+    def _load_package(name: str):
+        spec, origin = _package_specs[name]
+        if name in sys.modules:
+            raise RuntimeError(f"installed package {name} was inserted before owner loading")
+        module = importlib.util.module_from_spec(spec)
+        if name in sys.modules:
+            raise RuntimeError(f"installed package {name} was inserted during owner creation")
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+        _assert_loaded(module, name, origin, importlib.machinery.SourceFileLoader, spec)
+        return module
+
+    owner = _load_package("iroha_native")
+    native = owner.load_crypto_extension()
     _assert_loaded(native, "iroha_native._crypto", native_origin, importlib.machinery.ExtensionFileLoader)
+    # Load dependencies from their already admitted specs before the SDK initializer.
+    _loaded_packages = {"iroha_native": owner}
+    for name in ("norito", "iroha_torii_client", "iroha_python"):
+        _loaded_packages[name] = _load_package(name)
+
+    for name, module in _loaded_packages.items():
+        spec, origin = _package_specs[name]
+        _assert_loaded(module, name, origin, importlib.machinery.SourceFileLoader, spec)
+    _assert_loaded(native, "iroha_native._crypto", native_origin, importlib.machinery.ExtensionFileLoader)
+    _add_path(_ROOT / "iroha_python" / "tests")
 else:
+    _SOURCE_ROOTS = {
+        "iroha_python": _ROOT / "iroha_python" / "src" / "iroha_python",
+        "iroha_native": _ROOT / "iroha_native" / "src" / "iroha_native",
+    }
+
+    def _source_names():
+        return tuple(sorted(name for name in tuple(sys.modules) if type(name) is str and any(
+            name == owner or name.startswith(owner + ".") for owner in _SOURCE_ROOTS
+        )))
+
+    # Cached descendants can supply package exports even when no root package
+    # is present. Refuse every namespace member before any source dispatch.
+    for module_name in _source_names():
+        raise RuntimeError(f"source-package tests reject pre-seeded module {module_name}")
+    _add_path(_ROOT)
+    _add_path(_ROOT / "norito_py" / "src")
+    _add_path(_ROOT / "iroha_torii_client")
+    _add_path(_ROOT / "iroha_python" / "tests")
     _add_path(_ROOT / "iroha_python" / "src")
     _add_path(_ROOT / "iroha_native" / "src")
+
+    def _source_spec(name: str, origin: Path, loader_type: type):
+        if origin.resolve(strict=True) != origin or origin.is_symlink():
+            raise RuntimeError(f"source {name} origin must be canonical and non-symlinked")
+        package = origin.name == "__init__.py"
+        search = None if name in _SOURCE_ROOTS else [str(origin.parent.parent if package else origin.parent)]
+        spec = importlib.machinery.PathFinder.find_spec(name, search)
+        if (
+            type(spec) is not importlib.machinery.ModuleSpec
+            or type(spec.loader) is not loader_type
+            or type(spec.origin) is not str
+            or spec.origin != str(origin)
+            or spec.name != name
+            or spec.loader_state is not None
+            or spec.loader.name != name
+            or spec.loader.path != str(origin)
+            or spec.submodule_search_locations != ([str(origin.parent)] if package else None)
+        ):
+            raise RuntimeError(f"source {name} must resolve from its exact filesystem owner")
+        return spec
+
+    _SOURCE_IMPORTS = {}
+    _SOURCE_LOADED = {}
+    for name, package_root in _SOURCE_ROOTS.items():
+        origin = package_root / "__init__.py"
+        _source_spec(name, origin, importlib.machinery.SourceFileLoader)
+        _SOURCE_IMPORTS[name] = (origin, importlib.machinery.SourceFileLoader)
+    native_root = _SOURCE_ROOTS["iroha_native"]
+    native_spec = importlib.machinery.PathFinder.find_spec("iroha_native._crypto", [str(native_root)])
+    # Explicit native absence remains available to anonymous transport tests.
+    # Account qualification obtains ABI25 through the unchanged strict loader.
+    if native_spec is not None:
+        if type(native_spec) is not importlib.machinery.ModuleSpec or type(native_spec.origin) is not str:
+            raise RuntimeError("source native extension must have a filesystem origin")
+        native_origin = Path(native_spec.origin)
+        if native_origin.parent != native_root or not any(
+            native_origin.name == f"_crypto{suffix}" for suffix in importlib.machinery.EXTENSION_SUFFIXES
+        ):
+            raise RuntimeError("source native extension belongs to a different owner")
+        _source_spec("iroha_native._crypto", native_origin, importlib.machinery.ExtensionFileLoader)
+        _SOURCE_IMPORTS["iroha_native._crypto"] = (native_origin, importlib.machinery.ExtensionFileLoader)
+
+    def _descendant_origin(name: str):
+        owner, _, suffix = name.partition(".")
+        parts = suffix.split(".")
+        if not suffix or any(not part.isidentifier() for part in parts):
+            raise RuntimeError(f"loaded source {name} has an unsupported descendant name")
+        member = _SOURCE_ROOTS[owner].joinpath(*parts)
+        origins = tuple(path for path in (member.with_suffix(".py"), member / "__init__.py") if path.is_file())
+        if len(origins) != 1:
+            raise RuntimeError(f"loaded source {name} lacks one canonical source member")
+        return origins[0], importlib.machinery.SourceFileLoader
+
+    def _assert_source_loaded() -> None:
+        from types import ModuleType
+
+        names = _source_names()
+        if any(name not in names for name in _SOURCE_LOADED):
+            raise RuntimeError("loaded source namespace removed an original module owner")
+        for name in names:
+            module = sys.modules[name]
+            if type(module) is not ModuleType:
+                raise RuntimeError(f"loaded source {name} is not its admitted original owner")
+            if name not in _SOURCE_IMPORTS:
+                _SOURCE_IMPORTS[name] = _descendant_origin(name)
+            origin, loader_type = _SOURCE_IMPORTS[name]
+            values = vars(module)
+            spec = values.get("__spec__")
+            package = origin.name == "__init__.py"
+            if (
+                type(spec) is not importlib.machinery.ModuleSpec
+                or type(spec.loader) is not loader_type
+                or spec.loader_state is not None
+                or values.get("__loader__") is not spec.loader
+                or type(values.get("__file__")) is not str
+                or values["__file__"] != str(origin)
+                or spec.origin != str(origin)
+                or spec.name != name
+                or spec.loader.name != name
+                or spec.loader.path != str(origin)
+                or spec.submodule_search_locations != ([str(origin.parent)] if package else None)
+                or (package and values.get("__path__") != [str(origin.parent)])
+                or (name in _SOURCE_LOADED and _SOURCE_LOADED[name] is not module)
+            ):
+                raise RuntimeError(f"loaded source {name} changed from its original filesystem owner")
+            _source_spec(name, origin, loader_type)
+            _SOURCE_LOADED[name] = module
+
+    def pytest_sessionstart(session) -> None:
+        _assert_source_loaded()
+
+    def pytest_runtest_setup(item) -> None:
+        _assert_source_loaded()
+
+    def pytest_sessionfinish(session, exitstatus) -> None:
+        _assert_source_loaded()

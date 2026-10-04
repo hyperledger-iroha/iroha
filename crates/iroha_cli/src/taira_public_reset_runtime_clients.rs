@@ -10,6 +10,9 @@
 use super::*;
 use iroha::data_model::NetworkId;
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
+use iroha_deploy::localnet::{
+    TAIRA_VALIDATOR_ROLES_FILE, TairaValidatorRoleInventoryV1, TairaValidatorRoleV1,
+};
 use zeroize::Zeroizing;
 
 const RUNTIME_ROOT: &str = "/private/runtime/taira-public-reset";
@@ -291,23 +294,6 @@ pub(super) struct PrepareRuntimeClients {
     output_dir: PathBuf,
 }
 
-#[derive(JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-struct LaneManifestValidator {
-    validator: String,
-    peer_id: String,
-}
-
-#[derive(JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-struct LaneManifest {
-    lane: String,
-    governance: String,
-    version: u32,
-    validators: Vec<LaneManifestValidator>,
-    quorum: u32,
-}
-
 #[derive(JsonSerialize)]
 struct ClientBundleReceipt {
     schema: String,
@@ -349,39 +335,25 @@ fn private_bytes(path: &Path, maximum: u64, label: &str) -> Result<Zeroizing<Vec
     )?))
 }
 
-fn public_manifest(path: &Path) -> Result<LaneManifest> {
-    let (file, snapshot) = open_pinned_regular(path, "generated lane manifest")?;
+fn public_validator_roles(path: &Path) -> Result<TairaValidatorRoleInventoryV1> {
+    let (file, snapshot) = open_pinned_regular(path, "generated validator role inventory")?;
     #[cfg(unix)]
     if snapshot.uid != rustix::process::geteuid().as_raw()
         || !matches!(snapshot.mode & 0o7777, 0o600 | 0o644)
     {
-        return Err(eyre!("generated lane manifest custody differs"));
+        return Err(eyre!("generated validator role inventory custody differs"));
     }
     let bytes = read_pinned_bytes(
         path,
-        "generated lane manifest",
+        "generated validator role inventory",
         file,
         &snapshot,
         MAX_CLIENT_INPUT_BYTES,
     )?;
-    let manifest: LaneManifest = json::from_slice(&bytes)
-        .map_err(|_| eyre!("generated lane manifest is not exact V1 JSON"))?;
-    validate_manifest(&manifest)?;
-    Ok(manifest)
-}
-
-fn validate_manifest(manifest: &LaneManifest) -> Result<()> {
-    if manifest.lane != "is"
-        || manifest.governance != "parliament"
-        || manifest.version != 1
-        || manifest.quorum != 3
-        || manifest.validators.len() != VALIDATOR_SLUGS.len()
-    {
-        return Err(eyre!(
-            "generated lane manifest is not the four-validator IS committee"
-        ));
-    }
-    Ok(())
+    let inventory: TairaValidatorRoleInventoryV1 = json::from_slice(&bytes)
+        .map_err(|_| eyre!("generated validator role inventory is not exact V1 JSON"))?;
+    inventory.validate()?;
+    Ok(inventory)
 }
 
 fn toml_table<'a>(root: &'a toml::Table, path: &[&str]) -> Result<&'a toml::Table> {
@@ -463,12 +435,11 @@ fn parse_base(bytes: &[u8], staging: Option<&StagedRuntimeLayout>) -> Result<tom
             return Err(eyre!("generated base transaction policy differs"));
         }
         let account = toml_table(&table, &["account"])?;
-        if account.len() != 4
+        if account.len() != 3
             || account
                 .get("chain_discriminant")
                 .and_then(toml::Value::as_integer)
                 != Some(i64::from(CHAIN_DISCRIMINANT))
-            || toml_text(account, "domain")? != "wonderland.universal"
         {
             return Err(eyre!("generated base account context differs"));
         }
@@ -517,10 +488,6 @@ fn render_client(
     root.insert("transaction".into(), toml::Value::Table(transaction));
     let mut account = toml::Table::new();
     account.insert(
-        "domain".into(),
-        toml::Value::String("wonderland.universal".into()),
-    );
-    account.insert(
         "chain_discriminant".into(),
         toml::Value::Integer(i64::from(CHAIN_DISCRIMINANT)),
     );
@@ -554,7 +521,7 @@ fn canonical_account(text: &str, public: &PublicKey, label: &str) -> Result<()> 
 
 fn peer_config(
     config: &[u8],
-    row: &LaneManifestValidator,
+    row: &TairaValidatorRoleV1,
     index: usize,
     staging: Option<&StagedRuntimeLayout>,
 ) -> Result<(PublicKey, FaucetPolicyV1)> {
@@ -577,12 +544,12 @@ fn peer_config(
         let peer_id: PeerId = row
             .peer_id
             .parse()
-            .map_err(|_| eyre!("generated manifest peer identity is invalid"))?;
+            .map_err(|_| eyre!("generated role peer identity is invalid"))?;
         if peer_id.to_string() != row.peer_id
             || PeerId::from(peer_public).to_string() != row.peer_id
         {
             return Err(eyre!(
-                "generated manifest peer identity differs from peer config"
+                "generated role peer identity differs from peer config"
             ));
         }
         let signer = toml_table(&table, &["soracloud_runtime", "submission", "signer"])?;
@@ -779,7 +746,8 @@ pub(super) fn prepare(args: &PrepareRuntimeClients, output: &mut impl Write) -> 
                 "canary identity differs from native public inputs or maintenance admin"
             ));
         }
-        let manifest = public_manifest(&args.localnet_dir.join("lane-manifests/is.manifest.json"))?;
+        let inventory =
+            public_validator_roles(&args.localnet_dir.join(TAIRA_VALIDATOR_ROLES_FILE))?;
         let canary_origin = staging
             .as_ref()
             .map(|layout| layout.local_origin(0))
@@ -799,7 +767,7 @@ pub(super) fn prepare(args: &PrepareRuntimeClients, output: &mut impl Write) -> 
         let mut faucet: Option<FaucetPolicyV1> = None;
         let mut accounts = BTreeSet::new();
         let mut peers = BTreeSet::new();
-        for (index, row) in manifest.validators.iter().enumerate() {
+        for (index, row) in inventory.validators.iter().enumerate() {
             let path = args.localnet_dir.join(format!("peer{index}.toml"));
             let config =
                 private_bytes(&path, MAX_CLIENT_INPUT_BYTES, "generated validator config")?;
@@ -994,30 +962,58 @@ mod tests {
     }
 
     #[test]
-    fn manifest_requires_exact_four_validator_is_committee() {
-        let correct = r#"{"lane":"is","governance":"parliament","version":1,"validators":[{"validator":"one","peer_id":"peer1"},{"validator":"two","peer_id":"peer2"},{"validator":"three","peer_id":"peer3"},{"validator":"four","peer_id":"peer4"}],"quorum":3}"#;
-        let decoded: LaneManifest = json::from_str(correct).unwrap();
-        validate_manifest(&decoded).unwrap();
-        for wrong in [
-            correct.replace("\"quorum\":3", "\"quorum\":1"),
-            correct.replace("\"lane\":\"is\"", "\"lane\":\"paynet\""),
-        ] {
-            let parsed: LaneManifest = json::from_str(&wrong).unwrap();
-            assert!(validate_manifest(&parsed).is_err());
-        }
-        let unknown = correct.replace("\"peer_id\":\"peer4\"", "\"peer_id\":\"peer4\",\"extra\":1");
-        assert!(json::from_str::<LaneManifest>(&unknown).is_err());
+    fn public_role_reader_rejects_lane_authority_json() {
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt as _;
+        let _guard = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
+        let parent = tempfile::tempdir().unwrap();
+        let canonical_parent = parent.path().canonicalize().unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&canonical_parent, fs::Permissions::from_mode(0o700)).unwrap();
+        let path = canonical_parent.join(TAIRA_VALIDATOR_ROLES_FILE);
+        let validators = (0_u16..4)
+            .map(|index| {
+                let signer =
+                    KeyPair::from_seed(vec![u8::try_from(index + 1).unwrap()], Algorithm::Ed25519);
+                let peer = KeyPair::from_seed(
+                    vec![u8::try_from(index + 1).unwrap()],
+                    Algorithm::BlsNormal,
+                );
+                TairaValidatorRoleV1 {
+                    index,
+                    validator: AccountId::new(signer.public_key().clone()).to_string(),
+                    peer_id: PeerId::from(peer.public_key().clone()).to_string(),
+                }
+            })
+            .collect();
+        let inventory = TairaValidatorRoleInventoryV1 {
+            schema: "iroha.taira.validator-role-inventory.v1".into(),
+            chain: CHAIN_ID.into(),
+            validators,
+            quorum: 3,
+        };
+        let raw = json::to_vec(&inventory).unwrap();
+        fs::write(&path, &raw).unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        public_validator_roles(&path).unwrap();
+        let unknown = String::from_utf8(raw)
+            .unwrap()
+            .replacen("{", "{\"lane\":\"is\",", 1);
+        fs::write(&path, unknown).unwrap();
+        assert!(public_validator_roles(&path).is_err());
     }
 
     #[test]
-    fn peer_parser_binds_manifest_signer_socket_and_faucet() {
+    fn peer_parser_binds_role_signer_socket_and_faucet() {
         let _guard = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
         let peer = KeyPair::from_seed(b"peer-fixture".to_vec(), Algorithm::BlsNormal);
         let signer = KeyPair::from_seed(b"runtime-signer-fixture".to_vec(), Algorithm::Ed25519);
         let faucet = KeyPair::from_seed(b"faucet-fixture".to_vec(), Algorithm::Ed25519);
         let (_, bytes) = signer.public_key().try_to_bytes().unwrap();
         let account = AccountId::new(signer.public_key().clone()).to_string();
-        let row = LaneManifestValidator {
+        let row = TairaValidatorRoleV1 {
+            index: 0,
             validator: account.clone(),
             peer_id: PeerId::from(peer.public_key().clone()).to_string(),
         };
@@ -1043,7 +1039,8 @@ mod tests {
         .unwrap();
         let wrong_port = config.replace(&address, &wrong_address);
         assert!(peer_config(wrong_port.as_bytes(), &row, 0, None).is_err());
-        let wrong_account = LaneManifestValidator {
+        let wrong_account = TairaValidatorRoleV1 {
+            index: 0,
             validator: AccountId::new(faucet.public_key().clone()).to_string(),
             peer_id: row.peer_id.clone(),
         };
@@ -1072,7 +1069,7 @@ mod tests {
             Hash::new(b"runtime-client-test"),
         ));
         let base = format!(
-            "chain = {CHAIN_ID:?}\nnetwork_id_file = \"genesis.expected_hash\"\ntorii_url = \"http://127.0.0.1:8080/\"\n[transaction]\ntime_to_live_ms = 30000\nstatus_timeout_ms = 30000\nnonce = false\n[account]\ndomain = \"wonderland.universal\"\nchain_discriminant = 369\npublic_key = {:?}\nprivate_key = \"fixture-secret-invalid\"\n[basic_auth]\nweb_login = \"fixture-user\"\npassword = \"fixture-password\"\n",
+            "chain = {CHAIN_ID:?}\nnetwork_id_file = \"genesis.expected_hash\"\ntorii_url = \"http://127.0.0.1:8080/\"\n[transaction]\ntime_to_live_ms = 30000\nstatus_timeout_ms = 30000\nnonce = false\n[account]\nchain_discriminant = 369\npublic_key = {:?}\nprivate_key = \"fixture-secret-invalid\"\n[basic_auth]\nweb_login = \"fixture-user\"\npassword = \"fixture-password\"\n",
             kp.public_key().to_string(),
         );
         let error = parse_base(base.as_bytes(), None).unwrap_err();

@@ -8,6 +8,10 @@ use crate::{
     publication::{CapturedPublication, NextPublication, Publication},
 };
 
+#[cfg(any(test, feature = "test"))]
+#[path = "cell/test_support.rs"]
+pub mod test_support;
+
 #[path = "cell/initial.rs"]
 mod initial;
 pub use initial::{CellInitialization, CellInitializationError};

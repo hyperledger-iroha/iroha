@@ -7,7 +7,10 @@ use std::{alloc::Layout, cell::RefCell};
 static DEVICES: DeviceRegistry<MetalState> = DeviceRegistry::new();
 static DISCOVERY: DiscoveryGate = DiscoveryGate::new();
 static DISCOVERY_PROGRESS: FairProgress = FairProgress::new();
-static MERKLE_PROGRESS: FairProgress = FairProgress::new();
+static ED25519_PROGRESS: FairProgress = FairProgress::new();
+static MERKLE_REHASH_PROGRESS: FairProgress = FairProgress::new();
+static MERKLE_TREE_PROGRESS: FairProgress = FairProgress::new();
+static MERKLE_ROOT_PROGRESS: FairProgress = FairProgress::new();
 static BATCH_PROGRESS: [FairProgress; metal_cost::BATCH_FAMILIES] =
     [const { FairProgress::new() }; metal_cost::BATCH_FAMILIES];
 const CALIBRATION_BUDGET: Duration = Duration::from_secs(8);
@@ -45,6 +48,51 @@ mod configuration_tests {
             ..Default::default()
         });
         assert!(metal_policy_enabled());
+        assert_eq!(DEVICES.len(), 0);
+        // Unmeasured geometry must also decline before discovery or calibration.
+        for leaves in [0, 8_191, 229_377, usize::MAX] {
+            assert!(metal_merkle_cost_rehash::Geometry::new(0, 32, leaves).is_none());
+        }
+        let retained = crate::ByteMerkleTree::new(1, 32).unwrap();
+        assert!(!metal_rehash_tree_auto(&retained, &[1]));
+        for (bytes, chunk) in [
+            (0, 32),
+            (8_191 * 32, 32),
+            (65_536 * 32 + 1, 32),
+            (1, 0),
+            (1, 33),
+        ] {
+            // Test the real root entrypoint with unsupported borrowed geometry.
+            // The fixed tiny slice controls invalid chunk cases; count bounds
+            // are also checked directly without manufacturing huge input data.
+            assert!(metal_merkle_cost_root::Geometry::new(bytes, chunk).is_none());
+            assert!(metal_merkle_cost_tree::Geometry::new(bytes, chunk).is_none());
+        }
+        assert!(metal_root_from_bytes_auto(&[1], 0).is_none());
+        assert!(metal_root_from_bytes_auto(&[1], 33).is_none());
+        assert!(metal_root_from_bytes_auto(&[1], 32).is_none());
+        assert!(metal_tree_from_bytes_auto(&[1], 0).is_none());
+        assert!(metal_tree_from_bytes_auto(&[1], 33).is_none());
+        assert!(metal_tree_from_bytes_auto(&[1], 32).is_none());
+        for (work, items) in [
+            (metal_cost::MetalBatchWork::AesEnc, 2_049),
+            (metal_cost::MetalBatchWork::AesDecRounds(65), 128),
+        ] {
+            assert!(select_batch(work, items).is_none());
+        }
+        let unsupported = [crate::signature::Ed25519BatchItem::default(); 513];
+        let mut output = [true; 513];
+        assert!(!metal_ed25519_auto_into(&unsupported, &mut output));
+        assert!(output.into_iter().all(|value| value));
+        assert!(!metal_ed25519_auto_into(&unsupported[..16], &mut []));
+        let long = [0u8; 65_537];
+        let unsupported = [crate::signature::Ed25519BatchItem {
+            message: &long,
+            ..Default::default()
+        }; 16];
+        let mut output = [true; 16];
+        assert!(!metal_ed25519_auto_into(&unsupported, &mut output));
+        assert!(output.into_iter().all(|value| value));
         assert_eq!(DEVICES.len(), 0);
         // Check after policy application: entering this gate beforehand would suppress the
         // very discovery this test must catch. The gate records attempts even without a GPU.
@@ -276,39 +324,127 @@ pub(super) fn current_selection() -> Option<MetalSelection> {
     Some(MetalSelection { lease })
 }
 
-pub(super) fn select_merkle(work: MetalMerkleWork, leaves: usize) -> Option<MetalSelection> {
-    select(&MERKLE_PROGRESS, |state, begin| {
-        let mut cache = state.merkle_cost.try_lock().ok()?;
-        cache
-            .get_or_calibrate(Instant::now(), || {
-                metal_cost::calibrate(begin().ok_or(metal_cost::CalibrationFailure::Deferred)?)
-            })?
-            .qualified_cost(work, leaves)
+/// Rehash a fixed retained tree, including complete canonical-node refresh.
+/// Selection reads only public geometry and the actual qualified CPU baseline.
+pub(super) fn metal_rehash_tree_auto(tree: &crate::ByteMerkleTree, data: &[u8]) -> bool {
+    let Some(geometry) =
+        metal_merkle_cost_rehash::Geometry::new(data.len(), tree.chunk_size(), tree.leaf_count())
+    else {
+        return false;
+    };
+    let context = Sha256Context::production();
+    let Some(baseline) = sha256_cpu::context::Sha256Baseline::capture(context) else {
+        return false;
+    };
+    select(&MERKLE_REHASH_PROGRESS, |state, begin| {
+        state.merkle_rehash_cost.try_lock().ok()?.qualified_cost(
+            Instant::now(),
+            geometry,
+            baseline,
+            context,
+            begin,
+            |started| metal_merkle_cost_rehash::calibrate(geometry, baseline, context, started),
+        )
     })
+    .and_then(|selection| {
+        selection.run(|| metal_merkle::rehash_tree(tree, data, baseline, context))
+    })
+    .unwrap_or(false)
+}
+
+/// Byte-root selection reads only exact public geometry. The selected original
+/// physical owner remains bound through the complete operation and final readback.
+pub(super) fn metal_root_from_bytes_auto(data: &[u8], chunk: usize) -> Option<[u8; 32]> {
+    let geometry = metal_merkle_cost_root::Geometry::new(data.len(), chunk)?;
+    select(&MERKLE_ROOT_PROGRESS, |state, begin| {
+        state.merkle_root_cost.try_lock().ok()?.qualified_cost(
+            Instant::now(),
+            geometry,
+            begin,
+            |started| metal_merkle_cost_root::calibrate(geometry, started),
+        )
+    })?
+    .run(|| metal_merkle::root_from_bytes(data, chunk))
+    .flatten()
+}
+
+/// Complete retained-tree construction, bound to exact public geometry and
+/// the actual original CPU baseline. No caller bytes enter calibration.
+pub(super) fn metal_tree_from_bytes_auto(
+    data: &[u8],
+    chunk: usize,
+) -> Option<crate::ByteMerkleTree> {
+    let geometry = metal_merkle_cost_tree::Geometry::new(data.len(), chunk)?;
+    let context = Sha256Context::production();
+    let baseline = sha256_cpu::context::Sha256Baseline::capture(context)?;
+    let selection = select(&MERKLE_TREE_PROGRESS, |state, begin| {
+        state.merkle_tree_cost.try_lock().ok()?.qualified_cost(
+            Instant::now(),
+            geometry,
+            baseline,
+            context,
+            begin,
+            |started| metal_merkle_cost_tree::calibrate(geometry, baseline, context, started),
+        )
+    })?;
+    if !baseline.is_current(context) {
+        return None;
+    }
+    selection
+        .run(|| {
+            let original = current_selection()?;
+            let tree = metal_merkle::tree_from_bytes(data, chunk)?;
+            if !baseline.is_current(context) {
+                return None;
+            }
+            // Re-enter this same physical owner after complete destination construction.
+            original.run(|| tree)
+        })
+        .flatten()
 }
 
 pub(super) fn select_batch(
     work: metal_cost::MetalBatchWork,
     items: usize,
-) -> Option<MetalSelection> {
-    if !work.calibration_supported() || items < work.min_items() {
-        return None;
+) -> Option<metal_aes::MetalAesSelection> {
+    let geometry = metal_cost::exact::Geometry::new(work, items)?;
+    let baseline = metal_cost::AesCpuBaseline::capture(work);
+    let selection = select(&BATCH_PROGRESS[work.family_index()], |state, begin| {
+        state.batch_cost[work.family_index()]
+            .try_lock()
+            .ok()?
+            .qualified_cost(Instant::now(), geometry, baseline, begin, |started| {
+                metal_cost::exact::calibrate(geometry, baseline, started)
+            })
+    })?;
+    metal_aes::MetalAesSelection::new(selection, baseline, items)
+}
+
+/// Selection and execution borrow the same immutable public geometry and keep
+/// the original physical owner through result acceptance.
+pub(crate) fn metal_ed25519_auto_into(
+    items: &[crate::signature::Ed25519BatchItem<'_>],
+    destination: &mut [bool],
+) -> bool {
+    if items.len() != destination.len() || !metal_policy_enabled() {
+        return false;
     }
-    select(&BATCH_PROGRESS[work.family_index()], |state, begin| {
-        if matches!(work, metal_cost::MetalBatchWork::Ed25519) && state.ed25519_signature.is_none()
-        {
-            return None;
-        }
-        let mut cache = state.batch_cost[work.family_index()].try_lock().ok()?;
-        cache
-            .get_or_calibrate(Instant::now(), work, || {
-                metal_cost::calibrate_batch(
-                    work,
-                    begin().ok_or(metal_cost::CalibrationFailure::Deferred)?,
-                )
-            })?
-            .qualified_cost(items)
+    let Some(geometry) = crate::signature::ed25519_geometry::MessageGeometry::new(items) else {
+        return false;
+    };
+    select(&ED25519_PROGRESS, |state, begin| {
+        state.ed25519_signature.as_ref()?;
+        state.ed25519_cost.try_lock().ok()?.qualified_cost(
+            Instant::now(),
+            geometry,
+            begin,
+            |started| metal_ed25519_cost::calibrate(geometry, started),
+        )
     })
+    .and_then(|selected| {
+        selected.run(|| super::metal_signature::metal_ed25519_items_into(items, destination))
+    })
+    .unwrap_or(false)
 }
 
 pub(super) fn restart_discovery() {

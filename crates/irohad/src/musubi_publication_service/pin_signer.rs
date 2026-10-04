@@ -1,13 +1,14 @@
-//! Purpose-bound software signer for one paid Musubi pin registration.
+//! Purpose-bound paid pin preparation and immutable-slot signing.
 //!
-//! The credential remains in this runtime owner. The only signing entrypoint constructs its own
-//! canonical manifest and sole `RegisterPinManifest` payload from an authenticated finalized
-//! archive, current public policy, and the daemon's fee quote. It neither admits the transaction
-//! to Queue nor substitutes for the durable signed-intent outbox.
+//! The credential remains in this runtime owner. Public preparation constructs the canonical
+//! manifest and quoted unsigned payload. The private signing leaf accepts only its closed
+//! immutable slot, which persists the payload first and retains the original signed graph
+//! before any subsequent fallible check. Queue admission remains the coordinator's boundary.
 // TODO: Wire this signer through the immutable signed-intent outbox and finalized pin recovery,
 // then qualify queue admission and provider coordination before stock publication can start.
 use super::{
     MusubiPublicationFinalizedArchiveRegistrationQueryV1,
+    MusubiPublicationFinalizedArchiveRegistrationReadErrorV1,
     MusubiPublicationFinalizedArchiveRegistrationReaderV1,
     MusubiPublicationPrivateServiceContextV1, pin_registration::validate_signed_pin_intent,
 };
@@ -15,11 +16,11 @@ use iroha_config::parameters::actual::{
     MusubiPublicationPaidPinPolicy, SorafsPinPolicyConstraints,
 };
 use iroha_core::{
+    execution_attempt::ExecutionDeferred,
     executor::quote_nexus_fee_admission_draft,
     queue::Queue,
     smartcontracts::isi::sorafs::manifest_pin_policy_constraints_from_config,
     state::{State, StateReadOnly as _, WorldReadOnly as _, WorldStateSnapshot as _},
-    tx::AcceptedTransaction,
 };
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
@@ -34,6 +35,7 @@ use iroha_data_model::{
     },
     transaction::{
         DEFAULT_TRANSACTION_TIME_TO_LIVE, FeePaymentIntent, SignedTransaction, TransactionBuilder,
+        TransactionPayload,
     },
 };
 use iroha_musubi_service::MusubiPublicationServiceClockV1;
@@ -46,8 +48,12 @@ use sorafs_manifest::{
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 /// Redacted signer or current-state failure before any Queue admission.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MusubiPublicationPinSigningErrorV1 {
+    /// Original local allocation admission is unfinished; retain its exact retry owner.
+    Deferred(ExecutionDeferred),
+    /// The source registration is ahead of this daemon's coherent finalized view.
+    LocallyAhead,
     /// Runtime key does not control the configured public pin account.
     AuthorityMismatch,
     /// Finalized source archive is unavailable, invalid, or no longer current.
@@ -70,6 +76,8 @@ pub enum MusubiPublicationPinSigningErrorV1 {
 impl core::fmt::Display for MusubiPublicationPinSigningErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self {
+            Self::Deferred(_) => "Musubi pin signing is waiting for local history capacity",
+            Self::LocallyAhead => "Musubi pin source is ahead of local finality",
             Self::AuthorityMismatch => "Musubi pin signer authority does not match configuration",
             Self::Finality => "finalized Musubi archive is not current",
             Self::Clock => "durable Musubi pin clock is unavailable",
@@ -83,6 +91,21 @@ impl core::fmt::Display for MusubiPublicationPinSigningErrorV1 {
     }
 }
 impl std::error::Error for MusubiPublicationPinSigningErrorV1 {}
+impl From<MusubiPublicationFinalizedArchiveRegistrationReadErrorV1>
+    for MusubiPublicationPinSigningErrorV1
+{
+    fn from(error: MusubiPublicationFinalizedArchiveRegistrationReadErrorV1) -> Self {
+        match error {
+            MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Deferred(original) => {
+                Self::Deferred(original)
+            }
+            MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::LocallyAhead => {
+                Self::LocallyAhead
+            }
+            MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Invalid => Self::Finality,
+        }
+    }
+}
 
 /// Runtime-only credential restricted to one canonical paid pin transaction shape.
 pub struct MusubiPublicationPinTransactionSignerV1 {
@@ -129,27 +152,31 @@ impl MusubiPublicationPinTransactionSignerV1 {
         })
     }
 
-    /// Sign only an exact paid pin for one independently authenticated current archive.
+    /// Prepare the exact quoted unsigned pin for one independently authenticated archive.
     ///
-    /// The returned pair composes with the daemon's immutable signed-intent outbox, which must
-    /// durably persist the exact signed wire before Queue admission. Finality, routing, current
-    /// pricing, combined funding, and signature are checked again on each call. A changed archive
-    /// or fee policy requires a new invocation and a new outbox intent.
+    /// The native coordinator must durably retain this payload before invoking the private
+    /// signing leaf. Rechecks may refuse preparation; this method never creates a signature,
+    /// enters Queue, or renews an already retained payload.
     ///
     /// # Errors
-    /// Returns a redacted error before any side effect if finality, current policy, funding,
-    /// routing, clock, fee quote, manifest, or signing validation fails.
-    pub fn sign_finalized_archive(
+    /// Preserves native source deferrals and refuses changed source, invalid funding/policy,
+    /// routing, clock or a deadline outside the original finite authorization.
+    pub fn prepare_finalized_archive(
         &self,
         source: &MusubiPublicationFinalizedArchiveRegistrationQueryV1,
         clock: &mut dyn MusubiPublicationServiceClockV1,
-    ) -> Result<(ManifestDigest, SignedTransaction), MusubiPublicationPinSigningErrorV1> {
+        deadline_unix_ms: u64,
+    ) -> Result<(ManifestDigest, TransactionPayload), MusubiPublicationPinSigningErrorV1> {
         use MusubiPublicationPinSigningErrorV1 as Error;
         let archive = self
             .finalized_reader
             .read_current_archive(source)
-            .map_err(|_| Error::Finality)?;
+            .map_err(Error::from)?;
         let now_ms = clock.current_time_ms().map_err(|_| Error::Clock)?;
+        let remaining = deadline_unix_ms
+            .checked_sub(now_ms)
+            .filter(|remaining| *remaining > 0)
+            .ok_or(Error::Clock)?;
         let governance = self.state.governance_snapshot();
         let manifest = build_exact_pin_manifest(
             &archive.commitment,
@@ -157,16 +184,84 @@ impl MusubiPublicationPinTransactionSignerV1 {
             &governance.sorafs_pin_policy,
             now_ms,
         )?;
-        let digest = ManifestDigest::from_manifest(&manifest).map_err(|_| Error::Manifest)?;
-        let payload = manifest.encode().map_err(|_| Error::Manifest)?;
+        self.prepare_manifest(source, &archive.commitment, manifest, now_ms, remaining)
+    }
+
+    pub(super) fn prepare_retained_pin(
+        &self,
+        request: &super::native_pin::slot::SlotRequest,
+        source: &MusubiPublicationFinalizedArchiveRegistrationQueryV1,
+        now_ms: u64,
+    ) -> eyre::Result<TransactionPayload> {
+        use super::native_pin::slot::{SlotKind, decode_frame};
+        request.validate_pin_policy(
+            self.policy.storage_class,
+            self.policy.retention_horizon_secs,
+        )?;
+        request.authorization.ensure_live(now_ms)?;
+        eyre::ensure!(
+            request.kind == SlotKind::Pin
+                && request.network == self.network_id
+                && request.authority == self.authority,
+            "native retained pin signer binding differs"
+        );
+        let instruction: iroha_data_model::isi::InstructionBox =
+            decode_frame(&request.instruction)?;
+        let pin = instruction
+            .as_any()
+            .downcast_ref::<RegisterPinManifest>()
+            .ok_or_else(|| eyre::eyre!("native retained pin instruction differs"))?;
+        let manifest = sorafs_manifest::decode_manifest_v1_canonical(&pin.manifest_payload)?;
+        let archive = self.finalized_reader.read_current_archive(source)?;
+        // Reuse the sole quote/funding owner while keeping the original complete manifest,
+        // including its finite retention epoch. A retry cannot rebuild it from a later clock.
+        let (_, payload) = self.prepare_manifest(
+            source,
+            &archive.commitment,
+            manifest,
+            now_ms,
+            request.authorization.deadline_unix_ms - now_ms,
+        )?;
+        request
+            .authorization
+            .reserve_payload(&Default::default(), &payload.fee_payment, false)?;
+        Ok(payload)
+    }
+
+    fn prepare_manifest(
+        &self,
+        source: &MusubiPublicationFinalizedArchiveRegistrationQueryV1,
+        archive: &MusubiArchiveCommitmentV1,
+        manifest: ManifestV1,
+        now_ms: u64,
+        remaining: u64,
+    ) -> Result<(ManifestDigest, TransactionPayload), MusubiPublicationPinSigningErrorV1> {
+        use MusubiPublicationPinSigningErrorV1 as Error;
+        let governance = self.state.governance_snapshot();
+        super::pin_registration::validate_pin_manifest(&manifest, archive).map_err(|error| {
+            match error {
+                super::MusubiPublicationFinalizedPinRegistrationReadErrorV1::Deferred(original) => {
+                    Error::Deferred(original)
+                }
+                _ => Error::Manifest,
+            }
+        })?;
+        sorafs_manifest::validate_manifest(
+            &manifest,
+            &manifest_pin_policy_constraints_from_config(&governance.sorafs_pin_policy),
+        )
+        .map_err(|_| Error::Policy)?;
+        let digest = ManifestDigest::from_manifest(&manifest).map_err(pin_codec_refusal)?;
+        let payload = manifest.encode().map_err(pin_codec_refusal)?;
         let fixed_clock = TimeSource::new_fixed(Duration::from_millis(now_ms));
-        let draft = TransactionBuilder::new_with_time_source(
+        let mut draft = TransactionBuilder::new_with_time_source(
             self.network_id,
             self.authority.clone(),
             &fixed_clock,
             FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([RegisterPinManifest::new(payload, None, None)]);
+        draft.set_ttl(Duration::from_millis(remaining).min(DEFAULT_TRANSACTION_TIME_TO_LIVE));
         let route = self
             .queue
             .route_payload_plan_with_state(draft.payload(), self.state.as_ref())
@@ -178,8 +273,8 @@ impl MusubiPublicationPinTransactionSignerV1 {
         let current = self
             .finalized_reader
             .read_current_archive_in_view(source, &view)
-            .map_err(|_| Error::Finality)?;
-        if current.commitment != archive.commitment {
+            .map_err(Error::from)?;
+        if &current.commitment != archive {
             return Err(Error::Finality);
         }
         if view.world().pin_manifests().get(&digest).is_some() {
@@ -201,7 +296,14 @@ impl MusubiPublicationPinTransactionSignerV1 {
             next_height,
             Some(route.route.dataspace_id),
         )
-        .map_err(|_| Error::TransactionFee)?;
+        .map_err(|error| match error {
+            iroha_core::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                Error::Deferred(original)
+            }
+            iroha_core::execution_attempt::ExecutionAttemptError::Rejected(_) => {
+                Error::TransactionFee
+            }
+        })?;
         require_combined_pin_funding(
             view.world(),
             &governance.sorafs_pin_fee_asset_id,
@@ -210,39 +312,196 @@ impl MusubiPublicationPinTransactionSignerV1 {
             &quote,
             observation_time_ms / 1_000,
         )?;
-        let (max_clock_drift, transaction_limits) = {
-            let parameters = view.world().parameters();
-            (
-                parameters.sumeragi().max_clock_drift(),
-                parameters.transaction(),
-            )
-        };
-        let crypto = Arc::clone(&view.crypto);
         drop(view);
-        let builder = draft.with_fee_payment_intent(quote.recommended_intent);
-        let transaction = sign_quoted_pin(
+        let payload = draft
+            .with_fee_payment_intent(quote.recommended_intent)
+            .into_payload()
+            .map_err(|_| Error::TransactionFee)?;
+        self.recheck_finalized_archive(source)?;
+        Ok((digest, payload))
+    }
+
+    /// Quote only the exact closed control request already retained by the coordinator. This
+    /// creates no signature and never replaces a retained payload. Controls spend fees only.
+    pub(super) fn prepare_control(
+        &self,
+        request: &super::native_pin::slot::SlotRequest,
+        now_ms: u64,
+    ) -> eyre::Result<TransactionPayload> {
+        use super::native_pin::slot::{SlotKind, decode_frame};
+        request.validate()?;
+        request.authorization.ensure_live(now_ms)?;
+        eyre::ensure!(
+            request.network == self.network_id
+                && request.authority == self.authority
+                && !matches!(request.kind, SlotKind::Pin),
+            "native control signer binding differs"
+        );
+        let instruction: iroha_data_model::isi::InstructionBox =
+            decode_frame(&request.instruction)?;
+        let mut draft = TransactionBuilder::new_with_time_source(
             self.network_id,
-            &self.authority,
-            &archive.commitment,
-            digest,
-            builder,
-            &self.key_pair,
-        )?;
-        AcceptedTransaction::accept(
-            transaction.clone(),
-            &self.network_id,
-            max_clock_drift,
-            transaction_limits,
-            crypto.as_ref(),
+            self.authority.clone(),
+            &TimeSource::new_fixed(Duration::from_millis(now_ms)),
+            FeePaymentIntent::authority(Vec::new(), None),
         )
-        .map_err(|_| Error::TransactionAdmission)?;
-        if self.finalized_reader.read_current_archive(source).is_err() {
-            return Err(Error::Finality);
+        .with_instructions([instruction]);
+        draft.set_ttl(
+            Duration::from_millis(request.authorization.deadline_unix_ms - now_ms)
+                .min(DEFAULT_TRANSACTION_TIME_TO_LIVE),
+        );
+        let route = self
+            .queue
+            .route_payload_plan_with_state(draft.payload(), &self.state)
+            .map_err(|_| eyre::eyre!("native control route is unavailable"))?;
+        let iroha_core::queue::RoutingPlan::Single(route) = route else {
+            eyre::bail!("native control needs one native route");
+        };
+        let view = self.state.query_view();
+        let observed = view
+            .authenticated_query_ledger_time_ms()
+            .ok_or_else(|| eyre::eyre!("native control has no authenticated ledger time"))?;
+        let next_height = u64::try_from(view.block_hashes().len())?
+            .checked_add(1)
+            .ok_or_else(|| eyre::eyre!("native control height overflow"))?;
+        let quote = quote_nexus_fee_admission_draft(
+            view.world(),
+            &view.nexus,
+            &view.pipeline,
+            draft.payload(),
+            observed,
+            next_height,
+            Some(route.route.dataspace_id),
+        )
+        .map_err(|error| match error {
+            iroha_core::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                eyre::Report::new(original)
+            }
+            iroha_core::execution_attempt::ExecutionAttemptError::Rejected(_) => {
+                eyre::eyre!("native control fee quote is unavailable")
+            }
+        })?;
+        eyre::ensure!(
+            quote.quote.debit_source == FeeDebitSource::Account(self.authority.clone()),
+            "native control fee payer differs"
+        );
+        for charge in &quote.quote.charges {
+            let asset = quote
+                .quote
+                .authority_charge_assets
+                .get(&charge.kind)
+                .ok_or_else(|| eyre::eyre!("native control fee asset is unavailable"))?;
+            eyre::ensure!(
+                asset.account() == &self.authority
+                    && asset.definition() == &charge.asset_definition_id,
+                "native control fee source differs"
+            );
+            eyre::ensure!(
+                view.world()
+                    .assets()
+                    .get(asset)
+                    .is_some_and(|balance| balance.as_ref() >= &charge.max_bound)
+                    || charge.max_bound.is_zero(),
+                "native control fee funding is unavailable"
+            );
         }
-        Ok((digest, transaction))
+        let payload = draft
+            .with_fee_payment_intent(quote.recommended_intent)
+            .into_payload()?;
+        request.authorization.reserve_payload(
+            &Default::default(),
+            &payload.fee_payment,
+            matches!(request.kind, SlotKind::Check(_)),
+        )?;
+        Ok(payload)
+    }
+
+    /// The only production signature path consumes the immutable payload retained by its
+    /// fixed-purpose slot. The slot caches the signed graph before any later fallible work.
+    pub(super) fn sign_retained(
+        &self,
+        slot: &mut super::native_pin::slot::Slot,
+        source: Option<&MusubiPublicationFinalizedArchiveRegistrationQueryV1>,
+        clock: &mut dyn MusubiPublicationServiceClockV1,
+        deadline: std::time::Instant,
+    ) -> eyre::Result<()> {
+        use super::native_pin::slot::SlotKind;
+        slot.request().validate_pin_policy(
+            self.policy.storage_class,
+            self.policy.retention_horizon_secs,
+        )?;
+        eyre::ensure!(
+            slot.request().network == self.network_id && slot.request().authority == self.authority,
+            "native signer original identity differs"
+        );
+        let archive = match slot.request().kind {
+            SlotKind::Pin => Some(self.finalized_reader.read_current_archive(
+                source.ok_or_else(|| eyre::eyre!("native pin source original is missing"))?,
+            )?),
+            _ => {
+                eyre::ensure!(source.is_none(), "control slot cannot select an archive");
+                None
+            }
+        };
+        if let Some(archive) = &archive {
+            let payload = slot
+                .payload()?
+                .ok_or_else(|| eyre::eyre!("original pin payload missing"))?;
+            let iroha_data_model::transaction::Executable::Instructions(values) =
+                &payload.instructions
+            else {
+                eyre::bail!("original pin payload differs");
+            };
+            let pin = values[0]
+                .as_any()
+                .downcast_ref::<RegisterPinManifest>()
+                .ok_or_else(|| eyre::eyre!("original pin instruction differs"))?;
+            let manifest = sorafs_manifest::decode_manifest_v1_canonical(&pin.manifest_payload)?;
+            super::pin_registration::validate_pin_manifest(&manifest, &archive.commitment)?;
+        }
+        slot.sign_original(&self.key_pair, clock, deadline)?;
+        if let Some(archive) = archive {
+            let signed = slot
+                .signed()
+                .ok_or_else(|| eyre::eyre!("native signature is not retained"))?;
+            let iroha_data_model::transaction::Executable::Instructions(instructions) =
+                signed.instructions()
+            else {
+                eyre::bail!("native pin instruction differs");
+            };
+            let pin = instructions[0]
+                .as_any()
+                .downcast_ref::<RegisterPinManifest>()
+                .ok_or_else(|| eyre::eyre!("native pin instruction differs"))?;
+            let manifest = sorafs_manifest::decode_manifest_v1_canonical(&pin.manifest_payload)?;
+            let digest = ManifestDigest::from_manifest(&manifest)?;
+            validate_signed_pin_intent(
+                &self.network_id,
+                &self.authority,
+                &archive.commitment,
+                signed,
+                digest,
+            )?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn recheck_finalized_archive(
+        &self,
+        source: &MusubiPublicationFinalizedArchiveRegistrationQueryV1,
+    ) -> Result<(), MusubiPublicationPinSigningErrorV1> {
+        self.finalized_reader
+            .read_current_archive(source)
+            .map(|_| ())
+            .map_err(MusubiPublicationPinSigningErrorV1::from)
     }
 }
 
+#[cfg(test)]
+#[path = "pin_signer/reader_tests.rs"]
+mod reader_tests;
+
+#[cfg(test)]
 fn sign_quoted_pin(
     network_id: NetworkId,
     authority: &AccountId,
@@ -337,6 +596,15 @@ fn build_exact_pin_manifest(
     let constraints = manifest_pin_policy_constraints_from_config(governance);
     sorafs_manifest::validate_manifest(&manifest, &constraints).map_err(|_| Error::Policy)?;
     Ok(manifest)
+}
+
+fn pin_codec_refusal(error: norito::Error) -> MusubiPublicationPinSigningErrorV1 {
+    match super::pin_registration::codec_refusal(error) {
+        super::MusubiPublicationFinalizedPinRegistrationReadErrorV1::Deferred(original) => {
+            MusubiPublicationPinSigningErrorV1::Deferred(original)
+        }
+        _ => MusubiPublicationPinSigningErrorV1::Manifest,
+    }
 }
 
 fn require_combined_pin_funding(
@@ -506,6 +774,56 @@ mod tests {
         assert!(manifest.alias_claims.is_empty());
         assert!(manifest.metadata.is_empty());
         assert!(manifest.governance.council_signatures.is_empty());
+    }
+
+    #[test]
+    fn native_control_fee_report_preserves_typed_rejection_and_deferred_attempt() {
+        use iroha_core::{
+            execution_attempt::ExecutionAttemptError, executor::NexusFeeAdmissionError,
+        };
+        for original in [
+            ExecutionAttemptError::Rejected(NexusFeeAdmissionError::ConfigInvalid(
+                "exact fee configuration refusal".to_owned(),
+            )),
+            ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+            ),
+        ] {
+            let expected = original.clone();
+            let report = eyre::Report::new(original);
+            assert_eq!(
+                report.downcast_ref::<ExecutionAttemptError<NexusFeeAdmissionError>>(),
+                Some(&expected)
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_manifest_resource_refusal_preserves_local_deferral() {
+        let (archive, policy, _) = fixture();
+        let manifest = build_exact_pin_manifest(
+            &archive,
+            &policy,
+            &SorafsPinPolicyConstraints::default(),
+            42_001,
+        )
+        .unwrap();
+        let original = manifest.encode().unwrap();
+        let zero = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
+        let result = norito::with_decode_limits_scope(zero, || {
+            // The canonical decoder preserves the inherited allocation refusal through the
+            // manifest wrapper and the same mapper used by signed pin readback.
+            sorafs_manifest::decode_manifest_v1_canonical(&original)
+                .map_err(super::super::pin_registration::manifest_codec_refusal)
+        });
+        assert!(matches!(
+            result,
+            Err(super::super::MusubiPublicationFinalizedPinRegistrationReadErrorV1::Deferred(_))
+        ));
+        assert_eq!(
+            sorafs_manifest::decode_manifest_v1_canonical(&original).unwrap(),
+            manifest
+        );
     }
 
     #[test]

@@ -232,6 +232,54 @@ def test_encrypted_beacon_dkg_source_baseline() -> None:
     )
 
 
+@pytest.mark.parametrize("old,new", (
+    ("snapshot.record(),", "foreign.record(),"),
+    ("&self.budget,", "&foreign_budget,"),
+    ("self.finalized = Some(finalized);", "self.finalized = None;"),
+    ("return Err(GlobalThresholdBeaconError::IncompleteDkgEdges.into());", "return Ok(existing);"),
+))
+def test_encrypted_beacon_dkg_finalization_retains_original_owner(old: str, new: str) -> None:
+    """Finalization cannot substitute its source, funding, owner or all-edge rejection."""
+    model = guard.read("crates/iroha_data_model/src/consensus.rs")
+    path = "crates/iroha_core/src/beacon.rs"
+    core = guard.read(path)
+    body = guard.section(
+        core, "    /// Finalize only after every frozen dealer/recipient edge is accepted.",
+        "\n}\n\nfn validate_dkg_session(", path,
+    )
+    assert body.count(old) == 1
+    changed = core.replace(body, body.replace(old, new, 1), 1)
+    with pytest.raises(RuntimeError, match=re.escape(path)):
+        guard.require_encrypted_beacon_dkg_source(model, changed + "\n/* " + old + " */\n")
+
+
+@pytest.mark.parametrize("old,new", (
+    ("budget.try_reserve_bytes(demand.total_bytes()?)?", "foreign.try_reserve_bytes(demand.total_bytes()?)?"),
+    ("Construction::with_demand(demand, budget, &mut reservation)?", "Construction::with_demand(demand, foreign, &mut reservation)?"),
+    ("construction.edges(source.encrypted_shares.iter())?", "construction.edges(foreign.encrypted_shares.iter())?"),
+    ("construction.acceptances(source.share_acceptances.iter())?", "construction.acceptances(foreign.share_acceptances.iter())?"),
+    ("finalized_at_height: height,", "finalized_at_height: 0,"),
+    ("if construction.reservation.remaining_bytes() != 0", "if false"),
+))
+def test_encrypted_beacon_dkg_retained_constructor_cannot_lose_custody(
+    monkeypatch: pytest.MonkeyPatch, old: str, new: str,
+) -> None:
+    """The connected constructor keeps exact nested rows and its original reservation."""
+    path = guard.BEACON_DKG_OWNER_PATH
+    original_read = guard.read
+    source = original_read(path)
+    body = guard.rust_item(source, "pub(in crate::beacon) fn retain_finalized_dkg(", path)
+    assert body.count(old) == 1
+    changed = source.replace(body, body.replace(old, new, 1), 1)
+    monkeypatch.setattr(guard, "read", lambda requested: changed + "\n/* " + old + " */\n"
+                        if requested == path else original_read(requested))
+    with pytest.raises(RuntimeError, match=re.escape(path)):
+        guard.require_encrypted_beacon_dkg_source(
+            original_read("crates/iroha_data_model/src/consensus.rs"),
+            original_read("crates/iroha_core/src/beacon.rs"),
+        )
+
+
 @pytest.mark.parametrize(
     "original,replacement",
     (
@@ -278,25 +326,30 @@ def test_encrypted_beacon_dkg_rejects_partial_finalization(
         )
 
 
-@pytest.mark.parametrize("old,new", (
-    ("validation::DkgSnapshotRef::from(transcript).validate_with_admission(admit)?;", ""),
-    ("validation::DkgSnapshotRef::from(transcript).validate_with_admission(admit)?;",
-     "validation::DkgSnapshotRef::from(transcript).validate_with_admission(other)?;"),
-    ("validation::DkgSnapshotRef::from(transcript).validate_with_admission(admit)?;",
-     "let _ = validation::DkgSnapshotRef::from(transcript).validate_with_admission(admit);"),
-    ("|| transcript.encrypted_shares.len() != all_edges",
+@pytest.mark.parametrize("declaration,old,new", (
+    ("shape", "validation::DkgSnapshotRef::from(transcript).validate_with_verifier(verifier)?;", ""),
+    ("shape", "validation::DkgSnapshotRef::from(transcript).validate_with_verifier(verifier)?;",
+     "validation::DkgSnapshotRef::from(transcript).validate_with_verifier(other)?;"),
+    ("shape", "validation::DkgSnapshotRef::from(transcript).validate_with_verifier(verifier)?;",
+     "let _ = validation::DkgSnapshotRef::from(transcript).validate_with_verifier(verifier);"),
+    ("geometry", "|| transcript.encrypted_shares.len() != all_edges",
      "&& transcript.encrypted_shares.len() != all_edges"),
-    ("return Err(GlobalThresholdBeaconError::IncompleteDkgEdges.into());", "return Ok(());"),
-    (") != transcript.event_hash", ") != record.transcript_hash"),
+    ("geometry", "return Err(GlobalThresholdBeaconError::IncompleteDkgEdges);", "return Ok(());"),
+    ("shape", ") != transcript.event_hash", ") != record.transcript_hash"),
+    ("shape", "validate_adaptive_dkg_geometry(record)?;", ""),
+    ("shape", "validate_adaptive_dkg_geometry(record)?;", "validate_adaptive_dkg_geometry(foreign)?;"),
+    ("geometry", ".eq(1..=session.committee_size)", ".eq(1..session.committee_size)"),
 ))
 def test_encrypted_beacon_dkg_retains_original_admission_and_event_commitment(
-    old: str, new: str,
+    declaration: str, old: str, new: str,
 ) -> None:
     """Readback retains the caller's resource refusal and complete signed edge commitment."""
     model = guard.read("crates/iroha_data_model/src/consensus.rs")
     core = guard.read(BEACON_CORE_PATH)
     guard.require_encrypted_beacon_dkg_source(model, core)
-    body = guard.rust_item(core, "fn validate_adaptive_dkg_shape<E>(", BEACON_CORE_PATH)
+    name = ("fn validate_adaptive_dkg_geometry(" if declaration == "geometry" else
+            "fn validate_adaptive_dkg_shape<V: validation::DkgSignatureVerifier>(")
+    body = guard.rust_item(core, name, BEACON_CORE_PATH)
     assert body.count(old) == 1
     changed = core.replace(body, body.replace(old, new, 1), 1)
     assert changed != core
@@ -385,8 +438,8 @@ def test_signed_staking_fee_boundary_baseline() -> None:
     (
         (
             "crates/iroha_core/src/validation_fee.rs",
-            "crate::deferred_authority::reject_opaque_deferred_authority(groups, stx)?;",
-            "crate::deferred_authority::unchecked_opaque_operations(groups, stx)?;",
+            "crate::deferred_authority::reject_opaque_deferred_authority(groups, stx)",
+            "crate::deferred_authority::unchecked_opaque_operations(groups, stx)",
         ),
         (
             "crates/iroha_core/src/deferred_authority.rs",
@@ -640,6 +693,8 @@ CONSTRUCTION_PATH = "crates/iroha_core/src/state/state_block_construction.rs"
     ("fields", "                world,", "                world: World::default().block(),"),
     ("fields", "transactions: storage_transactions::TransactionsBlockField::new(transactions),",
      "transactions: storage_transactions::TransactionsBlockField::new(other_transactions),"),
+    ("fields", "_da_rewind_releases: da_rewind_releases,",
+     "_da_rewind_releases: foreign_releases,"),
     ("fields", "native_execution_tip: block_field::BlockField::new(native_execution_tip),",
      "native_execution_tip: block_field::BlockField::new(other_tip),"),
     ("fields", "_curr_block: curr_block,", "_curr_block: other_header,"),
@@ -656,7 +711,7 @@ CONSTRUCTION_PATH = "crates/iroha_core/src/state/state_block_construction.rs"
 ), ids=(
     "foreign-acquisition", "foreign-header", "substitute-continuation", "foreign-helper-module",
     "substitute-held-owner", "move-owned-finish", "substitute-world", "substitute-membership",
-    "substitute-native-tip", "substitute-carrier-header", "premature-start-flag", "substitute-parliament-buffer",
+    "substitute-da-rewind-releases", "substitute-native-tip", "substitute-carrier-header", "premature-start-flag", "substitute-parliament-buffer",
     "unarmed-final-handoff", "discard-final-original", "disconnected-outlined-finish",
     "empty-executing-owner", "lost-executing-retirement",
 ))
@@ -1083,9 +1138,56 @@ def test_sccp_heartbeat_keeps_the_original_ordered_start_owner(
 
 
 @pytest.mark.parametrize("path,original,replacement", (
+    ("crates/iroha_core/src/sumeragi/executor/replay.rs",
+     "instance: source.instance(),", "instance: foreign.instance(),"),
+    ("crates/iroha_core/src/sumeragi/executor/replay.rs",
+     "height: source.height(),", "height: foreign.height(),"),
+    ("crates/iroha_core/src/sumeragi/executor/replay.rs",
+     "block_hash: source.block_hash(),", "block_hash: foreign.block_hash(),"),
+    ("crates/iroha_core/src/sumeragi/executor/replay.rs",
+     "epoch: **epoch,", "epoch: *foreign_epoch,"),
+    ("crates/iroha_core/src/sumeragi/executor/replay.rs",
+     "params: *params,", "params: foreign_params,"),
+    ("crates/iroha_core/src/sumeragi/executor/replay.rs",
+     "committee_digest: committee_digest(committee),", "committee_digest: foreign_digest,"),
+    ("crates/iroha_core/src/sumeragi/executor/replay.rs",
+     "writer.write_all(iroha_sumeragi::preimage::TAG_COMMITTEE)?;", "writer.write_all(b\"foreign domain\")?;"),
+    ("crates/iroha_core/src/sumeragi/executor/replay.rs",
+     "u32::try_from(committee.n())", "u32::try_from(0)"),
+    ("crates/iroha_core/src/sumeragi/executor/replay.rs",
+     "u16::try_from(bytes.len())", "u16::try_from(0)"),
+    ("crates/iroha_core/src/sumeragi/executor/replay.rs",
+     "if let Err(error) = self.retire_completed_replay(block, qc)",
+     "if let Err(error) = self.retire_completed_replay(other_block, qc)"),
+    ("crates/iroha_core/src/sumeragi/executor/replay.rs",
+     "if let PublicationError::RecoveryRequired(reason) = &error",
+     "if let PublicationError::Retryable(reason) = &error"),
+    ("crates/iroha_core/src/sumeragi/executor/replay.rs",
+     "self.recovery = Some(reason.clone());", "self.recovery = None;"),
+    ("crates/iroha_core/src/sumeragi/executor/replay.rs",
+     "return Err(error);", "return Ok(());"),
+    ("crates/iroha_core/src/sumeragi/executor/replay.rs",
+     ".prepare_with_origin(block, qc, CommitTelemetryOrigin::HistoricalReplay)",
+     ".prepare_with_origin(block, qc, CommitTelemetryOrigin::Forward)"),
+    ("crates/iroha_core/src/sumeragi/executor/replay.rs",
+     "live.telemetry_origin != Some(CommitTelemetryOrigin::HistoricalReplay)", "false"),
+    ("crates/iroha_core/src/sumeragi/executor/replay.rs",
+     "self.source != ReplaySource::capture(block.source())", "false"),
+    ("crates/iroha_core/src/sumeragi/executor/replay.rs",
+     "self.payload != Hash::new(block.payload().as_slice())", "false"),
+    ("crates/iroha_core/src/sumeragi/executor/replay.rs",
+     "self.qc != qc", "false"),
+    ("crates/iroha_core/src/sumeragi/executor/replay.rs",
+     "preparation::encoding_failure(&error)",
+     "PublicationError::Retryable(error.to_string())"),
     ("crates/iroha_core/src/sumeragi/executor.rs",
-     ".prepare_with_origin(block, commit_qc, CommitTelemetryOrigin::HistoricalReplay)",
-     ".prepare_with_origin(block, commit_qc, CommitTelemetryOrigin::Forward)"),
+     "mod replay;", "#[cfg(test)]\nmod replay;"),
+    ("crates/iroha_core/src/sumeragi/executor.rs",
+     "self.call(|reply| Request::Replay(block.clone(), commit_qc.clone(), reply))",
+     "self.call(|reply| Request::Commit(block.clone(), commit_qc.clone(), reply))"),
+    ("crates/iroha_core/src/sumeragi/executor.rs",
+     "let _ = reply.send(self.replay(&block, &qc));",
+     "let _ = reply.send(self.commit(&block, &qc));"),
     ("crates/iroha_core/src/sumeragi/executor.rs",
      "pending.matches(block, qc) && pending.telemetry_origin == origin",
      "pending.matches(block, qc)"),
@@ -1110,6 +1212,36 @@ def test_parliament_replay_origin_retains_actual_authenticated_execution(
     source = guard.read(path)
     assert original in source
     changed = source.replace(original, replacement)
+    original_read = guard.read
+    monkeypatch.setattr(guard, "read", lambda target:
+                        changed if target == path else original_read(target))
+    with pytest.raises(RuntimeError, match=path):
+        guard.require_parliament_commit_publication(state)
+
+
+@pytest.mark.parametrize("original,replacement", (
+    ("-> Result<(), PublicationError>", "-> Result<(), String>"),
+    ("require_body_admission(block, &self.execution_budget)?;", ""),
+    ("require_qc_witness_admission(commit_qc, &self.execution_budget)?;", ""),
+    ("require_body_admission(block, &self.execution_budget)?;",
+     "require_body_admission(block, &self.execution_budget).map_err(|error| error.to_string())?;"),
+    ("require_qc_witness_admission(commit_qc, &self.execution_budget)?;",
+     "require_qc_witness_admission(commit_qc, &self.execution_budget).map_err(|error| error.to_string())?;"),
+    (".unwrap_or_else(|| Err(control::stopped()))",
+     ".unwrap_or_else(|| Err(control::stopped())).map_err(|error| error.to_string())"),
+    (".unwrap_or_else(|| Err(control::stopped()))", ".unwrap_or(Ok(()))"),
+))
+def test_replay_dispatch_preserves_typed_admission_and_channel_refusal(
+    original: str, replacement: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both original admissions precede a serialized, unprojected publication result."""
+    path = "crates/iroha_core/src/sumeragi/executor.rs"
+    state = guard.read(STATE_PATH)
+    guard.require_parliament_commit_publication(state)
+    source = guard.read(path)
+    replay = guard.rust_item(source, "    pub fn replay(", path)
+    assert replay.count(original) == 1
+    changed = source.replace(replay, replay.replace(original, replacement, 1), 1)
     original_read = guard.read
     monkeypatch.setattr(guard, "read", lambda target:
                         changed if target == path else original_read(target))
@@ -1173,8 +1305,8 @@ def test_indexed_beacon_requirement_gates_native_admission_and_production() -> N
      ""),
     (guard.EPOCH_BEACON_PATH, "    validate_pending_slot(world, current, height)?;\n", ""),
     (guard.EPOCH_BEACON_PATH,
-     "authenticated_global_threshold_beacon_roster_hash_v1(&record.session, &peers)",
-     "authenticated_global_threshold_beacon_roster_hash_v1(&record.session, &foreign_peers)"),
+     "authenticated_global_threshold_beacon_roster_hash_iter_v1(&record.session, peers)",
+     "authenticated_global_threshold_beacon_roster_hash_iter_v1(&record.session, foreign_peers)"),
     (guard.EPOCH_BEACON_PATH,
      ".parliament_unavailable_beacon_pulse_slots()\n        .get(&slot)\n"
      "        .is_some_and(|attempts| !attempts.is_empty())",
@@ -1464,6 +1596,10 @@ def test_borrowed_storage_iterator_gate_is_connected_to_main() -> None:
 @pytest.mark.parametrize("old,new", (
     ("iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(source)",
      "iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(other)"),
+    ("crate::execution_attempt::genesis_read_attempt_error(error, |error| {\n"
+     "                        ScheduleError::Epoch(error.to_string())\n"
+     "                    })",
+     "ScheduleError::Epoch(error.to_string()).into()"),
     ("crate::sumeragi::lanes::routing::committed_root_scope(&self.world)",
      "Some(SumeragiRootScope::Global)"),
     ("                ScheduleError::Epoch(\"native control requires immutable root scope\".into())",
@@ -1484,7 +1620,7 @@ def test_native_beacon_application_requires_signed_or_committed_original_root(
         guard.require_native_beacon_pulse_application(*sources.values())
 
 
-@pytest.mark.parametrize("path,declaration,original,replacement", (('crates/iroha_core/src/deferred_authority.rs', 'fn reject_opaque_committee_operations_with<F>(', 'depth > MAX_OPAQUE_DEFERRED_PROPOSAL_DEPTH', 'false'), ('crates/iroha_core/src/deferred_authority.rs', 'fn reject_opaque_committee_operations_with<F>(', 'reject_opaque_committee_operation(instruction, index)?;', 'let _ = instruction;'), ('crates/iroha_core/src/deferred_authority.rs', 'fn reject_opaque_committee_operations_with<F>(', 'resolve(&approval)', 'None'), ('crates/iroha_core/src/deferred_authority.rs', 'fn reject_opaque_committee_operations_with<F>(', 'if visited.insert(identity)', 'if false'), ('crates/iroha_core/src/deferred_authority.rs', 'fn reject_opaque_committee_operations_with<F>(', '&proposal.instructions,', '&[], '), ('crates/iroha_core/src/deferred_authority.rs', 'fn reject_opaque_committee_operations_with<F>(', '&proved.overlay,', '&[], '), ('crates/iroha_core/src/deferred_authority.rs', 'fn reject_opaque_committee_operations_with<F>(', 'std::slice::from_ref(instruction),', '&[], '), ('crates/iroha_core/src/validation_fee.rs', 'pub(crate) fn enforce_validation_fee_admission(', 'active_policy(state_transaction)?', 'None::<()>'), ('crates/iroha_core/src/validation_fee.rs', 'pub(crate) fn enforce_validation_fee_admission(', 'crate::retail_fee::admit(tx, state_transaction)?;', 'let _ = tx;'), ('crates/iroha_core/src/validation_fee.rs', 'fn reject_ivm_proved_completed_axt_effects(', 'OpaqueIvmProvedAxtEffects', 'OpaqueAcceptedEffects'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn admit(', 'RETAIL_FEE_ASSESSMENT_METADATA_KEY', 'UNAUTHENTICATED_ASSESSMENT_KEY'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn admit(', 'Some(*tx.hash().as_ref())', 'Some([0; 32])'), ('crates/iroha_core/src/retail_fee.rs', 'fn bind_assessment(', 'now >= assessment.expires_at_ms', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'fn bind_assessment(', 'if stx.world.retail_fee_assessment.is_some()', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn admit_deferred(', 'if reviewed.replace(assessment).is_some()', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'fn decode_assessment_marker(', 'log.msg.len() > 4096', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'fn decode_assessment_marker(', 'norito::decode_canonical(&bytes)', 'norito::decode_from_bytes(&bytes)'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn execute_assessment_marker(', 'stx.multisig_deferred_execution_stack.is_empty()', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn execute_assessment_marker(', '!stx.world.retail_fee_assessment_marker_pending', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn execute_assessment_marker(', 'stx.world.retail_fee_assessment.as_ref() != Some(&assessment)', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn execute_assessment_marker(', 'stx.world.retail_fee_assessment_marker_pending = false;', 'stx.world.retail_fee_assessment_marker_pending = true;'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn record_payment(', 'if stx.world.retail_fee_assessment.is_none()', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn record_payment(', 'approved_amount == amount', 'true'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'if stx.world.retail_fee_assessment_marker_pending', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'if !stx.world.retail_fee_exempt_payments.is_empty()', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'observed.iter().any(|(id, _)| id != source)', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'from.checked_sub(assessment.fee_minor)', 'Some(from)'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'source_transaction_hash: Some(source_transaction_hash)', 'source_transaction_hash: Some([0; 32])'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment: Some(assessment.clone())', 'assessment: None'), ('crates/iroha_core/src/tx.rs', 'pub(crate) fn validate_stateful_admission(', 'crate::validation_fee::enforce_validation_fee_admission(tx, state_transaction)', 'Ok::<(), ExecutionAttemptError<TransactionRejectionReason>>(())'), ('crates/iroha_core/src/tx.rs', 'pub(crate) fn execute_accepted_transaction_in_overlay(', 'crate::retail_fee::finalize(state_transaction)?;', 'let _ = state_transaction;'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.retail_enrolled != expected.retail_enrolled', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.account_id != expected.account_id', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.billing_month_start_ms != expected.billing_month_start_ms', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.policy_revision != expected.policy_revision', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.payments_used_before != expected.payments_used_before', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.qualifying_payments != expected.qualifying_payments', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.fee_minor != expected.fee_minor', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.state_commitment != expected.state_commitment', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.intent_hash != expected.intent_hash', 'false')))
+@pytest.mark.parametrize("path,declaration,original,replacement", (('crates/iroha_core/src/deferred_authority.rs', "fn reject_opaque_committee_operations_with<'a, F>(", 'depth > MAX_OPAQUE_DEFERRED_PROPOSAL_DEPTH', 'false'), ('crates/iroha_core/src/deferred_authority.rs', "fn reject_opaque_committee_operations_with<'a, F>(", 'reject_opaque_committee_operation(instruction, index)?;', 'let _ = instruction;'), ('crates/iroha_core/src/deferred_authority.rs', "fn reject_opaque_committee_operations_with<'a, F>(", 'resolve(&approval)', 'None'), ('crates/iroha_core/src/deferred_authority.rs', "fn reject_opaque_committee_operations_with<'a, F>(", 'if visited.insert(identity)', 'if false'), ('crates/iroha_core/src/deferred_authority.rs', "fn reject_opaque_committee_operations_with<'a, F>(", 'proposal.instructions.iter(),', '&[], '), ('crates/iroha_core/src/deferred_authority.rs', "fn reject_opaque_committee_operations_with<'a, F>(", 'proved.overlay.iter(),', '&[], '), ('crates/iroha_core/src/deferred_authority.rs', "fn reject_opaque_committee_operations_with<'a, F>(", 'std::slice::from_ref(instruction),', '&[], '), ('crates/iroha_core/src/validation_fee.rs', 'pub(crate) fn enforce_validation_fee_admission(', 'active_policy(state_transaction)?', 'None::<()>'), ('crates/iroha_core/src/validation_fee.rs', 'pub(crate) fn enforce_validation_fee_admission(', 'crate::retail_fee::admit(tx, state_transaction)?;', 'let _ = tx;'), ('crates/iroha_core/src/validation_fee.rs', 'fn reject_ivm_proved_completed_axt_effects(', 'OpaqueIvmProvedAxtEffects', 'OpaqueAcceptedEffects'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn admit(', 'RETAIL_FEE_ASSESSMENT_METADATA_KEY', 'UNAUTHENTICATED_ASSESSMENT_KEY'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn admit(', 'Some(*tx.hash().as_ref())', 'Some([0; 32])'), ('crates/iroha_core/src/retail_fee.rs', 'fn bind_assessment(', 'now >= assessment.expires_at_ms', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'fn bind_assessment(', 'if stx.world.retail_fee_assessment.is_some()', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn admit_deferred(', 'if reviewed.replace(assessment).is_some()', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'fn decode_assessment_marker(', 'log.msg.len() > 4096', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'fn decode_assessment_marker(', 'norito::decode_canonical(&bytes)', 'norito::decode_from_bytes(&bytes)'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn execute_assessment_marker(', 'stx.multisig_deferred_execution_stack.is_empty()', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn execute_assessment_marker(', '!stx.world.retail_fee_assessment_marker_pending', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn execute_assessment_marker(', 'stx.world.retail_fee_assessment.as_ref() != Some(&assessment)', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn execute_assessment_marker(', 'stx.world.retail_fee_assessment_marker_pending = false;', 'stx.world.retail_fee_assessment_marker_pending = true;'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn record_payment(', 'if stx.world.retail_fee_assessment.is_none()', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn record_payment(', 'approved_amount == amount', 'true'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'if stx.world.retail_fee_assessment_marker_pending', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'if !stx.world.retail_fee_exempt_payments.is_empty()', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'observed.iter().any(|(id, _)| id != source)', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'from.checked_sub(assessment.fee_minor)', 'Some(from)'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'source_transaction_hash: Some(source_transaction_hash)', 'source_transaction_hash: Some([0; 32])'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment: Some(assessment.clone())', 'assessment: None'), ('crates/iroha_core/src/tx.rs', 'pub(crate) fn validate_stateful_admission(', 'crate::validation_fee::enforce_validation_fee_admission(tx, state_transaction)', 'Ok::<(), ExecutionAttemptError<TransactionRejectionReason>>(())'), ('crates/iroha_core/src/tx.rs', 'pub(crate) fn execute_accepted_transaction_in_overlay(', 'crate::retail_fee::finalize(state_transaction)?;', 'let _ = state_transaction;'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.retail_enrolled != expected.retail_enrolled', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.account_id != expected.account_id', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.billing_month_start_ms != expected.billing_month_start_ms', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.policy_revision != expected.policy_revision', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.payments_used_before != expected.payments_used_before', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.qualifying_payments != expected.qualifying_payments', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.fee_minor != expected.fee_minor', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.state_commitment != expected.state_commitment', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.intent_hash != expected.intent_hash', 'false')))
 def test_native_fee_boundary_rejects_changed_live_authority_or_assessment(
     path: str, declaration: str, original: str, replacement: str,
 ) -> None:
@@ -1605,3 +1741,208 @@ def test_prepared_commit_independent_registry_and_cache_checks_are_owned(
     with pytest.raises(RuntimeError, match=PUBLICATION_PATH):
         guard.require_parliament_commit_publication(state)
 
+
+@pytest.mark.parametrize("path,declaration,original,replacement", (
+    (FEE_BOUNDARY_PATHS[0], "pub(crate) fn enforce_opaque_deferred_instruction_groups(",
+     "transaction_attempt_rejection(stx, error)", "discard_original_authority_refusal(stx, error)"),
+    (FEE_BOUNDARY_PATHS[0], "fn transaction_attempt_rejection(",
+     "state.defer_execution(reason)", "reject_local_capacity(reason)"),
+    (FEE_BOUNDARY_PATHS[1], "pub(crate) fn reject_opaque_deferred_authority(",
+     ".flat_map(|instructions| instructions.iter())", ".flat_map(|_| [].iter())"),
+    (FEE_BOUNDARY_PATHS[1], "pub(crate) fn reject_opaque_deferred_authority(",
+     "error.map_rejection(TransactionRejectionReason::Validation)",
+     "Attempt::Rejected(TransactionRejectionReason::Validation(error))"),
+    (FEE_BOUNDARY_PATHS[1], "pub(crate) fn reject_opaque_instruction_authority<'a>(",
+     "live_proposal_instructions_for_approval(state_transaction, approve)", "Ok(None)"),
+    (FEE_BOUNDARY_PATHS[1], "pub(crate) fn reject_opaque_instruction_authority<'a>(",
+     "error.map_rejection(|error|", "Attempt::Rejected(|error|"),
+    (FEE_BOUNDARY_PATHS[1], "fn reject_opaque_committee_operations_with<'a, F>(",
+     "Attempt::Deferred(reason) => return Err(Attempt::Deferred(reason))",
+     "Attempt::Deferred(_) => None"),
+    (FEE_BOUNDARY_PATHS[1], "fn reject_opaque_committee_operations_with<'a, F>(",
+     "error.map_rejection(|error|", "Attempt::Rejected(|error|"),
+    (FEE_BOUNDARY_PATHS[1], "fn reject_opaque_committee_operations_with<'a, F>(",
+     "instructions.iter(),", "[].iter(),"),
+))
+def test_signed_staking_authority_retains_original_deferred_live_reads(
+    path: str, declaration: str, original: str, replacement: str,
+) -> None:
+    """Every actual instruction is checked and only completed errors are reclassified."""
+    sources = _fee_boundary_sources()
+    _check_fee_boundary(sources)
+    body = guard.rust_item(sources[path], declaration, path)
+    assert original in body
+    sources[path] = sources[path].replace(body, body.replace(original, replacement, 1), 1)
+    sources[path] += "\n/* " + original + " */\n"
+    with pytest.raises(RuntimeError):
+        _check_fee_boundary(sources)
+
+
+def test_signed_staking_authority_precedes_optional_fee_policy_resolution() -> None:
+    """Moving the real guard behind optional policy lookup must not pass by spelling."""
+    sources = _fee_boundary_sources()
+    _check_fee_boundary(sources)
+    path = FEE_BOUNDARY_PATHS[0]
+    body = guard.rust_item(sources[path], "pub(crate) fn enforce_opaque_deferred_instruction_groups(", path)
+    guard_call = ("crate::deferred_authority::reject_opaque_deferred_authority(groups, stx)\n"
+                  "        .map_err(|error| transaction_attempt_rejection(stx, error))?;")
+    policy_call = ("let registry = validated_policy_registry(stx)\n"
+                   "        .map_err(|error| transaction_attempt_rejection(stx, error))?;")
+    assert body.count(guard_call) == body.count(policy_call) == 1
+    reordered = body.replace(guard_call, "", 1).replace(policy_call, policy_call + guard_call, 1)
+    sources[path] = sources[path].replace(body, reordered, 1)
+    with pytest.raises(RuntimeError):
+        _check_fee_boundary(sources)
+
+
+@pytest.mark.parametrize("old,new", (
+    ("let peers = current.committee.iter().map(|seat| &seat.validator);",
+     "let peers = foreign.committee.iter().map(|seat| &seat.validator);"),
+    ("let peers = current.committee.iter().map(|seat| &seat.validator);",
+     "let peers = current.committee.iter().rev().map(|seat| &seat.validator);"),
+    ("network_id: current.network_id,", "network_id: record.session.network_id,"),
+    ("network_id: current.network_id,\n        session_id: pulse.session_id,",
+     "network_id: current.network_id,\n        session_id: record.session.session_id,"),
+    ("        roster_hash,", "        roster_hash: record.session.roster_hash,"),
+    ("transcript_hash: record.session.transcript_hash,", "transcript_hash: foreign.transcript_hash,"),
+    ("let session = &record.session;", "let session = &foreign.session;"),
+    ("session\n        .check_binding(&binding)\n        .map_err(|error| error.to_string())?;", ""),
+    (".check_binding(&binding)", ".check_binding(&foreign_binding)"),
+    ("        &session,\n        &pulse,", "        &foreign_session,\n        &pulse,"),
+))
+def test_beacon_capture_requires_original_borrowed_roster_and_current_seal(old: str, new: str) -> None:
+    """A sealed graph still needs every current external identity before proof verification."""
+    sources = _beacon_sources()
+    guard.require_parliament_beacon_requirement(*sources.values())
+    path = guard.EPOCH_BEACON_PATH
+    body = guard.rust_item(sources[path], "pub(crate) fn capture(", path)
+    assert body.count(old) == 1
+    sources[path] = sources[path].replace(body, body.replace(old, new, 1), 1)
+    sources[path] += "\n/* " + old + " */\n"
+    with pytest.raises(RuntimeError, match=re.escape(path)):
+        guard.require_parliament_beacon_requirement(*sources.values())
+
+
+@pytest.mark.parametrize("path,declaration,old,new", (
+    (guard.BEACON_ROSTER_PATH, "pub(crate) fn authenticated_global_threshold_beacon_roster_hash_iter_v1<",
+     "let count = roster.len();", "let count = usize::from(session.committee_size);"),
+    (guard.BEACON_ROSTER_PATH, "pub(crate) fn authenticated_global_threshold_beacon_roster_hash_iter_v1<",
+     "session.roster_hash != roster_hash", "false"),
+    (guard.BEACON_ROSTER_PATH, "pub(crate) fn authenticated_global_threshold_beacon_roster_hash_iter_v1<",
+     "usize::from(session.committee_size) != count", "false"),
+    (guard.BEACON_ROSTER_PATH, "pub(crate) fn authenticated_global_threshold_beacon_roster_hash_iter_v1<",
+     "global_threshold_beacon_roster_hash_iter_v1(roster)", "global_threshold_beacon_roster_hash_iter_v1(foreign)"),
+    (guard.BEACON_ROSTER_PATH, "pub fn global_threshold_beacon_roster_hash_iter_v1<",
+     "validation::RosterIter(roster)", "validation::RosterIter(roster.rev())"),
+    (guard.BEACON_ROSTER_CODEC_PATH, "impl<'a, I> norito::core::SerializePayload for RosterIter<I>",
+     "writer, self.0.clone()", "writer, self.0.clone().skip(1)"),
+    (guard.BEACON_SEALED_SESSION_PATH, "    pub fn check_binding(",
+     "validate_binding(self.record(), expected)", "Ok(())"),
+    (guard.BEACON_SEALED_SESSION_PATH, "    pub fn check_binding(",
+     "validate_binding(self.record(), expected)", "validate_binding(foreign.record(), expected)"),
+    (guard.BEACON_SEALED_SESSION_PATH, "fn validate_binding(",
+     "source.network_id != expected.network_id", "false"),
+    (guard.BEACON_SEALED_SESSION_PATH, "fn validate_binding(",
+     "source.session_id != expected.session_id", "false"),
+    (guard.BEACON_SEALED_SESSION_PATH, "fn validate_binding(",
+     "source.roster_hash != expected.roster_hash", "false"),
+    (guard.BEACON_SEALED_SESSION_PATH, "fn validate_binding(",
+     "source.transcript_hash != expected.transcript_hash", "false"),
+))
+def test_borrowed_beacon_helpers_preserve_exact_source_cardinality_and_binding(
+    path: str, declaration: str, old: str, new: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Neither iterator cardinality/bytes nor the immutable graph recheck can be bypassed."""
+    guard.require_borrowed_beacon_roster_and_sealed_binding()
+    source = guard.read(path)
+    body = guard.rust_item(source, declaration, path)
+    assert body.count(old) == 1
+    changed = source.replace(body, body.replace(old, new, 1), 1) + "\n/* " + old + " */\n"
+    original_read = guard.read
+    monkeypatch.setattr(guard, "read", lambda target: changed if target == path else original_read(target))
+    with pytest.raises(RuntimeError, match=re.escape(path)):
+        guard.require_borrowed_beacon_roster_and_sealed_binding()
+
+
+@pytest.mark.parametrize("old,new", (
+    ("let target_roster = preparation.committee.iter().map(|seat| &seat.validator);",
+     "let target_roster = foreign.committee.iter().map(|seat| &seat.validator);"),
+    ("let target_roster = preparation.committee.iter().map(|seat| &seat.validator);",
+     "let target_roster = preparation.committee.iter().rev().map(|seat| &seat.validator);"),
+    ("authenticated_global_threshold_beacon_roster_hash_iter_v1(&record.session, target_roster)",
+     "authenticated_global_threshold_beacon_roster_hash_iter_v1(&record.session, foreign_roster)"),
+))
+def test_beacon_finalization_uses_complete_original_frozen_roster(old: str, new: str) -> None:
+    """The target binding must come from the complete ordered authenticated preparation."""
+    path = "crates/iroha_core/src/state/validator_committee.rs"
+    source = guard.read(path)
+    guard.require_beacon_finalization_roster(source)
+    assert source.count(old) == 1
+    with pytest.raises(RuntimeError, match=re.escape(path)):
+        guard.require_beacon_finalization_roster(source.replace(old, new, 1))
+
+@pytest.mark.parametrize("original,replacement", (
+    ("epoch: **epoch,", "epoch: EpochConfig::default(),"),
+    ("params: *params,", "params: ChainParams::default(),"),
+    ("committee_digest: committee_digest(committee),", "committee_digest: Hash::new([]),"),
+    ("instance: source.instance(),", "instance: [0; 32],"),
+    ("height: source.height(),", "height: 1,"),
+    ("block_hash: source.block_hash(),", "block_hash: [0; 32],"),
+    ("writer.write_all(iroha_sumeragi::preimage::TAG_COMMITTEE)?;", ""),
+    ("&u32::try_from(committee.n())", "&u32::try_from(1_usize)"),
+    ("for key in committee.members() {", "for key in committee.members().take(1) {"),
+    ("&u16::try_from(bytes.len())", "&u16::try_from(1_usize)"),
+    ("writer.write_all(bytes)?;", "writer.write_all(&[])?;"),
+))
+def test_completed_replay_compact_source_rejects_every_identity_substitution(
+    original: str, replacement: str,
+) -> None:
+    """Graph retirement cannot omit configuration or any canonical committee byte."""
+    source = guard.read("crates/iroha_core/src/sumeragi/executor/replay.rs")
+    guard.require_completed_replay_source(source)
+    assert source.count(original) == 1
+    with pytest.raises(RuntimeError, match="complete"):
+        guard.require_completed_replay_source(source.replace(original, replacement, 1))
+
+
+@pytest.mark.parametrize("original,replacement", (
+    ("if let PublicationError::RecoveryRequired(reason) = &error {", "if let reason = &error {"),
+    ("            return Err(error);", "            return Err(PublicationError::Retryable(error.to_string()));"),
+    ("source: ReplaySource::capture(&live.source),", "source: ReplaySource::capture(block.source()),"),
+))
+def test_replay_retirement_preserves_typed_original_refusal_and_published_source(
+    original: str, replacement: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retirement pressure stays typed; only its actual published owner supplies the receipt."""
+    path = "crates/iroha_core/src/sumeragi/executor/replay.rs"
+    state = guard.read(STATE_PATH)
+    guard.require_parliament_commit_publication(state)
+    source = guard.read(path)
+    assert source.count(original) == 1
+    changed = source.replace(original, replacement, 1)
+    original_read = guard.read
+    monkeypatch.setattr(guard, "read", lambda target:
+                        changed if target == path else original_read(target))
+    with pytest.raises(RuntimeError, match=path):
+        guard.require_parliament_commit_publication(state)
+
+
+@pytest.mark.parametrize("original,replacement", (
+    ("_da_rewind_releases: da_rewind_releases,", "_da_rewind_releases: replacement_releases,"),
+    ("_read_releases: StateViewReleases::new(self),", "_read_releases: StateViewReleases::new(other),"),
+))
+def test_start_construction_keeps_original_da_and_state_reader_release_owners(
+    original: str, replacement: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Outlined construction retains both original release owners before the armed handoff."""
+    path = CONSTRUCTION_PATH
+    state = guard.read(STATE_PATH)
+    guard.require_block_start_construction(state)
+    source = guard.read(path)
+    assert source.count(original) == 1
+    changed = source.replace(original, replacement, 1)
+    original_read = guard.read
+    monkeypatch.setattr(guard, "read", lambda target:
+                        changed if target == path else original_read(target))
+    with pytest.raises(RuntimeError, match="original writers"):
+        guard.require_block_start_construction(state)

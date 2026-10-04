@@ -26,6 +26,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         let catalog = |bindings| Self {
             chain_id: self.chain_id.clone(),
             network_id: self.network_id,
+            credential_max_memory_bytes: self.credential_max_memory_bytes,
             bindings,
         };
         (catalog(signers), catalog(base))

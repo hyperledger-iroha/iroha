@@ -116,6 +116,19 @@ impl LaneBlockSource for NoLanes {
 /// Why a global block's lane merge cannot be expanded.
 #[derive(Debug, thiserror::Error)]
 pub enum MergeError {
+    /// The same State published a new cut; reacquire the exact proposal and lane inputs.
+    #[error(
+        "lane source publication changed ({authenticated_generation} -> {observed_generation})"
+    )]
+    SourceChanged {
+        /// Generation bound by the original lane expansion.
+        authenticated_generation: u64,
+        /// Generation observed at its next source check.
+        observed_generation: u64,
+    },
+    /// Original State reader refusal, preserving its actual physical release source.
+    #[error(transparent)]
+    StateView(#[from] crate::state::StateViewError),
     /// Original routing State could not be read locally; the certified input remains retryable.
     #[error("lane routing deferred: {0}")]
     RoutingDeferred(#[from] crate::execution_attempt::ExecutionDeferred),
@@ -167,12 +180,17 @@ impl std::fmt::Debug for Expansion<'_> {
 impl Expansion<'_> {
     /// Refuse a local receiver substitution or publication change before interpreting peer work.
     pub(crate) fn validate_publication(&self, state: &State) -> Result<(), MergeError> {
-        if !std::ptr::eq(self.state, state)
-            || !is_stable_state_view_generation(self.generation, state.state_view_generation())
-        {
+        if !std::ptr::eq(self.state, state) {
             return Err(MergeError::Pending(
-                "expansion differs from original State publication".into(),
+                "expansion differs from original State owner".into(),
             ));
+        }
+        let observed_generation = state.state_view_generation();
+        if !is_stable_state_view_generation(self.generation, observed_generation) {
+            return Err(MergeError::SourceChanged {
+                authenticated_generation: self.generation,
+                observed_generation,
+            });
         }
         Ok(())
     }
@@ -190,7 +208,10 @@ impl Expansion<'_> {
         if !is_stable_state_view_generation(self.generation, generation) {
             return Err((
                 proposal,
-                MergeError::Pending("expansion differs from original State publication".into()),
+                MergeError::SourceChanged {
+                    authenticated_generation: self.generation,
+                    observed_generation: generation,
+                },
             ));
         }
         if proposal.hash() != self.source {
@@ -247,22 +268,15 @@ pub fn expand<'state>(
     source: &dyn LaneBlockSource,
     wait: Duration,
 ) -> Result<Expansion<'state>, MergeError> {
+    let publication = state.view_publication_release();
     let generation = state.state_view_generation();
-    if !is_stable_state_view_generation(generation, generation) {
-        return Err(MergeError::Pending(
-            "State publication is in progress".into(),
-        ));
-    }
-    let view = state
-        .try_view_once()
-        .map_err(|error| MergeError::Pending(error.to_string()))?
-        .ok_or_else(|| MergeError::Pending("State publication changed before expansion".into()))?;
+    let view = state.try_view_once()?;
     let expanded = expand_from_view(state, generation, &view, proposal, source, wait);
     drop(view);
     if !is_stable_state_view_generation(generation, state.state_view_generation()) {
-        return Err(MergeError::Pending(
-            "State publication changed during expansion".into(),
-        ));
+        return Err(MergeError::StateView(crate::state::StateViewError::Busy(
+            publication,
+        )));
     }
     expanded
 }

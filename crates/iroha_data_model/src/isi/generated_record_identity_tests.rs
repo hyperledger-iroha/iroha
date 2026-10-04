@@ -121,13 +121,13 @@ fn captured(nominal: &str) -> &'static Value {
             );
             assert_eq!(
                 hex(&Sha256::digest(source.as_bytes())),
-                "4de5be96e0a1e11b767d2b806201da24cc9fe777a41c04320628fa9867ba3813",
+                "fda9d3efe685fda3f368d5858fa80c6e00b2098965ead928a5446a5f84d81373",
                 "instruction record capture digest drift"
             );
             let capture: Value =
                 json::from_str(source).expect("immutable instruction record capture");
             let rows = capture.as_array().expect("captured type rows");
-            assert_eq!(rows.len(), 331, "complete instantiated record inventory");
+            assert_eq!(rows.len(), 332, "complete instantiated record inventory");
             let mut previous = None;
             let mut case_count = 0;
             for row in rows {
@@ -145,12 +145,12 @@ fn captured(nominal: &str) -> &'static Value {
                     .expect("captured cases")
                     .len();
             }
-            assert_eq!(case_count, 373, "complete populated record case inventory");
+            assert_eq!(case_count, 375, "complete populated record case inventory");
             capture
         })
         .as_array()
         .expect("captured type rows");
-    assert_eq!(rows.len(), 331, "complete instantiated record inventory");
+    assert_eq!(rows.len(), 332, "complete instantiated record inventory");
     let mut matches = rows
         .iter()
         .filter(|row| row.get("nominal").and_then(Value::as_str) == Some(nominal));

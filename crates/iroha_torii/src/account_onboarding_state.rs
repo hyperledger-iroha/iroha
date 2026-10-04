@@ -241,10 +241,10 @@ mod tests {
         Registrable as _,
         account::{Account, AccountId},
         alias_setup::AccountAliasName,
-        block::{BlockHeader, builder::BlockBuilder},
+        block::BlockHeader,
     };
     use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-    use std::{num::NonZeroU64, sync::Arc};
+    use std::sync::Arc;
 
     fn fixture_app(account_id: Option<&AccountId>) -> SharedAppState {
         let accounts = account_id
@@ -368,7 +368,7 @@ mod tests {
             "derive routed account-onboarding current-state account key",
         );
         let account_id = AccountId::new(account_key.public_key().clone());
-        let mut app = fixture_app(None);
+        let app = fixture_app(None);
         let request = request(&account_id, "merchant@banka.universal");
         let request_body = norito::json::to_vec(&request).expect("request JSON");
         let response = AccountOnboardingCurrentStateResponseV1 {

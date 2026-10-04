@@ -56,6 +56,7 @@ import {
   ValidationError,
   ValidationErrorCode,
   AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
+  field,
 } from "../src/index.js";
 import {
   AccountAddress,
@@ -307,16 +308,6 @@ test("governance lossless JSON writer preserves raw u64 tokens", () => {
     /cyclic values/u,
   );
 });
-
-function expectedProductionBackendRejectionPattern(backend) {
-  if (typeof backend !== "string" || backend.trim() === "") {
-    return /non-empty string/;
-  }
-  if (backend.trim() !== backend) {
-    return /surrounding whitespace/;
-  }
-  return /unsupported production verifier backend/;
-}
 
 function chunkFetchPlan(
   chunkFetchSpecs,
@@ -1564,59 +1555,6 @@ function createPipelineRecoveryFastpqProofsPayload(overrides = {}) {
   };
 }
 
-test("listAccountAssets canonicalizes encoded account ids", async () => {
-  const forms = sampleAccountForms();
-  let capturedUrl;
-  const fetchImpl = async (url) => {
-    capturedUrl = url;
-    return createResponse({
-      status: 200,
-      jsonData: { items: [], total: 0 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.listAccountAssets(forms.i105);
-  assert.ok(
-    capturedUrl?.includes(encodeURIComponent(forms.canonical)),
-    `expected ${capturedUrl} to include canonical segment ${forms.canonical}`,
-  );
-});
-
-test("listAccountAssets rejects retired domain-selector-prefixed segments", async () => {
-  const forms = sampleAccountForms();
-  let called = false;
-  const fetchImpl = async () => {
-    called = true;
-    return createResponse({ status: 200, jsonData: { items: [], total: 0 } });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, [TORII_TEST_NATIVE_BINDING]: {} });
-  await assert.rejects(
-    () => client.listAccountAssets(forms.selectorPrefixedHex),
-    (error) => {
-      if (error instanceof ValidationError) {
-        assert.equal(error.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
-        return true;
-      }
-      const isAccountAddressError = error instanceof AccountAddressError;
-      const cause = error?.cause;
-      const code = isAccountAddressError
-        ? error.code
-        : (cause instanceof AccountAddressError ? cause.code : null);
-      assert(
-        isAccountAddressError || error?.code === "ERR_INVALID_ACCOUNT_ID",
-        `expected AccountAddressError or validation error, got ${error?.constructor?.name}`,
-      );
-      assert.ok(
-        code === AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-        `unexpected error code ${code}`,
-      );
-      return true;
-    },
-  );
-  assert.equal(called, false, "fetchImpl should not be invoked for invalid addresses");
-});
-
 test("uploadAttachment posts bytes with metadata", async () => {
   const calls = [];
   const fetchImpl = async (url, init) => {
@@ -1819,84 +1757,6 @@ test("listAttachments rejects unsupported option fields", async () => {
   await assert.rejects(
     () => client.listAttachments({ signal: new AbortController().signal, extra: true }),
     /listAttachments options contains unsupported fields: extra/,
-  );
-});
-
-test("listRepoAgreements normalizes repo payload", async () => {
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: toriiFixtures.repo.list,
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const page = await client.listRepoAgreements({ limit: 2 });
-  assert.equal(page.total, 1);
-  assert.equal(page.items.length, 1);
-  const agreement = page.items[0];
-  assert.equal(agreement.id, "alpha_repo");
-  assert.equal(agreement.cashLeg.assetDefinitionId, "7EAD8EFYUx1aVKZPUU1fyKvr8dF1");
-  assert.equal(agreement.collateralLeg.metadata.isin, "US0000000001");
-  assert.equal(agreement.governance.marginFrequencySecs, 86400);
-});
-
-test("listRepoAgreements preserves bounded count metadata", async () => {
-  let capturedUrl;
-  const fetchImpl = async (url) => {
-    capturedUrl = url;
-    return createResponse({
-      status: 200,
-      jsonData: {
-        items: [],
-        has_more: true,
-        count_mode: "bounded",
-        indexed_height: 9,
-        indexed_block_hash: "ab".repeat(32),
-        query_source: "live",
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const page = await client.listRepoAgreements({ limit: 1, countMode: "bounded" });
-  assert.match(capturedUrl, /count_mode=bounded/);
-  assert.equal(page.total, null);
-  assert.equal(page.hasMore, true);
-  assert.equal(page.countMode, "bounded");
-  assert.equal(page.indexedHeight, 9);
-  assert.equal(page.querySource, "live");
-});
-
-test("queryRepoAgreements posts structured envelope", async () => {
-  const calls = [];
-  const fetchImpl = async (url, init) => {
-    calls.push({ url, init });
-    return createResponse({
-      status: 200,
-      jsonData: toriiFixtures.repo.list,
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.queryRepoAgreements({ sort: "maturity_timestamp_ms:desc", limit: 1 });
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, `${BASE_URL}/v1/repo/agreements/query`);
-  assert.equal(calls[0].init.method, "POST");
-  const body = JSON.parse(Buffer.from(calls[0].init.body).toString("utf8"));
-  assert.ok(body.sort, "expected sort array in repo query body");
-});
-
-test("queryRepoAgreements rejects malformed bounded metadata", async () => {
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: { items: [], has_more: "true", count_mode: "bounded" },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.queryRepoAgreements({ countMode: "bounded" }),
-    /invalid has_more flag/,
   );
 });
 
@@ -4490,7 +4350,9 @@ function canonicalUaidBindingsFixture() {
 function canonicalUaidManifestsFixture() {
   const fixture = cloneFixture(toriiFixtures.uaid.manifests);
   fixture.manifests[0].accounts = [FIXTURE_ALICE_ID];
-  return fixture;
+  const page = { items: fixture.manifests, next_cursor: null, total: fixture.total };
+  Object.defineProperty(page, "uaid", { value: fixture.uaid });
+  return page;
 }
 
 test("getUaidPortfolio preserves exact UAID literals and parses dataspace payloads", async () => {
@@ -4652,44 +4514,26 @@ test("getUaidBindings enforces UAID formats and normalizes entries", async () =>
   );
 });
 
-test("getUaidManifests validates lifecycle metadata and filters by dataspace", async () => {
-  let capturedUrl;
+test("uaidManifests validates full rows and posts collection filters", async () => {
+  let captured;
   const fixture = canonicalUaidManifestsFixture();
-  const fetchImpl = async (url) => {
-    capturedUrl = url;
-    return createResponse({
-      status: 200,
-      jsonData: fixture,
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getUaidManifests(fixture.uaid, {
-    dataspaceId: 11,
-    status: "active",
-    limit: 1,
-    offset: 0,
-    countMode: "exact",
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async (url, init) => {
+    captured = { url, init };
+    return createResponse({ status: 200, jsonData: fixture, headers: { "content-type": "application/json" } });
+  }});
+  const result = await client.uaidManifests(fixture.uaid).list({
+    filter: 'dataspace_id = 11 and status = "Active"', limit: 1, includeTotal: true,
   });
-  const parsed = new URL(capturedUrl);
-  assert.equal(parsed.searchParams.get("dataspace"), "11");
-  assert.equal(parsed.searchParams.get("status"), "active");
-  assert.equal(parsed.searchParams.get("limit"), "1");
-  assert.equal(parsed.searchParams.get("offset"), "0");
-  assert.equal(parsed.searchParams.get("count_mode"), "exact");
-  assert.equal(parsed.searchParams.get("canonical_i105"), null);
+  assert.equal(new URL(captured.url).pathname, `/v1/space-directory/uaids/${encodeURIComponent(fixture.uaid)}/manifests/query`);
+  assert.equal(captured.init.method, "POST");
+  assert.equal(JSON.parse(captured.init.body).include_total, true);
   assert.equal(result.total, 1);
-  assert.equal(result.has_more, false);
-  assert.equal(result.count_mode, "exact");
-  assert.equal(result.manifests.length, 1);
-  const record = result.manifests[0];
-  assert.equal(record.status, "Active");
-  assert.equal(record.lifecycle.activated_epoch, 4097);
-  assert.equal(record.manifest.entries[0].effect.Allow.max_amount, "500000000");
-  await assert.rejects(
-    () => client.getUaidManifests(fixture.uaid, { dataspaceId: 11, format: "i105" }),
-    /getUaidManifests options contains unsupported fields: format/,
-  );
+  assert.equal(result.nextCursor, null);
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].status, "Active");
+  assert.equal(result.items[0].lifecycle.activated_epoch, 4097);
+  assert.equal(result.items[0].manifest.entries[0].effect.Allow.max_amount, "500000000");
+  await assert.rejects(() => client.uaidManifests(fixture.uaid).list({ dataspaceId: 11 }), /dataspaceId/);
 });
 
 test("UAID read responses require exact current server fields", async () => {
@@ -4712,34 +4556,34 @@ test("UAID read responses require exact current server fields", async () => {
   cases.push(["getUaidBindings", bindingsDefaultedAccounts, /exact server fields/]);
 
   const manifestsMissingPageMetadata = canonicalUaidManifestsFixture();
-  delete manifestsMissingPageMetadata.count_mode;
-  cases.push(["getUaidManifests", manifestsMissingPageMetadata, /exact server fields/]);
+  delete manifestsMissingPageMetadata.next_cursor;
+  cases.push(["uaidManifests", manifestsMissingPageMetadata, /next_cursor/]);
 
   const manifestsLegacyVersion = canonicalUaidManifestsFixture();
-  manifestsLegacyVersion.manifests[0].manifest.version = "V1";
-  cases.push(["getUaidManifests", manifestsLegacyVersion, /unsigned integer 1/]);
+  manifestsLegacyVersion.items[0].manifest.version = "V1";
+  cases.push(["uaidManifests", manifestsLegacyVersion, /unsigned integer 1/]);
 
   const manifestsPrefixedHash = canonicalUaidManifestsFixture();
-  manifestsPrefixedHash.manifests[0].manifest_hash =
-    `0x${manifestsPrefixedHash.manifests[0].manifest_hash}`;
-  cases.push(["getUaidManifests", manifestsPrefixedHash, /exact lowercase 32-byte hex/]);
+  manifestsPrefixedHash.items[0].manifest_hash =
+    `0x${manifestsPrefixedHash.items[0].manifest_hash}`;
+  cases.push(["uaidManifests", manifestsPrefixedHash, /exact lowercase 32-byte hex/]);
 
   const manifestsMissingLifecycleField = canonicalUaidManifestsFixture();
-  delete manifestsMissingLifecycleField.manifests[0].lifecycle.expired_epoch;
-  cases.push(["getUaidManifests", manifestsMissingLifecycleField, /exact server fields/]);
+  delete manifestsMissingLifecycleField.items[0].lifecycle.expired_epoch;
+  cases.push(["uaidManifests", manifestsMissingLifecycleField, /exact server fields/]);
 
   const manifestsUnknownRecordField = canonicalUaidManifestsFixture();
-  manifestsUnknownRecordField.manifests[0].legacy_status = "active";
-  cases.push(["getUaidManifests", manifestsUnknownRecordField, /exact server fields/]);
+  manifestsUnknownRecordField.items[0].legacy_status = "active";
+  cases.push(["uaidManifests", manifestsUnknownRecordField, /exact server fields/]);
 
   const manifestsPaddedAccount = canonicalUaidManifestsFixture();
-  manifestsPaddedAccount.manifests[0].accounts[0] =
-    `${manifestsPaddedAccount.manifests[0].accounts[0]} `;
-  cases.push(["getUaidManifests", manifestsPaddedAccount, /surrounding whitespace/]);
+  manifestsPaddedAccount.items[0].accounts[0] =
+    `${manifestsPaddedAccount.items[0].accounts[0]} `;
+  cases.push(["uaidManifests", manifestsPaddedAccount, /surrounding whitespace/]);
 
   const manifestsNullOptional = canonicalUaidManifestsFixture();
-  manifestsNullOptional.manifests[0].manifest.entries[1].notes = null;
-  cases.push(["getUaidManifests", manifestsNullOptional, /omitted instead of null/]);
+  manifestsNullOptional.items[0].manifest.entries[1].notes = null;
+  cases.push(["uaidManifests", manifestsNullOptional, /omitted instead of null/]);
 
   for (const [method, payload, pattern] of cases) {
     const client = new ToriiClient(BASE_URL, {
@@ -4749,11 +4593,11 @@ test("UAID read responses require exact current server fields", async () => {
         headers: { "content-type": "application/json" },
       }),
     });
-    await assert.rejects(() => client[method](payload.uaid), pattern, method);
+    await assert.rejects(() => method === "uaidManifests" ? client.uaidManifests(payload.uaid).list() : client[method](payload.uaid), pattern, method);
   }
 });
 
-test("getUaidManifests rejects compatibility coercions before dispatch", async () => {
+test("uaidManifests rejects compatibility coercions before dispatch", async () => {
   let fetchCalled = false;
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
@@ -4773,8 +4617,8 @@ test("getUaidManifests rejects compatibility coercions before dispatch", async (
     { countMode: null },
   ]) {
     await assert.rejects(
-      () => client.getUaidManifests(uaid, options),
-      /JSON safe integer|must be one of|must be a string|positive|surrounding whitespace/u,
+      () => client.uaidManifests(uaid).list(options),
+      /unknown|unsupported|positive|limit|status|dataspaceId|offset|countMode/u,
     );
   }
   assert.equal(fetchCalled, false);
@@ -7105,8 +6949,8 @@ test("DA and UAID helpers reject non-object options", async () => {
     /getUaidBindings options must be an object/,
   );
   await assert.rejects(
-    () => client.getUaidManifests(uaid, "invalid"),
-    /getUaidManifests options must be an object/,
+    () => client.uaidManifests(uaid).list("invalid"),
+    /query must be an object|JSON object|plain object/,
   );
 });
 
@@ -9741,7 +9585,7 @@ test("getTransactionStatus rejects on malformed payloads", async () => {
   await assert.rejects(client.getTransactionStatus(hashHex), /\.hash/);
 });
 
-test("getTransactionStatusTyped rejects retired status envelopes", async () => {
+test("getTransactionStatus rejects retired status envelopes", async () => {
   const hashHex = "cd".repeat(32);
   const payload = {
     kind: "Transaction",
@@ -9759,12 +9603,12 @@ test("getTransactionStatusTyped rejects retired status envelopes", async () => {
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.getTransactionStatusTyped(hashHex),
+    () => client.getTransactionStatus(hashHex),
     /kind|content/,
   );
 });
 
-test("getTransactionStatusTyped normalises typed pipeline status responses", async () => {
+test("getTransactionStatus normalises typed pipeline status responses", async () => {
   const hashHex = "99".repeat(32);
   const fetchImpl = async () =>
     createResponse({
@@ -9781,7 +9625,7 @@ test("getTransactionStatusTyped normalises typed pipeline status responses", asy
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getTransactionStatusTyped(hashHex);
+  const result = await client.getTransactionStatus(hashHex);
   assert.ok(result, "typed payload should be returned");
   assert.equal(result?.hash, hashHex);
   assert.equal(result?.status?.kind, "Applied");
@@ -9796,7 +9640,7 @@ test("getTransactionStatusTyped normalises typed pipeline status responses", asy
   ]);
 });
 
-test("getTransactionStatusTyped rejects retired HTTP 204", async () => {
+test("getTransactionStatus rejects retired HTTP 204", async () => {
   const hashHex = "ef".repeat(32);
   const fetchImpl = async () =>
     createResponse({
@@ -9805,12 +9649,12 @@ test("getTransactionStatusTyped rejects retired HTTP 204", async () => {
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.getTransactionStatusTyped(hashHex),
+    () => client.getTransactionStatus(hashHex),
     (error) => error instanceof ToriiHttpError && error.status === 204,
   );
 });
 
-test("getTransactionStatusTyped rejects on malformed payload", async () => {
+test("getTransactionStatus rejects on malformed payload", async () => {
   const hashHex = "35".repeat(32);
   const fetchImpl = async () =>
     createResponse({
@@ -9819,7 +9663,7 @@ test("getTransactionStatusTyped rejects on malformed payload", async () => {
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(() => client.getTransactionStatusTyped(hashHex), /must be an object/);
+  await assert.rejects(() => client.getTransactionStatus(hashHex), /must be an object/);
 });
 
 test("getPipelineRecovery fetches the recovery sidecar", async () => {
@@ -10370,22 +10214,6 @@ test("waitForTransactionStatus always requests global status", async () => {
   ]);
 });
 
-test("waitForTransactionStatusTyped normalises payload", async () => {
-  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
-  const txHash = "11".repeat(32);
-  client.waitForTransactionStatus = async () =>
-    authoritativePipelineStatus(txHash, "Applied", {
-      blockHeight: 7,
-      resolvedFrom: "state",
-    });
-  const typed = await client.waitForTransactionStatusTyped(txHash, { intervalMs: 0 });
-  assert.equal(typed.hash, txHash);
-  assert.equal(typed.status.kind, "Applied");
-  assert.equal(typed.status.block_height, 7);
-  assert.equal(typed.scope, "global");
-  assert.equal(typed.resolved_from, "state");
-});
-
 test("getTransactionStatus uses a fresh header bag on each retry", async () => {
   const observedHeaders = [];
   let attempts = 0;
@@ -10483,14 +10311,17 @@ test("waitForTransactionStatus enforces timeoutMs", async () => {
 });
 
 test("submitTransactionAndWait delegates to submitTransaction + waitForTransactionStatus", async () => {
+  const finalHash = "55".repeat(32);
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 200 }),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative({
+      hashSignedTransaction: () => Buffer.from(finalHash, "hex"),
+    }),
   });
 
   const payload = Buffer.from([0xde, 0xad, 0xbe, 0xef]);
   let submittedPayload = null;
   let waitArgs = null;
-  const finalHash = "55".repeat(32);
   const expectedResult = {
     kind: "Transaction",
     content: { hash: finalHash, status: { kind: "Applied", content: null } },
@@ -10504,10 +10335,7 @@ test("submitTransactionAndWait delegates to submitTransaction + waitForTransacti
     return expectedResult;
   };
 
-  const result = await client.submitTransactionAndWait(payload, {
-    hashHex: finalHash,
-    timeoutMs: 500,
-  });
+  const result = await client.submitTransactionAndWait(payload, { timeoutMs: 500 });
 
   assert.strictEqual(submittedPayload, payload);
   assert.deepEqual(waitArgs, {
@@ -10517,6 +10345,8 @@ test("submitTransactionAndWait delegates to submitTransaction + waitForTransacti
     },
   });
   assert.strictEqual(result, expectedResult);
+  await client.submitTransactionAndWait(payload, { hashHex: finalHash });
+  assert.equal(waitArgs.hashHex, finalHash, "an asserted hash that matches the bytes is accepted");
 });
 
 test("transaction finality policy cannot be overridden", async () => {
@@ -10534,19 +10364,27 @@ test("transaction finality policy cannot be overridden", async () => {
   }
 });
 
-test("submitTransactionAndWait enforces hashHex option", async () => {
+test("submitTransactionAndWait rejects an asserted hashHex that does not match the signed bytes", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 200 }),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative({
+      hashSignedTransaction: () => Buffer.from("55".repeat(32), "hex"),
+    }),
   });
-  const dummy = Buffer.from([0]);
+  let submissions = 0;
+  client.submitTransaction = async () => {
+    submissions += 1;
+  };
+  const dummy = Buffer.from([1]);
   await assert.rejects(
-    () => client.submitTransactionAndWait(dummy),
+    () => client.submitTransactionAndWait(dummy, "options"),
     /submitTransactionAndWait options must be a plain object/,
   );
   await assert.rejects(
-    () => client.submitTransactionAndWait(dummy, {}),
-    /options\.hashHex must be a string/,
+    () => client.submitTransactionAndWait(dummy, { hashHex: "57".repeat(32) }),
+    /does not match the signed transaction hash/,
   );
+  assert.equal(submissions, 0);
 });
 
 test("submitTransactionAndWait validates poll options before submission", async () => {
@@ -10569,35 +10407,19 @@ test("submitTransactionAndWait validates poll options before submission", async 
   assert.equal(submissions, 0);
 });
 
-test("submitTransactionAndWaitTyped normalises the final payload", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({ status: 200 }),
-  });
-  const typedHash = "67".repeat(32);
-  const pipelineStatus = {
-    ...authoritativePipelineStatus(typedHash, "Approved"),
-  };
-  client.submitTransactionAndWait = async () => pipelineStatus;
-  const typed = await client.submitTransactionAndWaitTyped(Buffer.from([0]), {
-    hashHex: typedHash,
-  });
-  assert.equal(typed?.hash, typedHash);
-  assert.equal(typed?.status?.kind, "Approved");
-});
-
-test("getHealth requests JSON snapshot", async () => {
+test("getHealth reads the plain-text /health probe", async () => {
   const fetchImpl = async (url, init) => {
-    assert.equal(url, `${BASE_URL}/v1/health`);
-    assert.equal(init.headers.Accept, "application/json");
+    assert.equal(url, `${BASE_URL}/health`);
+    assert.equal(init.headers.Accept, "text/plain");
     return createResponse({
       status: 200,
-      jsonData: { status: "healthy" },
-      headers: { "content-type": "application/json" },
+      textBody: "Healthy\n",
+      headers: { "content-type": "text/plain" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const payload = await client.getHealth();
-  assert.deepEqual(payload, { status: "healthy" });
+  assert.deepEqual(payload, { status: "Healthy" });
 });
 
 test("getHealth rejects non-JSON protocol responses", async () => {
@@ -11503,7 +11325,7 @@ test("getNodeCapabilities normalizes runtime advert", async () => {
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getNodeCapabilities(canonicalReadOptions());
+  const result = await client.getNodeCapabilities();
   assert.deepEqual(result, {
     abiVersion: 1,
     dataModelVersion: 4,
@@ -11562,7 +11384,7 @@ test("getNodeCapabilities rejects non-integer ABI version", async () => {
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.getNodeCapabilities(canonicalReadOptions()),
+    () => client.getNodeCapabilities(),
     (error) => {
       assert.match(error.message, /abi_version/);
       return true;
@@ -11940,9 +11762,10 @@ registerToriiClientGovernanceTests({
   toriiFixtures,
 });
 
-test("getMetrics returns text when requested", async () => {
+test("getMetrics returns the Prometheus text exposition from /metrics", async () => {
   const metrics = "# HELP foo\nfoo 1\n";
-  const fetchImpl = async (_url, init) => {
+  const fetchImpl = async (url, init) => {
+    assert.equal(url, `${BASE_URL}/metrics`);
     assert.equal(init.headers.Accept, "text/plain");
     return createResponse({
       status: 200,
@@ -11951,23 +11774,8 @@ test("getMetrics returns text when requested", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.getMetrics({ asText: true });
-  assert.equal(payload, metrics);
-});
-
-test("getMetrics returns JSON by default", async () => {
-  const fetchImpl = async (url, init) => {
-    assert.equal(url, `${BASE_URL}/v1/metrics`);
-    assert.equal(init.headers.Accept, "application/json");
-    return createResponse({
-      status: 200,
-      jsonData: { metrics: ["ok"] },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
   const payload = await client.getMetrics();
-  assert.deepEqual(payload, { metrics: ["ok"] });
+  assert.equal(payload, metrics);
 });
 
 test("getMetrics rejects non-object options", async () => {
@@ -11978,43 +11786,31 @@ test("getMetrics rejects non-object options", async () => {
   await assert.rejects(client.getMetrics("nope"), /getMetrics options must be an object/);
 });
 
-test("getMetrics enforces boolean asText flag", async () => {
-  const fetchImpl = async () => {
-    throw new Error("should not reach fetch");
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    client.getMetrics({ asText: "true" }),
-    /getMetrics options\.asText must be boolean/,
-  );
-});
-
 test("getMetrics rejects unsupported option keys", async () => {
   const fetchImpl = async () => {
     throw new Error("should not reach fetch");
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.getMetrics({ asText: true, extra: true }),
-    /getMetrics options contains unsupported fields: extra/,
+    () => client.getMetrics({ asText: true }),
+    /getMetrics options contains unsupported fields: asText/,
   );
 });
 
 test("getMetrics forwards AbortSignal", async () => {
   const controller = new AbortController();
   const fetchImpl = async (url, init) => {
-    assert.equal(url, `${BASE_URL}/v1/metrics`);
-    assert.equal(init.headers.Accept, "application/json");
+    assert.equal(url, `${BASE_URL}/metrics`);
     assertRequestSignal(init.signal, controller.signal);
     return createResponse({
       status: 200,
-      jsonData: { ok: true },
-      headers: { "content-type": "application/json" },
+      textBody: "up 1\n",
+      headers: { "content-type": "text/plain" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const payload = await client.getMetrics({ signal: controller.signal });
-  assert.deepEqual(payload, { ok: true });
+  assert.equal(payload, "up 1\n");
 });
 
 test("getBlock fetches block by height", async () => {
@@ -12190,60 +11986,6 @@ test("getBlock returns null when Torii replies 404", async () => {
   assert.equal(block, null);
 });
 
-test("listBlocks encodes snapshot cursor pagination", async () => {
-  const cursor = "Y3Vyc29y";
-  const nextCursor = "bmV4dA";
-  const snapshotHash = "ab".repeat(32);
-  const fetchImpl = async (url) => {
-    assert.equal(url, `${BASE_URL}/v1/explorer/blocks?limit=5&cursor=${cursor}`);
-    return createResponse({
-      status: 200,
-      jsonData: {
-        pagination: {
-          limit: 5,
-          snapshot_height: 8,
-          snapshot_hash: snapshotHash,
-          next_cursor: nextCursor,
-          has_more: true,
-        },
-        items: [
-          {
-            hash: "CAFE",
-            height: 8,
-            created_at: "2026-01-01T00:00:00Z",
-            prev_block_hash: "BEEF",
-            transactions_hash: null,
-            transactions_rejected: 0,
-            transactions_total: 4,
-          },
-        ],
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.listBlocks({ cursor, limit: 5 });
-  assert.deepEqual(result, {
-    pagination: {
-      limit: 5,
-      snapshotHeight: 8,
-      snapshotHash,
-      nextCursor,
-      hasMore: true,
-    },
-    items: [
-      {
-        hash: "CAFE",
-        height: 8,
-        createdAt: "2026-01-01T00:00:00Z",
-        prevBlockHash: "BEEF",
-        transactionsHash: null,
-        transactionsRejected: 0,
-        transactionsTotal: 4,
-      },
-    ],
-  });
-});
 
 test("getBlock rejects empty identifiers", async () => {
   const fetchImpl = async () => {
@@ -12267,478 +12009,10 @@ test("getBlock rejects unsupported option keys", async () => {
   );
 });
 
-test("listBlocks validates pagination bounds", async () => {
-  const fetchImpl = async () => {
-    throw new Error("should not fetch");
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.listBlocks({ limit: 0 }),
-    /positive integer/,
-  );
-  await assert.rejects(
-    () => client.listBlocks({ cursor: "padded==" }),
-    /canonical base64url without padding/,
-  );
-  await assert.rejects(() => client.listBlocks({ limit: 101 }), /at most 100/);
-});
 
-test("listBlocks rejects non-object options", async () => {
-  const fetchImpl = async () => {
-    throw new Error("should not fetch");
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.listBlocks("oops"),
-    /block list options must be a plain object/,
-  );
-});
 
-test("listBlocks rejects unsupported option keys", async () => {
-  const fetchImpl = async () => {
-    throw new Error("should not fetch");
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.listBlocks({ page: 2 }),
-    /block list options contains unsupported fields: page/,
-  );
-});
 
-test("listBlocks rejects retired totals and inconsistent snapshot metadata", async () => {
-  const responses = [
-    {
-      pagination: {
-        limit: 5,
-        snapshot_height: 8,
-        snapshot_hash: "ab".repeat(32),
-        next_cursor: null,
-        has_more: false,
-        total_items: 8,
-      },
-      items: [],
-    },
-    {
-      pagination: {
-        limit: 5,
-        snapshot_height: 0,
-        snapshot_hash: "ab".repeat(32),
-        next_cursor: null,
-        has_more: false,
-      },
-      items: [],
-    },
-    {
-      pagination: {
-        limit: 5,
-        snapshot_height: 8,
-        snapshot_hash: "ab".repeat(32),
-        next_cursor: null,
-        has_more: true,
-      },
-      items: [],
-    },
-  ];
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({
-      status: 200,
-      jsonData: responses.shift(),
-      headers: { "content-type": "application/json" },
-    }),
-  });
 
-  await assert.rejects(() => client.listBlocks(), /unknown field total_items/);
-  await assert.rejects(
-    () => client.listBlocks(),
-    /snapshot_hash must be null exactly when snapshot_height is zero/,
-  );
-  await assert.rejects(
-    () => client.listBlocks(),
-    /has_more must match next_cursor availability/,
-  );
-});
-
-test("listAccounts encodes iterable params", async () => {
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, "/v1/accounts");
-    assert.equal(parsed.searchParams.get("limit"), "10");
-    assert.equal(parsed.searchParams.get("offset"), "5");
-    assert.equal(
-      parsed.searchParams.get("filter"),
-      JSON.stringify({ Eq: ["id", FIXTURE_ALICE_ID] }),
-    );
-    assert.equal(parsed.searchParams.get("sort"), "id:asc");
-    assert.equal(parsed.searchParams.get("canonical_i105"), null);
-    return createResponse({
-      status: 200,
-      jsonData: cloneFixture(toriiFixtures.iterable.accountListPage),
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listAccounts({
-    limit: "10",
-    offset: 5n,
-    filter: { Eq: ["id", FIXTURE_ALICE_ID] },
-    sort: [{ key: "id", order: "asc" }],
-  });
-  assert.deepEqual(payload, toriiFixtures.iterable.accountListPage);
-});
-
-test("queryAccounts preserves bounded count metadata", async () => {
-  let captured;
-  const fetchImpl = async (_url, init) => {
-    captured = JSON.parse(init.body);
-    return createResponse({
-      status: 200,
-      jsonData: {
-        items: [{ id: FIXTURE_ALICE_ID }],
-        has_more: true,
-        count_mode: "bounded",
-        indexed_height: 12,
-        indexed_block_hash: "ab".repeat(32),
-        query_source: "live",
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.queryAccounts({ limit: 1, countMode: "bounded" });
-
-  assert.equal(captured.count_mode, "bounded");
-  assert.equal(payload.total, null);
-  assert.equal(payload.hasMore, true);
-  assert.equal(payload.countMode, "bounded");
-  assert.equal(payload.indexedHeight, 12);
-  assert.equal(payload.indexedBlockHash, "ab".repeat(32));
-  assert.equal(payload.querySource, "live");
-});
-
-test("iterateAccountsQuery follows bounded hasMore without exact totals", async () => {
-  const offsets = [];
-  const fetchImpl = async (_url, init) => {
-    const body = JSON.parse(init.body);
-    offsets.push(body.pagination.offset);
-    const offset = body.pagination.offset;
-    return createResponse({
-      status: 200,
-      jsonData: {
-        items: [{ id: `${FIXTURE_ALICE_ID}-${offset}` }],
-        has_more: offset === 0,
-        count_mode: "bounded",
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const items = [];
-  for await (const item of client.iterateAccountsQuery({
-    pageSize: 1,
-    count_mode: "bounded",
-  })) {
-    items.push(item);
-  }
-
-  assert.deepEqual(offsets, [0, 1]);
-  assert.equal(items.length, 2);
-});
-
-test("listAccounts rejects unsupported format option", async () => {
-  let called = false;
-  const fetchImpl = async () => {
-    called = true;
-    return createResponse({
-      status: 200,
-      jsonData: { items: [], total: 0 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.listAccounts({ format: "i105" }),
-    /unsupported fields: format/i,
-  );
-  assert.equal(called, false, "request should not fire when format is unsupported");
-});
-
-test("listAccounts rejects unsupported sort order entries", async () => {
-  let called = false;
-  const fetchImpl = async () => {
-    called = true;
-    return createResponse({ status: 200, jsonData: { items: [], total: 0 } });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () =>
-      client.listAccounts({
-        sort: [{ key: "id", order: "ascending" }],
-      }),
-    /sort\[0]\.order must be "asc" or "desc"/,
-  );
-  assert.equal(called, false);
-});
-
-test("listAccounts rejects non-object filter values", async () => {
-  let callCount = 0;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      callCount += 1;
-      return createResponse({
-        status: 200,
-        jsonData: { items: [], total: 0 },
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  await assert.rejects(
-    () => client.listAccounts({ filter: [] }),
-    /filter must be a plain object/,
-  );
-  assert.equal(callCount, 0);
-});
-
-test("listAccounts rejects primitive options", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not call fetch");
-    },
-  });
-  await assert.rejects(
-    client.listAccounts("bogus"),
-    /options for \/v1\/accounts must be a plain object/,
-  );
-});
-
-test("listAccounts rejects unsupported iterable option keys", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not call fetch");
-    },
-  });
-  await assert.rejects(
-    () => client.listAccounts({ limit: 1, unknown: true }),
-    /options for \/v1\/accounts contains unsupported fields: unknown/,
-  );
-});
-
-test("listAccounts rejects query-only iterable options", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not call fetch");
-    },
-  });
-  await assert.rejects(
-    () => client.listAccounts({ fetchSize: 5 }),
-    /options for \/v1\/accounts contains unsupported fields: fetchSize/,
-  );
-});
-
-test("listAccounts validates response payload IDs", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: { items: [{}], total: 1 },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () => client.listAccounts(),
-    /account list response\.items\[0]\.id/,
-  );
-});
-
-test("queryAccounts rejects primitive options", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not call fetch");
-    },
-  });
-  await assert.rejects(
-    client.queryAccounts("bogus"),
-    /options for \/v1\/accounts\/query must be a plain object/,
-  );
-});
-
-test("queryAccounts rejects non-query iterable fields", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not call fetch");
-    },
-  });
-  await assert.rejects(
-    () => client.queryAccounts({ controllerId: FIXTURE_ALICE_ID }),
-    /options for \/v1\/accounts\/query contains unsupported fields: controllerId/,
-  );
-});
-
-test("queryAccounts rejects array filters from JSON strings", async () => {
-  let callCount = 0;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      callCount += 1;
-      return createResponse({
-        status: 200,
-        jsonData: { items: [], total: 0 },
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  await assert.rejects(
-    () => client.queryAccounts({ filter: "[]" }),
-    /filter must be a plain object/,
-  );
-  assert.equal(callCount, 0);
-});
-
-test("queryAccounts rejects unsupported format option", async () => {
-  let captured;
-  const fetchImpl = async (_url, init) => {
-    captured = JSON.parse(init.body);
-    return createResponse({
-      status: 200,
-      jsonData: { items: [], total: 0 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.queryAccounts({ format: "i105" }),
-    /unsupported fields: format/i,
-  );
-  assert.equal(captured, undefined);
-});
-
-test("queryAccounts rejects unsupported sort order tokens", async () => {
-  let callCount = 0;
-  const fetchImpl = async () => {
-    callCount += 1;
-    return createResponse({ status: 200, jsonData: { items: [], total: 0 } });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.queryAccounts({ sort: "id:descendingly" }),
-    /sort token at index 0 order must be "asc" or "desc"/,
-  );
-  assert.equal(callCount, 0);
-});
-
-test("queryAccounts rejects invalid countMode before fetching", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not call fetch");
-    },
-  });
-  await assert.rejects(
-    () => client.queryAccounts({ countMode: "full" }),
-    /countMode must be "bounded" or "exact"/,
-  );
-});
-
-test("queryAccounts rejects malformed has_more response metadata", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: { items: [], has_more: "false", count_mode: "bounded" },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () => client.queryAccounts({ countMode: "bounded" }),
-    /invalid has_more flag/,
-  );
-});
-
-test("queryDomains rejects non-object select entries", async () => {
-  let callCount = 0;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      callCount += 1;
-      return createResponse({
-        status: 200,
-        jsonData: { items: [], total: 0 },
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.queryDomains({
-        select: [{ id: true }, []],
-      }),
-    /select\[1] must be a field-path string or plain object/,
-  );
-  assert.equal(callCount, 0);
-});
-
-test("listNfts hits nft endpoint", async () => {
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, "/v1/nfts");
-    assert.equal(parsed.searchParams.get("limit"), "25");
-    return createResponse({
-      status: 200,
-      jsonData: { items: [{ id: "nft#1" }], total: 1 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listNfts({ limit: 25 });
-  assert.deepEqual(payload.items[0], { id: "nft#1" });
-});
-
-test("listExplorerNfts validates cursor pagination and encodes filters", async () => {
-  const calls = [];
-  const fetchImpl = async (url, init) => {
-    const parsed = new URL(url);
-    calls.push({ parsed, init });
-    return createResponse({
-      status: 200,
-      jsonData: {
-        pagination: { limit: 5, next_cursor: "bmV4dC1uZnQ", has_more: true },
-        items: [
-          { id: "6HptcdrgYMsS3ARWDMaabCQJtqQd#1", owned_by: SAMPLE_ACCOUNT_ID, metadata: { role: "demo" } },
-        ],
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const page = await client.listExplorerNfts({
-    ownedBy: SAMPLE_ACCOUNT_ID,
-    domainId: "wonderland",
-    cursor: "c3RhcnQtbmZ0",
-    limit: 5,
-  });
-  assert.equal(calls.length, 1);
-  const { parsed, init } = calls[0];
-  assert.equal(init.redirect, "error");
-  assert.equal(
-    init.headers["X-Iroha-Account"],
-    AccountAddress.parseEncoded(APPLICATION_CANONICAL_AUTH.accountId).address.canonicalHex(),
-  );
-  assert.ok(init.headers["X-Iroha-Signature"]);
-  assert.equal(parsed.pathname, "/v1/explorer/nfts");
-  assert.equal(parsed.searchParams.get("owned_by"), SAMPLE_ACCOUNT_ID);
-  assert.equal(parsed.searchParams.get("domain"), "wonderland");
-  assert.equal(parsed.searchParams.get("limit"), "5");
-  assert.equal(parsed.searchParams.get("cursor"), "c3RhcnQtbmZ0");
-  assert.equal(parsed.searchParams.get("page"), null);
-  assert.equal(parsed.searchParams.get("per_page"), null);
-  assert.equal(parsed.searchParams.get("canonical_i105"), null);
-  assert.deepEqual(page.pagination, {
-    limit: 5,
-    nextCursor: "bmV4dC1uZnQ",
-    hasMore: true,
-  });
-  assert.deepEqual(page.items[0], {
-    id: "6HptcdrgYMsS3ARWDMaabCQJtqQd#1",
-    ownedBy: SAMPLE_ACCOUNT_ID,
-    metadata: { role: "demo" },
-  });
-});
 
 test("dataspace-visible Explorer reads stay anonymous without a default signer", async () => {
   let capturedInit;
@@ -12749,7 +12023,7 @@ test("dataspace-visible Explorer reads stay anonymous without a default signer",
       return createResponse({
         status: 200,
         jsonData: {
-          pagination: { limit: 25, next_cursor: null, has_more: false },
+          next_cursor: null,
           items: [],
         },
         headers: { "content-type": "application/json" },
@@ -12757,124 +12031,15 @@ test("dataspace-visible Explorer reads stay anonymous without a default signer",
     },
   });
 
-  const page = await client.listExplorerNfts();
+  const page = await client.explorerNfts.list();
   assert.deepEqual(page.items, []);
   assert.equal(capturedInit.headers["X-Iroha-Account"], undefined);
   assert.equal(capturedInit.headers["X-Iroha-Signature"], undefined);
 });
 
-test("world Explorer lists reject offset pagination and malformed cursor metadata", async () => {
-  let fetchCalls = 0;
-  const localClient = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      fetchCalls += 1;
-      throw new Error("must not fetch");
-    },
-  });
-  await assert.rejects(
-    () => localClient.listExplorerNfts({ page: 2 }),
-    /unsupported fields: page/u,
-  );
-  await assert.rejects(
-    () => localClient.listExplorerRwas({ cursor: "padded==" }),
-    /canonical base64url without padding/u,
-  );
-  await assert.rejects(
-    () => localClient.listExplorerNfts({ cursor: "AB" }),
-    /canonical base64url without padding/u,
-  );
-  await assert.rejects(
-    () => localClient.listExplorerNfts({ limit: 101 }),
-    /must be at most 100/u,
-  );
-  assert.equal(fetchCalls, 0);
 
-  const malformedClient = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({
-      status: 200,
-      jsonData: {
-        pagination: { limit: 25, next_cursor: null, has_more: true },
-        items: [],
-      },
-      headers: { "content-type": "application/json" },
-    }),
-  });
-  await assert.rejects(
-    () => malformedClient.listExplorerNfts(),
-    /has_more must match next_cursor availability/u,
-  );
 
-  const unknownFieldClient = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({
-      status: 200,
-      jsonData: {
-        pagination: { limit: 25, next_cursor: null, has_more: false, page: 1 },
-        items: [],
-      },
-      headers: { "content-type": "application/json" },
-    }),
-  });
-  await assert.rejects(
-    () => unknownFieldClient.listExplorerNfts(),
-    /contains unknown field page/u,
-  );
-
-  const oversizedPageClient = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({
-      status: 200,
-      jsonData: {
-        pagination: { limit: 1, next_cursor: null, has_more: false },
-        items: [{}, {}],
-      },
-      headers: { "content-type": "application/json" },
-    }),
-  });
-  await assert.rejects(
-    () => oversizedPageClient.listExplorerRwas(),
-    /items must not exceed pagination\.limit/u,
-  );
-});
-
-test("iterateAccountNfts walks explorer pagination and honours maxItems", async () => {
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    const cursor = parsed.searchParams.get("cursor");
-    const limit = Number(parsed.searchParams.get("limit") ?? 25);
-    const totalItems = 5;
-    const start = cursor === null ? 0 : Number(Buffer.from(cursor, "base64url").toString("utf8"));
-    const remaining = Math.max(0, totalItems - start);
-    const items = Array.from({ length: Math.min(limit, remaining) }, (_, index) => ({
-      id: `6HptcdrgYMsS3ARWDMaabCQJtqQd#${start + index + 1}`,
-      owned_by: SAMPLE_ACCOUNT_ID,
-      metadata: { cursor, limit },
-    }));
-    const nextOffset = start + items.length;
-    const hasMore = nextOffset < totalItems;
-    return createResponse({
-      status: 200,
-      jsonData: {
-        pagination: {
-          limit,
-          next_cursor: hasMore ? Buffer.from(String(nextOffset)).toString("base64url") : null,
-          has_more: hasMore,
-        },
-        items,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const seen = [];
-  for await (const nft of client.iterateAccountNfts(SAMPLE_ACCOUNT_ID, {
-    limit: 2,
-    maxItems: 3,
-  })) {
-    seen.push(nft.id);
-  }
-  assert.deepEqual(seen, ["6HptcdrgYMsS3ARWDMaabCQJtqQd#1", "6HptcdrgYMsS3ARWDMaabCQJtqQd#2", "6HptcdrgYMsS3ARWDMaabCQJtqQd#3"]);
-});
-
-test("listExplorerNfts surfaces permission errors", async () => {
+test("explorerNfts surfaces permission errors", async () => {
   const fetchImpl = async () =>
     createResponse({
       status: 403,
@@ -12883,94 +12048,11 @@ test("listExplorerNfts surfaces permission errors", async () => {
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.listExplorerNfts(),
+    () => client.explorerNfts.list(),
     (error) => error instanceof ToriiHttpError && error.status === 403,
   );
 });
 
-test("listRwas hits rwa endpoint", async () => {
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, "/v1/rwas");
-    assert.equal(parsed.searchParams.get("limit"), "25");
-    return createResponse({
-      status: 200,
-      jsonData: { items: [{ id: SAMPLE_RWA_ID }], total: 1 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listRwas({ limit: 25 });
-  assert.deepEqual(payload.items[0], { id: SAMPLE_RWA_ID });
-});
-
-test("listExplorerRwas encodes owner/domain filters and cursor pagination", async () => {
-  const calls = [];
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    calls.push(parsed);
-    return createResponse({
-      status: 200,
-      jsonData: {
-        pagination: { limit: 5, next_cursor: "bmV4dC1yd2E", has_more: true },
-        items: [
-          {
-            id: SAMPLE_RWA_ID,
-            owned_by: SAMPLE_ACCOUNT_ID,
-            quantity: "10.5",
-            held_quantity: "1",
-            primary_reference: "vault-cert-001",
-            status: "active",
-            is_frozen: false,
-            metadata: { origin: "AE" },
-          },
-        ],
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const page = await client.listExplorerRwas({
-    ownedBy: SAMPLE_ACCOUNT_ID,
-    domainId: "commodities",
-    cursor: "c3RhcnQtcndh",
-    limit: 5,
-  });
-  assert.equal(calls.length, 1);
-  const parsed = calls[0];
-  assert.equal(parsed.pathname, "/v1/explorer/rwas");
-  assert.equal(parsed.searchParams.get("owned_by"), SAMPLE_ACCOUNT_ID);
-  assert.equal(parsed.searchParams.get("domain"), "commodities");
-  assert.equal(parsed.searchParams.get("limit"), "5");
-  assert.equal(parsed.searchParams.get("cursor"), "c3RhcnQtcndh");
-  assert.equal(parsed.searchParams.get("page"), null);
-  assert.equal(parsed.searchParams.get("per_page"), null);
-  assert.deepEqual(page.pagination, {
-    limit: 5,
-    nextCursor: "bmV4dC1yd2E",
-    hasMore: true,
-  });
-  assert.deepEqual(page.items[0], {
-    id: SAMPLE_RWA_ID,
-    ownedBy: SAMPLE_ACCOUNT_ID,
-    quantity: "10.5",
-    heldQuantity: "1",
-    primaryReference: "vault-cert-001",
-    status: "active",
-    isFrozen: false,
-    metadata: { origin: "AE" },
-    raw: {
-      id: SAMPLE_RWA_ID,
-      owned_by: SAMPLE_ACCOUNT_ID,
-      quantity: "10.5",
-      held_quantity: "1",
-      primary_reference: "vault-cert-001",
-      status: "active",
-      is_frozen: false,
-      metadata: { origin: "AE" },
-    },
-  });
-});
 
 test("getExplorerRwaDetail encodes path and decodes response", async () => {
   const fetchImpl = async (url) => {
@@ -13045,1728 +12127,68 @@ test("explorer RWA readbacks reject noncanonical quantity fields", async () => {
       fetchImpl: async () => createResponse({
         status: 200,
         jsonData: {
-          pagination: { limit: 25, next_cursor: null, has_more: false },
+          next_cursor: null,
           items: [record],
         },
         headers: { "content-type": "application/json" },
       }),
     });
     await assert.rejects(
-      () => client.listExplorerRwas(),
+      () => client.explorerRwas.list(),
       /canonical non-negative Kotodama V1 quantity/u,
     );
   }
 });
 
-test("queryRwas posts structured envelope", async () => {
-  let capturedBody;
-  const fetchImpl = async (_url, init) => {
-    assert.equal(init.method, "POST");
-    capturedBody = JSON.parse(init.body);
-    return createResponse({
-      status: 200,
-      jsonData: { items: [{ id: SAMPLE_RWA_ID }], total: 1 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const page = await client.queryRwas({
-    filter: { Eq: ["id", SAMPLE_RWA_ID] },
-    sort: [{ key: "id", order: "desc" }],
-    fetchSize: 10,
-  });
-  assert.deepEqual(capturedBody.filter, { Eq: ["id", SAMPLE_RWA_ID] });
-  assert.deepEqual(capturedBody.sort, [{ key: "id", order: "desc" }]);
-  assert.equal(capturedBody.fetch_size, 10);
-  assert.deepEqual(page.items[0], { id: SAMPLE_RWA_ID });
+
+test("accountPermissions uses collection pagination and retains complete permission validation", async () => {
+  const calls = [];
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async (url, init) => {
+    calls.push({ url, init });
+    return createResponse({ status: 200, headers: { "content-type": "application/json" },
+      jsonData: { items: [{ name: "CanMintAssetToAccount", payload: { account: FIXTURE_ALICE_ID } }], next_cursor: null, total: 1 } });
+  }});
+  const page = await client.accountPermissions(FIXTURE_ALICE_ID).list({ limit: 5, cursor: "prior", includeTotal: true });
+  assert.equal(new URL(calls[0].url).pathname, accountPath(FIXTURE_ALICE_ID, "/permissions/query"));
+  assert.equal(calls[0].init.method, "POST");
+  assert.deepEqual(JSON.parse(calls[0].init.body), { limit: 5, cursor: "prior", include_total: true });
+  assert.equal(page.items[0].name, "CanMintAssetToAccount");
+  assert.deepEqual(page.items[0].payload, { account: FIXTURE_ALICE_ID });
+  assert.equal(page.nextCursor, null);
+  assert.equal(page.total, 1);
+  assert.throws(() => client.accountPermissions(""), /accountId/);
+  await assert.rejects(() => client.accountPermissions(FIXTURE_ALICE_ID).list({ offset: 0 }), /offset/);
+  await assert.rejects(() => client.accountPermissions(FIXTURE_ALICE_ID).list({}, { signal: 1 }), /signal/);
+  assert.equal(calls.length, 1);
 });
 
-test("iterateAccountRwas walks explorer pagination and honours maxItems", async () => {
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    const cursor = parsed.searchParams.get("cursor");
-    const limit = Number(parsed.searchParams.get("limit") ?? 25);
-    const totalItems = 5;
-    const start = cursor === null ? 0 : Number(Buffer.from(cursor, "base64url").toString("utf8"));
-    const remaining = Math.max(0, totalItems - start);
-    const items = Array.from({ length: Math.min(limit, remaining) }, (_, index) => ({
-      id: `${SAMPLE_RWA_ID}:${start + index + 1}`,
-      owned_by: SAMPLE_ACCOUNT_ID,
-      quantity: "1",
-      held_quantity: "0",
-      primary_reference: `vault-cert-${start + index + 1}`,
-      status: null,
-      is_frozen: false,
-      metadata: { cursor, limit },
-    }));
-    const nextOffset = start + items.length;
-    const hasMore = nextOffset < totalItems;
-    return createResponse({
-      status: 200,
-      jsonData: {
-        pagination: {
-          limit,
-          next_cursor: hasMore ? Buffer.from(String(nextOffset)).toString("base64url") : null,
-          has_more: hasMore,
-        },
-        items,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const seen = [];
-  for await (const rwa of client.iterateAccountRwas(SAMPLE_ACCOUNT_ID, {
-    limit: 2,
-    maxItems: 3,
-  })) {
-    seen.push(rwa.id);
-  }
-  assert.deepEqual(seen, [
-    `${SAMPLE_RWA_ID}:1`,
-    `${SAMPLE_RWA_ID}:2`,
-    `${SAMPLE_RWA_ID}:3`,
-  ]);
+test("accountPermissions validates full rows while explicit projections preserve selected fields", async () => {
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({
+    status: 200, headers: { "content-type": "application/json" },
+    jsonData: { items: [{ payload: { account: FIXTURE_ALICE_ID } }], next_cursor: null },
+  }) });
+  await assert.rejects(() => client.accountPermissions(FIXTURE_ALICE_ID).list(), /name/);
+  const page = await client.accountPermissions(FIXTURE_ALICE_ID).list({ select: ["payload"] });
+  assert.deepEqual(page.items, [{ payload: { account: FIXTURE_ALICE_ID } }]);
 });
 
-test("queryDomains posts structured envelope", async () => {
-  let capturedBody;
-  const fetchImpl = async (_url, init) => {
-    assert.equal(init.method, "POST");
-    assert.equal(init.headers["Content-Type"], "application/json");
-    capturedBody = JSON.parse(init.body);
-    return createResponse({
-      status: 200,
-      jsonData: { items: [], total: 0 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.queryDomains({
-    filter: { Eq: ["id", "wonderland"] },
-    sort: "metadata.display_name:desc",
-    fetchSize: "32",
-    queryName: "FindDomains",
-    select: [{ id: true }],
-  });
-  assert.deepEqual(capturedBody.pagination, { offset: 0 });
-  assert.deepEqual(capturedBody.filter, { Eq: ["id", "wonderland"] });
-  assert.deepEqual(capturedBody.sort, [
-    { key: "metadata.display_name", order: "desc" },
-  ]);
-  assert.equal(capturedBody.fetch_size, 32);
-  assert.equal(capturedBody.query, "FindDomains");
-  assert.deepEqual(capturedBody.select, [{ id: true }]);
-});
-
-test("queryNfts posts Norito envelope", async () => {
-  let capturedBody;
-  const fetchImpl = async (_url, init) => {
-    assert.equal(init.method, "POST");
-    capturedBody = JSON.parse(init.body);
-    return createResponse({
-      status: 200,
-      jsonData: { items: [], total: 0 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.queryNfts({
-    filter: { Eq: ["id", "6HptcdrgYMsS3ARWDMaabCQJtqQd"] },
-    sort: [{ key: "id", order: "desc" }],
-    fetchSize: 10,
-  });
-  assert.deepEqual(capturedBody.filter, { Eq: ["id", "6HptcdrgYMsS3ARWDMaabCQJtqQd"] });
-  assert.deepEqual(capturedBody.sort, [{ key: "id", order: "desc" }]);
-  assert.equal(capturedBody.fetch_size, 10);
-  assert.equal(capturedBody.canonical_i105, undefined);
-});
-
-test("listNfts enforces credentials when requirePermissions is set", async () => {
-  let called = false;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      called = true;
-      return createResponse({
-        status: 200,
-        jsonData: { items: [], total: 0 },
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  await assert.rejects(
-    () => client.listNfts({ requirePermissions: true }),
-    /listNfts requires authToken or apiToken/,
-  );
-  assert.equal(called, false);
-});
-
-test("listNfts accepts requirePermissions when credentials are present", async () => {
-  let callCount = 0;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      callCount += 1;
-      return createResponse({
-        status: 200,
-        jsonData: { items: [{ id: "nft#1" }], total: 1 },
-        headers: { "content-type": "application/json" },
-      });
-    },
-    authToken: "token",
-  });
-  const payload = await client.listNfts({ requirePermissions: true, limit: 1 });
-  assert.equal(callCount, 1);
-  assert.deepEqual(payload.items[0], { id: "nft#1" });
-});
-
-test("listNfts rejects non-boolean requirePermissions", async () => {
-  let fetchCalled = false;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      fetchCalled = true;
-      return createResponse({
-        status: 200,
-        jsonData: { items: [], total: 0 },
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.listNfts({
-        // @ts-expect-error runtime guard
-        requirePermissions: "yes",
-      }),
-    /listNfts\.requirePermissions must be a boolean/,
-  );
-  assert.equal(fetchCalled, false);
-});
-
-test("iterateAccountsQuery paginates structured filters", async () => {
-  let callCount = 0;
-  const fetchImpl = async (url, init) => {
-    assert.equal(init.method, "POST");
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, "/v1/accounts/query");
-    const body = JSON.parse(init.body);
-    assert.deepEqual(body.filter, { Eq: ["id", SAMPLE_ACCOUNT_FORMS.i105] });
-    const offset = Number(body.pagination?.offset ?? 0);
-    const limit = Number(body.pagination?.limit ?? 0);
-    if (callCount === 0) {
-      assert.equal(limit, 2);
-      assert.equal(offset, 0);
-    } else {
-      assert.equal(limit, 2);
-      assert.equal(offset, 2);
+test("contract history collections reject retired row fields and preserve block coordinates", async () => {
+  const activity = { entrypoint_hash: "tx1", result_ok: true, contract_address: "irohac1router", block_height: 4, block_index: 2 };
+  const event = { event_id: "tx1:0", schema_version: 1, provenance: "derived", tx_hash_hex: "aa".repeat(32), block_height: 4, block_index: 2,
+    block_hash_hex: "deadbeef", result_ok: true, contract_address: "irohac1router", module: "router", event_kind: "route_swap" };
+  for (const [property, base] of [["contractActivity", activity], ["contractEvents", event]]) {
+    for (const [field, value] of [["gas_asset_id", "xor#universal"], ["fee_sponsor", FIXTURE_ALICE_ID], ["gas_limit", 100000]]) {
+      const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200,
+        jsonData: { items: [{ ...base, [field]: value }], next_cursor: null }, headers: { "content-type": "application/json" } }) });
+      await assert.rejects(() => client[property].list(), new RegExp(`${field} is retired`, "u"));
     }
-    callCount += 1;
-    const items =
-      offset === 0
-        ? [{ id: "acc-1" }, { id: "acc-2" }]
-        : [{ id: "acc-3" }];
-    return createResponse({
-      status: 200,
-      jsonData: { items, total: 3 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const seen = [];
-  for await (const account of client.iterateAccountsQuery({
-    filter: { Eq: ["id", SAMPLE_ACCOUNT_FORMS.i105] },
-    pageSize: 2,
-  })) {
-    seen.push(account.id);
+    const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200,
+      jsonData: { items: [base], next_cursor: "older" }, headers: { "content-type": "application/json" } }) });
+    const page = await client[property].list();
+    assert.equal(page.items[0].block_height, 4);
+    assert.equal(page.items[0].block_index, 2);
+    assert.equal(page.nextCursor, "older");
   }
-  assert.deepEqual(seen, ["acc-1", "acc-2", "acc-3"]);
-  assert.equal(callCount, 2);
-});
-
-test("iterateAccounts rejects primitive iterator options", () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not call fetch");
-    },
-  });
-  assert.throws(
-    () => client.iterateAccounts("bogus"),
-    /listAccounts iterator options must be a plain object/,
-  );
-});
-
-test("iterateAccountsQuery rejects primitive iterator options", () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not call fetch");
-    },
-  });
-  assert.throws(
-    () => client.iterateAccountsQuery("bogus"),
-    /queryAccounts iterator options must be a plain object/,
-  );
-});
-
-test("iterateDomainsQuery pages through query endpoint", async () => {
-  let callCount = 0;
-  const fetchImpl = async (url, init) => {
-    assert.equal(new URL(url).pathname, "/v1/domains/query");
-    const body = JSON.parse(init.body);
-    const offset = Number(body.pagination?.offset ?? 0);
-    callCount += 1;
-    const items = offset === 0 ? [{ id: "wonderland" }] : [{ id: "utopia" }];
-    return createResponse({
-      status: 200,
-      jsonData: { items, total: 2 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const ids = [];
-  for await (const domain of client.iterateDomainsQuery({ pageSize: 1 })) {
-    ids.push(domain.id);
-  }
-  assert.deepEqual(ids, ["wonderland", "utopia"]);
-  assert.equal(callCount, 2);
-});
-
-test("iterateAssetDefinitions advances pages and honours maxItems", async () => {
-  const responses = [
-    { items: [{ id: "a" }, { id: "b" }], total: 5 },
-    { items: [{ id: "c" }], total: 5 },
-  ];
-  let callCount = 0;
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    if (callCount === 0) {
-      assert.equal(parsed.searchParams.get("limit"), "2");
-      assert.equal(parsed.searchParams.get("offset"), "0");
-    } else if (callCount === 1) {
-      assert.equal(parsed.searchParams.get("limit"), "1");
-      assert.equal(parsed.searchParams.get("offset"), "2");
-    }
-    const payload = responses[callCount] ?? { items: [], total: 5 };
-    callCount += 1;
-    return createResponse({
-      status: 200,
-      jsonData: payload,
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const collected = [];
-  for await (const item of client.iterateAssetDefinitions({
-    pageSize: 2,
-    maxItems: 3,
-  })) {
-    collected.push(item.id);
-  }
-  assert.deepEqual(collected, ["a", "b", "c"]);
-  assert.equal(callCount, 2);
-});
-
-test("iterateAssetDefinitionsQuery paginates query responses", async () => {
-  let callCount = 0;
-  const fetchImpl = async (url, init) => {
-    assert.equal(new URL(url).pathname, "/v1/assets/definitions/query");
-    const body = JSON.parse(init.body);
-    const offset = Number(body.pagination?.offset ?? 0);
-    callCount += 1;
-    const items =
-      offset === 0
-        ? [{ id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" }]
-        : [{ id: "6sfXUWFsj5B9CV4dXLq6nkU3H55W" }];
-    return createResponse({
-      status: 200,
-      jsonData: { items, total: 2 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const ids = [];
-  for await (const def of client.iterateAssetDefinitionsQuery({ pageSize: 1 })) {
-    ids.push(def.id);
-  }
-  assert.deepEqual(ids, ["62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "6sfXUWFsj5B9CV4dXLq6nkU3H55W"]);
-  assert.equal(callCount, 2);
-});
-
-test("queryAssetDefinitions enforces requirePermissions", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not call fetch");
-    },
-  });
-  await assert.rejects(
-    () => client.queryAssetDefinitions({ requirePermissions: true }),
-    /queryAssetDefinitions requires authToken or apiToken/,
-  );
-});
-
-test("iterateNfts paginates across responses", async () => {
-  const responses = [
-    { items: [{ id: "nft#1" }], total: 3 },
-    { items: [{ id: "nft#2" }], total: 3 },
-    { items: [{ id: "nft#3" }], total: 3 },
-  ];
-  let callCount = 0;
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, "/v1/nfts");
-    assert.equal(parsed.searchParams.get("limit"), "1");
-    assert.equal(parsed.searchParams.get("offset"), String(callCount));
-    const payload = responses[callCount] ?? { items: [], total: 3 };
-    callCount += 1;
-    return createResponse({
-      status: 200,
-      jsonData: payload,
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const collected = [];
-  for await (const nft of client.iterateNfts({ pageSize: 1, maxItems: 3 })) {
-    collected.push(nft.id);
-  }
-  assert.deepEqual(collected, ["nft#1", "nft#2", "nft#3"]);
-  assert.equal(callCount, 3);
-});
-
-test("iterateNftsQuery paginates structured responses", async () => {
-  let callCount = 0;
-  const fetchImpl = async (url, init) => {
-    assert.equal(new URL(url).pathname, "/v1/nfts/query");
-    const body = JSON.parse(init.body);
-    const offset = Number(body.pagination?.offset ?? 0);
-    callCount += 1;
-    const items = offset === 0 ? [{ id: "nft#a" }] : [{ id: "nft#b" }];
-    return createResponse({
-      status: 200,
-      jsonData: { items, total: 2 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const ids = [];
-  for await (const nft of client.iterateNftsQuery({ pageSize: 1 })) {
-    ids.push(nft.id);
-  }
-  assert.deepEqual(ids, ["nft#a", "nft#b"]);
-  assert.equal(callCount, 2);
-});
-
-test("iterateNftsQuery enforces maxItems and increments pagination", async () => {
-  const seenPagination = [];
-  const fetchImpl = async (_url, init) => {
-    const envelope = JSON.parse(init.body);
-    seenPagination.push(envelope.pagination);
-    const offset = Number(envelope.pagination?.offset ?? 0);
-    const items =
-      offset === 0 ? [{ id: "nft#0" }, { id: "nft#1" }] : [{ id: "nft#2" }];
-    return createResponse({
-      status: 200,
-      jsonData: { items, total: 10 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const ids = [];
-  for await (const nft of client.iterateNftsQuery({ pageSize: 2, maxItems: 3 })) {
-    ids.push(nft.id);
-  }
-  assert.deepEqual(ids, ["nft#0", "nft#1", "nft#2"]);
-  assert.deepEqual(seenPagination, [{ offset: 0, limit: 2 }, { offset: 2, limit: 1 }]);
-});
-
-test("listNfts surfaces permission errors with payload details", async () => {
-  const fetchImpl = async () =>
-    createResponse({
-      status: 403,
-      statusText: "Forbidden",
-      jsonData: { code: "permission_denied", message: "missing role" },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.listNfts({ limit: 1 }),
-    (error) => {
-      assert.ok(error instanceof ToriiHttpError);
-      assert.equal(error.status, 403);
-      assert.equal(error.code, "permission_denied");
-      assert.equal(error.errorMessage, "missing role");
-      return true;
-    },
-  );
-});
-
-test("listAccountPermissions encodes pagination and parses response", async () => {
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath(FIXTURE_ALICE_ID, "/permissions"));
-    assert.equal(parsed.searchParams.get("limit"), "5");
-    assert.equal(parsed.searchParams.get("offset"), "2");
-    return createResponse({
-      status: 200,
-      jsonData: {
-        items: [
-          {
-            name: "CanMintAssetToAccount",
-            payload: {
-              asset_definition: "xor#wonderland",
-              account: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-            },
-          },
-        ],
-        total: 1,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.listAccountPermissions(FIXTURE_ALICE_ID, {
-    limit: 5,
-    offset: 2,
-  });
-  assert.deepEqual(result, {
-    items: [
-      {
-        name: "CanMintAssetToAccount",
-        payload: {
-          asset_definition: "xor#wonderland",
-          account: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-        },
-      },
-    ],
-    total: 1,
-  });
-  await assert.rejects(
-    () => client.listAccountPermissions(""),
-    /accountId must not be empty/,
-  );
-});
-
-test("listAccountPermissions rejects non-object options", async () => {
-  let fetchCalled = false;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      fetchCalled = true;
-      return createResponse({
-        status: 200,
-        jsonData: { items: [], total: 0 },
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  await assert.rejects(
-    () => client.listAccountPermissions(FIXTURE_ALICE_ID, 1),
-    /listAccountPermissions must be a plain object/,
-  );
-  assert.equal(fetchCalled, false);
-});
-
-test("listAccountPermissions rejects invalid signals", async () => {
-  let fetchCalled = false;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      fetchCalled = true;
-      return createResponse({
-        status: 200,
-        jsonData: { items: [], total: 0 },
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.listAccountPermissions(FIXTURE_ALICE_ID, {
-        // @ts-expect-error intentional invalid signal for runtime guard
-        signal: {},
-      }),
-    /listAccountPermissions options.signal must be an AbortSignal/,
-  );
-  assert.equal(fetchCalled, false);
-});
-
-test("listAccountPermissions forwards AbortSignal instances", async () => {
-  const controller = new AbortController();
-  let capturedInit = null;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (_url, init) => {
-      capturedInit = init;
-      return createResponse({
-        status: 200,
-        jsonData: { items: [], total: 0 },
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  await client.listAccountPermissions(FIXTURE_ALICE_ID, {
-    limit: 1,
-    signal: controller.signal,
-  });
-  assert.ok(capturedInit);
-  assertRequestSignal(capturedInit.signal, controller.signal);
-});
-
-test("iterateAccountPermissions paginates account-scoped permissions", async () => {
-  let callCount = 0;
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath(FIXTURE_ALICE_ID, "/permissions"));
-    const limit = Number(parsed.searchParams.get("limit"));
-    const offset = Number(parsed.searchParams.get("offset") ?? "0");
-    callCount += 1;
-    let items = [];
-    if (offset === 0) {
-      items = Array.from({ length: limit }, (_, idx) => ({
-        name: `Permission${idx}`,
-        payload: {},
-      }));
-    } else if (offset === 2) {
-      items = [{ name: "Permission2", payload: {} }];
-    }
-    return createResponse({
-      status: 200,
-      jsonData: { items, total: 4 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const collected = [];
-  for await (const item of client.iterateAccountPermissions(FIXTURE_ALICE_ID, {
-    pageSize: 2,
-    maxItems: 3,
-  })) {
-    collected.push(item.name);
-  }
-  assert.deepEqual(collected, ["Permission0", "Permission1", "Permission2"]);
-  assert.equal(callCount, 2);
-});
-
-test("listAccountPermissions validates entry names", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: { items: [{ payload: {} }], total: 1 },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () => client.listAccountPermissions(FIXTURE_ALICE_ID),
-    /account permission list response\.items\[0]\.name/,
-  );
-});
-
-test("listAccountPermissions normalizes I105 and i105 (`sora`) account ids", async () => {
-  const forms = sampleAccountForms();
-  for (const literal of [forms.i105, forms.i105]) {
-    let requestedPath = null;
-    const fetchImpl = async (url) => {
-      requestedPath = new URL(url).pathname;
-      return createResponse({
-        status: 200,
-        jsonData: { items: [], total: 0 },
-        headers: { "content-type": "application/json" },
-      });
-    };
-    const client = new ToriiClient(BASE_URL, { fetchImpl });
-    await client.listAccountPermissions(literal);
-    assert.equal(requestedPath, accountPath(literal, "/permissions"));
-  }
-});
-
-test("listAccountAssets encodes pagination params", async () => {
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath(FIXTURE_ALICE_ID, "/assets"));
-    assert.equal(parsed.searchParams.get("limit"), "5");
-    assert.equal(parsed.searchParams.get("offset"), "1");
-    return createResponse({
-      status: 200,
-      jsonData: {
-        items: [{ asset_id: FIXTURE_ASSET_ID_A, quantity: "10" }],
-        total: 1,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listAccountAssets(FIXTURE_ALICE_ID, { limit: 5, offset: 1 });
-  assert.equal(payload.items[0].asset_id, FIXTURE_ASSET_ID_A);
-});
-
-test("listAccountAssets encodes assetId filters", async () => {
-  const assetId = FIXTURE_ASSET_ID_A;
-  const normalizedAssetId = FIXTURE_ASSET_ID_A;
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath(FIXTURE_ALICE_ID, "/assets"));
-    assert.equal(parsed.searchParams.get("asset"), normalizedAssetId);
-    return createResponse({
-      status: 200,
-      jsonData: { items: [{ asset: normalizedAssetId, quantity: "10" }], total: 1 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listAccountAssets(FIXTURE_ALICE_ID, { assetId });
-  assert.equal(payload.items[0].asset_id, normalizedAssetId);
-  assert.equal(payload.items[0].asset, normalizedAssetId);
-});
-
-test("listAccountAssets rejects malformed asset filters", async () => {
-  const invalidAssetId = "not:an-asset";
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("fetch should not be called");
-    },
-  });
-
-  await assert.rejects(
-    () => client.listAccountAssets(FIXTURE_ALICE_ID, { assetId: invalidAssetId }),
-    /canonical unprefixed Base58 asset id/,
-  );
-});
-
-test("listAccountAssets enforces canonical quantity strings", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: {
-          items: [{ asset_id: FIXTURE_ASSET_ID_A, quantity: 10 }],
-          total: 1,
-        },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () => client.listAccountAssets(FIXTURE_ALICE_ID),
-    /account asset list response\.items\[0]\.quantity/,
-  );
-});
-
-test("listAccountAssets rejects noncanonical quantity spellings", async () => {
-  for (const quantity of [-1, "01", "1.0", "1.20", "1amt", "1qty", " 1", "1e0"]) {
-    const client = new ToriiClient(BASE_URL, {
-      fetchImpl: async () =>
-        createResponse({
-          status: 200,
-          jsonData: {
-            items: [{ asset_id: FIXTURE_ASSET_ID_A, quantity }],
-            total: 1,
-          },
-          headers: { "content-type": "application/json" },
-        }),
-    });
-    await assert.rejects(
-      () => client.listAccountAssets(FIXTURE_ALICE_ID),
-      /account asset list response\.items\[0\]\.quantity/,
-    );
-  }
-});
-
-test("listAccountAssets rejects camelCase assetId fields", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: {
-          items: [
-            {
-              asset_id: FIXTURE_ASSET_ID_A,
-              assetId: FIXTURE_ASSET_ID_A,
-              quantity: "10",
-            },
-          ],
-          total: 1,
-        },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () => client.listAccountAssets(FIXTURE_ALICE_ID),
-    /account asset list response\.items\[0]\.assetId is not supported/,
-  );
-});
-
-test("queryAccountAssets posts structured envelope", async () => {
-  let capturedBody;
-  const fetchImpl = async (_url, init) => {
-    capturedBody = JSON.parse(init.body);
-    return createResponse({
-      status: 200,
-      jsonData: { items: [], total: 0 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.queryAccountAssets(FIXTURE_ALICE_ID, {
-    filter: { Gte: ["quantity", 5] },
-    sort: [{ key: "quantity", order: "desc" }],
-    fetchSize: 10,
-  });
-  assert.deepEqual(capturedBody.filter, { Gte: ["quantity", 5] });
-  assert.deepEqual(capturedBody.sort, [{ key: "quantity", order: "desc" }]);
-  assert.equal(capturedBody.fetch_size, 10);
-  assert.equal(capturedBody.canonical_i105, undefined);
-});
-
-test("queryAccountAssets surfaces errors for invalid filters", async () => {
-  const fetchImpl = async () =>
-    createResponse({
-      status: 400,
-      jsonData: { code: "ValidationFail", message: "too complex" },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () =>
-      client.queryAccountAssets(FIXTURE_ALICE_ID, {
-        filter: { IsNull: ["asset_id"] },
-      }),
-    (error) => {
-      assert(error instanceof ToriiHttpError);
-      assert.equal(error.status, 400);
-      assert.equal(error.code, "ValidationFail");
-      return true;
-    },
-  );
-});
-
-test("iterateAccountAssets walks multiple pages", async () => {
-  const responses = [
-    { items: [{ asset_id: FIXTURE_ASSET_ID_A, quantity: "5" }], total: 2 },
-    { items: [{ asset_id: FIXTURE_ASSET_ID_B, quantity: "7" }], total: 2 },
-  ];
-  let callCount = 0;
-  const fetchImpl = async () => {
-    const payload = responses[callCount] ?? { items: [], total: 2 };
-    callCount += 1;
-    return createResponse({
-      status: 200,
-      jsonData: payload,
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const collected = [];
-  for await (const holding of client.iterateAccountAssets(FIXTURE_ALICE_ID, { pageSize: 1 })) {
-    collected.push(holding.asset_id);
-  }
-  assert.deepEqual(collected, [FIXTURE_ASSET_ID_A, FIXTURE_ASSET_ID_B]);
-});
-
-test("iterateAccountAssetsQuery paginates per-account query endpoint", async () => {
-  let callCount = 0;
-  const fetchImpl = async (url, init) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath(FIXTURE_ALICE_ID, "/assets/query"));
-    const body = JSON.parse(init.body);
-    const offset = Number(body.pagination?.offset ?? 0);
-    callCount += 1;
-    const items =
-      offset === 0
-        ? [{ asset_id: FIXTURE_ASSET_ID_A, quantity: "5" }]
-        : [{ asset_id: FIXTURE_ASSET_ID_B, quantity: "7" }];
-    return createResponse({
-      status: 200,
-      jsonData: { items, total: 2 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const seen = [];
-  for await (const holding of client.iterateAccountAssetsQuery(FIXTURE_ALICE_ID, {
-    pageSize: 1,
-  })) {
-    seen.push(holding.asset_id);
-  }
-  assert.deepEqual(seen, [FIXTURE_ASSET_ID_A, FIXTURE_ASSET_ID_B]);
-  assert.equal(callCount, 2);
-});
-
-test("iterateAccountAssets enforces credentials when requirePermissions is set", () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not hit fetch");
-    },
-  });
-  assert.throws(
-    () => client.iterateAccountAssets(FIXTURE_ALICE_ID, { requirePermissions: true }),
-    /iterateAccountAssets requires authToken or apiToken/,
-  );
-});
-
-test("iterateAccountAssetsQuery honours requirePermissions with credentials", async () => {
-  let callCount = 0;
-  const fetchImpl = async () => {
-    callCount += 1;
-    return createResponse({
-      status: 200,
-      jsonData: { items: [{ asset_id: FIXTURE_ASSET_ID_A, quantity: "1" }], total: 1 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, apiToken: "token" });
-  const holdings = [];
-  for await (const item of client.iterateAccountAssetsQuery(FIXTURE_ALICE_ID, {
-    requirePermissions: true,
-  })) {
-    holdings.push(item.asset_id);
-  }
-  assert.equal(callCount, 1);
-  assert.deepEqual(holdings, [FIXTURE_ASSET_ID_A]);
-});
-
-test("iterateAccountAssets enforces maxItems and offset progression", async () => {
-  const seenRequests = [];
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    seenRequests.push({
-      limit: parsed.searchParams.get("limit"),
-      offset: parsed.searchParams.get("offset"),
-    });
-    const offset = Number(parsed.searchParams.get("offset") ?? "0");
-    const page =
-      offset === 0
-        ? [
-            { asset_id: FIXTURE_ASSET_ID_A, quantity: "2" },
-            { asset_id: FIXTURE_ASSET_ID_B, quantity: "3" },
-          ]
-        : [{ asset_id: FIXTURE_ASSET_ID_C, quantity: "5" }];
-    return createResponse({
-      status: 200,
-      jsonData: { items: page, total: 5 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const collected = [];
-  for await (const holding of client.iterateAccountAssets(FIXTURE_ALICE_ID, {
-    pageSize: 2,
-    maxItems: 3,
-  })) {
-    collected.push(holding.asset_id);
-  }
-  assert.deepEqual(collected, [FIXTURE_ASSET_ID_A, FIXTURE_ASSET_ID_B, FIXTURE_ASSET_ID_C]);
-  assert.deepEqual(seenRequests, [
-    { limit: "2", offset: "0" },
-    { limit: "1", offset: "2" },
-  ]);
-});
-
-test("listAccountAssets surfaces permission errors with payload details", async () => {
-  const fetchImpl = async () =>
-    createResponse({
-      status: 403,
-      statusText: "Forbidden",
-      jsonData: { code: "permission_denied", message: "missing permission" },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.listAccountAssets(FIXTURE_ALICE_ID, { limit: 1 }),
-    (error) => {
-      assert.ok(error instanceof ToriiHttpError);
-      assert.equal(error.status, 403);
-      assert.equal(error.code, "permission_denied");
-      assert.equal(error.errorMessage, "missing permission");
-      return true;
-    },
-  );
-});
-
-test("queryAccountAssets surfaces permission errors with payload details", async () => {
-  const fetchImpl = async () =>
-    createResponse({
-      status: 403,
-      statusText: "Forbidden",
-      jsonData: { code: "permission_denied", message: "missing role" },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () =>
-      client.queryAccountAssets(FIXTURE_ALICE_ID, {
-        filter: { Eq: ["asset_id", FIXTURE_ASSET_ID_A] },
-      }),
-    (error) => {
-      assert.ok(error instanceof ToriiHttpError);
-      assert.equal(error.status, 403);
-      assert.equal(error.code, "permission_denied");
-      assert.equal(error.errorMessage, "missing role");
-      return true;
-    },
-  );
-});
-
-test("listAccountTransactions encodes pagination params", async () => {
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath(FIXTURE_ALICE_ID, "/transactions"));
-    assert.equal(parsed.searchParams.get("limit"), "3");
-    assert.equal(parsed.searchParams.get("offset"), "4");
-    return createResponse({
-      status: 200,
-      jsonData: {
-        items: [
-          {
-            authority: FIXTURE_ALICE_ID,
-            entrypoint_hash: "abc",
-            result_ok: true,
-            timestamp_ms: 123,
-          },
-        ],
-        total: 1,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listAccountTransactions(FIXTURE_ALICE_ID, {
-    limit: 3,
-    offset: 4,
-  });
-  assert.equal(payload.items[0].entrypoint_hash, "abc");
-});
-
-test("listAccountTransactions encodes assetId filters", async () => {
-  const assetId = FIXTURE_ASSET_ID_A;
-  const normalizedAssetId = FIXTURE_ASSET_ID_A;
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath(FIXTURE_ALICE_ID, "/transactions"));
-    assert.equal(parsed.searchParams.get("asset_id"), normalizedAssetId);
-    return createResponse({
-      status: 200,
-      jsonData: {
-        items: [{ entrypoint_hash: "abc", result_ok: true }],
-        total: 1,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listAccountTransactions(FIXTURE_ALICE_ID, {
-    assetId,
-  });
-  assert.equal(payload.items[0].entrypoint_hash, "abc");
-});
-
-test("listAccountTransactions validates boolean result fields", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: {
-          items: [{ entrypoint_hash: "tx1", result_ok: "maybe" }],
-          total: 1,
-        },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () => client.listAccountTransactions(FIXTURE_ALICE_ID),
-    /account transaction list response\.items\[0]\.result_ok/,
-  );
-});
-
-test("listAccountTransactions rejects camelCase entrypointHash fields", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: {
-          items: [
-            {
-              entrypoint_hash: "tx1",
-              entrypointHash: "tx1",
-              result_ok: true,
-            },
-          ],
-          total: 1,
-        },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () => client.listAccountTransactions(FIXTURE_ALICE_ID),
-    /account transaction list response\.items\[0]\.entrypointHash is not supported/,
-  );
-});
-
-test("listContractActivity encodes contract activity filters", async () => {
-  let capturedUrl;
-  const fetchImpl = async (url) => {
-    capturedUrl = url;
-    return createResponse({
-      status: 200,
-      jsonData: {
-        items: [
-          {
-            authority: FIXTURE_ALICE_ID,
-            entrypoint_hash: "abc",
-            result_ok: true,
-            timestamp_ms: 123,
-            contract_address: "irohac1router",
-            contract_alias: "dlmm_router",
-            contract_entrypoint: "route_swap",
-            contract_payload: { amount_in: 100, min_out: 95 },
-            fee_payment: authorityFeePayment(100000),
-          },
-        ],
-        total: 1,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listContractActivity({
-    authority: FIXTURE_ALICE_ID,
-    contractAlias: "dlmm_router",
-    contractEntrypoint: "route_swap",
-    resultOk: true,
-    sinceTimestampMs: 100,
-    untilTimestampMs: 200,
-    limit: 5,
-    offset: 1,
-  });
-  const parsed = new URL(capturedUrl);
-  assert.equal(parsed.pathname, "/v1/contracts/activity");
-  assert.equal(parsed.searchParams.get("authority"), FIXTURE_ALICE_ID);
-  assert.equal(parsed.searchParams.get("contract_alias"), "dlmm_router");
-  assert.equal(parsed.searchParams.get("contract_entrypoint"), "route_swap");
-  assert.equal(parsed.searchParams.get("result_ok"), "true");
-  assert.equal(parsed.searchParams.get("since_timestamp_ms"), "100");
-  assert.equal(parsed.searchParams.get("until_timestamp_ms"), "200");
-  assert.equal(payload.items[0].contract_payload.amount_in, 100);
-  assert.deepEqual(payload.items[0].fee_payment, authorityFeePayment(100000));
-});
-
-test("listContractActivity rejects camelCase payload aliases", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: {
-          items: [
-            {
-              entrypoint_hash: "tx1",
-              result_ok: true,
-              contract_address: "irohac1router",
-              contractPayload: {},
-            },
-          ],
-          total: 1,
-        },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () => client.listContractActivity(),
-    /contract activity list response\.items\[0]\.contractPayload is not supported/,
-  );
-});
-
-test("listContractEvents encodes generic contract event filters", async () => {
-  let capturedUrl;
-  const fetchImpl = async (url) => {
-    capturedUrl = url;
-    return createResponse({
-      status: 200,
-      jsonData: {
-        items: [
-          {
-            event_id: "abc:0",
-            schema_version: 1,
-            provenance: "derived",
-            authority: FIXTURE_ALICE_ID,
-            timestamp_ms: 123,
-            tx_hash_hex: "ab".repeat(32),
-            block_height: 9,
-            block_hash_hex: "deadbeef",
-            result_ok: true,
-            contract_address: "irohac1router",
-            contract_alias: "dlmm_router",
-            module: "dlmm_router",
-            event_kind: "route_swap",
-            participants: [FIXTURE_ALICE_ID],
-            asset_ids: ["xor#universal"],
-            numeric_fields: { amount_in: 100 },
-            payload: { amount_in: 100, min_out: 95 },
-            fee_payment: authorityFeePayment(100000),
-          },
-        ],
-        total: 1,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listContractEvents({
-    authority: FIXTURE_ALICE_ID,
-    contractAlias: "dlmm_router",
-    module: "dlmm_router",
-    eventKind: "route_swap",
-    participant: FIXTURE_ALICE_ID,
-    assetId: "xor#universal",
-    provenance: "derived",
-    resultOk: true,
-    sinceTimestampMs: 100,
-    untilTimestampMs: 200,
-    limit: 5,
-    offset: 1,
-  });
-  const parsed = new URL(capturedUrl);
-  assert.equal(parsed.pathname, "/v1/contracts/events");
-  assert.equal(parsed.searchParams.get("authority"), FIXTURE_ALICE_ID);
-  assert.equal(parsed.searchParams.get("contract_alias"), "dlmm_router");
-  assert.equal(parsed.searchParams.get("module"), "dlmm_router");
-  assert.equal(parsed.searchParams.get("event_kind"), "route_swap");
-  assert.equal(parsed.searchParams.get("participant"), FIXTURE_ALICE_ID);
-  assert.equal(parsed.searchParams.get("asset_id"), "xor#universal");
-  assert.equal(parsed.searchParams.get("provenance"), "derived");
-  assert.equal(parsed.searchParams.get("result_ok"), "true");
-  assert.equal(payload.items[0].payload.amount_in, 100);
-  assert.equal(payload.items[0].block_height, 9);
-  assert.deepEqual(payload.items[0].fee_payment, authorityFeePayment(100000));
-});
-
-test("contract query helpers reject padded selector filters before dispatch", async () => {
-  let fetchCalled = false;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      fetchCalled = true;
-      throw new Error("fetch must not run for padded selector filters");
-    },
-  });
-
-  const asyncCases = [
-    [
-      "activity contractAddress",
-      () => client.listContractActivity({ contractAddress: " irohac1router" }),
-      /contractAddress must not contain surrounding whitespace/u,
-    ],
-    [
-      "activity contractAlias",
-      () => client.listContractActivity({ contractAlias: "dlmm_router " }),
-      /contractAlias must not contain surrounding whitespace/u,
-    ],
-    [
-      "event contractAddress",
-      () => client.listContractEvents({ contractAddress: "irohac1router " }),
-      /contractAddress must not contain surrounding whitespace/u,
-    ],
-    [
-      "event contractAlias",
-      () => client.listContractEvents({ contractAlias: " dlmm_router" }),
-      /contractAlias must not contain surrounding whitespace/u,
-    ],
-    [
-      "event participant",
-      () => client.listContractEvents({ participant: `${FIXTURE_ALICE_ID} ` }),
-      /participant must not contain surrounding whitespace/u,
-    ],
-    [
-      "event assetId",
-      () => client.listContractEvents({ assetId: " xor#universal" }),
-      /assetId must not contain surrounding whitespace/u,
-    ],
-  ];
-
-  for (const [label, action, pattern] of asyncCases) {
-    await assert.rejects(action, pattern, label);
-  }
-
-  assert.throws(
-    () => client.streamContractEvents({ participant: ` ${FIXTURE_ALICE_ID}` }),
-    /participant must not contain surrounding whitespace/u,
-  );
-  assert.equal(fetchCalled, false);
-});
-
-test("listContractEvents rejects camelCase payload aliases", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: {
-          items: [
-            {
-              event_id: "tx1:0",
-              schema_version: 1,
-              provenance: "derived",
-              tx_hash_hex: "tx1",
-              block_height: 1,
-              block_hash_hex: "deadbeef",
-              result_ok: true,
-              contract_address: "irohac1router",
-              module: "router",
-              event_kind: "route_swap",
-              numericFields: {},
-            },
-          ],
-          total: 1,
-        },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () => client.listContractEvents(),
-    /contract event list response\.items\[0]\.numericFields is not supported/,
-  );
-});
-
-test("contract activity and event projections reject retired fee selectors", async () => {
-  const activity = {
-    entrypoint_hash: "tx1",
-    result_ok: true,
-    contract_address: "irohac1router",
-  };
-  const event = {
-    event_id: "tx1:0",
-    schema_version: 1,
-    provenance: "derived",
-    tx_hash_hex: "tx1",
-    block_height: 1,
-    block_hash_hex: "deadbeef",
-    result_ok: true,
-    contract_address: "irohac1router",
-    module: "router",
-    event_kind: "route_swap",
-  };
-  for (const [method, base] of [
-    ["listContractActivity", activity],
-    ["listContractEvents", event],
-  ]) {
-    for (const [field, value] of [
-      ["gas_asset_id", "xor#universal"],
-      ["fee_sponsor", FIXTURE_ALICE_ID],
-      ["gas_limit", 100000],
-    ]) {
-      const client = new ToriiClient(BASE_URL, {
-        fetchImpl: async () =>
-          createResponse({
-            status: 200,
-            jsonData: { items: [{ ...base, [field]: value }], total: 1 },
-            headers: { "content-type": "application/json" },
-          }),
-      });
-      await assert.rejects(() => client[method](), new RegExp(`${field} is retired`, "u"));
-    }
-  }
-});
-
-test("queryAccountTransactions posts structured envelope", async () => {
-  let capturedBody;
-  const fetchImpl = async (_url, init) => {
-    assert.equal(init.method, "POST");
-    capturedBody = JSON.parse(init.body);
-    return createResponse({
-      status: 200,
-      jsonData: { items: [], total: 0 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.queryAccountTransactions(FIXTURE_ALICE_ID, {
-    filter: { Eq: ["authority", FIXTURE_ALICE_ID] },
-    sort: [{ key: "timestamp_ms", order: "desc" }],
-    fetchSize: 5,
-    queryName: "AccountTransactions",
-  });
-  assert.deepEqual(capturedBody.filter, { Eq: ["authority", FIXTURE_ALICE_ID] });
-  assert.deepEqual(capturedBody.sort, [{ key: "timestamp_ms", order: "desc" }]);
-  assert.equal(capturedBody.fetch_size, 5);
-  assert.equal(capturedBody.query, "AccountTransactions");
-});
-
-test("queryTransactions posts structured envelope", async () => {
-  let capturedPath;
-  let capturedBody;
-  const fetchImpl = async (url, init) => {
-    const parsed = new URL(url);
-    capturedPath = parsed.pathname;
-    assert.equal(init.method, "POST");
-    capturedBody = JSON.parse(init.body);
-    return createResponse({
-      status: 200,
-      jsonData: { items: [], total: 0 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.queryTransactions({
-    filter: { op: "eq", args: ["asset_id", "pkr#sbp"] },
-    sort: [{ key: "timestamp_ms", order: "desc" }],
-    fetchSize: 10,
-    queryName: "Transactions",
-  });
-  assert.equal(capturedPath, "/v1/transactions/query");
-  assert.deepEqual(capturedBody.filter, { op: "eq", args: ["asset_id", "pkr#sbp"] });
-  assert.deepEqual(capturedBody.sort, [{ key: "timestamp_ms", order: "desc" }]);
-  assert.equal(capturedBody.fetch_size, 10);
-  assert.equal(capturedBody.query, "Transactions");
-});
-
-test("queryTransactions builds convenience transaction filters", async () => {
-  let capturedPath;
-  let capturedBody;
-  const fetchImpl = async (url, init) => {
-    const parsed = new URL(url);
-    capturedPath = parsed.pathname;
-    assert.equal(init.method, "POST");
-    capturedBody = JSON.parse(init.body);
-    return createResponse({
-      status: 200,
-      jsonData: { items: [], total: 0 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.queryTransactions({
-    assetId: "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb",
-    resultOk: true,
-    sinceTimestampMs: 1700000000000,
-    sort: "newest",
-    fetchSize: 25,
-    queryName: "Transactions",
-  });
-  assert.equal(capturedPath, "/v1/transactions/query");
-  assert.deepEqual(capturedBody.filter, {
-    op: "and",
-    args: [
-      { op: "eq", args: ["asset_id", "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb"] },
-      { op: "eq", args: ["result_ok", true] },
-      { op: "gte", args: ["timestamp_ms", 1700000000000] },
-    ],
-  });
-  assert.deepEqual(capturedBody.sort, [
-    { key: "timestamp_ms", order: "desc" },
-    { key: "entrypoint_hash", order: "desc" },
-  ]);
-  assert.equal(capturedBody.fetch_size, 25);
-  assert.equal(capturedBody.query, "Transactions");
-});
-
-test("queryTransactions posts field-path select projections", async () => {
-  let capturedPath;
-  let capturedBody;
-  const fetchImpl = async (url, init) => {
-    const parsed = new URL(url);
-    capturedPath = parsed.pathname;
-    assert.equal(init.method, "POST");
-    capturedBody = JSON.parse(init.body);
-    return createResponse({
-      status: 200,
-      jsonData: { items: [], total: 0 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.queryTransactions({
-    select: [" authority ", "metadata.amount", "metadata.from_account_id"],
-    queryName: "TransactionProjection",
-  });
-  assert.equal(capturedPath, "/v1/transactions/query");
-  assert.deepEqual(capturedBody.select, [
-    "authority",
-    "metadata.amount",
-    "metadata.from_account_id",
-  ]);
-  assert.equal(capturedBody.query, "TransactionProjection");
-});
-
-test("queryTransactions rejects invalid select projection entries", async () => {
-  let callCount = 0;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      callCount += 1;
-      return createResponse({
-        status: 200,
-        jsonData: { items: [], total: 0 },
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.queryTransactions({
-        select: ["authority", 42],
-      }),
-    /select\[1] must be a field-path string or plain object/,
-  );
-  await assert.rejects(
-    () =>
-      client.queryTransactions({
-        select: ["authority", " "],
-      }),
-    /select\[1] must be a non-empty field path/,
-  );
-  assert.equal(callCount, 0);
-});
-
-test("queryAccountTransactions merges raw and convenience filters", async () => {
-  let capturedBody;
-  const fetchImpl = async (_url, init) => {
-    capturedBody = JSON.parse(init.body);
-    return createResponse({
-      status: 200,
-      jsonData: { items: [], total: 0 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.queryAccountTransactions(FIXTURE_ALICE_ID, {
-    filter: { op: "eq", args: ["authority", FIXTURE_ALICE_ID] },
-    assetId: "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb",
-  });
-  assert.deepEqual(capturedBody.filter, {
-    op: "and",
-    args: [
-      { op: "eq", args: ["authority", FIXTURE_ALICE_ID] },
-      { op: "eq", args: ["asset_id", "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb"] },
-    ],
-  });
-});
-
-test("iterateAccountTransactions paginates results", async () => {
-  const responses = [
-    {
-      items: [{ entrypoint_hash: "tx1", result_ok: true }],
-      total: 3,
-    },
-    {
-      items: [{ entrypoint_hash: "tx2", result_ok: false }],
-      total: 3,
-    },
-    {
-      items: [{ entrypoint_hash: "tx3", result_ok: true }],
-      total: 3,
-    },
-  ];
-  let callCount = 0;
-  const fetchImpl = async () => {
-    const payload = responses[callCount] ?? { items: [], total: 3 };
-    callCount += 1;
-    return createResponse({
-      status: 200,
-      jsonData: payload,
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const hashes = [];
-  for await (const tx of client.iterateAccountTransactions(FIXTURE_ALICE_ID, {
-    pageSize: 1,
-    maxItems: 3,
-  })) {
-    hashes.push(tx.entrypoint_hash);
-  }
-  assert.deepEqual(hashes, ["tx1", "tx2", "tx3"]);
-  assert.equal(callCount, 3);
-});
-
-test("iterateAccountTransactionsQuery walks query endpoint", async () => {
-  let callCount = 0;
-  const fetchImpl = async (url, init) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, accountPath(FIXTURE_ALICE_ID, "/transactions/query"));
-    const body = JSON.parse(init.body);
-    const offset = Number(body.pagination?.offset ?? 0);
-    callCount += 1;
-    const items =
-      offset === 0
-        ? [{ entrypoint_hash: "tx1", result_ok: true }]
-        : [{ entrypoint_hash: "tx2", result_ok: false }];
-    return createResponse({
-      status: 200,
-      jsonData: { items, total: 2 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const hashes = [];
-  for await (const tx of client.iterateAccountTransactionsQuery(FIXTURE_ALICE_ID, {
-    pageSize: 1,
-  })) {
-    hashes.push(tx.entrypoint_hash);
-  }
-  assert.deepEqual(hashes, ["tx1", "tx2"]);
-  assert.equal(callCount, 2);
-});
-
-test("listAccountAssets rejects blank account ids", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({ status: 200, jsonData: { items: [], total: 0 }, headers: { "content-type": "application/json" } }),
-  });
-  await assert.rejects(
-    () => client.listAccountAssets("", {}),
-    /accountId must not be empty/,
-  );
-});
-
-test("listAccountAssets trims and encodes path segments", async () => {
-  let capturedPath;
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    capturedPath = parsed.pathname;
-    return createResponse({
-      status: 200,
-      jsonData: { items: [], total: 0 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.listAccountAssets(`  ${FIXTURE_ALICE_ID}  `);
-  assert.equal(capturedPath, accountPath(FIXTURE_ALICE_ID, "/assets"));
-});
-
-test("listAssetHolders encodes definition id", async () => {
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, "/v1/assets/62Fk4FPcMuLvW5QjDGNF2a4jAmjM/holders");
-    return createResponse({
-      status: 200,
-      jsonData: {
-        items: [{ account_id: FIXTURE_ALICE_ID, quantity: "10" }],
-        total: 1,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
-  assert.equal(payload.items[0].account_id, FIXTURE_ALICE_ID);
-});
-
-test("listAssetHolders encodes assetId filters", async () => {
-  const assetId = FIXTURE_ASSET_ID_A;
-  const normalizedAssetId = FIXTURE_ASSET_ID_A;
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, "/v1/assets/62Fk4FPcMuLvW5QjDGNF2a4jAmjM/holders");
-    assert.equal(parsed.searchParams.get("asset_id"), normalizedAssetId);
-    return createResponse({
-      status: 200,
-      jsonData: {
-        items: [{ account_id: FIXTURE_ALICE_ID, quantity: "5" }],
-        total: 1,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", { assetId });
-  assert.equal(payload.items[0].account_id, FIXTURE_ALICE_ID);
-});
-
-test("listAssetHolders validates holder identifiers", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: { items: [{ quantity: "5" }], total: 1 },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () => client.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-    /asset holder list response\.items\[0]\.account_id/,
-  );
-});
-
-test("listAssetHolders rejects camelCase accountId fields", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: {
-          items: [
-            {
-              account_id: FIXTURE_ALICE_ID,
-              accountId: FIXTURE_ALICE_ID,
-              quantity: "10",
-            },
-          ],
-          total: 1,
-        },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () => client.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-    /asset holder list response\.items\[0]\.accountId is not supported/,
-  );
-});
-
-test("queryAssetHolders posts encoded definition path", async () => {
-  const fetchImpl = async (url, init) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, "/v1/assets/62Fk4FPcMuLvW5QjDGNF2a4jAmjM/holders/query");
-    assert.equal(init.method, "POST");
-    return createResponse({
-      status: 200,
-      jsonData: { items: [], total: 0 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.queryAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {});
-});
-
-test("iterateAssetHolders paginates holder list", async () => {
-  const responses = [
-    { items: [{ account_id: FIXTURE_ALICE_ID, quantity: "5" }], total: 2 },
-    { items: [{ account_id: FIXTURE_BOB_NARNIA_ID, quantity: "4" }], total: 2 },
-  ];
-  let callCount = 0;
-  const fetchImpl = async () => {
-    const payload = responses[callCount] ?? { items: [], total: 2 };
-    callCount += 1;
-    return createResponse({
-      status: 200,
-      jsonData: payload,
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const holders = [];
-  for await (const holder of client.iterateAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", { pageSize: 1 })) {
-    holders.push(holder.account_id);
-  }
-  assert.deepEqual(holders, [FIXTURE_ALICE_ID, FIXTURE_BOB_NARNIA_ID]);
-});
-
-test("iterateAssetHoldersQuery paginates query responses", async () => {
-  let callCount = 0;
-  const fetchImpl = async (url, init) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, "/v1/assets/62Fk4FPcMuLvW5QjDGNF2a4jAmjM/holders/query");
-    const body = JSON.parse(init.body);
-    const offset = Number(body.pagination?.offset ?? 0);
-    callCount += 1;
-    const items =
-      offset === 0
-        ? [{ account_id: FIXTURE_ALICE_ID, quantity: "5" }]
-        : [{ account_id: FIXTURE_BOB_NARNIA_ID, quantity: "4" }];
-    return createResponse({
-      status: 200,
-      jsonData: { items, total: 2 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const ids = [];
-  for await (const holder of client.iterateAssetHoldersQuery("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
-    pageSize: 1,
-  })) {
-    ids.push(holder.account_id);
-  }
-  assert.deepEqual(ids, [FIXTURE_ALICE_ID, FIXTURE_BOB_NARNIA_ID]);
-  assert.equal(callCount, 2);
 });
 
 test("getGovernanceContract reads one governed binding", async () => {
@@ -14859,7 +12281,7 @@ test("iterateTriggersQuery paginates query payloads", async () => {
     assert.equal(parsed.pathname, "/v1/triggers/query");
     const body = JSON.parse(init.body);
     const offset = Number(body.pagination?.offset ?? 0);
-    assert.deepEqual(body.filter, { Eq: ["object.authority", FIXTURE_ALICE_ID] });
+    assert.deepEqual(body.filter, { op: "eq", args: ["object.authority", FIXTURE_ALICE_ID] });
     callCount += 1;
     const items =
       offset === 0
@@ -14877,7 +12299,7 @@ test("iterateTriggersQuery paginates query payloads", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const ids = [];
   for await (const trigger of client.iterateTriggersQuery({
-    filter: { Eq: ["object.authority", FIXTURE_ALICE_ID] },
+    filter: { op: "eq", args: ["object.authority", FIXTURE_ALICE_ID] },
     pageSize: 2,
   })) {
     ids.push(trigger.id);
@@ -15366,7 +12788,7 @@ test("streamEvents signs the exact final path and query with the default identit
   const fetchImpl = async (url, init) => {
     assert.equal(
       url,
-      `${BASE_URL}/v1/events/sse?filter=${encodeURIComponent('{"Pipeline":{"Block":{}}}')}`,
+      `${BASE_URL}/v1/events/sse?${new URLSearchParams({ filter: "block_height > 0" })}`,
     );
     assert.equal(init.headers["Last-Event-ID"], undefined);
     assert.equal(init.redirect, "error");
@@ -15399,7 +12821,7 @@ test("streamEvents signs the exact final path and query with the default identit
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const iterator = client.streamEvents({
-    filter: { Pipeline: { Block: {} } },
+    filter: field("block_height").gt(0),
   });
   const first = await iterator.next();
   assert.equal(first.done, false);
@@ -15435,195 +12857,6 @@ test("streamEvents stays anonymous when no default signer is configured", async 
   assert.equal(requestInit.headers["X-Iroha-Timestamp-Ms"], undefined);
   assert.equal(requestInit.headers["X-Iroha-Nonce"], undefined);
   assert.equal(requestInit.redirect, undefined);
-});
-
-test("streamEvents rejects unsupported production backend event filters before fetch", () => {
-  let calls = 0;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      calls += 1;
-      throw new Error("unexpected fetch");
-    },
-  });
-  for (const backend of [
-    " halo2/ipa",
-    "halo2/ipa ",
-    "\thalo2/ipa",
-    "halo2/ipa\n",
-    "stark/fri/miden",
-    "stark/fri/latest",
-    "stark/fri/attestation",
-    "stark/fri/contest",
-    "stark/fri/random-profile",
-    "stark/fri/sha512-goldilocks",
-    "stark/fri/audit-proof-v1",
-    "halo2/ipa:production-ready",
-    "halo2/ipa:claimed-production",
-    "halo2/ipa:mainnet-ready",
-    "stark/fri/audit-signoff",
-    "stark/fri/externally-audited",
-    "stark/fri/security-review-passed",
-    "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
-    "stark/fri/a-u-d-i-t-c-l-a-i-m",
-    "stark/fri/poseidon-x7-goldilocks-6x64-v1 ",
-    "halo2/ipa/orchard",
-    "halo2/kzg",
-    "halo2/ipa\0",
-    "halo2/pasta/tiny-add",
-    "halo2/ipa/tiny-add",
-    "halo2/ipa:tiny-add",
-    "halo2/pasta/tiny-commit-open",
-    "halo2/pasta/anon-transfer-2x2",
-    "halo2/ipa/anon-transfer-2x2",
-    "halo2/ipa:anon-transfer-2x2",
-    "halo2/pasta/anon-transfer-2x2-merkle2",
-    "halo2/ipa/anon-transfer-2x2-merkle8",
-    "halo2/ipa:anon-transfer-2x2-merkle16",
-    "halo2/pasta/vote-bool-commit",
-    "halo2/ipa/vote-bool-commit",
-    "halo2/ipa:vote-bool-commit",
-    "halo2/pasta/vote-bool-commit-merkle2",
-    "halo2/ipa/vote-bool-commit-merkle8",
-    "halo2/ipa:vote-bool-commit-merkle16",
-    "mock/dev",
-  ]) {
-    assert.throws(
-      () =>
-        client.streamEvents({
-          filter: {
-            VerifyingKey: {
-              id_matcher: { backend, name: "vk_main" },
-              event_set: { Registered: true, Updated: true },
-            },
-          },
-        }),
-      expectedProductionBackendRejectionPattern(backend),
-    );
-    assert.throws(
-      () =>
-        client.streamEvents({
-          filter: {
-            Proof: {
-              id_matcher: { backend, hash_hex: "a".repeat(64) },
-              event_set: { Verified: true, Rejected: true },
-            },
-          },
-        }),
-      expectedProductionBackendRejectionPattern(backend),
-    );
-    assert.throws(
-      () =>
-        client.streamEvents({
-          filter: JSON.stringify({
-            Proof: {
-              id_matcher: { backend, hash_hex: "a".repeat(64) },
-              event_set: { Verified: true, Rejected: true },
-            },
-          }),
-        }),
-      expectedProductionBackendRejectionPattern(backend),
-    );
-  }
-  assert.equal(calls, 0);
-});
-
-test("streamEvents rejects malformed verifying key event names before fetch", () => {
-  let calls = 0;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      calls += 1;
-      throw new Error("unexpected fetch");
-    },
-  });
-  for (const name of ["", "   ", "\t", "\n", " vk_main ", "vk_main ", "vk:main", 42]) {
-    assert.throws(
-      () =>
-        client.streamEvents({
-          filter: {
-            VerifyingKey: {
-              id_matcher: { backend: "halo2/ipa", name },
-              event_set: { Registered: true, Updated: true },
-            },
-          },
-        }),
-      /id_matcher\.name.*(must not be empty|must be a string|must not contain surrounding whitespace|must not contain ':')/,
-    );
-    assert.throws(
-      () =>
-        client.streamEvents({
-          filter: JSON.stringify({
-            VerifyingKey: {
-              id_matcher: { backend: "halo2/ipa", name },
-              event_set: { Registered: true, Updated: true },
-            },
-          }),
-        }),
-      /id_matcher\.name.*(must not be empty|must be a string|must not contain surrounding whitespace|must not contain ':')/,
-    );
-  }
-
-  const iterator = client.streamEvents({
-    filter: {
-      VerifyingKey: {
-        id_matcher: { backend: "halo2/ipa", name: "vk_main" },
-        event_set: { Registered: true, Updated: true },
-      },
-    },
-  });
-  assert.equal(typeof iterator.next, "function");
-  assert.equal(calls, 0);
-});
-
-test("streamEvents rejects malformed proof event hashes before fetch", () => {
-  let calls = 0;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      calls += 1;
-      throw new Error("unexpected fetch");
-    },
-  });
-  for (const hashHex of [
-    "",
-    "abc",
-    "z".repeat(64),
-    "a".repeat(63),
-    `0x${"a".repeat(63)}`,
-  ]) {
-    assert.throws(
-      () =>
-        client.streamEvents({
-          filter: {
-            Proof: {
-              id_matcher: { backend: "halo2/ipa", hash_hex: hashHex },
-              event_set: { Verified: true, Rejected: true },
-            },
-          },
-        }),
-      /hash_hex.*(32-byte hex string|not be empty)/,
-    );
-    assert.throws(
-      () =>
-        client.streamEvents({
-          filter: JSON.stringify({
-            Proof: {
-              id_matcher: { backend: "halo2/ipa", hash_hex: hashHex },
-              event_set: { Verified: true, Rejected: true },
-            },
-          }),
-        }),
-      /hash_hex.*(32-byte hex string|not be empty)/,
-    );
-  }
-  const iterator = client.streamEvents({
-    filter: {
-      Proof: {
-        id_matcher: { backend: "halo2/ipa", hash_hex: `0x${"A".repeat(64)}` },
-        event_set: { Verified: true, Rejected: true },
-      },
-    },
-  });
-  assert.equal(typeof iterator.next, "function");
-  assert.equal(calls, 0);
 });
 
 test("streamContractEvents encodes selector params", async () => {
@@ -22429,7 +19662,7 @@ test("queryTriggers posts iterable envelope", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.queryTriggers({
-    filter: { Eq: ["namespace", "apps"] },
+    filter: { op: "eq", args: ["namespace", "apps"] },
     sort: [{ key: "created_at", order: "desc" }],
     limit: 5,
     offset: 2,
@@ -22437,7 +19670,7 @@ test("queryTriggers posts iterable envelope", async () => {
     queryName: "recent-triggers",
   });
   assert.deepEqual(capturedBody.pagination, { offset: 2, limit: 5 });
-  assert.deepEqual(capturedBody.filter, { Eq: ["namespace", "apps"] });
+  assert.deepEqual(capturedBody.filter, { op: "eq", args: ["namespace", "apps"] });
   assert.deepEqual(capturedBody.sort, [{ key: "created_at", order: "desc" }]);
   assert.equal(capturedBody.fetch_size, 25);
   assert.equal(capturedBody.query, "recent-triggers");
@@ -23261,11 +20494,11 @@ test("HTTP error diagnostics abort stalled bodies and retry cleanup cancels disc
       });
     },
   });
-  await assert.rejects(
-    () => retryClient.getNodeCapabilities(canonicalReadOptions()),
-    (error) => error instanceof ToriiHttpError && error.status === 503,
-  );
-  assert.equal(requests, 1);
+  // The public capability read is retryable: the discarded 503 body is cancelled
+  // before the retry succeeds.
+  const advert = await retryClient.getNodeCapabilities();
+  assert.equal(advert.dataModelVersion, validNodeCapabilitiesPayload().data_model_version);
+  assert.equal(requests, 2);
   assert.equal(retryBodyCancels, 1);
 });
 
@@ -23301,7 +20534,7 @@ test("http errors expose structured fields", async () => {
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.listAccounts(),
+    () => client.accounts.list(),
     (error) => {
       assert(error instanceof ToriiHttpError);
       assert.equal(error.status, 400);

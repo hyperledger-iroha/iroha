@@ -816,21 +816,73 @@ impl ContractAddress {
     /// Ed25519 public point. It deliberately does not derive a scalar/private key: knowing the
     /// public contract address therefore does not reveal signing material for the subject account.
     /// The domain and retry counter encoding are consensus-critical ABI V1 constants.
+    ///
+    /// This owning path retains the ordinary cached public-key parser, including its key,
+    /// rejection and cache allocations. [`Self::try_subject_key_bytes`] derives without those
+    /// allocations; constructing a retained public key or account then requires separate funding.
     #[must_use]
     pub fn subject_id(&self) -> AccountId {
+        let public_key = match self.try_subject_candidate(
+            |_| Ok::<(), core::convert::Infallible>(()),
+            |candidate| {
+                iroha_crypto::PublicKey::from_bytes(iroha_crypto::Algorithm::Ed25519, candidate)
+                    .ok()
+            },
+        ) {
+            Ok(public_key) => public_key,
+            Err(never) => match never {},
+        };
+        AccountId::new(public_key)
+    }
+    /// Derive the subject's Ed25519 public-key bytes with caller-admitted work for every attempt.
+    ///
+    /// Before each hash and strict point check, `admit_attempt` receives the exact number of
+    /// bytes to hash (the V1 tag, the stored address spelling, and the four-byte big-endian
+    /// counter). The caller must admit that hash work and one strict Ed25519 candidate check.
+    /// No attempt is made after admission fails. A retry starts again at counter zero; a local
+    /// work refusal does not make the contract address invalid or impose a consensus limit.
+    ///
+    /// The derivation itself allocates no heap storage and never accesses the key parse cache.
+    /// The callback is responsible for its own resources. Constructing a retained public key or
+    /// [`AccountId`] from the returned bytes is a separate allocation requiring its own funding.
+    ///
+    /// # Errors
+    /// Returns the callback's original error on work refusal, without producing subject bytes.
+    ///
+    /// # Panics
+    /// Panics if all candidates exhaust the V1 `u32` retry counter, as does [`Self::subject_id`].
+    pub fn try_subject_key_bytes<E>(
+        &self,
+        admit_attempt: impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<[u8; 32], E> {
+        self.try_subject_candidate(admit_attempt, |candidate| {
+            iroha_crypto::ed25519_public_key_is_valid(candidate).then_some(*candidate)
+        })
+    }
+    // One V1 hash/counter algorithm for the owning and bytes-only paths. Keep the candidate
+    // acceptor private: both public consumers use the same strict Ed25519 key relation.
+    fn try_subject_candidate<T, E>(
+        &self,
+        mut admit_attempt: impl FnMut(usize) -> Result<(), E>,
+        mut accept_candidate: impl FnMut(&[u8; 32]) -> Option<T>,
+    ) -> Result<T, E> {
+        let address_bytes = self.as_ref().as_bytes();
+        // ContractAddress admits only the fixed V1 Bech32 payload and HRP.
+        let hashed_len = CONTRACT_SUBJECT_HASH_TO_POINT_TAG_V1.len()
+            + address_bytes.len()
+            + core::mem::size_of::<u32>();
         let mut counter = 0_u32;
         loop {
+            admit_attempt(hashed_len)?;
             let counter_bytes = counter.to_be_bytes();
-            let candidate = iroha_crypto::Hash::new_from_chunks(&[
+            let candidate: [u8; 32] = iroha_crypto::Hash::new_from_chunks(&[
                 CONTRACT_SUBJECT_HASH_TO_POINT_TAG_V1,
-                self.as_ref().as_bytes(),
+                address_bytes,
                 &counter_bytes,
-            ]);
-            if let Ok(public_key) = iroha_crypto::PublicKey::from_bytes(
-                iroha_crypto::Algorithm::Ed25519,
-                candidate.as_ref(),
-            ) {
-                return AccountId::new(public_key);
+            ])
+            .into();
+            if let Some(accepted) = accept_candidate(&candidate) {
+                return Ok(accepted);
             }
             counter = counter
                 .checked_add(1)
@@ -1836,13 +1888,17 @@ pub mod manifest {
                     .variants
                     .windows(2)
                     .all(|pair| pair[0].code < pair[1].code)
-                && self
-                    .variants
-                    .iter()
-                    .map(|variant| &variant.name)
-                    .collect::<std::collections::BTreeSet<_>>()
-                    .len()
-                    == self.variants.len()
+                && {
+                    // Variant count is bounded above before this expression.
+                    // Keep metadata validation independent of allocator pressure.
+                    let mut names = [""; 256];
+                    for (slot, variant) in names.iter_mut().zip(&self.variants) {
+                        *slot = &variant.name;
+                    }
+                    let names = &mut names[..self.variants.len()];
+                    names.sort_unstable();
+                    names.windows(2).all(|pair| pair[0] != pair[1])
+                }
         }
         /// Hash the canonical variant schema independently of the separately bound nominal identity.
         #[must_use]

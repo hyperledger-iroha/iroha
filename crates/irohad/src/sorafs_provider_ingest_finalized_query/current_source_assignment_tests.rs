@@ -43,19 +43,19 @@ fn current_assignment_binding_tracks_new_revision_and_rejects_stale_source() {
             ProviderIngestFinalizedProviderProjectionV1 {
                 provider_id: destination,
                 expected_owner: None,
-                expected_signer_policy: None,
+                expected_authority: None,
                 orders: vec![shared.clone()],
             },
             ProviderIngestFinalizedProviderProjectionV1 {
                 provider_id: old_source,
                 expected_owner: None,
-                expected_signer_policy: None,
+                expected_authority: None,
                 orders: vec![shared.clone()],
             },
             ProviderIngestFinalizedProviderProjectionV1 {
                 provider_id: new_source,
                 expected_owner: None,
-                expected_signer_policy: None,
+                expected_authority: None,
                 orders: Vec::new(),
             },
         ],

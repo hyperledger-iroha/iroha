@@ -1,5 +1,6 @@
 //! Exact-artifact kernel qualification; physical health stays in iroha_accel.
 
+use crate::cuda::receipts::CompletionCounter;
 use iroha_accel::{PtxArtifact, cuda::CudaFailure};
 use std::sync::{
     Mutex, OnceLock, TryLockError,
@@ -16,6 +17,7 @@ pub(super) struct KernelAdmission {
     artifact: OnceLock<PtxArtifact>,
     state: AtomicU8,
     gate: Mutex<()>,
+    completions: CompletionCounter,
 }
 
 impl KernelAdmission {
@@ -89,6 +91,37 @@ impl KernelAdmission {
 
     pub(super) fn admitted(&self, artifact: PtxArtifact) -> bool {
         self.state.load(Ordering::Acquire) == ADMITTED && self.artifact.get() == Some(&artifact)
+    }
+
+    pub(super) fn record_completed(&self, artifact: PtxArtifact, production: bool) -> bool {
+        if !production || !self.admitted(artifact) {
+            return false;
+        }
+        self.completions.record();
+        true
+    }
+
+    pub(super) fn completed(&self) -> u64 {
+        self.completions.get()
+    }
+
+    pub(super) fn record_completed_with(
+        &self,
+        artifact: PtxArtifact,
+        other: &Self,
+        other_artifact: PtxArtifact,
+        production: bool,
+    ) -> bool {
+        if !production
+            || std::ptr::eq(self, other)
+            || !self.admitted(artifact)
+            || !other.admitted(other_artifact)
+        {
+            return false;
+        }
+        self.completions.record();
+        other.completions.record();
+        true
     }
 
     pub(super) fn can_attempt(&self, artifact: PtxArtifact) -> bool {

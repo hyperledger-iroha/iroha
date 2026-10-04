@@ -142,6 +142,21 @@ impl NativeFinalityFixture {
         fixture
     }
 
+    /// Construct an independently signed explicit-parameter genesis and genuine H2 certificate.
+    /// Fixed public fixture keys and synthetic execution results grant no runtime authority.
+    #[must_use]
+    pub fn new_with_explicit_parameters() -> Self {
+        let mut fixture = Self::start_with_mode_and_scope_parameters(
+            "portable-native-fixture",
+            SumeragiConsensusMode::Permissioned,
+            crate::block::consensus::SumeragiRootScope::Global,
+            true,
+        );
+        let block = fixture.block_with_submitted_work(fixture.next_header());
+        fixture.certify(block);
+        fixture
+    }
+
     /// Start at deterministic signed genesis for a separately selected fixture chain label.
     /// The result-only H1 prefix alone does not authenticate genesis execution outputs.
     #[must_use]
@@ -174,6 +189,15 @@ impl NativeFinalityFixture {
         chain_id: &str,
         mode: SumeragiConsensusMode,
         root_scope: crate::block::consensus::SumeragiRootScope,
+    ) -> Self {
+        Self::start_with_mode_and_scope_parameters(chain_id, mode, root_scope, false)
+    }
+
+    fn start_with_mode_and_scope_parameters(
+        chain_id: &str,
+        mode: SumeragiConsensusMode,
+        root_scope: crate::block::consensus::SumeragiRootScope,
+        explicit_parameters: bool,
     ) -> Self {
         assert!(!chain_id.is_empty(), "fixture chain label must be selected");
         let mut keys: Vec<_> = (1..=4)
@@ -243,6 +267,18 @@ impl NativeFinalityFixture {
                         .into_custom_parameter(),
                 ))
                 .into(),
+            );
+        }
+        if explicit_parameters {
+            let parameters = crate::parameter::system::SumeragiParameters::default();
+            assert_eq!(
+                ChainParamsRecord::from_parameters(&parameters),
+                ChainParamsRecord::from_core(&ChainParams::default())
+            );
+            instructions.extend(
+                parameters
+                    .parameters()
+                    .map(|parameter| SetParameter::new(Parameter::Sumeragi(parameter)).into()),
             );
         }
         let mut tx = TransactionBuilder::new_genesis(
@@ -361,7 +397,7 @@ impl NativeFinalityFixture {
             .sign(signer.private_key());
         let mut builder = BlockBuilder::new(header);
         builder.push_transaction(tx);
-        let mut block = builder.build(BTreeSet::new());
+        let mut block = builder.build(crate::block::BlockSignatures::default());
         Self::install_network_results(&mut block, vec![Ok(Vec::new())]);
         block
     }

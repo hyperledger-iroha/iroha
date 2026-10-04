@@ -55,15 +55,6 @@ fn stage_membership(block: &mut StateBlock<'_>, source: Option<Hash>) {
     block.block_hashes.push(block_hash);
 }
 
-fn take_all_captured_outputs(block: &mut StateBlock<'_>, with_transfer: bool) {
-    assert!(block.take_exec_witness().is_some());
-    assert!(block.take_parliament_timed_ovn_casting_bindings().is_some());
-    assert_eq!(block.take_fastpq_witness_context().is_some(), with_transfer);
-    assert!(block.exec_witness.is_none());
-    assert!(block.parliament_timed_ovn_casting_bindings.is_none());
-    assert!(block.fastpq_witness_context.is_none());
-}
-
 fn assert_unpublished(state: &State) {
     assert_eq!(
         state.world.smart_contract_state.view().get(&marker()),
@@ -75,31 +66,94 @@ fn assert_unpublished(state: &State) {
     assert!(state.latest_block_hash_fast().is_none());
 }
 
+// The first-release source owner cannot be published through a component-only
+// commit. These controls use actual signed account-metadata instructions and
+// native quorum publication; the former raw marker checks remain below for the
+// explicit component-refusal/setup tests.
+fn publication_marker() -> iroha_model_base::name::Name {
+    "fastpq_commit_seal_marker".parse().unwrap()
+}
+
 #[test]
 fn intact_finalized_inventory_commits_after_all_cached_outputs_are_taken() {
+    use crate::sumeragi::test_chain::Signers;
+    use iroha_data_model::{isi::SetKeyValue, prelude::*};
+    use iroha_primitives::json::Json;
+    use iroha_test_samples::{ALICE_KEYPAIR, BOB_ID};
     for with_transfer in [false, true] {
-        {
-            let state = state_with_marker();
-            let (mut block, _recording) = recorded_block(&state, header());
-            cache_canonical_test_transaction_set(&mut block, &[]);
-            let source = with_transfer.then(|| Hash::new(b"committable finalized source"));
-            apply_marker(&mut block, 1, source);
-            block
-                .finalize_fastpq_source_inventory(&[], &[], &[])
-                .unwrap();
-            block.drain_transfer_transcripts_with_pending(None);
-            block.capture_exec_witness().unwrap();
-            take_all_captured_outputs(&mut block, with_transfer);
-            stage_membership(&mut block, source);
-            block.commit().unwrap();
-            assert_eq!(
-                state.world.smart_contract_state.view().get(&marker()),
-                Some(&vec![1]),
-            );
-            assert_eq!(state.committed_height(), 1);
-            assert_eq!(state.transactions.latest_height(), 1);
-            assert_eq!(state.latest_block_hash_fast(), Some(header().hash()));
+        let (mut chain, asset) = super::native_capture_fixture::native_publication_chain();
+        let state = Arc::clone(chain.state());
+        let created = chain.committed(1).block_time_ms();
+        let mut body = vec![InstructionBox::from(SetKeyValue::account(
+            ALICE_ID.clone(),
+            publication_marker(),
+            Json::new(1_u32),
+        ))];
+        if with_transfer {
+            body.push(Transfer::asset_quantity(asset, 1_u32, BOB_ID.clone()).into());
         }
+        let tx = chain.sign(&ALICE_KEYPAIR, body, created);
+        let proposal = chain.proposal(None, vec![tx]);
+        let expected_hash = proposal.hash();
+        let mut pending = chain.begin_proposal(proposal, Default::default()).unwrap();
+        pending
+            .inspect(move |original| {
+                assert!(original.state.exec_witness.is_none());
+                assert!(original.state.fastpq_witness_context.is_none());
+                assert!(
+                    original
+                        .state
+                        .parliament_timed_ovn_casting_bindings
+                        .is_none()
+                );
+                assert_eq!(
+                    !original.witness.fastpq_transcripts.is_empty(),
+                    with_transfer
+                );
+                original
+                    .state
+                    .verify_sumeragi_execution_witness(
+                        original.block.as_ref(),
+                        original.witness.wire(),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    original
+                        .state
+                        .world
+                        .accounts
+                        .get(&ALICE_ID)
+                        .unwrap()
+                        .metadata
+                        .get(&publication_marker()),
+                    Some(&Json::new(1_u32))
+                );
+            })
+            .unwrap();
+        pending.prepare(Signers::Quorum).unwrap();
+        pending.publish(Signers::Quorum).unwrap();
+        let retained = pending.take_finalized_fastpq_source().unwrap();
+        assert_eq!(retained.manifest().executed_entry_count, 1);
+        assert_eq!(
+            retained.manifest().statement_count,
+            u32::from(with_transfer)
+        );
+        drop(pending);
+        assert_eq!(
+            state
+                .world
+                .accounts
+                .view()
+                .get(&ALICE_ID)
+                .unwrap()
+                .metadata
+                .get(&publication_marker()),
+            Some(&Json::new(1_u32))
+        );
+        assert_eq!(state.committed_height(), 2);
+        assert_eq!(state.transactions.latest_height(), 2);
+        assert_eq!(state.latest_block_hash_fast(), Some(expected_hash));
+        assert_eq!(chain.kura().blocks_count(), 2);
     }
 }
 
@@ -107,42 +161,43 @@ fn intact_finalized_inventory_commits_after_all_cached_outputs_are_taken() {
 fn late_applied_source_cannot_commit_after_all_cached_outputs_are_taken() {
     for same_key in [false, true] {
         for drain_late in [false, true] {
-            {
-                let state = state_with_marker();
-                let (mut block, _recording) = recorded_block(&state, header());
-                cache_canonical_test_transaction_set(&mut block, &[]);
-                let original = Hash::new(b"captured source before extraction");
-                apply_marker(&mut block, 1, Some(original));
-                block
-                    .finalize_fastpq_source_inventory(&[], &[], &[])
-                    .unwrap();
-                block.drain_transfer_transcripts_with_pending(None);
-                block.capture_exec_witness().unwrap();
-                take_all_captured_outputs(&mut block, true);
-                let late = if same_key {
-                    original
-                } else {
-                    Hash::new(b"late source after extraction")
-                };
-                apply_marker(&mut block, 2, Some(late));
-                assert_eq!(
-                    block.world.smart_contract_state.get(&marker()),
-                    Some(&vec![2])
-                );
-                if drain_late {
-                    let archive = block.drain_transfer_transcripts_with_pending(None);
-                    assert_eq!(archive.len(), 1);
-                    assert!(archive.contains_key(&late));
-                    assert!(block.fastpq_transcripts.is_empty());
-                }
-                stage_membership(&mut block, Some(original));
-                // No second capture or accessor call can be required to reject publication.
-                assert!(matches!(
-                    block.commit(),
-                    Err(TransactionsBlockError::FastpqSourceInventory)
-                ));
-                assert_unpublished(&state);
-            }
+            super::native_capture_fixture::assert_native_publication_refuses(
+                true,
+                move |original| {
+                    assert!(original.state.exec_witness.is_none());
+                    assert!(original.state.fastpq_witness_context.is_none());
+                    assert!(
+                        original
+                            .state
+                            .parliament_timed_ovn_casting_bindings
+                            .is_none()
+                    );
+                    let original_hash = original.witness.fastpq_transcripts[0].entry_hash;
+                    let late = if same_key {
+                        original_hash
+                    } else {
+                        Hash::new(b"late source after actual extraction")
+                    };
+                    apply_marker(original.state, 2, Some(late));
+                    assert_eq!(
+                        original.state.world.smart_contract_state.get(&marker()),
+                        Some(&vec![2])
+                    );
+                    if drain_late {
+                        let archive = original.state.drain_transfer_transcripts_with_pending(None);
+                        assert_eq!(archive.len(), 1);
+                        assert!(archive.contains_key(&late));
+                        assert!(original.state.fastpq_transcripts.is_empty());
+                    }
+                    // No second capture/getter repairs the immutable native witness.
+                    assert!(
+                        original
+                            .state
+                            .verified_fastpq_source_inventory_for_capture()
+                            .is_err()
+                    );
+                },
+            );
         }
     }
 }

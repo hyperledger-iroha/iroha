@@ -343,7 +343,12 @@ impl MainProverBufferPlanV1 {
         let shape = assembly.sha_schedule.shape();
         let retained = sum(&[
             small_retained,
+            // Both original masked RFC coefficient sets remain live through query replay.
+            // Reserve all public columns before the first source or entropy draw.
+            super::main_retained_rfc::MainRetainedRfcV1::forecast_all_v1(layout)?,
             P256MainBaseSourceV1::allocation_forecast_v1()?,
+            ZkX509ShaBatchSegmentAuxSourceV1::native_aux_cache_forecast_all_v1()
+                .map_err(map_main_sha_source_error_v1)?,
             ZkX509ShaBatchFixedProviderV1::allocation_forecast_v1(shape)
                 .map_err(map_main_sha_source_error_v1)?,
         ])?;
@@ -410,6 +415,10 @@ impl MainProverBufferPlanV1 {
             retained,
             source_scratch,
             MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1,
+            // A fixed public maximum pair is charged before native sources
+            // and in every later phase, even when the current public domain
+            // uses no table. No private capacity can select table/fallback.
+            main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1,
         ])?;
         if required > self.remaining_source_and_runtime_envelope {
             return Err(ZkX509StarkErrorV1::ProofTooLarge);
@@ -510,7 +519,11 @@ impl MainProverBufferPlanV1 {
         ])?;
         // Keep the former coefficient replay allowance unchanged. Native DEEP
         // charges its Lagrange weights, mask powers, bounded native batch and
-        // weighted arrays by actual capacity inside this envelope. The temporary
+        // weighted arrays by actual capacity inside this envelope. Mixed retained
+        // RFC DEEP independently admits BOTH the native and coefficient owners
+        // together against replay_batch; it does not spend this smaller native
+        // allowance twice. Its coefficient-power and weighted capacity checks
+        // retain the same full replay reservation in every applicable phase. The temporary
         // inversion prefix ends before the weighted/native batch lifetime starts;
         // no common-domain evaluation matrix is allocated during DEEP.
         let deep_replay = sum(&[

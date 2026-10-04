@@ -1,4 +1,6 @@
 //! Cross-crate FASTPQ source-opening parity against the actual ordinary-write tree.
+//! Synthetic source leaves exercise codec/membership binding; no native execution or finality is claimed.
+
 use super::{FastpqSourceOpeningBuildLimits, fastpq_ordinary_source_statement_opening_v1};
 use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_data_model::{
@@ -36,7 +38,7 @@ fn leaves() -> Vec<FastpqOrdinarySourceStatementLeafV1> {
             },
             statement_index: i,
             entry_index: i * 2,
-            entry_transcript_count: 1,
+            effect_count: 1,
             entry_hash: Hash::new([i as u8]),
             execution_kind: FastpqSourceExecutionKindV1::ExecutionCall,
             route: FastpqSourceRouteV1::Lane(FastpqSourceLaneV1 {
@@ -44,7 +46,10 @@ fn leaves() -> Vec<FastpqOrdinarySourceStatementLeafV1> {
                 lane_incarnation: Hash::new(b"source lane incarnation"),
             }),
             dataspace_id: DataSpaceId::new(4),
-            statement_digest: [i as u8 + 9; 32],
+            effects_digest: [i as u8 + 9; 32],
+            slot: 19_000_000,
+            perm_root: Hash::new(b"synthetic source permission root").into(),
+            tx_set_hash: Hash::new(b"synthetic ordered source transactions").into(),
         })
         .collect()
 }
@@ -440,7 +445,7 @@ fn source_opening_producer_rejects_entire_malformed_or_duplicate_reserved_family
 #[test]
 fn source_opening_producer_requires_exact_complete_archive_source_and_position() {
     let (witness, leaves) = witness_fixture();
-    for mutation in 0..6 {
+    for mutation in 0..9 {
         let mut changed = leaves.clone();
         match mutation {
             0 => changed.swap(0, 1),
@@ -448,7 +453,7 @@ fn source_opening_producer_requires_exact_complete_archive_source_and_position()
                 changed.remove(1);
                 changed[1].statement_index = 1;
             }
-            2 => changed[1].statement_digest[0] ^= 1,
+            2 => changed[1].effects_digest[0] ^= 1,
             3 => {
                 changed[1].route = FastpqSourceRouteV1::Lane(FastpqSourceLaneV1 {
                     lane_id: LaneId::new(2),
@@ -457,6 +462,9 @@ fn source_opening_producer_requires_exact_complete_archive_source_and_position()
             }
             4 => changed[1].route = FastpqSourceRouteV1::Unrouted,
             5 => changed[1].execution_kind = FastpqSourceExecutionKindV1::ProtocolPurpose,
+            6 => changed[1].slot += 1,
+            7 => changed[1].perm_root[0] ^= 1,
+            8 => changed[1].tx_set_hash[0] ^= 1,
             _ => unreachable!(),
         }
         assert!(
@@ -600,4 +608,80 @@ fn ordinary_recorder_cannot_alias_the_protected_source_manifest_key() {
             FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1[0]
         );
     }
+}
+
+#[test]
+fn complete_effect_source_context_fields_and_coverage_are_bound_by_both_inclusions() {
+    let (opening, root) = opening_fixture();
+    for mutation in 0..3 {
+        let mut changed = opening.clone();
+        match mutation {
+            0 => changed.leaf.slot += 1,
+            1 => changed.leaf.perm_root[0] ^= 1,
+            2 => changed.leaf.tx_set_hash[0] ^= 1,
+            _ => unreachable!(),
+        }
+        // Even an offered matching expected leaf cannot replace the original Merkle member.
+        assert!(!verify_fastpq_ordinary_source_statement_opening_v1(
+            &changed,
+            &changed.leaf,
+            root,
+            5,
+            5
+        ));
+        assert!(!verify_fastpq_ordinary_source_statement_opening_v1(
+            &opening,
+            &changed.leaf,
+            root,
+            5,
+            5
+        ));
+    }
+    let mut unsupported = opening;
+    unsupported.manifest.coverage = FastpqSourceEffectCoverageV1::Unsupported;
+    let bytes = norito::encode_canonical(&unsupported.manifest).unwrap();
+    assert_eq!(
+        norito::decode_canonical::<FastpqOrdinarySourceStatementManifestV1>(&bytes).unwrap(),
+        unsupported.manifest
+    );
+    let writes = [crate::exec_witness::smt::KvPair::new(
+        FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1,
+        bytes,
+    )];
+    let matching_root = crate::exec_witness::smt::compute_post_state_root(&[], &writes);
+    assert!(!verify_fastpq_ordinary_source_statement_opening_v1(
+        &unsupported,
+        &unsupported.leaf,
+        matching_root,
+        5,
+        5
+    ));
+}
+
+#[test]
+fn complete_effect_count_remains_independent_of_statement_capacity() {
+    let mut leaves = leaves();
+    leaves[0].effect_count = 17;
+    let manifest = build_fastpq_ordinary_source_statement_manifest_v1(
+        leaves[0].source,
+        &entries(),
+        &leaves,
+        5,
+        3,
+    )
+    .unwrap();
+    assert_eq!(manifest.statement_count, 3);
+    assert!(leaves[0].effect_count > manifest.statement_count);
+    assert_eq!(manifest.coverage, FastpqSourceEffectCoverageV1::Complete);
+    leaves[0].effect_count = 0;
+    assert!(
+        build_fastpq_ordinary_source_statement_manifest_v1(
+            leaves[0].source,
+            &entries(),
+            &leaves,
+            5,
+            3
+        )
+        .is_none()
+    );
 }

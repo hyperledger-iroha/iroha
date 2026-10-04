@@ -166,7 +166,8 @@ fn test_facade_retains_exact_executed_results_membership_and_certified_parents()
     assert_eq!(first.0, 2);
     let block = state
         .block_by_height(NonZeroUsize::new(2).unwrap())
-        .unwrap();
+        .expect("committed history read completes")
+        .expect("committed execution is retained");
     block.validate_output_merkle_cache().unwrap();
     for (index, signed) in transactions.into_iter().enumerate() {
         assert!(state.has_committed_entrypoint(signed.hash_as_entrypoint()));

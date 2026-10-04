@@ -21,6 +21,7 @@ import {
   buildTimeTriggerAction,
   buildPacs008Message,
   buildPacs009Message,
+  field,
 } from "../src/index.js";
 import {
   assertNonNegativeInteger,
@@ -464,14 +465,10 @@ test(
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
     });
-    const page = await client.listBlocks({ limit: 5 });
+    const page = await client.explorerBlocks.list({ limit: 5 });
     assert.ok(page, "blocks page payload must be present");
-    const { pagination, items } = page;
-    assert.ok(pagination, "block list should include pagination metadata");
-    assertNonNegativeInteger(pagination.page, "blocks.pagination.page");
-    assertNonNegativeInteger(pagination.perPage, "blocks.pagination.perPage");
-    assertNonNegativeInteger(pagination.totalPages, "blocks.pagination.totalPages");
-    assertNonNegativeInteger(pagination.totalItems, "blocks.pagination.totalItems");
+    const { nextCursor, items } = page;
+    assert.ok(nextCursor === null || typeof nextCursor === "string");
     assert.ok(Array.isArray(items), "block list should return an items array");
     assert.ok(items.length <= 5, "block list must respect provided limit");
     if (items.length === 0) {
@@ -506,7 +503,7 @@ test(
       apiToken: API_TOKEN,
     });
     const accountId = AUTHORITY_ACCOUNT_ID;
-    const page = await client.listAccountPermissions(accountId, { limit: 10 });
+    const page = await client.accountPermissions(accountId).list({ limit: 10, includeTotal: true });
     assert.ok(page, "account permission list should return a payload");
     assert.ok(
       typeof page.total === "number",
@@ -532,7 +529,7 @@ test(
         "permission token payload must be an object when present",
       );
     }
-    const limitedPage = await client.listAccountPermissions(accountId, { limit: 1 });
+    const limitedPage = await client.accountPermissions(accountId).list({ limit: 1 });
     assert.ok(
       Array.isArray(limitedPage.items),
       "account permission list should respect pagination parameters",
@@ -542,12 +539,12 @@ test(
       "account permission list must respect the provided limit",
     );
     const iteratorIncludesSample = await iteratorIncludes(
-      client.iterateAccountPermissions(accountId, { limit: 2 }),
+      client.accountPermissions(accountId).iterate({ limit: 2 }),
       (entry) => entry?.name === sample.name,
     );
     assert.ok(
       iteratorIncludesSample,
-      "account permission iterator should surface entries returned by listAccountPermissions",
+      "account permission iterator should surface entries returned by the permission collection",
     );
   },
 );
@@ -720,7 +717,7 @@ test(
 
     let listPage;
     try {
-      listPage = await client.listNfts({ limit: 5 });
+      listPage = await client.nfts.list({ limit: 5, includeTotal: true });
     } catch (error) {
       if (isUnexpectedNotFoundError(error)) {
         t.diagnostic(
@@ -744,7 +741,7 @@ test(
 
     let queryPage;
     try {
-      queryPage = await client.queryNfts({ limit: 5 });
+      queryPage = await client.nfts.list({ limit: 5, sort: "id", includeTotal: true });
     } catch (error) {
       if (isUnexpectedNotFoundError(error)) {
         t.diagnostic(
@@ -769,18 +766,18 @@ test(
         "nft query should include at least one known id",
       );
       const iteratorListFound = await iteratorIncludes(
-        client.iterateNfts({ limit: 2, maxItems: 10 }),
+        client.nfts.iterate({ limit: 2 }),
         (entry) => entry?.id === referenceId,
       );
       assert.ok(iteratorListFound, "nft iterator should surface the reference id");
       const iteratorQueryFound = await iteratorIncludes(
-        client.iterateNftsQuery({ limit: 2, maxItems: 10 }),
+        client.nfts.iterate({ filter: field("id").eq(referenceId), limit: 2 }),
         (entry) => entry?.id === referenceId,
       );
-      assert.ok(iteratorQueryFound, "nft query iterator should surface the reference id");
+      assert.ok(iteratorQueryFound, "filtered nft iterator should surface the reference id");
     } else {
       t.diagnostic("NFT endpoints returned empty payloads; iterator assertions skipped");
-      for await (const _unused of client.iterateNfts({ limit: 2, maxItems: 2 })) {
+      for await (const _unused of client.nfts.iterate({ limit: 2 })) {
         t.diagnostic(`drained nft iterator item: ${JSON.stringify(_unused)}`);
         break;
       }
@@ -819,7 +816,7 @@ test(
       privateKey,
     });
 
-    const status = await client.submitTransactionAndWaitTyped(signedTransaction, {
+    const status = await client.submitTransactionAndWait(signedTransaction, {
       hashHex: hash.toString("hex"),
       intervalMs: 1_000,
       timeoutMs: 30_000,
@@ -827,8 +824,8 @@ test(
     assertSuccessfulStatus(status, domainId);
 
     let found = false;
-    for await (const entry of client.iterateDomains({
-      contains: domainId,
+    for await (const entry of client.domains.iterate({
+      filter: field("id").eq(domainId),
       limit: 5,
     })) {
       if (entry?.id === domainId) {
@@ -836,7 +833,7 @@ test(
         break;
       }
     }
-    assert.ok(found, `expected listDomains to include ${domainId}`);
+    assert.ok(found, `expected the domains collection to include ${domainId}`);
   },
 );
 
@@ -875,7 +872,7 @@ test(
 
     await client.submitTransaction(signedTransaction);
 
-    const typedStatus = await client.waitForTransactionStatusTyped(hashHex, {
+    const typedStatus = await client.waitForTransactionStatus(hashHex, {
       intervalMs: 1_000,
       timeoutMs: 60_000,
     });
@@ -889,7 +886,7 @@ test(
     assert.equal(typedStatus.scope, "global");
     assert.equal(typedStatus.resolved_from, "state");
 
-    const fetchedStatus = await client.getTransactionStatusTyped(hashHex);
+    const fetchedStatus = await client.getTransactionStatus(hashHex);
     assert.ok(
       fetchedStatus,
       "pipeline status endpoint should retain the terminal snapshot after polling",
@@ -940,7 +937,7 @@ test(
         },
         privateKey,
       });
-    const accountStatus = await client.submitTransactionAndWaitTyped(accountTx, {
+    const accountStatus = await client.submitTransactionAndWait(accountTx, {
       hashHex: accountHash.toString("hex"),
       intervalMs: 1_000,
       timeoutMs: 30_000,
@@ -969,7 +966,7 @@ test(
         },
         privateKey,
       });
-    const assetStatus = await client.submitTransactionAndWaitTyped(assetTx, {
+    const assetStatus = await client.submitTransactionAndWait(assetTx, {
       hashHex: assetHash.toString("hex"),
       intervalMs: 1_000,
       timeoutMs: 30_000,
@@ -977,8 +974,8 @@ test(
     assertSuccessfulStatus(assetStatus, assetDefinitionId);
 
     let definitionFound = false;
-    for await (const definition of client.iterateAssetDefinitions({
-      contains: assetDefinitionId,
+    for await (const definition of client.assetDefinitions.iterate({
+      filter: field("id").eq(assetDefinitionId),
       limit: 5,
     })) {
       if (definition?.id === assetDefinitionId) {
@@ -988,13 +985,7 @@ test(
     }
     assert.ok(definitionFound, `expected asset definitions to include ${assetDefinitionId}`);
 
-    let assetFound = null;
-    for await (const asset of client.iterateAccountAssets(accountId, { limit: 5 })) {
-      if (asset?.asset_id === assetId) {
-        assetFound = asset;
-        break;
-      }
-    }
+    const assetFound = await findAccountAsset(client, accountId, assetId);
     assert.ok(assetFound, `expected ${accountId} to own ${assetId}`);
     assert.equal(assetFound.quantity, "7");
 
@@ -1010,7 +1001,7 @@ test(
         },
         privateKey,
       });
-    const extraMintStatus = await client.submitTransactionAndWaitTyped(extraMintTx, {
+    const extraMintStatus = await client.submitTransactionAndWait(extraMintTx, {
       hashHex: extraMintHash.toString("hex"),
       intervalMs: 1_000,
       timeoutMs: 30_000,
@@ -1022,19 +1013,19 @@ test(
     assert.equal(refreshedAsset.quantity, "10");
 
     const domainQueryFound = await iteratorIncludes(
-      client.iterateDomainsQuery({ pageSize: 5, maxItems: 25 }),
+      client.domains.iterate({ limit: 5 }),
       (domain) => domain?.id === domainId,
     );
-    assert.ok(domainQueryFound, `expected domain query iterator to include ${domainId}`);
+    assert.ok(domainQueryFound, `expected domain iterator to include ${domainId}`);
 
     const accountQueryFound = await iteratorIncludes(
-      client.iterateAccountsQuery({ pageSize: 5, maxItems: 25 }),
+      client.accounts.iterate({ limit: 5 }),
       (account) => account?.id === accountId,
     );
-    assert.ok(accountQueryFound, `expected account query iterator to include ${accountId}`);
+    assert.ok(accountQueryFound, `expected account iterator to include ${accountId}`);
 
     const assetDefinitionQueryFound = await iteratorIncludes(
-      client.iterateAssetDefinitionsQuery({ pageSize: 5, maxItems: 25 }),
+      client.assetDefinitions.iterate({ limit: 5 }),
       (definition) => definition?.id === assetDefinitionId,
     );
     assert.ok(
@@ -1042,7 +1033,7 @@ test(
       `expected asset definition query iterator to include ${assetDefinitionId}`,
     );
 
-    const accountTransactions = await client.listAccountTransactions(accountId, {
+    const accountTransactions = await client.accountTransactions(accountId).list({
       limit: 5,
     });
     assert.ok(
@@ -1050,9 +1041,10 @@ test(
       "account transactions list should include at least one entry",
     );
 
-    const accountAssetQuery = await client.queryAccountAssets(accountId, {
+    const accountAssetQuery = await client.accountAssets(accountId).list({
       limit: 5,
-      sort: [{ key: "quantity", order: "desc" }],
+      sort: "-quantity",
+      includeTotal: true,
     });
     assert.ok(
       accountAssetQuery && typeof accountAssetQuery.total === "number",
@@ -1063,13 +1055,13 @@ test(
       "account asset query response should include an items array",
     );
     assert.ok(
-      accountAssetQuery.items.some((entry) => entry?.asset_id === assetId),
+      accountAssetQuery.items.some((entry) => entry?.asset === assetDefinitionOf(assetId)),
       `expected account asset query results to include ${assetId}`,
     );
 
     const assetQueryIteratorFound = await iteratorIncludes(
-      client.iterateAccountAssetsQuery(accountId, { limit: 2, maxItems: 10 }),
-      (entry) => entry?.asset_id === assetId,
+      client.accountAssets(accountId).iterate({ limit: 2 }),
+      (entry) => entry?.asset === assetDefinitionOf(assetId),
     );
     assert.ok(
       assetQueryIteratorFound,
@@ -1120,7 +1112,7 @@ test(
         },
         privateKey,
       });
-    const senderStatus = await client.submitTransactionAndWaitTyped(senderTx, {
+    const senderStatus = await client.submitTransactionAndWait(senderTx, {
       hashHex: senderHash.toString("hex"),
       intervalMs: 1_000,
       timeoutMs: 30_000,
@@ -1141,7 +1133,7 @@ test(
         },
         privateKey,
       });
-    const receiverStatus = await client.submitTransactionAndWaitTyped(receiverTx, {
+    const receiverStatus = await client.submitTransactionAndWait(receiverTx, {
       hashHex: receiverHash.toString("hex"),
       intervalMs: 1_000,
       timeoutMs: 30_000,
@@ -1168,7 +1160,7 @@ test(
         },
         privateKey,
       });
-    const assetStatus = await client.submitTransactionAndWaitTyped(assetTx, {
+    const assetStatus = await client.submitTransactionAndWait(assetTx, {
       hashHex: assetHash.toString("hex"),
       intervalMs: 1_000,
       timeoutMs: 30_000,
@@ -1191,7 +1183,7 @@ test(
       },
       privateKey,
     });
-    const transferStatus = await client.submitTransactionAndWaitTyped(transferTx, {
+    const transferStatus = await client.submitTransactionAndWait(transferTx, {
       hashHex: transferHash.toString("hex"),
       intervalMs: 1_000,
       timeoutMs: 30_000,
@@ -1206,15 +1198,15 @@ test(
     assert.ok(receiverSnapshot, `expected receiver asset snapshot for ${receiverAssetId}`);
     assert.equal(receiverSnapshot.quantity, transferQuantity);
 
-    const receiverAssets = await client.listAccountAssets(receiverAccountId, { limit: 5 });
+    const receiverAssets = await client.accountAssets(receiverAccountId).list({ limit: 5 });
     const receiverItems = receiverAssets?.items ?? [];
     assert.ok(Array.isArray(receiverItems), "account asset list should expose items");
     assert.ok(
-      receiverItems.some((entry) => entry?.asset_id === receiverAssetId),
+      receiverItems.some((entry) => entry?.asset === assetDefinitionOf(receiverAssetId)),
       `expected account asset list to include ${receiverAssetId}`,
     );
 
-    const holderPage = await client.listAssetHolders(assetDefinitionId, { limit: 10 });
+    const holderPage = await client.assetHolders(assetDefinitionId).list({ limit: 10 });
     assert.ok(
       holderPage && Array.isArray(holderPage.items),
       "asset holder list should return entries",
@@ -1238,10 +1230,10 @@ test(
       "receiver holder entry must report transferred quantity",
     );
 
-    const holderQuery = await client.queryAssetHolders(assetDefinitionId, {
+    const holderQuery = await client.assetHolders(assetDefinitionId).list({
       limit: 5,
-      offset: 0,
-      sort: [{ key: "quantity", order: "desc" }],
+      sort: "-quantity",
+      includeTotal: true,
     });
     assert.ok(
       holderQuery && typeof holderQuery.total === "number",
@@ -1260,26 +1252,29 @@ test(
     );
 
     const iteratorListFound = await iteratorIncludes(
-      client.iterateAssetHolders(assetDefinitionId, { limit: 5 }),
+      client.assetHolders(assetDefinitionId).iterate({ limit: 5 }),
       (entry) => entry?.account_id === receiverAccountId && entry.quantity === transferQuantity,
     );
     assert.ok(iteratorListFound, "asset holder iterator should surface the receiver account");
 
     const iteratorQueryFound = await iteratorIncludes(
-      client.iterateAssetHoldersQuery(assetDefinitionId, { limit: 5 }),
+      client.assetHolders(assetDefinitionId).iterate({
+        filter: field("account_id").eq(senderAccountId),
+        limit: 5,
+      }),
       (entry) => entry?.account_id === senderAccountId && entry.quantity === remainingQuantity,
     );
-    assert.ok(iteratorQueryFound, "asset holder query iterator should surface the sender account");
+    assert.ok(iteratorQueryFound, "filtered asset holder iterator should surface the sender account");
 
-    const accountFilter = { Eq: { id: senderAccountId } };
-    const accountList = await client.listAccounts({ filter: accountFilter, limit: 5 });
+    const accountFilter = field("id").eq(senderAccountId);
+    const accountList = await client.accounts.list({ filter: accountFilter, limit: 5 });
     const accountListItems = accountList?.items ?? [];
     assert.ok(
       accountListItems.some((entry) => entry?.id === senderAccountId),
       "account list should surface the sender account",
     );
 
-    const accountQueryPage = await client.queryAccounts({ filter: accountFilter, limit: 1 });
+    const accountQueryPage = await client.accounts.list({ filter: accountFilter.toString(), limit: 1 });
     const accountQueryItems = accountQueryPage?.items ?? [];
     assert.ok(
       accountQueryItems.length >= 1 && accountQueryItems[0]?.id === senderAccountId,
@@ -1287,13 +1282,13 @@ test(
     );
 
     const listIteratorFound = await iteratorIncludes(
-      client.iterateAccounts({ filter: accountFilter, limit: 5 }),
+      client.accounts.iterate({ filter: accountFilter, limit: 5 }),
       (entry) => entry?.id === senderAccountId,
     );
     assert.ok(listIteratorFound, "account iterator should include the sender account");
 
     const queryIteratorFound = await iteratorIncludes(
-      client.iterateAccountsQuery({ filter: accountFilter, limit: 5 }),
+      client.accounts.iterate({ filter: accountFilter.toJSON(), limit: 5 }),
       (entry) => entry?.id === senderAccountId,
     );
     assert.ok(
@@ -1301,7 +1296,7 @@ test(
       "account query iterator should include the sender account",
     );
 
-    const i105AccountList = await client.listAccounts({
+    const i105AccountList = await client.accounts.list({
       filter: accountFilter,
       limit: 5,
     });
@@ -1311,7 +1306,7 @@ test(
       "account list should honour i105 address formatting",
     );
 
-    const i105AccountQuery = await client.queryAccounts({
+    const i105AccountQuery = await client.accounts.list({
       filter: accountFilter,
       limit: 1,
     });
@@ -1322,10 +1317,9 @@ test(
     );
 
     const i105ListIteratorFound = await iteratorIncludes(
-      client.iterateAccounts({
+      client.accounts.iterate({
         filter: accountFilter,
         limit: 5,
-        maxItems: 10,
       }),
       (entry) => entry?.id === senderAccountId,
     );
@@ -1335,10 +1329,10 @@ test(
     );
 
     const i105QueryIteratorFound = await iteratorIncludes(
-      client.iterateAccountsQuery({
+      client.accounts.iterate({
         filter: accountFilter,
+        sort: "id",
         limit: 5,
-        maxItems: 10,
       }),
       (entry) => entry?.id === senderAccountId,
     );
@@ -1347,7 +1341,7 @@ test(
       "account query iterator should emit i105 literals when requested",
     );
 
-    const i105Transactions = await client.listAccountTransactions(senderAccountId, {
+    const i105Transactions = await client.accountTransactions(senderAccountId).list({
       limit: 5,
     });
     const listAuthority = (i105Transactions?.items ?? []).find(
@@ -1363,7 +1357,8 @@ test(
       "account transaction list should emit canonical authority literals",
     );
 
-    const i105TransactionQuery = await client.queryAccountTransactions(senderAccountId, {
+    const i105TransactionQuery = await client.accountTransactions(senderAccountId).list({
+      filter: field("authority").eq(AUTHORITY_ACCOUNT_ID),
       limit: 5,
     });
     const queryAuthority = (i105TransactionQuery?.items ?? []).find(
@@ -1380,9 +1375,8 @@ test(
     );
 
     const i105TransactionIteratorFound = await iteratorIncludes(
-      client.iterateAccountTransactions(senderAccountId, {
+      client.accountTransactions(senderAccountId).iterate({
         limit: 5,
-        maxItems: 10,
       }),
       (entry) => entry?.authority === AUTHORITY_ACCOUNT_ID,
     );
@@ -1392,9 +1386,9 @@ test(
     );
 
     const i105TransactionQueryIteratorFound = await iteratorIncludes(
-      client.iterateAccountTransactionsQuery(senderAccountId, {
+      client.accountTransactions(senderAccountId).iterate({
+        sort: "-timestamp_ms,entrypoint_hash",
         limit: 5,
-        maxItems: 10,
       }),
       (entry) => entry?.authority === AUTHORITY_ACCOUNT_ID,
     );
@@ -1418,7 +1412,7 @@ test(
 
     let listPage;
     try {
-      listPage = await client.listRepoAgreements({ limit: 5 });
+      listPage = await client.repoAgreements.list({ limit: 5, includeTotal: true });
     } catch (error) {
       if (isUnexpectedNotFoundError(error)) {
         t.diagnostic(
@@ -1442,10 +1436,10 @@ test(
     const agreement = listPage.items[0];
     assertRepoAgreementSnapshot(agreement, "repo agreement list entry");
 
-    const repoFilter = { Eq: { id: agreement.id } };
+    const repoFilter = field("id").eq(agreement.id);
     let queryPage;
     try {
-      queryPage = await client.queryRepoAgreements({ filter: repoFilter, limit: 1 });
+      queryPage = await client.repoAgreements.list({ filter: repoFilter, limit: 1, includeTotal: true });
     } catch (error) {
       if (isUnexpectedNotFoundError(error)) {
         t.diagnostic(
@@ -1466,13 +1460,13 @@ test(
     );
 
     const iteratorListFound = await iteratorIncludes(
-      client.iterateRepoAgreements({ filter: repoFilter, limit: 5 }),
+      client.repoAgreements.iterate({ filter: repoFilter, limit: 5 }),
       (entry) => entry?.id === agreement.id,
     );
     assert.ok(iteratorListFound, "repo agreement iterator should surface the filtered agreement");
 
     const iteratorQueryFound = await iteratorIncludes(
-      client.iterateRepoAgreementsQuery({ filter: repoFilter, limit: 5 }),
+      client.repoAgreements.iterate({ filter: repoFilter.toString(), limit: 5 }),
       (entry) => entry?.id === agreement.id,
     );
     assert.ok(
@@ -1668,7 +1662,7 @@ test(
     let queryPage;
     try {
       queryPage = await client.queryTriggers({
-        filter: { Eq: ["id", example.id] },
+        filter: field("id").eq(example.id).toJSON(),
         limit: 1,
       });
     } catch (error) {
@@ -1751,7 +1745,7 @@ test(
       assert.equal(record.metadata.intent, metadata.intent);
 
       const page = await client.queryTriggers({
-        filter: { Eq: ["id", triggerId] },
+        filter: field("id").eq(triggerId).toJSON(),
         limit: 1,
       });
       assertNonNegativeInteger(page.total, "trigger query total after registration");
@@ -1825,7 +1819,7 @@ test(
       },
       privateKey,
     });
-    const statusPromise = client.submitTransactionAndWaitTyped(signedTransaction, {
+    const statusPromise = client.submitTransactionAndWait(signedTransaction, {
       hashHex: hash.toString("hex"),
       intervalMs: 1_000,
       timeoutMs: 30_000,
@@ -1887,7 +1881,7 @@ test(
       },
       privateKey,
     });
-    const statusPromise = client.submitTransactionAndWaitTyped(signedTransaction, {
+    const statusPromise = client.submitTransactionAndWait(signedTransaction, {
       hashHex: hash.toString("hex"),
       intervalMs: 1_000,
       timeoutMs: 30_000,
@@ -1943,7 +1937,7 @@ test(
     });
     const hashHex = hash.toString("hex");
 
-    const status = await client.submitTransactionAndWaitTyped(signedTransaction, {
+    const status = await client.submitTransactionAndWait(signedTransaction, {
       hashHex,
       intervalMs: 1_000,
       timeoutMs: 30_000,
@@ -1960,6 +1954,7 @@ test(
         const page = await fetchPage();
         assert.ok(page, `${context} should return a payload`);
         assert.equal(typeof page.total, "number", `${context} should expose total count`);
+        assert.ok(page.nextCursor === null || typeof page.nextCursor === "string", `${context} should expose nextCursor`);
         const items = page.items ?? [];
         assert.ok(Array.isArray(items), `${context} should expose an items array`);
         const entry = items.find(matchesHash);
@@ -1972,8 +1967,8 @@ test(
     };
 
     const listEntry = await waitForMatch(
-      () => client.listAccountTransactions(AUTHORITY_ACCOUNT_ID, { limit: 25 }),
-      "listAccountTransactions",
+      () => client.accountTransactions(AUTHORITY_ACCOUNT_ID).list({ limit: 25, includeTotal: true }),
+      "accountTransactions.list",
     );
     assert.equal(
       listEntry.entrypoint_hash.toLowerCase(),
@@ -1990,19 +1985,20 @@ test(
     assert.equal(listEntry.result_ok, true, "account transactions entry should report success");
 
     const iteratorFound = await iteratorIncludes(
-      client.iterateAccountTransactions(AUTHORITY_ACCOUNT_ID, { limit: 5 }),
+      client.accountTransactions(AUTHORITY_ACCOUNT_ID).iterate({ limit: 5 }),
       matchesHash,
     );
     assert.ok(iteratorFound, "account transaction iterator should surface the submission");
 
     const queryEntry = await waitForMatch(
       () =>
-        client.queryAccountTransactions(AUTHORITY_ACCOUNT_ID, {
+        client.accountTransactions(AUTHORITY_ACCOUNT_ID).list({
+          filter: field("entrypoint_hash").eq(hashHex),
           limit: 10,
-          offset: 0,
-          sort: [{ key: "timestamp_ms", order: "desc" }],
+          sort: "-timestamp_ms",
+          includeTotal: true,
         }),
-      "queryAccountTransactions",
+      "accountTransactions.list with filter",
     );
     assert.equal(
       queryEntry.entrypoint_hash.toLowerCase(),
@@ -2011,7 +2007,7 @@ test(
     );
 
     const iteratorQueryFound = await iteratorIncludes(
-      client.iterateAccountTransactionsQuery(AUTHORITY_ACCOUNT_ID, { limit: 5 }),
+      client.accountTransactions(AUTHORITY_ACCOUNT_ID).iterate({ sort: "-timestamp_ms", limit: 5 }),
       matchesHash,
     );
     assert.ok(
@@ -2249,7 +2245,7 @@ test(
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
     });
-    const blocksPage = await client.listBlocks({ limit: 5 });
+    const blocksPage = await client.explorerBlocks.list({ limit: 5 });
     const candidateHeights = (blocksPage?.items ?? [])
       .map((entry) => entry?.height)
       .filter(
@@ -2514,11 +2510,11 @@ test(
       apiToken: API_TOKEN,
     });
     const manifestOptions =
-      UAID_DATASPACE_ID === null ? undefined : { dataspaceId: UAID_DATASPACE_ID };
-    const manifests = await client.getUaidManifests(UAID_LITERAL, manifestOptions);
+      UAID_DATASPACE_ID === null ? undefined : { filter: `dataspace_id = ${UAID_DATASPACE_ID}` };
+    const manifests = await client.uaidManifests(UAID_LITERAL).list(manifestOptions);
     assertUaidManifestsSnapshot(manifests, UAID_LITERAL);
     assert.notEqual(
-      manifests.manifests.length,
+      manifests.items.length,
       0,
       "UAID manifests endpoint must return the qualification manifest for the supplied UAID",
     );
@@ -4273,7 +4269,7 @@ function randomIdentifier(prefix) {
 }
 
 function assertSuccessfulStatus(status, referenceId) {
-  assert.ok(status, "expected submitTransactionAndWaitTyped to return a payload");
+  assert.ok(status, "expected submitTransactionAndWait to return a payload");
   assert.equal(
     status.status?.kind,
     "Applied",
@@ -4401,13 +4397,10 @@ function assertUaidBindingsSnapshot(snapshot, expectedUaid) {
 
 function assertUaidManifestsSnapshot(snapshot, expectedUaid) {
   assert.ok(snapshot && typeof snapshot === "object", "uaid manifests snapshot must be an object");
-  assert.equal(
-    snapshot.uaid,
-    expectedUaid,
-    "uaid manifests response must echo the requested UAID",
-  );
-  assert.ok(Array.isArray(snapshot.manifests), "uaid manifests array must be present");
-  snapshot.manifests.forEach((record, index) => {
+  assert.ok(snapshot.nextCursor === null || typeof snapshot.nextCursor === "string");
+  assert.ok(Array.isArray(snapshot.items), "uaid manifests array must be present");
+  snapshot.items.forEach((record, index) => {
+    assert.equal(record.manifest.uaid, expectedUaid);
     assert.equal(
       typeof record.dataspace_id,
       "number",
@@ -4520,9 +4513,18 @@ function assertSnsNameRecord(record, expectedSelector) {
   assertNonNegativeInteger(record.expiresAtMs, "sns name record expiresAtMs");
 }
 
-async function findAccountAsset(client, accountId, assetId) {
-  for await (const asset of client.iterateAccountAssets(accountId, { limit: 10 })) {
-    if (asset?.asset_id === assetId) {
+function assetDefinitionOf(assetHoldingId) {
+  const separator = assetHoldingId.indexOf("#");
+  return separator === -1 ? assetHoldingId : assetHoldingId.slice(0, separator);
+}
+
+async function findAccountAsset(client, accountId, assetHoldingId) {
+  const definitionId = assetDefinitionOf(assetHoldingId);
+  for await (const asset of client.accountAssets(accountId).iterate({
+    filter: field("asset").eq(definitionId),
+    limit: 10,
+  })) {
+    if (asset?.asset === definitionId) {
       return asset;
     }
   }
@@ -4591,13 +4593,13 @@ async function waitForUaidManifestRecord(client, uaidLiteral, dataspaceId, optio
   let lastSnapshot = null;
   for (let index = 0; index < attempts; index += 1) {
     try {
-      const snapshot = await client.getUaidManifests(uaidLiteral, {
-        dataspaceId,
+      const snapshot = await client.uaidManifests(uaidLiteral).list({
+        filter: `dataspace_id = ${dataspaceId}`,
       });
       assertUaidManifestsSnapshot(snapshot, uaidLiteral);
       lastSnapshot = snapshot;
       const record =
-        snapshot.manifests.find(
+        snapshot.items.find(
           (entry) => entry && entry.dataspace_id === dataspaceId,
         ) ?? null;
       if (record && predicate(record)) {
@@ -4610,7 +4612,7 @@ async function waitForUaidManifestRecord(client, uaidLiteral, dataspaceId, optio
   }
   if (lastSnapshot) {
     throw new Error(
-      `Space Directory manifest for dataspace ${dataspaceId} not ready after ${attempts} attempts (last manifest count=${lastSnapshot.manifests.length})`,
+      `Space Directory manifest for dataspace ${dataspaceId} not ready after ${attempts} attempts (last manifest count=${lastSnapshot.items.length})`,
     );
   }
   if (lastError) {
@@ -5287,7 +5289,7 @@ function assertEvidenceRecord(entry) {
   if (entry.penalty_status.status === "pending") {
     assert.equal(entry.penalty_status.details, null);
   } else {
-    assert.ok(["applied", "cancelled"].includes(entry.penalty_status.status));
+    assert.equal(entry.penalty_status.status, "applied");
     assert.deepEqual(Object.keys(entry.penalty_status.details), ["height"]);
     assertEvidenceU64(
       entry.penalty_status.details.height,

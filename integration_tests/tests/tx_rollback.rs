@@ -53,7 +53,7 @@ fn client_sends_transaction_with_invalid_instruction_should_not_see_any_changes(
     );
     let definition_query_result = client
         .client()
-        .query(FindAssetsDefinitions::new())
+        .query(FindAssetDefinitions::new())
         .execute_all()?;
     assert!(
         definition_query_result

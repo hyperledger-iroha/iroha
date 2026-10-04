@@ -583,6 +583,70 @@ def test_rejects_workspace_feature_injection(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.parametrize("defaults", [None, True])
+def test_rejects_privacy_workspace_default_feature_drift(
+    tmp_path: Path, defaults: bool | None,
+) -> None:
+    _write_fixture(tmp_path)
+    assert FEATURE_HYGIENE.check_repository(tmp_path) == []
+    manifest = tmp_path / "Cargo.toml"
+    row = 'iroha_core_privacy = { path = "deps/iroha_core_privacy", default-features = false }'
+    replacement = (
+        'iroha_core_privacy = { path = "deps/iroha_core_privacy" }'
+        if defaults is None else row.replace("false", "true")
+    )
+    source = manifest.read_text(encoding="utf-8")
+    assert source.count(row) == 1
+    manifest.write_text(source.replace(row, replacement), encoding="utf-8")
+
+    assert FEATURE_HYGIENE.check_repository(tmp_path) == [
+        f"{manifest}: workspace dependency `iroha_core_privacy` "
+        "must set `default-features = false`"
+    ]
+
+
+@pytest.mark.parametrize("feature", ["simd", "zk-stark"])
+def test_rejects_privacy_workspace_feature_injection(
+    tmp_path: Path, feature: str,
+) -> None:
+    _write_fixture(tmp_path)
+    assert FEATURE_HYGIENE.check_repository(tmp_path) == []
+    manifest = tmp_path / "Cargo.toml"
+    row = 'iroha_core_privacy = { path = "deps/iroha_core_privacy", default-features = false }'
+    source = manifest.read_text(encoding="utf-8")
+    assert source.count(row) == 1
+    manifest.write_text(
+        source.replace(row, row[:-2] + f', features = ["{feature}"] }}'),
+        encoding="utf-8",
+    )
+
+    assert FEATURE_HYGIENE.check_repository(tmp_path) == [
+        f"{manifest}: workspace dependency `iroha_core_privacy` "
+        "must not inject features"
+    ]
+
+
+@pytest.mark.parametrize("defaults", [None, True])
+def test_rejects_privacy_member_default_feature_drift(
+    tmp_path: Path, defaults: bool | None,
+) -> None:
+    _write_fixture(tmp_path)
+    assert FEATURE_HYGIENE.check_repository(tmp_path) == []
+    rows = _member_rows()
+    row = "iroha_core_privacy = { workspace = true, default-features = false }"
+    rows[rows.index(row)] = (
+        "iroha_core_privacy = { workspace = true }"
+        if defaults is None else row.replace("false", "true")
+    )
+    _write_member(tmp_path, "crates/consumer", rows)
+
+    assert FEATURE_HYGIENE.check_repository(tmp_path) == [
+        f"{tmp_path / 'crates/consumer/Cargo.toml'}: [dependencies] "
+        "`iroha_core_privacy` must set `default-features = false` "
+        "and select features locally"
+    ]
+
+
 def test_rejects_implicit_default_features_in_default_member(tmp_path: Path) -> None:
     _write_fixture(tmp_path, member_defaults=True)
 
@@ -696,3 +760,157 @@ def test_cli_executable_keeps_only_real_target_and_option_features() -> None:
     assert document["features"]["cli"] == []
     assert document["features"]["dev-tools"] == ["cli"]
     assert set(document["features"]["default"]) == {"cli", "bridge", "offline-visual-codecs"}
+
+
+def test_bls_requires_explicit_arrayvec_dependency_forwarding() -> None:
+    """BLS must activate the bounded threshold transcript's optional dependency."""
+
+    document = _guarded_document("iroha_crypto")
+    assert _guarded_errors("iroha_crypto", document) == []
+    assert "dep:arrayvec" in document["features"]["bls"]
+    changed = copy.deepcopy(document)
+    changed["features"]["bls"].remove("dep:arrayvec")
+    assert changed != document
+
+    errors = _guarded_errors("iroha_crypto", changed)
+
+    assert any(
+        "feature `bls` must be" in error and "'dep:arrayvec'" in error
+        for error in errors
+    ), errors
+
+
+def test_sample_fault_injection_is_dev_only_and_rejects_normal_dependency(
+    monkeypatch,
+) -> None:
+    """The sample's test opt-in cannot leak back into its ordinary model graph."""
+
+    manifest = ROOT / "data_model/samples/executor_custom_data_model/Cargo.toml"
+    document = FEATURE_HYGIENE._load_toml(manifest)
+    assert "fault_injection" not in document["dependencies"]["iroha_data_model"]["features"]
+    assert "fault_injection" in document["dev-dependencies"]["iroha_data_model"]["features"]
+    assert FEATURE_HYGIENE.check_repository(ROOT) == []
+    changed = copy.deepcopy(document)
+    changed["dependencies"]["iroha_data_model"]["features"].append("fault_injection")
+    assert changed != document
+    original_load = FEATURE_HYGIENE._load_toml
+
+    def mutated_load(path: Path) -> dict:
+        return copy.deepcopy(changed) if path == manifest else original_load(path)
+
+    monkeypatch.setattr(FEATURE_HYGIENE, "_load_toml", mutated_load)
+    errors = FEATURE_HYGIENE.check_repository(ROOT)
+
+    assert any(
+        "package `executor_custom_data_model` [dependencies] dependency `iroha_data_model`"
+        in error
+        and "selects explicit opt-in feature `fault_injection` from a non-dev dependency declaration"
+        in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize("mutation", ("remove", "optional", "weak", "wrong-platform", "extra-feature", "normal-only", "alias"))
+def test_mandatory_daemon_cuda_target_dependency_is_exact(mutation: str) -> None:
+    document = _guarded_document("irohad_lib")
+    assert _guarded_errors("irohad_lib", document) == []
+    changed = copy.deepcopy(document)
+    scope = 'cfg(any(target_os = "linux", target_os = "windows"))'
+    row = changed["target"][scope]["dependencies"]["ivm"]
+    if mutation == "remove":
+        del changed["target"][scope]["dependencies"]["ivm"]
+    elif mutation == "optional":
+        row["optional"] = True
+    elif mutation == "weak":
+        row["features"] = ["cuda?"]
+    elif mutation == "wrong-platform":
+        changed["target"]['cfg(target_os = "macos")'] = changed["target"].pop(scope)
+    elif mutation == "extra-feature":
+        row["features"] = ["cuda", "cuda-hardware-tests"]
+    elif mutation == "normal-only":
+        changed["dependencies"]["ivm"]["features"] = ["cuda"]
+        del changed["target"][scope]["dependencies"]["ivm"]
+    else:
+        changed["features"]["ivm-cuda"] = ["ivm/cuda"]
+    assert any("mandatory daemon CUDA" in error for error in _guarded_errors("irohad_lib", changed))
+
+
+def test_contextual_cuda_pins_both_exact_dependency_members() -> None:
+    document = _guarded_document("ivm")
+    assert _guarded_errors("ivm", document) == []
+    assert FEATURE_HYGIENE.EXPECTED_FEATURES["ivm"]["cuda"] == (
+        "dep:cust", "iroha_accel/cuda",
+    )
+    assert "cuda" in FEATURE_HYGIENE.CONTEXTUAL_SHIPPING_FEATURES["ivm"]
+    assert "cuda" not in FEATURE_HYGIENE.EXPLICIT_OPT_IN_FEATURES["ivm"]
+    assert "cuda" not in FEATURE_HYGIENE.local_default_feature_closure(
+        FEATURE_HYGIENE.cargo_visible_features(document)
+    )
+    for members in (
+        [], ["dep:cust"], ["iroha_accel/cuda"],
+        ["cust", "iroha_accel/cuda"],
+        ["dep:cust", "iroha_accel?/cuda"],
+        ["iroha_accel/cuda", "dep:cust"],
+        ["dep:cust", "iroha_accel/cuda", "cuda-hardware-tests"],
+    ):
+        changed = copy.deepcopy(document)
+        changed["features"]["cuda"] = members
+        assert changed != document
+        assert any(
+            "feature `cuda` must be ['dep:cust', 'iroha_accel/cuda']" in error
+            for error in _guarded_errors("ivm", changed)
+        ), members
+
+
+def test_daemon_mutation_testing_is_empty_explicit_and_excluded_from_defaults() -> None:
+    document = _guarded_document("irohad_lib")
+    assert _guarded_errors("irohad_lib", document) == []
+    assert FEATURE_HYGIENE.EXPECTED_FEATURES["irohad_lib"]["mutation-testing"] == ()
+    assert document["features"]["mutation-testing"] == []
+    assert "mutation-testing" in FEATURE_HYGIENE.EXPLICIT_OPT_IN_FEATURES["irohad_lib"]
+    assert "mutation-testing" not in FEATURE_HYGIENE.CONTEXTUAL_SHIPPING_FEATURES["irohad_lib"]
+    assert "mutation-testing" not in FEATURE_HYGIENE.local_default_feature_closure(
+        FEATURE_HYGIENE.cargo_visible_features(document)
+    )
+    changed = copy.deepcopy(document)
+    changed["features"]["mutation-testing"] = ["iroha_core/mutation-testing"]
+    assert any(
+        "feature `mutation-testing` must be []" in error
+        for error in _guarded_errors("irohad_lib", changed)
+    )
+    for aggregate in ("default", "daemon"):
+        changed = copy.deepcopy(document)
+        changed["features"][aggregate].append("mutation-testing")
+        assert any(
+            "explicit opt-in feature `mutation-testing` is reachable from `default`" in error
+            for error in _guarded_errors("irohad_lib", changed)
+        ), aggregate
+
+
+def test_daemon_mutation_dependency_is_nonshipping_even_through_an_alias(tmp_path: Path) -> None:
+    _write_fixture(tmp_path)
+    assert FEATURE_HYGIENE.check_repository(tmp_path) == []
+    assert not any(
+        owner == "irohad_lib" and feature == "mutation-testing"
+        for _consumer, owner, feature in
+        FEATURE_HYGIENE.NONSHIPPING_EXPLICIT_OPT_IN_DEPENDENCY_ALLOWLIST
+    )
+    for section in ("dependencies", "build-dependencies", "dev-dependencies"):
+        rows = _member_rows()
+        if section != "dependencies":
+            rows.extend(["", f"[{section}]"])
+        rows.append(
+            'daemon_owner = { package = "irohad_lib", version = "0.1.0", '
+            'default-features = false, features = ["mutation-testing"] }'
+        )
+        _write_member(tmp_path, "crates/consumer", rows)
+        errors = FEATURE_HYGIENE.check_repository(tmp_path)
+        if section == "dev-dependencies":
+            assert errors == []
+        else:
+            assert any(
+                f"package `consumer` [{section}] dependency `daemon_owner` "
+                "(package `irohad_lib`) selects explicit opt-in feature `mutation-testing` "
+                "from a non-dev dependency declaration" in error
+                for error in errors
+            ), (section, errors)

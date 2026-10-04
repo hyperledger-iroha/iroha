@@ -1,5 +1,8 @@
 //! Same-State provider admission heads, immutable history and authenticated current lookup.
 
+mod originals;
+pub use originals::with_genesis_provider_admission_originals_v1;
+
 use crate::{
     query::signer_finality::verify_signer_finality_v1,
     state::{StateReadOnly, WorldReadOnly},
@@ -219,12 +222,18 @@ pub fn read_finalized_provider_admission_v1(
     now_secs: u64,
 ) -> Result<Option<AdmissionRecord>, Error> {
     authenticate_current(view)?;
+    read_current_provider_admission(view, provider, now_secs)
+}
+
+fn read_current_provider_admission(
+    view: &impl StateReadOnly,
+    provider: ProviderId,
+    now_secs: u64,
+) -> Result<Option<AdmissionRecord>, Error> {
     let finalized_secs = view
-        .latest_block()
+        .authenticated_query_ledger_time_ms()
         .ok_or(ProviderAdmissionErrorV1)?
-        .header()
-        .creation_time()
-        .as_secs();
+        / 1_000;
     let Some(policy) = read_policy(view.world())? else {
         return Ok(None);
     };
@@ -244,6 +253,27 @@ pub fn read_finalized_provider_admission_v1(
         now_secs.max(finalized_secs),
     )
 }
+/// Read the current admission through an already-authenticated native receipt from this exact view.
+/// A same-height receipt from another view, or an older receipt from this view, is not current.
+/// The caller retains the original cumulative native reader/decoder allowance around this call.
+pub(crate) fn read_provider_admission_at_native_current_v1(
+    view: &crate::state::StateView<'_>,
+    current: &super::signer_check::SignerCertifiedBlockV1<'_, '_>,
+    provider: ProviderId,
+    now_secs: u64,
+) -> Result<Option<AdmissionRecord>, Error> {
+    let block = current
+        .in_view(view)
+        .map_err(|_| ProviderAdmissionErrorV1)?;
+    if block.height() != view.height() as u64
+        || Some(block.block_hash()) != view.block_hashes().last().copied()
+    {
+        return Err(ProviderAdmissionErrorV1);
+    }
+    authenticate_current_head(view)?;
+    read_current_provider_admission(view, provider, now_secs)
+}
+
 fn authenticate_current(view: &impl StateReadOnly) -> Result<(), Error> {
     let height = u64::try_from(view.block_hashes().len()).map_err(|_| ProviderAdmissionErrorV1)?;
     let hash = view
@@ -252,6 +282,11 @@ fn authenticate_current(view: &impl StateReadOnly) -> Result<(), Error> {
         .map(|hash| *hash.as_ref())
         .ok_or(ProviderAdmissionErrorV1)?;
     verify_signer_finality_v1(view, height, hash).map_err(|_| ProviderAdmissionErrorV1)?;
+    authenticate_current_head(view)
+}
+
+fn authenticate_current_head(view: &impl StateReadOnly) -> Result<(), Error> {
+    let height = u64::try_from(view.block_hashes().len()).map_err(|_| ProviderAdmissionErrorV1)?;
     if let Some(head) = read_head(view.world(), None)? {
         if head.height > height {
             return Err(ProviderAdmissionErrorV1);

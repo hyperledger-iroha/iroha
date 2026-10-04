@@ -49,9 +49,10 @@ fn original_candidate() -> (CertifiedTestChain, KeyPair, ValidatorCandidateKeysV
             Account::new(other.clone()).build(&other),
             Account::new(escrow.clone()).build(&escrow),
         ],
-        [AssetDefinition::numeric(
+        [AssetDefinition::new(
             definition,
             "Staked XOR",
+            iroha_primitives::numeric::NumericSpec::fractional(9),
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         )
@@ -383,7 +384,7 @@ fn original_beacon_public_state_decode_refusal_defers_before_installation() {
         .global_beacon_key_sessions()
         .get(&record.session.session_id)
         .unwrap();
-    assert_eq!(installed.session, record.session);
+    assert_eq!(installed.session.record(), &record.session);
     assert_eq!(installed.activated_at_height, Some(height + 1));
 }
 

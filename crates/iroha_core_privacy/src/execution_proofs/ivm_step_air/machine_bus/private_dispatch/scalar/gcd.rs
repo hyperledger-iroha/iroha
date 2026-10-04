@@ -110,7 +110,7 @@ fn convolution(bank: &[F], left: usize, right: usize, index: usize) -> F {
 }
 
 pub(super) fn append_residues(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     bank: &[F],
     sources: word::Sources<'_>,
     selected: F,

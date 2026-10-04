@@ -102,6 +102,10 @@ path = "examples/shuffle.rs"
 name = "plonk_api"
 path = "tests/plonk_api.rs"
 
+[[test]]
+name = "golden_proof_bytes"
+path = "tests/golden_proof_bytes.rs"
+
 [[bench]]
 name = "commit_zk"
 path = "benches/commit_zk.rs"
@@ -223,6 +227,9 @@ version = "0.3.1"
 [dev-dependencies.rand_core]
 version = "0.6"
 features = ["getrandom"]
+
+[dev-dependencies.sha2]
+version = "0.10"
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies.getrandom]
 version = "0.2"

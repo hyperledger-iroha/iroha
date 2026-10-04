@@ -68,6 +68,7 @@ mod fastpq;
 mod gar;
 mod i3_bench_suite;
 mod i3_slo_harness;
+mod kagami_bundle;
 mod kagami_profiles;
 mod ministry;
 mod ministry_agenda;
@@ -160,6 +161,11 @@ enum CommandKind {
         print_hashes: bool,
         summary_target: Option<JsonTarget>,
         attestation_target: Option<JsonTarget>,
+    },
+    KagamiBundle {
+        output: PathBuf,
+        profile: String,
+        network_profiles: Option<PathBuf>,
     },
     MochiBundle {
         output: PathBuf,
@@ -1156,6 +1162,14 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
         }
         CommandKind::ConfigDebug { config } => {
             run_config_debug(&config)?;
+        }
+        CommandKind::KagamiBundle {
+            output,
+            profile,
+            network_profiles,
+        } => {
+            let path = kagami_bundle::bundle(&output, &profile, network_profiles.as_deref())?;
+            println!("Kagami CLI bundle: {}", path.display());
         }
         CommandKind::MochiBundle {
             output,
@@ -2607,6 +2621,42 @@ where
                 attestation_target,
             })
         }
+        "kagami-bundle" => {
+            let mut output = None;
+            let mut profile = String::from("release");
+            let mut network_profiles = None;
+            let mut pending = args.peekable();
+            while let Some(flag) = pending.next() {
+                match flag.as_str() {
+                    "--out" => {
+                        let path = pending.next().ok_or("expected path after --out")?;
+                        if output.is_some() {
+                            return Err("--out may be supplied only once".into());
+                        }
+                        output = Some(normalize_path(Path::new(&path))?);
+                    }
+                    "--profile" => {
+                        profile = pending.next().ok_or("expected profile after --profile")?;
+                    }
+                    "--network-profiles" => {
+                        let path = pending
+                            .next()
+                            .ok_or("expected installation artifact after --network-profiles")?;
+                        if network_profiles.is_some() {
+                            return Err("--network-profiles may be supplied only once".into());
+                        }
+                        network_profiles = Some(normalize_path(Path::new(&path))?);
+                    }
+                    _ => return Err(format!("unknown kagami-bundle flag: {flag}").into()),
+                }
+            }
+            kagami_bundle::validate_profile(&profile)?;
+            Ok(CommandKind::KagamiBundle {
+                output: output.unwrap_or_else(|| workspace_root().join("target/kagami-bundle")),
+                profile,
+                network_profiles,
+            })
+        }
         "mochi-bundle" => {
             let mut output: Option<PathBuf> = None;
             let mut profile = String::from("release");
@@ -2665,6 +2715,7 @@ where
             }
             let output = output.unwrap_or_else(default_mochi_bundle_path);
             mochi::validate_bundle_profile(&profile)?;
+            mochi::validate_network_profile_input(&profile, network_profiles.as_deref())?;
             Ok(CommandKind::MochiBundle {
                 output,
                 profile,

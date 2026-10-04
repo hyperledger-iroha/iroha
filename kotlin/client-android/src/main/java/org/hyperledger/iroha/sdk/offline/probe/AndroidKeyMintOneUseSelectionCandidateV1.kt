@@ -14,6 +14,7 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
 import java.security.MessageDigest
+import org.hyperledger.iroha.sdk.crypto.keystore.AndroidKeystoreAliasStateV1
 import org.hyperledger.iroha.sdk.crypto.keystore.attestation.KagemushaKeyMintRawSelectionEvidenceV1
 import org.hyperledger.iroha.sdk.crypto.keystore.attestation.preparedChallengeV1
 import org.hyperledger.iroha.sdk.crypto.keystore.attestation.requireKagemushaCoreSelectionFrameV1
@@ -570,8 +571,14 @@ internal class SelectionCandidateRunnerV1(
             random.fill(0)
             return KeyMintOneUsePreparationResultV1.Frozen("reserve", error.javaClass.name)
         }
-        val aliasExists = try { device.hasAlias(alias) } catch (_: Exception) { true }
-        if (aliasExists) {
+        // Only a definitive absence permits generation; a Keystore that cannot answer is frozen
+        // exactly like an existing alias.
+        val aliasAbsent = try {
+            device.aliasState(alias) == AndroidKeystoreAliasStateV1.ABSENT
+        } catch (_: Exception) {
+            false
+        }
+        if (!aliasAbsent) {
             random.fill(0)
             // The durable .preparing marker remains: even deletion of an orphan alias must not
             // turn this predecessor into permission to generate a second one-use key.

@@ -13,6 +13,7 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami localnet down`↴](#kagami-localnet-down)
 * [`kagami localnet reset`↴](#kagami-localnet-reset)
 * [`kagami localnet generate`↴](#kagami-localnet-generate)
+* [`kagami localnet validate-beacon-launch`↴](#kagami-localnet-validate-beacon-launch)
 * [`kagami dataspace`↴](#kagami-dataspace)
 * [`kagami dataspace up`↴](#kagami-dataspace-up)
 * [`kagami dataspace status`↴](#kagami-dataspace-status)
@@ -23,6 +24,8 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami context use`↴](#kagami-context-use)
 * [`kagami contract`↴](#kagami-contract)
 * [`kagami contract deploy`↴](#kagami-contract-deploy)
+* [`kagami package`↴](#kagami-package)
+* [`kagami package publish`↴](#kagami-package-publish)
 * [`kagami docker`↴](#kagami-docker)
 * [`kagami keys`↴](#kagami-keys)
 * [`kagami kagemusha`↴](#kagami-kagemusha)
@@ -67,13 +70,15 @@ This document contains the help content for the `kagami` command-line program.
 
 ## `kagami`
 
-Task-first Iroha operator tooling for guided setup, local devnets, genesis work, and diagnostics.
+Start local networks, attach private dataspaces, and deploy Iroha contracts.
 
 **Usage:** `kagami [OPTIONS] <COMMAND>`
 
 Common tasks:
   kagami localnet up
+  kagami dataspace up acme --network taira
   kagami contract deploy hello.ko
+  kagami package publish .
   kagami context list
   kagami wizard
   kagami localnet generate --out-dir ./localnet
@@ -90,6 +95,7 @@ Common tasks:
 * `dataspace` — Run an owner-private local dataspace attached to an installed remote network
 * `context` — Select and inspect managed developer environments
 * `contract` — Build and deploy native IVM contracts in one invocation
+* `package` — Publish native Musubi packages through an exact generated local environment
 * `docker` — Generate validator-only Docker Compose from a prepared bundle or explicit dev seed
 * `keys` — Generate cryptographic key pairs and optional validator Proofs-of-Possession
 * `kagemusha` — Authenticate one complete KAGEMUSHA V1 release and its deployment evidence
@@ -148,6 +154,7 @@ Start and manage a persistent localnet without supplying configuration
 * `down` — Stop the owned validators, preserving their identities and ledger
 * `reset` — Explicitly retire one stopped generation so the next up creates a fresh ledger
 * `generate` — Generate an operator-owned network bundle without starting validators
+* `validate-beacon-launch` — Validate an isolated native beacon configuration and opaque descriptor handoff
 
 
 
@@ -320,6 +327,21 @@ Generate an operator-owned network bundle without starting validators
 
 
 
+## `kagami localnet validate-beacon-launch`
+
+Validate an isolated native beacon configuration and opaque descriptor handoff
+
+**Usage:** `kagami localnet validate-beacon-launch --network-dir <NETWORK_DIR> --peer-index <PEER_INDEX> --beacon-config <BEACON_CONFIG> --beacon-credential <BEACON_CREDENTIAL>`
+
+###### **Options:**
+
+* `--network-dir <NETWORK_DIR>` — Absolute directory containing the unchanged generated peer0..3 configurations
+* `--peer-index <PEER_INDEX>` — Zero-based generated peer index
+* `--beacon-config <BEACON_CONFIG>` — Separate native configuration in the private run's beacon/seat-N directory
+* `--beacon-credential <BEACON_CREDENTIAL>` — Owner-only native beacon credential beside the separate configuration
+
+
+
 ## `kagami dataspace`
 
 Run an owner-private local dataspace attached to an installed remote network
@@ -485,6 +507,41 @@ Deploy source, bytecode, or a Musubi package; automatically start a default loca
 * `--locked` — Require an unchanged Musubi dependency lock
 * `--resume <RESUME>` — Recover this exact retained deployment without rebuilding or signing another plan
 * `--max-fee <MAX_FEE>` — Bound the aggregate quoted fees in their single fee asset before dispatch
+
+
+
+## `kagami package`
+
+Publish native Musubi packages through an exact generated local environment
+
+**Usage:** `kagami package <COMMAND>`
+
+###### **Subcommands:**
+
+* `publish` — Publish with original generated client/namespace intent and the canonical durable engine
+
+
+
+## `kagami package publish`
+
+Publish with original generated client/namespace intent and the canonical durable engine
+
+**Usage:** `kagami package publish [OPTIONS] [MANIFEST]`
+
+###### **Arguments:**
+
+* `<MANIFEST>` — Package/workspace manifest or directory (defaults to the selected workspace)
+
+###### **Options:**
+
+* `--state <STATE>` — Private runtime store. By default each workspace has its own OS application-state directory
+* `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
+* `--json` — Emit one public JSON result; progress remains on stderr
+* `--context <CONTEXT>` — Use this exact retained environment without changing workspace selection
+* `--package <PACKAGE>` — Exact package when the workspace contains more than one selected member
+* `--detach` — Return at the canonical durable seed-ingress boundary
+* `--resume <RESUME>` — Continue one original publication operation; requires an existing selected context
+* `--recover <RECOVER>` — Recover pristine package sidecars for one original operation; never creates a new context
 
 
 
@@ -1095,11 +1152,8 @@ Generate per-client CLI configs from a base client.toml
 
 ###### **Options:**
 
-* `--base-config <PATH>` — Base client config to copy the chain, exact network identity, Torii URL, and credentials from
+* `--base-config <PATH>` — Base client config to copy the chain, exact network identity, account network context, Torii URL, and credentials from
 * `--out-dir <DIR>` — Output directory for generated client configs (default: <base-config-dir>/clients)
-* `--domain <SCOPE>` — Account scope for generated client configs (`dataspace` or `domain.dataspace`)
-
-  Default value: `acme.universal`
 * `--seed-hex <HEX>` — A 32-byte secret master seed encoded as 64 hexadecimal characters.
 
    Per-client keys are derived with an explicit domain and client name. Omit this option for independent operating-system-random keys.

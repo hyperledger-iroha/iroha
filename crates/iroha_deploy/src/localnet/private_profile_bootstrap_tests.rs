@@ -556,6 +556,7 @@ fn private_bpng_profile_rejects_public_taira_and_permissioned_before_writing() {
         &mut BufWriter::new(Vec::new()),
         Some(PUBLIC_TAIRA_CHAIN_ID),
         None,
+        TairaParentCatalog::WithIs,
     )
     .expect_err("a local BPNG preset must not become public Taira allocation");
     assert!(error.to_string().contains("Nexus Sora profile"));

@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# Validate that SwiftPM accepts the complete bridge and rejects a missing bridge.
+# Validate SwiftPM's selected native bridge and mandatory missing-artifact refusal.
+# Requires Swift; optional MOBILE_SDK_*_ARTIFACT_DIR selectors follow Package.swift.
+# SWIFT_SPM_* paths select reports/caches. Existing artifacts and caches are retained.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PACKAGE_DIR="${REPO_ROOT}/IrohaSwift"
-BRIDGE_DIR="${REPO_ROOT}/dist/NoritoBridge.xcframework"
+ARTIFACT_DIR="${MOBILE_SDK_LOCAL_UNIT_ARTIFACT_DIR:-${MOBILE_SDK_APPLE_ARTIFACT_DIR:-${REPO_ROOT}/dist}}"
+BRIDGE_DIR="${ARTIFACT_DIR}/NoritoBridge.xcframework"
 REPORT_DIR="${SWIFT_SPM_REPORT_DIR:-${REPO_ROOT}/artifacts/swift_spm_validation}"
 SUMMARY_PATH="${SWIFT_SPM_SUMMARY:-${REPORT_DIR}/summary.json}"
 WITH_BRIDGE_LOG="${SWIFT_SPM_WITH_BRIDGE_LOG:-${REPORT_DIR}/with_bridge.log}"
@@ -24,12 +27,12 @@ write_summary() {
 EOF
 }
 
-restore_bridge() {
-  if [[ -n "${BRIDGE_STASH:-}" && -d "${BRIDGE_STASH}" && ! -d "${BRIDGE_DIR}" ]]; then
-    mv "${BRIDGE_STASH}" "${BRIDGE_DIR}"
+remove_missing_artifact_directory() {
+  if [[ -n "${MISSING_ARTIFACT_DIR:-}" ]]; then
+    rmdir "${MISSING_ARTIFACT_DIR}" 2>/dev/null || true
   fi
 }
-trap restore_bridge EXIT
+trap remove_missing_artifact_directory EXIT
 
 if ! command -v swift >/dev/null 2>&1; then
   echo "[swift-spm] error: swift toolchain not available" >&2
@@ -46,7 +49,7 @@ fi
 mkdir -p "${REPORT_DIR}"
 touch "${WITH_BRIDGE_LOG}" "${MISSING_BRIDGE_LOG}"
 mkdir -p "${MODULE_CACHE}"
-rm -rf "${WITH_BRIDGE_SCRATCH}" "${MISSING_BRIDGE_SCRATCH}"
+mkdir -p "${WITH_BRIDGE_SCRATCH}" "${MISSING_BRIDGE_SCRATCH}"
 
 export SWIFT_MODULE_CACHE_PATH="${MODULE_CACHE}"
 export CLANG_MODULE_CACHE_PATH="${MODULE_CACHE}"
@@ -59,16 +62,22 @@ fi
 
 echo "[swift-spm] building with bridge present"
 set +e
-swift build --package-path "${PACKAGE_DIR}" --configuration debug --manifest-cache none --scratch-path "${WITH_BRIDGE_SCRATCH}" 2>&1 | tee "${WITH_BRIDGE_LOG}"
+swift build --package-path "${PACKAGE_DIR}" --configuration debug --disable-automatic-resolution --manifest-cache none --scratch-path "${WITH_BRIDGE_SCRATCH}" 2>&1 | tee "${WITH_BRIDGE_LOG}"
 WITH_RC=${PIPESTATUS[0]}
 set -e
 
-BRIDGE_STASH="${BRIDGE_DIR}.spmcheck.$RANDOM.$$"
-mv "${BRIDGE_DIR}" "${BRIDGE_STASH}"
+# Select an empty canonical external directory for the negative case. This leaves
+# the caller's actual framework available to every concurrent consumer.
+MISSING_ARTIFACT_DIR="$(mktemp -d /tmp/iroha-spm-missing-bridge.XXXXXXXX)"
+MISSING_ARTIFACT_DIR="$(cd "${MISSING_ARTIFACT_DIR}" && pwd -P)"
 
 echo "[swift-spm] resolving with bridge missing (expect mandatory-bridge rejection)"
 set +e
-swift build --package-path "${PACKAGE_DIR}" --configuration debug --manifest-cache none --scratch-path "${MISSING_BRIDGE_SCRATCH}" 2>&1 | tee "${MISSING_BRIDGE_LOG}"
+(
+  unset MOBILE_SDK_LOCAL_UNIT_ARTIFACT_DIR
+  export MOBILE_SDK_APPLE_ARTIFACT_DIR="${MISSING_ARTIFACT_DIR}"
+  swift build --package-path "${PACKAGE_DIR}" --configuration debug --disable-automatic-resolution --manifest-cache none --scratch-path "${MISSING_BRIDGE_SCRATCH}"
+) 2>&1 | tee "${MISSING_BRIDGE_LOG}"
 MISSING_RC=${PIPESTATUS[0]}
 set -e
 
@@ -76,8 +85,6 @@ REQUIRED_ERROR=false
 if grep -q "NoritoBridge.xcframework is required" "${MISSING_BRIDGE_LOG}"; then
   REQUIRED_ERROR=true
 fi
-
-restore_bridge
 
 OVERALL_STATUS="passed"
 if [[ ${WITH_RC} -ne 0 ]]; then

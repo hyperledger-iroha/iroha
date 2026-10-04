@@ -201,16 +201,19 @@ fn register_capacity_provider(
                 "fund genuine gateway fixture capacity".into(),
             )
             .into(),
-            UpsertProviderCredit::new(ProviderCreditRecord::new(
-                provider,
-                Quantity::zero(),
-                Quantity::from(100_u32),
-                Quantity::from(1_u32),
-                Quantity::zero(),
-                (now - 6_500) / 1_000,
-                (now - 6_500) / 1_000,
-                Default::default(),
-            ))
+            UpsertProviderCredit::new(
+                None,
+                ProviderCreditRecord::new(
+                    provider,
+                    Quantity::zero(),
+                    Quantity::from(100_u32),
+                    Quantity::from(1_u32),
+                    Quantity::zero(),
+                    (now - 6_500) / 1_000,
+                    (now - 6_500) / 1_000,
+                    Default::default(),
+                ),
+            )
             .into(),
         ],
         now - 6_501,
@@ -751,7 +754,11 @@ fn native_gateway_provider_executes_real_admission_ack_serving_and_release_under
                     intent.payload.clone()
                 },
             )
-            .map_err(observation_error)?;
+            .map_err(|failure| {
+                failure
+                    .rejection()
+                    .map_or(Error::Unavailable, observation_error)
+            })?;
         runtime.deliver(admitted.record, deadline)?;
         let append = driver.appends();
         assert_eq!(
@@ -775,7 +782,11 @@ fn native_gateway_provider_executes_real_admission_ack_serving_and_release_under
                     assert!(!delivery.needs_terminal_check());
                 },
             )
-            .map_err(observation_error)?;
+            .map_err(|failure| {
+                failure
+                    .rejection()
+                    .map_or(Error::Unavailable, observation_error)
+            })?;
         runtime.deliver(admitted.record, deadline)?;
         assert_eq!(
             driver.appends(),
@@ -1190,5 +1201,125 @@ fn native_gateway_delivery_rejects_substitution_permission_drift_and_original_de
         driver.appends().is_empty(),
         "neither historical source authority nor a new Check can revive revoked signing permission"
     );
+    driver.finish();
+}
+
+#[test]
+fn native_gateway_consume_refusal_retries_original_check_before_one_capture_sign_and_submit() {
+    use crate::native_check_binding::complete_check_with;
+    use iroha_core::execution_attempt::ExecutionAttemptError;
+    use std::cell::Cell;
+
+    let fixture = Fixture::new();
+    let state = fixture.chain.state().clone();
+    let (_dir, config) = credentials();
+    let queue = queue();
+    let runtime = fixture.runtime(&config, queue.clone());
+    let driver = NativeDriver::start(fixture, queue);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let request = request();
+    let admitted = runtime
+        .admit(&request, deadline)
+        .expect("real native Admit");
+    let proof = runtime
+        .checked(Selector::Admission(request), deadline)
+        .expect("original finalized signed Admission Check");
+    assert_eq!(proof.deadline(), deadline);
+    let committed_before = driver.committed.lock().unwrap().len();
+    assert!(driver.appends().is_empty());
+    let pool = state.ivm_execution_budget();
+    let original_limit = pool.limit_bytes();
+    let retained = pool.reserved_bytes();
+    let samples = Cell::new(0);
+    let captures = Cell::new(0);
+    let signs = Cell::new(0);
+    let submits = Cell::new(0);
+    let consume = |proof: Verified| {
+        proof.consume_for_reputation_delivery(
+            &admitted.record,
+            || {
+                samples.set(samples.get() + 1);
+                runtime.time()
+            },
+            |delivery| {
+                captures.set(captures.get() + 1);
+                assert!(matches!(delivery.disposition(), Disposition::Pending));
+                assert!(!delivery.needs_terminal_check());
+                assert!(delivery.append_intent().is_some());
+                signs.set(signs.get() + 1);
+                runtime
+                    .transactions
+                    .sign_reputation_delivery(&delivery, deadline)
+            },
+        )
+    };
+    pool.set_limit_bytes(0);
+    let failed = consume(proof)
+        .err()
+        .expect("final authenticated consume refuses on the original State pool");
+    let signed_check = failed.signed_transaction().clone();
+    assert_eq!(failed.deadline(), deadline);
+    assert_eq!(
+        (samples.get(), captures.get(), signs.get(), submits.get()),
+        (0, 0, 0, 0)
+    );
+    assert_eq!(
+        pool.reserved_bytes(),
+        retained,
+        "refused replay releases only transient owners"
+    );
+    let mut waits = 0;
+    let signed_append = complete_check_with(
+        Err(failed),
+        |failure| {
+            assert_eq!(failure.signed_transaction(), &signed_check);
+            assert_eq!(failure.deadline(), deadline);
+            let verified = failure.into_pending().verify_finalized(|| runtime.time())?;
+            consume(verified)
+        },
+        Instant::now,
+        |failure, delay| {
+            waits += 1;
+            assert_eq!(delay, Duration::from_millis(1));
+            assert_eq!(failure.signed_transaction(), &signed_check);
+            assert_eq!(failure.deadline(), deadline);
+            let ExecutionAttemptError::Deferred(original) = failure.error() else {
+                panic!("original local source refusal");
+            };
+            assert!(matches!(
+                original.allocation_refusal(),
+                Some(iroha_allocation::AllocationRefusal::ExceedsLimit { limit_bytes: 0, .. })
+            ));
+            assert_eq!(
+                (samples.get(), captures.get(), signs.get(), submits.get()),
+                (0, 0, 0, 0)
+            );
+            assert_eq!(driver.committed.lock().unwrap().len(), committed_before);
+            assert!(driver.appends().is_empty());
+            assert_eq!(pool.reserved_bytes(), retained);
+            pool.set_limit_bytes(original_limit);
+        },
+    )
+    .unwrap_or_else(|_| panic!("same original Check retries after original capacity is restored"))
+    .expect("the one completed signing callback succeeds");
+    assert_eq!(waits, 1);
+    assert_eq!(
+        (samples.get(), captures.get(), signs.get(), submits.get()),
+        (1, 1, 1, 0)
+    );
+    assert_eq!(driver.committed.lock().unwrap().len(), committed_before);
+    assert!(driver.appends().is_empty(), "retry never submits an Append");
+    assert!(
+        pool.reserved_bytes() < retained,
+        "consumed Check releases its last original binding owner"
+    );
+    submits.set(submits.get() + 1);
+    runtime
+        .transactions
+        .submit_and_wait(&signed_append, deadline)
+        .expect("submit only the completed callback's exact envelope");
+    assert_eq!((captures.get(), signs.get(), submits.get()), (1, 1, 1));
+    assert_eq!(driver.appends(), vec![signed_append]);
+    assert_eq!(driver.committed.lock().unwrap().len(), committed_before + 1);
     driver.finish();
 }

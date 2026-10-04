@@ -1,11 +1,13 @@
 //! Public TLE key-session transcripts and release verification.
 
 use crate::evidence::TimedOvnReleaseIdentityPublicV1;
+use arrayvec::ArrayVec;
 use iroha_crypto::{
     threshold_bls::{
         AdaptiveThresholdBlsParameters, AdaptiveThresholdBlsPublicTranscript,
-        DasRenDealerCommitment, DasRenPartialSignature, ThresholdBlsError, ThresholdBlsSession,
-        ThresholdBlsSignature, TleReleasePurpose, ValidatedDealerCommitment,
+        DasRenDealerCommitment, DasRenPartialSignature, THRESHOLD_BLS_MAX_COMMITTEE_SIZE_V1,
+        ThresholdBlsError, ThresholdBlsSession, ThresholdBlsSignature, TleReleasePurpose,
+        ValidatedDealerCommitment,
     },
     tle::{TleError, TleIdentitySecretKeyV1, TleMasterPublicKey, TleReleaseIdentityV1},
 };
@@ -231,6 +233,7 @@ impl TleKeySessionLifecycleV1 {
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
+#[norito(decode_fields)]
 pub struct TleAdaptiveDealerCommitmentV1 {
     /// Canonical one-based dealer index.
     pub dealer_index: u16,
@@ -271,6 +274,7 @@ impl TleAdaptiveDealerCommitmentV1 {
     JsonSerialize,
     JsonDeserialize,
 )]
+#[norito(decode_fields)]
 pub struct TleAdaptivePublicShareV1 {
     /// Canonical one-based participant index.
     pub index: u16,
@@ -297,6 +301,7 @@ pub struct TleAdaptivePublicShareV1 {
     norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_core::tle_release::TleKeySessionPublicStateV1")]
+#[norito(decode_fields)]
 pub struct TleKeySessionPublicStateV1 {
     /// Fixed adapter version.
     pub version: u16,
@@ -428,23 +433,30 @@ impl ValidatedTleKeySessionV1 {
         if state.qualified_dealers.len() != state.qualified_dealer_commitments.len() {
             return Err(TleReleaseAdapterError::TranscriptMismatch);
         }
-        let validated_dealers = state
+        // The crypto session already seals the exact 3f + 1 profile at at most
+        // 31 seats. Retain proof-validated dealers inline rather than allocating
+        // a second graph while importing a prepaid public transcript.
+        let mut validated_dealers =
+            ArrayVec::<_, { THRESHOLD_BLS_MAX_COMMITTEE_SIZE_V1 as usize }>::new();
+        for (dealer, qualified_index) in state
             .qualified_dealer_commitments
             .iter()
             .zip(&state.qualified_dealers)
-            .map(|(dealer, qualified_index)| {
-                if dealer.dealer_index != *qualified_index {
-                    return Err(ThresholdBlsError::NonCanonicalQualifiedSet);
-                }
-                DasRenDealerCommitment::verify(
-                    &parameters,
-                    dealer.dealer_index,
-                    &dealer.coefficient_commitments,
-                    dealer.constant_pok_commitment,
-                    dealer.constant_pok_response,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        {
+            if dealer.dealer_index != *qualified_index {
+                return Err(ThresholdBlsError::NonCanonicalQualifiedSet.into());
+            }
+            let validated = DasRenDealerCommitment::verify(
+                &parameters,
+                dealer.dealer_index,
+                &dealer.coefficient_commitments,
+                dealer.constant_pok_commitment,
+                dealer.constant_pok_response,
+            )?;
+            validated_dealers
+                .try_push(validated)
+                .map_err(|_| ThresholdBlsError::NonCanonicalQualifiedSet)?;
+        }
         let transcript = AdaptiveThresholdBlsPublicTranscript::from_qualified_dealers(
             &parameters,
             &validated_dealers,
@@ -452,17 +464,17 @@ impl ValidatedTleKeySessionV1 {
             state.dkg_event_hash,
         )?;
         transcript.ensure_adaptive_protocol_ready()?;
-        let reconstructed_shares = transcript
-            .public_shares()
-            .iter()
-            .map(|share| TleAdaptivePublicShareV1 {
-                index: share.index(),
-                participant_hash: *share.participant_hash(),
-                public_key_share: *share.as_bytes(),
-            })
-            .collect::<Vec<_>>();
+        let reconstructed_shares =
+            transcript
+                .public_shares()
+                .iter()
+                .map(|share| TleAdaptivePublicShareV1 {
+                    index: share.index(),
+                    participant_hash: *share.participant_hash(),
+                    public_key_share: *share.as_bytes(),
+                });
         if state.group_public_key != *transcript.group_public_key().as_bytes()
-            || state.public_shares != reconstructed_shares
+            || !state.public_shares.iter().copied().eq(reconstructed_shares)
             || state.transcript_hash != *transcript.transcript_hash()
             || state.dkg_event_hash != *transcript.dkg_event_hash()
         {

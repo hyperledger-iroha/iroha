@@ -7,7 +7,7 @@ use iroha::client::BorrowedKeyPairIdentityRequestSignerV1;
 use iroha::data_model::nexus::{
     AtomicPrivateSettlementV1, PrivateSettlementCommitteeAuthorityV1,
     PrivateSettlementPhaseCertificateV1, PrivateSettlementPrepareBarrierV1,
-    PrivateSettlementProvisionalLegMaterialV1,
+    PrivateSettlementProvisionalLegMaterialV1, ValidatorCommitteeOperationV1,
 };
 use iroha_core::private_settlement::{
     PrivateSettlementAuditEvaluationV1, PrivateSettlementAuditPolicyEvaluatorV1,
@@ -62,6 +62,66 @@ pub enum PublicLaneCommand {
     Validators(PublicLaneValidatorsArgs),
     /// List bonded stake and pending unbonds for a public lane
     Stake(PublicLaneStakeArgs),
+    /// Observe the current finality source and one target's frozen preparation and custody progress
+    CommitteeStatus(PublicLaneCommitteeStatusArgs),
+    /// Submit one reviewed candidate publication, credential preparation or seat admission
+    CommitteeSubmit(PublicLaneCommitteeSubmitArgs),
+}
+
+/// Explicit target for the canonical public committee observation.
+#[derive(clap::Args, Debug)]
+pub struct PublicLaneCommitteeStatusArgs {
+    /// Target scheduling epoch; the server cannot select a different epoch
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    pub target_epoch: u64,
+}
+
+/// Exact owner-authorized preparation operation, never an activation or cancellation.
+#[derive(clap::Args, Debug)]
+pub struct PublicLaneCommitteeSubmitArgs {
+    /// Canonical Norito JSON ValidatorCommitteeOperationV1 reviewed before submission
+    #[arg(long, value_name = "PATH")]
+    pub file: PathBuf,
+}
+
+impl Run for PublicLaneCommitteeStatusArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let client = iroha::blocking::Client::from_client(context.client_from_config()?)?;
+        let observation = client
+            .nexus()
+            .validator_committee(Some(self.target_epoch))?;
+        // Retain the original finality attachments and all preparation evidence.
+        // Callers must authenticate them before provisioning or authorizing keys.
+        context.print_data(&observation)
+    }
+}
+
+impl Run for PublicLaneCommitteeSubmitArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        use iroha::data_model::{isi::SetParameter, parameter::Parameter};
+
+        let operation: ValidatorCommitteeOperationV1 =
+            crate::staking::load_committee_json(&self.file, "--file")?;
+        let network = match &operation {
+            ValidatorCommitteeOperationV1::PublishCandidate(candidate) => {
+                Some(candidate.network_id)
+            }
+            ValidatorCommitteeOperationV1::PrepareCredentials(preparation) => {
+                Some(preparation.credentials.authority.network_id)
+            }
+            // Seat evidence binds its exact transition. Core reconstructs the
+            // network-bound challenge from that committed preparation.
+            ValidatorCommitteeOperationV1::AdmitSeat(_) => None,
+        };
+        eyre::ensure!(
+            network.is_none_or(|network| network == context.config().network_id),
+            "--file must bind the configured submission network"
+        );
+        let instruction = SetParameter::new(Parameter::Custom(operation.into_custom_parameter()));
+        context.finish(vec![iroha::data_model::isi::InstructionBox::from(
+            instruction,
+        )])
+    }
 }
 
 /// Atomic private-settlement Torii operations.
@@ -296,6 +356,8 @@ impl Run for Command {
             Command::PublicLane(cmd) => match cmd {
                 PublicLaneCommand::Validators(args) => public_lane_validators(context, &args),
                 PublicLaneCommand::Stake(args) => public_lane_stake(context, &args),
+                PublicLaneCommand::CommitteeStatus(args) => args.run(context),
+                PublicLaneCommand::CommitteeSubmit(args) => args.run(context),
             },
             Command::PrivateSettlement(command) => private_settlement(context, command),
         }

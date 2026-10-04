@@ -125,21 +125,29 @@ fn exact_signed_source_requires_direct_role11_action_digest_index_and_time() {
     changed.operation.reserved_execution.instruction_index = 1;
     assert_eq!(
         signed_source_matches(&changed, TargetKind::Reserved, &entry, network, 1_000),
-        Err(Error::Execution)
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            Error::Execution
+        ))
     );
     changed = record.clone();
     changed.request_digest = [0x99; 32];
     assert_eq!(
         signed_source_matches(&changed, TargetKind::Reserved, &entry, network, 1_000),
-        Err(Error::Execution)
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            Error::Execution
+        ))
     );
     assert_eq!(
         signed_source_matches(&record, TargetKind::Reserved, &entry, network, 1_001),
-        Err(Error::Execution)
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            Error::Execution
+        ))
     );
     assert_eq!(
         signed_source_matches(&record, TargetKind::Terminal, &entry, network, 1_000),
-        Err(Error::CorruptHistory)
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            Error::CorruptHistory
+        ))
     );
 
     let mut other_action = instruction;
@@ -167,7 +175,9 @@ fn exact_signed_source_requires_direct_role11_action_digest_index_and_time() {
             network,
             1_000
         ),
-        Err(Error::Execution)
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            Error::Execution
+        ))
     );
 }
 
@@ -244,13 +254,17 @@ fn expiry_source_keeps_original_slot_under_new_current_custody() {
         .expect("certified height 2");
     assert_eq!(
         authenticate_target(&view, &terminal, TargetKind::Terminal, &target),
-        Err(Error::Execution),
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            Error::Execution
+        )),
     );
     // A target of another height than the recorded execution.
     let genesis = CertifiedChain::new(&view).unwrap().certified(1).unwrap();
     assert_eq!(
         authenticate_target(&view, &terminal, TargetKind::Terminal, &genesis),
-        Err(Error::Execution),
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            Error::Execution
+        )),
     );
 }
 
@@ -272,7 +286,9 @@ fn historical_reader_requires_retained_row_and_committed_finality() {
             floor,
         )
         .err(),
-        Some(Error::Conflict),
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            Error::Conflict
+        )),
     );
     let mut world = World::new();
     let id = record.operation.operation.reviewed.request.operation_id;
@@ -307,6 +323,29 @@ fn historical_reader_requires_retained_row_and_committed_finality() {
     );
     assert_eq!(
         authenticate_stream_token_history_to_floor_v1(&state.view(), provider, id, floor).err(),
-        Some(Error::Finality),
+        Some(crate::execution_attempt::ExecutionAttemptError::Rejected(
+            Error::Finality
+        )),
+    );
+}
+
+#[test]
+fn actual_signed_history_source_preserves_local_codec_refusal() {
+    let (state, _, record, _, entry) = source_fixture();
+    let network = *state.network_id_ref().as_bytes();
+    let zero = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
+    let failed = norito::with_decode_limits_scope(zero, || {
+        signed_source_matches(&record, TargetKind::Reserved, &entry, network, 1_000)
+    });
+    assert!(
+        matches!(
+            failed,
+            Err(crate::execution_attempt::ExecutionAttemptError::Deferred(_))
+        ),
+        "original codec refusal must not become successful proof rejection: {failed:?}"
+    );
+    assert_eq!(
+        signed_source_matches(&record, TargetKind::Reserved, &entry, network, 1_000),
+        Ok(())
     );
 }

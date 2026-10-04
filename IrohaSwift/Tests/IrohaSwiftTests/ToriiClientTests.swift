@@ -246,9 +246,7 @@ final class ToriiClientTests: XCTestCase {
     private var canonicalReadAuth: ToriiCanonicalRequestAuth {
         ToriiCanonicalRequestAuth(
             accountId: authority,
-            privateKey: canonicalSigningSeed,
-            timestampMs: 4_102_444_801_000,
-            nonce: "canonical-read-test"
+            privateKey: canonicalSigningSeed
         )
     }
 
@@ -256,9 +254,7 @@ final class ToriiClientTests: XCTestCase {
                                    privateKeyByte: UInt8) -> ToriiCanonicalRequestAuth {
         ToriiCanonicalRequestAuth(
             accountId: accountId,
-            privateKey: Data(repeating: privateKeyByte, count: 32),
-            timestampMs: 4_102_444_801_000,
-            nonce: "canonical-application-post-test"
+            privateKey: Data(repeating: privateKeyByte, count: 32)
         )
     }
 
@@ -269,6 +265,26 @@ final class ToriiClientTests: XCTestCase {
     override func tearDown() {
         StubURLProtocol.handler = nil
         super.tearDown()
+    }
+
+    /// Inspect shared collection JSON while preserving the individual selector assertions.
+    private func explorerQueryValues(_ request: URLRequest) throws -> [String: String] {
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertNil(request.url?.query)
+        let body = try JSONSerialization.jsonObject(with: XCTUnwrap(bodyData(from: request))) as! [String: Any]
+        var values: [String: String] = [:]
+        for key in ["limit", "cursor"] {
+            if let value = body[key] { values[key] = String(describing: value) }
+        }
+        func equalityValues(_ node: Any) {
+            guard let node = node as? [String: Any], let args = node["args"] as? [Any] else { return }
+            if node["op"] as? String == "and" { args.forEach(equalityValues) }
+            else if node["op"] as? String == "eq", args.count == 2, let field = args[0] as? String {
+                values[field] = String(describing: args[1])
+            }
+        }
+        if let filter = body["filter"] { equalityValues(filter) }
+        return values
     }
 
     private func bodyData(from request: URLRequest) -> Data? {
@@ -298,7 +314,9 @@ final class ToriiClientTests: XCTestCase {
             file: file,
             line: line
         )
-        expectedComponents.queryItems = queryItems
+        if !queryItems.isEmpty {
+            expectedComponents.queryItems = queryItems
+        }
         let expectedURL = try XCTUnwrap(expectedComponents.url, file: file, line: line)
         XCTAssertEqual(request.httpMethod, "GET", file: file, line: line)
         XCTAssertEqual(request.url, expectedURL, file: file, line: line)
@@ -412,11 +430,18 @@ final class ToriiClientTests: XCTestCase {
         irohaSwiftPackageRootURL().deletingLastPathComponent()
     }
 
+    /// Fixed canonical-request freshness so tests can recompute exact signatures.
+    private static let canonicalReadFreshness = ToriiCanonicalRequestFreshness(
+        timestampMs: { 4_102_444_801_000 },
+        nonce: { "canonical-read-test" }
+    )
+
     private func makeClient(
         baseURL: URL = URL(string: "https://example.test")!,
         defaultHeaders: [String: String] = [:],
         operatorSigningContext: ToriiOperatorSigningContext? = ToriiClientTests.operatorSigningContext,
-        includeCanonicalReadAuth: Bool = true
+        includeCanonicalReadAuth: Bool = true,
+        canonicalRequestFreshness: ToriiCanonicalRequestFreshness = ToriiClientTests.canonicalReadFreshness
     ) -> ToriiClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
@@ -427,6 +452,7 @@ final class ToriiClientTests: XCTestCase {
             defaultHeaders: defaultHeaders,
             localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical),
             canonicalRequestAuth: includeCanonicalReadAuth ? canonicalReadAuth : nil,
+            canonicalRequestFreshness: canonicalRequestFreshness,
             operatorSigningContext: operatorSigningContext
         )
     }
@@ -958,99 +984,6 @@ final class ToriiClientTests: XCTestCase {
             proofVerifier: nil,
             note: nil
         )
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testGetAssetsAsync() async throws {
-        StubURLProtocol.handler = { request in
-            try self.assertCanonicalDataspaceReadRequest(request)
-            self.assertDecodedPath(request, contains: "/v1/accounts/sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV/assets")
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            [{"asset":"66owaQmAQMuHxPzxUN3bqZ6FJfDa","account_id":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","scope":"global","quantity":"10"}]
-            """.data(using: .utf8)!
-            return (response, body)
-        }
-
-        let balances = try await makeClient().getAssets(
-            accountId: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            asset: nil
-        )
-        XCTAssertEqual(balances.count, 1)
-        XCTAssertEqual(balances.first?.asset, roseAssetDefinitionId)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testGetAssetsAsyncDecodesAssetFieldsDirectly() async throws {
-        StubURLProtocol.handler = { request in
-            self.assertDecodedPath(request, contains: "/v1/accounts/sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV/assets")
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            [{"asset":"66owaQmAQMuHxPzxUN3bqZ6FJfDa","account_id":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","scope":"global","quantity":"10"}]
-            """.data(using: .utf8)!
-            return (response, body)
-        }
-
-        let balances = try await makeClient().getAssets(
-            accountId: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            asset: nil
-        )
-        XCTAssertEqual(balances.count, 1)
-        guard let item = balances.first else {
-            XCTFail("missing asset balance")
-            return
-        }
-        XCTAssertEqual(item.asset, roseAssetDefinitionId)
-        XCTAssertEqual(item.accountId, "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
-        XCTAssertEqual(item.scope, "global")
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testGetAssetsAsyncDecodesReadableAssetFields() async throws {
-        StubURLProtocol.handler = { request in
-            self.assertDecodedPath(request, contains: "/v1/accounts/sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV/assets")
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            [{
-              "asset":"66owaQmAQMuHxPzxUN3bqZ6FJfDa",
-              "account_id":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-              "scope":"global",
-              "asset_name":"USD",
-              "asset_alias":"usd#issuer.main",
-              "quantity":"10"
-            }]
-            """.data(using: .utf8)!
-            return (response, body)
-        }
-
-        let balances = try await makeClient().getAssets(
-            accountId: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            asset: nil
-        )
-        XCTAssertEqual(balances.count, 1)
-        XCTAssertEqual(balances.first?.asset, roseAssetDefinitionId)
-        XCTAssertEqual(balances.first?.accountId, "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
-        XCTAssertEqual(balances.first?.scope, "global")
-        XCTAssertEqual(balances.first?.assetName, "USD")
-        XCTAssertEqual(balances.first?.assetAlias, "usd#issuer.main")
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testGetAssetsPreservesPercentEncodedPathWithBasePath() async throws {
-        let baseURL = URL(string: "https://example.test/api")!
-        let client = makeClient(baseURL: baseURL)
-        StubURLProtocol.handler = { request in
-            self.assertDecodedPath(request, contains: "/api/v1/accounts/sorauﾛ1NfｺｷﾘcﾙｦEﾑgsKti4Zﾘ6HKｳZCﾅｸｼ16fvSｲymｶｻﾘﾎ29JNWE/assets")
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-            let body = "[]".data(using: .utf8)!
-            return (response, body)
-        }
-
-        let balances = try await client.getAssets(
-            accountId: "sorauﾛ1NfｺｷﾘcﾙｦEﾑgsKti4Zﾘ6HKｳZCﾅｸｼ16fvSｲymｶｻﾘﾎ29JNWE",
-            asset: nil
-        )
-        XCTAssertEqual(balances.count, 0)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -4938,9 +4871,10 @@ final class ToriiClientTests: XCTestCase {
                 _ = try await makeClient().submitTransaction(data: transaction)
                 XCTFail("expected HTTP \(statusCode) rejection")
             } catch let error as ToriiClientError {
-                guard case let .httpStatus(code, _, _) = error else {
+                guard case let .api(apiError) = error else {
                     return XCTFail("unexpected error for HTTP \(statusCode): \(error)")
                 }
+                let code = apiError.status
                 XCTAssertEqual(code, statusCode)
             }
         }
@@ -5721,9 +5655,10 @@ final class ToriiClientTests: XCTestCase {
                     }
                     XCTFail("\(surface.rawValue) must reject HTTP \(statusCode)")
                 } catch let error as ToriiClientError {
-                    guard case let .httpStatus(code, _, _) = error else {
+                    guard case let .api(apiError) = error else {
                         return XCTFail("unexpected \(surface.rawValue) error: \(error)")
                     }
+                    let code = apiError.status
                     XCTAssertEqual(code, statusCode)
                 }
                 XCTAssertEqual(
@@ -5773,9 +5708,12 @@ final class ToriiClientTests: XCTestCase {
             )
             XCTFail("expected rejection")
         } catch let error as ToriiClientError {
-            guard case let .httpStatus(code, message, rejectCode) = error else {
+            guard case let .api(apiError) = error else {
                 return XCTFail("unexpected error: \(error)")
             }
+            let code = apiError.status
+            let message: String? = apiError.message
+            let rejectCode = apiError.rejectCode
             XCTAssertEqual(code, 400)
             XCTAssertEqual(rejectCode, "PRTRY:TX_SIGNATURE_MISSING")
             XCTAssertEqual(message, "failed to accept transaction")
@@ -5969,9 +5907,10 @@ final class ToriiClientTests: XCTestCase {
             )
             XCTFail("expected missing capabilities to reject submission")
         } catch let error as ToriiClientError {
-            guard case let .httpStatus(code, _, _) = error else {
+            guard case let .api(apiError) = error else {
                 return XCTFail("unexpected error: \(error)")
             }
+            let code = apiError.status
             XCTAssertEqual(code, 404)
         } catch {
             XCTFail("unexpected error: \(error)")
@@ -6015,9 +5954,10 @@ final class ToriiClientTests: XCTestCase {
             )
             XCTFail("expected rate-limited capabilities to reject submission")
         } catch let error as ToriiClientError {
-            guard case let .httpStatus(code, _, _) = error else {
+            guard case let .api(apiError) = error else {
                 return XCTFail("unexpected error: \(error)")
             }
+            let code = apiError.status
             XCTAssertEqual(code, 429)
         } catch {
             XCTFail("unexpected error: \(error)")
@@ -6061,9 +6001,10 @@ final class ToriiClientTests: XCTestCase {
             )
             XCTFail("expected failed capabilities to reject submission")
         } catch let error as ToriiClientError {
-            guard case let .httpStatus(code, _, _) = error else {
+            guard case let .api(apiError) = error else {
                 return XCTFail("unexpected error: \(error)")
             }
+            let code = apiError.status
             XCTAssertEqual(code, 502)
         } catch {
             XCTFail("unexpected error: \(error)")
@@ -6843,9 +6784,7 @@ final class ToriiClientTests: XCTestCase {
         let leaseId = String(repeating: "13", count: 32)
         let auth = ToriiCanonicalRequestAuth(
             accountId: "alice@universal",
-            privateKey: Data(repeating: 7, count: 32),
-            timestampMs: 1_700_000_000_000,
-            nonce: "vpn-https-test"
+            privateKey: Data(repeating: 7, count: 32)
         )
         let operations: [(String, () async throws -> Void)] = [
             ("profile", { _ = try await client.getVpnProfile() }),
@@ -6963,9 +6902,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testRegisterAndUnregisterPushDeviceSignCanonicalBody() async throws {
         let auth = ToriiCanonicalRequestAuth(accountId: "alice@universal",
-                                             privateKey: Data(repeating: 7, count: 32),
-                                             timestampMs: 1_700_000_000_010,
-                                             nonce: "push-nonce-1")
+                                             privateKey: Data(repeating: 7, count: 32))
         var callCount = 0
         StubURLProtocol.handler = { request in
             callCount += 1
@@ -6993,9 +6930,7 @@ final class ToriiClientTests: XCTestCase {
                                              topics: [" activity "])
         try await client.registerPushDevice(request, canonicalAuth: auth)
         let deleteAuth = ToriiCanonicalRequestAuth(accountId: "alice@universal",
-                                                   privateKey: Data(repeating: 7, count: 32),
-                                                   timestampMs: 1_700_000_000_011,
-                                                   nonce: "push-nonce-2")
+                                                   privateKey: Data(repeating: 7, count: 32))
         try await client.unregisterPushDevice(request, canonicalAuth: deleteAuth)
         XCTAssertEqual(callCount, 2)
     }
@@ -7005,9 +6940,7 @@ final class ToriiClientTests: XCTestCase {
         let meteringKey = String(repeating: "ab", count: 32)
         let quoteId = String(repeating: "cd", count: 32)
         let auth = ToriiCanonicalRequestAuth(accountId: "alice@universal",
-                                             privateKey: Data(repeating: 7, count: 32),
-                                             timestampMs: 1_700_000_000_000,
-                                             nonce: "nonce-1")
+                                             privateKey: Data(repeating: 7, count: 32))
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/vpn/quotes")
             XCTAssertEqual(request.httpMethod, "POST")
@@ -7057,7 +6990,12 @@ final class ToriiClientTests: XCTestCase {
                                            headerFields: ["Content-Type": "application/json"])!
             return (response, try JSONSerialization.data(withJSONObject: payload))
         }
-        let quote = try await makeClient().createVpnQuote(
+        let quote = try await makeClient(
+            canonicalRequestFreshness: ToriiCanonicalRequestFreshness(
+                timestampMs: { 1_700_000_000_000 },
+                nonce: { "nonce-1" }
+            )
+        ).createVpnQuote(
             ToriiVpnQuoteCreateRequest(exitClass: "standard", meteringPublicKeyHex: "0x\(meteringKey)"),
             canonicalAuth: auth
         )
@@ -7084,9 +7022,7 @@ final class ToriiClientTests: XCTestCase {
 
         let paddedAccount = ToriiCanonicalRequestAuth(
             accountId: " alice",
-            privateKey: Data(repeating: 7, count: 32),
-            timestampMs: 1_700_000_000_000,
-            nonce: "nonce-1"
+            privateKey: Data(repeating: 7, count: 32)
         )
         do {
             _ = try await client.createVpnQuote(request, canonicalAuth: paddedAccount)
@@ -7096,14 +7032,18 @@ final class ToriiClientTests: XCTestCase {
         }
         XCTAssertFalse(called)
 
-        let paddedNonce = ToriiCanonicalRequestAuth(
+        let validAuth = ToriiCanonicalRequestAuth(
             accountId: "alice@universal",
-            privateKey: Data(repeating: 7, count: 32),
-            timestampMs: 1_700_000_000_000,
-            nonce: "nonce-1 "
+            privateKey: Data(repeating: 7, count: 32)
+        )
+        let paddedNonceClient = makeClient(
+            canonicalRequestFreshness: ToriiCanonicalRequestFreshness(
+                timestampMs: { 1_700_000_000_000 },
+                nonce: { "nonce-1 " }
+            )
         )
         do {
-            _ = try await client.createVpnQuote(request, canonicalAuth: paddedNonce)
+            _ = try await paddedNonceClient.createVpnQuote(request, canonicalAuth: validAuth)
             XCTFail("padded canonical auth nonce should reject")
         } catch {
             XCTAssertEqual(error as? ToriiCanonicalRequestError, .invalidNonce)
@@ -7119,9 +7059,7 @@ final class ToriiClientTests: XCTestCase {
         let meteringKey = String(repeating: "33", count: 32)
         let helperTicketHex = "5356504e48543100" + String(repeating: "00", count: 780)
         let auth = ToriiCanonicalRequestAuth(accountId: "alice@universal",
-                                             privateKey: Data(repeating: 7, count: 32),
-                                             timestampMs: 1_700_000_000_020,
-                                             nonce: "vpn-session-nonce")
+                                             privateKey: Data(repeating: 7, count: 32))
         var callCount = 0
         StubURLProtocol.handler = { request in
             callCount += 1
@@ -7259,9 +7197,7 @@ final class ToriiClientTests: XCTestCase {
         let sessionId = String(repeating: "33", count: 16)
         let leaseId = String(repeating: "66", count: 32)
         let auth = ToriiCanonicalRequestAuth(accountId: "alice@universal",
-                                             privateKey: Data(repeating: 7, count: 32),
-                                             timestampMs: 1_700_000_000_030,
-                                             nonce: "vpn-receipt-nonce")
+                                             privateKey: Data(repeating: 7, count: 32))
         let settle: [String: Any] = [
             "wire_id": "SettleVpnLease",
             "payload_hex": "cafe"
@@ -7756,255 +7692,6 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testIrohaSDKGetAssetsAsyncUsesREST() async throws {
-        StubURLProtocol.handler = { request in
-            self.assertDecodedPath(request, contains: "/v1/accounts/sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV/assets")
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            [{"asset":"66owaQmAQMuHxPzxUN3bqZ6FJfDa","account_id":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","scope":"global","quantity":"10"}]
-            """.data(using: .utf8)!
-            return (response, body)
-        }
-
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [StubURLProtocol.self]
-        let session = URLSession(configuration: configuration)
-        let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!, session: session)
-
-        let balances = try await sdk.getAssets(
-            accountId: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            asset: nil
-        )
-        XCTAssertEqual(balances.count, 1)
-        XCTAssertEqual(balances.first?.asset, roseAssetDefinitionId)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testGetAssetsRejectsPaddedAccountLiteralBeforeNetwork() async {
-        StubURLProtocol.handler = { request in
-            XCTFail("getAssets should reject a padded account literal before dispatch")
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 500,
-                httpVersion: nil,
-                headerFields: nil
-            )!
-            return (response, Data())
-        }
-
-        await XCTAssertThrowsErrorAsync(
-            try await makeClient().getAssets(
-                accountId: "  sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV  ",
-                asset: nil
-            )
-        ) { error in
-            guard case let ToriiClientError.invalidPayload(reason) = error else {
-                return XCTFail("Expected invalidPayload for padded accountId, got \(error)")
-            }
-            XCTAssertEqual(reason, "accountId must not contain surrounding whitespace.")
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testGetAssetsPreservesTairaAccountDiscriminant() async throws {
-        let accountId = try AccountAddress
-            .fromAccount(publicKey: validEd25519PublicKey(seed: 0x61))
-            .toI105(networkPrefix: TairaTestnetProfile.i105Discriminant)
-        StubURLProtocol.handler = { request in
-            self.assertDecodedPath(
-                request,
-                contains: "/v1/accounts/\(accountId)/assets"
-            )
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "application/json"]
-            )!
-            return (response, Data("[]".utf8))
-        }
-
-        let balances = try await makeClient().getAssets(
-            accountId: accountId,
-            asset: nil
-        )
-        XCTAssertTrue(balances.isEmpty)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testGetAssetsRejectsPercentEscapedAccountLiteral() async {
-        await XCTAssertThrowsErrorAsync(
-            try await makeClient().getAssets(
-                accountId: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV%2Fsorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
-            ),
-            expectation: { _ in }
-        )
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testGetAssetsEncodesAssetSelectorFilter() async throws {
-        let assetId = roseAssetDefinitionId
-        StubURLProtocol.handler = { request in
-            self.assertDecodedPath(request, contains: "/v1/accounts/sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV/assets")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let assetFilter = components?.queryItems?.first(where: { $0.name == "asset" })?.value
-            XCTAssertEqual(assetFilter, assetId)
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            [{"asset":"\(assetId)","account_id":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","scope":"global","quantity":"10"}]
-            """.data(using: .utf8)!
-            return (response, body)
-        }
-
-        let balances = try await makeClient().getAssets(accountId: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", asset: assetId)
-        XCTAssertEqual(balances.count, 1)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testGetAssetsEncodesScopeSelectorFilter() async throws {
-        let accountId = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
-        StubURLProtocol.handler = { request in
-            self.assertDecodedPath(request, contains: "/v1/accounts/\(accountId)/assets")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let scopeFilter = components?.queryItems?.first(where: { $0.name == "scope" })?.value
-            XCTAssertEqual(scopeFilter, "global")
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-            return (response, "[]".data(using: .utf8)!)
-        }
-
-        let balances = try await makeClient().getAssets(accountId: accountId, scope: "global")
-        XCTAssertEqual(balances.count, 0)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testGetAssetsRejectsPaddedScopeBeforeNetwork() async {
-        let accountId = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
-        StubURLProtocol.handler = { request in
-            XCTFail("getAssets should validate scope before dispatch")
-            let response = HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!
-            return (response, Data())
-        }
-
-        await XCTAssertThrowsErrorAsync(
-            try await makeClient().getAssets(accountId: accountId, scope: " global")
-        ) { error in
-            guard case let ToriiClientError.invalidPayload(reason) = error else {
-                return XCTFail("Expected invalidPayload for padded scope, got \(error)")
-            }
-            XCTAssertTrue(
-                reason.contains("scope must not contain surrounding whitespace"),
-                "Expected scope whitespace diagnostic, got \(reason)"
-            )
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testAccountAssetQueryHelpersRejectSurroundingWhitespace() async {
-        let accountId = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
-        let assetId = roseAssetDefinitionId
-        let cases: [(String, () async throws -> Void)] = [
-            (
-                "account assets asset selector",
-                { _ = try await self.makeClient().getAssets(accountId: accountId, asset: " \(assetId)") }
-            ),
-            (
-                "account transactions asset selector",
-                { _ = try await self.makeClient().getTransactions(accountId: accountId, assetDefinitionId: "\(assetId) ") }
-            ),
-            (
-                "explorer transfers asset selector",
-                { _ = try await self.makeClient().getExplorerTransfers(assetDefinitionId: " \(assetId)") }
-            ),
-            (
-                "explorer transfer summaries asset selector",
-                { _ = try await self.makeClient().getExplorerTransferSummaries(assetDefinitionId: "\(assetId) ") }
-            ),
-        ]
-
-        for (label, action) in cases {
-            await XCTAssertThrowsErrorAsync(try await action()) { error in
-                guard case let ToriiClientError.invalidPayload(reason) = error else {
-                    return XCTFail("Expected invalidPayload for \(label), got \(error)")
-                }
-                XCTAssertTrue(
-                    reason.contains("surrounding whitespace"),
-                    "Expected whitespace diagnostic for \(label), got \(reason)"
-                )
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testGetTransactionsEncodesAccountLiteral() async throws {
-        StubURLProtocol.handler = { request in
-            try self.assertCanonicalDataspaceReadRequest(request)
-            self.assertDecodedPath(request, contains: "/v1/accounts/sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV/transactions")
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            {"items":[{"entrypoint_hash":"hash","authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","timestamp_ms":1,"result_ok":true}],"total":1}
-            """.data(using: .utf8)!
-            return (response, body)
-        }
-
-        let transactions = try await makeClient().getTransactions(accountId: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
-        XCTAssertEqual(transactions.total, 1)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testAccountDataspaceReadsRemainAnonymousWithoutCanonicalSigner() async throws {
-        let accountId = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
-        var paths: [String] = []
-        StubURLProtocol.handler = { request in
-            paths.append(try XCTUnwrap(request.url?.path))
-            for header in [
-                ToriiCanonicalRequest.headerAccount,
-                ToriiCanonicalRequest.headerSignature,
-                ToriiCanonicalRequest.headerTimestampMs,
-                ToriiCanonicalRequest.headerNonce,
-            ] {
-                XCTAssertNil(request.value(forHTTPHeaderField: header))
-            }
-            let body = request.url?.path.hasSuffix("/assets") == true
-                ? "[]"
-                : #"{"items":[],"total":0}"#
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "application/json"]
-            )!
-            return (response, Data(body.utf8))
-        }
-
-        let client = makeClient(includeCanonicalReadAuth: false)
-        _ = try await client.getAssets(accountId: accountId)
-        _ = try await client.getTransactions(accountId: accountId)
-
-        XCTAssertEqual(paths.count, 2)
-        XCTAssertTrue(paths[0].hasSuffix("/assets"))
-        XCTAssertTrue(paths[1].hasSuffix("/transactions"))
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testGetTransactionsEncodesAssetIdFilter() async throws {
-        let assetId = self.encodedRoseAssetID
-        StubURLProtocol.handler = { request in
-            self.assertDecodedPath(request, contains: "/v1/accounts/sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV/transactions")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let assetFilter = components?.queryItems?.first(where: { $0.name == "asset_id" })?.value
-            XCTAssertEqual(assetFilter, assetId)
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            {"items":[{"entrypoint_hash":"hash","authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","timestamp_ms":1,"result_ok":true}],"total":1}
-            """.data(using: .utf8)!
-            return (response, body)
-        }
-
-        let transactions = try await makeClient().getTransactions(accountId: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", assetDefinitionId: assetId)
-        XCTAssertEqual(transactions.total, 1)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
     func testGetExplorerAccountQrDecodesResponse() async throws {
         StubURLProtocol.handler = { request in
             self.assertDecodedPath(request, contains: "/v1/explorer/accounts/sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV/qr")
@@ -8090,7 +7777,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetExplorerInstructionsEncodesQueryAndDecodesResponse() async throws {
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions/query")
             XCTAssertEqual(
                 request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount),
                 canonicalRequestAccountHeaderValue(self.authority)
@@ -8098,9 +7785,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertNotNil(
                 request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature)
             )
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let queryItems = components?.queryItems ?? []
-            let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            let query = try self.explorerQueryValues(request)
             XCTAssertEqual(query["cursor"], "Y3Vyc29y")
             XCTAssertEqual(query["limit"], "25")
             XCTAssertEqual(query["account"], "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D")
@@ -8116,7 +7801,7 @@ final class ToriiClientTests: XCTestCase {
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
             {
-                "pagination": {"limit":25,"snapshot_height":5,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
+                "next_cursor":null,
                 "items": [
                     {
                         "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -8150,20 +7835,21 @@ final class ToriiClientTests: XCTestCase {
             return (response, body)
         }
 
-        let params = ToriiExplorerInstructionsParams(cursor: "Y3Vyc29y",
-                                                     limit: 25,
-                                                     account: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-                                                     authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                                                     transactionHash: "deadbeef",
-                                                     transactionStatus: "Committed",
-                                                     block: 5,
-                                                     kind: "Transfer",
-                                                     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
-        let page = try await makeClient().getExplorerInstructions(params: params)
-        XCTAssertEqual(page.pagination.limit, 25)
-        XCTAssertEqual(page.pagination.snapshotHeight, 5)
-        XCTAssertEqual(page.pagination.snapshotHash, String(repeating: "a", count: 64))
-        XCTAssertFalse(page.pagination.hasMore)
+        let params = ToriiListQuery(
+            filter: ToriiFilter.all([
+                ToriiField("account") == "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+                ToriiField("authority") == "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                ToriiField("transaction_hash") == "deadbeef",
+                ToriiField("transaction_status") == "Committed",
+                ToriiField("block") == 5,
+                ToriiField("kind") == "Transfer",
+                ToriiField("asset_id") == "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+            ]),
+            limit: 25, cursor: "Y3Vyc29y"
+        )
+        let page = try await makeClient().explorerInstructions.page(params)
+
+        XCTAssertNil(page.nextCursor)
         XCTAssertEqual(page.items.count, 1)
         let item = page.items[0]
         XCTAssertEqual(item.kind, "Transfer")
@@ -8183,7 +7869,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testDataspaceVisibleExplorerRequestRemainsAnonymousWithoutDefaultSigner() async throws {
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions/query")
             XCTAssertNil(
                 request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount)
             )
@@ -8197,7 +7883,7 @@ final class ToriiClientTests: XCTestCase {
                 headerFields: ["Content-Type": "application/json"]
             )!
             let body = """
-            {"pagination":{"limit":10,"snapshot_height":0,"snapshot_hash":null,"next_cursor":null,"has_more":false},"items":[]}
+            {"next_cursor":null,"items":[]}
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -8209,7 +7895,7 @@ final class ToriiClientTests: XCTestCase {
             session: URLSession(configuration: configuration),
             localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical)
         )
-        let page = try await client.getExplorerInstructions()
+        let page = try await client.explorerInstructions.page()
         XCTAssertTrue(page.items.isEmpty)
     }
 
@@ -8245,7 +7931,7 @@ final class ToriiClientTests: XCTestCase {
     func testExplorerBurnInstructionParsedAsSummary() throws {
         let json = """
         {
-            "pagination":{"limit":10,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
+            "next_cursor":null,
             "items":[{
                 "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "created_at":"2025-06-01T10:00:00Z",
@@ -8271,7 +7957,7 @@ final class ToriiClientTests: XCTestCase {
             }]
         }
         """
-        let page = try JSONDecoder().decode(ToriiExplorerInstructionsPage.self, from: Data(json.utf8))
+        let page = try JSONDecoder().decode(ToriiPage<ToriiExplorerInstructionItem>.self, from: Data(json.utf8))
         XCTAssertEqual(page.items.count, 1)
 
         let item = page.items[0]
@@ -8293,7 +7979,7 @@ final class ToriiClientTests: XCTestCase {
         // Page with Transfer + Mint + unknown kind — all parseable ones should be included
         let json = """
         {
-            "pagination":{"limit":10,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
+            "next_cursor":null,
             "items":[
                 {
                     "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -8365,7 +8051,7 @@ final class ToriiClientTests: XCTestCase {
             ]
         }
         """
-        let page = try JSONDecoder().decode(ToriiExplorerInstructionsPage.self, from: Data(json.utf8))
+        let page = try JSONDecoder().decode(ToriiPage<ToriiExplorerInstructionItem>.self, from: Data(json.utf8))
         XCTAssertEqual(page.items.count, 3, "All 3 items should decode")
 
         let summaries = page.transferSummaries()
@@ -8376,10 +8062,9 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetExplorerInstructionsCompletion() {
-        let expectation = expectation(description: "explorer-instructions")
+    func testGetExplorerInstructionsCompletion() async throws {
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions/query")
             let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
             XCTAssertNil(components?.queryItems)
             let response = HTTPURLResponse(url: request.url!,
@@ -8387,35 +8072,22 @@ final class ToriiClientTests: XCTestCase {
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"pagination":{"limit":10,"snapshot_height":0,"snapshot_hash":null,"next_cursor":null,"has_more":false},"items":[]}
+            {"next_cursor":null,"items":[]}
             """.data(using: .utf8)!
             return (response, body)
         }
 
-        _ = makeClient().getExplorerInstructions { result in
-            switch result {
-            case .success(let page):
-                XCTAssertEqual(page.items.count, 0)
-                XCTAssertEqual(page.pagination.snapshotHeight, 0)
-                XCTAssertNil(page.pagination.snapshotHash)
-                XCTAssertFalse(page.pagination.hasMore)
-            case .failure(let error):
-                XCTFail("Unexpected error: \(error)")
-            }
-            expectation.fulfill()
-        }
-
-        waitForExpectations(timeout: 2.0)
+        let page = try await makeClient().explorerInstructions.page()
+        XCTAssertTrue(page.items.isEmpty)
+        XCTAssertNil(page.nextCursor)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGetExplorerTransfersFiltersByAccount() async throws {
         let assetIdFilter = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let queryItems = components?.queryItems ?? []
-            let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions/query")
+            let query = try self.explorerQueryValues(request)
             XCTAssertEqual(query["asset_id"], assetIdFilter)
             XCTAssertEqual(query["kind"], "Transfer")
             let response = HTTPURLResponse(url: request.url!,
@@ -8424,7 +8096,7 @@ final class ToriiClientTests: XCTestCase {
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
             {
-                "pagination": {"limit":10,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
+                "next_cursor":null,
                 "items": [
                     {
                         "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -8496,10 +8168,8 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetExplorerTransactionsEncodesQueryAndDecodesResponse() async throws {
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/explorer/transactions")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let queryItems = components?.queryItems ?? []
-            let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(request.url?.path, "/v1/explorer/transactions/query")
+            let query = try self.explorerQueryValues(request)
             XCTAssertEqual(query["cursor"], "Y3Vyc29y")
             XCTAssertEqual(query["limit"], "25")
             XCTAssertEqual(query["authority"], "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
@@ -8512,7 +8182,7 @@ final class ToriiClientTests: XCTestCase {
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
             {
-                "pagination": {"limit":25,"snapshot_height":5,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
+                "next_cursor":null,
                 "items": [
                     {
                         "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -8528,62 +8198,50 @@ final class ToriiClientTests: XCTestCase {
             return (response, body)
         }
 
-        let params = ToriiExplorerTransactionsParams(cursor: "Y3Vyc29y",
-                                                     limit: 25,
-                                                     authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                                                     block: 5,
-                                                     status: "Committed",
-                                                     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
-        let page = try await makeClient().getExplorerTransactions(params: params)
-        XCTAssertEqual(page.pagination.limit, 25)
-        XCTAssertEqual(page.pagination.snapshotHeight, 5)
+        let params = ToriiListQuery(
+            filter: ToriiFilter.all([
+                ToriiField("authority") == "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                ToriiField("block") == 5,
+                ToriiField("status") == "Committed",
+                ToriiField("asset_id") == "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+            ]),
+            limit: 25, cursor: "Y3Vyc29y"
+        )
+        let page = try await makeClient().explorerTransactions.page(params)
+
+
         XCTAssertEqual(page.items.count, 1)
         XCTAssertEqual(page.items.first?.hash, "deadbeef")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetExplorerTransactionsCompletion() {
-        let expectation = expectation(description: "explorer-transactions")
+    func testGetExplorerTransactionsCompletion() async throws {
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/explorer/transactions")
+            XCTAssertEqual(request.url?.path, "/v1/explorer/transactions/query")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"pagination":{"limit":10,"snapshot_height":0,"snapshot_hash":null,"next_cursor":null,"has_more":false},"items":[]}
+            {"next_cursor":null,"items":[]}
             """.data(using: .utf8)!
             return (response, body)
         }
 
-        _ = makeClient().getExplorerTransactions { result in
-            switch result {
-            case .success(let page):
-                XCTAssertEqual(page.items.count, 0)
-                XCTAssertFalse(page.pagination.hasMore)
-            case .failure(let error):
-                XCTFail("Unexpected error: \(error)")
-            }
-            expectation.fulfill()
-        }
-        waitForExpectations(timeout: 2.0)
+        let page = try await makeClient().explorerTransactions.page()
+        XCTAssertTrue(page.items.isEmpty)
+        XCTAssertNil(page.nextCursor)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGetContractActivityEncodesQueryAndDecodesResponse() async throws {
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/contracts/activity")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let queryItems = components?.queryItems ?? []
-            let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
-            XCTAssertEqual(query["limit"], "20")
-            XCTAssertEqual(query["offset"], "40")
-            XCTAssertEqual(query["authority"], "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
-            XCTAssertEqual(query["contract_alias"], "benefits::paynet")
-            XCTAssertEqual(query["contract_entrypoint"], "claim")
-            XCTAssertEqual(query["since_timestamp_ms"], "1000")
-            XCTAssertEqual(query["until_timestamp_ms"], "2000")
-            XCTAssertEqual(query["result_ok"], "true")
+            XCTAssertEqual(request.url?.path, "/v1/contracts/activity/query")
+            XCTAssertEqual(request.httpMethod, "POST")
+            let query = try JSONSerialization.jsonObject(with: XCTUnwrap(self.bodyData(from: request))) as! [String: Any]
+            XCTAssertEqual(query["limit"] as? Int, 20)
+            XCTAssertNotNil(query["filter"])
+            XCTAssertNil(query["offset"])
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -8594,6 +8252,8 @@ final class ToriiClientTests: XCTestCase {
                     {
                         "authority": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                         "timestamp_ms": 1234,
+                        "block_index": 0,
+                        "block_height": 7,
                         "entrypoint_hash": "0xabc",
                         "result_ok": true,
                         "contract_address": "cntr:deadbeef",
@@ -8606,24 +8266,15 @@ final class ToriiClientTests: XCTestCase {
                         }
                     }
                 ],
-                "total": 1
+                "next_cursor": null
             }
             """.data(using: .utf8)!
             return (response, body)
         }
 
-        let params = ToriiContractActivityParams(
-            limit: 20,
-            offset: 40,
-            authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            contractAlias: "benefits::paynet",
-            contractEntrypoint: "claim",
-            sinceTimestampMs: 1000,
-            untilTimestampMs: 2000,
-            resultOk: true
-        )
-        let list = try await makeClient().getContractActivity(params: params)
-        XCTAssertEqual(list.total, 1)
+        let query = ToriiListQuery(filterText: #"contract_alias = "benefits::paynet" and contract_entrypoint = "claim" and timestamp_ms >= 1000 and timestamp_ms <= 2000 and result_ok = true"#, limit: 20)
+        let list = try await makeClient().contractActivity.page(query)
+        XCTAssertNil(list.nextCursor)
         XCTAssertEqual(list.items.first?.contractAlias, "benefits::paynet")
         XCTAssertEqual(list.items.first?.contractEntrypoint, "claim")
         XCTAssertEqual(list.items.first?.timestampMs, 1234)
@@ -8638,19 +8289,12 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetContractEventsEncodesQueryAndDecodesResponse() async throws {
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/contracts/events")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let queryItems = components?.queryItems ?? []
-            let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
-            XCTAssertEqual(query["limit"], "10")
-            XCTAssertEqual(query["offset"], "5")
-            XCTAssertEqual(query["contract_alias"], "benefits::paynet")
-            XCTAssertEqual(query["module"], "benefits")
-            XCTAssertEqual(query["event_kind"], "spend")
-            XCTAssertEqual(query["participant"], "merchant@paynet")
-            XCTAssertEqual(query["asset_id"], "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
-            XCTAssertEqual(query["provenance"], "derived")
-            XCTAssertEqual(query["result_ok"], "false")
+            XCTAssertEqual(request.url?.path, "/v1/contracts/events/query")
+            XCTAssertEqual(request.httpMethod, "POST")
+            let query = try JSONSerialization.jsonObject(with: XCTUnwrap(self.bodyData(from: request))) as! [String: Any]
+            XCTAssertEqual(query["limit"] as? Int, 10)
+            XCTAssertNotNil(query["filter"])
+            XCTAssertNil(query["offset"])
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -8664,6 +8308,7 @@ final class ToriiClientTests: XCTestCase {
                         "provenance": "derived",
                         "authority": "beneficiary@paynet",
                         "timestamp_ms": 1234,
+                        "block_index": 0,
                         "tx_hash_hex": "0xabc",
                         "block_height": 7,
                         "block_hash_hex": "0xblock",
@@ -8682,25 +8327,15 @@ final class ToriiClientTests: XCTestCase {
                         }
                     }
                 ],
-                "total": 1
+                "next_cursor": null
             }
             """.data(using: .utf8)!
             return (response, body)
         }
 
-        let params = ToriiContractEventParams(
-            limit: 10,
-            offset: 5,
-            contractAlias: "benefits::paynet",
-            module: "benefits",
-            eventKind: "spend",
-            participant: "merchant@paynet",
-            assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-            provenance: "derived",
-            resultOk: false
-        )
-        let list = try await makeClient().getContractEvents(params: params)
-        XCTAssertEqual(list.total, 1)
+        let query = ToriiListQuery(filterText: #"contract_alias = "benefits::paynet" and module = "benefits" and event_kind = "spend" and participants = "merchant@paynet" and asset_ids = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" and provenance = "derived" and result_ok = false"#, limit: 10)
+        let list = try await makeClient().contractEvents.page(query)
+        XCTAssertNil(list.nextCursor)
         XCTAssertEqual(list.items.first?.eventId, "0xabc:0")
         XCTAssertEqual(list.items.first?.participants ?? [], ["beneficiary@paynet", "merchant@paynet"])
         XCTAssertEqual(list.items.first?.assetIds ?? [], ["62Fk4FPcMuLvW5QjDGNF2a4jAmjM"])
@@ -8712,29 +8347,20 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetContractEventsCompletion() {
-        let expectation = expectation(description: "contract-events")
+    func testContractEventsEmptyPage() async throws {
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/contracts/events")
+            XCTAssertEqual(request.url?.path, "/v1/contracts/events/query")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
-            let body = #"{"items":[],"total":0}"#.data(using: .utf8)!
+            let body = #"{"items":[],"next_cursor":null}"#.data(using: .utf8)!
             return (response, body)
         }
 
-        _ = makeClient().getContractEvents { result in
-            switch result {
-            case .success(let list):
-                XCTAssertEqual(list.items.count, 0)
-                XCTAssertEqual(list.total, 0)
-            case .failure(let error):
-                XCTFail("Unexpected error: \(error)")
-            }
-            expectation.fulfill()
-        }
-        waitForExpectations(timeout: 2.0)
+        let page = try await makeClient().contractEvents.page()
+        XCTAssertTrue(page.items.isEmpty)
+        XCTAssertNil(page.nextCursor)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -8863,39 +8489,26 @@ final class ToriiClientTests: XCTestCase {
         waitForExpectations(timeout: 2.0)
     }
 
-    func testExplorerRwasParamsQueryItemsEncodeCursorAndDomain() throws {
-        let params = ToriiExplorerRwasParams(cursor: "Y3Vyc29y",
-                                             limit: 25,
-                                             domain: "commodities.sora")
-        let queryItems = try XCTUnwrap(params.queryItems())
-        let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
-        XCTAssertEqual(query["cursor"], "Y3Vyc29y")
-        XCTAssertEqual(query["limit"], "25")
-        XCTAssertEqual(query["domain"], "commodities.sora")
-        XCTAssertNil(query["page"])
-        XCTAssertNil(query["per_page"])
-    }
-
-    func testExplorerRwasParamsRejectInvalidCursorAndLimit() {
-        for cursor in ["", "padded=", "a", "contains space"] {
-            XCTAssertThrowsError(try ToriiExplorerRwasParams(cursor: cursor).queryItems())
-        }
-        for limit: UInt32 in [0, 101] {
-            XCTAssertThrowsError(try ToriiExplorerRwasParams(limit: limit).queryItems())
-        }
+    func testExplorerRwasSharedQueryBody() throws {
+        let query = ToriiListQuery(filter: ToriiField("domain") == "commodities.sora", limit: 25, cursor: "Y3Vyc29y")
+        let body = try JSONSerialization.jsonObject(with: query.requestBody()) as! [String: Any]
+        XCTAssertEqual(body["cursor"] as? String, "Y3Vyc29y")
+        XCTAssertEqual(body["limit"] as? Int, 25)
+        XCTAssertNotNil(body["filter"])
+        XCTAssertNil(body["domain"])
     }
 
     func testExplorerRwaCursorPageDecodesExactContract() throws {
         let json = """
         {
-          "pagination":{"limit":2,"next_cursor":"Y3Vyc29y","has_more":true},
+          "next_cursor":"Y3Vyc29y",
           "items":[]
         }
         """
-        let page = try JSONDecoder().decode(ToriiExplorerRwasPage.self, from: Data(json.utf8))
-        XCTAssertEqual(page.pagination.limit, 2)
-        XCTAssertEqual(page.pagination.nextCursor, "Y3Vyc29y")
-        XCTAssertTrue(page.pagination.hasMore)
+        let page = try JSONDecoder().decode(ToriiPage<ToriiExplorerRwaRecord>.self, from: Data(json.utf8))
+
+        XCTAssertEqual(page.nextCursor, "Y3Vyc29y")
+        XCTAssertNotNil(page.nextCursor)
     }
 
     func testExplorerRwaCursorPageRejectsRetiredUnknownAndInconsistentFields() {
@@ -8903,25 +8516,25 @@ final class ToriiClientTests: XCTestCase {
         {"page":1,"per_page":25,"total_pages":1,"total_items":0}
         """
         XCTAssertThrowsError(
-            try JSONDecoder().decode(ToriiExplorerCursorMeta.self, from: Data(retired.utf8))
+            try JSONDecoder().decode(ToriiPage<ToriiExplorerRwaRecord>.self, from: Data(retired.utf8))
         )
 
         let inconsistent = """
         {"limit":25,"next_cursor":null,"has_more":true}
         """
         XCTAssertThrowsError(
-            try JSONDecoder().decode(ToriiExplorerCursorMeta.self, from: Data(inconsistent.utf8))
+            try JSONDecoder().decode(ToriiPage<ToriiExplorerRwaRecord>.self, from: Data(inconsistent.utf8))
         )
 
         let unknownOuter = """
         {
-          "pagination":{"limit":25,"next_cursor":null,"has_more":false},
+          "next_cursor":null,
           "items":[],
           "total_items":0
         }
         """
         XCTAssertThrowsError(
-            try JSONDecoder().decode(ToriiExplorerRwasPage.self, from: Data(unknownOuter.utf8))
+            try JSONDecoder().decode(ToriiPage<ToriiExplorerRwaRecord>.self, from: Data(unknownOuter.utf8))
         )
     }
 
@@ -8930,11 +8543,8 @@ final class ToriiClientTests: XCTestCase {
         var observedCursors: [String?] = []
         var observedLimits: [String?] = []
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/explorer/rwas")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let query = Dictionary(
-                uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") }
-            )
+            XCTAssertEqual(request.url?.path, "/v1/explorer/rwas/query")
+            let query = try self.explorerQueryValues(request)
             observedCursors.append(query["cursor"])
             observedLimits.append(query["limit"])
             XCTAssertEqual(query["domain"], "commodities")
@@ -8944,14 +8554,14 @@ final class ToriiClientTests: XCTestCase {
             case nil:
                 body = """
                 {
-                  "pagination":{"limit":2,"next_cursor":"Y3Vyc29yLTE","has_more":true},
+                  "next_cursor":"Y3Vyc29yLTE",
                   "items":[]
                 }
                 """
             case "Y3Vyc29yLTE":
                 body = """
                 {
-                  "pagination":{"limit":2,"next_cursor":"Y3Vyc29yLTI","has_more":true},
+                  "next_cursor":"Y3Vyc29yLTI",
                   "items":[{
                     "id":"lot-001$commodities.sora",
                     "owned_by":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -8967,7 +8577,7 @@ final class ToriiClientTests: XCTestCase {
             case "Y3Vyc29yLTI":
                 body = """
                 {
-                  "pagination":{"limit":2,"next_cursor":null,"has_more":false},
+                  "next_cursor":null,
                   "items":[{
                     "id":"lot-002$commodities.sora",
                     "owned_by":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -8983,7 +8593,7 @@ final class ToriiClientTests: XCTestCase {
             default:
                 XCTFail("Unexpected cursor")
                 body = """
-                {"pagination":{"limit":2,"next_cursor":null,"has_more":false},"items":[]}
+                {"next_cursor":null,"items":[]}
                 """
             }
             let response = HTTPURLResponse(
@@ -8995,9 +8605,7 @@ final class ToriiClientTests: XCTestCase {
             return (response, Data(body.utf8))
         }
 
-        let stream = makeClient().iterateExplorerRwas(
-            params: ToriiExplorerRwasParams(domain: "commodities")
-        )
+        let stream = makeClient().explorerRwas.items(ToriiListQuery(filter: ToriiField("domain") == "commodities"))
         var identifiers: [String] = []
         for try await item in stream {
             identifiers.append(item.id)
@@ -9005,20 +8613,17 @@ final class ToriiClientTests: XCTestCase {
 
         XCTAssertEqual(identifiers, ["lot-001$commodities.sora", "lot-002$commodities.sora"])
         XCTAssertEqual(observedCursors, [nil, "Y3Vyc29yLTE", "Y3Vyc29yLTI"])
-        XCTAssertEqual(observedLimits, [nil, "2", "2"])
+        XCTAssertEqual(observedLimits, [nil, nil, nil])
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     func testIterateExplorerRwasRejectsRepeatedCursor() async throws {
         StubURLProtocol.handler = { request in
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let query = Dictionary(
-                uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") }
-            )
+            let query = try self.explorerQueryValues(request)
             let cursor = query["cursor"]
             let body = """
             {
-              "pagination":{"limit":1,"next_cursor":"Y3Vyc29yLTE","has_more":true},
+              "next_cursor":"Y3Vyc29yLTE",
               "items":[]
             }
             """
@@ -9035,7 +8640,7 @@ final class ToriiClientTests: XCTestCase {
         }
 
         do {
-            for try await _ in makeClient().iterateExplorerRwas() {}
+            for try await _ in makeClient().explorerRwas.items() {}
             XCTFail("Expected a repeated-cursor error")
         } catch {
             XCTAssertTrue(String(describing: error).contains("repeated a cursor"))
@@ -9068,10 +8673,10 @@ final class ToriiClientTests: XCTestCase {
     func testAssetAndRwaReadbacksRejectNoncanonicalQuantities() throws {
         for quantity in ["-1", "01", "1.0", "1.20", " 1", "1e0"] {
             let assetJSON = """
-            {"asset":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","quantity":"\(quantity)"}
+            {"asset":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","asset_name":"Gold","asset_alias":null,"scope":"global","account_id":"owner","quantity":"\(quantity)"}
             """
             XCTAssertThrowsError(
-                try JSONDecoder().decode(ToriiAssetBalance.self, from: Data(assetJSON.utf8)),
+                try JSONDecoder().decode(ToriiAccountAsset.self, from: Data(assetJSON.utf8)),
                 "accepted asset quantity \(quantity)"
             )
 
@@ -9144,131 +8749,11 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testListRwasEncodesOptions() async throws {
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/rwas")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let query = Dictionary(uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
-            XCTAssertEqual(query["limit"], "25")
-            XCTAssertEqual(query["offset"], "10")
-            XCTAssertEqual(query["sort"], "id")
-            let filterValue = try XCTUnwrap(query["filter"])
-            let filterData = try XCTUnwrap(filterValue.data(using: .utf8))
-            let decodedFilter = try JSONSerialization.jsonObject(with: filterData) as? [String: String]
-            XCTAssertEqual(decodedFilter?["id"], "lot-001$commodities.sora")
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            {"items":[{"id":"lot-001$commodities.sora"}],"total":1}
-            """.data(using: .utf8)!
-            return (response, body)
-        }
-
-        let options = ToriiListOptions(filter: .json(.object(["id": .string("lot-001$commodities.sora")])),
-                                       sort: .fields(["id"]),
-                                       limit: 25,
-                                       offset: 10)
-        let page = try await makeClient().listRwas(options: options)
-        XCTAssertEqual(page.total, 1)
-        XCTAssertEqual(page.items.first?.id, "lot-001$commodities.sora")
-    }
-
-    func testQueryEnvelopeEncodesMixedSelectEntries() throws {
-        let envelope = ToriiQueryEnvelope(
-            select: [
-                .fieldPath(" account.id "),
-                .object(["metadata": .bool(true)]),
-            ]
-        )
-
-        let encoded = try JSONEncoder().encode(envelope)
-        let object = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
-        )
-        let select = try XCTUnwrap(object["select"] as? [Any])
-        XCTAssertEqual(select[0] as? String, "account.id")
-        XCTAssertEqual(
-            (select[1] as? [String: Any])?["metadata"] as? Bool,
-            true
-        )
-    }
-
-    func testQueryEnvelopeRejectsBlankSelectFieldPaths() throws {
-        let envelope = ToriiQueryEnvelope(select: [.fieldPath(" ")])
-        XCTAssertThrowsError(try JSONEncoder().encode(envelope)) { error in
-            let description = String(describing: error)
-            XCTAssertTrue(description.contains("select field path must not be empty"))
-        }
-    }
-
-    func testQueryEnvelopeRejectsBlankQueryName() throws {
-        let envelope = ToriiQueryEnvelope(query: " ")
-        XCTAssertThrowsError(try JSONEncoder().encode(envelope)) { error in
-            let description = String(describing: error)
-            XCTAssertTrue(description.contains("query must be a non-empty string"))
-        }
-    }
-
-    func testQueryEnvelopeRejectsInvalidCountMode() throws {
-        let envelope = ToriiQueryEnvelope(countMode: "full")
-        XCTAssertThrowsError(try JSONEncoder().encode(envelope)) { error in
-            let description = String(describing: error)
-            XCTAssertTrue(description.contains("countMode must be bounded or exact"))
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testIterateRwasRespectsPagingAndMaxItems() async throws {
-        var observedLimits: [String] = []
-        var observedOffsets: [String] = []
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/rwas")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let query = Dictionary(uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
-            if let limit = query["limit"] {
-                observedLimits.append(limit)
-            }
-            if let offset = query["offset"] {
-                observedOffsets.append(offset)
-            }
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            let body: Data
-            switch query["offset"] ?? "0" {
-            case "0":
-                body = """
-                {"items":[{"id":"lot-001$commodities.sora"},{"id":"lot-002$commodities.sora"}],"total":4}
-                """.data(using: .utf8)!
-            case "2":
-                body = """
-                {"items":[{"id":"lot-003$commodities.sora"}],"total":4}
-                """.data(using: .utf8)!
-            default:
-                body = #"{"items":[],"total":4}"#.data(using: .utf8)!
-            }
-            return (response, body)
-        }
-
-        let stream = makeClient().iterateRwas(pageSize: 2, maxItems: 3)
-        var collected: [String] = []
-        for try await item in stream {
-            collected.append(item.id)
-        }
-        XCTAssertEqual(collected, ["lot-001$commodities.sora", "lot-002$commodities.sora", "lot-003$commodities.sora"])
-        XCTAssertEqual(observedLimits, ["2", "1"])
-        XCTAssertEqual(observedOffsets, ["0", "2"])
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
     func testGetExplorerTransactionTransfersAggregatesCursors() async throws {
         let assetIdFilter = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
         let pageOne = """
         {
-            "pagination": {"limit":1,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":"Y3Vyc29yMg","has_more":true},
+            "next_cursor":"Y3Vyc29yMg",
             "items": [
                 {
                     "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -9299,7 +8784,7 @@ final class ToriiClientTests: XCTestCase {
 
         let pageTwo = """
         {
-            "pagination": {"limit":1,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
+            "next_cursor":null,
             "items": [
                 {
                     "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -9329,10 +8814,8 @@ final class ToriiClientTests: XCTestCase {
         """.data(using: .utf8)!
 
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let queryItems = components?.queryItems ?? []
-            let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions/query")
+            let query = try self.explorerQueryValues(request)
             XCTAssertEqual(query["transaction_hash"], "deadbeef")
             XCTAssertEqual(query["kind"], "Transfer")
             XCTAssertEqual(query["asset_id"], assetIdFilter)
@@ -9347,7 +8830,7 @@ final class ToriiClientTests: XCTestCase {
                 XCTAssertNil(query["limit"])
                 return (response, pageOne)
             case "Y3Vyc29yMg":
-                XCTAssertEqual(query["limit"], "1")
+                XCTAssertNil(query["limit"])
                 return (response, pageTwo)
             default:
                 return (response, Data())
@@ -9365,14 +8848,14 @@ final class ToriiClientTests: XCTestCase {
     func testGetExplorerTransactionTransferSummariesCompletion() {
         let expectation = expectation(description: "explorer-transaction-transfer-summaries")
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions/query")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
             {
-                "pagination": {"limit":50,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
+                "next_cursor":null,
                 "items": [
                     {
                         "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -9422,7 +8905,7 @@ final class ToriiClientTests: XCTestCase {
     func testGetExplorerTransactionTransferSummariesFiltersByAssetId() async throws {
         let body = """
         {
-            "pagination": {"limit":50,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
+            "next_cursor":null,
             "items": [
                 {
                     "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -9476,10 +8959,8 @@ final class ToriiClientTests: XCTestCase {
             .data(using: .utf8)!
 
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let queryItems = components?.queryItems ?? []
-            let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions/query")
+            let query = try self.explorerQueryValues(request)
             XCTAssertEqual(query["transaction_hash"], "deadbeef")
             XCTAssertEqual(query["kind"], "Transfer")
             XCTAssertEqual(query["asset_id"], "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
@@ -9550,10 +9031,8 @@ final class ToriiClientTests: XCTestCase {
     func testGetExplorerTransferSummariesFiltersByAccount() async throws {
         let assetIdFilter = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let queryItems = components?.queryItems ?? []
-            let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions/query")
+            let query = try self.explorerQueryValues(request)
             XCTAssertEqual(query["asset_id"], assetIdFilter)
             XCTAssertEqual(query["kind"], "Transfer")
             let response = HTTPURLResponse(url: request.url!,
@@ -9562,7 +9041,7 @@ final class ToriiClientTests: XCTestCase {
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
             {
-                "pagination": {"limit":10,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
+                "next_cursor":null,
                 "items": [
                     {
                         "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -9605,17 +9084,15 @@ final class ToriiClientTests: XCTestCase {
     func testGetExplorerTransferSummariesCompletion() {
         let expectation = expectation(description: "explorer-transfer-summaries")
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let queryItems = components?.queryItems ?? []
-            let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions/query")
+            let query = try self.explorerQueryValues(request)
             XCTAssertEqual(query["kind"], "Transfer")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"pagination":{"limit":10,"snapshot_height":0,"snapshot_hash":null,"next_cursor":null,"has_more":false},"items":[]}
+            {"next_cursor":null,"items":[]}
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -9635,10 +9112,8 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetAccountTransferHistoryBuildsTransferQuery() async throws {
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let queryItems = components?.queryItems ?? []
-            let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions/query")
+            let query = try self.explorerQueryValues(request)
             XCTAssertEqual(query["kind"], "Transfer")
             XCTAssertEqual(query["cursor"], "Y3Vyc29y")
             XCTAssertEqual(query["limit"], "20")
@@ -9651,7 +9126,7 @@ final class ToriiClientTests: XCTestCase {
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
             {
-                "pagination": {"limit":20,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
+                "next_cursor":null,
                 "items": []
             }
             """.data(using: .utf8)!
@@ -9669,13 +9144,13 @@ final class ToriiClientTests: XCTestCase {
     func testGetAccountTransferHistoryCompletion() {
         let expectation = expectation(description: "account-transfer-history")
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions/query")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"pagination":{"limit":10,"snapshot_height":0,"snapshot_hash":null,"next_cursor":null,"has_more":false},"items":[]}
+            {"next_cursor":null,"items":[]}
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -9695,10 +9170,8 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetTransactionHistoryBuildsTransferQuery() async throws {
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let queryItems = components?.queryItems ?? []
-            let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions/query")
+            let query = try self.explorerQueryValues(request)
             XCTAssertEqual(query["kind"], "Transfer")
             XCTAssertEqual(query["cursor"], "Y3Vyc29y")
             XCTAssertEqual(query["limit"], "5")
@@ -9710,7 +9183,7 @@ final class ToriiClientTests: XCTestCase {
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
             {
-                "pagination": {"limit":5,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
+                "next_cursor":null,
                 "items": []
             }
             """.data(using: .utf8)!
@@ -9727,13 +9200,13 @@ final class ToriiClientTests: XCTestCase {
     func testGetTransactionHistoryCompletion() {
         let expectation = expectation(description: "transaction-history")
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions/query")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"pagination":{"limit":10,"snapshot_height":0,"snapshot_hash":null,"next_cursor":null,"has_more":false},"items":[]}
+            {"next_cursor":null,"items":[]}
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -9755,10 +9228,8 @@ final class ToriiClientTests: XCTestCase {
         var callCount = 0
         StubURLProtocol.handler = { request in
             callCount += 1
-            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let queryItems = components?.queryItems ?? []
-            let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions/query")
+            let query = try self.explorerQueryValues(request)
             XCTAssertEqual(query["kind"], "Transfer")
             if callCount == 1 {
                 XCTAssertNil(query["cursor"])
@@ -9776,7 +9247,7 @@ final class ToriiClientTests: XCTestCase {
             if callCount == 1 {
                 body = """
                 {
-                    "pagination": {"limit":1,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":"Y3Vyc29yMg","has_more":true},
+                    "next_cursor":"Y3Vyc29yMg",
                     "items": [
                         {
                             "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -9809,7 +9280,7 @@ final class ToriiClientTests: XCTestCase {
             } else {
                 body = """
                 {
-                    "pagination": {"limit":1,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":null,"has_more":false},
+                    "next_cursor":null,
                     "items": [
                         {
                             "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -9858,10 +9329,7 @@ final class ToriiClientTests: XCTestCase {
         var callCount = 0
         StubURLProtocol.handler = { request in
             callCount += 1
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let query = Dictionary(
-                uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") }
-            )
+            let query = try self.explorerQueryValues(request)
             if callCount == 1 {
                 XCTAssertNil(query["cursor"])
             } else {
@@ -9873,7 +9341,7 @@ final class ToriiClientTests: XCTestCase {
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
             {
-              "pagination":{"limit":1,"snapshot_height":10,"snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","next_cursor":"Y3Vyc29y","has_more":true},
+              "next_cursor":"Y3Vyc29y",
               "items":[]
             }
             """.data(using: .utf8)!
@@ -9898,118 +9366,23 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testListDomainsEncodesOptions() async throws {
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/domains")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let query = Dictionary(uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
-            XCTAssertEqual(query["limit"], "25")
-            XCTAssertEqual(query["offset"], "10")
-            XCTAssertEqual(query["sort"], "name,-created_at")
-            let filterValue = try XCTUnwrap(query["filter"])
-            let filterData = try XCTUnwrap(filterValue.data(using: .utf8))
-            let decodedFilter = try JSONSerialization.jsonObject(with: filterData) as? [String: String]
-            XCTAssertEqual(decodedFilter?["id"], "wonderland")
-            let body = """
-            {
-                "items": [
-                    {"id":"wonderland","owned_by":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","metadata":{"theme":"demo"}}
-                ],
-                "total": 1
-            }
-            """.data(using: .utf8)!
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            return (response, body)
-        }
-
-        let options = ToriiListOptions(
-            filter: .json(.object(["id": .string("wonderland")])),
-            sort: .fields(["name", "-created_at"]),
-            limit: 25,
-            offset: 10
-        )
-        let page = try await makeClient().listDomains(options: options)
-        XCTAssertEqual(page.total, 1)
-        let record = try XCTUnwrap(page.items.first)
-        XCTAssertEqual(record.id, "wonderland")
-        XCTAssertEqual(record.ownedBy, "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
-        if case let .string(theme)? = record.metadata["theme"] {
-            XCTAssertEqual(theme, "demo")
-        } else {
-            XCTFail("expected metadata value")
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testIterateDomainsRespectsPagingAndMaxItems() async throws {
-        var observedLimits: [String] = []
-        var observedOffsets: [String] = []
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/domains")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let queryItems = components?.queryItems ?? []
-            let dictionary = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
-            if let limitValue = dictionary["limit"] {
-                observedLimits.append(limitValue)
-            }
-            if let offsetValue = dictionary["offset"] {
-                observedOffsets.append(offsetValue)
-            }
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            let body: Data
-            switch dictionary["offset"] ?? "0" {
-            case "0":
-                body = """
-                {"items":[
-                    {"id":"domain-1","metadata":{}},
-                    {"id":"domain-2","metadata":{}}
-                ],"total":4}
-                """.data(using: .utf8)!
-            case "2":
-                body = """
-                {"items":[{"id":"domain-3","metadata":{}}],"total":4}
-                """.data(using: .utf8)!
-            default:
-                body = #"{"items":[],"total":4}"#.data(using: .utf8)!
-            }
-            return (response, body)
-        }
-
-        let stream = makeClient().iterateDomains(pageSize: 2, maxItems: 3)
-        var collected: [String] = []
-        for try await record in stream {
-            collected.append(record.id)
-        }
-        XCTAssertEqual(collected, ["domain-1", "domain-2", "domain-3"])
-        XCTAssertEqual(observedLimits, ["2", "1"])
-        XCTAssertEqual(observedOffsets, ["0", "2"])
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
     func testListSubscriptionPlansEncodesParams() async throws {
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/subscriptions/plans")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let query = Dictionary(uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
-            XCTAssertEqual(query["provider"], "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
-            XCTAssertEqual(query["limit"], "10")
-            XCTAssertEqual(query["offset"], "5")
+            XCTAssertEqual(request.url?.path, "/v1/subscriptions/plans/query")
+            XCTAssertEqual(request.httpMethod, "POST")
+            let query = try JSONSerialization.jsonObject(with: XCTUnwrap(self.bodyData(from: request))) as! [String: Any]
+            XCTAssertEqual(query["limit"] as? Int, 10)
+            XCTAssertNotNil(query["filter"])
+            XCTAssertNil(query["offset"])
             let payload: [String: Any] = [
                 "items": [
                     [
-                        "plan_id": "plan#subs",
-                        "plan": [
-                            "provider": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                            "pricing": ["kind": "fixed"]
-                        ]
+                        "id": "plan#subs",
+                        "provider": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                        "pricing": ["kind": "fixed"]
                     ]
                 ],
+                "next_cursor": NSNull(),
                 "total": 1
             ]
             let response = HTTPURLResponse(url: request.url!,
@@ -10020,41 +9393,34 @@ final class ToriiClientTests: XCTestCase {
             return (response, data)
         }
 
-        let params = ToriiSubscriptionPlanListParams(provider: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", limit: 10, offset: 5)
-        let response = try await makeClient().listSubscriptionPlans(params: params)
+        let query = ToriiListQuery(filter: ToriiField("provider") == "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", limit: 10, includeTotal: true)
+        let response = try await makeClient().subscriptionPlans.page(query)
         XCTAssertEqual(response.total, 1)
         let item = try XCTUnwrap(response.items.first)
-        XCTAssertEqual(item.planId, "plan#subs")
-        if case let .string(provider)? = item.plan["provider"] {
-            XCTAssertEqual(provider, "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
-        } else {
-            XCTFail("missing plan provider")
-        }
+        XCTAssertEqual(item.id, "plan#subs")
+        XCTAssertEqual(item.provider, "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     func testListSubscriptionsEncodesParams() async throws {
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/subscriptions")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let query = Dictionary(uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
-            XCTAssertEqual(query["owned_by"], "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D")
-            XCTAssertEqual(query["provider"], "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
-            XCTAssertEqual(query["status"], "active")
-            XCTAssertEqual(query["limit"], "25")
-            XCTAssertEqual(query["offset"], "0")
+            XCTAssertEqual(request.url?.path, "/v1/subscriptions/query")
+            XCTAssertEqual(request.httpMethod, "POST")
+            let query = try JSONSerialization.jsonObject(with: XCTUnwrap(self.bodyData(from: request))) as! [String: Any]
+            XCTAssertEqual(query["limit"] as? Int, 25)
+            XCTAssertNotNil(query["filter"])
+            XCTAssertNil(query["offset"])
             let payload: [String: Any] = [
                 "items": [
                     [
-                        "subscription_id": "sub-1$subscriptions",
-                        "subscription": [
-                            "status": "active",
-                            "plan_id": "plan#subs"
-                        ],
+                        "id": "sub-1$subscriptions",
+                        "status": "active",
+                        "plan_id": "plan#subs",
                         "invoice": ["amount": "120"],
                         "plan": ["provider": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"]
                     ]
                 ],
+                "next_cursor": NSNull(),
                 "total": 1
             ]
             let response = HTTPURLResponse(url: request.url!,
@@ -10065,20 +9431,13 @@ final class ToriiClientTests: XCTestCase {
             return (response, data)
         }
 
-        let params = ToriiSubscriptionListParams(ownedBy: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-                                                 provider: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                                                 status: .active,
-                                                 limit: 25,
-                                                 offset: 0)
-        let response = try await makeClient().listSubscriptions(params: params)
+        let query = ToriiListQuery(filterText: #"owned_by = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D" and provider = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV" and status = "active""#, limit: 25, includeTotal: true)
+        let response = try await makeClient().subscriptions.page(query)
         XCTAssertEqual(response.total, 1)
         let record = try XCTUnwrap(response.items.first)
-        XCTAssertEqual(record.subscriptionId, "sub-1$subscriptions")
-        if case let .string(status)? = record.subscription["status"] {
-            XCTAssertEqual(status, "active")
-        } else {
-            XCTFail("missing subscription status")
-        }
+        XCTAssertEqual(record.id, "sub-1$subscriptions")
+        XCTAssertEqual(record.status, .active)
+        XCTAssertEqual(record.planId, "plan#subs")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -10375,7 +9734,9 @@ final class ToriiClientTests: XCTestCase {
             _ = try await makeClient().submitKagemushaRedemption(
                 redemption, withCurrentOwner: { try $0() })
             XCTFail("An HTTP rejection must not return an operation status")
-        } catch ToriiClientError.httpStatus(let status, _, let rejectCode) {
+        } catch let ToriiClientError.api(apiError) {
+            let status = apiError.status
+            let rejectCode = apiError.rejectCode
             XCTAssertEqual(status, 409)
             XCTAssertEqual(rejectCode, headerCode)
         }
@@ -10389,7 +9750,9 @@ final class ToriiClientTests: XCTestCase {
             _ = try await makeClient().getKagemushaOperation(
                 operationID: redemption.operationID)
             XCTFail("A rejected status read must not become operation absence")
-        } catch ToriiClientError.httpStatus(let status, _, let rejectCode) {
+        } catch let ToriiClientError.api(apiError) {
+            let status = apiError.status
+            let rejectCode = apiError.rejectCode
             XCTAssertEqual(status, 403)
             XCTAssertEqual(rejectCode, headerCode)
         }
@@ -10402,7 +9765,9 @@ final class ToriiClientTests: XCTestCase {
             _ = try await makeClient().submitKagemushaRedemption(
                 redemption, withCurrentOwner: { try $0() })
             XCTFail("An HTTP rejection must not return an operation status")
-        } catch ToriiClientError.httpStatus(let status, _, let rejectCode) {
+        } catch let ToriiClientError.api(apiError) {
+            let status = apiError.status
+            let rejectCode = apiError.rejectCode
             XCTAssertEqual(status, 409)
             XCTAssertNil(rejectCode, "an error body cannot supply an authoritative reject code")
         }
@@ -12443,9 +11808,7 @@ final class ToriiClientHeaderTests: XCTestCase {
         }
         let aliasAuth = ToriiCanonicalRequestAuth(
             accountId: alias,
-            privateKey: canonicalReadAuth.privateKey,
-            timestampMs: canonicalReadAuth.timestampMs,
-            nonce: canonicalReadAuth.nonce
+            privateKey: canonicalReadAuth.privateKey
         )
 
         let quote = try await makeClient().quoteFees(
@@ -12568,7 +11931,8 @@ final class ToriiClientHeaderTests: XCTestCase {
                 canonicalAuth: canonicalReadAuth
             )
             XCTFail("exact-limit error response must reach status handling")
-        } catch let ToriiClientError.httpStatus(code, _, _) {
+        } catch let ToriiClientError.api(apiError) {
+            let code = apiError.status
             XCTAssertEqual(code, 400)
         } catch {
             XCTFail("unexpected exact-limit error: \(error)")
@@ -12716,7 +12080,8 @@ final class ToriiClientHeaderTests: XCTestCase {
                 canonicalAuth: canonicalReadAuth
             )
             XCTFail("exact-limit error response must reach status handling")
-        } catch let ToriiClientError.httpStatus(code, _, _) {
+        } catch let ToriiClientError.api(apiError) {
+            let code = apiError.status
             XCTAssertEqual(code, 400)
         } catch {
             XCTFail("unexpected exact-limit error: \(error)")
@@ -12895,9 +12260,10 @@ final class ToriiClientHeaderTests: XCTestCase {
         await XCTAssertThrowsErrorAsync(
             try await makeClient().registerVerifyingKey(request)
         ) { error in
-            guard case let ToriiClientError.httpStatus(code, _, _) = error else {
+            guard case let ToriiClientError.api(apiError) = error else {
                 return XCTFail("Expected HTTP status error, got \(error)")
             }
+            let code = apiError.status
             XCTAssertEqual(code, 202)
         }
 
@@ -13301,31 +12667,18 @@ final class ToriiClientHeaderTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGenericEventStreamsSignExactFinalQueriesWithDefaultCanonicalAuth() async throws {
-        let verifyingKeyFilter = ToriiVerifyingKeyEventFilter(
-            backend: "halo2/ipa",
-            name: "vk_main",
-            includeRegistered: true,
-            includeUpdated: false
-        )
-        expectCanonicalEventRequest(queryItems: try XCTUnwrap(verifyingKeyFilter.queryItems()))
+        // Verifying-key events have no event-stream fields; they are recognised locally.
+        expectCanonicalEventRequest(queryItems: [])
         var verifyingKeyIterator = makeClient()
-            .streamVerifyingKeyEvents(filter: verifyingKeyFilter)
+            .streamVerifyingKeyEvents()
             .makeAsyncIterator()
         let verifyingKeyEvent = try await verifyingKeyIterator.next()
         XCTAssertNil(verifyingKeyEvent)
 
-        let triggerFilter = ToriiTriggerEventFilter(
-            triggerId: "nightly-tick",
-            includeCreated: true,
-            includeDeleted: false,
-            includeExtended: false,
-            includeShortened: false,
-            includeMetadataInserted: false,
-            includeMetadataRemoved: false
-        )
-        expectCanonicalEventRequest(queryItems: try XCTUnwrap(triggerFilter.queryItems()))
+        // Trigger events have no event-stream fields; they are recognised locally.
+        expectCanonicalEventRequest(queryItems: [])
         var triggerIterator = makeClient()
-            .streamTriggerEvents(filter: triggerFilter)
+            .streamTriggerEvents()
             .makeAsyncIterator()
         let triggerEvent = try await triggerIterator.next()
         XCTAssertNil(triggerEvent)
@@ -13336,23 +12689,18 @@ final class ToriiClientHeaderTests: XCTestCase {
             includeVerified: false,
             includeRejected: true
         )
-        expectCanonicalEventRequest(queryItems: try XCTUnwrap(proofFilter.queryItems()))
+        XCTAssertEqual(try proofFilter.serverFilter()?.description, #"proof_backend = "halo2/ipa""#)
+        expectCanonicalEventRequest(
+            queryItems: [URLQueryItem(name: "filter", value: #"proof_backend = "halo2/ipa""#)]
+        )
         var proofIterator = makeClient()
             .streamProofEvents(filter: proofFilter)
             .makeAsyncIterator()
         let proofEvent = try await proofIterator.next()
         XCTAssertNil(proofEvent)
 
-        let statusFilter = ToriiJSONValue.object([
-            "op": .string("eq"),
-            "args": .array([.string("tx_hash"), .string(Self.pipelineHash)]),
-        ])
-        let statusFilterValue = String(
-            decoding: try statusFilter.encodedData(),
-            as: UTF8.self
-        )
         expectCanonicalEventRequest(
-            queryItems: [URLQueryItem(name: "filter", value: statusFilterValue)]
+            queryItems: [URLQueryItem(name: "filter", value: "tx_hash = \"\(Self.pipelineHash)\"")]
         )
         var statusIterator = makeClient()
             .streamTransactionStatusEvents(hashHex: Self.pipelineHash)
@@ -13369,7 +12717,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             includeVerified: true,
             includeRejected: false
         )
-        let queryItems = try XCTUnwrap(filter.queryItems())
+        let queryItems = [URLQueryItem(name: "filter", value: try XCTUnwrap(filter.serverFilter()).description)]
         var expectedComponents = try XCTUnwrap(
             URLComponents(string: "https://example.test/v1/events/sse")
         )
@@ -13412,10 +12760,16 @@ final class ToriiClientHeaderTests: XCTestCase {
         let ssePayload = """
 id: 15
 event: message
-data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":2,"circuit_id":"halo2/ipa::transfer_v2","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":96,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active"}}}}
+data: {"category":"Data","event":"VerifyingKey","summary":"VerifyingKey(Registered(..))"}
 
 id: 16
-data: {"VerifyingKey":{"Updated":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":3,"circuit_id":"halo2/ipa::transfer_v3","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":96,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active"}}}}
+data: {"category":"Data","event":"Asset","summary":"Asset(Added(..))"}
+
+id: 17
+data: {"category":"Other","event":"Time","summary":"Time(..)"}
+
+id: 18
+data: {"category":"Data","event":"VerifyingKey"}
 
 """
             .data(using: .utf8)!
@@ -13431,256 +12785,31 @@ data: {"VerifyingKey":{"Updated":{"id":{"backend":"halo2/ipa","name":"vk_main"},
             return (response, ssePayload)
         }
 
-        let stream = makeClient().streamVerifyingKeyEvents(filter: ToriiVerifyingKeyEventFilter(backend: "halo2/ipa",
-                                                                                                name: "vk_main"))
-        var iterator = stream.makeAsyncIterator()
+        var iterator = makeClient().streamVerifyingKeyEvents().makeAsyncIterator()
 
         let first = try await iterator.next()
-        guard case let .registered(id, record)? = first?.event else {
-            return XCTFail("Expected registered event")
-        }
         XCTAssertEqual(first?.eventId, "15")
-        XCTAssertEqual(id.backend, "halo2/ipa")
-        XCTAssertEqual(id.name, "vk_main")
-        XCTAssertEqual(record.version, 2)
+        XCTAssertEqual(first?.eventName, "message")
+        XCTAssertEqual(
+            first?.event,
+            ToriiEventNotice(category: "Data", event: "VerifyingKey", summary: "VerifyingKey(Registered(..))")
+        )
         XCTAssertEqual(first?.rawEvent.contains("Registered"), true)
 
         let second = try await iterator.next()
-        guard case let .updated(updatedId, updatedRecord)? = second?.event else {
-            return XCTFail("Expected updated event")
-        }
-        XCTAssertEqual(second?.eventId, "16")
-        XCTAssertEqual(updatedId.backend, "halo2/ipa")
-        XCTAssertEqual(updatedId.name, "vk_main")
-        XCTAssertEqual(updatedRecord.version, 3)
+        XCTAssertEqual(second?.eventId, "18")
+        XCTAssertEqual(second?.event.event, "VerifyingKey")
+        XCTAssertNil(second?.event.summary)
 
         let third = try await iterator.next()
         XCTAssertNil(third)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testStreamVerifyingKeyEventsRejectsMultiplePayloadKinds() async throws {
-        let ssePayload = """
-id: 91
-data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":2,"circuit_id":"halo2/ipa::transfer_v2","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":96,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active"}},"Updated":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":2,"circuit_id":"halo2/ipa::transfer_v2","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":96,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active"}}}}
-
-"""
-            .data(using: .utf8)!
-
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "text/event-stream"]
-            )!
-            return (response, ssePayload)
-        }
-
-        let stream = makeClient().streamVerifyingKeyEvents()
-        var iterator = stream.makeAsyncIterator()
-        do {
-            _ = try await iterator.next()
-            XCTFail("Expected verifying key event decoding error")
-        } catch {
-            guard case ToriiClientError.decoding = error else {
-                return XCTFail("Expected ToriiClientError.decoding")
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testStreamVerifyingKeyEventsRejectsInvalidIdComponent() async throws {
-        let ssePayload = """
-id: 92
-data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2:ipa","name":"vk_main"},"record":{"version":2,"circuit_id":"halo2/ipa::transfer_v2","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":96,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active"}}}}
-
-"""
-            .data(using: .utf8)!
-
-        StubURLProtocol.handler = { request in
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "text/event-stream"]
-            )!
-            return (response, ssePayload)
-        }
-
-        let stream = makeClient().streamVerifyingKeyEvents()
-        var iterator = stream.makeAsyncIterator()
-        do {
-            _ = try await iterator.next()
-            XCTFail("Expected verifying key event decoding error")
-        } catch {
-            guard case ToriiClientError.decoding = error else {
-                return XCTFail("Expected ToriiClientError.decoding")
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testStreamVerifyingKeyEventsRejectsInvalidRecordHex() async throws {
-        let ssePayload = """
-id: 93
-data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":2,"circuit_id":"halo2/ipa::transfer_v2","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"zz","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":96,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active"}}}}
-
-"""
-            .data(using: .utf8)!
-
-        StubURLProtocol.handler = { request in
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "text/event-stream"]
-            )!
-            return (response, ssePayload)
-        }
-
-        let stream = makeClient().streamVerifyingKeyEvents()
-        var iterator = stream.makeAsyncIterator()
-        do {
-            _ = try await iterator.next()
-            XCTFail("Expected verifying key event decoding error")
-        } catch {
-            guard case ToriiClientError.decoding = error else {
-                return XCTFail("Expected ToriiClientError.decoding")
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testStreamVerifyingKeyEventsRejectsNegativeVkLength() async throws {
-        let ssePayload = """
-id: 94
-data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":2,"circuit_id":"halo2/ipa::transfer_v2","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":-1,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active"}}}}
-
-"""
-            .data(using: .utf8)!
-
-        StubURLProtocol.handler = { request in
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "text/event-stream"]
-            )!
-            return (response, ssePayload)
-        }
-
-        let stream = makeClient().streamVerifyingKeyEvents()
-        var iterator = stream.makeAsyncIterator()
-        do {
-            _ = try await iterator.next()
-            XCTFail("Expected verifying key event decoding error")
-        } catch {
-            guard case ToriiClientError.decoding = error else {
-                return XCTFail("Expected ToriiClientError.decoding")
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testStreamVerifyingKeyEventsRejectsEmptyInlineKeyBytes() async throws {
-        let ssePayload = """
-id: 95
-data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":2,"circuit_id":"halo2/ipa::transfer_v2","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":96,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active","key":{"backend":"halo2/ipa","bytes_b64":""}}}}}
-
-"""
-            .data(using: .utf8)!
-
-        StubURLProtocol.handler = { request in
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "text/event-stream"]
-            )!
-            return (response, ssePayload)
-        }
-
-        let stream = makeClient().streamVerifyingKeyEvents()
-        var iterator = stream.makeAsyncIterator()
-        do {
-            _ = try await iterator.next()
-            XCTFail("Expected verifying key event decoding error")
-        } catch {
-            guard case ToriiClientError.decoding = error else {
-                return XCTFail("Expected ToriiClientError.decoding")
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testStreamVerifyingKeyEventsRejectsInlineKeyBackendMismatch() async throws {
-        let ssePayload = """
-id: 96
-data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":2,"circuit_id":"halo2/ipa::transfer_v2","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":2,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active","key":{"backend":"halo2/ipa-alt","bytes_b64":"AQI="}}}}}
-
-"""
-            .data(using: .utf8)!
-
-        StubURLProtocol.handler = { request in
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "text/event-stream"]
-            )!
-            return (response, ssePayload)
-        }
-
-        let stream = makeClient().streamVerifyingKeyEvents()
-        var iterator = stream.makeAsyncIterator()
-        do {
-            _ = try await iterator.next()
-            XCTFail("Expected verifying key event decoding error")
-        } catch {
-            guard case ToriiClientError.decoding = error else {
-                return XCTFail("Expected ToriiClientError.decoding")
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testStreamVerifyingKeyEventsRejectsInlineKeyLengthMismatch() async throws {
-        let ssePayload = """
-id: 97
-data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":2,"circuit_id":"halo2/ipa::transfer_v2","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":3,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active","key":{"backend":"halo2/ipa","bytes_b64":"AQI="}}}}}
-
-"""
-            .data(using: .utf8)!
-
-        StubURLProtocol.handler = { request in
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "text/event-stream"]
-            )!
-            return (response, ssePayload)
-        }
-
-        let stream = makeClient().streamVerifyingKeyEvents()
-        var iterator = stream.makeAsyncIterator()
-        do {
-            _ = try await iterator.next()
-            XCTFail("Expected verifying key event decoding error")
-        } catch {
-            guard case ToriiClientError.decoding = error else {
-                return XCTFail("Expected ToriiClientError.decoding")
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
     func testStreamVerifyingKeyEventsDoesNotEmitLastEventIdHeader() async throws {
         let ssePayload = """
 id: 21
-data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":1,"circuit_id":"halo2/ipa::transfer_v1","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":96,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active"}}}}
+data: {"category":"Data","event":"VerifyingKey","summary":"VerifyingKey(Registered(..))"}
 
 """
             .data(using: .utf8)!
@@ -13698,12 +12827,9 @@ data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main
             return (response, ssePayload)
         }
 
-        let stream = makeClient().streamVerifyingKeyEvents()
-        var iterator = stream.makeAsyncIterator()
+        var iterator = makeClient().streamVerifyingKeyEvents().makeAsyncIterator()
         let event = try await iterator.next()
-        guard case .registered? = event?.event else {
-            return XCTFail("Expected registered event")
-        }
+        XCTAssertEqual(event?.event.event, "VerifyingKey")
         let finished = try await iterator.next()
         XCTAssertNil(finished)
         XCTAssertNil(lastEventIdHeader)
@@ -13878,13 +13004,7 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
     func testStreamAccountTransferHistoryCombinesHistoryAndStream() async throws {
         let historyPayload = """
         {
-            "pagination": {
-                "limit": 2,
-                "snapshot_height": 10,
-                "snapshot_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "next_cursor": null,
-                "has_more": false
-            },
+            "next_cursor":null,
             "items": [
                 {
                     "authority": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -14002,13 +13122,7 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
     func testStreamAccountTransferHistoryPreservesBatchDuplicates() async throws {
         let historyPayload = """
         {
-            "pagination": {
-                "limit": 1,
-                "snapshot_height": 10,
-                "snapshot_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "next_cursor": null,
-                "has_more": false
-            },
+            "next_cursor":null,
             "items": [
                 {
                     "authority": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -14081,61 +13195,19 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
     }
 
 #if canImport(Combine)
-    @available(iOS 15.0, macOS 12.0, *)
-    func testAssetsPublisherDeliversBalances() throws {
-        let payload = """
-[
-  {"asset":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","quantity":"10"},
-  {"asset":"5CJ6HCMxWw9xhuHmxDrzEfWGeE7M","quantity":"20"}
-]
-"""
-            .data(using: .utf8)!
-
-        StubURLProtocol.handler = { request in
-            self.assertDecodedPath(request, contains: "/v1/accounts/sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV/assets")
-            XCTAssertEqual(request.url?.query, "limit=2")
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            return (response, payload)
-        }
-
-        let client = makeClient()
-        var cancellables: Set<AnyCancellable> = []
-        let valueExpectation = expectation(description: "received balances")
-        let completionExpectation = expectation(description: "publisher finished")
-
-        var balances: [ToriiAssetBalance] = []
-        client.assetsPublisher(accountId: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", limit: 2, scheduler: nil)
-            .sink { completion in
-                if case .failure(let error) = completion {
-                    XCTFail("Unexpected failure: \(error)")
-                }
-                completionExpectation.fulfill()
-            } receiveValue: { value in
-                balances = value
-                valueExpectation.fulfill()
-            }
-            .store(in: &cancellables)
-
-        waitForExpectations(timeout: 2.0)
-        XCTAssertEqual(balances.count, 2)
-        XCTAssertEqual(balances.first?.asset, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
-        XCTAssertEqual(balances.first?.quantity, "10")
-        XCTAssertEqual(balances.last?.asset, "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M")
-        XCTAssertEqual(balances.last?.quantity, "20")
-    }
 
     @available(iOS 15.0, macOS 12.0, *)
     func testVerifyingKeyEventsPublisherBridgesSseStream() throws {
         let ssePayload = """
 id: 15
 event: message
-data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":2,"circuit_id":"halo2/ipa::transfer_v2","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":96,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active"}}}}
+data: {"category":"Data","event":"VerifyingKey","summary":"VerifyingKey(Registered(..))"}
 
 id: 16
-data: {"VerifyingKey":{"Updated":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":3,"circuit_id":"halo2/ipa::transfer_v3","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":96,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active"}}}}
+data: {"category":"Data","event":"Trigger","summary":"Trigger(Created(..))"}
+
+id: 17
+data: {"category":"Data","event":"VerifyingKey","summary":"VerifyingKey(Updated(..))"}
 
 """
             .data(using: .utf8)!
@@ -14156,9 +13228,8 @@ data: {"VerifyingKey":{"Updated":{"id":{"backend":"halo2/ipa","name":"vk_main"},
         valueExpectation.expectedFulfillmentCount = 2
         let completionExpectation = expectation(description: "publisher completed")
 
-        var events: [ToriiVerifyingKeyEventMessage] = []
-        client.verifyingKeyEventsPublisher(filter: ToriiVerifyingKeyEventFilter(backend: "halo2/ipa", name: "vk_main"),
-                                           scheduler: nil)
+        var events: [ToriiEventMessage<ToriiEventNotice>] = []
+        client.verifyingKeyEventsPublisher(scheduler: nil)
             .sink { completion in
                 if case .failure(let error) = completion {
                     XCTFail("Unexpected failure: \(error)")
@@ -14172,24 +13243,8 @@ data: {"VerifyingKey":{"Updated":{"id":{"backend":"halo2/ipa","name":"vk_main"},
 
         waitForExpectations(timeout: 2.0)
 
-        guard events.count == 2 else {
-            return XCTFail("Expected two events")
-        }
-        guard case let .registered(id, record) = events[0].event else {
-            return XCTFail("Expected registered event")
-        }
-        XCTAssertEqual(events[0].eventId, "15")
-        XCTAssertEqual(id.backend, "halo2/ipa")
-        XCTAssertEqual(id.name, "vk_main")
-        XCTAssertEqual(record.status, .active)
-
-        guard case let .updated(updatedId, updatedRecord) = events[1].event else {
-            return XCTFail("Expected updated event")
-        }
-        XCTAssertEqual(events[1].eventId, "16")
-        XCTAssertEqual(updatedId.backend, "halo2/ipa")
-        XCTAssertEqual(updatedId.name, "vk_main")
-        XCTAssertEqual(updatedRecord.version, 3)
+        XCTAssertEqual(events.map(\.eventId), ["15", "17"])
+        XCTAssertEqual(events.map(\.event.summary), ["VerifyingKey(Registered(..))", "VerifyingKey(Updated(..))"])
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -14417,13 +13472,7 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
     func testAccountTransferHistoryPublisherCombinesHistoryAndStream() throws {
         let historyPayload = """
         {
-            "pagination": {
-                "limit": 2,
-                "snapshot_height": 10,
-                "snapshot_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "next_cursor": null,
-                "has_more": false
-            },
+            "next_cursor":null,
             "items": [
                 {
                     "authority": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -14552,13 +13601,7 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
     func testStreamTransactionTransferSummariesCombinesHistoryAndStream() async throws {
         let historyPayload = """
         {
-            "pagination": {
-                "limit": 2,
-                "snapshot_height": 10,
-                "snapshot_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "next_cursor": null,
-                "has_more": false
-            },
+            "next_cursor":null,
             "items": [
                 {
                     "authority": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -14669,13 +13712,7 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
     func testTransactionTransferSummariesPublisherCombinesHistoryAndStream() throws {
         let historyPayload = """
         {
-            "pagination": {
-                "limit": 2,
-                "snapshot_height": 10,
-                "snapshot_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "next_cursor": null,
-                "has_more": false
-            },
+            "next_cursor":null,
             "items": [
                 {
                     "authority": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -14786,76 +13823,21 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
     }
 #endif
 
-    func testVerifyingKeyEventFilterRequiresBackendAndName() {
-        XCTAssertThrowsError(try ToriiVerifyingKeyEventFilter(backend: "halo2/ipa", name: nil).queryItems()) { error in
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload error")
-            }
-        }
-    }
-
-    func testVerifyingKeyEventFilterRejectsInvalidBackendOrName() {
-        for backend in [
-            " halo2/ipa",
-            "halo2/ipa ",
-            "\thalo2/ipa",
-            "halo2/ipa\n",
-            "stark/fri/miden",
-            "halo2/ipa/orchard",
-            "halo2/kzg",
-            "halo2:ipa",
-            "mock/dev"
-        ] {
-            XCTAssertThrowsError(try ToriiVerifyingKeyEventFilter(backend: backend, name: "vk").queryItems()) { error in
-                guard case let ToriiClientError.invalidPayload(reason) = error else {
-                    return XCTFail("Expected invalidPayload error")
-                }
-                XCTAssertEqual(reason, expectedVerifierRegistryBackendRejection(backend))
-            }
-        }
-
-        for name in ["", "   ", "\t", "\n", "vk:main"] {
-            XCTAssertThrowsError(try ToriiVerifyingKeyEventFilter(backend: "halo2/ipa", name: name).queryItems()) { error in
-                guard case ToriiClientError.invalidPayload = error else {
-                    return XCTFail("Expected invalidPayload error")
-                }
-            }
-        }
-    }
-
-    func testVerifyingKeyEventFilterCanonicalizesNameBeforeEncoding() throws {
-        let queryItems = try XCTUnwrap(ToriiVerifyingKeyEventFilter(backend: "halo2/ipa",
-                                                                    name: " vk_main ").queryItems())
-        let filterValue = try XCTUnwrap(queryItems.first { $0.name == "filter" }?.value)
-        let data = try XCTUnwrap(filterValue.data(using: .utf8))
-        let decoded = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        let verifyingKey = try XCTUnwrap(decoded["VerifyingKey"] as? [String: Any])
-        let matcher = try XCTUnwrap(verifyingKey["id_matcher"] as? [String: Any])
-        XCTAssertEqual(matcher["backend"] as? String, "halo2/ipa")
-        XCTAssertEqual(matcher["name"] as? String, "vk_main")
-    }
-
     @available(iOS 15.0, macOS 12.0, *)
     func testStreamTriggerEventsAsync() async throws {
         let ssePayload = """
 id: 101
 event: lifecycle
-data: {"Trigger":{"Created":"nightly-tick"}}
+data: {"category":"Data","event":"Trigger","summary":"Trigger(Created(..))"}
 
 id: 102
-data: {"Trigger":{"Deleted":"nightly-tick"}}
+data: {"category":"Other","event":"ExecuteTrigger","summary":"ExecuteTrigger(..)"}
 
 id: 103
-data: {"Trigger":{"Extended":{"trigger":"nightly-tick","by":3}}}
+data: {"category":"Future","event":"Trigger","summary":"not a data event"}
 
 id: 104
-data: {"Trigger":{"Shortened":{"trigger":"nightly-tick","by":1}}}
-
-id: 105
-data: {"Trigger":{"MetadataInserted":{"target":"nightly-tick","key":"mode","value":"fast"}}}
-
-id: 106
-data: {"Trigger":{"MetadataRemoved":{"target":"nightly-tick","key":"mode","value":null}}}
+data: {"category":"Data","event":"Trigger","summary":"Trigger(Deleted(..))"}
 
 """
             .data(using: .utf8)!
@@ -14871,104 +13853,26 @@ data: {"Trigger":{"MetadataRemoved":{"target":"nightly-tick","key":"mode","value
             return (response, ssePayload)
         }
 
-        var filter = ToriiTriggerEventFilter(triggerId: "nightly-tick")
-        filter.includeMetadataInserted = true
-        filter.includeMetadataRemoved = true
-
-        let stream = makeClient().streamTriggerEvents(filter: filter)
-        var iterator = stream.makeAsyncIterator()
+        var iterator = makeClient().streamTriggerEvents().makeAsyncIterator()
 
         let created = try await iterator.next()
-        guard case let .created(id)? = created?.event else {
-            return XCTFail("Expected created trigger event")
-        }
         XCTAssertEqual(created?.eventId, "101")
         XCTAssertEqual(created?.eventName, "lifecycle")
-        XCTAssertEqual(id, "nightly-tick")
-        XCTAssertTrue(created?.rawEvent.contains("Created") ?? false)
+        XCTAssertEqual(created?.event, ToriiEventNotice(category: "Data", event: "Trigger", summary: "Trigger(Created(..))"))
 
         let deleted = try await iterator.next()
-        guard case let .deleted(deletedId)? = deleted?.event else {
-            return XCTFail("Expected deleted trigger event")
-        }
-        XCTAssertEqual(deleted?.eventId, "102")
-        XCTAssertEqual(deletedId, "nightly-tick")
-
-        let extended = try await iterator.next()
-        guard case let .extended(extensionChange)? = extended?.event else {
-            return XCTFail("Expected extended trigger event")
-        }
-        XCTAssertEqual(extended?.eventId, "103")
-        XCTAssertEqual(extensionChange.triggerId, "nightly-tick")
-        XCTAssertEqual(extensionChange.delta, 3)
-
-        let shortened = try await iterator.next()
-        guard case let .shortened(shortenChange)? = shortened?.event else {
-            return XCTFail("Expected shortened trigger event")
-        }
-        XCTAssertEqual(shortened?.eventId, "104")
-        XCTAssertEqual(shortenChange.triggerId, "nightly-tick")
-        XCTAssertEqual(shortenChange.delta, 1)
-
-        let inserted = try await iterator.next()
-        guard case let .metadataInserted(metadata)? = inserted?.event else {
-            return XCTFail("Expected metadata inserted trigger event")
-        }
-        XCTAssertEqual(inserted?.eventId, "105")
-        XCTAssertEqual(metadata.triggerId, "nightly-tick")
-        XCTAssertEqual(metadata.key, "mode")
-        XCTAssertEqual(metadata.value, .string("fast"))
-
-        let removed = try await iterator.next()
-        guard case let .metadataRemoved(metadataRemoved)? = removed?.event else {
-            return XCTFail("Expected metadata removed trigger event")
-        }
-        XCTAssertEqual(removed?.eventId, "106")
-        XCTAssertEqual(metadataRemoved.triggerId, "nightly-tick")
-        XCTAssertEqual(metadataRemoved.key, "mode")
-        XCTAssertEqual(metadataRemoved.value, .null)
+        XCTAssertEqual(deleted?.eventId, "104")
+        XCTAssertEqual(deleted?.event.summary, "Trigger(Deleted(..))")
 
         let finished = try await iterator.next()
         XCTAssertNil(finished)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testStreamTriggerEventsRejectsMultiplePayloadKinds() async throws {
-        let ssePayload = """
-id: 301
-data: {"Trigger":{"Created":"nightly-tick","Deleted":"nightly-tick"}}
-
-"""
-            .data(using: .utf8)!
-
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "text/event-stream"]
-            )!
-            return (response, ssePayload)
-        }
-
-        let stream = makeClient().streamTriggerEvents()
-        var iterator = stream.makeAsyncIterator()
-        do {
-            _ = try await iterator.next()
-            XCTFail("Expected trigger event decoding error")
-        } catch {
-            guard case ToriiClientError.decoding = error else {
-                return XCTFail("Expected ToriiClientError.decoding")
-            }
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
     func testStreamTriggerEventsDoesNotEmitLastEventIdHeader() async throws {
         let ssePayload = """
 id: 205
-data: {"Trigger":{"Deleted":"nightly-tick"}}
+data: {"category":"Data","event":"Trigger","summary":"Trigger(Deleted(..))"}
 
 """
             .data(using: .utf8)!
@@ -14986,65 +13890,31 @@ data: {"Trigger":{"Deleted":"nightly-tick"}}
             return (response, ssePayload)
         }
 
-        let stream = makeClient().streamTriggerEvents()
-        var iterator = stream.makeAsyncIterator()
+        var iterator = makeClient().streamTriggerEvents().makeAsyncIterator()
         let event = try await iterator.next()
-        guard case let .deleted(id)? = event?.event else {
-            return XCTFail("Expected deleted trigger event")
-        }
-        XCTAssertEqual(id, "nightly-tick")
+        XCTAssertEqual(event?.event.event, "Trigger")
         XCTAssertNil(lastEventIdHeader)
         let finished = try await iterator.next()
         XCTAssertNil(finished)
     }
 
-    func testTriggerEventFilterRequiresAtLeastOneEventType() {
-        XCTAssertThrowsError(
-            try ToriiTriggerEventFilter(includeCreated: false,
-                                        includeDeleted: false,
-                                        includeExtended: false,
-                                        includeShortened: false,
-                                        includeMetadataInserted: false,
-                                        includeMetadataRemoved: false).queryItems()
-        ) { error in
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload error")
-            }
-        }
-    }
-
-    func testTriggerEventFilterEncodesMatcherAndEventSet() throws {
-        let filter = ToriiTriggerEventFilter(triggerId: "nightly-tick",
-                                             includeCreated: true,
-                                             includeDeleted: false,
-                                             includeExtended: true,
-                                             includeShortened: false,
-                                             includeMetadataInserted: false,
-                                             includeMetadataRemoved: true)
-        let queryItems = try XCTUnwrap(filter.queryItems())
-        XCTAssertEqual(queryItems.count, 1)
-        XCTAssertEqual(queryItems[0].name, "filter")
-        let data = try XCTUnwrap(queryItems[0].value?.data(using: .utf8))
-        let decoded = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        let trigger = try XCTUnwrap(decoded["Trigger"] as? [String: Any])
-        XCTAssertEqual(trigger["id_matcher"] as? String, "nightly-tick")
-        let eventSet = try XCTUnwrap(trigger["event_set"] as? [String: Any])
-        XCTAssertEqual(eventSet["Created"] as? Bool, true)
-        XCTAssertEqual(eventSet["Deleted"] as? Bool, false)
-        XCTAssertEqual(eventSet["Extended"] as? Bool, true)
-        XCTAssertEqual(eventSet["Shortened"] as? Bool, false)
-        XCTAssertEqual(eventSet["MetadataInserted"] as? Bool, false)
-        XCTAssertEqual(eventSet["MetadataRemoved"] as? Bool, true)
-    }
-
     @available(iOS 15.0, macOS 12.0, *)
     func testStreamProofEventsAsync() async throws {
         let ssePayload = """
+id: 41
+data: {"category":"Data","event":"Asset","summary":"Asset(Added(..))"}
+
 id: 42
-        data: {"Proof":{"Verified":{"id":{"backend":"halo2/ipa","proof_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"vk_ref":{"backend":"halo2/ipa","name":"vk_main"},"vk_commitment":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","call_hash":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","envelope_hash":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}}}
+data: {"category":"Data","event":"ProofVerified","backend":"halo2/ipa","proof_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","call_hash":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","envelope_hash":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","vk_ref":"halo2/ipa::vk_main","vk_commitment":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
 
 id: 43
-        data: {"Proof":{"Rejected":{"id":{"backend":"halo2/ipa","proof_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}}
+data: {"category":"Data","event":"ProofRejected","backend":"halo2/ipa","proof_hash":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","call_hash":null,"envelope_hash":null,"vk_ref":null,"vk_commitment":null}
+
+id: 44
+data: {"category":"Data","event":"ProofPruned","backend":"halo2/ipa","removed_count":1,"remaining":9,"cap":10,"grace_blocks":2,"prune_batch":4,"pruned_at_height":77,"pruned_by":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","origin":"Insert","removed":[{"backend":"halo2/ipa","proof_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}
+
+id: 45
+data: {"category":"Data","event":"ProofPruned","backend":"halo2/ipa","removed_count":1,"remaining":9,"cap":10,"grace_blocks":2,"prune_batch":4,"pruned_at_height":78,"pruned_by":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV","origin":"Manual","removed":[{"backend":"halo2/ipa","proof_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}
 
 """
             .data(using: .utf8)!
@@ -15061,9 +13931,7 @@ id: 43
         }
 
         let stream = makeClient().streamProofEvents(filter: ToriiProofEventFilter(backend: "halo2/ipa",
-                                                                                  proofHashHex: String(repeating: "a", count: 64),
-                                                                                  includeVerified: true,
-                                                                                  includeRejected: true))
+                                                                                  proofHashHex: String(repeating: "a", count: 64)))
         var iterator = stream.makeAsyncIterator()
 
         let verified = try await iterator.next()
@@ -15071,8 +13939,9 @@ id: 43
             return XCTFail("Expected verified proof event")
         }
         XCTAssertEqual(verified?.eventId, "42")
-        XCTAssertEqual(payload.id.backend, "halo2/ipa")
-        XCTAssertEqual(payload.id.proofHashHex, String(repeating: "a", count: 64))
+        XCTAssertEqual(payload.id, ToriiProofId(backend: "halo2/ipa", proofHashHex: String(repeating: "a", count: 64)))
+        XCTAssertEqual(payload.verifyingKeyRef, "halo2/ipa::vk_main")
+        XCTAssertEqual(payload.verifyingKeyId?.backend, "halo2/ipa")
         XCTAssertEqual(payload.verifyingKeyId?.name, "vk_main")
         XCTAssertEqual(payload.verifyingKeyCommitmentHex, String(repeating: "b", count: 64))
         XCTAssertEqual(payload.callHashHex, String(repeating: "c", count: 64))
@@ -15084,49 +13953,29 @@ id: 43
         }
         XCTAssertEqual(rejected?.eventId, "43")
         XCTAssertEqual(rejectedPayload.id.proofHashHex, String(repeating: "a", count: 64))
+        XCTAssertNil(rejectedPayload.verifyingKeyRef)
         XCTAssertNil(rejectedPayload.verifyingKeyId)
+        XCTAssertNil(rejectedPayload.callHashHex)
+
+        let pruned = try await iterator.next()
+        guard case let .pruned(prunedPayload)? = pruned?.event else {
+            return XCTFail("Expected pruned proof event")
+        }
+        XCTAssertEqual(pruned?.eventId, "44")
+        XCTAssertEqual(prunedPayload.origin, .insert)
+        XCTAssertEqual(prunedPayload.prunedAtHeight, 77)
+        XCTAssertEqual(prunedPayload.remaining, 9)
+        XCTAssertEqual(prunedPayload.removed.map(\.proofHashHex), [String(repeating: "a", count: 64)])
 
         let finished = try await iterator.next()
-        XCTAssertNil(finished)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testStreamProofEventsRejectsMultiplePayloadKinds() async throws {
-        let ssePayload = """
-id: 77
-data: {"Proof":{"Verified":{"id":{"backend":"halo2/ipa","proof_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},"Rejected":{"id":{"backend":"halo2/ipa","proof_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}}
-
-"""
-            .data(using: .utf8)!
-
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "text/event-stream"]
-            )!
-            return (response, ssePayload)
-        }
-
-        let stream = makeClient().streamProofEvents()
-        var iterator = stream.makeAsyncIterator()
-        do {
-            _ = try await iterator.next()
-            XCTFail("Expected proof event decoding error")
-        } catch {
-            guard case ToriiClientError.decoding = error else {
-                return XCTFail("Expected ToriiClientError.decoding")
-            }
-        }
+        XCTAssertNil(finished, "event 45 prunes another proof and is filtered out locally")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     func testStreamProofEventsRejectsInvalidProofHashHex() async throws {
         let ssePayload = """
 id: 90
-data: {"Proof":{"Rejected":{"id":{"backend":"halo2/ipa","proof_hash_hex":"abcd"}}}}
+data: {"category":"Data","event":"ProofRejected","backend":"halo2/ipa","proof_hash":"abcd"}
 
 """
             .data(using: .utf8)!
@@ -15141,14 +13990,13 @@ data: {"Proof":{"Rejected":{"id":{"backend":"halo2/ipa","proof_hash_hex":"abcd"}
             return (response, ssePayload)
         }
 
-        let stream = makeClient().streamProofEvents()
-        var iterator = stream.makeAsyncIterator()
+        var iterator = makeClient().streamProofEvents().makeAsyncIterator()
         do {
             _ = try await iterator.next()
             XCTFail("Expected proof event decoding error")
         } catch {
             guard case ToriiClientError.decoding = error else {
-                return XCTFail("Expected ToriiClientError.decoding")
+                return XCTFail("Expected ToriiClientError.decoding, got \(error)")
             }
         }
     }
@@ -15157,7 +14005,7 @@ data: {"Proof":{"Rejected":{"id":{"backend":"halo2/ipa","proof_hash_hex":"abcd"}
     func testStreamProofEventsRejectsInvalidCommitmentHex() async throws {
         let ssePayload = """
 id: 91
-data: {"Proof":{"Verified":{"id":{"backend":"halo2/ipa","proof_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"vk_commitment":"zzzz"}}}
+data: {"category":"Data","event":"ProofVerified","backend":"halo2/ipa","proof_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","vk_commitment":"zzzz"}
 
 """
             .data(using: .utf8)!
@@ -15172,14 +14020,13 @@ data: {"Proof":{"Verified":{"id":{"backend":"halo2/ipa","proof_hash_hex":"aaaaaa
             return (response, ssePayload)
         }
 
-        let stream = makeClient().streamProofEvents()
-        var iterator = stream.makeAsyncIterator()
+        var iterator = makeClient().streamProofEvents().makeAsyncIterator()
         do {
             _ = try await iterator.next()
             XCTFail("Expected proof event decoding error")
         } catch {
             guard case ToriiClientError.decoding = error else {
-                return XCTFail("Expected ToriiClientError.decoding")
+                return XCTFail("Expected ToriiClientError.decoding, got \(error)")
             }
         }
     }
@@ -15188,7 +14035,7 @@ data: {"Proof":{"Verified":{"id":{"backend":"halo2/ipa","proof_hash_hex":"aaaaaa
     func testStreamProofEventsRejectsInvalidBackend() async throws {
         let ssePayload = """
 id: 92
-data: {"Proof":{"Rejected":{"id":{"backend":"halo2:ipa","proof_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}}
+data: {"category":"Data","event":"ProofRejected","backend":"halo2:ipa","proof_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 
 """
             .data(using: .utf8)!
@@ -15203,14 +14050,13 @@ data: {"Proof":{"Rejected":{"id":{"backend":"halo2:ipa","proof_hash_hex":"aaaaaa
             return (response, ssePayload)
         }
 
-        let stream = makeClient().streamProofEvents()
-        var iterator = stream.makeAsyncIterator()
+        var iterator = makeClient().streamProofEvents().makeAsyncIterator()
         do {
             _ = try await iterator.next()
             XCTFail("Expected proof event decoding error")
         } catch {
             guard case ToriiClientError.decoding = error else {
-                return XCTFail("Expected ToriiClientError.decoding")
+                return XCTFail("Expected ToriiClientError.decoding, got \(error)")
             }
         }
     }
@@ -15219,7 +14065,7 @@ data: {"Proof":{"Rejected":{"id":{"backend":"halo2:ipa","proof_hash_hex":"aaaaaa
     func testStreamProofEventsDoesNotEmitLastEventIdHeader() async throws {
         let ssePayload = """
 id: 88
-        data: {"Proof":{"Rejected":{"id":{"backend":"halo2/ipa","proof_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}}
+data: {"category":"Data","event":"ProofRejected","backend":"halo2/ipa","proof_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","call_hash":null,"envelope_hash":null,"vk_ref":null,"vk_commitment":null}
 
 """
             .data(using: .utf8)!
@@ -15236,8 +14082,7 @@ id: 88
             return (response, ssePayload)
         }
 
-        let stream = makeClient().streamProofEvents()
-        var iterator = stream.makeAsyncIterator()
+        var iterator = makeClient().streamProofEvents().makeAsyncIterator()
         let event = try await iterator.next()
         guard case .rejected? = event?.event else {
             return XCTFail("Expected rejected proof event")
@@ -15349,9 +14194,9 @@ data: {"code":"stream_source_closed","message":"The event source closed.","dropp
     @available(iOS 15.0, macOS 12.0, *)
     func testTransactionStatusStreamStillFiltersOrdinaryNonTransactionEvents() async throws {
         let ssePayload = """
-data: {"event":"Block","hash":"\(Self.pipelineHash)","status":"Applied"}
+data: {"category":"Pipeline","event":"Block","status":"Applied"}
 
-data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","block_height":17}
+data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)","lane_id":0,"dataspace_id":0,"status":"Rejected","block_height":17,"rejection_code":"limit_check","rejection_reason":"transaction exceeded a limit"}
 
 """.data(using: .utf8)!
 
@@ -15367,27 +14212,27 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
 
         var iterator = makeClient().streamTransactionStatusEvents(hashHex: Self.pipelineHash).makeAsyncIterator()
-        let event = try await iterator.next()
-        XCTAssertEqual(event?.event, "Transaction")
-        XCTAssertEqual(event?.blockHeight, 17)
+        let message = try await iterator.next()
+        XCTAssertEqual(message?.event.status, .rejected)
+        XCTAssertEqual(message?.event.blockHeight, 17)
+        XCTAssertEqual(message?.event.rejectionCode, .limitCheck)
+        XCTAssertEqual(message?.event.rejectionReason, "transaction exceeded a limit")
         let finished = try await iterator.next()
         XCTAssertNil(finished)
     }
 
-    func testProofEventFilterRequiresBackendAndHash() {
-        XCTAssertThrowsError(try ToriiProofEventFilter(backend: "halo2/ipa", proofHashHex: nil).queryItems()) { error in
+    func testProofEventFilterRequiresAnEventKindAndAValidHash() {
+        XCTAssertThrowsError(try ToriiProofEventFilter(includeVerified: false, includeRejected: false, includePruned: false).serverFilter()) { error in
             guard case ToriiClientError.invalidPayload = error else {
                 return XCTFail("Expected invalidPayload error")
             }
         }
-        XCTAssertThrowsError(try ToriiProofEventFilter(backend: "halo2/ipa",
-                                                       proofHashHex: "abc",
-                                                       includeVerified: true,
-                                                       includeRejected: true).queryItems()) { error in
+        XCTAssertThrowsError(try ToriiProofEventFilter(backend: "halo2/ipa", proofHashHex: "abc").serverFilter()) { error in
             guard case ToriiClientError.invalidPayload = error else {
                 return XCTFail("Expected invalidPayload error")
             }
         }
+        XCTAssertNil(try ToriiProofEventFilter().serverFilter())
     }
 
     func testProofEventFilterRejectsInvalidBackendOrHash() {
@@ -15402,10 +14247,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "halo2:ipa",
             "mock/dev"
         ] {
-            XCTAssertThrowsError(try ToriiProofEventFilter(backend: backend,
-                                                           proofHashHex: String(repeating: "a", count: 64),
-                                                           includeVerified: true,
-                                                           includeRejected: true).queryItems()) { error in
+            XCTAssertThrowsError(try ToriiProofEventFilter(backend: backend).serverFilter()) { error in
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
                     return XCTFail("Expected invalidPayload error")
                 }
@@ -15413,36 +14255,36 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             }
         }
 
-        for proofHashHex in [
+        for hash in [
             "",
             "abc",
             String(repeating: "z", count: 64),
             String(repeating: "a", count: 63),
             "0x" + String(repeating: "a", count: 63)
         ] {
-            XCTAssertThrowsError(try ToriiProofEventFilter(backend: "halo2/ipa",
-                                                           proofHashHex: proofHashHex,
-                                                           includeVerified: true,
-                                                           includeRejected: true).queryItems()) { error in
-                guard case ToriiClientError.invalidPayload = error else {
-                    return XCTFail("Expected invalidPayload error")
+            for filter in [
+                ToriiProofEventFilter(proofHashHex: hash),
+                ToriiProofEventFilter(callHashHex: hash),
+                ToriiProofEventFilter(envelopeHashHex: hash),
+            ] {
+                XCTAssertThrowsError(try filter.serverFilter()) { error in
+                    guard case ToriiClientError.invalidPayload = error else {
+                        return XCTFail("Expected invalidPayload error")
+                    }
                 }
             }
         }
     }
 
-    func testProofEventFilterCanonicalizesHashBeforeEncoding() throws {
-        let queryItems = try XCTUnwrap(ToriiProofEventFilter(backend: "halo2/ipa",
-                                                             proofHashHex: "0x" + String(repeating: "A", count: 64),
-                                                             includeVerified: true,
-                                                             includeRejected: true).queryItems())
-        let filterValue = try XCTUnwrap(queryItems.first { $0.name == "filter" }?.value)
-        let data = try XCTUnwrap(filterValue.data(using: .utf8))
-        let decoded = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        let proof = try XCTUnwrap(decoded["Proof"] as? [String: Any])
-        let matcher = try XCTUnwrap(proof["id_matcher"] as? [String: Any])
-        XCTAssertEqual(matcher["backend"] as? String, "halo2/ipa")
-        XCTAssertEqual(matcher["hash_hex"] as? String, String(repeating: "a", count: 64))
+    func testProofEventFilterRendersEventStreamTextFilter() throws {
+        let call = "0x" + String(repeating: "A", count: 64)
+        let envelope = String(repeating: "b", count: 64)
+        let filter = ToriiProofEventFilter(backend: "halo2/ipa", callHashHex: call, envelopeHashHex: envelope)
+        XCTAssertEqual(
+            try filter.serverFilter()?.description,
+            "proof_backend = \"halo2/ipa\" and proof_call_hash = \"\(String(repeating: "a", count: 64))\" and proof_envelope_hash = \"\(envelope)\""
+        )
+        XCTAssertNil(try ToriiProofEventFilter(proofHashHex: envelope).serverFilter())
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -15672,19 +14514,17 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
     }
 
-
-
-
-
-
     func testPipelineTransactionEventDecodesNumericDataspaceId() throws {
         let transactionHash = String(repeating: "b", count: 64)
         let payload = """
         {
+            "category": "Pipeline",
             "event": "Transaction",
             "hash": "\(transactionHash)",
-            "status": "Applied",
-            "dataspace_id": 9
+            "status": "Approved",
+            "lane_id": 3,
+            "dataspace_id": 9,
+            "block_height": null
         }
         """
 
@@ -15693,10 +14533,12 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             from: Data(payload.utf8)
         )
 
-        XCTAssertEqual(event.dataspaceId, "9")
+        XCTAssertEqual(event.dataspaceId, 9)
+        XCTAssertEqual(event.laneId, 3)
+        XCTAssertEqual(event.status, .approved)
+        XCTAssertNil(event.blockHeight)
+        XCTAssertNil(event.rejectionCode)
     }
-
-
 
     @available(iOS 15.0, macOS 12.0, *)
     func testStatusSnapshotTracksMetrics() async throws {
@@ -17233,37 +16075,6 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
     }
 
-    func testDeployContractInstanceRejectsRemovedServerSideSigningFlow() async {
-        let manifest = ToriiContractManifest(compilerFingerprint: "kotodama-0.8")
-        let req = ToriiDeployContractInstanceRequest(authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                                                     namespace: "apps",
-                                                     contractId: "calc.v1",
-                                                     codeB64: "AQ==",
-                                                     manifest: manifest)
-        await XCTAssertThrowsErrorAsync(try await makeClient().deployContractInstance(req)) { error in
-            guard case let ToriiClientError.invalidPayload(reason) = error else {
-                return XCTFail("Expected invalidPayload, got \(error)")
-            }
-            XCTAssertTrue(reason.contains("/v1/contracts/instance"))
-            XCTAssertTrue(reason.contains("locally signed transaction"))
-        }
-    }
-
-    func testActivateContractInstanceRejectsRemovedServerSideSigningFlow() async {
-        let codeHash = String(repeating: "1", count: 64)
-        let req = ToriiActivateContractInstanceRequest(authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                                                       namespace: "apps",
-                                                       contractId: "calc.v1",
-                                                       codeHash: codeHash)
-        await XCTAssertThrowsErrorAsync(try await makeClient().activateContractInstance(req)) { error in
-            guard case let ToriiClientError.invalidPayload(reason) = error else {
-                return XCTFail("Expected invalidPayload, got \(error)")
-            }
-            XCTAssertTrue(reason.contains("/v1/contracts/instance/activate"))
-            XCTAssertTrue(reason.contains("locally signed transaction"))
-        }
-    }
-
     func testContractCallBoundaryConsumesSharedRustArgumentRecordFixture() async throws {
         let fixtureURL = repositoryRootURL()
             .appendingPathComponent("fixtures/kotodama/entrypoint_argument_record_v1.json")
@@ -17284,7 +16095,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertNoThrow(try AccountAddress.parseEncoded(fixtureAuthority))
         let authority = self.authority
         XCTAssertEqual(fixture["codec"] as? String, "EntrypointArgumentRecordV1")
-        XCTAssertEqual(fixture["generator"] as? String, "ivm::encode_argument_record_from_json")
+        XCTAssertEqual(fixture["generator"] as? String, "ivm_abi::arguments::encode_argument_record_from_json")
         XCTAssertNotNil(schemaHash.range(of: "^[0-9a-f]{64}$", options: .regularExpression))
         XCTAssertNotNil(recordHex.range(of: "^(?:[0-9a-f]{2})+$", options: .regularExpression))
         XCTAssertEqual(
@@ -17346,9 +16157,10 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
 
         await XCTAssertThrowsErrorAsync(try await makeClient().callContract(request)) { error in
-            guard case let ToriiClientError.httpStatus(code, _, _) = error else {
-                return XCTFail("expected httpStatus, got \(error)")
+            guard case let ToriiClientError.api(apiError) = error else {
+                return XCTFail("expected an api error, got \(error)")
             }
+            let code = apiError.status
             XCTAssertEqual(code, 503)
         }
     }
@@ -18971,7 +17783,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             do {
                 _ = try await makeClient().getTransactionStatus(hashHex: Self.pipelineHash)
                 XCTFail("Expected HTTP \(code) to be rejected")
-            } catch let ToriiClientError.httpStatus(actual, _, _) {
+            } catch let ToriiClientError.api(apiError) {
+                let actual = apiError.status
                 XCTAssertEqual(actual, code)
             } catch {
                 XCTFail("Unexpected error: \(error)")
@@ -19040,9 +17853,12 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             _ = try await makeClient().getTransactionStatus(hashHex: Self.pipelineHash)
             XCTFail("expected status failure")
         } catch let error as ToriiClientError {
-            guard case let .httpStatus(code, message, rejectCode) = error else {
+            guard case let .api(apiError) = error else {
                 return XCTFail("unexpected error: \(error)")
             }
+            let code = apiError.status
+            let message: String? = apiError.message
+            let rejectCode = apiError.rejectCode
             XCTAssertEqual(code, 400)
             XCTAssertEqual(rejectCode, "build_claim_missing")
             XCTAssertEqual(message, "missing build claim for transaction status")
@@ -19075,9 +17891,12 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             _ = try await makeClient().getTransactionStatus(hashHex: Self.pipelineHash)
             XCTFail("expected status failure")
         } catch let error as ToriiClientError {
-            guard case let .httpStatus(code, message, rejectCode) = error else {
+            guard case let .api(apiError) = error else {
                 return XCTFail("unexpected error: \(error)")
             }
+            let code = apiError.status
+            let message: String? = apiError.message
+            let rejectCode = apiError.rejectCode
             XCTAssertEqual(code, 503)
             XCTAssertNil(rejectCode)
             XCTAssertEqual(message, "The finalized proof is not available yet.")
@@ -19106,9 +17925,12 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             _ = try await makeClient().getTransactionStatus(hashHex: Self.pipelineHash)
             XCTFail("expected status failure")
         } catch let error as ToriiClientError {
-            guard case let .httpStatus(code, message, rejectCode) = error else {
+            guard case let .api(apiError) = error else {
                 return XCTFail("unexpected error: \(error)")
             }
+            let code = apiError.status
+            let message: String? = apiError.message
+            let rejectCode = apiError.rejectCode
             XCTAssertEqual(code, 502)
             XCTAssertNil(rejectCode)
             XCTAssertEqual(message, "upstream status pipeline unavailable")
@@ -19150,9 +17972,12 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             _ = try await makeClient().getTransactionStatus(hashHex: Self.pipelineHash)
             XCTFail("expected status failure")
         } catch let error as ToriiClientError {
-            guard case let .httpStatus(code, message, rejectCode) = error else {
+            guard case let .api(apiError) = error else {
                 return XCTFail("unexpected error: \(error)")
             }
+            let code = apiError.status
+            let message: String? = apiError.message
+            let rejectCode = apiError.rejectCode
             XCTAssertEqual(code, 429)
             XCTAssertNil(rejectCode)
             XCTAssertEqual(message, "transaction queue is at capacity")
@@ -19178,9 +18003,12 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             _ = try await makeClient().getTransactionStatus(hashHex: Self.pipelineHash)
             XCTFail("expected status failure")
         } catch let error as ToriiClientError {
-            guard case let .httpStatus(code, message, rejectCode) = error else {
+            guard case let .api(apiError) = error else {
                 return XCTFail("unexpected error: \(error)")
             }
+            let code = apiError.status
+            let message: String? = apiError.message
+            let rejectCode = apiError.rejectCode
             XCTAssertEqual(code, 503)
             XCTAssertNil(rejectCode)
             XCTAssertEqual(message, "proxy temporarily unavailable")
@@ -19214,9 +18042,12 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             _ = try await makeClient().getTransactionStatus(hashHex: Self.pipelineHash)
             XCTFail("expected status failure")
         } catch let error as ToriiClientError {
-            guard case let .httpStatus(code, message, rejectCode) = error else {
+            guard case let .api(apiError) = error else {
                 return XCTFail("unexpected error: \(error)")
             }
+            let code = apiError.status
+            let message: String? = apiError.message
+            let rejectCode = apiError.rejectCode
             XCTAssertEqual(code, 422)
             XCTAssertNil(rejectCode)
             XCTAssertEqual(message, "status query validation failed")
@@ -19245,9 +18076,12 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             _ = try await makeClient().getTransactionStatus(hashHex: Self.pipelineHash)
             XCTFail("expected status failure")
         } catch let error as ToriiClientError {
-            guard case let .httpStatus(code, message, rejectCode) = error else {
+            guard case let .api(apiError) = error else {
                 return XCTFail("unexpected error: \(error)")
             }
+            let code = apiError.status
+            let message: String? = apiError.message
+            let rejectCode = apiError.rejectCode
             XCTAssertEqual(code, 500)
             XCTAssertNil(rejectCode)
             XCTAssertEqual(message, #"{"code":"E123","status":"invalid"}"#)
@@ -19274,9 +18108,12 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             _ = try await makeClient().getTransactionStatus(hashHex: Self.pipelineHash)
             XCTFail("expected status failure")
         } catch let error as ToriiClientError {
-            guard case let .httpStatus(code, message, rejectCode) = error else {
+            guard case let .api(apiError) = error else {
                 return XCTFail("unexpected error: \(error)")
             }
+            let code = apiError.status
+            let message: String? = apiError.message
+            let rejectCode = apiError.rejectCode
             XCTAssertEqual(code, 500)
             XCTAssertNil(rejectCode)
             let value = try XCTUnwrap(message)
@@ -19323,9 +18160,12 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 _ = try await makeClient().getTransactionStatus(hashHex: Self.pipelineHash)
                 XCTFail("\(fixtureCase.id): expected status failure")
             } catch let error as ToriiClientError {
-                guard case let .httpStatus(code, message, rejectCode) = error else {
+                guard case let .api(apiError) = error else {
                     return XCTFail("\(fixtureCase.id): unexpected error shape \(error)")
                 }
+                let code = apiError.status
+                let message: String? = apiError.message
+                let rejectCode = apiError.rejectCode
                 XCTAssertEqual(code, fixtureCase.statusCode, "\(fixtureCase.id): status code mismatch")
                 if let expectedRejectCode = fixtureCase.expectedRejectCode {
                     XCTAssertEqual(rejectCode, expectedRejectCode, "\(fixtureCase.id): reject code mismatch")

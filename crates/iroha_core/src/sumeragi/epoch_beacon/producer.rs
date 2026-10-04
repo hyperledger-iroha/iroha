@@ -4,19 +4,19 @@
 //! pulse. View changes and empty payload fallback never reset the pulse. Followers do not read
 //! this owner: they decode the exact signed header witness and validate it in pristine State.
 //!
-//! TODO: the existing lower beacon transcript/reducer owns ordinary nested allocations.
-//! Complete its original-pool allocation admission before production resource qualification.
+//! TODO: the lower beacon session/transcript and cryptographic scratch still own
+//! ordinary allocations. The reducer payload, partial slots and selected subset are
+//! bounded inline; complete the remaining original-pool admission before qualification.
 
 mod readiness;
-pub(crate) use readiness::NativeBeaconReadiness;
+pub(crate) use readiness::{NativeBeaconReadiness, NativeBeaconReadinessError};
 
 use super::control;
 use crate::{
     beacon::{
         GlobalThresholdBeaconError, GlobalThresholdBeaconPartialSignerV1,
         GlobalThresholdBeaconPulseAggregatorV1, GlobalThresholdBeaconSessionBindingV1,
-        authenticated_global_threshold_beacon_roster_hash_v1,
-        validate_global_threshold_beacon_session_v1,
+        authenticated_global_threshold_beacon_roster_hash_iter_v1,
     },
     state::{NativeExecutionTip, StateReadOnly, WorldReadOnly},
     sumeragi::schedule,
@@ -380,24 +380,19 @@ impl ActiveRound {
                 "active session differs from the authenticated epoch or finalized parent".into(),
             ));
         }
-        let peers = current
-            .committee
-            .iter()
-            .map(|seat| seat.validator.clone())
-            .collect::<Vec<_>>();
+        let peers = current.committee.iter().map(|seat| &seat.validator);
         let roster_hash =
-            authenticated_global_threshold_beacon_roster_hash_v1(&record.session, &peers)
+            authenticated_global_threshold_beacon_roster_hash_iter_v1(&record.session, peers)
                 .map_err(|error| NativeBeaconError::Source(error.to_string()))?;
-        let session = validate_global_threshold_beacon_session_v1(
-            record.session.clone(),
-            &GlobalThresholdBeaconSessionBindingV1 {
+        let session = record.session.clone();
+        session
+            .check_binding(&GlobalThresholdBeaconSessionBindingV1 {
                 network_id: current.network_id,
                 session_id: id,
                 roster_hash,
                 transcript_hash: record.session.transcript_hash,
-            },
-        )
-        .map_err(|error| NativeBeaconError::Source(error.to_string()))?;
+            })
+            .map_err(|error| NativeBeaconError::Source(error.to_string()))?;
         let mut roster = [[0; 48]; 31];
         let mut local = None;
         for (index, seat) in current.committee.iter().enumerate() {

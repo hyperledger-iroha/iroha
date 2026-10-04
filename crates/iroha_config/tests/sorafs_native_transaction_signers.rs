@@ -566,8 +566,11 @@ fn bundle_level_unknown_roles_and_secret_material_are_rejected() {
 #[test]
 fn explicit_native_credential_path_is_parsed_without_reading_a_secret() {
     let fixtures = complete_role_fixtures();
-    let source = complete_source(&fixtures)
-        + "\nsoftware_credential = \"/run/iroha/nonexistent-orderbook-key\"\n";
+    #[cfg(windows)]
+    let path = r"C:\iroha\nonexistent-orderbook-key";
+    #[cfg(not(windows))]
+    let path = "/run/iroha/nonexistent-orderbook-key";
+    let source = complete_source(&fixtures) + &format!("\nsoftware_credential = {path:?}\n");
     let actual = parse_overlay(&source).expect("config only validates the path shape");
     assert_eq!(
         actual
@@ -577,7 +580,7 @@ fn explicit_native_credential_path_is_parsed_without_reading_a_secret() {
             .orderbook
             .unwrap()
             .software_credential,
-        Some(PathBuf::from("/run/iroha/nonexistent-orderbook-key"))
+        Some(PathBuf::from(path))
     );
     for path in ["relative/key", "/run/../key"] {
         let invalid = complete_source(&fixtures) + &format!("\nsoftware_credential = {path:?}\n");
@@ -585,6 +588,52 @@ fn explicit_native_credential_path_is_parsed_without_reading_a_secret() {
     }
     let mut external = fixtures;
     external[3].handle = "provider://sorafs/orderbook/primary".into();
-    let invalid = complete_source(&external) + "\nsoftware_credential = \"/run/iroha/key\"\n";
+    let invalid = complete_source(&external) + &format!("\nsoftware_credential = {path:?}\n");
     assert!(parse_overlay(&invalid).is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn native_credentials_accept_exact_windows_drive_and_canonical_verbatim_drive_spelling() {
+    let fixtures = complete_role_fixtures();
+    // Parsing is lexical and does not probe the drive, create files or assert private custody.
+    for path in [r"C:\iroha\signers\key", r"\\?\C:\iroha\signers\key"] {
+        let source = complete_source(&fixtures) + &format!("\nsoftware_credential = {path:?}\n");
+        let actual = parse_overlay(&source).expect("supported native local-drive shape");
+        assert_eq!(
+            actual
+                .torii
+                .sorafs_storage
+                .native_transaction_signers
+                .orderbook
+                .unwrap()
+                .software_credential,
+            Some(PathBuf::from(path))
+        );
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn native_credentials_refuse_windows_relative_unc_device_and_traversal_paths() {
+    let fixtures = complete_role_fixtures();
+    for path in [
+        r"C:relative\key",
+        r"\iroha\key",
+        r"C:\iroha\..\key",
+        r"\\?\C:\iroha\..\key",
+        r"\\?\C:\iroha\.\key",
+        r"\\server\share\key",
+        r"\\?\UNC\server\share\key",
+        r"\\.\C:\iroha\key",
+        r"\\.\pipe\runtime-key",
+        r"\\?\Volume{00000000-0000-0000-0000-000000000000}\key",
+    ] {
+        let source = complete_source(&fixtures) + &format!("\nsoftware_credential = {path:?}\n");
+        let error = parse_overlay(&source).expect_err("unsupported native credential path");
+        assert!(
+            error.contains("software_credential must be an absolute path without traversal"),
+            "{error}"
+        );
+    }
 }

@@ -13,8 +13,10 @@ symbols and the existing unwind behavior.
 
 Every slice retains authenticated PQClean normalization and complete-archive C
 link checks. The native host check exercises ABI identity, SHA3/SHAKE, ML-DSA,
-and ML-KEM. Static XCFramework layout, headers, exports, and CocoaPods archive
-limits remain enforced by their existing owners. Profile selection alone is
+and ML-KEM. Static XCFramework layout, headers, exports, and authenticated ZIP
+limits remain enforced by their existing owners. SwiftPM is the sole supported
+Swift delivery path; qualify the packaged archive and an ordinary Release SDK
+consumer. Profile selection alone is
 not evidence that a candidate passes resource, SDK, or device qualification.
 
 `connect_norito_domain_id_validate_v1` admits only exact canonical ASCII

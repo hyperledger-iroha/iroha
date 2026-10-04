@@ -476,10 +476,15 @@ fn native_validation_enforces_height_aware_da_policy_before_lane_creation() {
     let height = fixture.chain.height() + 1;
     let correct = crate::da::active_proof_policy_bundle_at_height(&nexus, height);
     let heightless = crate::da::active_proof_policy_bundle(&nexus);
-    assert!(correct.policies.iter().all(|policy| policy.lane_id != lane));
+    assert!(
+        correct
+            .policies()
+            .iter()
+            .all(|policy| policy.lane_id != lane)
+    );
     assert!(
         heightless
-            .policies
+            .policies()
             .iter()
             .any(|policy| policy.lane_id == lane)
     );
@@ -577,14 +582,23 @@ fn native_validation_rejects_da_cursor_regression() {
         Default::default(),
     );
     {
-        let cursors = fixture.chain.state().da_shard_cursor_index();
+        let cursors = fixture
+            .chain
+            .state()
+            .da_shard_cursor_index()
+            .expect("original DA hydration");
         let cursor = cursors.get(0, LaneId::SINGLE).unwrap();
         assert_eq!((cursor.epoch, cursor.sequence), (2, 3));
     }
     let mut proposal = fixture.proposal(vec![fixture.transaction(2_010, None)], fixture.cadence());
     proposal.set_da_commitments(Some(DaCommitmentBundle::new(vec![record(2, 0xBC)])));
     let generation = fixture.chain.state().state_view_generation();
-    let receipts = fixture.chain.state().da_receipt_cursors().snapshot();
+    let receipts = fixture
+        .chain
+        .state()
+        .da_receipt_cursors()
+        .expect("original DA hydration")
+        .snapshot();
     let (_, error) = fixture.validate(proposal).unpack(|_| {}).err().unwrap();
     // The original committed receipt cursor rejects this regression before the
     // shard cursor is advanced; both indexes must retain their certified values.
@@ -602,14 +616,23 @@ fn native_validation_rejects_da_cursor_regression() {
         ),
         "unexpected regression rejection: {error:?}"
     );
-    let cursors = fixture.chain.state().da_shard_cursor_index();
+    let cursors = fixture
+        .chain
+        .state()
+        .da_shard_cursor_index()
+        .expect("original DA hydration");
     let cursor = cursors.get(0, LaneId::SINGLE).unwrap();
     assert_eq!(
         (cursor.epoch, cursor.sequence, cursor.last_block_height),
         (2, 3, 3)
     );
     assert_eq!(
-        fixture.chain.state().da_receipt_cursors().snapshot(),
+        fixture
+            .chain
+            .state()
+            .da_receipt_cursors()
+            .expect("original DA hydration")
+            .snapshot(),
         receipts
     );
     assert_eq!(fixture.chain.state().state_view_generation(), generation);

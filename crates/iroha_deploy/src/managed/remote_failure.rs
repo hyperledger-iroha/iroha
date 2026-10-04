@@ -1,6 +1,6 @@
 //! Closed public attachment diagnostics; underlying errors never cross this boundary.
 
-use super::Error;
+use super::{Error, ManagedBootstrapFailure};
 use crate::{
     attachment::AttachmentError, bootstrap::BootstrapError, provisioning::ProvisioningError,
     verify::finality::FinalityError,
@@ -11,6 +11,9 @@ use norito::json::{JsonDeserialize, JsonSerialize};
 /// Messages are fixed locally; response bodies, credentials and custody paths are excluded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ManagedAttachmentFailure {
+    /// Exact closed bootstrap reason, retaining its unsigned, signed or custody distinction.
+    #[error("{0}")]
+    Bootstrap(ManagedBootstrapFailure),
     /// Request construction or preparation failed before completion could be observed.
     #[error("operation preparation failed; retry the exact retained request")]
     PreparationFailed,
@@ -69,6 +72,24 @@ impl ManagedAttachmentFailure {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Bootstrap(reason) => match reason {
+                ManagedBootstrapFailure::RetainedMaterial => "bootstrap_retained_material",
+                ManagedBootstrapFailure::Cancelled => "bootstrap_cancelled",
+                ManagedBootstrapFailure::AuthorizationExpired => "bootstrap_authorization_expired",
+                ManagedBootstrapFailure::TransitionPending => "bootstrap_transition_pending",
+                ManagedBootstrapFailure::PayloadExpired => "bootstrap_payload_expired",
+                ManagedBootstrapFailure::SignedUnresolved => "bootstrap_signed_unresolved",
+                ManagedBootstrapFailure::EnrollmentExpired => "bootstrap_enrollment_expired",
+                ManagedBootstrapFailure::EnrollmentObservationExpired => {
+                    "bootstrap_enrollment_observation_expired"
+                }
+                ManagedBootstrapFailure::EnrollmentPredecessorChanged => {
+                    "bootstrap_enrollment_predecessor_changed"
+                }
+                ManagedBootstrapFailure::ProfileExpired => "bootstrap_profile_expired",
+                ManagedBootstrapFailure::EpochLimit => "bootstrap_epoch_limit",
+                ManagedBootstrapFailure::ReplacementLimit => "bootstrap_replacement_limit",
+            },
             Self::PreparationFailed => "preparation_failed",
             Self::RecoveryFailed => "recovery_failed",
             Self::OperationExpired => "operation_expired",
@@ -106,6 +127,38 @@ impl JsonDeserialize for ManagedAttachmentFailure {
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         match parser.parse_string()?.as_str() {
+            "bootstrap_retained_material" => {
+                Ok(Self::Bootstrap(ManagedBootstrapFailure::RetainedMaterial))
+            }
+            "bootstrap_cancelled" => Ok(Self::Bootstrap(ManagedBootstrapFailure::Cancelled)),
+            "bootstrap_authorization_expired" => Ok(Self::Bootstrap(
+                ManagedBootstrapFailure::AuthorizationExpired,
+            )),
+            "bootstrap_transition_pending" => {
+                Ok(Self::Bootstrap(ManagedBootstrapFailure::TransitionPending))
+            }
+            "bootstrap_payload_expired" => {
+                Ok(Self::Bootstrap(ManagedBootstrapFailure::PayloadExpired))
+            }
+            "bootstrap_signed_unresolved" => {
+                Ok(Self::Bootstrap(ManagedBootstrapFailure::SignedUnresolved))
+            }
+            "bootstrap_enrollment_expired" => {
+                Ok(Self::Bootstrap(ManagedBootstrapFailure::EnrollmentExpired))
+            }
+            "bootstrap_enrollment_observation_expired" => Ok(Self::Bootstrap(
+                ManagedBootstrapFailure::EnrollmentObservationExpired,
+            )),
+            "bootstrap_enrollment_predecessor_changed" => Ok(Self::Bootstrap(
+                ManagedBootstrapFailure::EnrollmentPredecessorChanged,
+            )),
+            "bootstrap_profile_expired" => {
+                Ok(Self::Bootstrap(ManagedBootstrapFailure::ProfileExpired))
+            }
+            "bootstrap_epoch_limit" => Ok(Self::Bootstrap(ManagedBootstrapFailure::EpochLimit)),
+            "bootstrap_replacement_limit" => {
+                Ok(Self::Bootstrap(ManagedBootstrapFailure::ReplacementLimit))
+            }
             "preparation_failed" => Ok(Self::PreparationFailed),
             "recovery_failed" => Ok(Self::RecoveryFailed),
             "operation_expired" => Ok(Self::OperationExpired),
@@ -189,10 +242,16 @@ impl From<FinalityError> for ManagedAttachmentFailure {
 impl From<Error> for ManagedAttachmentFailure {
     fn from(error: Error) -> Self {
         match error {
+            Error::Bootstrap(reason) => Self::Bootstrap(reason),
             Error::Io(_) | Error::Busy(_) => Self::CustodyUnavailable,
             Error::ParentDeadline | Error::Timeout(_) => Self::AwaitingCompletion,
             Error::ParentProgressDeadline { failure, .. } => failure,
-            Error::NoSelection | Error::Invalid(_) => Self::ContextRejected,
+            // A retained service bootstrap that cannot advance under this authorization
+            // invalidates the selected context; it is never a parent completion signal.
+            Error::NoSelection
+            | Error::Invalid(_)
+            | Error::Bootstrap(_)
+            | Error::ContractCall { .. } => Self::ContextRejected,
         }
     }
 }
@@ -206,3 +265,108 @@ impl From<std::io::Error> for ManagedAttachmentFailure {
 #[cfg(test)]
 #[path = "remote_failure_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod bootstrap_failure_tests {
+    //! Closed bootstrap diagnostics preserve exact native causes without exposing source data.
+
+    use super::*;
+
+    #[test]
+    fn managed_bootstrap_failures_preserve_typed_reasons_and_public_codes() {
+        for (reason, code) in [
+            (
+                ManagedBootstrapFailure::RetainedMaterial,
+                "bootstrap_retained_material",
+            ),
+            (ManagedBootstrapFailure::Cancelled, "bootstrap_cancelled"),
+            (
+                ManagedBootstrapFailure::AuthorizationExpired,
+                "bootstrap_authorization_expired",
+            ),
+            (
+                ManagedBootstrapFailure::TransitionPending,
+                "bootstrap_transition_pending",
+            ),
+            (
+                ManagedBootstrapFailure::PayloadExpired,
+                "bootstrap_payload_expired",
+            ),
+            (
+                ManagedBootstrapFailure::SignedUnresolved,
+                "bootstrap_signed_unresolved",
+            ),
+            (
+                ManagedBootstrapFailure::EnrollmentExpired,
+                "bootstrap_enrollment_expired",
+            ),
+            (
+                ManagedBootstrapFailure::EnrollmentObservationExpired,
+                "bootstrap_enrollment_observation_expired",
+            ),
+            (
+                ManagedBootstrapFailure::EnrollmentPredecessorChanged,
+                "bootstrap_enrollment_predecessor_changed",
+            ),
+            (
+                ManagedBootstrapFailure::ProfileExpired,
+                "bootstrap_profile_expired",
+            ),
+            (ManagedBootstrapFailure::EpochLimit, "bootstrap_epoch_limit"),
+            (
+                ManagedBootstrapFailure::ReplacementLimit,
+                "bootstrap_replacement_limit",
+            ),
+        ] {
+            let failure = ManagedAttachmentFailure::from(Error::Bootstrap(reason));
+            assert_eq!(failure, ManagedAttachmentFailure::Bootstrap(reason));
+            assert_eq!(failure.as_str(), code);
+            assert_eq!(failure.to_string(), reason.to_string());
+            assert!(std::error::Error::source(&failure).is_none());
+            let encoded = norito::json::to_vec(&failure).unwrap();
+            assert_eq!(
+                norito::json::from_slice::<ManagedAttachmentFailure>(&encoded).unwrap(),
+                failure
+            );
+            assert_eq!(
+                norito::json::from_str::<String>(std::str::from_utf8(&encoded).unwrap()).unwrap(),
+                code
+            );
+            assert!(
+                code.len() <= 40,
+                "public bootstrap code exceeds its bound: {code}"
+            );
+            assert!(failure.to_string().len() < 128);
+        }
+        for raw in [
+            r#""bootstrap_remote_secret""#,
+            r#"{"bootstrap":"cancelled","response":"secret"}"#,
+        ] {
+            assert!(norito::json::from_str::<ManagedAttachmentFailure>(raw).is_err());
+        }
+    }
+
+    #[test]
+    fn bootstrap_conditions_do_not_invent_terminal_wallet_operation_evidence() {
+        for reason in [
+            ManagedBootstrapFailure::RetainedMaterial,
+            ManagedBootstrapFailure::Cancelled,
+            ManagedBootstrapFailure::AuthorizationExpired,
+            ManagedBootstrapFailure::TransitionPending,
+            ManagedBootstrapFailure::PayloadExpired,
+            ManagedBootstrapFailure::SignedUnresolved,
+            ManagedBootstrapFailure::EnrollmentExpired,
+            ManagedBootstrapFailure::EnrollmentObservationExpired,
+            ManagedBootstrapFailure::EnrollmentPredecessorChanged,
+            ManagedBootstrapFailure::ProfileExpired,
+            ManagedBootstrapFailure::EpochLimit,
+            ManagedBootstrapFailure::ReplacementLimit,
+        ] {
+            assert!(
+                !ManagedAttachmentFailure::from(Error::Bootstrap(reason)).is_terminal_operation()
+            );
+        }
+        assert!(ManagedAttachmentFailure::OperationExpired.is_terminal_operation());
+        assert!(ManagedAttachmentFailure::OperationRejected.is_terminal_operation());
+    }
+}

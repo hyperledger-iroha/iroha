@@ -3,10 +3,9 @@ package org.hyperledger.iroha.sdk.client.stream
 import org.hyperledger.iroha.sdk.client.ClientObserver
 import org.hyperledger.iroha.sdk.client.ClientResponse
 import org.hyperledger.iroha.sdk.client.CanonicalRequestSigner
-import org.hyperledger.iroha.sdk.client.JsonEncoder
-import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.client.LocalSigningContext
 import org.hyperledger.iroha.sdk.client.transport.HttpTransportScope
+import org.hyperledger.iroha.sdk.client.ToriiApiException
 import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
 import org.hyperledger.iroha.sdk.client.TransportSecurity
 import org.hyperledger.iroha.sdk.client.transport.StreamingTransportExecutor
@@ -14,14 +13,11 @@ import org.hyperledger.iroha.sdk.client.transport.TransportExecutor
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.client.transport.TransportStreamResponse
-import org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTag
-import java.io.BufferedReader
+import org.hyperledger.iroha.sdk.query.Filter
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
-import java.io.InputStreamReader
 import java.net.URI
-import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.time.Duration
@@ -36,6 +32,10 @@ import java.util.concurrent.atomic.AtomicReference
 
 private const val EVENT_STREAM_CONTENT_TYPE = "text/event-stream"
 private const val DEFAULT_EVENT_NAME = "message"
+private const val MAX_LINE_BYTES = 1024 * 1024
+private const val MAX_EVENT_CHARS = 8 * 1024 * 1024
+private const val MAX_ERROR_BODY_BYTES = 64 * 1024
+private const val EVENTS_SSE_PATH = "/v1/events/sse"
 
 /**
  * Minimal streaming client used to consume Torii server-sent event (SSE) feeds. The implementation
@@ -50,6 +50,7 @@ class ToriiEventStreamClient private constructor(
     private val localSigningContext: LocalSigningContext? = null,
     private val canonicalRequestAuth: ToriiCanonicalRequestAuth? = null,
     readerExecutor: Executor? = null,
+    private val allowPlaintextLoopback: Boolean = false,
 ) : AutoCloseable {
     private val transport = HttpTransportScope.create(transport)
     private val ownsReaderExecutor = readerExecutor == null
@@ -88,6 +89,48 @@ class ToriiEventStreamClient private constructor(
         defaultHeaders: Map<String, String> = emptyMap(),
         observers: List<ClientObserver> = emptyList(),
     ) : this(baseUri, transport, defaultHeaders, observers, null, null)
+
+    /**
+     * Opens the live `/v1/events/sse` feed, keeping only events matching [filter] (`null` streams
+     * every visible event). The filter uses the collection-query text grammar over event fields,
+     * e.g. `(EventFields.TX_HASH eq hash) and EventFields.TX_STATUS.isIn("Approved", "Rejected")`.
+     */
+    @JvmOverloads
+    fun openEventStream(
+        filter: Filter?,
+        listener: ToriiEventStreamListener,
+        options: ToriiEventStreamOptions = ToriiEventStreamOptions.defaultOptions(),
+    ): ToriiEventStream {
+        val resolved = if (filter == null) options else options.toBuilder().setFilter(filter).build()
+        return openSseStream(EVENTS_SSE_PATH, resolved, listener)
+    }
+
+    /**
+     * Subscribes to `/v1/events/sse` with typed events: each payload is decoded with
+     * [ToriiEvent.parse] (unknown payloads arrive as [ToriiEvent.Unknown]) and a terminal
+     * `stream_error` frame is reported through [ToriiEventListener.onStreamError].
+     */
+    @JvmOverloads
+    fun subscribe(
+        filter: Filter?,
+        listener: ToriiEventListener,
+        options: ToriiEventStreamOptions = ToriiEventStreamOptions.defaultOptions(),
+    ): ToriiEventStream = openEventStream(
+        filter,
+        object : ToriiEventStreamListener {
+            override fun onOpen() = listener.onOpen()
+
+            override fun onEvent(event: ServerSentEvent) {
+                val terminal = event.terminalStreamError()
+                if (terminal != null) listener.onStreamError(terminal) else listener.onEvent(ToriiEvent.parse(event.data))
+            }
+
+            override fun onClosed() = listener.onClosed()
+
+            override fun onError(error: Throwable) = listener.onError(error)
+        },
+        options,
+    )
 
     /**
      * Opens an SSE stream against `path` using the supplied options.
@@ -147,10 +190,7 @@ class ToriiEventStreamClient private constructor(
     }
 
     private fun buildRequest(path: String?, options: ToriiEventStreamOptions): TransportRequest {
-        val target = appendQueryParameters(
-            normalizeEventSseUriFilter(resolvePath(path)),
-            normalizeEventSseQueryParameters(options.queryParameters),
-        )
+        val target = appendQueryParameters(resolvePath(path), streamQueryParameters(options))
         val headers = LinkedHashMap(defaultHeaders)
         headers.putIfAbsent("Accept", EVENT_STREAM_CONTENT_TYPE)
         headers.putIfAbsent("Cache-Control", "no-cache")
@@ -168,6 +208,7 @@ class ToriiEventStreamClient private constructor(
             target,
             headers,
             null,
+            allowPlaintextLoopback,
         )
         val builder = TransportRequest.builder().setUri(target).setMethod("GET")
         val timeout = options.timeout
@@ -182,34 +223,7 @@ class ToriiEventStreamClient private constructor(
         target: URI,
         signingContext: LocalSigningContext,
         canonicalAuth: ToriiCanonicalRequestAuth,
-    ): Map<String, String> {
-        val timestampMs = canonicalAuth.timestampMs
-        val nonce = canonicalAuth.nonce
-        require((timestampMs == null) == (nonce == null)) {
-            "timestampMs and nonce must be provided together"
-        }
-        return if (timestampMs == null) {
-            CanonicalRequestSigner.buildHeaders(
-                signingContext.networkId(),
-                "GET",
-                target,
-                null,
-                canonicalAuth.accountId,
-                canonicalAuth.signer,
-            )
-        } else {
-            CanonicalRequestSigner.buildHeaders(
-                signingContext.networkId(),
-                "GET",
-                target,
-                null,
-                canonicalAuth.accountId,
-                canonicalAuth.signer,
-                timestampMs,
-                nonce!!,
-            )
-        }
-    }
+    ): Map<String, String> = canonicalAuth.headers(signingContext.networkId(), "GET", target, null)
 
     private fun resolvePath(path: String?): URI {
         if (path.isNullOrBlank()) return baseUri
@@ -220,58 +234,67 @@ class ToriiEventStreamClient private constructor(
         return URI.create(joined)
     }
 
+    /**
+     * Parse `text/event-stream` frames per the SSE specification: lines end with CRLF, LF or CR;
+     * an event is dispatched at a blank line only when it carried `data`; an event cut off by the
+     * end of the stream is discarded. Lines are limited to [MAX_LINE_BYTES] and events to
+     * [MAX_EVENT_CHARS] characters.
+     */
     private fun parseEventStream(
         stream: java.io.InputStream,
         listener: ToriiEventStreamListener,
         activeStream: ActiveStream,
     ) {
         try {
-            BufferedReader(InputStreamReader(stream, StandardCharsets.UTF_8)).use { reader ->
+            stream.use { input ->
+                val reader = SseLineReader(input, MAX_LINE_BYTES)
                 val data = StringBuilder()
+                var hasData = false
                 var eventName: String? = null
                 var eventId: String? = null
-                var line: String? = null
-                while (!activeStream.closed() && reader.readLine().also { line = it } != null) {
-                    if (activeStream.closed()) break
-                    val currentLine = line!!
-                    if (currentLine.isEmpty()) {
-                        dispatchEvent(listener, data, eventName, eventId)
+                var firstLine = true
+                while (!activeStream.closed()) {
+                    var line = reader.readLine() ?: break
+                    if (firstLine) {
+                        firstLine = false
+                        if (line.startsWith("\uFEFF")) line = line.substring(1)
+                    }
+                    if (line.isEmpty()) {
+                        if (hasData) dispatchEvent(listener, data, eventName, eventId)
+                        data.setLength(0)
+                        hasData = false
                         eventName = null
                         eventId = null
                         continue
                     }
-                    if (currentLine.startsWith(":")) continue
-                    val colon = currentLine.indexOf(':')
-                    val field: String
-                    val value: String
-                    if (colon == -1) {
-                        field = currentLine
-                        value = ""
+                    if (line.startsWith(":")) continue
+                    val colon = line.indexOf(':')
+                    val field = if (colon == -1) line else line.substring(0, colon)
+                    val value = if (colon == -1) {
+                        ""
                     } else {
-                        field = currentLine.substring(0, colon)
-                        val raw = currentLine.substring(colon + 1)
-                        value = if (raw.startsWith(" ")) raw.substring(1) else raw
+                        val raw = line.substring(colon + 1)
+                        if (raw.startsWith(" ")) raw.substring(1) else raw
                     }
                     when (field) {
-                        "data" -> data.append(value).append('\n')
-                        "event" -> eventName = value
-                        "id" -> eventId = value
-                        "retry" -> {
-                            try {
-                                val millis = value.toLong()
-                                if (millis >= 0) {
-                                    listener.onRetryHint(Duration.ofMillis(millis))
-                                }
-                            } catch (_: NumberFormatException) {
+                        "data" -> {
+                            if (data.length + value.length + 1 > MAX_EVENT_CHARS) {
+                                throw IOException("Torii SSE event exceeds $MAX_EVENT_CHARS characters")
                             }
+                            data.append(value).append('\n')
+                            hasData = true
+                        }
+                        "event" -> eventName = value
+                        "id" -> if (value.indexOf('\u0000') < 0) eventId = value
+                        "retry" -> if (value.isNotEmpty() && value.all { it in '0'..'9' }) {
+                            value.toLongOrNull()?.let { listener.onRetryHint(Duration.ofMillis(it)) }
                         }
                     }
                 }
-                if (!activeStream.closed()) dispatchEvent(listener, data, eventName, eventId)
             }
         } catch (ex: IOException) {
             if (!activeStream.closed()) {
-                throw RuntimeException("Failed to parse Torii SSE stream", ex)
+                throw java.io.UncheckedIOException("Failed to parse Torii SSE stream", ex)
             }
         }
     }
@@ -290,12 +313,7 @@ class ToriiEventStreamClient private constructor(
         }
         response!!
         if (response.statusCode < 200 || response.statusCode >= 300) {
-            val body = response.body
-            val message = if (body.isEmpty()) "" else String(body, StandardCharsets.UTF_8)
-            val error = IOException(
-                "Torii SSE request failed with status ${response.statusCode}" +
-                    if (message.isEmpty()) "" else ": $message"
-            )
+            val error = ToriiApiException.fromResponse(response.statusCode, response.headers, response.body)
             failStream(request, listener, stream, error)
             return
         }
@@ -330,11 +348,7 @@ class ToriiEventStreamClient private constructor(
         }
         response!!
         if (response.statusCode < 200 || response.statusCode >= 300) {
-            val message = readBody(response)
-            val error = IOException(
-                "Torii SSE request failed with status ${response.statusCode}" +
-                    if (message.isEmpty()) "" else ": $message"
-            )
+            val error = ToriiApiException.fromResponse(response.statusCode, response.headers, readBody(response))
             failStream(request, listener, stream, error)
             return
         }
@@ -467,138 +481,13 @@ class ToriiEventStreamClient private constructor(
         private fun isCanonicalLiveSseRawPath(rawPath: String?): Boolean =
             rawPath == "/v1/events/sse" || rawPath == "/v1/contracts/events/sse"
 
-        private fun normalizeEventSseUriFilter(target: URI): URI {
-            val rawQuery = target.rawQuery ?: return target
-            val normalizedQuery = normalizeEventSseQuery(rawQuery)
-            if (normalizedQuery == rawQuery) return target
-            val targetText = target.toString()
-            val fragmentIndex = targetText.indexOf('#')
-            val withoutFragment = if (fragmentIndex >= 0) targetText.substring(0, fragmentIndex) else targetText
-            val fragment = if (fragmentIndex >= 0) targetText.substring(fragmentIndex) else ""
-            val base = withoutFragment.substringBefore('?')
-            return URI.create("$base?$normalizedQuery$fragment")
-        }
-
-        private fun normalizeEventSseQueryParameters(params: Map<String, String>): Map<String, String> {
-            if (!params.containsKey("filter")) return params
-            val normalized = LinkedHashMap(params)
-            normalized["filter"] = normalizeEventFilterPayload(params.getValue("filter"), "eventFilter")
-            return normalized
-        }
-
-        private fun normalizeEventSseQuery(rawQuery: String): String {
-            val segments = rawQuery.split('&').toMutableList()
-            var changed = false
-            for (index in segments.indices) {
-                val segment = segments[index]
-                if (segment.isEmpty()) continue
-                val equals = segment.indexOf('=')
-                val rawName = if (equals >= 0) segment.substring(0, equals) else segment
-                val rawValue = if (equals >= 0) segment.substring(equals + 1) else ""
-                val name = decodeQueryComponent(rawName)
-                if (name != "filter") continue
-                val value = decodeQueryComponent(rawValue)
-                val normalized = normalizeEventFilterPayload(value, "eventFilter")
-                if (normalized != value) {
-                    segments[index] = "${URLEncoder.encode(name, "UTF-8")}=${URLEncoder.encode(normalized, "UTF-8")}"
-                    changed = true
-                }
+        /** Option query parameters plus the canonical `filter` text, which may be given only once. */
+        private fun streamQueryParameters(options: ToriiEventStreamOptions): Map<String, String> {
+            val filter = options.filter ?: return options.queryParameters
+            require(options.queryParameters.keys.none { it == "filter" }) {
+                "pass the event filter either with setFilter or as the `filter` query parameter, not both"
             }
-            return if (changed) segments.joinToString("&") else rawQuery
-        }
-
-        private fun decodeQueryComponent(value: String): String =
-            URLDecoder.decode(value.replace("+", " "), "UTF-8")
-
-        private fun normalizeEventFilterPayload(filter: String, context: String): String {
-            val trimmed = filter.trim()
-            if (trimmed.isEmpty() || (trimmed[0] != '{' && trimmed[0] != '[')) return filter
-            val parsed = try {
-                JsonParser.parse(trimmed)
-            } catch (_: IllegalStateException) {
-                return filter
-            }
-            @Suppress("UNCHECKED_CAST")
-            val obj = parsed as? MutableMap<String, Any?> ?: return filter
-            return if (normalizeProductionEventFilterObject(obj, context)) JsonEncoder.encode(obj) else filter
-        }
-
-        private fun normalizeProductionEventFilterObject(filter: MutableMap<String, Any?>, context: String): Boolean {
-            var changed = false
-            for (eventKind in listOf("VerifyingKey", "Proof")) {
-                @Suppress("UNCHECKED_CAST")
-                val body = filter[eventKind] as? MutableMap<String, Any?> ?: continue
-                @Suppress("UNCHECKED_CAST")
-                val matcher = body["id_matcher"] as? MutableMap<String, Any?> ?: continue
-                if (!matcher.containsKey("backend")) continue
-                val backendContext = "$context.$eventKind.id_matcher.backend"
-                val backend = matcher["backend"] as? String
-                    ?: throw IllegalArgumentException("$backendContext must be a string")
-                val normalizedBackend =
-                    VerifyingKeyBackendTag.requireVerifierBackendRegistryLabelV1(backend, backendContext)
-                if (normalizedBackend != backend) {
-                    matcher["backend"] = normalizedBackend
-                    changed = true
-                }
-                if (eventKind == "Proof") {
-                    changed = normalizeProofHashMatcher(matcher, "hash_hex", "$context.$eventKind.id_matcher.hash_hex") || changed
-                    changed = normalizeProofHashMatcher(
-                        matcher,
-                        "proof_hash_hex",
-                        "$context.$eventKind.id_matcher.proof_hash_hex",
-                    ) || changed
-                } else {
-                    changed = normalizeVerifyingKeyNameMatcher(
-                        matcher,
-                        "$context.$eventKind.id_matcher.name",
-                    ) || changed
-                }
-            }
-            return changed
-        }
-
-        private fun normalizeVerifyingKeyNameMatcher(
-            matcher: MutableMap<String, Any?>,
-            context: String,
-        ): Boolean {
-            if (!matcher.containsKey("name")) return false
-            val raw = matcher["name"] as? String
-                ?: throw IllegalArgumentException("$context must be a string")
-            val normalized = raw.trim()
-            require(normalized.isNotEmpty()) {
-                "$context must be a non-empty string"
-            }
-            require(!normalized.contains(':')) {
-                "$context must not contain ':' characters"
-            }
-            if (normalized == raw) return false
-            matcher["name"] = normalized
-            return true
-        }
-
-        private fun normalizeProofHashMatcher(
-            matcher: MutableMap<String, Any?>,
-            propertyName: String,
-            context: String,
-        ): Boolean {
-            if (!matcher.containsKey(propertyName)) return false
-            val raw = matcher[propertyName] as? String
-                ?: throw IllegalArgumentException("$context must be a string")
-            val normalized = normalizeHex32String(raw, context)
-            if (normalized == raw) return false
-            matcher[propertyName] = normalized
-            return true
-        }
-
-        private fun normalizeHex32String(raw: String, context: String): String {
-            var normalized = raw.trim().lowercase()
-            if (normalized.startsWith("0x")) {
-                normalized = normalized.substring(2)
-            }
-            require(normalized.length == 64 && normalized.all { it in '0'..'9' || it in 'a'..'f' }) {
-                "$context must be a 32-byte hex string"
-            }
-            return normalized
+            return LinkedHashMap(options.queryParameters).also { it["filter"] = filter }
         }
 
         private fun encodeQuery(params: Map<String, String>): String {
@@ -620,7 +509,6 @@ class ToriiEventStreamClient private constructor(
             eventName: String?,
             eventId: String?,
         ) {
-            if (data.isEmpty() && eventName == null && eventId == null) return
             if (data.isNotEmpty() && data[data.length - 1] == '\n') {
                 data.deleteCharAt(data.length - 1)
             }
@@ -637,23 +525,25 @@ class ToriiEventStreamClient private constructor(
             return error
         }
 
-        private fun readBody(response: TransportStreamResponse): String {
+        /** Read at most [MAX_ERROR_BODY_BYTES] of an error response for diagnostics. */
+        private fun readBody(response: TransportStreamResponse): ByteArray {
             val data: ByteArray
             try {
                 response.body.use { body ->
                     ByteArrayOutputStream().use { buffer ->
                         val chunk = ByteArray(4096)
-                        var read: Int
-                        while (body.read(chunk).also { read = it } != -1) {
+                        while (buffer.size() < MAX_ERROR_BODY_BYTES) {
+                            val read = body.read(chunk, 0, minOf(chunk.size, MAX_ERROR_BODY_BYTES - buffer.size()))
+                            if (read == -1) break
                             buffer.write(chunk, 0, read)
                         }
                         data = buffer.toByteArray()
                     }
                 }
             } catch (_: IOException) {
-                return ""
+                return ByteArray(0)
             }
-            return if (data.isEmpty()) "" else String(data, StandardCharsets.UTF_8)
+            return data
         }
     }
 
@@ -665,6 +555,13 @@ class ToriiEventStreamClient private constructor(
         private var localSigningContext: LocalSigningContext? = null
         private var canonicalRequestAuth: ToriiCanonicalRequestAuth? = null
         private var readerExecutor: Executor? = null
+        private var allowPlaintextLoopback: Boolean = false
+
+        /** Allow canonical signing over plain `http` to loopback hosts (local development only). */
+        fun allowPlaintextLoopback(allow: Boolean): Builder {
+            allowPlaintextLoopback = allow
+            return this
+        }
 
         fun setBaseUri(baseUri: URI): Builder {
             this.baseUri = baseUri
@@ -723,6 +620,7 @@ class ToriiEventStreamClient private constructor(
                 localSigningContext,
                 canonicalRequestAuth,
                 readerExecutor,
+                allowPlaintextLoopback,
             )
         }
     }
@@ -779,6 +677,51 @@ class ToriiEventStreamClient private constructor(
             responseFuture.getAndSet(null)?.cancel(false)
             if (cleanupError == null) completion.complete(null)
             else completion.completeExceptionally(cleanupError)
+        }
+    }
+}
+
+/**
+ * Reads SSE lines (terminated by CRLF, LF or CR) as UTF-8 with replacement, bounding each line.
+ * Returns `null` at the end of the stream; a final unterminated line is discarded, as the SSE
+ * specification requires for an event cut off by the end of the stream.
+ */
+internal class SseLineReader(private val input: java.io.InputStream, private val maxLineBytes: Int) {
+    private val buffer = ByteArray(8192)
+    private var position = 0
+    private var limit = 0
+    private var skipLineFeed = false
+    private val line = ByteArrayOutputStream()
+
+    fun readLine(): String? {
+        line.reset()
+        while (true) {
+            if (position == limit) {
+                limit = input.read(buffer, 0, buffer.size)
+                position = 0
+                if (limit <= 0) {
+                    limit = 0
+                    return null
+                }
+            }
+            val byte = buffer[position++]
+            if (skipLineFeed) {
+                skipLineFeed = false
+                if (byte == '\n'.code.toByte()) continue
+            }
+            when (byte) {
+                '\n'.code.toByte() -> return String(line.toByteArray(), StandardCharsets.UTF_8)
+                '\r'.code.toByte() -> {
+                    skipLineFeed = true
+                    return String(line.toByteArray(), StandardCharsets.UTF_8)
+                }
+                else -> {
+                    if (line.size() >= maxLineBytes) {
+                        throw IOException("Torii SSE line exceeds $maxLineBytes bytes")
+                    }
+                    line.write(byte.toInt())
+                }
+            }
         }
     }
 }

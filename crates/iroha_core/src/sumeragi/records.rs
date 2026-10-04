@@ -31,6 +31,7 @@ use std::{
 };
 
 use iroha_crypto::Hash;
+use iroha_fs::OwnerDirectory;
 use iroha_sumeragi::{
     crypto::Crypto,
     safety::RecordState,
@@ -293,6 +294,63 @@ impl core::fmt::Debug for FileRecordStore {
 }
 
 impl FileRecordStore {
+    /// Authorize only the first replay-owner installation for this exact native key/instance.
+    /// The opaque permit is obtained before `install` writes the Instance event. A
+    /// known instance or existing safety record never authorizes missing-journal recovery.
+    pub(super) fn private_counter_first_installation(
+        &self,
+        instance: &Hash32,
+        key: &PublicKey,
+        assertion: Option<&FreshKeyAssertion>,
+    ) -> io::Result<Option<PrivateCounterFirstInstallation>> {
+        let _guard = self.log_lock.lock();
+        let (log, valid_bytes) = self.read_log()?;
+        let actual_bytes = match fs::metadata(&self.log_path) {
+            Ok(metadata) => metadata.len(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => 0,
+            Err(error) => return Err(error),
+        };
+        // An ignored torn/corrupt log tail cannot supply first-install provenance.
+        if actual_bytes != valid_bytes {
+            return Ok(None);
+        }
+        let stored_id = self.store_id()?;
+        if log.last().map(LogEntry::store_id) != stored_id {
+            return Ok(None);
+        }
+        if log.iter().any(|entry| {
+            matches!(entry,
+                LogEntry::Instance { instance: existing, key: existing_key, .. }
+                    if existing == instance && existing_key == key
+            )
+        }) || self.load(instance, key)? != RecordState::Absent
+        {
+            return Ok(None);
+        }
+        let generated = log
+            .iter()
+            .rev()
+            .find_map(|entry| match entry {
+                LogEntry::Key {
+                    key: existing,
+                    generated,
+                    ..
+                } if existing == key => Some(*generated),
+                _ => None,
+            })
+            .unwrap_or(false);
+        if !generated && assertion.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(PrivateCounterFirstInstallation {
+            records_dir: OwnerDirectory::open(&self.records_dir)?
+                .path()
+                .to_path_buf(),
+            instance: *instance,
+            key_hash: Hash::new(key.as_bytes()),
+        }))
+    }
+
     /// Open (creating if needed) the record store in `records_dir` with the installation log
     /// at `log_path`, which must lie outside `records_dir` (§7.4 rule 2).
     ///
@@ -381,6 +439,19 @@ impl FileRecordStore {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok((Vec::new(), 0)),
             Err(error) => Err(error),
         }
+    }
+}
+
+/// First-install capability owned by genuine safety-record provenance, never a request boolean.
+pub(super) struct PrivateCounterFirstInstallation {
+    records_dir: PathBuf,
+    instance: Hash32,
+    key_hash: Hash,
+}
+
+impl PrivateCounterFirstInstallation {
+    pub(super) fn authorizes(&self, records_dir: &Path, instance: &Hash32, key_hash: Hash) -> bool {
+        self.records_dir == records_dir && self.instance == *instance && self.key_hash == key_hash
     }
 }
 

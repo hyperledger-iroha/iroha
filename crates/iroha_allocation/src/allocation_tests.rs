@@ -1,6 +1,16 @@
 //! Finite capacity, prepaid splitting and scoped reclamation notifications.
 
 use super::*;
+use crate::release::ReleaseRegistration;
+
+fn registration(budget: &AllocationBudget) -> ReleaseRegistration {
+    ReleaseRegistration::from_reservation(
+        &mut budget
+            .try_reserve(ReleaseRegistration::allocation_layout())
+            .unwrap(),
+    )
+    .unwrap()
+}
 use std::{
     future::Future,
     panic::{AssertUnwindSafe, catch_unwind},
@@ -20,15 +30,18 @@ impl Wake for WakeCount {
     }
 }
 
-fn poll(wait: &mut crate::release::ReleaseFuture, wakes: &Arc<WakeCount>) -> Poll<()> {
+fn poll(wait: &mut crate::release::ReleaseFuture<'_>, wakes: &Arc<WakeCount>) -> Poll<()> {
     Pin::new(wait).poll(&mut Context::from_waker(&Waker::from(Arc::clone(wakes))))
 }
 
-fn capacity_wait(error: AllocationRefusal) -> crate::release::ReleaseFuture {
+fn capacity_wait(
+    error: AllocationRefusal,
+    registration: &mut ReleaseRegistration,
+) -> crate::release::ReleaseFuture<'_> {
     let AllocationRefusal::Capacity { release, .. } = error else {
         panic!("expected temporary capacity refusal: {error}");
     };
-    release.wait_for_release()
+    release.wait_for_release(registration)
 }
 
 fn layout(size: usize) -> Layout {
@@ -136,14 +149,21 @@ fn peak_tracks_original_admissions_across_borrowers_and_limit_reload() {
 
 #[test]
 fn growing_original_limit_wakes_waiters_after_reload_scope() {
-    let budget = AllocationBudget::new(8);
+    let budget = AllocationBudget::new(8 + ReleaseRegistration::allocation_layout().size());
+    let mut budget_registration_0 = registration(&budget);
     let held = budget.try_reserve_bytes(8).unwrap();
-    let mut wait = capacity_wait(budget.try_reserve_bytes(1).unwrap_err());
+    let mut wait = capacity_wait(
+        budget.try_reserve_bytes(1).unwrap_err(),
+        &mut budget_registration_0,
+    );
     let wakes = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &wakes).is_pending());
     budget.with_deferred_refund_notifications(|_| {
-        budget.set_limit_bytes(9);
-        assert_eq!(budget.limit_bytes(), 9);
+        budget.set_limit_bytes(9 + ReleaseRegistration::allocation_layout().size());
+        assert_eq!(
+            budget.limit_bytes(),
+            9 + ReleaseRegistration::allocation_layout().size()
+        );
         assert_eq!(wakes.0.load(SeqCst), 0);
     });
     assert_eq!(wakes.0.load(SeqCst), 1);
@@ -152,7 +172,10 @@ fn growing_original_limit_wakes_waiters_after_reload_scope() {
     assert!(extra.belongs_to(&budget));
     drop(held);
     drop(extra);
-    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(
+        budget.reserved_bytes(),
+        ReleaseRegistration::allocation_layout().size()
+    );
 }
 
 #[test]
@@ -225,10 +248,14 @@ fn component_partitions_use_original_full_pool_without_allocation_or_new_admissi
 
 #[test]
 fn refused_or_empty_partition_preserves_original_credits_and_release_observation() {
-    let budget = AllocationBudget::new(8);
+    let budget = AllocationBudget::new(8 + ReleaseRegistration::allocation_layout().size());
+    let mut budget_registration_0 = registration(&budget);
     let other = AllocationBudget::new(8);
     let mut original = budget.try_reserve_bytes(8).unwrap();
-    let mut wait = capacity_wait(budget.try_reserve_bytes(1).unwrap_err());
+    let mut wait = capacity_wait(
+        budget.try_reserve_bytes(1).unwrap_err(),
+        &mut budget_registration_0,
+    );
     let wakes = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &wakes).is_pending());
     without_allocations(|| {
@@ -241,7 +268,10 @@ fn refused_or_empty_partition_preserves_original_credits_and_release_observation
         );
         drop(original.try_partition_bytes(0).unwrap());
         assert_eq!(original.remaining_bytes(), 8);
-        assert_eq!(budget.reserved_bytes(), 8);
+        assert_eq!(
+            budget.reserved_bytes(),
+            8 + ReleaseRegistration::allocation_layout().size()
+        );
         assert_eq!(wakes.0.load(SeqCst), 0);
     });
     let child = without_allocations(|| original.try_partition_bytes(8).unwrap());
@@ -252,7 +282,10 @@ fn refused_or_empty_partition_preserves_original_credits_and_release_observation
     without_allocations(|| drop(child));
     assert_eq!(wakes.0.load(SeqCst), 1);
     assert!(poll(&mut wait, &wakes).is_ready());
-    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(
+        budget.reserved_bytes(),
+        ReleaseRegistration::allocation_layout().size()
+    );
 }
 
 #[test]
@@ -277,18 +310,29 @@ fn aggregate_partitions_exceed_single_layout_limits_without_overflow() {
 
 #[test]
 fn exact_pool_release_wakes_waiters_including_before_their_first_poll() {
-    let budget = AllocationBudget::new(8);
+    let budget = AllocationBudget::new(8 + 2 * ReleaseRegistration::allocation_layout().size());
+    let mut budget_registration_0 = registration(&budget);
+    let mut budget_registration_1 = registration(&budget);
     let other = AllocationBudget::new(8);
     let owner = budget.try_reserve(layout(8)).unwrap();
-    let mut registered = capacity_wait(budget.try_reserve(layout(1)).unwrap_err());
-    let mut unregistered = capacity_wait(budget.try_reserve(layout(1)).unwrap_err());
+    let mut registered = capacity_wait(
+        budget.try_reserve(layout(1)).unwrap_err(),
+        &mut budget_registration_0,
+    );
+    let mut unregistered = capacity_wait(
+        budget.try_reserve(layout(1)).unwrap_err(),
+        &mut budget_registration_1,
+    );
     let wakes = Arc::new(WakeCount::default());
     assert!(poll(&mut registered, &wakes).is_pending());
     drop(other.try_reserve(layout(8)).unwrap());
     assert_eq!(wakes.0.load(SeqCst), 0);
     assert!(poll(&mut registered, &wakes).is_pending());
     drop(owner);
-    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(
+        budget.reserved_bytes(),
+        2 * ReleaseRegistration::allocation_layout().size()
+    );
     assert_eq!(wakes.0.load(SeqCst), 1);
     assert!(poll(&mut registered, &wakes).is_ready());
     assert!(poll(&mut unregistered, &wakes).is_ready());
@@ -339,10 +383,14 @@ fn charge_keeps_original_pool_alive_after_budget_handle_is_dropped() {
 
 #[test]
 fn nested_original_pool_scopes_return_credits_immediately_and_coalesce_without_allocation() {
-    let budget = AllocationBudget::new(8);
+    let budget = AllocationBudget::new(8 + ReleaseRegistration::allocation_layout().size());
+    let mut budget_registration_0 = registration(&budget);
     let same_pool = budget.clone();
     let owner = budget.try_reserve(layout(8)).unwrap();
-    let mut wait = capacity_wait(budget.try_reserve(layout(1)).unwrap_err());
+    let mut wait = capacity_wait(
+        budget.try_reserve(layout(1)).unwrap_err(),
+        &mut budget_registration_0,
+    );
     let wakes = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &wakes).is_pending());
 
@@ -352,14 +400,23 @@ fn nested_original_pool_scopes_return_credits_immediately_and_coalesce_without_a
         budget.with_deferred_refund_notifications(|_| {
             same_pool.with_deferred_refund_notifications(|_| {
                 drop(owner);
-                assert_eq!(budget.reserved_bytes(), 0);
+                assert_eq!(
+                    budget.reserved_bytes(),
+                    ReleaseRegistration::allocation_layout().size()
+                );
                 assert_eq!(wakes.0.load(SeqCst), 0);
             });
             // Refunded capacity is reusable before any deferred notification.
             let reused = budget.try_reserve(layout(8)).unwrap();
-            assert_eq!(budget.reserved_bytes(), 8);
+            assert_eq!(
+                budget.reserved_bytes(),
+                8 + ReleaseRegistration::allocation_layout().size()
+            );
             drop(reused);
-            assert_eq!(budget.reserved_bytes(), 0);
+            assert_eq!(
+                budget.reserved_bytes(),
+                ReleaseRegistration::allocation_layout().size()
+            );
             assert_eq!(wakes.0.load(SeqCst), 0);
         });
     });
@@ -369,12 +426,20 @@ fn nested_original_pool_scopes_return_credits_immediately_and_coalesce_without_a
 
 #[test]
 fn nested_different_pool_scopes_flush_independently() {
-    let first = AllocationBudget::new(8);
-    let second = AllocationBudget::new(8);
+    let first = AllocationBudget::new(8 + ReleaseRegistration::allocation_layout().size());
+    let mut first_registration_0 = registration(&first);
+    let second = AllocationBudget::new(8 + ReleaseRegistration::allocation_layout().size());
+    let mut second_registration_0 = registration(&second);
     let first_owner = first.try_reserve(layout(8)).unwrap();
     let second_owner = second.try_reserve(layout(8)).unwrap();
-    let mut first_wait = capacity_wait(first.try_reserve(layout(1)).unwrap_err());
-    let mut second_wait = capacity_wait(second.try_reserve(layout(1)).unwrap_err());
+    let mut first_wait = capacity_wait(
+        first.try_reserve(layout(1)).unwrap_err(),
+        &mut first_registration_0,
+    );
+    let mut second_wait = capacity_wait(
+        second.try_reserve(layout(1)).unwrap_err(),
+        &mut second_registration_0,
+    );
     let first_wakes = Arc::new(WakeCount::default());
     let second_wakes = Arc::new(WakeCount::default());
     assert!(poll(&mut first_wait, &first_wakes).is_pending());
@@ -385,8 +450,14 @@ fn nested_different_pool_scopes_flush_independently() {
             // Finding the exact pool crosses an unrelated inner scope.
             drop(first_owner);
             drop(second_owner);
-            assert_eq!(first.reserved_bytes(), 0);
-            assert_eq!(second.reserved_bytes(), 0);
+            assert_eq!(
+                first.reserved_bytes(),
+                ReleaseRegistration::allocation_layout().size()
+            );
+            assert_eq!(
+                second.reserved_bytes(),
+                ReleaseRegistration::allocation_layout().size()
+            );
             assert_eq!(first_wakes.0.load(SeqCst), 0);
             assert_eq!(second_wakes.0.load(SeqCst), 0);
         });
@@ -400,18 +471,28 @@ fn nested_different_pool_scopes_flush_independently() {
 
 #[test]
 fn another_threads_refund_notifies_while_this_threads_scope_is_still_active() {
-    let budget = AllocationBudget::new(8);
+    let budget = AllocationBudget::new(8 + ReleaseRegistration::allocation_layout().size());
+    let mut budget_registration_0 = registration(&budget);
     let local = budget.try_reserve(layout(4)).unwrap();
     let remote = budget.try_reserve(layout(4)).unwrap();
-    let mut wait = capacity_wait(budget.try_reserve(layout(1)).unwrap_err());
+    let mut wait = capacity_wait(
+        budget.try_reserve(layout(1)).unwrap_err(),
+        &mut budget_registration_0,
+    );
     let wakes = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &wakes).is_pending());
     budget.with_deferred_refund_notifications(|_| {
         drop(local);
-        assert_eq!(budget.reserved_bytes(), 4);
+        assert_eq!(
+            budget.reserved_bytes(),
+            4 + ReleaseRegistration::allocation_layout().size()
+        );
         assert_eq!(wakes.0.load(SeqCst), 0);
         std::thread::spawn(move || drop(remote)).join().unwrap();
-        assert_eq!(budget.reserved_bytes(), 0);
+        assert_eq!(
+            budget.reserved_bytes(),
+            ReleaseRegistration::allocation_layout().size()
+        );
         assert_eq!(wakes.0.load(SeqCst), 1);
         assert!(poll(&mut wait, &wakes).is_ready());
     });
@@ -436,9 +517,14 @@ fn scope_unwind_notifies_after_its_physical_writer_has_unlocked() {
             self.released.fetch_add(observed, SeqCst);
         }
     }
-    let budget = AllocationBudget::new(8);
+    let budget = AllocationBudget::new(8 + 2 * ReleaseRegistration::allocation_layout().size());
+    let mut budget_registration_0 = registration(&budget);
+    let mut budget_registration_1 = registration(&budget);
     let owner = budget.try_reserve(layout(8)).unwrap();
-    let mut wait = capacity_wait(budget.try_reserve(layout(1)).unwrap_err());
+    let mut wait = capacity_wait(
+        budget.try_reserve(layout(1)).unwrap_err(),
+        &mut budget_registration_0,
+    );
     let physical = Arc::new(Mutex::new(()));
     let wake = Arc::new(Probe {
         physical: Arc::clone(&physical),
@@ -455,7 +541,10 @@ fn scope_unwind_notifies_after_its_physical_writer_has_unlocked() {
             budget.with_deferred_refund_notifications(|_| {
                 let _held = physical.lock().unwrap();
                 drop(owner);
-                assert_eq!(budget.reserved_bytes(), 0);
+                assert_eq!(
+                    budget.reserved_bytes(),
+                    2 * ReleaseRegistration::allocation_layout().size()
+                );
                 assert_eq!(wake.released.load(SeqCst), 0);
                 panic!("original operation failed while its writer was held");
             });
@@ -470,7 +559,10 @@ fn scope_unwind_notifies_after_its_physical_writer_has_unlocked() {
     );
 
     let owner = budget.try_reserve(layout(8)).unwrap();
-    let mut next = capacity_wait(budget.try_reserve(layout(1)).unwrap_err());
+    let mut next = capacity_wait(
+        budget.try_reserve(layout(1)).unwrap_err(),
+        &mut budget_registration_1,
+    );
     let next_wakes = Arc::new(WakeCount::default());
     assert!(poll(&mut next, &next_wakes).is_pending());
     drop(owner);
@@ -480,9 +572,13 @@ fn scope_unwind_notifies_after_its_physical_writer_has_unlocked() {
 
 #[test]
 fn caught_inner_unwind_remains_deferred_until_the_original_outer_scope_exits() {
-    let budget = AllocationBudget::new(8);
+    let budget = AllocationBudget::new(8 + ReleaseRegistration::allocation_layout().size());
+    let mut budget_registration_0 = registration(&budget);
     let owner = budget.try_reserve(layout(8)).unwrap();
-    let mut wait = capacity_wait(budget.try_reserve(layout(1)).unwrap_err());
+    let mut wait = capacity_wait(
+        budget.try_reserve(layout(1)).unwrap_err(),
+        &mut budget_registration_0,
+    );
     let wakes = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &wakes).is_pending());
     budget.with_deferred_refund_notifications(|_| {
@@ -495,7 +591,10 @@ fn caught_inner_unwind_remains_deferred_until_the_original_outer_scope_exits() {
             }))
             .is_err()
         );
-        assert_eq!(budget.reserved_bytes(), 0);
+        assert_eq!(
+            budget.reserved_bytes(),
+            ReleaseRegistration::allocation_layout().size()
+        );
         assert_eq!(wakes.0.load(SeqCst), 0);
     });
     assert_eq!(wakes.0.load(SeqCst), 1);
@@ -518,9 +617,14 @@ fn refund_callback_can_reenter_scopes_and_its_panic_leaves_no_stale_tls_owner() 
             panic!("reentrant wake failed after its nested scope completed");
         }
     }
-    let budget = AllocationBudget::new(8);
+    let budget = AllocationBudget::new(8 + 2 * ReleaseRegistration::allocation_layout().size());
+    let mut budget_registration_0 = registration(&budget);
+    let mut budget_registration_1 = registration(&budget);
     let owner = budget.try_reserve(layout(8)).unwrap();
-    let mut wait = capacity_wait(budget.try_reserve(layout(1)).unwrap_err());
+    let mut wait = capacity_wait(
+        budget.try_reserve(layout(1)).unwrap_err(),
+        &mut budget_registration_0,
+    );
     let wake = Arc::new(Reenter {
         budget: budget.clone(),
         calls: AtomicUsize::new(0),
@@ -538,7 +642,10 @@ fn refund_callback_can_reenter_scopes_and_its_panic_leaves_no_stale_tls_owner() 
         .is_err()
     );
     assert_eq!(wake.calls.load(SeqCst), 1);
-    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(
+        budget.reserved_bytes(),
+        2 * ReleaseRegistration::allocation_layout().size()
+    );
     assert!(
         Pin::new(&mut wait)
             .poll(&mut Context::from_waker(&waker))
@@ -546,7 +653,10 @@ fn refund_callback_can_reenter_scopes_and_its_panic_leaves_no_stale_tls_owner() 
     );
 
     let owner = budget.try_reserve(layout(8)).unwrap();
-    let mut next = capacity_wait(budget.try_reserve(layout(1)).unwrap_err());
+    let mut next = capacity_wait(
+        budget.try_reserve(layout(1)).unwrap_err(),
+        &mut budget_registration_1,
+    );
     let next_wakes = Arc::new(WakeCount::default());
     assert!(poll(&mut next, &next_wakes).is_pending());
     drop(owner);
@@ -577,10 +687,18 @@ fn deferred_flush_preserves_first_panic_and_wakes_the_remaining_cohort_after_unl
             self.wakes.fetch_add(1, SeqCst);
         }
     }
-    let budget = AllocationBudget::new(8);
+    let budget = AllocationBudget::new(8 + 2 * ReleaseRegistration::allocation_layout().size());
+    let mut budget_registration_0 = registration(&budget);
+    let mut budget_registration_1 = registration(&budget);
     let owner = budget.try_reserve(layout(8)).unwrap();
-    let mut first = capacity_wait(budget.try_reserve(layout(1)).unwrap_err());
-    let mut second = capacity_wait(budget.try_reserve(layout(1)).unwrap_err());
+    let mut first = capacity_wait(
+        budget.try_reserve(layout(1)).unwrap_err(),
+        &mut budget_registration_0,
+    );
+    let mut second = capacity_wait(
+        budget.try_reserve(layout(1)).unwrap_err(),
+        &mut budget_registration_1,
+    );
     let physical = Arc::new(Mutex::new(()));
     let first_wake = Arc::new(FirstWake(AtomicUsize::new(0)));
     let first_waker = Waker::from(Arc::clone(&first_wake));
@@ -604,7 +722,10 @@ fn deferred_flush_preserves_first_panic_and_wakes_the_remaining_cohort_after_unl
         budget.with_deferred_refund_notifications(|_| {
             let _held = physical.lock().unwrap();
             drop(owner);
-            assert_eq!(budget.reserved_bytes(), 0);
+            assert_eq!(
+                budget.reserved_bytes(),
+                2 * ReleaseRegistration::allocation_layout().size()
+            );
             assert_eq!(first_wake.0.load(SeqCst), 0);
             assert_eq!(survivor.wakes.load(SeqCst), 0);
         });
@@ -628,7 +749,10 @@ fn deferred_flush_preserves_first_panic_and_wakes_the_remaining_cohort_after_unl
             .poll(&mut Context::from_waker(&second_waker))
             .is_ready()
     );
-    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(
+        budget.reserved_bytes(),
+        2 * ReleaseRegistration::allocation_layout().size()
+    );
 }
 
 #[test]
@@ -658,8 +782,10 @@ fn checked_aggregate_bytes_need_no_fabricated_single_allocation_layout() {
 
 #[test]
 fn partition_retains_exact_original_pool_and_conserves_real_credits() {
-    let budget = AllocationBudget::new(64);
-    let equal_but_foreign = AllocationBudget::new(64);
+    let budget = AllocationBudget::new(64 + ReleaseRegistration::allocation_layout().size());
+    let mut budget_registration_0 = registration(&budget);
+    let equal_but_foreign =
+        AllocationBudget::new(64 + ReleaseRegistration::allocation_layout().size());
     let mut whole = budget.try_reserve_bytes(64).unwrap();
     assert!(whole.belongs_to(&budget.clone()));
     assert!(!whole.belongs_to(&equal_but_foreign));
@@ -667,7 +793,10 @@ fn partition_retains_exact_original_pool_and_conserves_real_credits() {
     assert!(part.belongs_to(&budget));
     assert_eq!(whole.remaining_bytes(), 40);
     assert_eq!(part.remaining_bytes(), 24);
-    assert_eq!(budget.reserved_bytes(), 64);
+    assert_eq!(
+        budget.reserved_bytes(),
+        64 + ReleaseRegistration::allocation_layout().size()
+    );
     let error = without_allocations(|| whole.try_partition_bytes(41).unwrap_err());
     assert_eq!(
         error,
@@ -676,7 +805,10 @@ fn partition_retains_exact_original_pool_and_conserves_real_credits() {
             remaining_bytes: 40
         }
     );
-    let mut wait = capacity_wait(budget.try_reserve_bytes(1).unwrap_err());
+    let mut wait = capacity_wait(
+        budget.try_reserve_bytes(1).unwrap_err(),
+        &mut budget_registration_0,
+    );
     let wakes = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &wakes).is_pending());
     let zero = without_allocations(|| whole.try_partition_bytes(0).unwrap());
@@ -691,16 +823,25 @@ fn partition_retains_exact_original_pool_and_conserves_real_credits() {
     assert!(!charge.belongs_to(&equal_but_foreign));
     budget.with_deferred_refund_notifications(|_| {
         without_allocations(|| drop(part));
-        assert_eq!(budget.reserved_bytes(), 56);
+        assert_eq!(
+            budget.reserved_bytes(),
+            56 + ReleaseRegistration::allocation_layout().size()
+        );
         assert_eq!(wakes.0.load(SeqCst), 0);
         without_allocations(|| drop(whole));
-        assert_eq!(budget.reserved_bytes(), 16);
+        assert_eq!(
+            budget.reserved_bytes(),
+            16 + ReleaseRegistration::allocation_layout().size()
+        );
     });
     assert_eq!(wakes.0.load(SeqCst), 1);
     assert!(poll(&mut wait, &wakes).is_ready());
     assert_eq!(equal_but_foreign.reserved_bytes(), 0);
     without_allocations(|| drop(charge));
-    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(
+        budget.reserved_bytes(),
+        ReleaseRegistration::allocation_layout().size()
+    );
 }
 
 #[test]
@@ -769,28 +910,43 @@ fn owned_refund_scope_reserves_original_control_until_last_custodian() {
         Err(AllocationRefusal::ExceedsLimit { .. })
     ));
     assert_eq!(small.reserved_bytes(), 0);
-    let budget = AllocationBudget::new(bytes + 1);
+    let budget = AllocationBudget::new(bytes + 1 + ReleaseRegistration::allocation_layout().size());
+    let mut budget_registration_0 = registration(&budget);
     let scope = budget.try_owned_refund_scope().unwrap();
-    assert_eq!(budget.reserved_bytes(), bytes);
+    assert_eq!(
+        budget.reserved_bytes(),
+        bytes + ReleaseRegistration::allocation_layout().size()
+    );
     let last = without_allocations(|| scope.clone());
     let held = budget.try_reserve_bytes(1).unwrap();
-    let mut wait = capacity_wait(budget.try_reserve_bytes(1).unwrap_err());
+    let mut wait = capacity_wait(
+        budget.try_reserve_bytes(1).unwrap_err(),
+        &mut budget_registration_0,
+    );
     let wakes = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &wakes).is_pending());
     drop(held);
     drop(scope);
     assert_eq!(wakes.0.load(SeqCst), 0);
-    assert_eq!(budget.reserved_bytes(), bytes);
+    assert_eq!(
+        budget.reserved_bytes(),
+        bytes + ReleaseRegistration::allocation_layout().size()
+    );
     drop(last);
     assert!(wakes.0.load(SeqCst) > 0);
     assert!(poll(&mut wait, &wakes).is_ready());
-    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(
+        budget.reserved_bytes(),
+        ReleaseRegistration::allocation_layout().size()
+    );
 }
 
 #[test]
 fn owned_refund_scopes_unlink_out_of_order_across_lexical_and_foreign_scopes() {
     let bytes = OwnedAllocationScope::allocation_layout().size();
-    let budget = AllocationBudget::new(bytes * 3 + 1);
+    let budget =
+        AllocationBudget::new(bytes * 3 + 1 + ReleaseRegistration::allocation_layout().size());
+    let mut budget_registration_0 = registration(&budget);
     let other = AllocationBudget::new(bytes + 1);
     let outer = budget.try_owned_refund_scope().unwrap();
     let foreign = other.try_owned_refund_scope().unwrap();
@@ -799,7 +955,10 @@ fn owned_refund_scopes_unlink_out_of_order_across_lexical_and_foreign_scopes() {
     let held = budget
         .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
         .unwrap();
-    let mut wait = capacity_wait(budget.try_reserve_bytes(1).unwrap_err());
+    let mut wait = capacity_wait(
+        budget.try_reserve_bytes(1).unwrap_err(),
+        &mut budget_registration_0,
+    );
     let wakes = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &wakes).is_pending());
     drop(held);
@@ -809,7 +968,10 @@ fn owned_refund_scopes_unlink_out_of_order_across_lexical_and_foreign_scopes() {
     assert_eq!(other.reserved_bytes(), 0);
     drop(retained);
     assert!(wakes.0.load(SeqCst) > 0);
-    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(
+        budget.reserved_bytes(),
+        ReleaseRegistration::allocation_layout().size()
+    );
     // The TLS chain must contain no pointer into any freed owned/lexical record.
     without_allocations(|| budget.with_deferred_refund_notifications(|_| {}));
 }
@@ -832,4 +994,63 @@ fn pool_identity_requires_same_owner_and_never_admits_credit() {
     assert_eq!(independent.limit_bytes(), 0);
     assert_eq!(original.reserved_bytes(), 0);
     assert_eq!(independent.reserved_bytes(), 0);
+}
+
+#[test]
+fn prepaid_shared_exact_charge_retains_refused_original_and_last_reader() {
+    use crate::test_support::refusing_allocation;
+    let layout = ChargedShared::<[u8; 33]>::allocation_layout();
+    let budget = AllocationBudget::new(layout.size());
+    let mut reservation = budget.try_reserve(layout).unwrap();
+    let charge = reservation.try_split(layout).unwrap();
+    let (charge, error) = refusing_allocation(layout, || {
+        ChargedShared::<[u8; 33]>::reserve_from_charge(charge)
+    })
+    .err()
+    .unwrap();
+    assert_eq!(error, SharedFromChargeError::Allocator { layout });
+    assert!(charge.belongs_to(&budget));
+    assert_eq!(charge.layout(), layout);
+    assert_eq!(budget.reserved_bytes(), layout.size());
+    budget.set_limit_bytes(0);
+    let shell = ChargedShared::<[u8; 33]>::reserve_from_charge(charge)
+        .unwrap_or_else(|_| panic!("unchanged charge retry"));
+    assert!(shell.belongs_to(&budget));
+    let owner = without_allocations(|| shell.initialize([7; 33]));
+    let reader = without_allocations(|| owner.clone());
+    without_allocations(|| drop(owner));
+    assert_eq!(budget.reserved_bytes(), layout.size());
+    assert_eq!(*reader, [7; 33]);
+    without_allocations(|| drop(reader));
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+#[test]
+fn prepaid_shared_charge_rejects_wrong_size_and_alignment_before_allocation() {
+    #[repr(align(64))]
+    struct Aligned;
+    let exact = ChargedShared::<Aligned>::allocation_layout();
+    for wrong in [
+        Layout::from_size_align(exact.size() + 1, exact.align()).unwrap(),
+        Layout::from_size_align(exact.size(), 1).unwrap(),
+    ] {
+        let budget = AllocationBudget::new(wrong.size());
+        let mut reservation = budget.try_reserve(wrong).unwrap();
+        let charge = reservation.try_split(wrong).unwrap();
+        let (charge, error) =
+            without_allocations(|| ChargedShared::<Aligned>::reserve_from_charge(charge))
+                .err()
+                .unwrap();
+        assert_eq!(
+            error,
+            SharedFromChargeError::LayoutMismatch {
+                expected: exact,
+                actual: wrong
+            }
+        );
+        assert!(charge.belongs_to(&budget));
+        assert_eq!(charge.layout(), wrong);
+        assert_eq!(budget.reserved_bytes(), wrong.size());
+        drop(charge);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
 }

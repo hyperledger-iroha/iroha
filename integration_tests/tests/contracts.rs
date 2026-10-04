@@ -25,7 +25,6 @@ use iroha_executor_data_model::permission::{
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
-use iroha_model_base::peer::PeerId;
 use iroha_model_base::topology::DataSpaceId;
 use iroha_sumeragi::availability::recommended_data_availability_layout;
 use iroha_test_network::{NetworkBuilder, read_on_dedicated_thread};
@@ -64,8 +63,8 @@ fn minimal_contract_artifact_binds_unit_entrypoint_to_canonical_callable() {
     assert_eq!(callable.entry_pc, entrypoint.entry_pc);
     assert_ne!(callable.entry_pc, 0, "raw entry must not dispatch main");
     assert!(callable.validate());
-    assert!(callable.argument_words.is_empty());
-    assert_eq!(callable.result_words, vec![ivm::call::CallWordV1::Unit]);
+    assert_eq!(callable.arguments, ivm::call::CallSchemaV1::empty());
+    assert_eq!(callable.results, ivm::call::CallSchemaV1::unit());
 
     // Preserve all remaining compiler sections while removing only the
     // authenticated callable descriptor; admission must reject that omission.
@@ -1218,7 +1217,7 @@ fn dynamic_counter_call_intent(
         .find(|descriptor| descriptor.name == entrypoint)
         .and_then(|descriptor| descriptor.argument_schema.as_ref())
         .unwrap_or_else(|| panic!("missing argument schema for `{entrypoint}`"));
-    let argument_bytes = ivm::encode_argument_record_from_json(
+    let argument_bytes = ivm_abi::arguments::encode_argument_record_from_json(
         schema,
         &iroha_primitives::json::Json::from(payload.clone()),
     )
@@ -2546,7 +2545,7 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
                     .collect::<Vec<_>>();
                 let asset_definition_ids = client
                     .client()
-                    .query(FindAssetsDefinitions::new())
+                    .query(FindAssetDefinitions::new())
                     .execute_all()?
                     .into_iter()
                     .map(|definition| definition.id().clone())

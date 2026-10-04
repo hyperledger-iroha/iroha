@@ -30,14 +30,12 @@ maintenance = { status = "actively-developed" }
 [features]
 default = ["bridge", "offline-visual-codecs"]
 offline-visual-codecs = ["dep:image"]
-# Experimental selector support. Forwarded to client/data-model crates when enabled.
-ids_projection = ["iroha/ids_projection", "iroha_data_model/ids_projection"]
 # Hooks used only by integration tests.
 cli_integration_harness = []
 bridge = []
 
 [dependencies]
-iroha_core_privacy = { workspace = true }
+iroha_core_privacy = { workspace = true, default-features = false }
 iroha_core_timed_ovn = { workspace = true }
 iroha_model_base = { workspace = true }
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
@@ -53,6 +51,7 @@ iroha_sccp_wallet = { workspace = true }
 iroha_petal = { workspace = true }
 iroha_primitives = { workspace = true }
 ivm = { workspace = true }
+ivm_abi = { workspace = true }
 kotodama_lang = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["sm", "consensus"] }
 iroha_core = { workspace = true, default-features = false, features = ["node"] }

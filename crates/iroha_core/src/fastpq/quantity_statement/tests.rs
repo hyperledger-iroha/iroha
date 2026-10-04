@@ -51,7 +51,7 @@ fn build(
     inputs: FastpqPublicInputs,
     transcripts: &[TransferTranscript],
 ) -> FastpqQuantityStatement {
-    quantity_statement_from_finalized_transcripts(
+    quantity_statement_from_finalized_transcripts_for_testing(
         inputs,
         transcripts,
         PublicTransferLimits::default(),
@@ -131,7 +131,7 @@ fn missing_digest_invalid_arithmetic_and_construction_limits_fail_without_repair
         }
         let before = norito::encode_canonical(&changed).unwrap();
         assert!(
-            quantity_statement_from_finalized_transcripts(
+            quantity_statement_from_finalized_transcripts_for_testing(
                 inputs,
                 &changed,
                 PublicTransferLimits::default(),
@@ -142,7 +142,7 @@ fn missing_digest_invalid_arithmetic_and_construction_limits_fail_without_repair
         assert_eq!(norito::encode_canonical(&changed).unwrap(), before);
     }
     assert!(
-        quantity_statement_from_finalized_transcripts(
+        quantity_statement_from_finalized_transcripts_for_testing(
             inputs,
             &transcripts,
             PublicTransferLimits {
@@ -154,7 +154,7 @@ fn missing_digest_invalid_arithmetic_and_construction_limits_fail_without_repair
         .is_err()
     );
     assert!(
-        quantity_statement_from_finalized_transcripts(
+        quantity_statement_from_finalized_transcripts_for_testing(
             inputs,
             &transcripts,
             PublicTransferLimits::default(),
@@ -176,7 +176,7 @@ fn empty_source_keeps_unchanged_inputs_and_can_be_consumed_without_copies() {
     let mut changed = inputs;
     changed.new_root = Hash::new(b"changed empty root").into();
     assert!(
-        quantity_statement_from_finalized_transcripts(
+        quantity_statement_from_finalized_transcripts_for_testing(
             changed,
             &[],
             PublicTransferLimits::default(),
@@ -184,4 +184,84 @@ fn empty_source_keeps_unchanged_inputs_and_can_be_consumed_without_copies() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn private_tree_refuses_foreign_pool_before_source_projection() {
+    let (inputs, transcripts) = fixture();
+    let original = AllocationBudget::new(1_000_000);
+    let equal_but_foreign = AllocationBudget::new(1_000_000);
+    let mut reservation = original.try_reserve_bytes(1_000_000).unwrap();
+    let before = quantity_materializer_invocations_for_testing();
+    let result = quantity_statement_from_finalized_transcripts(
+        inputs,
+        &transcripts,
+        PublicTransferLimits::default(),
+        TransferSmtBuildLimits::for_update_limit(2).unwrap(),
+        &equal_but_foreign,
+        &mut reservation,
+    );
+    assert!(matches!(
+        result,
+        Err(fastpq_prover::Error::AllocationForeignPool)
+    ));
+    assert_eq!(quantity_materializer_invocations_for_testing(), before);
+    assert_eq!(reservation.remaining_bytes(), 1_000_000);
+    assert_eq!(equal_but_foreign.reserved_bytes(), 0);
+}
+
+#[test]
+fn private_tree_exact_demand_deficit_preserves_original_reservation() {
+    let (inputs, transcripts) = fixture();
+    let limits = TransferSmtBuildLimits::for_update_limit(2).unwrap();
+    let demand = limits.allocation_bytes(2, 2).unwrap();
+    let budget = AllocationBudget::new(demand);
+    let mut reservation = budget.try_reserve_bytes(demand - 1).unwrap();
+    let result = quantity_statement_from_finalized_transcripts(
+        inputs,
+        &transcripts,
+        PublicTransferLimits::default(),
+        limits,
+        &budget,
+        &mut reservation,
+    );
+    match result {
+        Err(fastpq_prover::Error::AllocationReservation(error)) => {
+            assert_eq!(error.requested_bytes, demand);
+            assert_eq!(error.remaining_bytes, demand - 1);
+        }
+        result => panic!("expected original reservation deficit, got {result:?}"),
+    }
+    assert_eq!(reservation.remaining_bytes(), demand - 1);
+    drop(reservation);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn private_paths_retain_original_pool_credit_through_statement_split() {
+    let (inputs, transcripts) = fixture();
+    let limits = TransferSmtBuildLimits::for_update_limit(2).unwrap();
+    let demand = limits.allocation_bytes(2, 2).unwrap();
+    let budget = AllocationBudget::new(demand);
+    let mut reservation = budget.try_reserve_bytes(demand).unwrap();
+    let result = quantity_statement_from_finalized_transcripts(
+        inputs,
+        &transcripts,
+        PublicTransferLimits::default(),
+        limits,
+        &budget,
+        &mut reservation,
+    )
+    .unwrap();
+    drop(reservation);
+    assert!(budget.reserved_bytes() > 0);
+    let (statement, witnesses) = result.into_parts();
+    let retained = budget.reserved_bytes();
+    drop(statement);
+    assert_eq!(budget.reserved_bytes(), retained);
+    assert_eq!(witnesses.pairs().len(), 1);
+    assert_eq!(witnesses.pairs()[0][0].siblings.len(), 32);
+    assert_eq!(witnesses.pairs()[0][1].path_bits.len(), 4);
+    drop(witnesses);
+    assert_eq!(budget.reserved_bytes(), 0);
 }

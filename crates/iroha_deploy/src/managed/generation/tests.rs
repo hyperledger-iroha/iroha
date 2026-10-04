@@ -16,6 +16,11 @@ fn interrupted_unpublished_stage_is_discarded_under_operation_ownership() {
             PublishMode::CreateNew,
         )
         .unwrap();
+    for index in 0..4 {
+        stage
+            .write_atomic(format!("peer{index}.launch"), b"0", PublishMode::CreateNew)
+            .unwrap();
+    }
     drop(nested);
     drop(stage);
     assert!(
@@ -23,6 +28,9 @@ fn interrupted_unpublished_stage_is_discarded_under_operation_ownership() {
     );
     let stage = fresh_stage(&root).unwrap();
     assert!(!stage.path().join("keys").exists());
+    for index in 0..4 {
+        assert!(!stage.path().join(format!("peer{index}.launch")).exists());
+    }
     assert!(!root.path().join(DIRECTORY).exists());
     assert!(std::fs::read_dir(stage.path()).unwrap().next().is_none());
 }
@@ -55,7 +63,8 @@ fn published_generation_survives_retry_with_an_unpublished_leftover() {
         .unwrap();
     drop(stage);
     let pin = read(&directory).unwrap().launcher;
-    let request = LocalnetRequest::new(pin.path.clone(), pin.path);
+    let mut request = LocalnetRequest::new(pin.path.clone(), pin.path);
+    request.service_profile = prepared.service_profile;
     assert!(matches!(store.up(&request), Err(Error::Io(_))));
     assert_eq!(encode(&read(&directory).unwrap()).unwrap(), before);
     assert_eq!(store.prepared("local").unwrap(), prepared);
@@ -68,6 +77,12 @@ fn uncertain_publication_reopens_only_the_exact_complete_generation() {
     let (_, directory, _) =
         super::super::tests::fixture(&temporary.path().join("managed"), "local");
     let expected = read(&directory).unwrap();
+    let generation = directory.open_child(DIRECTORY).unwrap();
+    for index in 0..4 {
+        generation
+            .write_atomic(format!("peer{index}.launch"), b"1", PublishMode::CreateNew)
+            .unwrap();
+    }
     reconcile_publication(&directory, &expected).unwrap();
     let mut foreign = expected.clone();
     foreign.prepared.context.network_id = "another identity".into();
@@ -76,6 +91,22 @@ fn uncertain_publication_reopens_only_the_exact_complete_generation() {
         encode(&read(&directory).unwrap()).unwrap(),
         encode(&expected).unwrap()
     );
+    for index in 0..4 {
+        assert_eq!(
+            generation
+                .read(format!("peer{index}.launch"), 1)
+                .unwrap()
+                .as_slice(),
+            b"1",
+            "reconciling a published generation cannot rearm its keys"
+        );
+        assert!(
+            !directory
+                .path()
+                .join(format!("peer{index}.launch"))
+                .exists()
+        );
+    }
 }
 
 #[test]
@@ -90,7 +121,7 @@ fn staged_private_generation_publishes_exact_final_paths_and_original_identity()
         .unwrap();
     let binary = directory.path().join("binary");
     let pin = store::pin_binary(&binary).unwrap();
-    let mut request = LocalnetRequest::new(binary.clone(), binary);
+    let mut request = LocalnetRequest::private_root(binary.clone(), binary);
     request.name = "private".into();
     let _operation = store::acquire(&directory, "operation.lock", "private").unwrap();
     let ports = LocalnetPorts::reserve().unwrap();
@@ -109,7 +140,19 @@ fn staged_private_generation_publishes_exact_final_paths_and_original_identity()
         &ports,
     )
     .unwrap();
+    assert_published_launch_fences(&directory);
     assert_ne!(retained.prepared.context.account_id, abandoned_owner);
+    assert_eq!(
+        retained.prepared.service_profile,
+        crate::localnet::LocalnetServiceProfile::Standard
+    );
+    assert!(
+        !directory
+            .path()
+            .join(DIRECTORY)
+            .join("runtime/stream-token-authorities")
+            .exists()
+    );
     assert!(!directory.path().join(STAGING).exists());
     assert!(!directory.path().join(MANIFEST).exists());
     assert_eq!(
@@ -133,12 +176,41 @@ fn staged_private_generation_publishes_exact_final_paths_and_original_identity()
             crate::secret_toml::parse_table(text, "published peer").unwrap(),
         );
         assert!(
+            table["genesis"]["file"].as_str()
+                == directory
+                    .path()
+                    .join(DIRECTORY)
+                    .join("genesis.signed.nrt")
+                    .to_str(),
+            "only the admitted complete final generation supplies signed genesis"
+        );
+        assert!(
+            table["genesis"]["expected_hash_file"].as_str()
+                == Some(crate::localnet::GENESIS_EXPECTED_HASH_FILE),
+            "relative native identity selection must resolve beside the final config"
+        );
+        assert!(
             table["data_dir"]
                 .as_str()
                 .unwrap()
                 .starts_with(directory.path().join(DIRECTORY).to_str().unwrap())
         );
     }
+    // Launch fences mutate under native private-directory custody. They must not become
+    // immutable content roles or invalidate the actual config/genesis snapshot on first exec.
+    let snapshot =
+        super::super::startup_receipt::LaunchSnapshot::retain(&directory, &retained).unwrap();
+    let generation = directory.open_child(DIRECTORY).unwrap();
+    let manifest = generation.read(MANIFEST, MAX_METADATA).unwrap();
+    generation
+        .write_atomic("peer0.launch", b"1", PublishMode::Replace)
+        .unwrap();
+    snapshot.validate().unwrap();
+    assert_eq!(
+        generation.read(MANIFEST, MAX_METADATA).unwrap().as_slice(),
+        manifest.as_slice(),
+        "mutable launch custody cannot retag the original generation manifest"
+    );
 }
 
 #[cfg(unix)]
@@ -192,6 +264,7 @@ fn staged_global_generation_publishes_all_runtime_paths_and_custody() {
         &ports,
     )
     .unwrap();
+    assert_published_launch_fences(&directory);
     assert!(!directory.path().join(STAGING).exists());
     assert!(!directory.path().join(MANIFEST).exists());
     assert_eq!(store.prepared("local").unwrap(), retained.prepared);
@@ -202,6 +275,21 @@ fn staged_global_generation_publishes_all_runtime_paths_and_custody() {
         let text = std::str::from_utf8(&bytes).unwrap();
         assert!(!text.contains(STAGING));
         assert!(text.contains(directory.path().join(DIRECTORY).to_str().unwrap()));
+    }
+}
+
+fn assert_published_launch_fences(directory: &PrivateDirectory) {
+    let generation = directory.open_child(DIRECTORY).unwrap();
+    for index in 0..4 {
+        let name = format!("peer{index}.launch");
+        assert_eq!(generation.read(&name, 1).unwrap().as_slice(), b"0");
+        assert!(!directory.path().join(&name).exists());
+        assert!(
+            generation
+                .write_atomic(&name, b"0", PublishMode::CreateNew)
+                .is_err(),
+            "published launch custody must never be recreated"
+        );
     }
 }
 
@@ -237,7 +325,10 @@ fn staged_service_authorities_publish_exact_identity_and_private_custody() {
     let pin = store::pin_binary(&binary).unwrap();
     let mut request = LocalnetRequest::new(binary.clone(), binary);
     request.name = "native-authorities".into();
-    request.service_profile = crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities;
+    assert_eq!(
+        request.service_profile,
+        crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities
+    );
     let _operation = store::acquire(&directory, "operation.lock", &request.name).unwrap();
     let ports = LocalnetPorts::reserve().unwrap();
     let retained = prepare(

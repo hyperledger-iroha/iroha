@@ -101,6 +101,9 @@ macro_rules! initial_world_field {
     (kagemusha_terminal_nullifier_operations, $budget:ident, $execution:ident) => {
         OperationIndex::try_new_admitted($budget.clone())?
     };
+    (sumeragi_amx_participant, $budget:ident, $execution:ident) => {
+        crate::sumeragi::amx::empty_participant_cell($execution)?
+    };
     (musubi_replication_shortfall_releases, $budget:ident, $execution:ident) => {
         super::scalar_cell_custody::initialize(0, $execution)?
     };

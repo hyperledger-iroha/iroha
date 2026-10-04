@@ -2,19 +2,18 @@
 use super::*;
 use iroha::client::ContractCallDraftIntent;
 use iroha_contract_deploy::call::{
-    ContractCallDisposition, ContractCallReceipt, ContractCallRequest, ContractCallService,
+    CallAuthorization, ContractCallDisposition, ContractCallReceipt, ContractCallRequest,
+    ContractCallService,
 };
 use iroha_data_model::{
-    account::address::ChainDiscriminantGuard,
-    smart_contract::ContractAddress,
-    transaction::{
-        FeePaymentIntent,
-        executable::{ContractArgumentRecord, ContractInvocation},
-    },
+    account::address::ChainDiscriminantGuard, smart_contract::ContractAddress,
+    transaction::FeePaymentIntent,
 };
-use iroha_model_base::metadata::Metadata;
-use iroha_primitives::json::Json;
-use std::num::NonZeroU64;
+use std::{
+    collections::BTreeMap,
+    num::NonZeroU64,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[derive(Args, Debug)]
 pub(super) struct CallArgs {
@@ -41,6 +40,12 @@ pub(super) struct CallArgs {
     /// Signature-bound VM execution budget.
     #[arg(long, default_value_t = 1_500_000, value_parser = clap::value_parser!(u64).range(1..=10_000_000), conflicts_with_all = ["resume", "cancel"])]
     gas_limit: u64,
+    /// Fee asset for an explicit aggregate cap when the selected network has no finite maxima.
+    #[arg(long, requires = "max_fee", conflicts_with_all = ["resume", "cancel"])]
+    max_fee_asset: Option<iroha_data_model::asset::AssetDefinitionId>,
+    /// Positive aggregate cap across the self-grant and mutable call in --max-fee-asset.
+    #[arg(long, requires = "max_fee_asset", conflicts_with_all = ["resume", "cancel"])]
+    max_fee: Option<iroha_primitives::numeric::Quantity>,
     /// Persist the reviewed operation without submitting its self-grant or call.
     #[arg(long, conflicts_with_all = ["resume", "cancel"])]
     prepare: bool,
@@ -60,7 +65,8 @@ pub(super) fn run_call(
         return recover_call(manifest, args, journal, progress);
     }
     let entrypoint = requested_entrypoint(args)?;
-    let payload = deploy::parse_view_payload(&args.args)?;
+    let payload = iroha_contract_deploy::call::parse_contract_arguments(&args.args)
+        .map_err(|error| Diagnostic::new(ErrorCode::Usage, error.to_string()))?;
     progress("Building the selected artifact and preparing its exact mutable call...");
     let build = build::prepare_build(manifest, &call_build_args(args), CompilerActionV1::Build)?;
     let artifact = deploy::select_artifact(&build.execution.artifacts, args.contract.as_deref())?;
@@ -92,6 +98,39 @@ pub(super) fn run_call(
     let gas_limit = NonZeroU64::new(args.gas_limit)
         .ok_or_else(|| Diagnostic::new(ErrorCode::Usage, "gas limit must be positive"))?;
     let fee = gas_limited_fee_payment(&build.network, gas_limit)?;
+    let mut maxima = BTreeMap::new();
+    for component in fee.charge_limits() {
+        let total = maxima
+            .entry(component.asset_definition_id().clone())
+            .or_insert_with(iroha_primitives::numeric::Quantity::zero);
+        *total = total
+            .checked_add(component.max_amount())
+            .map_err(|_| Diagnostic::new(ErrorCode::Usage, "configured call fee cap overflow"))?;
+    }
+    if let (Some(asset), Some(cap)) = (&args.max_fee_asset, &args.max_fee) {
+        if cap.is_zero() {
+            return Err(Diagnostic::new(
+                ErrorCode::Usage,
+                "--max-fee must be positive",
+            ));
+        }
+        maxima = BTreeMap::from([(asset.clone(), cap.clone())]);
+    }
+    if maxima.is_empty() {
+        return Err(Diagnostic::new(
+            ErrorCode::Usage,
+            "call requires finite configured fee maxima or --max-fee-asset and --max-fee",
+        ));
+    }
+    let signing_deadline_unix_ms = u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| call_diagnostic(&error.into()))?
+            .as_millis(),
+    )
+    .ok()
+    .and_then(|now| now.checked_add(60_000))
+    .ok_or_else(|| Diagnostic::new(ErrorCode::Usage, "call signing deadline overflow"))?;
     let prepared = service
         .prepare(ContractCallRequest {
             artifact: bytes,
@@ -99,6 +138,10 @@ pub(super) fn run_call(
             payload,
             intent,
             fee_payment: fee,
+            authorization: CallAuthorization {
+                signing_deadline_unix_ms,
+                max_total_fees: maxima,
+            },
         })
         .map_err(|error| call_diagnostic(&error))?;
     let operation_id = prepared
@@ -241,84 +284,12 @@ fn trusted_call_intent(
     entrypoint: &str,
     payload: Value,
 ) -> Result<(ContractCallDraftIntent, Option<Value>), Diagnostic> {
-    let verified = ivm::verify_contract_artifact(artifact)
-        .map_err(|error| Diagnostic::new(ErrorCode::PackageInvalid, error.to_string()))?;
-    let descriptor = verified
-        .contract_interface
-        .entrypoints
-        .iter()
-        .find(|entry| entry.name == entrypoint)
-        .ok_or_else(|| {
-            Diagnostic::new(
-                ErrorCode::Usage,
-                "entrypoint is absent from the verified local artifact",
-            )
-        })?;
-    if descriptor.kind == iroha_data_model::smart_contract::manifest::EntryPointKind::View {
-        return Err(Diagnostic::new(
-            ErrorCode::Usage,
-            "use `musubi view` for a read-only entrypoint",
-        ));
-    }
-    let (arguments, payload) = match &descriptor.argument_schema {
-        Some(schema) => {
-            let canonical = Json::from_norito_value_ref(&payload)
-                .map_err(|error| Diagnostic::new(ErrorCode::Usage, error.to_string()))?;
-            let bytes =
-                ivm::encode_argument_record_from_json(schema, &canonical).map_err(|error| {
-                    Diagnostic::new(
-                        ErrorCode::Usage,
-                        format!("arguments do not match the local entrypoint schema: {error}"),
-                    )
-                })?;
-            let arguments = ContractArgumentRecord::try_new(bytes)
-                .map_err(|error| Diagnostic::new(ErrorCode::Usage, error.to_string()))?;
-            (Some(arguments), Some(payload))
-        }
-        None if descriptor.params.is_empty() && payload.as_object().is_some_and(Map::is_empty) => {
-            (None, None)
-        }
-        None => {
-            return Err(Diagnostic::new(
-                ErrorCode::Usage,
-                "zero-parameter entrypoints accept only omitted arguments or {}",
-            ));
-        }
-    };
-    let mut metadata = Metadata::default();
-    for (key, value) in [
-        ("contract_address", address.to_string()),
-        ("contract_code_hash", verified.code_hash.to_string()),
-        ("contract_entrypoint", entrypoint.to_owned()),
-    ] {
-        metadata.insert(
-            key.parse::<Name>()
-                .map_err(|error| Diagnostic::new(ErrorCode::Internal, error.to_string()))?,
-            Json::new(value),
-        );
-    }
-    if let Some(payload) = &payload {
-        metadata.insert(
-            "contract_payload"
-                .parse::<Name>()
-                .map_err(|error| Diagnostic::new(ErrorCode::Internal, error.to_string()))?,
-            Json::from_norito_value_ref(payload)
-                .map_err(|error| Diagnostic::new(ErrorCode::Usage, error.to_string()))?,
-        );
-    }
-    Ok((
-        ContractCallDraftIntent {
-            invocation: ContractInvocation {
-                contract_address: address,
-                expected_code_hash: verified.code_hash,
-                entrypoint: entrypoint.to_owned(),
-                arguments,
-            },
-            metadata,
-        },
-        payload,
-    ))
+    iroha_contract_deploy::call::trusted_contract_intent(
+        artifact, address, entrypoint, payload, false,
+    )
+    .map_err(|error| Diagnostic::new(ErrorCode::Usage, error.to_string()))
 }
+
 fn call_slot(
     root: &Path,
     network_name: &str,

@@ -101,6 +101,16 @@ mod execution_effects;
 pub(crate) use execution_effects::ExecutionEffects;
 #[path = "executor_fastpq_rejection_tail.rs"]
 mod fastpq_rejection_tail;
+/// Signature-bound inputs already captured before executable dispatch.
+struct RawIvmTransactionInputs {
+    metadata: Metadata,
+    gas_limit_md: Option<u64>,
+    gas_asset_opt: Option<String>,
+    fee_sponsor: Option<FeeSponsorProgramId>,
+    skip_nexus_fee: bool,
+    tx_bytes_len: usize,
+}
+
 /// One-shot proof that the executor debited one exact sponsored fee charge.
 pub(crate) struct VerifiedFeeSponsorCharge {
     submitting_authority: AccountId,
@@ -423,7 +433,7 @@ fn native_iterable_query_access(
         iroha_data_model::asset::definition::AssetDefinition,
         AssetDefinition
     ) {
-        if any_exact!(payload; data_model_query::asset::prelude::FindAssetsDefinitions) {
+        if any_exact!(payload; data_model_query::asset::prelude::FindAssetDefinitions) {
             return Ok(NativeQueryAccess::Registered);
         }
         return Err(invalid_native_iterable_query());
@@ -920,11 +930,8 @@ fn validate_builtin_subsystem_query_permission(
         | SingularQueryBox::FindSorafsOrderbookEvents(_) => {
             let can_set_pricing: Permission =
                 executor_permission::sorafs::CanSetSorafsPricing.into();
-            let can_complete_orders: Permission =
-                executor_permission::sorafs::CanCompleteSorafsReplicationOrder.into();
-            if authority_has_permission(world, authority, &can_set_pricing)?
-                || authority_has_permission(world, authority, &can_complete_orders)?
-            {
+            // Provider-scoped completion authority grants no global orderbook inventory.
+            if authority_has_permission(world, authority, &can_set_pricing)? {
                 Ok(())
             } else {
                 Err(ValidationFail::NotPermitted(
@@ -1828,6 +1835,12 @@ pub enum NexusFeeAdmissionError {
     /// Node or persisted fee configuration is invalid.
     ConfigInvalid(String),
 }
+impl core::fmt::Display for NexusFeeAdmissionError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(self.reason())
+    }
+}
+impl std::error::Error for NexusFeeAdmissionError {}
 impl NexusFeeAdmissionError {
     fn rejected(code: FeeRejectionCode, reason: impl Into<String>) -> Self {
         Self::Rejected {
@@ -3101,13 +3114,15 @@ pub(crate) fn encode_contract_argument_record(
         (Some(_), None) => Err(ValidationFail::NotPermitted(
             "parameterized entrypoint requires a payload".to_owned(),
         )),
-        (Some(schema), Some(payload)) => ivm::encode_argument_record_from_json(schema, payload)
-            .map(Some)
-            .map_err(|error| {
-                ValidationFail::NotPermitted(format!(
-                    "contract payload does not match the entrypoint argument schema: {error}"
-                ))
-            }),
+        (Some(schema), Some(payload)) => {
+            ivm_abi::arguments::encode_argument_record_from_json(schema, payload)
+                .map(Some)
+                .map_err(|error| {
+                    ValidationFail::NotPermitted(format!(
+                        "contract payload does not match the entrypoint argument schema: {error}"
+                    ))
+                })
+        }
     }
 }
 fn prepare_contract_argument_record_from_json(
@@ -5702,59 +5717,83 @@ impl Executor {
     /// Bind one role-15 operation to its sole direct signed External Network entry.
     ///
     /// Contract, IVM, sealed-reveal and mixed-batch effects cannot acquire this token.
+    /// Local allocation refusals retain their first nonwire retry owner and cannot become a
+    /// completed source rejection, fee, or output.
     pub(crate) fn direct_final_promotion_operation_origin(
-        state_transaction: &StateTransaction<'_, '_>,
+        state_transaction: &mut StateTransaction<'_, '_>,
         transaction: &SignedTransaction,
         instruction: &InstructionBox,
         direct_body: bool,
-    ) -> Option<iroha_data_model::sorafs::final_promotion_authority::FinalPromotionOperationOriginV1>
-    {
+    ) -> Result<
+        Option<
+            iroha_data_model::sorafs::final_promotion_authority::FinalPromotionOperationOriginV1,
+        >,
+        ValidationFail,
+    > {
+        use crate::execution_attempt::{ExecutionAttemptError, norito_decode_attempt_error};
         use iroha_data_model::{
             isi::sorafs::MutateSorafsFinalPromotionAuthority,
             sorafs::final_promotion_authority::{
                 FinalPromotionAuthorityActionV1, FinalPromotionOperationOriginV1,
             },
-            transaction::TransactionEntrypoint,
         };
+        state_transaction.current_direct_final_promotion_operation_origin = None;
         if !direct_body {
-            return None;
+            return Ok(None);
         }
         let Executable::Instructions(instructions) = transaction.instructions() else {
-            return None;
+            return Ok(None);
         };
         if instructions.len() != 1 || instructions.first() != Some(instruction) {
-            return None;
+            return Ok(None);
         }
-        let native = instruction
+        let Some(native) = instruction
             .as_any()
-            .downcast_ref::<MutateSorafsFinalPromotionAuthority>()?;
+            .downcast_ref::<MutateSorafsFinalPromotionAuthority>()
+        else {
+            return Ok(None);
+        };
         if !matches!(
             &native.action,
             FinalPromotionAuthorityActionV1::Reserve(_)
                 | FinalPromotionAuthorityActionV1::Complete(_)
         ) {
-            return None;
+            return Ok(None);
         }
-        let outer = transaction.hash_as_entrypoint();
+        let outer = transaction.try_hash_as_entrypoint().map_err(|error| {
+            state_transaction.attempt_error_to_validation_fail(norito_decode_attempt_error(
+                error,
+                |_| {
+                    ValidationFail::NotPermitted("invalid final-promotion original encoding".into())
+                },
+            ))
+        })?;
+        let signed_hash =
+            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::from(outer));
         if state_transaction.current_network_entrypoint_hash != Some(outer)
             || state_transaction.tx_call_hash != Some(iroha_crypto::Hash::from(outer))
-            || state_transaction.current_tx_hash != Some(transaction.hash())
+            || state_transaction.current_tx_hash != Some(signed_hash)
             || transaction.network_id() != Some(&state_transaction.network_id)
-            // TODO: F02 must reserve the bounded signed-entry clone and canonical frame before
-            // this verification allocates; the 64 KiB envelope bound alone is not admission.
-            || crate::query::signer_check::native_signed_entry_frame_v1(
-                &TransactionEntrypoint::External(transaction.clone()),
-            )
-            .is_err()
         {
-            return None;
+            return Ok(None);
         }
-        Some(FinalPromotionOperationOriginV1 {
+        match crate::query::signer_check::native_signed_transaction_frame_attempt_v1(transaction) {
+            Ok(_) => {}
+            Err(ExecutionAttemptError::Rejected(_)) => return Ok(None),
+            Err(ExecutionAttemptError::Deferred(reason)) => {
+                return Err(state_transaction.defer_execution(reason));
+            }
+        }
+        let Some(entry_index) = state_transaction
+            .current_entrypoint_index
+            .and_then(|index| u32::try_from(index).ok())
+        else {
+            return Ok(None);
+        };
+        Ok(Some(FinalPromotionOperationOriginV1 {
             entry_hash: *outer.as_ref(),
-            entry_index: state_transaction
-                .current_entrypoint_index
-                .and_then(|index| u32::try_from(index).ok())?,
-        })
+            entry_index,
+        }))
     }
     #[allow(clippy::too_many_lines)]
     fn execute_metered_instructions(
@@ -5816,6 +5855,13 @@ impl Executor {
             state_transaction.admit_authored_execution_effects(&instructions)?;
             state_transaction.last_tx_gas_used = used;
             state_transaction.record_execution_fee_instructions(instructions.len(), used)?;
+        }
+        if let Some(replay) = ivm_proved_replay.as_ref() {
+            crate::deferred_authority::reject_opaque_instruction_authority(
+                replay.queued.iter().map(|queued| &queued.instruction),
+                state_transaction,
+            )
+            .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
         }
         let confidential_delta = crate::gas::sum_confidential_gas_costs(instructions.iter());
         if confidential_delta > 0 {
@@ -6069,7 +6115,15 @@ impl Executor {
                             &isi,
                             contract_runtime_context.is_none()
                                 && entrypoint_authorization.is_none(),
-                        );
+                        )?;
+                    state_transaction.current_direct_musubi_pin_outbox_origin =
+                        crate::smartcontracts::isi::musubi::capture_pin_outbox_operation_origin(
+                            state_transaction,
+                            transaction,
+                            &isi,
+                            contract_runtime_context.is_none()
+                                && entrypoint_authorization.is_none(),
+                        )?;
                     let result = self.execute_instruction_with_contract_runtime_context(
                         state_transaction,
                         authority,
@@ -6082,6 +6136,7 @@ impl Executor {
                     state_transaction.current_direct_reputation_policy_origin = None;
                     state_transaction.current_direct_sorafs_admission_initialization = false;
                     state_transaction.current_direct_final_promotion_operation_origin = None;
+                    state_transaction.current_direct_musubi_pin_outbox_origin = None;
                     result?;
                     if let Some(authorization) = entrypoint_authorization {
                         authorization
@@ -6221,6 +6276,7 @@ impl Executor {
         state_transaction.current_direct_stream_token_gateway_instruction_index = None;
         state_transaction.current_direct_stream_token_reputation_payload = None;
         state_transaction.current_direct_reputation_policy_origin = None;
+        state_transaction.current_direct_musubi_pin_outbox_origin = None;
         let resolved = self.resolve_contract_invocation(state_transaction, call, ivm_cache)?;
         self.execute_resolved_contract_invocation(
             state_transaction,
@@ -6248,6 +6304,7 @@ impl Executor {
         state_transaction.current_direct_stream_token_gateway_instruction_index = None;
         state_transaction.current_direct_stream_token_reputation_payload = None;
         state_transaction.current_direct_reputation_policy_origin = None;
+        state_transaction.current_direct_musubi_pin_outbox_origin = None;
         root_scope::ensure_contract_scope(state_transaction, &call.contract_address)?;
         use crate::smartcontracts::ivm::host::CoreHostImpl as CoreCoreHost;
         let ResolvedContractInvocation {
@@ -6387,13 +6444,15 @@ impl Executor {
         };
         let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
         if let Err(err) = run_result {
-            if let Some(reason) = crate::execution_attempt::ExecutionDeferred::from_vm_error(&err) {
-                drop(host);
-                return Err(state_transaction.defer_execution(reason));
-            }
-            let error =
-                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&runtime, &err);
+            let attempt =
+                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&runtime, err);
             drop(host);
+            let error = match attempt {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    return Err(state_transaction.defer_execution(reason));
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+            };
             // Retain attempted VM work even when the guest traps. Live-batch rejection discards
             // business state but uses this counter for block budgeting and rejected fees.
             state_transaction.last_tx_gas_used =
@@ -7138,6 +7197,7 @@ impl Executor {
                                 )?;
                             state_transaction.current_direct_final_promotion_operation_origin =
                                 None;
+                            state_transaction.current_direct_musubi_pin_outbox_origin = None;
                             let result =
                                 self.execute_instruction(state_transaction, authority, instruction);
                             state_transaction.current_direct_stream_token_instruction_index = None;
@@ -7147,6 +7207,7 @@ impl Executor {
                                 .current_direct_stream_token_gateway_instruction_index = None;
                             state_transaction.current_direct_final_promotion_operation_origin =
                                 None;
+                            state_transaction.current_direct_musubi_pin_outbox_origin = None;
                             result?;
                         }
                         ExecutableBatchItem::ContractCall(call) => {
@@ -7157,6 +7218,7 @@ impl Executor {
                                 .current_direct_stream_token_gateway_instruction_index = None;
                             state_transaction.current_direct_final_promotion_operation_origin =
                                 None;
+                            state_transaction.current_direct_musubi_pin_outbox_origin = None;
                             let remaining = live_batch_contract_execution_limit(
                                 gas_limit,
                                 gas_used,
@@ -7188,261 +7250,96 @@ impl Executor {
                     skip_nexus_fee,
                 )
             }
-            (Self::Initial | Self::UserProvided(_), Executable::Ivm(bytes)) => {
-                // IVM path: run the bytecode through the VM with CoreHost, enqueueing ISIs,
-                // then apply them via the standard executor logic.
-                use crate::smartcontracts::ivm::host::CoreHostImpl as CoreCoreHost;
-                // Set gas limit per transaction (payer-provided), clamped to remaining block budget.
-                // Read the signature-bound payer cap captured before moving the transaction.
-                let gas_limit_md = gas_limit_md.ok_or_else(|| {
-                    ValidationFail::NotPermitted(
-                        "missing gas limit in fee payment intent".to_owned(),
-                    )
-                })?;
-                let block_remaining = if state_transaction.gas_limit_per_block == 0 {
-                    u64::MAX
-                } else {
-                    state_transaction
-                        .gas_limit_per_block
-                        .saturating_sub(state_transaction.gas_used_in_block_so_far)
-                };
-                let effective_limit = gas_limit_md.min(block_remaining);
-                let admitted = ivm_cache
-                    .summarize_executable(bytes.as_ref())
-                    .map_err(crate::smartcontracts::ivm::program_admission_error)?;
-                let summary = match admitted {
-                    ExecutableProgramSummary::Contract(summary) => summary,
-                    ExecutableProgramSummary::Generic(summary) => {
-                        let artifact =
-                            root_scope::captured_artifact_id(state_transaction, summary.code_hash)?;
-                        crate::smartcontracts::ivm::validate_generic_execution_context(
-                            &state_transaction.world,
-                            &md,
-                            artifact,
-                        )?;
-                        let effective_cycles = validate_prepared_ivm_execution_policy(
-                            state_transaction,
-                            &summary.metadata,
-                        )?;
-                        let prepared_contract_cache = ivm_cache.prepared_contract_cache();
-                        let amx_analysis =
-                            ivm_cache
-                                .analyze_generic_program(&summary)
-                                .map_err(|error| {
-                                    ValidationFail::InternalError(format!(
-                                        "invalid admitted generic-program analysis: {error}"
-                                    ))
-                                })?;
-                        let streaming_metadata =
-                            crate::pipeline::overlay::resolve_streaming_metadata(
-                                state_transaction,
-                                authority,
-                            );
-                        let bound_contract_records =
-                            code::snapshot_bound_contract_records_by_subject(state_transaction)
-                                .map_err(|error| {
-                                    state_transaction.attempt_error_to_validation_fail(error)
-                                })?;
-                        let heap_limit = state_transaction
-                            .world
-                            .parameters
-                            .get()
-                            .smart_contract()
-                            .memory()
-                            .get();
-                        let mut runtime = ivm_cache
-                            .checkout_generic_runtime(&summary, effective_limit, heap_limit)
-                            .map_err(|error| {
-                                state_transaction.vm_error_to_validation_fail(error, |error| {
-                                    ValidationFail::InternalError(error.to_string())
-                                })
-                            })?;
-                        runtime.set_max_cycles(effective_cycles.get());
-                        runtime.set_gas_limit(effective_limit);
-                        let accounts = state_transaction.accounts_snapshot();
-                        let mut host =
-                            CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts));
-                        host.set_output_limits_from_parameters(
-                            state_transaction.world.parameters.get().smart_contract(),
-                        );
-                        host.set_generic_execution();
-                        host.set_prepared_contract_cache(prepared_contract_cache);
-                        host.set_amx_analysis(amx_analysis);
-                        host.set_amx_limits(
-                            crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(
-                                state_transaction.pipeline(),
-                            ),
-                        );
-                        host.hydrate_axt_state(state_transaction).map_err(|error| {
-                            ValidationFail::InternalError(format!(
-                                "invalid AXT policy snapshot: {error}"
-                            ))
-                        })?;
-                        host.set_crypto_config(Arc::clone(&state_transaction.crypto));
-                        host.set_zk_config(&state_transaction.zk);
-                        host.set_public_inputs_from_parameters(
-                            state_transaction.world.parameters.get(),
-                        );
-                        host.set_vrf_epoch_seeds_from_state(state_transaction)
-                            .map_err(|error| {
-                                state_transaction.attempt_error_to_validation_fail(
-                                    error.map_rejection(ValidationFail::InternalError),
-                                )
-                            })?;
-                        host.set_query_state(state_transaction);
-                        host.set_bound_contract_records_by_subject_snapshot(bound_contract_records);
-                        crate::pipeline::overlay::apply_streaming_metadata(
-                            &mut host,
-                            streaming_metadata,
-                        );
-                        host.set_chain_id(&state_transaction.chain_id);
-                        #[cfg(feature = "telemetry")]
-                        host.set_telemetry(state_transaction.telemetry.clone());
-                        host.set_zk_snapshots_from_world(
-                            &state_transaction.world,
-                            &state_transaction.zk,
-                        )
-                        .map_err(|err| {
-                            ValidationFail::InternalError(format!(
-                                "invalid ZK snapshot state: {err}"
-                            ))
-                        })?;
-                        let run_result = match state_transaction.execution_cycle_budget()? {
-                            Some(budget) => {
-                                runtime.run_with_host_and_cycle_budget(&mut host, budget)
-                            }
-                            None => runtime.run_with_host(&mut host),
-                        };
-                        let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
-                        if let Err(err) = run_result {
-                            if let Some(reason) =
-                                crate::execution_attempt::ExecutionDeferred::from_vm_error(&err)
-                            {
-                                drop(host);
-                                return Err(state_transaction.defer_execution(reason));
-                            }
-                            let error =
-                                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
-                                    &runtime, &err,
-                                );
-                            drop(host);
-                            // The actual VM consumed this work even though business effects
-                            // will roll back. Retain it before returning the original failure.
-                            state_transaction.last_tx_gas_used = gas_used;
-                            state_transaction.record_execution_fee_vm_work(gas_used)?;
-                            return Err(error);
-                        }
-                        let artifacts = host.into_execution_artifacts(None);
-                        // Consume the host borrow, then retain root work before artifact
-                        // validation/application can reject. Later nested work must not be
-                        // overwritten by a post-application root-gas assignment.
-                        state_transaction.last_tx_gas_used = gas_used;
-                        state_transaction.record_execution_fee_vm_work(gas_used)?;
-                        let artifacts = artifacts?;
-                        let _executed =
-                            artifacts.apply_to_transaction(state_transaction, authority)?;
-                        Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
-                        if should_charge_pipeline_gas_asset(
-                            skip_nexus_fee,
-                            &state_transaction.nexus.fees,
-                            &gas_asset_opt,
-                        ) && let Some(gas_asset_id_str) = gas_asset_opt
-                        {
-                            Self::charge_pipeline_gas_asset_fee(
-                                state_transaction,
-                                authority,
-                                &transaction_for_fee,
-                                &gas_asset_id_str,
-                                gas_used,
-                                fee_sponsor.as_ref(),
-                            )?;
-                        }
-                        if !skip_nexus_fee {
-                            Self::charge_nexus_fees(
-                                state_transaction,
-                                authority,
-                                &transaction_for_fee,
-                                fee_sponsor,
-                                tx_bytes_len,
-                                0,
-                                gas_used,
-                            )?;
-                        }
-                        return Ok(());
-                    }
-                };
+            (Self::Initial | Self::UserProvided(_), Executable::Ivm(bytes)) => self
+                .execute_raw_ivm_transaction(
+                    state_transaction,
+                    authority,
+                    &transaction_for_fee,
+                    ivm_cache,
+                    bytes,
+                    RawIvmTransactionInputs {
+                        metadata: md,
+                        gas_limit_md,
+                        gas_asset_opt,
+                        fee_sponsor,
+                        skip_nexus_fee,
+                        tx_bytes_len,
+                    },
+                ),
+        }
+    }
+    /// Run only the selected raw-IVM branch, retaining its original fee and effect order.
+    /// Native instructions do not reserve the runtime and host locals from this stage.
+    #[allow(clippy::too_many_lines)]
+    fn execute_raw_ivm_transaction(
+        &self,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        transaction_for_fee: &SignedTransaction,
+        ivm_cache: &mut IvmCache,
+        bytes: iroha_data_model::transaction::executable::IvmBytecode,
+        inputs: RawIvmTransactionInputs,
+    ) -> Result<(), ValidationFail> {
+        let RawIvmTransactionInputs {
+            metadata: md,
+            gas_limit_md,
+            gas_asset_opt,
+            fee_sponsor,
+            skip_nexus_fee,
+            tx_bytes_len,
+        } = inputs;
+        // IVM path: run the bytecode through the VM with CoreHost, enqueueing ISIs,
+        // then apply them via the standard executor logic.
+        use crate::smartcontracts::ivm::host::CoreHostImpl as CoreCoreHost;
+        // Set gas limit per transaction (payer-provided), clamped to remaining block budget.
+        // Read the signature-bound payer cap captured before moving the transaction.
+        let gas_limit_md = gas_limit_md.ok_or_else(|| {
+            ValidationFail::NotPermitted("missing gas limit in fee payment intent".to_owned())
+        })?;
+        let block_remaining = if state_transaction.gas_limit_per_block == 0 {
+            u64::MAX
+        } else {
+            state_transaction
+                .gas_limit_per_block
+                .saturating_sub(state_transaction.gas_used_in_block_so_far)
+        };
+        let effective_limit = gas_limit_md.min(block_remaining);
+        let admitted = ivm_cache
+            .summarize_executable(bytes.as_ref())
+            .map_err(|error| {
+                state_transaction.vm_error_to_validation_fail(
+                    error,
+                    crate::smartcontracts::ivm::program_admission_error,
+                )
+            })?;
+        let summary = match admitted {
+            ExecutableProgramSummary::Contract(summary) => summary,
+            ExecutableProgramSummary::Generic(summary) => {
+                let artifact =
+                    root_scope::captured_artifact_id(state_transaction, summary.code_hash)?;
+                crate::smartcontracts::ivm::validate_generic_execution_context(
+                    &state_transaction.world,
+                    &md,
+                    artifact,
+                )?;
                 let effective_cycles =
                     validate_prepared_ivm_execution_policy(state_transaction, &summary.metadata)?;
-                crate::pipeline::overlay::validate_contract_binding(
+                let prepared_contract_cache = ivm_cache.prepared_contract_cache();
+                let amx_analysis =
+                    ivm_cache
+                        .analyze_generic_program(&summary)
+                        .map_err(|error| {
+                            state_transaction
+                                .program_analysis_error_to_validation_fail(error, "generic-program")
+                        })?;
+                let streaming_metadata = crate::pipeline::overlay::resolve_streaming_metadata(
                     state_transaction,
-                    transaction_for_fee.payload(),
-                    &summary,
-                )
-                .map_err(|error| {
-                    overlay_build_error_to_attempt_validation_fail(state_transaction, error)
-                })?;
-                let selector = requested_contract_entrypoint(&md)?.ok_or_else(|| {
-                    ValidationFail::NotPermitted(
-                        "self-describing raw-IVM contract dispatch requires explicit contract_entrypoint metadata"
-                            .to_owned(),
-                    )
-                })?;
-                let runtime_identity = require_raw_contract_runtime_identity(
-                    &state_transaction.world,
-                    summary.code_hash,
-                    &md,
-                )?;
-                code::ensure_contract_execution_allowed(
-                    &state_transaction.world,
-                    &runtime_identity.contract_address,
-                    state_transaction.block_height(),
-                )
-                .map_err(ValidationFail::NotPermitted)?;
-                let entrypoint_authorization = authorize_prepared_raw_contract_selector(
-                    &state_transaction.world,
                     authority,
-                    summary.prepared_contract(),
-                    &selector,
-                    &runtime_identity,
+                );
+                let bound_contract_records = code::snapshot_bound_contract_records_by_subject(
+                    state_transaction,
                 )
                 .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
-                let contract_subject = code::fetch_bound_contract_subject(
-                    state_transaction,
-                    &runtime_identity.contract_address,
-                )
-                .ok_or_else(|| {
-                    ValidationFail::NotPermitted(format!(
-                        "contract instance `{}` has no valid subject binding",
-                        runtime_identity.contract_address
-                    ))
-                })?;
-                let transition = validate_prepared_contract_lifecycle_call(
-                    &state_transaction.world,
-                    &runtime_identity.contract_address,
-                    runtime_identity.code_hash,
-                    summary.prepared_contract(),
-                    &selector,
-                )?;
-                debug_assert!(
-                    transition.is_none(),
-                    "raw lifecycle selectors are rejected before state validation"
-                );
-                let mut contract_call_context = parse_prepared_contract_call_execution_context(
-                    &md,
-                    summary.prepared_contract(),
-                    effective_limit,
-                )?;
-                if let Some(context) = contract_call_context.as_mut() {
-                    context.bind_runtime_identity(runtime_identity, contract_subject);
-                }
-                if let Some(context) = contract_call_context.as_ref() {
-                    enforce_contract_entrypoint_permission(
-                        &state_transaction.world,
-                        authority,
-                        context,
-                    )
-                    .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
-                }
                 let heap_limit = state_transaction
                     .world
                     .parameters
@@ -7450,8 +7347,8 @@ impl Executor {
                     .smart_contract()
                     .memory()
                     .get();
-                let mut runtime = summary
-                    .checkout_runtime(effective_limit, heap_limit)
+                let mut runtime = ivm_cache
+                    .checkout_generic_runtime(&summary, effective_limit, heap_limit)
                     .map_err(|error| {
                         state_transaction.vm_error_to_validation_fail(error, |error| {
                             ValidationFail::InternalError(error.to_string())
@@ -7459,44 +7356,20 @@ impl Executor {
                     })?;
                 runtime.set_max_cycles(effective_cycles.get());
                 runtime.set_gas_limit(effective_limit);
-                if let Some(argument_record) = contract_call_context
-                    .as_ref()
-                    .and_then(ContractCallExecutionContext::prepared_argument_record)
-                {
-                    argument_record
-                        .precharge_vm(&mut runtime)
-                        .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?;
-                }
-                if let Some(context) = contract_call_context.as_ref() {
-                    if let Some(entrypoint_pc) = context.entrypoint_pc {
-                        let code_len = runtime.memory.code_len();
-                        runtime.set_register(1, code_len);
-                        runtime.set_program_counter(entrypoint_pc).map_err(|err| {
-                            let selector = context.entrypoint.as_deref().unwrap_or("main");
-                            ValidationFail::NotPermitted(format!(
-                                "contract entrypoint `{selector}` resolved to invalid pc: {err}"
-                            ))
-                        })?;
-                    }
-                }
-                let contract_runtime_context = contract_call_context
-                    .as_ref()
-                    .and_then(ContractCallExecutionContext::runtime_context);
-                // Attach host with a snapshot of known accounts for vendor helpers when present.
                 let accounts = state_transaction.accounts_snapshot();
-                let mut host = if let Some(context) = contract_call_context {
-                    CoreCoreHost::with_accounts_and_argument_record(
-                        authority.clone(),
-                        Arc::clone(&accounts),
-                        context.argument_record,
-                    )
-                } else {
-                    CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts))
-                };
+                let mut host =
+                    CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts));
                 host.set_output_limits_from_parameters(
                     state_transaction.world.parameters.get().smart_contract(),
                 );
-                host.set_prepared_contract_cache(summary.prepared_contract_cache());
+                host.set_generic_execution();
+                host.set_prepared_contract_cache(prepared_contract_cache);
+                host.set_amx_analysis(amx_analysis);
+                host.set_amx_limits(
+                    crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(
+                        state_transaction.pipeline(),
+                    ),
+                );
                 host.hydrate_axt_state(state_transaction).map_err(|error| {
                     ValidationFail::InternalError(format!("invalid AXT policy snapshot: {error}"))
                 })?;
@@ -7510,14 +7383,11 @@ impl Executor {
                         )
                     })?;
                 host.set_query_state(state_transaction);
-                host.set_contract_runtime_context(contract_runtime_context.clone());
-                host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
-                // Keep the human-readable label available through SYSVAR_CHAIN_ID; AXT
-                // hydration above installs the exact NetworkId used by VRF verification.
+                host.set_bound_contract_records_by_subject_snapshot(bound_contract_records);
+                crate::pipeline::overlay::apply_streaming_metadata(&mut host, streaming_metadata);
                 host.set_chain_id(&state_transaction.chain_id);
                 #[cfg(feature = "telemetry")]
                 host.set_telemetry(state_transaction.telemetry.clone());
-                // Thread ZK snapshots (roots, elections, verifying keys) for read/verify syscalls.
                 host.set_zk_snapshots_from_world(&state_transaction.world, &state_transaction.zk)
                     .map_err(|err| {
                         ValidationFail::InternalError(format!("invalid ZK snapshot state: {err}"))
@@ -7528,29 +7398,32 @@ impl Executor {
                 };
                 let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
                 if let Err(err) = run_result {
-                    if let Some(reason) =
-                        crate::execution_attempt::ExecutionDeferred::from_vm_error(&err)
-                    {
-                        drop(host);
-                        return Err(state_transaction.defer_execution(reason));
-                    }
-                    let error = crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
-                        &runtime, &err,
-                    );
+                    let attempt =
+                        crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
+                            &runtime, err,
+                        );
                     drop(host);
+                    let error = match attempt {
+                        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                            return Err(state_transaction.defer_execution(reason));
+                        }
+                        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                    };
+                    // The actual VM consumed this work even though business effects
+                    // will roll back. Retain it before returning the original failure.
                     state_transaction.last_tx_gas_used = gas_used;
                     state_transaction.record_execution_fee_vm_work(gas_used)?;
                     return Err(error);
                 }
-                // Retain completed root work before artifact validation/application;
-                // a rejected artifact must not make an executed raw contract free.
-                let artifacts = host.into_execution_artifacts(contract_runtime_context);
+                let artifacts = host.into_execution_artifacts(None);
+                // Consume the host borrow, then retain root work before artifact
+                // validation/application can reject. Later nested work must not be
+                // overwritten by a post-application root-gas assignment.
                 state_transaction.last_tx_gas_used = gas_used;
                 state_transaction.record_execution_fee_vm_work(gas_used)?;
                 let artifacts = artifacts?;
                 let _executed = artifacts.apply_to_transaction(state_transaction, authority)?;
                 Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
-                // Charge gas fees: if a gas asset was provided and accepted by policy.
                 if should_charge_pipeline_gas_asset(
                     skip_nexus_fee,
                     &state_transaction.nexus.fees,
@@ -7560,7 +7433,7 @@ impl Executor {
                     Self::charge_pipeline_gas_asset_fee(
                         state_transaction,
                         authority,
-                        &transaction_for_fee,
+                        transaction_for_fee,
                         &gas_asset_id_str,
                         gas_used,
                         fee_sponsor.as_ref(),
@@ -7570,16 +7443,218 @@ impl Executor {
                     Self::charge_nexus_fees(
                         state_transaction,
                         authority,
-                        &transaction_for_fee,
+                        transaction_for_fee,
                         fee_sponsor,
                         tx_bytes_len,
                         0,
                         gas_used,
                     )?;
                 }
-                Ok(())
+                return Ok(());
+            }
+        };
+        let effective_cycles =
+            validate_prepared_ivm_execution_policy(state_transaction, &summary.metadata)?;
+        crate::pipeline::overlay::validate_contract_binding(
+            state_transaction,
+            transaction_for_fee.payload(),
+            &summary,
+        )
+        .map_err(|error| {
+            overlay_build_error_to_attempt_validation_fail(state_transaction, error)
+        })?;
+        let selector = requested_contract_entrypoint(&md)?.ok_or_else(|| {
+            ValidationFail::NotPermitted(
+                "self-describing raw-IVM contract dispatch requires explicit contract_entrypoint metadata"
+                    .to_owned(),
+            )
+        })?;
+        let runtime_identity = require_raw_contract_runtime_identity(
+            &state_transaction.world,
+            summary.code_hash,
+            &md,
+        )?;
+        code::ensure_contract_execution_allowed(
+            &state_transaction.world,
+            &runtime_identity.contract_address,
+            state_transaction.block_height(),
+        )
+        .map_err(ValidationFail::NotPermitted)?;
+        let entrypoint_authorization = authorize_prepared_raw_contract_selector(
+            &state_transaction.world,
+            authority,
+            summary.prepared_contract(),
+            &selector,
+            &runtime_identity,
+        )
+        .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
+        let contract_subject = code::fetch_bound_contract_subject(
+            state_transaction,
+            &runtime_identity.contract_address,
+        )
+        .ok_or_else(|| {
+            ValidationFail::NotPermitted(format!(
+                "contract instance `{}` has no valid subject binding",
+                runtime_identity.contract_address
+            ))
+        })?;
+        let transition = validate_prepared_contract_lifecycle_call(
+            &state_transaction.world,
+            &runtime_identity.contract_address,
+            runtime_identity.code_hash,
+            summary.prepared_contract(),
+            &selector,
+        )?;
+        debug_assert!(
+            transition.is_none(),
+            "raw lifecycle selectors are rejected before state validation"
+        );
+        let mut contract_call_context = parse_prepared_contract_call_execution_context(
+            &md,
+            summary.prepared_contract(),
+            effective_limit,
+        )?;
+        if let Some(context) = contract_call_context.as_mut() {
+            context.bind_runtime_identity(runtime_identity, contract_subject);
+        }
+        if let Some(context) = contract_call_context.as_ref() {
+            enforce_contract_entrypoint_permission(&state_transaction.world, authority, context)
+                .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
+        }
+        let heap_limit = state_transaction
+            .world
+            .parameters
+            .get()
+            .smart_contract()
+            .memory()
+            .get();
+        let mut runtime = summary
+            .checkout_runtime(effective_limit, heap_limit)
+            .map_err(|error| {
+                state_transaction.vm_error_to_validation_fail(error, |error| {
+                    ValidationFail::InternalError(error.to_string())
+                })
+            })?;
+        runtime.set_max_cycles(effective_cycles.get());
+        runtime.set_gas_limit(effective_limit);
+        if let Some(argument_record) = contract_call_context
+            .as_ref()
+            .and_then(ContractCallExecutionContext::prepared_argument_record)
+        {
+            argument_record
+                .precharge_vm(&mut runtime)
+                .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?;
+        }
+        if let Some(context) = contract_call_context.as_ref() {
+            if let Some(entrypoint_pc) = context.entrypoint_pc {
+                let code_len = runtime.memory.code_len();
+                runtime.set_register(1, code_len);
+                runtime.set_program_counter(entrypoint_pc).map_err(|err| {
+                    let selector = context.entrypoint.as_deref().unwrap_or("main");
+                    ValidationFail::NotPermitted(format!(
+                        "contract entrypoint `{selector}` resolved to invalid pc: {err}"
+                    ))
+                })?;
             }
         }
+        let contract_runtime_context = contract_call_context
+            .as_ref()
+            .and_then(ContractCallExecutionContext::runtime_context);
+        // Attach host with a snapshot of known accounts for vendor helpers when present.
+        let accounts = state_transaction.accounts_snapshot();
+        let mut host = if let Some(context) = contract_call_context {
+            CoreCoreHost::with_accounts_and_argument_record(
+                authority.clone(),
+                Arc::clone(&accounts),
+                context.argument_record,
+            )
+        } else {
+            CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts))
+        };
+        host.set_output_limits_from_parameters(
+            state_transaction.world.parameters.get().smart_contract(),
+        );
+        host.set_prepared_contract_cache(summary.prepared_contract_cache());
+        host.hydrate_axt_state(state_transaction).map_err(|error| {
+            ValidationFail::InternalError(format!("invalid AXT policy snapshot: {error}"))
+        })?;
+        host.set_crypto_config(Arc::clone(&state_transaction.crypto));
+        host.set_zk_config(&state_transaction.zk);
+        host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
+        host.set_vrf_epoch_seeds_from_state(state_transaction)
+            .map_err(|error| {
+                state_transaction.attempt_error_to_validation_fail(
+                    error.map_rejection(ValidationFail::InternalError),
+                )
+            })?;
+        host.set_query_state(state_transaction);
+        host.set_contract_runtime_context(contract_runtime_context.clone());
+        host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
+        // Keep the human-readable label available through SYSVAR_CHAIN_ID; AXT
+        // hydration above installs the exact NetworkId used by VRF verification.
+        host.set_chain_id(&state_transaction.chain_id);
+        #[cfg(feature = "telemetry")]
+        host.set_telemetry(state_transaction.telemetry.clone());
+        // Thread ZK snapshots (roots, elections, verifying keys) for read/verify syscalls.
+        host.set_zk_snapshots_from_world(&state_transaction.world, &state_transaction.zk)
+            .map_err(|err| {
+                ValidationFail::InternalError(format!("invalid ZK snapshot state: {err}"))
+            })?;
+        let run_result = match state_transaction.execution_cycle_budget()? {
+            Some(budget) => runtime.run_with_host_and_cycle_budget(&mut host, budget),
+            None => runtime.run_with_host(&mut host),
+        };
+        let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
+        if let Err(err) = run_result {
+            let attempt =
+                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&runtime, err);
+            drop(host);
+            let error = match attempt {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    return Err(state_transaction.defer_execution(reason));
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+            };
+            state_transaction.last_tx_gas_used = gas_used;
+            state_transaction.record_execution_fee_vm_work(gas_used)?;
+            return Err(error);
+        }
+        // Retain completed root work before artifact validation/application;
+        // a rejected artifact must not make an executed raw contract free.
+        let artifacts = host.into_execution_artifacts(contract_runtime_context);
+        state_transaction.last_tx_gas_used = gas_used;
+        state_transaction.record_execution_fee_vm_work(gas_used)?;
+        let artifacts = artifacts?;
+        let _executed = artifacts.apply_to_transaction(state_transaction, authority)?;
+        Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
+        // Charge gas fees: if a gas asset was provided and accepted by policy.
+        if should_charge_pipeline_gas_asset(
+            skip_nexus_fee,
+            &state_transaction.nexus.fees,
+            &gas_asset_opt,
+        ) && let Some(gas_asset_id_str) = gas_asset_opt
+        {
+            Self::charge_pipeline_gas_asset_fee(
+                state_transaction,
+                authority,
+                transaction_for_fee,
+                &gas_asset_id_str,
+                gas_used,
+                fee_sponsor.as_ref(),
+            )?;
+        }
+        if !skip_nexus_fee {
+            Self::charge_nexus_fees(
+                state_transaction,
+                authority,
+                transaction_for_fee,
+                fee_sponsor,
+                tx_bytes_len,
+                0,
+                gas_used,
+            )?;
+        }
+        Ok(())
     }
     /// Execute [`InstructionBox`].
     ///
@@ -7815,6 +7890,16 @@ impl Executor {
                 );
             }
             Err(err) => {
+                let err =
+                    match crate::smartcontracts::isi::multisig::multisig_instruction_decode_attempt(
+                        err,
+                        std::convert::identity,
+                    ) {
+                        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                            return Err(state_transaction.defer_execution(reason));
+                        }
+                        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                    };
                 if let Some(custom) = instruction.as_any().downcast_ref::<CustomInstruction>() {
                     iroha_logger::error!(
                         ?err,
@@ -8138,8 +8223,23 @@ impl Executor {
         authority: &AccountId,
         query: &QueryRequest,
     ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
-        let latest_block = state_ro.latest_block().map(|block| block.header());
-        self.validate_query_with_world_parts(state_ro.world(), latest_block, authority, query)
+        let latest_block = state_ro
+            .latest_block()
+            .map_err(|error| {
+                error.map_rejection(|error| {
+                    ValidationFail::QueryFailed(
+                        iroha_data_model::query::error::QueryExecutionFail::CanonicalHistory(error),
+                    )
+                })
+            })?
+            .map(|block| block.header());
+        self.validate_query_with_world_parts(
+            state_ro.world(),
+            latest_block,
+            authority,
+            query,
+            &state_ro.execution_budget(),
+        )
     }
     /// Validate [`QueryRequest`] using world-state and latest committed block header.
     ///
@@ -8157,6 +8257,7 @@ impl Executor {
         latest_block: Option<BlockHeader>,
         authority: &AccountId,
         query: &QueryRequest,
+        budget: &iroha_allocation::AllocationBudget,
     ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
         trace!("Running query validation");
         // This native boundary is mandatory for Initial and user-provided executors alike.
@@ -8216,6 +8317,7 @@ impl Executor {
                     query_label,
                     gas_limit,
                     heap_limit,
+                    budget,
                 )?;
                 match report.verdict {
                     Ok(()) => Ok(()),
@@ -8273,18 +8375,22 @@ impl Executor {
         let executor_parameters = state_transaction.world.parameters.get().executor();
         let gas_limit = executor_parameters.fuel().get();
         let heap_limit = executor_parameters.memory().get();
-        let maybe_data_model =
-            run_executor_migration(&loaded_executor, &context, gas_limit, heap_limit).map_err(
-                |error| match error {
-                    crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
-                        map_migration_fail_to_vm_error(error)
-                    }
-                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
-                        state_transaction.defer_execution(reason.clone());
-                        reason.into_vm_error()
-                    }
-                },
-            )?;
+        let maybe_data_model = run_executor_migration(
+            &loaded_executor,
+            &context,
+            gas_limit,
+            heap_limit,
+            &state_transaction.execution_budget(),
+        )
+        .map_err(|error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                map_migration_fail_to_vm_error(error)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                state_transaction.defer_execution(reason.clone());
+                reason.into_vm_error()
+            }
+        })?;
         if let Some(data_model) = maybe_data_model {
             debug!("executor migrate entrypoint supplied a new data model");
             state_transaction
@@ -8319,12 +8425,13 @@ fn run_executor_validation<T>(
     verdict_context: &str,
     gas_limit: u64,
     heap_limit: u64,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<ExecutorValidationReport, crate::execution_attempt::ExecutionAttemptError<ValidationFail>>
 where
     ValidatePayload<T>: Encode,
 {
     let mut ivm = executor
-        .checkout_runtime_for_gas_limit(gas_limit, heap_limit)
+        .checkout_runtime_for_gas_limit(gas_limit, heap_limit, budget)
         .map_err(|error| {
             crate::execution_attempt::vm_attempt_error(error, |error| {
                 ValidationFail::InternalError(error.to_string())
@@ -8387,12 +8494,13 @@ fn run_executor_migration(
     context: &ExecutorContext,
     gas_limit: u64,
     heap_limit: u64,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<
     Option<ExecutorDataModel>,
     crate::execution_attempt::ExecutionAttemptError<ValidationFail>,
 > {
     let mut ivm = executor
-        .checkout_runtime_for_gas_limit(gas_limit, heap_limit)
+        .checkout_runtime_for_gas_limit(gas_limit, heap_limit, budget)
         .map_err(|error| {
             crate::execution_attempt::vm_attempt_error(error, |error| {
                 ValidationFail::InternalError(error.to_string())
@@ -8495,7 +8603,19 @@ fn dispatch_instruction_with_ivm(
     authority: &AccountId,
     instruction: InstructionBox,
 ) -> Result<(), ValidationFail> {
-    let curr_block = state_transaction.latest_block().map_or_else(
+    let latest_block = state_transaction
+        .latest_block()
+        .map_err(|error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                state_transaction.defer_execution(reason)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::CanonicalHistory(error),
+                )
+            }
+        })?;
+    let curr_block = latest_block.map_or_else(
         || BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0),
         |b| b.header(),
     );
@@ -8516,8 +8636,15 @@ fn dispatch_instruction_with_ivm(
         .executor()
         .memory()
         .get();
-    let report = run_executor_validation(executor, &payload, instruction_id, gas_limit, heap_limit)
-        .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
+    let report = run_executor_validation(
+        executor,
+        &payload,
+        instruction_id,
+        gas_limit,
+        heap_limit,
+        &state_transaction.execution_budget(),
+    )
+    .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?;
     state_transaction.executor_fuel_remaining = state_transaction
         .executor_fuel_remaining
         .saturating_sub(report.gas_used);
@@ -8914,6 +9041,27 @@ pub(crate) fn ensure_asset_definition_registration_allowed(
         "Can't register asset definition".to_owned(),
     ))
 }
+#[cfg(test)]
+#[path = "executor_runtime_memory_tests.rs"]
+mod runtime_memory_tests;
+
+#[cfg(test)]
+#[path = "executor_public_pin_admission_tests.rs"]
+mod public_pin_admission_tests;
+
+#[cfg(test)]
+#[path = "executor_opaque_monetary_tests.rs"]
+mod opaque_monetary_tests;
+
+#[cfg(test)]
+fn executor_test_budget() -> iroha_allocation::AllocationBudget {
+    thread_local! {
+        static BUDGET: iroha_allocation::AllocationBudget =
+            iroha_allocation::AllocationBudget::new(512 * 1024 * 1024);
+    }
+    BUDGET.with(Clone::clone)
+}
+
 /// [`Executor`] with cached [`IVM`] for execution.
 #[derive(Debug, Clone)]
 #[debug("LoadedExecutor {{ runtime: <IVM> }}")]
@@ -8969,6 +9117,8 @@ enum ExecutorRuntimePoolEvent {
     Eviction,
 }
 struct ExecutorRuntimePool {
+    // Bound once to the first State owner. Foreign State clones execute uncached.
+    execution_budget: Option<iroha_allocation::AllocationBudget>,
     variants: BTreeMap<ExecutorRuntimeKey, ExecutorRuntimeVariant>,
     order: VecDeque<ExecutorRuntimeKey>,
     capacity: usize,
@@ -8978,38 +9128,16 @@ struct ExecutorRuntimePool {
     index_memory: ivm::cache_memory::MemoryReservation,
 }
 impl ExecutorRuntimePool {
-    fn new(
-        key: ExecutorRuntimeKey,
-        baseline: RuntimeTemplate,
-        mut vm: IVM,
-        capacity: usize,
-    ) -> Self {
-        let mut pool = Self {
+    fn new(capacity: usize) -> Self {
+        Self {
+            execution_budget: None,
             index_memory: ivm::cache_memory::MemoryReservation::active(0),
             variants: BTreeMap::new(),
             order: VecDeque::new(),
             capacity,
             #[cfg(test)]
-            stats: ExecutorRuntimePoolStats {
-                program_loads: 1,
-                template_builds: 1,
-                ..ExecutorRuntimePoolStats::default()
-            },
-        };
-        if vm.reset_from_runtime_template(&baseline).is_ok()
-            && baseline.try_retain_cache_allocations()
-            && vm.try_retain_cache_allocations()
-        {
-            let identity = pool.insert_variant(key);
-            if let Some(variant) = pool.variants.get_mut(&key) {
-                debug_assert!(ivm::cache_memory::SharedValue::ptr_eq(
-                    &identity,
-                    &variant.identity
-                ));
-                variant.available = Some((baseline, vm));
-            }
+            stats: ExecutorRuntimePoolStats::default(),
         }
-        pool
     }
     fn clear_storage(&mut self) {
         #[cfg(test)]
@@ -9129,11 +9257,28 @@ impl ExecutorRuntimePool {
         identity
     }
 }
+/// The actual pool guard determines refund custody; equal limits are not pool identity.
+/// Every guard drops inside its original scope, including on unwind. State writers
+/// retain the enclosing same-pool notifications through their existing refund owner.
+fn with_executor_runtime_pool<R>(
+    pool: &Mutex<ExecutorRuntimePool>,
+    operation: impl FnOnce(&mut ExecutorRuntimePool) -> R,
+) -> R {
+    let mut guard = pool.lock().unwrap_or_else(|error| error.into_inner());
+    let budget = guard.execution_budget.clone();
+    let run = move || operation(&mut guard);
+    match budget {
+        Some(budget) => budget.with_deferred_refund_notifications(move |_| run()),
+        None => run(),
+    }
+}
+
 struct ExecutorRuntimeLease {
     pool: Arc<Mutex<ExecutorRuntimePool>>,
     _pool_memory: Arc<ivm::cache_memory::MemoryReservation>,
     key: ExecutorRuntimeKey,
-    variant_identity: ivm::cache_memory::SharedValue<()>,
+    variant_identity: Option<ivm::cache_memory::SharedValue<()>>,
+    execution_budget: iroha_allocation::AllocationBudget,
     baseline: RuntimeTemplate,
     vm: Option<IVM>,
 }
@@ -9154,25 +9299,30 @@ impl DerefMut for ExecutorRuntimeLease {
 }
 impl Drop for ExecutorRuntimeLease {
     fn drop(&mut self) {
-        let Some(mut vm) = self.vm.take() else {
+        let Some(vm) = self.vm.take() else {
             return;
         };
-        let (can_return, mut idle_reclaims_left) = {
-            let pool = self.pool.lock().unwrap_or_else(|error| error.into_inner());
+        // The VM moves into the scope before any path can destroy it. The baseline
+        // field's later final release also occurs outside every physical pool guard.
+        let budget = self.execution_budget.clone();
+        budget.with_deferred_refund_notifications(move |_| self.return_runtime(vm));
+    }
+}
+impl ExecutorRuntimeLease {
+    fn return_runtime(&self, mut vm: IVM) {
+        let Some(identity) = self.variant_identity.as_ref() else {
+            return;
+        };
+        let (can_return, mut idle_reclaims_left) = with_executor_runtime_pool(&self.pool, |pool| {
             (
                 pool.variants.get(&self.key).is_some_and(|variant| {
-                    ivm::cache_memory::SharedValue::ptr_eq(
-                        &variant.identity,
-                        &self.variant_identity,
-                    ) && variant.available.is_none()
+                    ivm::cache_memory::SharedValue::ptr_eq(&variant.identity, identity)
+                        && variant.available.is_none()
                 }),
                 pool.capacity,
             )
-        };
-        if !can_return {
-            return;
-        }
-        if vm.reset_from_runtime_template(&self.baseline).is_err() {
+        });
+        if !can_return || vm.reset_from_runtime_template(&self.baseline).is_err() {
             return;
         }
         while !self.baseline.try_retain_cache_allocations() || !vm.try_retain_cache_allocations() {
@@ -9180,33 +9330,30 @@ impl Drop for ExecutorRuntimeLease {
                 return;
             }
             idle_reclaims_left -= 1;
-            let idle = {
-                let mut pool = self.pool.lock().unwrap_or_else(|error| error.into_inner());
-                pool.take_idle_runtime_for_retention(self.key, &self.variant_identity)
-            };
+            let idle = with_executor_runtime_pool(&self.pool, |pool| {
+                pool.take_idle_runtime_for_retention(self.key, identity)
+            });
             let Some(idle) = idle else {
                 return;
             };
-            // A fresh governance geometry may need the room held by an unused
-            // constructor geometry. Refund only this original idle owner's actual
-            // lifetime; shared allocations still held by borrowers stay charged.
             drop(idle);
         }
-        let mut pool = self.pool.lock().unwrap_or_else(|error| error.into_inner());
-        let stored = pool.variants.get_mut(&self.key).is_some_and(|variant| {
-            if !ivm::cache_memory::SharedValue::ptr_eq(&variant.identity, &self.variant_identity)
-                || variant.available.is_some()
-            {
-                return false;
+        with_executor_runtime_pool(&self.pool, move |pool| {
+            let stored = pool.variants.get_mut(&self.key).is_some_and(|variant| {
+                if !ivm::cache_memory::SharedValue::ptr_eq(&variant.identity, identity)
+                    || variant.available.is_some()
+                {
+                    return false;
+                }
+                variant.available = Some((self.baseline.clone(), vm));
+                true
+            });
+            if stored {
+                pool.record(ExecutorRuntimePoolEvent::DirtyReset);
+                pool.touch(self.key);
+                pool.retain_index_or_clear();
             }
-            variant.available = Some((self.baseline.clone(), vm));
-            true
         });
-        if stored {
-            pool.record(ExecutorRuntimePoolEvent::DirtyReset);
-            pool.touch(self.key);
-            pool.retain_index_or_clear();
-        }
     }
 }
 fn stack_limit_for_gas(gas_limit: u64) -> u64 {
@@ -9214,10 +9361,9 @@ fn stack_limit_for_gas(gas_limit: u64) -> u64 {
 }
 impl LoadedExecutor {
     pub(crate) fn load(raw_executor: data_model_executor::Executor) -> Result<Self, VMError> {
-        let default_parameters = iroha_data_model::parameter::SmartContractParameters::default();
-        let gas_limit = default_parameters.fuel().get();
-        let heap_limit = default_parameters.memory().get();
-        let key = ExecutorRuntimeKey::for_limits(gas_limit, heap_limit);
+        // Restore validates the same static image as load_program, but has no State
+        // resource owner yet. Mutable runtimes are funded only at live checkout.
+        IVM::validate_program(raw_executor.bytecode().as_ref())?;
         // Normalize caller spare Vec capacity, then charge the actual owned Vec.
         let bytecode = raw_executor.bytecode().as_ref().to_vec();
         let bytecode_capacity = bytecode.capacity();
@@ -9227,12 +9373,7 @@ impl LoadedExecutor {
             ),
             Some(bytecode_capacity),
         );
-        let mut ivm = Self::load_runtime(&raw_executor, gas_limit, heap_limit)?;
-        let baseline = ivm.try_runtime_template()?;
         let runtime_pool = Arc::new(Mutex::new(ExecutorRuntimePool::new(
-            key,
-            baseline,
-            ivm,
             EXECUTOR_RUNTIME_VARIANT_CAPACITY,
         )));
         let pool_memory = Arc::new(ivm::cache_memory::MemoryReservation::active(
@@ -9249,9 +9390,7 @@ impl LoadedExecutor {
         impl PoolControl {
             fn clear(&self) {
                 if let Some(pool) = self.weak.upgrade() {
-                    pool.lock()
-                        .unwrap_or_else(|error| error.into_inner())
-                        .clear_storage();
+                    with_executor_runtime_pool(&pool, ExecutorRuntimePool::clear_storage);
                 }
             }
         }
@@ -9271,8 +9410,9 @@ impl LoadedExecutor {
         raw_executor: &data_model_executor::Executor,
         gas_limit: u64,
         heap_limit: u64,
+        budget: &iroha_allocation::AllocationBudget,
     ) -> Result<IVM, VMError> {
-        let mut vm = IVM::try_new(gas_limit)?;
+        let mut vm = IVM::try_new_with_memory_budget(gas_limit, budget)?;
         vm.memory.set_heap_max_limit(heap_limit)?;
         vm.load_program(raw_executor.bytecode().as_ref())?;
         vm.set_gas_limit(gas_limit);
@@ -9282,13 +9422,16 @@ impl LoadedExecutor {
         &self,
         gas_limit: u64,
         heap_limit: u64,
+        budget: &iroha_allocation::AllocationBudget,
     ) -> Result<ExecutorRuntimeLease, VMError> {
         let key = ExecutorRuntimeKey::for_limits(gas_limit, heap_limit);
-        let (variant_identity, runtime) = {
-            let mut pool = self
-                .runtime_pool
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
+        let (variant_identity, runtime) = with_executor_runtime_pool(&self.runtime_pool, |pool| {
+            let original = pool.execution_budget.get_or_insert_with(|| budget.clone());
+            if !original.same_pool(budget) {
+                // Cloned Worlds can belong to different States. Do not transfer a
+                // retained image's original credit, or evict it beneath foreign writers.
+                return (None, None);
+            }
             if let Some(variant) = pool.variants.get_mut(&key) {
                 let identity = variant.identity.clone();
                 let runtime = variant.available.take();
@@ -9298,25 +9441,25 @@ impl LoadedExecutor {
                     ExecutorRuntimePoolEvent::Miss
                 });
                 pool.touch(key);
-                (identity, runtime)
+                (Some(identity), runtime)
             } else {
                 pool.record(ExecutorRuntimePoolEvent::Miss);
-                (pool.insert_variant(key), None)
+                (Some(pool.insert_variant(key)), None)
             }
-        };
-        // Runtime allocation and loading never hold the pool lock. In particular,
-        // a nested borrower cannot block its parent behind active memory admission.
+        });
+        // Admission never waits or holds a pool lock. Each new baseline reserves
+        // its complete clone demand from this same VM budget before allocation.
         let (baseline, mut vm) = if let Some(runtime) = runtime {
             runtime
         } else {
-            let mut vm = Self::load_runtime(&self.raw_executor, gas_limit, heap_limit)?;
+            let mut vm = Self::load_runtime(&self.raw_executor, gas_limit, heap_limit, budget)?;
             let baseline = vm.try_runtime_template()?;
-            let mut pool = self
-                .runtime_pool
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            pool.record(ExecutorRuntimePoolEvent::ProgramLoad);
-            pool.record(ExecutorRuntimePoolEvent::TemplateBuild);
+            if variant_identity.is_some() {
+                with_executor_runtime_pool(&self.runtime_pool, |pool| {
+                    pool.record(ExecutorRuntimePoolEvent::ProgramLoad);
+                    pool.record(ExecutorRuntimePoolEvent::TemplateBuild);
+                });
+            }
             (baseline, vm)
         };
         vm.activate_cached_runtime();
@@ -9326,6 +9469,7 @@ impl LoadedExecutor {
             _pool_memory: Arc::clone(&self._pool_memory),
             key,
             variant_identity,
+            execution_budget: budget.clone(),
             baseline,
             vm: Some(vm),
         })
@@ -9469,6 +9613,7 @@ pub mod executor_norito {
                     .checkout_runtime_for_gas_limit(
                         parameters.fuel().get(),
                         parameters.memory().get(),
+                        &executor_test_budget(),
                     )
                     .unwrap();
                 assert_eq!(expected, net_state_hash(&first).unwrap());
@@ -9731,7 +9876,11 @@ mod tests {
         let state = state_after_genesis(world);
         assert_eq!(state.committed_height(), 1);
         assert_eq!(state.kura().blocks_count(), 1);
-        let genesis = state.kura().get_block(nonzero!(1_usize)).unwrap();
+        let genesis = state
+            .kura()
+            .get_block(nonzero!(1_usize), &state.ivm_execution_budget())
+            .expect("completed original State read")
+            .unwrap();
         assert_eq!(
             state.network_id_ref(),
             &NetworkId::from_genesis_hash(genesis.hash())
@@ -10793,9 +10942,10 @@ mod tests {
                 Account::new(other.clone()).build(&other),
                 Account::new(escrow.clone()).build(&escrow),
             ],
-            [AssetDefinition::numeric(
+            [AssetDefinition::new(
                 definition,
-                "Staked XOR",
+                "Staked XOR".to_owned(),
+                iroha_primitives::numeric::NumericSpec::fractional(9),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
                 None,
             )
@@ -11568,6 +11718,7 @@ mod tests {
                 lane_id: iroha_model_base::topology::LaneId::SINGLE,
                 account: staker,
                 claim_plan: PublicLaneRewardClaimPlanV1 {
+                    fee_claim: None,
                     network_scope,
                     valid_until_height: 2,
                     expected_state: None,
@@ -14947,6 +15098,17 @@ mod tests {
     }
     #[test]
     fn local_checkout_deferral_abandons_transaction_without_gas_or_fee() {
+        check_local_checkout_abandons_transaction(
+            ivm::error::ExecutionDeferral::ActiveMemoryCapacity,
+        );
+    }
+    #[test]
+    fn local_custody_invariant_abandons_transaction_without_gas_or_fee() {
+        check_local_checkout_abandons_transaction(
+            ivm::error::ExecutionDeferral::LocalInvariantViolation,
+        );
+    }
+    fn check_local_checkout_abandons_transaction(reason: ivm::error::ExecutionDeferral) {
         let (state, keypair, authority, _, _, fee_asset, _) =
             pipeline_fee_state_fixture(state_after_genesis);
         let mut program = ivm::ProgramMetadata {
@@ -15005,9 +15167,7 @@ mod tests {
         let retry_transaction = transaction.clone();
         let mut ivm_cache = IvmCache::new();
         let shared_cache = ivm_cache.prepared_contract_cache();
-        shared_cache.set_checkout_refusal_for_test(Some(
-            ivm::error::ExecutionDeferral::ActiveMemoryCapacity,
-        ));
+        shared_cache.set_checkout_refusal_for_test(Some(reason));
         let result = super::Executor::Initial.execute_transaction(
             &mut state_transaction,
             &authority,
@@ -15017,14 +15177,11 @@ mod tests {
         assert_eq!(
             result,
             Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
-                ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into()
+                reason.into()
             ))
         );
         assert_eq!(state_transaction.last_tx_gas_used, 0);
-        assert_eq!(
-            state_transaction.execution_deferral(),
-            Some(ivm::error::ExecutionDeferral::ActiveMemoryCapacity.into())
-        );
+        assert_eq!(state_transaction.execution_deferral(), Some(reason.into()));
         // Releasing local pressure cannot bless this already incomplete overlay.
         shared_cache.set_checkout_refusal_for_test(None);
         assert_eq!(
@@ -17639,21 +17796,47 @@ mod tests {
         let source = prepared.genesis.block();
         let instruction: InstructionBox = Register::domain(Domain::new(domain_id)).into();
         let index = exact_native_genesis_fixture_index(source, &instruction);
+        // Each phase retains one original acquisition in its own debug stack frame
+        // while checking the same signed sources and refusal assertions.
+        assert_native_genesis_absent_original_source(&prepared, &instruction, index);
+        assert_native_genesis_component_identity_refusals(&prepared, &instruction, index);
+        assert_native_genesis_foreign_signed_source(&prepared);
+        assert_native_genesis_foreign_state_network(&prepared, &instruction, index);
+        assert_native_genesis_successor_header(&prepared, &instruction, index);
+        assert_native_genesis_committed_bootstrap_refusal(&prepared, &instruction, index);
+    }
+
+    #[inline(never)]
+    fn assert_native_genesis_absent_original_source(
+        prepared: &crate::sumeragi::test_chain::PreparedTestChainConfig,
+        instruction: &InstructionBox,
+        index: usize,
+    ) {
+        let source = prepared.genesis.block();
         let mut absent = prepared.state.block(source.header());
         assert!(
             absent
-                .transaction_for_original_genesis_testing(source, index, &ALICE_ID, &instruction)
+                .transaction_for_original_genesis_testing(source, index, &ALICE_ID, instruction)
                 .is_err(),
             "H1 without retained original route must refuse"
         );
         drop(absent);
+    }
+
+    #[inline(never)]
+    fn assert_native_genesis_component_identity_refusals(
+        prepared: &crate::sumeragi::test_chain::PreparedTestChainConfig,
+        instruction: &InstructionBox,
+        index: usize,
+    ) {
+        let source = prepared.genesis.block();
         let mut block = prepared
             .state
             .block_with_pristine_carrier_stage(source, |_| Ok::<_, String>(()))
             .unwrap();
         assert!(
             block
-                .transaction_for_original_genesis_testing(source, index, &BOB_ID, &instruction)
+                .transaction_for_original_genesis_testing(source, index, &BOB_ID, instruction)
                 .is_err(),
             "configured signer mismatch must refuse"
         );
@@ -17663,14 +17846,14 @@ mod tests {
                     source,
                     source.network_entrypoint_count(),
                     &ALICE_ID,
-                    &instruction
+                    instruction
                 )
                 .is_err(),
             "absent original ordinal must refuse"
         );
         assert!(
             block
-                .transaction_for_original_genesis_testing(source, 0, &ALICE_ID, &instruction)
+                .transaction_for_original_genesis_testing(source, 0, &ALICE_ID, instruction)
                 .is_err(),
             "a different valid original ordinal must not authenticate the tested instruction"
         );
@@ -17682,12 +17865,24 @@ mod tests {
                 .is_err(),
             "authentic RegisterDomain must not bless a substituted Log"
         );
+        drop(block);
+    }
+
+    #[inline(never)]
+    fn assert_native_genesis_foreign_signed_source(
+        prepared: &crate::sumeragi::test_chain::PreparedTestChainConfig,
+    ) {
+        let source = prepared.genesis.block();
         let other_domain = DomainId::try_new("foreign-source", "universal").unwrap();
         let foreign = prepared_native_domain_genesis_fixture(&other_domain);
         let foreign_instruction: InstructionBox =
             Register::domain(Domain::new(other_domain)).into();
         let foreign_index =
             exact_native_genesis_fixture_index(foreign.genesis.block(), &foreign_instruction);
+        let mut block = prepared
+            .state
+            .block_with_pristine_carrier_stage(source, |_| Ok::<_, String>(()))
+            .unwrap();
         assert!(
             block
                 .transaction_for_original_genesis_testing(
@@ -17700,16 +17895,34 @@ mod tests {
             "foreign signed source/hash must refuse"
         );
         drop(block);
+    }
+
+    #[inline(never)]
+    fn assert_native_genesis_foreign_state_network(
+        prepared: &crate::sumeragi::test_chain::PreparedTestChainConfig,
+        instruction: &InstructionBox,
+        index: usize,
+    ) {
+        let source = prepared.genesis.block();
         let foreign_network_state = state_for_testing(World::new());
         let mut foreign_network_block = foreign_network_state
             .block_with_pristine_carrier_stage(source, |_| Ok::<_, String>(()))
             .unwrap();
         let network_error = foreign_network_block
-            .transaction_for_original_genesis_testing(source, index, &ALICE_ID, &instruction)
+            .transaction_for_original_genesis_testing(source, index, &ALICE_ID, instruction)
             .err()
             .expect("a source cannot grant bootstrap scope to another State network");
         assert!(network_error.contains("another State network"));
         drop(foreign_network_block);
+    }
+
+    #[inline(never)]
+    fn assert_native_genesis_successor_header(
+        prepared: &crate::sumeragi::test_chain::PreparedTestChainConfig,
+        instruction: &InstructionBox,
+        index: usize,
+    ) {
+        let source = prepared.genesis.block();
         let mut wrong_header = prepared.state.block(BlockHeader::new(
             nonzero!(2_u64),
             Some(source.hash()),
@@ -17718,11 +17931,20 @@ mod tests {
             0,
         ));
         let header_error = wrong_header
-            .transaction_for_original_genesis_testing(source, index, &ALICE_ID, &instruction)
+            .transaction_for_original_genesis_testing(source, index, &ALICE_ID, instruction)
             .err()
             .expect("a source cannot grant bootstrap scope to a successor header");
         assert!(header_error.contains("another block header"));
         drop(wrong_header);
+    }
+
+    #[inline(never)]
+    fn assert_native_genesis_committed_bootstrap_refusal(
+        prepared: &crate::sumeragi::test_chain::PreparedTestChainConfig,
+        instruction: &InstructionBox,
+        index: usize,
+    ) {
+        let source = prepared.genesis.block();
         crate::sumeragi::startup::apply_genesis(
             &prepared.state,
             source.clone(),
@@ -17737,7 +17959,7 @@ mod tests {
             .unwrap();
         assert!(
             replay
-                .transaction_for_original_genesis_testing(source, index, &ALICE_ID, &instruction)
+                .transaction_for_original_genesis_testing(source, index, &ALICE_ID, instruction)
                 .is_err(),
             "committed history must not regain original bootstrap scope"
         );
@@ -19828,7 +20050,11 @@ mod tests {
         .unwrap();
         let parameters = iroha_data_model::parameter::SmartContractParameters::default();
         let mut lease = loaded
-            .checkout_runtime_for_gas_limit(parameters.fuel().get(), parameters.memory().get())
+            .checkout_runtime_for_gas_limit(
+                parameters.fuel().get(),
+                parameters.memory().get(),
+                &executor_test_budget(),
+            )
             .unwrap();
         {
             let mut pool = loaded.runtime_pool.lock().unwrap();
@@ -19848,7 +20074,11 @@ mod tests {
             "an evicted borrower cannot republish its stale pool identity"
         );
         loaded
-            .checkout_runtime_for_gas_limit(parameters.fuel().get(), parameters.memory().get())
+            .checkout_runtime_for_gas_limit(
+                parameters.fuel().get(),
+                parameters.memory().get(),
+                &executor_test_budget(),
+            )
             .unwrap();
     }
     #[test]
@@ -19864,6 +20094,7 @@ mod tests {
                     .checkout_runtime_for_gas_limit(
                         parameters.fuel().get(),
                         parameters.memory().get(),
+                        &executor_test_budget(),
                     )
                     .unwrap();
                 lease.memory.preload_input(0, &[0x5a]).unwrap();
@@ -19872,7 +20103,11 @@ mod tests {
             .is_err()
         );
         let lease = loaded
-            .checkout_runtime_for_gas_limit(parameters.fuel().get(), parameters.memory().get())
+            .checkout_runtime_for_gas_limit(
+                parameters.fuel().get(),
+                parameters.memory().get(),
+                &executor_test_budget(),
+            )
             .unwrap();
         assert_eq!(
             lease.memory.load_region(Memory::INPUT_START, 1).unwrap(),
@@ -19886,7 +20121,11 @@ mod tests {
         }
         for _ in 0..2 {
             let mut lease = loaded
-                .checkout_runtime_for_gas_limit(parameters.fuel().get(), parameters.memory().get())
+                .checkout_runtime_for_gas_limit(
+                    parameters.fuel().get(),
+                    parameters.memory().get(),
+                    &executor_test_budget(),
+                )
                 .unwrap();
             lease.set_register(10, Memory::OUTPUT_START);
             lease.run().unwrap();
@@ -19933,17 +20172,17 @@ mod tests {
         loaded.runtime_pool.lock().unwrap().clear_storage();
         drop(
             loaded
-                .checkout_runtime_for_gas_limit(gas_limit, heap_limit)
+                .checkout_runtime_for_gas_limit(gas_limit, heap_limit, &executor_test_budget())
                 .expect("warm bounded-stack executor runtime"),
         );
         let (before, variants) = loaded.runtime_pool_snapshot();
         assert_eq!(variants, 1);
         let first = loaded
-            .checkout_runtime_for_gas_limit(gas_limit, heap_limit)
+            .checkout_runtime_for_gas_limit(gas_limit, heap_limit, &executor_test_budget())
             .expect("first pooled executor runtime");
         let second_allocation = {
             let mut second = loaded
-                .checkout_runtime_for_gas_limit(gas_limit, heap_limit)
+                .checkout_runtime_for_gas_limit(gas_limit, heap_limit, &executor_test_budget())
                 .expect("overlapping cold executor runtime");
             let allocation = second
                 .memory
@@ -19957,7 +20196,7 @@ mod tests {
             allocation
         };
         let third = loaded
-            .checkout_runtime_for_gas_limit(gas_limit, heap_limit)
+            .checkout_runtime_for_gas_limit(gas_limit, heap_limit, &executor_test_budget())
             .expect("second runtime must be reusable while first remains leased");
         assert_eq!(
             third
@@ -19986,7 +20225,7 @@ mod tests {
     fn loaded_executor_returning_past_heap_result() -> LoadedExecutor {
         let metadata = ivm::ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: 0,
             vector_length: 0,
             max_cycles: 100_000,
@@ -20039,6 +20278,7 @@ mod tests {
             "hostile-output-test",
             1_000_000,
             Memory::HEAP_MAX_SIZE,
+            &executor_test_budget(),
         );
         let validation_error = match validation_result {
             Err(error) => error,
@@ -20048,9 +20288,14 @@ mod tests {
             validation_error.to_string().contains(expected_message),
             "unexpected validation error: {validation_error}"
         );
-        let migration_error =
-            run_executor_migration(&loaded, &context, 1_000_000, Memory::HEAP_MAX_SIZE)
-                .expect_err("hostile migration result must be rejected");
+        let migration_error = run_executor_migration(
+            &loaded,
+            &context,
+            1_000_000,
+            Memory::HEAP_MAX_SIZE,
+            &executor_test_budget(),
+        )
+        .expect_err("hostile migration result must be rejected");
         assert!(
             migration_error.to_string().contains(expected_message),
             "unexpected migration error: {migration_error}"
@@ -20084,6 +20329,7 @@ mod tests {
             "past-heap-output-test",
             100_000,
             Memory::HEAP_MAX_SIZE,
+            &executor_test_budget(),
         );
         let validation_error = match validation_result {
             Err(error) => error,
@@ -20095,9 +20341,14 @@ mod tests {
                 .contains("is not fully readable"),
             "unexpected validation error: {validation_error}"
         );
-        let migration_error =
-            run_executor_migration(&loaded, &context, 100_000, Memory::HEAP_MAX_SIZE)
-                .expect_err("past-heap migration result must be rejected");
+        let migration_error = run_executor_migration(
+            &loaded,
+            &context,
+            100_000,
+            Memory::HEAP_MAX_SIZE,
+            &executor_test_budget(),
+        )
+        .expect_err("past-heap migration result must be rejected");
         assert!(
             migration_error
                 .to_string()
@@ -20125,8 +20376,14 @@ mod tests {
         let unit_success =
             loaded_executor_with_result_prefix(declared_len, canonical_unit.as_slice());
         assert_eq!(
-            run_executor_migration(&unit_success, &context, 1_000_000, Memory::HEAP_MAX_SIZE,)
-                .expect("a canonical unit-success migration result must be accepted"),
+            run_executor_migration(
+                &unit_success,
+                &context,
+                1_000_000,
+                Memory::HEAP_MAX_SIZE,
+                &executor_test_budget()
+            )
+            .expect("a canonical unit-success migration result must be accepted"),
             None,
             "the unit-success payload must not install an empty data model"
         );
@@ -20136,8 +20393,14 @@ mod tests {
             + u64::try_from(canonical.len()).expect("bounded migration result");
         let complete = loaded_executor_with_result_prefix(declared_len, canonical.as_slice());
         assert_eq!(
-            run_executor_migration(&complete, &context, 1_000_000, Memory::HEAP_MAX_SIZE)
-                .expect("a canonical complete migration result must be accepted"),
+            run_executor_migration(
+                &complete,
+                &context,
+                1_000_000,
+                Memory::HEAP_MAX_SIZE,
+                &executor_test_budget()
+            )
+            .expect("a canonical complete migration result must be accepted"),
             Some(model)
         );
         let mut non_canonical = canonical;
@@ -20145,9 +20408,14 @@ mod tests {
         let declared_len = EXECUTOR_LENGTH_PREFIX_BYTES_U64
             + u64::try_from(non_canonical.len()).expect("bounded migration result");
         let trailing = loaded_executor_with_result_prefix(declared_len, non_canonical.as_slice());
-        let trailing_error =
-            run_executor_migration(&trailing, &context, 1_000_000, Memory::HEAP_MAX_SIZE)
-                .expect_err("a migration result with trailing bytes must be rejected");
+        let trailing_error = run_executor_migration(
+            &trailing,
+            &context,
+            1_000_000,
+            Memory::HEAP_MAX_SIZE,
+            &executor_test_budget(),
+        )
+        .expect_err("a migration result with trailing bytes must be rejected");
         assert!(
             trailing_error
                 .to_string()
@@ -20173,6 +20441,7 @@ mod tests {
             "legitimate-output-test",
             1_000_000,
             Memory::HEAP_MAX_SIZE,
+            &executor_test_budget(),
         )
         .expect("legitimate validation result is readable");
         assert!(report.verdict.is_ok());
@@ -20183,8 +20452,14 @@ mod tests {
             &migration_verdict,
         );
         assert_eq!(
-            run_executor_migration(&migration, &context, 1_000_000, Memory::HEAP_MAX_SIZE,)
-                .expect("legitimate migration result is readable"),
+            run_executor_migration(
+                &migration,
+                &context,
+                1_000_000,
+                Memory::HEAP_MAX_SIZE,
+                &executor_test_budget()
+            )
+            .expect("legitimate migration result is readable"),
             None
         );
     }
@@ -20348,7 +20623,7 @@ seiyaku GuardedValue {
             })
             .and_then(|entry| entry.argument_schema.as_ref())
             .expect("write argument schema");
-        let arguments = ivm::encode_argument_record_from_json(
+        let arguments = ivm_abi::arguments::encode_argument_record_from_json(
             schema,
             &Json::from(norito::json!({ "value": "7" })),
         )
@@ -20982,7 +21257,7 @@ seiyaku OrderedBatchGuard {
             })
             .and_then(|entry| entry.argument_schema.as_ref())
             .expect("write argument schema");
-        let arguments = ivm::encode_argument_record_from_json(
+        let arguments = ivm_abi::arguments::encode_argument_record_from_json(
             schema,
             &Json::from(norito::json!({ "value": "9" })),
         )
@@ -21524,9 +21799,10 @@ seiyaku ReviewedValue {
             .and_then(|entrypoint| entrypoint.argument_schema.as_ref())
             .expect("reviewed argument schema");
         let reviewed_payload = Json::from(norito::json!({ "value": "7" }));
-        let reviewed_arguments = ivm::encode_argument_record_from_json(schema, &reviewed_payload)
-            .expect("encode reviewed arguments");
-        let swapped_arguments = ivm::encode_argument_record_from_json(
+        let reviewed_arguments =
+            ivm_abi::arguments::encode_argument_record_from_json(schema, &reviewed_payload)
+                .expect("encode reviewed arguments");
+        let swapped_arguments = ivm_abi::arguments::encode_argument_record_from_json(
             schema,
             &Json::from(norito::json!({ "value": "8" })),
         )

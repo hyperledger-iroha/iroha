@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  KAGEMUSHA wallet custody requires an empty backup and device-transfer set
+  (spec §4.2; G2 design rev 2). These attributes merge into the host
+  application. KagemushaWalletAndroidPlatformV1.create refuses custody when
+  FLAG_ALLOW_BACKUP is set, a backup agent exists, or either rule resource as
+  resolved in the host app is not exclude-only. Replacing the rule attributes
+  with tools:replace or tools:remove cannot be detected at runtime, so the host
+  app must not do it (kotlin/README.md).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/kagemusha_wallet_v1_data_extraction_rules"
+        android:fullBackupContent="@xml/kagemusha_wallet_v1_full_backup_content"
+        tools:targetApi="31" />
+</manifest>

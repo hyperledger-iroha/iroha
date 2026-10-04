@@ -34,7 +34,10 @@ fn commit_signature_tally_dedups_and_counts_set_b() {
         BlockSignature::new(2, checked_block_signature(kp_proxy.private_key(), hash)),
         BlockSignature::new(3, checked_block_signature(kp_set_b.private_key(), hash)),
     ]);
-    let block = DataBlockBuilder::new(header).build(signatures);
+    let block = DataBlockBuilder::new(header).build(
+        iroha_data_model::block::BlockSignatures::try_from_iter(signatures)
+            .expect("at most 31 block signatures"),
+    );
     let tally = commit_signature_tally(&block, &topology);
     assert_eq!(tally.present, 4);
     assert_eq!(tally.counted, 4);
@@ -57,7 +60,10 @@ fn is_commit_rejects_duplicate_signer_index() {
         BlockSignature::new(1, checked_block_signature(kp_proxy.private_key(), hash)),
         BlockSignature::new(1, checked_block_signature(kp_dup.private_key(), hash)),
     ]);
-    let block = DataBlockBuilder::new(header).build(signatures);
+    let block = DataBlockBuilder::new(header).build(
+        iroha_data_model::block::BlockSignatures::try_from_iter(signatures)
+            .expect("at most 31 block signatures"),
+    );
     let err = ValidBlock::is_commit(&block, &topology).unwrap_err();
     assert!(matches!(
         err,
@@ -80,7 +86,10 @@ fn is_commit_rejects_proxy_tail_spoof() {
         BlockSignature::new(0, checked_block_signature(kp_leader.private_key(), hash)),
         BlockSignature::new(1, checked_block_signature(kp_spoof.private_key(), hash)),
     ]);
-    let block = DataBlockBuilder::new(header).build(signatures);
+    let block = DataBlockBuilder::new(header).build(
+        iroha_data_model::block::BlockSignatures::try_from_iter(signatures)
+            .expect("at most 31 block signatures"),
+    );
     let err = ValidBlock::is_commit(&block, &topology).unwrap_err();
     assert!(
         matches!(err, SignatureVerificationError::UnknownSignature),
@@ -103,7 +112,10 @@ fn is_commit_rejects_leader_spoof() {
         BlockSignature::new(0, checked_block_signature(kp_spoof.private_key(), hash)),
         BlockSignature::new(1, checked_block_signature(kp_proxy.private_key(), hash)),
     ]);
-    let block = DataBlockBuilder::new(header).build(signatures);
+    let block = DataBlockBuilder::new(header).build(
+        iroha_data_model::block::BlockSignatures::try_from_iter(signatures)
+            .expect("at most 31 block signatures"),
+    );
     let err = ValidBlock::is_commit(&block, &topology).unwrap_err();
     assert!(matches!(err, SignatureVerificationError::UnknownSignature));
 }
@@ -129,7 +141,10 @@ fn is_commit_rejects_set_b_spoof() {
         BlockSignature::new(2, checked_block_signature(kp_proxy.private_key(), hash)),
         BlockSignature::new(3, checked_block_signature(kp_spoof.private_key(), hash)),
     ]);
-    let block = DataBlockBuilder::new(header).build(signatures);
+    let block = DataBlockBuilder::new(header).build(
+        iroha_data_model::block::BlockSignatures::try_from_iter(signatures)
+            .expect("at most 31 block signatures"),
+    );
     let err = ValidBlock::is_commit(&block, &topology).unwrap_err();
     assert!(matches!(err, SignatureVerificationError::UnknownSignature));
 }
@@ -149,14 +164,23 @@ fn commit_with_signers_rejects_invalid_block_signature() {
         BlockSignature::new(0, checked_block_signature(kp_proxy.private_key(), hash)),
         BlockSignature::new(1, checked_block_signature(kp_proxy.private_key(), hash)),
     ]);
-    let block =
-        ValidBlock::new_unverified_for_tests(DataBlockBuilder::new(header).build(signatures));
+    let block = ValidBlock::new_unverified_for_tests(
+        DataBlockBuilder::new(header).build(
+            iroha_data_model::block::BlockSignatures::try_from_iter(signatures)
+                .expect("at most 31 block signatures"),
+        ),
+    );
     let signers = BTreeSet::from([
         ValidatorIndex::try_from(0).expect("validator index parses"),
         ValidatorIndex::try_from(1).expect("validator index parses"),
     ]);
     let result = block
-        .commit_with_signers(&topology, &signers, false)
+        .commit_with_signers(
+            &topology,
+            &signers,
+            false,
+            crate::block::reserve_block_for_tests(),
+        )
         .unpack(|_| {});
     assert!(
         result.is_err(),
@@ -179,7 +203,12 @@ fn commit_with_signers_succeeds_with_quorum_and_signatures() {
         ValidatorIndex::try_from(1).expect("validator index parses"),
     ]);
     let result = block
-        .commit_with_signers(&topology, &signers, false)
+        .commit_with_signers(
+            &topology,
+            &signers,
+            false,
+            crate::block::reserve_block_for_tests(),
+        )
         .unpack(|_| {});
     assert!(
         result.is_ok(),

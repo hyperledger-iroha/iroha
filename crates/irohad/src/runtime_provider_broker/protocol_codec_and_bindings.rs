@@ -347,6 +347,8 @@ struct DecodeResourcePolicyV1 {
     max_total_allocated_bytes: usize,
     element_headroom: usize,
     allocation_headroom_bytes: usize,
+    // Private schema work bound; ordinary operation policies retain one wire pass.
+    allocation_wire_passes: usize,
     max_nesting_depth: usize,
     // Process-wide reservation for the audited maximum simultaneously
     // live frame, typed value, and canonical-copy layers.
@@ -370,6 +372,7 @@ impl DecodeResourcePolicyV1 {
             max_total_allocated_bytes: total_caps.1,
             element_headroom: headroom.0,
             allocation_headroom_bytes: headroom.1,
+            allocation_wire_passes: 1,
             max_nesting_depth,
             max_composed_bytes: resource_caps.0,
             max_cumulative_bytes: resource_caps.1,
@@ -398,20 +401,24 @@ fn decode_resource_budget(
         || policy.max_blob_bytes == 0
         || policy.max_total_elements == 0
         || policy.max_total_allocated_bytes == 0
+        || policy.allocation_wire_passes == 0
         || policy.max_nesting_depth == 0
         || policy.max_composed_bytes == 0
         || policy.max_cumulative_bytes < policy.max_composed_bytes
     {
         return Err(BrokerError::Protocol);
     }
-    // Each allowance has an audited absolute ceiling. Wire length only
-    // reduces the allowance for a small value; it can never amplify it.
+    // Each allowance has its unchanged audited absolute ceiling. The ordinary
+    // one-pass policy keeps its previous fixed headroom. Complete beacon graphs
+    // additionally bound their actual schema framing/copy work by wire length;
+    // the source-derived multiplier never raises the absolute ceiling.
     let max_total_elements = encoded_len
         .checked_add(policy.element_headroom)
         .ok_or(BrokerError::Protocol)?
         .min(policy.max_total_elements);
     let max_total_allocated_bytes = encoded_len
-        .checked_add(policy.allocation_headroom_bytes)
+        .checked_mul(policy.allocation_wire_passes)
+        .and_then(|bytes| bytes.checked_add(policy.allocation_headroom_bytes))
         .ok_or(BrokerError::Protocol)?
         .min(policy.max_total_allocated_bytes);
     // A canonicality check allocates one exact re-encoding alongside the
@@ -431,13 +438,13 @@ fn decode_resource_budget(
 #[derive(Debug)]
 struct DecodeResourcePoolV1 {
     max_bytes: usize,
-    used_bytes: AtomicUsize,
+    allocation: iroha_allocation::AllocationBudget,
 }
 impl DecodeResourcePoolV1 {
-    const fn new(max_bytes: usize) -> Self {
+    fn new(max_bytes: usize) -> Self {
         Self {
             max_bytes,
-            used_bytes: AtomicUsize::new(0),
+            allocation: iroha_allocation::AllocationBudget::new(max_bytes),
         }
     }
     fn try_acquire(
@@ -447,45 +454,34 @@ impl DecodeResourcePoolV1 {
         if bytes == 0 || bytes > self.max_bytes {
             return Err(BrokerError::Protocol);
         }
-        let mut observed = self.used_bytes.load(Ordering::Acquire);
-        loop {
-            let next = observed.checked_add(bytes).ok_or(BrokerError::Protocol)?;
-            if next > self.max_bytes {
-                return Err(BrokerError::Unavailable);
-            }
-            match self.used_bytes.compare_exchange_weak(
-                observed,
-                next,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => {
-                    return Ok(DecodeResourcePoolPermitV1 {
-                        pool: Arc::clone(self),
-                        bytes,
-                    });
-                }
-                Err(current) => observed = current,
-            }
-        }
+        let reservation =
+            self.allocation
+                .try_reserve_bytes(bytes)
+                .map_err(|refusal| match refusal {
+                    iroha_allocation::AllocationRefusal::Capacity { .. } => {
+                        BrokerError::Unavailable
+                    }
+                    _ => BrokerError::Protocol,
+                })?;
+        Ok(DecodeResourcePoolPermitV1 {
+            _reservation: reservation,
+        })
     }
 }
 #[derive(Debug)]
 struct DecodeResourcePoolPermitV1 {
-    pool: Arc<DecodeResourcePoolV1>,
-    bytes: usize,
-}
-impl Drop for DecodeResourcePoolPermitV1 {
-    fn drop(&mut self) {
-        let previous = self.pool.used_bytes.fetch_sub(self.bytes, Ordering::AcqRel);
-        debug_assert!(previous >= self.bytes);
-    }
+    _reservation: iroha_allocation::AllocationReservation,
 }
 #[derive(Debug)]
 struct DecodeResourceAdmissionV1 {
     operation: Option<u16>,
     policy: DecodeResourcePolicyV1,
     usage: Mutex<DecodeResourceUsageV1>,
+    // The same authenticated request session follows ingress, dispatch and result
+    // validation. This owns the original charged graph, never a raw DTO clone.
+    // Retire it before releasing the enclosing process-pool permit.
+    beacon_session: Mutex<Option<iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1>>,
+    pool: Arc<DecodeResourcePoolV1>,
     _permit: DecodeResourcePoolPermitV1,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -514,11 +510,12 @@ impl DecodeResourceAdmissionV1 {
         policy: DecodeResourcePolicyV1,
     ) -> Result<Arc<Self>, BrokerError> {
         let permit = pool.try_acquire(policy.max_composed_bytes)?;
-        drop(pool);
         Ok(Arc::new(Self {
             operation,
             policy,
             usage: Mutex::new(DecodeResourceUsageV1::default()),
+            beacon_session: Mutex::new(None),
+            pool,
             _permit: permit,
         }))
     }
@@ -599,6 +596,73 @@ impl DecodeResourceAdmissionV1 {
         usage.consumed_bytes = next;
         Ok(budget)
     }
+    fn retain_beacon_session(
+        &self,
+        record: &iroha_data_model::consensus::GlobalThresholdBeaconKeySessionV1,
+        binding: &iroha_core::beacon::GlobalThresholdBeaconSessionBindingV1,
+    ) -> Result<iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1, BrokerError> {
+        // Test-only mutant restores the retired per-phase graph reconstruction.
+        #[cfg(not(all(test, sumeragi_daemon_mutation = "HC93")))]
+        {
+            let retained = self
+                .beacon_session
+                .lock()
+                .map_err(|_| BrokerError::Protocol)?;
+            if let Some(session) = retained.as_ref() {
+                // The external binding is checked on every use. Matching only its
+                // identifiers would trust substituted inner transcript/signature bytes.
+                session
+                    .check_binding(binding)
+                    .map_err(|_| BrokerError::Rejected)?;
+                if session.record() != record {
+                    return Err(BrokerError::Rejected);
+                }
+                return Ok(session.clone());
+            }
+        }
+        // The existing decoded-frame peak remains completely reserved: its
+        // monotonic cumulative counter is not a live allocation owner and cannot
+        // donate credits to a graph. Admit the physical graph and verifier buffers
+        // additionally from this operation's original finite process pool once.
+        // Raw DTO decoding/canonical copies retain their existing audited envelope;
+        // no additional raw DTO or canonical bytes are copied into this owner.
+        // TODO: replace that conservative decode envelope with actual funded raw
+        // decoder/encode backing; retaining the authenticated graph does not do so.
+        let verified = iroha_core::beacon::validate_global_threshold_beacon_session_v1(
+            record,
+            binding,
+            &self.pool.allocation,
+        )
+        .map_err(beacon_session_error)?;
+        // Verification and scratch refunds above, and retirement of a losing
+        // concurrent reader below, occur outside the session mutex. A physical
+        // source release callback can therefore reenter this operation safely.
+        let result = {
+            let mut retained = self
+                .beacon_session
+                .lock()
+                .map_err(|_| BrokerError::Protocol)?;
+            match retained.as_ref() {
+                Some(session) => {
+                    if session.record() == record {
+                        session
+                            .check_binding(binding)
+                            .map_err(|_| BrokerError::Rejected)?;
+                        Ok(session.clone())
+                    } else {
+                        Err(BrokerError::Rejected)
+                    }
+                }
+                None => {
+                    *retained = Some(verified.clone());
+                    Ok(verified.clone())
+                }
+            }
+        };
+        drop(verified);
+        result
+    }
+
     fn enter(self: &Arc<Self>) -> DecodeResourceAdmissionScopeV1 {
         CURRENT_DECODE_ADMISSIONS_V1.with(|stack| {
             stack.borrow_mut().push(Arc::clone(self));
@@ -934,19 +998,7 @@ fn digest_parts(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 fn encode_canonical<T: NoritoSerialize>(value: &T, limit: usize) -> Result<Vec<u8>, BrokerError> {
-    let framed_len = norito::canonical_frame_len(value).map_err(|_| BrokerError::Protocol)?;
-    if framed_len == 0 || framed_len > limit {
-        return Err(BrokerError::Rejected);
-    }
-    if let Some(admission) = current_decode_resource_admission() {
-        admission.reserve_encoded_copy(framed_len, limit)?;
-    }
-    let mut bytes =
-        ScrubbedBytes::new(norito::encode_canonical(value).map_err(|_| BrokerError::Protocol)?);
-    if bytes.len() != framed_len {
-        return Err(BrokerError::Protocol);
-    }
-    Ok(bytes.take())
+    canonical_attempt::encode(value, limit).map_err(|error| error.service_error())
 }
 fn encode_sensitive_canonical<T: NoritoSerialize>(
     value: &T,
@@ -1015,18 +1067,19 @@ where
     for<'de> T: NoritoDeserialize<'de>,
 {
     if let Some(admission) = current_decode_resource_admission() {
-        return decode_canonical_with_admission(bytes, limit, &admission);
+        return decode_canonical_with_admission(bytes, limit, &admission)
+            .map_err(|error| error.service_error());
     }
     let admission = DecodeResourceAdmissionV1::acquire_from(pool, None, policy)?;
     admission.reserve_raw_frame(bytes.len(), limit)?;
     let _scope = admission.enter();
-    decode_canonical_with_admission(bytes, limit, &admission)
+    decode_canonical_with_admission(bytes, limit, &admission).map_err(|error| error.service_error())
 }
 fn decode_canonical_with_admission<T>(
     bytes: &[u8],
     limit: usize,
     admission: &DecodeResourceAdmissionV1,
-) -> Result<T, BrokerError>
+) -> Result<T, CanonicalAttemptErrorV1>
 where
     T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
@@ -1039,7 +1092,8 @@ where
         budget.max_total_allocated_bytes,
         budget.max_nesting_depth,
     );
-    norito::decode_canonical_with_limits::<T>(bytes, limits).map_err(|_| BrokerError::Protocol)
+    norito::decode_canonical_for_admission::<T>(bytes, limits)
+        .map_err(CanonicalAttemptErrorV1::Decode)
 }
 fn encode_frame<T: NoritoSerialize>(
     kind: u8,
@@ -1133,7 +1187,8 @@ where
     T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
-    let frame = decode_canonical_with_admission::<BrokerFrameV1>(bytes, limit, admission)?;
+    let frame = decode_canonical_with_admission::<BrokerFrameV1>(bytes, limit, admission)
+        .map_err(|error| error.service_error())?;
     if frame.magic != BROKER_MAGIC_V1
         || frame.version != BROKER_VERSION_V1
         || frame.kind != expected_kind
@@ -1141,6 +1196,7 @@ where
         return Err(BrokerError::Protocol);
     }
     decode_canonical_with_admission::<T>(&frame.body, limit, admission)
+        .map_err(|error| error.service_error())
 }
 fn write_length_prefixed<W: std::io::Write>(
     writer: &mut W,
@@ -1373,8 +1429,10 @@ fn operation_request_digest(fields: &OperationRequestFieldsV1) -> Result<[u8; 32
     let bytes = encode_canonical(fields, MAX_OPERATION_FRAME_BYTES_V1)?;
     Ok(digest_parts(OPERATION_REQUEST_DOMAIN_V1, &[&bytes]))
 }
-fn operation_response_digest(fields: &OperationResponseFieldsV1) -> Result<[u8; 32], BrokerError> {
-    let bytes = encode_canonical(fields, MAX_OPERATION_FRAME_BYTES_V1)?;
+fn operation_response_digest(
+    fields: &OperationResponseFieldsV1,
+) -> Result<[u8; 32], CanonicalAttemptErrorV1> {
+    let bytes = canonical_attempt::encode(fields, MAX_OPERATION_FRAME_BYTES_V1)?;
     Ok(digest_parts(OPERATION_RESPONSE_DOMAIN_V1, &[&bytes]))
 }
 fn make_handshake_request(
@@ -2011,7 +2069,7 @@ fn make_operation_response(
 fn make_operation_response_scrubbed(
     request: &OperationRequestV1,
     status: u8,
-    mut result: ScrubbedBytes,
+    result: ScrubbedBytes,
     session_network_id: &NetworkId,
 ) -> Result<OperationResponseV1, BrokerError> {
     let result_digest = operation_result_digest(&result);
@@ -2027,22 +2085,31 @@ fn make_operation_response_scrubbed(
         result_digest,
         result_len: u64::try_from(result.len()).map_err(|_| BrokerError::Protocol)?,
     };
-    let response_digest = operation_response_digest(&fields)?;
-    let response = OperationResponseV1 {
-        session_id: request.session_id,
-        request_id: request.request_id,
-        request_digest: request.request_digest,
-        observed_binding: request.binding.clone(),
-        provider_metadata_digest: request.provider_metadata_digest,
-        operation: request.operation,
-        payload_digest: request.payload_digest,
-        status,
-        result_digest,
-        result: result.take(),
-        response_digest,
-    };
+    let response_digest =
+        operation_response_digest(&fields).map_err(|error| error.service_error())?;
+    let response = operation_response_from_fields(fields, response_digest, result);
     validate_operation_response(request, &response, session_network_id)?;
     Ok(response)
+}
+/// Move the exact admitted fields and result into the sole response wire owner.
+fn operation_response_from_fields(
+    fields: OperationResponseFieldsV1,
+    response_digest: [u8; 32],
+    mut result: ScrubbedBytes,
+) -> OperationResponseV1 {
+    OperationResponseV1 {
+        session_id: fields.session_id,
+        request_id: fields.request_id,
+        request_digest: fields.request_digest,
+        observed_binding: fields.observed_binding,
+        provider_metadata_digest: fields.provider_metadata_digest,
+        operation: fields.operation,
+        payload_digest: fields.payload_digest,
+        status: fields.status,
+        result_digest: fields.result_digest,
+        result: result.take(),
+        response_digest,
+    }
 }
 fn validate_signing_payload_len(length: usize) -> Result<(), BrokerError> {
     if length == 0 || length > MAX_SIGNING_PAYLOAD_BYTES_V1 {

@@ -1275,6 +1275,7 @@ const fn native_signer_role_for_slot(
 pub struct IrohaRuntimeProviderBindingsV1 {
     chain_id: String,
     network_id: NetworkId,
+    credential_max_memory_bytes: usize,
     bindings: Vec<IrohaRuntimeProviderBindingV1>,
 }
 #[derive(Clone, Copy)]
@@ -1312,6 +1313,10 @@ impl IrohaRuntimeProviderBindingsV1 {
         Ok(Self {
             chain_id: config.common.chain.to_string(),
             network_id: NetworkId::from_genesis_hash(config.genesis.expected_hash),
+            credential_max_memory_bytes: config
+                .runtime_provider_broker
+                .credential_max_memory_bytes
+                .get(),
             bindings,
         })
     }
@@ -1480,6 +1485,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         Ok(Self {
             chain_id: chain_id.to_string(),
             network_id,
+            credential_max_memory_bytes: 0,
             bindings: vec![binding],
         })
     }
@@ -1575,6 +1581,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         Ok(Self {
             chain_id: chain_id.to_string(),
             network_id,
+            credential_max_memory_bytes: 0,
             bindings,
         })
     }
@@ -1588,6 +1595,51 @@ impl IrohaRuntimeProviderBindingsV1 {
     pub const fn network_id(&self) -> &NetworkId {
         &self.network_id
     }
+    /// Aggregate credential memory allowed for this registry. Zero grants no threshold custody.
+    #[must_use]
+    pub const fn credential_max_memory_bytes(&self) -> usize {
+        self.credential_max_memory_bytes
+    }
+    /// Check the parsed local memory policy against this public assembly.
+    ///
+    /// A positive catalog bound must match exactly. Zero is valid only when
+    /// neither consensus threshold-signing slot is present and therefore grants
+    /// no threshold custody. This compares public metadata only; it does not
+    /// qualify a backend, validate credentials, or grant allocation credit.
+    /// The bound controls local operational admission, not transaction validity
+    /// or gas accounting.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IrohaRuntimeProviderRegistryErrorV1::BindingMismatch`] before
+    /// credential input or backend discovery for a differing bound or a zero
+    /// bound attached to threshold custody.
+    pub fn validate_credential_memory_policy_v1(
+        &self,
+        policy: &iroha_config::parameters::actual::RuntimeProviderBroker,
+    ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
+        let has_threshold_custody = self.iter().any(|binding| {
+            matches!(
+                binding.slot(),
+                IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner
+                    | IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner
+            )
+        });
+        if (self.credential_max_memory_bytes != 0 || has_threshold_custody)
+            && self.credential_max_memory_bytes != policy.credential_max_memory_bytes.get()
+        {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
+        }
+        Ok(())
+    }
+    /// Create the original finite pool once at a credential-registry service boundary.
+    ///
+    /// Pass this same pool to every current and pending credential import for that
+    /// registry. Retained public transcripts keep its charges through their last owner.
+    #[must_use]
+    pub fn new_credential_registry_budget_v1(&self) -> iroha_allocation::AllocationBudget {
+        iroha_allocation::AllocationBudget::new(self.credential_max_memory_bytes)
+    }
     /// Iterate over the stable, deterministically ordered provider requests.
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &IrohaRuntimeProviderBindingV1> {
         self.bindings.iter()
@@ -1598,6 +1650,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         Self {
             chain_id: self.chain_id.clone(),
             network_id: self.network_id,
+            credential_max_memory_bytes: self.credential_max_memory_bytes,
             bindings: self
                 .bindings
                 .iter()
@@ -1623,6 +1676,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         Self {
             chain_id: chain_id.into(),
             network_id: runtime_provider_test_network_id(),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings: Vec::new(),
         }
     }
@@ -1638,6 +1692,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         Self {
             chain_id: chain_id.into(),
             network_id: runtime_provider_test_network_id(),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new(
                     slot,
@@ -1662,6 +1717,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         Self {
             chain_id: chain_id.into(),
             network_id: runtime_provider_test_network_id(),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_governance_dag_signer(
                     handle,
@@ -1721,6 +1777,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         Self {
             chain_id: "server-test-chain".to_owned(),
             network_id: fixture.network_id,
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings,
         }
     }
@@ -1745,6 +1802,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         Self {
             chain_id: chain_id.into(),
             network_id: runtime_provider_test_network_id(),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings: vec![binding],
         }
     }
@@ -1784,6 +1842,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         Self {
             chain_id: chain_id.into(),
             network_id: runtime_provider_test_network_id(),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_governance_request_auth(
                     slot,
@@ -1818,6 +1877,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         Self {
             chain_id: chain_id.into(),
             network_id: runtime_provider_test_network_id(),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings,
         }
     }
@@ -1833,6 +1893,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         Self {
             chain_id: chain_id.into(),
             network_id: runtime_provider_test_network_id(),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_provider_ingest_source(
                     handle,
@@ -3546,6 +3607,7 @@ mod tests {
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "por-replay-test-chain".to_owned(),
             network_id: test_network_id(0xA5),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_por_replay_archive(&archive)
                     .expect("valid archive request"),
@@ -3941,6 +4003,7 @@ mod tests {
         let empty = IrohaRuntimeProviderBindingsV1 {
             chain_id: "por-replay-test-chain".to_owned(),
             network_id: test_network_id(0xA5),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings: Vec::new(),
         };
         assert!(matches!(
@@ -5658,6 +5721,7 @@ mod tests {
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "evidence-viewer-archive-test-chain".to_owned(),
             network_id: test_network_id(0xA5),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_evidence_viewer_archive(viewer)
                     .expect("valid evidence-viewer archive request"),
@@ -5676,6 +5740,7 @@ mod tests {
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "evidence-viewer-transparency-test-chain".to_owned(),
             network_id: test_network_id(0xA5),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_evidence_viewer_transparency_publisher(
                     viewer,
@@ -5735,6 +5800,7 @@ mod tests {
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
             network_id: test_network_id(0xA5),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings,
         }
     }
@@ -5742,6 +5808,7 @@ mod tests {
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
             network_id: test_network_id(0xA5),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new(
                     IrohaRuntimeProviderSlotV1::BillingStatementSigner,
@@ -5825,6 +5892,7 @@ mod tests {
         let bindings = IrohaRuntimeProviderBindingsV1 {
             chain_id: "default-chain".to_owned(),
             network_id: test_network_id(0xA5),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings: Vec::new(),
         };
         let dependencies =
@@ -6055,6 +6123,7 @@ mod tests {
         let requested = IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
             network_id: test_network_id(0xA5),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings: vec![binding],
         };
         assert!(matches!(
@@ -6072,6 +6141,7 @@ mod tests {
         let unrequested = IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
             network_id: test_network_id(0xA5),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings: Vec::new(),
         };
         let registry = FixedRegistry(
@@ -6101,6 +6171,7 @@ mod tests {
         let unrequested = IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
             network_id: test_network_id(0xA5),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings: Vec::new(),
         };
         let registry = FixedRegistry(
@@ -6175,6 +6246,7 @@ mod tests {
         let unrequested = IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
             network_id: test_network_id(0xA5),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings: Vec::new(),
         };
         let registry = FixedRegistry(
@@ -6240,6 +6312,7 @@ mod tests {
         let requested = IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
             network_id: test_network_id(0xA5),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings: vec![binding.clone()],
         };
         assert!(matches!(
@@ -6258,6 +6331,7 @@ mod tests {
         let unrequested = IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
             network_id: test_network_id(0xA5),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings: Vec::new(),
         };
         let registry = FixedRegistry(
@@ -6393,6 +6467,7 @@ mod tests {
         let unrequested = IrohaRuntimeProviderBindingsV1 {
             chain_id: "production-chain".to_owned(),
             network_id: test_network_id(0xA5),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings: Vec::new(),
         };
         let runtime = Arc::new(FencedPrivacyRuntime::exact());

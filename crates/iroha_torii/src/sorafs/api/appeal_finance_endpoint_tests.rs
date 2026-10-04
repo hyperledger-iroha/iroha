@@ -635,7 +635,7 @@ async fn appeal_finance_deposit_endpoint_durably_enqueues_open_asset_lock() {
     );
     let expected =
         appeal_finance_deposit_expectation(request.clone()).expect("valid deposit expectation");
-    let (mut app, _temp_dir, mut native_chain) =
+    let (mut app, _temp_dir, native_chain) =
         sorafs_app_state_with_appeal_finance_asset_lock_world(&auth, &expected.asset_definition_id);
     configure_appeal_finance_settlement_submitter(&mut app, &auth.provider, _temp_dir.path());
     seed_appeal_finance_finalized_anchor(&native_chain);

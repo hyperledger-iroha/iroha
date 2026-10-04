@@ -10,7 +10,7 @@ use crate::{
 };
 use iroha_crypto::{KeyPair, bls_normal_pop_prove};
 use iroha_sumeragi::types::{Bitmap, ChainParams, ControlWitness};
-use std::{collections::BTreeSet, num::NonZeroU64};
+use std::num::NonZeroU64;
 
 #[test]
 fn finality_root_scope_preserves_original_global_and_private_genesis_authority() {
@@ -352,7 +352,7 @@ impl Fixture {
             0,
         ));
         builder.push_transaction(tx);
-        let mut block = builder.build(BTreeSet::new());
+        let mut block = builder.build(crate::block::BlockSignatures::default());
         output_test_support::install_network(&mut block, vec![Ok(Vec::default())]).unwrap();
         let result = result(&block, &epoch);
         let parent = first.decode_checked().unwrap();
@@ -376,7 +376,7 @@ impl Fixture {
     }
     pub(super) fn alternate(&self) -> SumeragiFinalityProof {
         let mut proof = self.second.clone();
-        let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
+        let mut block = decode_framed_signed_block(&proof.block_wire).unwrap();
         let certificate = block.commit_certificate().unwrap();
         let consensus_header = certificate.consensus_header().to_vec();
         let result_preimage = certificate.result_preimage().to_vec();
@@ -426,7 +426,7 @@ fn current_proofs_roundtrip_and_verify_successful_exact_execution() {
             .is_err()
     );
     assert!(
-        decode_versioned_signed_block(&authenticated.canonical_executed_wire().unwrap())
+        decode_framed_signed_block(&authenticated.canonical_executed_wire().unwrap())
             .unwrap()
             .commit_certificate()
             .is_none()
@@ -461,7 +461,7 @@ fn current_proof_rejects_tampered_qc_result_committee_parent_wire_and_availabili
     let fixture = Fixture::new();
     for mutation in 0..8 {
         let mut bad = fixture.second.clone();
-        let mut block = decode_versioned_signed_block(&bad.block_wire).unwrap();
+        let mut block = decode_framed_signed_block(&bad.block_wire).unwrap();
         let certificate = block.commit_certificate().unwrap();
         let mut consensus_header = certificate.consensus_header().to_vec();
         let mut result_preimage = certificate.result_preimage().to_vec();
@@ -641,7 +641,7 @@ fn certified_result_cannot_replace_its_incumbent_or_fixed_next_parameters() {
     let fixture = Fixture::new();
     for change_epoch in [false, true] {
         let mut proof = fixture.second.clone();
-        let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
+        let mut block = decode_framed_signed_block(&proof.block_wire).unwrap();
         let certificate = block.commit_certificate().unwrap();
         let mut value = ExecutionResultCommitment::decode(certificate.result_preimage()).unwrap();
         let mut header: CoreHeader =
@@ -708,7 +708,7 @@ fn certified_beacon_pulse_requires_the_exact_committed_parent() {
     let fixture = Fixture::new();
     for foreign_parent in [false, true] {
         let mut proof = fixture.second.clone();
-        let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
+        let mut block = decode_framed_signed_block(&proof.block_wire).unwrap();
         let certificate = block.commit_certificate().unwrap();
         let header = certificate.consensus_header().to_vec();
         let availability = certificate.availability().to_vec();
@@ -843,7 +843,7 @@ fn certified_beacon_pulse_requires_exact_parent_and_native_context() {
     let fixture = Fixture::new();
     for mutation in 0..7 {
         let mut proof = fixture.second.clone();
-        let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
+        let mut block = decode_framed_signed_block(&proof.block_wire).unwrap();
         let certificate = block.commit_certificate().unwrap();
         let header = certificate.consensus_header().to_vec();
         let availability = certificate.availability().to_vec();
@@ -928,7 +928,7 @@ fn quorum_certificate_and_control_bytes_cannot_authorize_no_work() {
     let (crypto, _) = ProofCrypto::new(&fixture.validators).unwrap();
     for with_control in [false, true] {
         let mut proof = fixture.second.clone();
-        let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
+        let mut block = decode_framed_signed_block(&proof.block_wire).unwrap();
         let certificate = block.commit_certificate().unwrap();
         let mut header: CoreHeader =
             norito::decode_canonical(certificate.consensus_header()).unwrap();
@@ -1045,7 +1045,7 @@ fn signed_genesis_layout_reaches_the_native_epoch_exactly() {
 #[test]
 fn availability_scratch_refusal_preserves_signed_source_for_retry() {
     let fixture = Fixture::new();
-    let block = decode_versioned_signed_block(&fixture.second.block_wire).unwrap();
+    let block = decode_framed_signed_block(&fixture.second.block_wire).unwrap();
     let certificate = block.commit_certificate().unwrap();
     let header: CoreHeader = norito::decode_canonical(certificate.consensus_header()).unwrap();
     let table: AvailabilityFrame = norito::decode_canonical(certificate.availability()).unwrap();
@@ -1118,5 +1118,68 @@ fn availability_scratch_resource_keeps_its_exact_category() {
     assert_eq!(
         FinalityError::from(PayloadAvailabilityError::from(invalid.clone())),
         invalid
+    );
+}
+
+#[test]
+fn authenticated_successor_requires_exact_global_network_and_bounded_chain() {
+    use crate::{
+        block::consensus::SumeragiRootScope,
+        sumeragi_finality::test_fixtures::NativeFinalityFixture,
+    };
+    let mut global = NativeFinalityFixture::start("selected-global-root");
+    let block = global.block_with_submitted_work(global.next_header());
+    let proof = global.certify(block);
+    let verified = global.verifier().verify_retained_decision(&proof).unwrap();
+    verified
+        .verify_global_scope(global.network_id(), global.chain_id())
+        .unwrap();
+    for chain in [
+        "",
+        "foreign-chain",
+        "selected-global-root\n",
+        &"x".repeat(1025),
+    ] {
+        assert!(
+            verified
+                .verify_global_scope(global.network_id(), chain)
+                .is_err()
+        );
+    }
+    // The chain label is external to signed genesis, so changing that label alone
+    // preserves NetworkId. Select a genuinely different signed genesis here.
+    let foreign = NativeFinalityFixture::start_with_mode(
+        "selected-global-root",
+        crate::parameter::system::SumeragiConsensusMode::Npos,
+    );
+    assert_ne!(foreign.network_id(), global.network_id());
+    assert!(
+        verified
+            .verify_global_scope(foreign.network_id(), global.chain_id())
+            .is_err()
+    );
+    let genesis = global
+        .verifier()
+        .verify_retained_decision(global.genesis_proof())
+        .unwrap();
+    assert!(
+        genesis
+            .verify_global_scope(global.network_id(), global.chain_id())
+            .is_err()
+    );
+    let mut private = NativeFinalityFixture::start_with_scope(
+        "selected-global-root",
+        SumeragiRootScope::Dataspace {
+            parent_network_id: global.network_id(),
+            dataspace_id: iroha_model_base::topology::DataSpaceId::new(u64::MAX),
+        },
+    );
+    let block = private.block_with_submitted_work(private.next_header());
+    let proof = private.certify(block);
+    let verified = private.verifier().verify_retained_decision(&proof).unwrap();
+    assert!(
+        verified
+            .verify_global_scope(private.network_id(), private.chain_id())
+            .is_err()
     );
 }

@@ -942,7 +942,9 @@ fn completed_musubi_capture_network_wire_rejects_unmarked_identity() {
     raw_network[Hash::LENGTH - 1] &= !1;
     assert!(matches!(
         <NetworkId as norito::codec::Decode>::decode(&mut raw_network.as_slice()),
-        Err(norito::Error::Message(message)) if message == "invalid hash lsb"
+        Err(norito::Error::InvalidValue {
+            context: "hash lsb"
+        })
     ));
 }
 #[test]

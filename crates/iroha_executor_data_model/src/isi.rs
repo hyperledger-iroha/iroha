@@ -29,7 +29,7 @@ macro_rules! impl_custom_instruction {
             type Error = norito::Error;
             fn try_from(payload: &Json) -> Result<Self, norito::Error> {
                 norito::json::from_str::<Self>(payload.as_ref())
-                    .map_err(|e| norito::Error::from(e.to_string()))
+                    .map_err(norito::json::Error::into_core_error)
             }
         }
         $(
@@ -1035,6 +1035,37 @@ pub mod multisig {
                 }
                 _ => panic!("expected register variant"),
             }
+        }
+        #[test]
+        fn custom_multisig_conversion_preserves_decode_resource_identity() {
+            let instruction = sample_instruction_box();
+            let expected = MultisigInstructionBox::try_from(&instruction).unwrap();
+            norito::with_decode_limits_scope(
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+                || {
+                    let error = MultisigInstructionBox::try_from(&instruction)
+                        .expect_err("the actual JSON decoder must honor its zero-allocation scope");
+                    assert!(
+                        matches!(
+                            error,
+                            norito::Error::Json(norito::json::Error::DecodeResourceLimit)
+                        ) || norito::core::decode_error_matches_active_limits(&error),
+                        "original JSON refusal was erased: {error:?}",
+                    );
+                },
+            );
+            assert_eq!(
+                MultisigInstructionBox::try_from(&instruction).unwrap(),
+                expected
+            );
+            let malformed = Json::new(norito::json!({"UnknownMultisigVariant": {}}));
+            let error = MultisigInstructionBox::try_from(&malformed)
+                .expect_err("unknown variants remain deterministic errors");
+            assert!(!matches!(
+                error,
+                norito::Error::Json(norito::json::Error::DecodeResourceLimit)
+            ));
+            assert!(!norito::core::decode_error_matches_active_limits(&error));
         }
         #[test]
         fn multisig_register_json_includes_account_field() {

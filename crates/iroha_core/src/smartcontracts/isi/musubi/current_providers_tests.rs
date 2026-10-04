@@ -27,9 +27,18 @@ fn current_provider_fixture(count: usize) -> (World, MusubiArchiveLocationKeyV1)
             .cloned()
             .unwrap();
         let binding = &record.attestation.payload.binding;
-        world
-            .provider_owners
-            .insert(*provider, binding.completed_by.clone());
+        assert_ne!(
+            binding.completed_by,
+            binding.completion_authority.provider_owner
+        );
+        assert_eq!(
+            binding.completed_by,
+            binding.completion_authority.completion_signer
+        );
+        world.provider_owners.insert(
+            *provider,
+            binding.completion_authority.provider_owner.clone(),
+        );
         world
             .musubi_locations_by_provider
             .insert(MusubiProviderLocationKeyV1::new(*provider, key), ());
@@ -119,7 +128,7 @@ fn current_providers_reject_missing_duplicate_and_oversized_completion_sets() {
 
 #[test]
 fn current_providers_preserve_empty_evidence_for_current_authority_and_completion_conflicts() {
-    for case in 0..6 {
+    for case in 0..7 {
         let (mut world, key) = current_provider_fixture(1);
         let location = world
             .musubi_archive_locations
@@ -144,7 +153,8 @@ fn current_providers_preserve_empty_evidence_for_current_authority_and_completio
             2 => completion.completion_authority.provider_owner = account(0x79),
             3 => completion.assignment_revision += 1,
             4 => completion.completion_epoch += 1,
-            _ => completion.finalized_anchor.height += 1,
+            5 => completion.finalized_anchor.height += 1,
+            _ => completion.completion_authority.completion_signer = account(0x79),
         }
         world
             .replication_orders

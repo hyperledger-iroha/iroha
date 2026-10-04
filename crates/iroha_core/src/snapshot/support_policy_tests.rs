@@ -430,6 +430,118 @@ async fn snapshot_publication_rejects_foreign_captured_tip() {
     assert_ne!(original.identity.native_tip, foreign.identity.native_tip);
 }
 #[tokio::test]
+async fn snapshot_commit_evidence_refusal_retains_original_pool_and_captured_publication() {
+    use crate::{
+        execution_attempt::ExecutionAttemptError, sumeragi::certified_chain::CertifiedChain,
+    };
+    use iroha_allocation::{AllocationBudget, AllocationRefusal};
+    use iroha_data_model::block::SharedSignedBlock;
+    use std::{
+        future::Future as _,
+        pin::pin,
+        task::{Context, Waker},
+    };
+
+    let mut chain = native_snapshot_chain();
+    chain.commit_at(2_000, Vec::new());
+    let captured = CapturedStateSnapshot::capture(chain.state()).unwrap();
+    let checkpoint = geometry_checkpoint_from_snapshot(captured.json.as_bytes()).unwrap();
+    ensure_snapshot_commit_evidence(chain.state(), &checkpoint, &captured.identity).unwrap();
+    let root = tempdir().unwrap();
+    let store = root.path().join("snapshot");
+    let key = checked_random_snapshot_keypair();
+    let budget = chain.state().ivm_execution_budget();
+    let mut registration = crate::unit_test_support::release_registration(&budget);
+    let layout = SharedSignedBlock::allocation_layout();
+    let baseline = budget.reserved_bytes();
+    let ceiling = budget.limit_bytes();
+    let original_tip = chain.state().latest_block_hash_fast();
+    let original_frame = chain
+        .kura()
+        .canonical_block_wire_bytes_for_testing(nonzero!(2_usize))
+        .unwrap();
+    for admitted_controls in [0, 1] {
+        let occupied = budget
+            .try_reserve_bytes(ceiling - baseline - admitted_controls * layout.size())
+            .unwrap();
+        if admitted_controls == 1 {
+            let original_reader = CertifiedChain::from_pinned(
+                &captured.identity.chain_id,
+                &captured.identity.network_id,
+                &checkpoint.block_hashes,
+                chain.kura(),
+                &budget,
+            )
+            .expect("one prepaid shared control admits the original genesis reader");
+            assert_eq!(budget.reserved_bytes(), ceiling);
+            assert!(matches!(
+                original_reader.certified(2),
+                Err(ExecutionAttemptError::Deferred(_))
+            ));
+            drop(original_reader);
+        }
+        let error = ensure_snapshot_commit_evidence(chain.state(), &checkpoint, &captured.identity)
+            .expect_err("original evidence read must wait for its own finite pool");
+        let TryWriteError::CommitEvidenceResourceDeferred { height, reason } = error else {
+            panic!("resource refusal became bad snapshot evidence: {error:?}");
+        };
+        assert_eq!(height, 2);
+        let Some(AllocationRefusal::Capacity {
+            requested_bytes,
+            reserved_bytes,
+            limit_bytes,
+            release,
+        }) = reason.allocation_refusal()
+        else {
+            panic!("exact original shared-control capacity refusal must survive");
+        };
+        assert_eq!(
+            (*requested_bytes, *reserved_bytes, *limit_bytes),
+            (layout.size(), ceiling, ceiling)
+        );
+        let mut released = pin!(release.clone().wait_for_release(&mut registration));
+        let mut context = Context::from_waker(Waker::noop());
+        if admitted_controls == 0 {
+            assert!(released.as_mut().poll(&mut context).is_pending());
+            let unrelated = AllocationBudget::new(layout.size());
+            drop(unrelated.try_reserve(layout).unwrap());
+            assert!(released.as_mut().poll(&mut context).is_pending());
+        } else {
+            // Dropping the admitted genesis reader refunds its exact original control.
+            assert!(released.as_mut().poll(&mut context).is_ready());
+        }
+        assert!(matches!(
+            try_write_snapshot(chain.state(), &store, &key, TEST_CHUNK_SIZE),
+            Err(TryWriteError::CommitEvidenceResourceDeferred { height: 2, .. })
+        ));
+        assert_snapshot_bundle_absent(&store);
+        assert_eq!(chain.state().latest_block_hash_fast(), original_tip);
+        assert_eq!(
+            chain
+                .kura()
+                .canonical_block_wire_bytes_for_testing(nonzero!(2_usize))
+                .unwrap(),
+            original_frame
+        );
+        captured
+            .identity
+            .validate_bytes(captured.json.as_bytes())
+            .unwrap();
+        drop(occupied);
+        assert!(released.as_mut().poll(&mut context).is_ready());
+        ensure_snapshot_commit_evidence(chain.state(), &checkpoint, &captured.identity).unwrap();
+        assert_eq!(budget.reserved_bytes(), baseline);
+    }
+    try_write_snapshot(chain.state(), &store, &key, TEST_CHUNK_SIZE).unwrap();
+    assert_canonical_snapshot_generation(&store);
+    assert_eq!(
+        std::fs::read(current_generation_artifact(&store, SNAPSHOT_FILE_NAME)).unwrap(),
+        captured.json.as_bytes()
+    );
+    assert_eq!(chain.state().latest_block_hash_fast(), original_tip);
+}
+
+#[tokio::test]
 async fn snapshot_publication_preserves_native_cut_and_requires_original_replay() {
     let mut chain = native_snapshot_chain();
     chain.commit(Vec::new());
@@ -938,21 +1050,27 @@ fn accepted_log_transaction(message: &str) -> AcceptedTransaction<'static> {
     .sign(key_pair.private_key());
     AcceptedTransaction::new_unchecked(Cow::Owned(transaction))
 }
-fn signed_block_with_transaction(transaction: AcceptedTransaction<'static>) -> Arc<SignedBlock> {
+fn signed_block_with_transaction(
+    transaction: AcceptedTransaction<'static>,
+) -> iroha_data_model::block::SharedSignedBlock {
     signed_block_after_transaction(transaction, None)
 }
 fn signed_block_after_transaction(
     transaction: AcceptedTransaction<'static>,
     latest_block: Option<&SignedBlock>,
-) -> Arc<SignedBlock> {
+) -> iroha_data_model::block::SharedSignedBlock {
     let block_signer = checked_seeded_keypair(0x33, Algorithm::BlsNormal);
-    Arc::new(
+    iroha_data_model::block::SharedSignedBlock::try_new(
         BlockBuilder::new(vec![transaction])
             .chain(0, latest_block)
             .sign(block_signer.private_key())
             .unpack(|_| {})
             .into(),
+        &crate::state::AllocationBudget::new(
+            iroha_data_model::block::SharedSignedBlock::allocation_layout().size(),
+        ),
     )
+    .expect("admit structural snapshot fixture block")
 }
 /// Apply hostile fixture changes without changing unrelated signed schema ordering.
 fn snapshot_json_with_mutation(original: &str, mutated: &json::Value) -> String {
@@ -1112,8 +1230,12 @@ pub(super) fn write_snapshot_bundle_from_bytes(
     )
     .expect("publish canonical test pointer");
 }
-fn store_block_and_mark_state_height(state: &mut State, kura: &Arc<Kura>, block: Arc<SignedBlock>) {
-    kura.store_block(Arc::clone(&block)).expect("store block");
+fn store_block_and_mark_state_height(
+    state: &mut State,
+    kura: &Arc<Kura>,
+    block: iroha_data_model::block::SharedSignedBlock,
+) {
+    kura.store_block(block.clone()).expect("store block");
     state.push_block_hash_for_testing(block.hash());
     seed_snapshot_genesis_resolver_checkpoint(&state);
 }

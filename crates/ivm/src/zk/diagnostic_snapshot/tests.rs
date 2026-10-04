@@ -51,14 +51,14 @@ impl Fixture {
                     index: 7,
                     value: 0xDDDD,
                     tag: true,
-                    path: vec![[5; 32]; 8],
+                    path: [[5; 32]; crate::REGISTER_MERKLE_PATH_DEPTH],
                     root,
                 },
                 RegEvent::Write {
                     index: 8,
                     value: 0xEEEE,
                     tag: true,
-                    path: vec![[6; 32]; 8],
+                    path: [[6; 32]; crate::REGISTER_MERKLE_PATH_DEPTH],
                     root,
                 },
             ],
@@ -143,39 +143,36 @@ fn reserved_parent_survives_shrink_and_shared_snapshot_final_owner() {
 }
 
 #[test]
-fn delta_capture_expands_without_changing_source_and_rejects_bad_indices() {
-    let mut rows = vec![
-        DeltaEntry {
-            pc: 4,
-            changes: vec![(7, 21, true)],
-        },
-        DeltaEntry {
-            pc: 8,
-            changes: vec![(8, 22, false)],
-        },
-    ];
+fn delta_capture_expands_without_changing_source() {
     let budget = AllocationBudget::new(64 * 1024);
-    fn capture(
-        rows: &[DeltaEntry],
-        budget: &AllocationBudget,
-    ) -> Result<DiagnosticTraceSnapshot, VMError> {
-        DiagnosticTraceSource {
-            registers: DiagnosticRegisterSource::Deltas(rows),
-            constraints: &[],
-            memory_events: &[],
-            register_events: &[],
-            steps: &[],
-        }
-        .try_snapshot(budget)
+    let mut rows = super::DeltaTraceLog::new(Some(&budget));
+    budget.with_deferred_refund_notifications(|scope| {
+        rows.prepare_batch(2, 256, 1, Some(scope)).unwrap();
+    });
+    let mut gpr = [0; 256];
+    let mut tags = [false; 256];
+    gpr[7] = 21;
+    tags[7] = true;
+    rows.record_reserved(4, gpr, tags);
+    gpr[8] = 22;
+    rows.record_reserved(8, gpr, tags);
+    let retained = budget.reserved_bytes();
+    let snapshot = DiagnosticTraceSource {
+        registers: DiagnosticRegisterSource::Deltas(&rows),
+        constraints: &[],
+        memory_events: &[],
+        register_events: &[],
+        steps: &[],
     }
-    let snapshot = capture(&rows, &budget).unwrap();
+    .try_snapshot(&budget)
+    .unwrap();
     assert_eq!(snapshot.states()[1].gpr[7], 21);
     assert!(snapshot.states()[1].tags[7]);
     assert_eq!(snapshot.states()[1].gpr[8], 22);
     drop(snapshot);
-    assert_eq!(rows[0].changes[0], (7, 21, true));
-    rows[1].changes.push((256, 99, true));
-    assert!(matches!(capture(&rows, &budget), Err(VMError::DecodeError)));
+    assert_eq!(rows.entry(0).unwrap().changes[7], (7, 21, true));
+    assert_eq!(budget.reserved_bytes(), retained);
+    drop(rows);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 
@@ -316,24 +313,13 @@ fn checker_rejects_extra_missing_and_out_of_range_register_paths() {
         (event.index, [event.path, &[[8; 32]]].concat()),
         (256, event.path.to_vec()),
     ] {
-        let rows = [RegEvent::Read {
+        let altered = DiagnosticRegisterEvent {
             index,
-            value: event.value,
-            tag: event.tag,
-            path,
-            root: HashOf::from_untyped_unchecked(Hash::prehashed(*event.root)),
-        }];
-        let altered = DiagnosticTraceSource {
-            registers: DiagnosticRegisterSource::States(snapshot.states()),
-            constraints: snapshot.constraints(),
-            memory_events: &[],
-            register_events: &rows,
-            steps: &[],
-        }
-        .try_snapshot(&budget)
-        .unwrap();
+            path: &path,
+            ..event
+        };
         assert_eq!(
-            super::super::check_diagnostic_trace(&altered),
+            super::super::register_authentication::check(altered),
             Err(VMError::AssertionFailed)
         );
     }

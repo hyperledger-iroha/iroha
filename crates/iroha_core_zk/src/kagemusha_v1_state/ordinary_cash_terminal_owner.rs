@@ -42,11 +42,12 @@ pub(super) enum TransportOriginals {
     },
 }
 
+/// Opaque original data retained by the parent cash journal; admission remains in this owner.
 #[derive(Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::OrdinaryCashTerminalSelectionOriginalsV1"
 )]
-struct SelectionOriginals {
+pub(super) struct SelectionOriginals {
     preselection_cash_prefix: KagemushaRecoveryJournalPrefixV1,
     financial_control: CapturedFinancialControlIdentity,
     prepared: KagemushaOrdinaryPreparedOutgoingV1,
@@ -384,7 +385,7 @@ impl TerminalJournal {
 impl KagemushaNativeOrdinaryCashOwnerV1 {
     /// Reserve a distinct actual purpose1 nonce only after real preparation Guard and State proofs.
     /// The transport inputs remain private Native originals; managed code supplies no owner/time/key.
-    pub(crate) fn select_terminal(
+    pub(super) fn select_terminal(
         &mut self,
         candidate: KagemushaAuthenticatedOrdinaryCashCandidateV1,
         guard: KagemushaAuthenticatedOrdinaryPreparationGuardV1,
@@ -951,15 +952,6 @@ impl KagemushaAuthenticatedOrdinaryCashTerminalApprovalSelectionV1<'_> {
     }
     pub(crate) fn authorization_binding_digest(&self) -> Result<DigestV1, KagemushaStateErrorV1> {
         authorization(&self.captured().1, self.pending().lease.as_deref())
-    }
-    pub(crate) fn approval_admission_time_ms(&self) -> u64 {
-        self.admission_interval_lower_ms()
-    }
-    pub(crate) fn admission_interval_lower_ms(&self) -> u64 {
-        self.admission_clock_context().lower_at_ms
-    }
-    pub(crate) fn admission_interval_upper_ms(&self) -> u64 {
-        self.admission_clock_context().upper_at_ms
     }
     pub(crate) fn transition_stream(&self) -> &[u8] {
         &self.pending().originals.transition_stream

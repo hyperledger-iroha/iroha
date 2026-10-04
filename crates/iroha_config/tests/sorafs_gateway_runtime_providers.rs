@@ -125,3 +125,94 @@ feed_transport_provider_policy_digest_hex = "{}"
         }
     }
 }
+
+fn compliance_overlay() -> String {
+    let public = |seed| {
+        let pair =
+            iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
+                .unwrap();
+        hex::encode(pair.public_key().to_bytes().1)
+    };
+    let checkpoint =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/compliance-checkpoint.nrt");
+    // This tests only parser ownership: no checkpoint, provider, key or native authority is opened.
+    format!(
+        r#"
+[sorafs.gateway.compliance]
+enabled = true
+feed_transport_provider_handle = "sorafs.gateway.compliance.feed-https.v1"
+feed_transport_provider_revision = 1
+feed_transport_provider_policy_digest_hex = "{}"
+checkpoint_path = {:?}
+policy_id_hex = "{}"
+region_id = "local"
+gateway_id = "local-gateway"
+catalog_threshold = 2
+gateway_ack_threshold = 1
+feeds = []
+[[sorafs.gateway.compliance.catalog_signers]]
+signer_id = "catalog-a"
+public_key_hex = "{}"
+[[sorafs.gateway.compliance.catalog_signers]]
+signer_id = "catalog-b"
+public_key_hex = "{}"
+[[sorafs.gateway.compliance.gateway_signers]]
+signer_id = "local-gateway"
+public_key_hex = "{}"
+"#,
+        "52".repeat(32),
+        checkpoint.to_str().unwrap(),
+        "53".repeat(32),
+        public(31),
+        public(32),
+        public(33)
+    )
+}
+
+#[test]
+fn enabled_compliance_allows_explicit_empty_feeds_without_relaxing_authority_or_host_rules() {
+    let original = compliance_overlay();
+    let actual = parse_overlay(&original).expect("explicit empty feed selection");
+    let compliance = actual.torii.sorafs_gateway.compliance.unwrap();
+    assert!(compliance.feeds.is_empty());
+    assert_eq!(compliance.catalog_threshold, 2);
+    assert_eq!(compliance.gateway_ack_threshold, 1);
+    assert_eq!(compliance.gateway_id, "local-gateway");
+    for changed in [
+        original.replace("catalog_threshold = 2", "catalog_threshold = 0"),
+        original.replace("gateway_ack_threshold = 1", "gateway_ack_threshold = 0"),
+        original.replace(
+            "feed_transport_provider_revision = 1",
+            "feed_transport_provider_revision = 0",
+        ),
+    ] {
+        assert!(parse_overlay(&changed).is_err());
+    }
+    let malformed_feed = original.replace("feeds = []", "")
+        + r#"
+[[sorafs.gateway.compliance.feeds]]
+feed_id = "configured"
+url = "https://feed.example/catalog"
+required = true
+hosts = []
+"#;
+    let host_error = parse_overlay(&malformed_feed).unwrap_err();
+    assert!(
+        host_error.contains("requires at least one HTTPS host"),
+        "configured feed must reach the host validator: {host_error}"
+    );
+    let configured_feed = malformed_feed.replace(
+        "hosts = []",
+        &format!(
+            r#"[[sorafs.gateway.compliance.feeds.hosts]]
+hostname = "feed.example"
+accepted_spki_sha256_hex = ["{}"]"#,
+            "54".repeat(32)
+        ),
+    );
+    let actual = parse_overlay(&configured_feed).expect("nonempty pinned feed remains valid");
+    assert_eq!(
+        actual.torii.sorafs_gateway.compliance.unwrap().feeds.len(),
+        1
+    );
+}

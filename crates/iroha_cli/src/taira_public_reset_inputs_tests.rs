@@ -495,7 +495,7 @@ fn assembler_rejects_incomplete_topology_before_reading_runtime_inputs() {
             .iter()
             .map(|slug| absent.join(format!("{slug}.service")))
             .collect(),
-        edge_unit: absent.join("edge.service"),
+        native_edge_capability: absent.join("native-edge-capability.json"),
         known_hosts: absent.join("known-hosts"),
     };
     let error = derive_inventory(&mut inventory, &inputs)
@@ -558,7 +558,7 @@ fn aggregate_timeout_budget_rejects_assembly_and_authorization_before_input_or_c
             .iter()
             .map(|slug| absent.join(format!("{slug}.service")))
             .collect(),
-        edge_unit: absent.join("edge.service"),
+        native_edge_capability: absent.join("native-edge-capability.json"),
         known_hosts: absent.join("known-hosts"),
     };
     let expected = "bounded execution plan requires 83400 seconds (actions: 82200 seconds, admission: 900 seconds, safety: 300 seconds), exceeding the 43200-second limit by 40200 seconds";
@@ -813,7 +813,7 @@ fn native_context_rejects_scope_before_opening_actual_inputs() {
         validator_operator_key: path.clone(),
         inrou_stage_dir: Some(path.clone()),
         validator_unit: vec![path.clone(); 4],
-        edge_unit: path.clone(),
+        native_edge_capability: path.clone(),
         known_hosts: path,
     };
     let error = derive_reset_context(&intent, &inputs)

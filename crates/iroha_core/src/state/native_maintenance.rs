@@ -63,7 +63,14 @@ impl StateBlock<'_> {
         source: &iroha_data_model::block::SignedBlock,
     ) -> Result<(), String> {
         self.inspect_owned_execution_sources_for_test(source, |state, sources| {
-            state.finalize_owned_fastpq_source_inventory_with_pending(sources, None)
+            state
+                .finalize_owned_fastpq_source_inventory_with_pending(sources, None)
+                .map_err(|error| match error {
+                    crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => panic!(
+                        "completed source control encountered original local deferral: {reason}"
+                    ),
+                })
         })
     }
 }

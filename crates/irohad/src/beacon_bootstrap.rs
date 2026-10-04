@@ -13,13 +13,14 @@ use clap::{Parser, Subcommand};
 use iroha_core::beacon::{
     AdaptiveGlobalThresholdBeaconDkgCryptoV1, FinalizedGlobalThresholdBeaconKeySessionRecordV1,
     GlobalThresholdBeaconDkgSnapshotV1, GlobalThresholdBeaconDkgStateV1,
-    LocalGlobalThresholdBeaconDkgSeatV1,
+    GlobalThresholdBeaconSessionBindingV1, GlobalThresholdBeaconSessionError,
+    LocalGlobalThresholdBeaconDkgErrorV1, PreparedLocalGlobalThresholdBeaconDkgSeatV1,
+    ValidatedGlobalThresholdBeaconSessionV1,
     credential::{
         RuntimeGlobalBeaconShareProvisioningV1, encode_global_beacon_partial_signer_credential_v1,
-        global_beacon_partial_signer_inventory_digest_v1,
         global_beacon_partial_signer_public_inventory_digest_v1,
     },
-    global_threshold_beacon_roster_hash_v1,
+    global_threshold_beacon_roster_hash_v1, validate_global_threshold_beacon_session_v1,
 };
 use iroha_core::state::{
     THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
@@ -63,6 +64,8 @@ use zeroize::{Zeroize as _, Zeroizing};
 
 mod genesis_seat;
 mod rotation_seat;
+mod seat_attempt;
+mod seat_export;
 use rotation_seat::provision_rotation_seat_command;
 
 const MAX_PUBLIC_BYTES: usize = 32 * 1024 * 1024;
@@ -70,7 +73,7 @@ const MAX_ROTATION_PHASE_PROOF_BYTES: usize = NATIVE_FINALITY_MAX_JOURNAL_BYTES;
 const MAX_TIMEOUT_MS: u64 = 3_600_000;
 const ROTATION_PENDING_SHARE_NAME: &str = "pending-share.bin";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) enum Error {
     InvalidInput,
     InvalidCustody,
@@ -78,6 +81,13 @@ pub(crate) enum Error {
     Height,
     Deadline,
     Io,
+    Session(GlobalThresholdBeaconSessionError),
+    LocalDkg(LocalGlobalThresholdBeaconDkgErrorV1),
+    Journal(iroha_core::sumeragi::native_journal::NativeJournalError),
+    GenesisBundle(eyre::Report),
+    Export(seat_export::ExportError),
+    Attempt(seat_attempt::AttemptError),
+    PendingAttempt(seat_attempt::PendingSeatDkgAttempt),
 }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -88,10 +98,77 @@ impl std::fmt::Display for Error {
             Self::Height => "beacon bootstrap committed-height observation is invalid or closed",
             Self::Deadline => "beacon bootstrap operation deadline elapsed",
             Self::Io => "beacon bootstrap bounded I/O failed",
+            Self::Session(error) => return std::fmt::Display::fmt(error, f),
+            Self::LocalDkg(error) => return std::fmt::Display::fmt(error, f),
+            Self::Journal(error) => return std::fmt::Display::fmt(error, f),
+            Self::GenesisBundle(error) => return std::fmt::Display::fmt(error, f),
+            Self::Export(error) => return std::fmt::Display::fmt(error, f),
+            Self::Attempt(error) => return std::fmt::Display::fmt(error, f),
+            Self::PendingAttempt(error) => return std::fmt::Display::fmt(error, f),
         })
     }
 }
+impl From<seat_attempt::AttemptError> for Error {
+    fn from(error: seat_attempt::AttemptError) -> Self {
+        Self::Attempt(error)
+    }
+}
+impl From<LocalGlobalThresholdBeaconDkgErrorV1> for Error {
+    fn from(error: LocalGlobalThresholdBeaconDkgErrorV1) -> Self {
+        Self::LocalDkg(error)
+    }
+}
+impl From<GlobalThresholdBeaconSessionError> for Error {
+    fn from(error: GlobalThresholdBeaconSessionError) -> Self {
+        match error {
+            GlobalThresholdBeaconSessionError::Invalid(_) => Self::Crypto,
+            original => Self::Session(original),
+        }
+    }
+}
+impl From<iroha_core::sumeragi::native_journal::NativeJournalError> for Error {
+    fn from(error: iroha_core::sumeragi::native_journal::NativeJournalError) -> Self {
+        Self::Journal(error)
+    }
+}
+impl From<iroha_data_model::sumeragi::finality::NativeFinalityDecodeError> for Error {
+    fn from(error: iroha_data_model::sumeragi::finality::NativeFinalityDecodeError) -> Self {
+        Self::Journal(iroha_core::sumeragi::native_journal::NativeJournalError::Decode(error))
+    }
+}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Session(error) => Some(error),
+            Self::LocalDkg(error) => Some(error),
+            Self::Journal(error) => Some(error),
+            Self::GenesisBundle(error) => Some(error.as_ref()),
+            Self::Export(error) => Some(error),
+            Self::Attempt(error) => Some(error),
+            Self::PendingAttempt(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 type Result<T> = std::result::Result<T, Error>;
+
+fn retain_public_session(
+    public: &GlobalThresholdBeaconKeySessionV1,
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<ValidatedGlobalThresholdBeaconSessionV1> {
+    let expected = GlobalThresholdBeaconSessionBindingV1 {
+        network_id: public.network_id,
+        session_id: public.session_id,
+        roster_hash: public.roster_hash,
+        transcript_hash: public.transcript_hash,
+    };
+    validate_global_threshold_beacon_session_v1(public, &expected, budget).map_err(Error::from)
+}
+
+#[cfg(test)]
+fn test_credential_budget() -> iroha_allocation::AllocationBudget {
+    iroha_allocation::AllocationBudget::new(64 * 1024 * 1024)
+}
 
 #[derive(Parser)]
 #[command(
@@ -99,6 +176,10 @@ type Result<T> = std::result::Result<T, Error>;
     about = "Run one-seat beacon DKG and exact-quorum lifecycle finalization; never submits a transaction"
 )]
 struct Args {
+    /// Finite physical pool for this command's credential graph and verification workspace.
+    /// Place this explicit operation limit before the subcommand.
+    #[arg(long)]
+    credential_max_memory_bytes: std::num::NonZeroUsize,
     #[command(subcommand)]
     command: Command,
 }
@@ -354,6 +435,9 @@ pub(crate) fn dispatch_if_requested() -> bool {
         crate::taira_runtime_signer::TAIRA_CHAIN_DISCRIMINANT_V1,
     );
     let parsed = Args::parse_from(std::iter::once(OsString::from("beacon-bootstrap")).chain(args));
+    let credential_budget =
+        iroha_allocation::AllocationBudget::new(parsed.credential_max_memory_bytes.get());
+    let budget = &credential_budget;
     let result = match parsed.command {
         Command::ProvisionGenesisSeat {
             genesis,
@@ -380,6 +464,7 @@ pub(crate) fn dispatch_if_requested() -> bool {
             finality_fd,
             &attempt_root,
             timeout_ms,
+            budget,
         ),
         Command::AssembleGenesisDkg {
             genesis,
@@ -402,6 +487,7 @@ pub(crate) fn dispatch_if_requested() -> bool {
             &provider,
             certificate_height,
             &output,
+            budget,
         ),
         Command::SignGenesisInstall {
             chain_id,
@@ -423,6 +509,7 @@ pub(crate) fn dispatch_if_requested() -> bool {
             key_fd,
             config_fd,
             &output,
+            budget,
         ),
         Command::AssembleGenesisInstall {
             chain_id,
@@ -440,6 +527,7 @@ pub(crate) fn dispatch_if_requested() -> bool {
             &bundle,
             &signature,
             &output,
+            budget,
         ),
         Command::ProvisionRotationSeat {
             proof,
@@ -463,6 +551,7 @@ pub(crate) fn dispatch_if_requested() -> bool {
             provider_revision,
             &attempt_root,
             timeout_ms,
+            budget,
         ),
         Command::AssembleRotationDkg {
             proof,
@@ -478,6 +567,7 @@ pub(crate) fn dispatch_if_requested() -> bool {
             &provider,
             certificate_height,
             &output,
+            budget,
         ),
         Command::SignRotation {
             proof,
@@ -486,13 +576,21 @@ pub(crate) fn dispatch_if_requested() -> bool {
             key_fd,
             config_fd,
             output,
-        } => sign_rotation_command(&proof, &bundle, signer_index, key_fd, config_fd, &output),
+        } => sign_rotation_command(
+            &proof,
+            &bundle,
+            signer_index,
+            key_fd,
+            config_fd,
+            &output,
+            budget,
+        ),
         Command::AssembleRotation {
             proof,
             bundle,
             signature,
             output,
-        } => assemble_rotation_command(&proof, &bundle, &signature, &output),
+        } => assemble_rotation_command(&proof, &bundle, &signature, &output, budget),
     };
     if let Err(error) = result {
         eprintln!("{error}");
@@ -501,13 +599,6 @@ pub(crate) fn dispatch_if_requested() -> bool {
     true
 }
 
-fn require_budget(deadline: Instant) -> Result<()> {
-    if Instant::now() >= deadline {
-        Err(Error::Deadline)
-    } else {
-        Ok(())
-    }
-}
 fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
     a.is_file()
         && b.is_file()
@@ -778,60 +869,6 @@ fn write_new(path: &Path, bytes: &[u8], private: bool) -> Result<()> {
         private,
     )
 }
-fn read_exact_until(fd: BorrowedFd<'_>, deadline: Instant, bytes: &mut [u8]) -> Result<()> {
-    let mut offset = 0;
-    while offset < bytes.len() {
-        require_budget(deadline)?;
-        let timeout =
-            rustix::event::Timespec::try_from(deadline.saturating_duration_since(Instant::now()))
-                .map_err(|_| Error::Deadline)?;
-        let mut polls = [rustix::event::PollFd::new(
-            &fd,
-            rustix::event::PollFlags::IN,
-        )];
-        match rustix::event::poll(&mut polls, Some(&timeout)) {
-            Ok(0) => return Err(Error::Deadline),
-            Ok(_) if polls[0].revents().contains(rustix::event::PollFlags::NVAL) => {
-                return Err(Error::Height);
-            }
-            Ok(_) => {}
-            Err(rustix::io::Errno::INTR) => continue,
-            Err(_) => return Err(Error::Io),
-        }
-        match rustix::io::read(fd, &mut bytes[offset..]) {
-            Ok(0) => return Err(Error::Height),
-            Ok(count) => offset += count,
-            Err(rustix::io::Errno::INTR) => continue,
-            Err(_) => return Err(Error::Io),
-        }
-    }
-    Ok(())
-}
-
-fn read_rotation_phase_height(
-    fd: BorrowedFd<'_>,
-    deadline: Instant,
-    verifier: &mut NativeJournalCursor,
-    last_height: &mut u64,
-    cutoff_height: u64,
-) -> Result<u64> {
-    // Each FIFO frame carries one bounded complete canonical native journal.
-    // Signed genesis alone never advances the finality clock.
-    let mut length = [0_u8; 4];
-    read_exact_until(fd, deadline, &mut length)?;
-    let length = usize::try_from(u32::from_be_bytes(length)).map_err(|_| Error::Height)?;
-    if length == 0 || length > verifier.limits().journal_bytes {
-        return Err(Error::Height);
-    }
-    let mut encoded = Vec::new();
-    encoded.try_reserve_exact(length).map_err(|_| Error::Io)?;
-    encoded.resize(length, 0);
-    read_exact_until(fd, deadline, &mut encoded)?;
-    let journal =
-        NativeFinalityJournal::decode(&encoded, verifier.limits()).map_err(|_| Error::Crypto)?;
-    advance_phase_journal(verifier, &journal, last_height, cutoff_height)
-}
-
 fn check_rotation_phase_height(
     last_height: u64,
     proof_height: u64,
@@ -857,7 +894,7 @@ fn advance_phase_journal(
     if verifier.tip().map(|tip| tip.height()).unwrap_or(1) != *last_height {
         return Err(Error::Height);
     }
-    let verified = verifier.advance(journal).map_err(|_| Error::Crypto)?;
+    let verified = verifier.advance(journal.into())?;
     // The sole verifier checks actual height, source order and the prior receipt.
     debug_assert_eq!(verified.height(), height);
     *last_height = verified.height();
@@ -867,17 +904,16 @@ fn advance_phase_journal(
 fn rotation_phase_verifier(
     proof: &RotationProofArgs,
     evidence: &ValidatorCommitteeSelectionEvidenceV1,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<NativeJournalCursor> {
     let mut verifier = NativeJournalCursor::new(
         proof.chain_id.clone(),
         proof.network_id,
         iroha_data_model::block::consensus::SumeragiRootScope::Global,
         proof.finality_limits.checked()?,
-    )
-    .map_err(|_| Error::Crypto)?;
-    verifier
-        .advance(&evidence.finality_journal)
-        .map_err(|_| Error::Crypto)?;
+        budget,
+    )?;
+    verifier.advance((&evidence.finality_journal).into())?;
     Ok(verifier)
 }
 
@@ -888,6 +924,7 @@ fn validate_rotation_phase_chain(
     final_height: u64,
     cutoff_height: u64,
     chain: &[NativeFinalityJournal],
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<()> {
     let expected_count = usize::try_from(
         final_height
@@ -898,7 +935,7 @@ fn validate_rotation_phase_chain(
     if chain.len() != expected_count {
         return Err(Error::Height);
     }
-    let mut verifier = rotation_phase_verifier(proof, evidence)?;
+    let mut verifier = rotation_phase_verifier(proof, evidence, budget)?;
     let mut last_height = start_height;
     for phase in chain {
         advance_phase_journal(&mut verifier, phase, &mut last_height, cutoff_height)?;
@@ -945,6 +982,7 @@ fn draft_rotation_certificate(
 
 fn read_verified_rotation_selection(
     proof: &RotationProofArgs,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<(
     ValidatorCommitteeSelectionEvidenceV1,
     VerifiedValidatorCommitteeSelectionV1,
@@ -956,18 +994,23 @@ fn read_verified_rotation_selection(
             .journal_bytes
             .min(COMMITTEE_PROVISIONING_EVIDENCE_MAX_BYTES_V1),
     )?;
-    let evidence: ValidatorCommitteeSelectionEvidenceV1 = norito::decode_canonical_with_limits(
-        &bytes,
+    let evidence: ValidatorCommitteeSelectionEvidenceV1 = norito::core::with_decode_limits_scope(
         limits.decode_limits().map_err(|_| Error::InvalidInput)?,
+        || {
+            norito::decode_canonical_for_admission(
+                &bytes,
+                norito::canonical_decode_limits(bytes.len()),
+            )
+        },
     )
-    .map_err(|_| Error::InvalidInput)?;
+    .map_err(iroha_data_model::sumeragi::finality::NativeFinalityDecodeError::from)?;
     let verifier = NativeJournalCursor::new(
         proof.chain_id.clone(),
         proof.network_id,
         iroha_data_model::block::consensus::SumeragiRootScope::Global,
         limits,
-    )
-    .map_err(|_| Error::Crypto)?;
+        budget,
+    )?;
     let selected = verify_validator_committee_selection_evidence_v1(
         &evidence,
         &proof.chain_id,
@@ -976,8 +1019,8 @@ fn read_verified_rotation_selection(
         proof.transition_id.into(),
         limits,
         verifier.attestations(),
-    )
-    .map_err(|_| Error::Crypto)?;
+        budget,
+    )?;
     Ok((evidence, selected))
 }
 
@@ -986,6 +1029,7 @@ fn validate_rotation_bundle(
     proof: &RotationProofArgs,
     evidence: &ValidatorCommitteeSelectionEvidenceV1,
     selected: &VerifiedValidatorCommitteeSelectionV1,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<Vec<PeerId>> {
     let preparation = selected.preparation();
     let target_roster = preparation
@@ -999,7 +1043,7 @@ fn validate_rotation_bundle(
         .iter()
         .map(|seat| seat.validator.clone())
         .collect::<Vec<_>>();
-    bundle.record.validate().map_err(|_| Error::Crypto)?;
+    bundle.record.validate(budget).map_err(Error::from)?;
     if bundle.schema != "iroha.validator-committee.rotation-dkg.v1"
         || bundle.preparation != *preparation
         || bundle.dkg_session.network_id != preparation.network_id
@@ -1060,6 +1104,7 @@ fn validate_rotation_bundle(
             .checked_sub(1)
             .ok_or(Error::Height)?,
         &bundle.phase_proofs,
+        budget,
     )?;
     let mut handles = BTreeSet::new();
     let revision = bundle
@@ -1078,7 +1123,7 @@ fn validate_rotation_bundle(
             || provider.policy_digest
                 != global_beacon_partial_signer_public_inventory_digest_v1(
                     bundle.record.session.network_id,
-                    &[(bundle.record.session.clone(), provider.signer_index)],
+                    &[(&bundle.record.session, provider.signer_index)],
                 )
                 .map_err(|_| Error::Crypto)?
         {
@@ -1218,6 +1263,7 @@ fn sign_rotation_command(
     key_fd: Option<i32>,
     config_fd: Option<i32>,
     output: &Path,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<()> {
     let (fd, config) = match (key_fd, config_fd) {
         (Some(198), None) => (198, false),
@@ -1225,9 +1271,9 @@ fn sign_rotation_command(
         _ => return Err(Error::InvalidInput),
     };
     iroha_genesis::init_instruction_registry();
-    let (evidence, selected) = read_verified_rotation_selection(proof)?;
+    let (evidence, selected) = read_verified_rotation_selection(proof, budget)?;
     let bundle: RotationPublicBundle = read_json(bundle_path)?;
-    let roster = validate_rotation_bundle(&bundle, proof, &evidence, &selected)?;
+    let roster = validate_rotation_bundle(&bundle, proof, &evidence, &selected, budget)?;
     let file = crate::taira_runtime_signer::take_inherited_private_file(fd)
         .map_err(|_| Error::InvalidCustody)?;
     let key = if config {
@@ -1291,11 +1337,12 @@ fn assemble_rotation_command(
     bundle_path: &Path,
     signatures: &[PathBuf],
     output: &Path,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<()> {
     iroha_genesis::init_instruction_registry();
-    let (evidence, selected) = read_verified_rotation_selection(proof)?;
+    let (evidence, selected) = read_verified_rotation_selection(proof, budget)?;
     let bundle: RotationPublicBundle = read_json(bundle_path)?;
-    let roster = validate_rotation_bundle(&bundle, proof, &evidence, &selected)?;
+    let roster = validate_rotation_bundle(&bundle, proof, &evidence, &selected, budget)?;
     let signatures = signatures
         .iter()
         .map(|path| read_json(path))

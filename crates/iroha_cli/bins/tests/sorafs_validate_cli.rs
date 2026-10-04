@@ -2228,7 +2228,7 @@ fn canonical_validator_rejects_irrelevant_globals_before_config_or_input_access(
         vec!["--config", "missing-client.toml"],
         vec!["--operator-private-key-file", "/missing-key"],
         vec!["--verbose"],
-        vec!["--input"],
+        vec!["--stdin-instructions"],
     ] {
         let output = cargo_bin_cmd!("iroha")
             .current_dir(directory.path())

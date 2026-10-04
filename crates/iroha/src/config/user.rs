@@ -11,11 +11,9 @@ use iroha_config_base::{
     util::{DurationMs, Emitter, EmitterResultExt},
 };
 use iroha_model_base::chain::ChainId;
-use iroha_model_base::domain::DomainId;
-use iroha_model_base::name;
 use iroha_service_model::soranet::AnonymityPolicy;
 use iroha_service_model::soranet::RolloutPhase;
-use iroha_torii_shared::{network_profile, network_profile_names};
+use iroha_torii_shared::network_profile_names;
 use sorafs_manifest::alias_cache::AliasCachePolicy;
 use std::{fmt, fs::File, io::Read as _, path::PathBuf, time::Duration};
 use url::Url;
@@ -56,7 +54,7 @@ pub struct Root {
     /// Optional Musubi production-publication platform bindings.
     pub musubi: Musubi,
 }
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 /// Errors found while validating or parsing user configuration.
 pub enum ParseError {
     /// Transaction status timeout should be smaller than its time-to-live.
@@ -86,12 +84,6 @@ pub enum ParseError {
         /// The supplied label.
         value: String,
     },
-    /// Invalid account domain literal.
-    #[error("Account domain must use `dataspace` or `domain.dataspace` format: `{value}`")]
-    InvalidAccountDomain {
-        /// Raw configured value.
-        value: String,
-    },
     /// Unknown public account network profile.
     #[error("Invalid account network profile: `{profile}`")]
     InvalidAccountProfile {
@@ -113,20 +105,49 @@ pub enum ParseError {
     /// Account config omitted both profile and explicit discriminant.
     #[error("Account config must set `profile` or an explicit `chain_discriminant`")]
     MissingAccountNetworkContext,
+    /// Explicit account chain discriminant is zero.
+    #[error("Account chain discriminant must be nonzero")]
+    ZeroAccountChainDiscriminant,
     /// Exact network identity was absent, ambiguous, or invalid.
     #[error("Invalid exact network identity configuration")]
     InvalidNetworkIdentity,
 }
 type ReportResult<T, E> = core::result::Result<T, Report<[E]>>;
-fn valid_account_domain_scope_literal(value: &str) -> bool {
-    if value.trim().is_empty() || value.trim() != value {
-        return false;
+/// Resolve `account.profile` and `account.chain_discriminant` with the shared
+/// [`super::resolve_account_chain_discriminant`] rule, reporting a failure with its origin.
+fn resolve_account_network_context(
+    profile: Option<&str>,
+    explicit: Option<WithOrigin<u16>>,
+    emitter: &mut Emitter<ParseError>,
+) -> Option<u16> {
+    let error = match super::resolve_account_chain_discriminant(
+        profile,
+        explicit.as_ref().map(|value| *value.value()),
+    ) {
+        Ok(discriminant) => return Some(discriminant),
+        Err(error) => error,
+    };
+    let hint = match &error {
+        super::AccountChainDiscriminantError::Missing => format!(
+            "set `account.profile` to a public network ({}) or `account.chain_discriminant` to the I105 chain discriminant of the target network",
+            network_profile_names()
+        ),
+        super::AccountChainDiscriminantError::UnknownProfile { .. } => {
+            format!("supported account profiles: {}", network_profile_names())
+        }
+        super::AccountChainDiscriminantError::ProfileMismatch { profile, .. } => format!(
+            "remove `account.chain_discriminant` or select the profile of the target network instead of `{profile}`"
+        ),
+        super::AccountChainDiscriminantError::Zero => {
+            "set `account.chain_discriminant` to the nonzero I105 chain discriminant of the target network".to_owned()
+        }
+    };
+    let mut report = Report::new(ParseError::from(error));
+    if let Some(explicit) = explicit {
+        report = report.attach(explicit.into_attachment());
     }
-    if value.contains('.') {
-        DomainId::parse_fully_qualified(value).is_ok()
-    } else {
-        name::canonicalize_domain_label(value).is_ok()
-    }
+    emitter.emit(report.attach(hint));
+    None
 }
 fn resolve_account_private_key(
     inline: Option<WithOrigin<PrivateKey>>,
@@ -327,7 +348,6 @@ impl Root {
             torii_request_timeout_ms,
             account:
                 Account {
-                    domain: domain_literal,
                     profile,
                     public_key,
                     private_key,
@@ -380,69 +400,11 @@ impl Root {
                 .attach("Note: only `http` and `https` protocols are supported"),
             ),
         }
-        let torii_api_url = {
-            let mut url = torii_url.into_value();
-            let path = url.path();
-            // Ensure torii url ends with a trailing slash
-            if !path.ends_with('/') {
-                let path = path.to_owned() + "/";
-                url.set_path(&path)
-            }
-            url
-        };
-        let chain_discriminant = match profile.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
-            Some(profile_name) => {
-                if let Some(profile) = network_profile(profile_name) {
-                    match chain_discriminant.origin() {
-                        ParameterOrigin::Default { .. } => WithOrigin::new(
-                            profile.chain_discriminant,
-                            ParameterOrigin::custom(format!(
-                                "derived from account profile `{}`",
-                                profile.name
-                            )),
-                        ),
-                        _ if *chain_discriminant.value() == profile.chain_discriminant => {
-                            chain_discriminant
-                        }
-                        _ => {
-                            emitter.emit(
-                                Report::new(ParseError::AccountProfileDiscriminantMismatch {
-                                    profile: profile.name.to_owned(),
-                                    expected: profile.chain_discriminant,
-                                    actual: *chain_discriminant.value(),
-                                })
-                                .attach(format!(
-                                    "expected profile `{}` chain_discriminant={}, actual chain_discriminant={}",
-                                    profile.name,
-                                    profile.chain_discriminant,
-                                    chain_discriminant.value()
-                                )),
-                            );
-                            chain_discriminant
-                        }
-                    }
-                } else {
-                    emitter.emit(
-                        Report::new(ParseError::InvalidAccountProfile {
-                            profile: profile_name.to_owned(),
-                        })
-                        .attach(format!(
-                            "supported account profiles: {}",
-                            network_profile_names()
-                        )),
-                    );
-                    chain_discriminant
-                }
-            }
-            None => chain_discriminant,
-        };
+        let torii_api_url = super::normalize_torii_api_url(torii_url.into_value());
+        let account_chain_discriminant =
+            resolve_account_network_context(profile.as_deref(), chain_discriminant, &mut emitter);
         let (public_key, public_key_origin) = public_key.into_tuple();
         let private_key = resolve_account_private_key(private_key, private_key_file, &mut emitter);
-        if !valid_account_domain_scope_literal(&domain_literal) {
-            emitter.emit(Report::new(ParseError::InvalidAccountDomain {
-                value: domain_literal.clone(),
-            }));
-        }
         let key_pair = private_key.and_then(|(private_key, private_key_origin)| {
             KeyPair::new(public_key.clone(), private_key)
                 .attach(ConfigValueAndOrigin::new("[REDACTED]", public_key_origin))
@@ -489,12 +451,14 @@ impl Root {
         emitter.into_result()?;
         let network_id =
             network_id.expect("network identity should be valid when emitter succeeds");
+        let account_chain_discriminant = account_chain_discriminant
+            .expect("account network context should be valid when emitter succeeds");
         Ok((
             super::Config {
                 chain: chain_id,
                 network_id,
                 account: account_id,
-                account_chain_discriminant: chain_discriminant.into_value(),
+                account_chain_discriminant,
                 key_pair: key_pair.unwrap(),
                 torii_api_url,
                 basic_auth,
@@ -513,12 +477,13 @@ impl Root {
     }
 }
 /// Account parameters for building the default signer identity.
+///
+/// The network context is explicit: set `profile` for a public network or
+/// `chain_discriminant` for any other network. Omitting both is a parse error.
 #[derive(Debug, Clone, ReadConfig)]
 pub struct Account {
-    /// Dataspace or domain.dataspace scope used for account alias operations.
-    #[config(env = "ACCOUNT_DOMAIN")]
-    pub domain: String,
-    /// Public network profile used to derive the I105 chain discriminant.
+    /// Public network profile (`taira` or `minamoto`) that determines the I105 chain
+    /// discriminant.
     #[config(env = "ACCOUNT_PROFILE")]
     pub profile: Option<String>,
     /// Public key of the account.
@@ -530,12 +495,12 @@ pub struct Account {
     /// Owner-held file containing the account's canonical private key.
     #[config(env = "ACCOUNT_PRIVATE_KEY_FILE")]
     pub private_key_file: Option<WithOrigin<PathBuf>>,
-    /// I105 chain discriminant used when parsing and rendering account literals.
-    #[config(
-        env = "ACCOUNT_CHAIN_DISCRIMINANT",
-        default = "iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT"
-    )]
-    pub chain_discriminant: WithOrigin<u16>,
+    /// Explicit I105 chain discriminant used when parsing and rendering account literals.
+    ///
+    /// Required for networks without a public `profile`; with a profile it must match the
+    /// profile's discriminant. It has no default.
+    #[config(env = "ACCOUNT_CHAIN_DISCRIMINANT")]
+    pub chain_discriminant: Option<WithOrigin<u16>>,
 }
 /// Transaction defaults used by the client.
 #[derive(Debug, Clone, ReadConfig)]
@@ -660,8 +625,11 @@ impl fmt::Debug for MusubiPublication {
 pub struct MusubiPublicationProviderGateway {
     /// Lowercase hexadecimal public `SoraFS` provider identifier.
     pub provider_id: String,
-    /// Provider-specific authenticated readback HTTPS base URL.
+    /// Authenticated private readback HTTPS base URL; providers may share a service.
     pub url: String,
+    /// Exact provider management origin for account-signed attestation inventory reads.
+    /// HTTPS is required except for an explicitly selected numeric loopback HTTP origin.
+    pub attestation_url: String,
 }
 impl fmt::Debug for MusubiPublicationProviderGateway {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -803,18 +771,11 @@ mod tests {
                 crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             )),
             account: Account {
-                domain: "wonderland.universal".to_owned(),
-                profile: Some(iroha_torii_shared::NETWORK_PROFILE_MINAMOTO.to_owned()),
+                profile: None,
                 public_key: WithOrigin::inline(key_pair.public_key().clone()),
                 private_key: Some(WithOrigin::inline(key_pair.private_key().clone())),
                 private_key_file: None,
-                chain_discriminant: WithOrigin::new(
-                    iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
-                    ParameterOrigin::default(iroha_config_base::ParameterId::from([
-                        "account",
-                        "chain_discriminant",
-                    ])),
-                ),
+                chain_discriminant: Some(WithOrigin::inline(777)),
             },
             transaction: Transaction {
                 time_to_live_ms: WithOrigin::inline(DurationMs::from(ttl)),
@@ -920,19 +881,64 @@ mod tests {
         assert_eq!(config.transaction_ttl, ttl);
         assert_eq!(config.transaction_status_timeout, timeout);
     }
-    #[test]
-    fn parse_preserves_account_chain_discriminant() {
+    fn parse_errors(root: Root) -> Vec<ParseError> {
+        root.parse()
+            .expect_err("configuration should be rejected")
+            .frames()
+            .filter_map(|frame| frame.downcast_ref::<ParseError>())
+            .cloned()
+            .collect()
+    }
+    fn with_network_context(profile: Option<&str>, explicit: Option<u16>) -> Root {
         let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
-        root.account.profile = None;
-        root.account.chain_discriminant = WithOrigin::inline(777);
-        let config = root.parse().expect("configuration should be valid");
+        root.account.profile = profile.map(str::to_owned);
+        root.account.chain_discriminant = explicit.map(WithOrigin::inline);
+        root
+    }
+    #[test]
+    fn parse_rejects_missing_account_network_context() {
+        for profile in [None, Some(""), Some("  ")] {
+            assert_eq!(
+                parse_errors(with_network_context(profile, None)),
+                [ParseError::MissingAccountNetworkContext],
+                "{profile:?} must not select a default network"
+            );
+        }
+    }
+    #[test]
+    fn parse_preserves_explicit_account_chain_discriminant() {
+        let config = with_network_context(None, Some(777))
+            .parse()
+            .expect("an explicit discriminant is a complete network context");
         assert_eq!(config.account_chain_discriminant, 777);
     }
     #[test]
     fn parse_uses_account_profile_chain_discriminant() {
-        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
-        root.account.profile = Some(iroha_torii_shared::NETWORK_PROFILE_TAIRA.to_owned());
-        let config = root.parse().expect("configuration should be valid");
+        for (profile, expected) in [
+            (
+                iroha_torii_shared::NETWORK_PROFILE_TAIRA,
+                iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT,
+            ),
+            (
+                iroha_torii_shared::NETWORK_PROFILE_MINAMOTO,
+                iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
+            ),
+            ("Taira", iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT),
+        ] {
+            let config = with_network_context(Some(profile), None)
+                .parse()
+                .expect("a public profile is a complete network context");
+            assert_eq!(config.account_chain_discriminant, expected, "{profile}");
+        }
+    }
+    #[test]
+    fn parse_accepts_matching_account_profile_and_chain_discriminant() {
+        let config = with_network_context(
+            Some(iroha_torii_shared::NETWORK_PROFILE_TAIRA),
+            Some(iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT),
+        )
+        .parse()
+        .expect("a matching explicit discriminant should be accepted");
         assert_eq!(
             config.account_chain_discriminant,
             iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT
@@ -940,61 +946,35 @@ mod tests {
     }
     #[test]
     fn parse_rejects_account_profile_discriminant_mismatch() {
-        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
-        root.account.profile = Some(iroha_torii_shared::NETWORK_PROFILE_TAIRA.to_owned());
-        root.account.chain_discriminant = WithOrigin::inline(753);
-        let err = root
-            .parse()
-            .expect_err("profile/discriminant mismatch should be rejected");
-        let parse_errors: Vec<_> = err
-            .frames()
-            .filter_map(|frame| frame.downcast_ref::<ParseError>())
-            .collect();
-        assert!(
-            parse_errors.iter().any(|error| {
-                matches!(
-                    error,
-                    ParseError::AccountProfileDiscriminantMismatch {
-                        profile,
-                        expected,
-                        actual
-                    } if profile == iroha_torii_shared::NETWORK_PROFILE_TAIRA
-                        && *expected == iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT
-                        && *actual == 753
-                )
-            }),
-            "expected profile mismatch error, found {parse_errors:?}"
-        );
-    }
-    #[test]
-    fn parse_uses_default_account_chain_discriminant_without_profile() {
-        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
-        root.account.profile = None;
-        let config = root.parse().expect("configuration should be valid");
         assert_eq!(
-            config.account_chain_discriminant,
-            iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT
+            parse_errors(with_network_context(
+                Some(iroha_torii_shared::NETWORK_PROFILE_TAIRA),
+                Some(753),
+            )),
+            [ParseError::AccountProfileDiscriminantMismatch {
+                profile: iroha_torii_shared::NETWORK_PROFILE_TAIRA.to_owned(),
+                expected: iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT,
+                actual: 753,
+            }]
         );
     }
     #[test]
     fn parse_rejects_unknown_account_profile() {
-        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
-        root.account.profile = Some("unknownnet".to_owned());
-        let err = root
-            .parse()
-            .expect_err("unknown profile should be rejected");
-        let parse_errors: Vec<_> = err
-            .frames()
-            .filter_map(|frame| frame.downcast_ref::<ParseError>())
-            .collect();
-        assert!(
-            parse_errors.iter().any(|error| {
-                matches!(
-                    error,
-                    ParseError::InvalidAccountProfile { profile } if profile == "unknownnet"
-                )
-            }),
-            "expected invalid profile error, found {parse_errors:?}"
+        for explicit in [None, Some(777)] {
+            assert_eq!(
+                parse_errors(with_network_context(Some("unknownnet"), explicit)),
+                [ParseError::InvalidAccountProfile {
+                    profile: "unknownnet".to_owned(),
+                }],
+                "explicit discriminant {explicit:?}"
+            );
+        }
+    }
+    #[test]
+    fn parse_rejects_zero_account_chain_discriminant() {
+        assert_eq!(
+            parse_errors(with_network_context(None, Some(0))),
+            [ParseError::ZeroAccountChainDiscriminant]
         );
     }
     #[test]
@@ -1021,32 +1001,5 @@ mod tests {
             "expected `ParseError::TxTimeoutVsTtl`, found {parse_errors:?}"
         );
         assert!(format!("{err:?}").contains("transaction status timeout must not exceed TTL"));
-    }
-    #[test]
-    fn parse_accepts_dataspace_account_domain_scope() {
-        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
-        root.account.domain = "wonderland".to_owned();
-        let config = root
-            .parse()
-            .expect("bare dataspace account scope should be accepted");
-        assert_eq!(config.chain.as_str(), "test-chain");
-    }
-    #[test]
-    fn parse_rejects_invalid_account_domain_scope_without_panicking() {
-        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
-        root.account.domain = "wonderland universal".to_owned();
-        let err = root
-            .parse()
-            .expect_err("invalid account scope should be rejected");
-        let parse_errors: Vec<_> = err
-            .frames()
-            .filter_map(|frame| frame.downcast_ref::<ParseError>())
-            .collect();
-        assert!(
-            parse_errors
-                .iter()
-                .any(|error| matches!(error, ParseError::InvalidAccountDomain { value } if value == "wonderland universal")),
-            "expected `ParseError::InvalidAccountDomain`, found {parse_errors:?}"
-        );
     }
 }

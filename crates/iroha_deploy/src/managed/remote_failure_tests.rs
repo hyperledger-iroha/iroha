@@ -50,6 +50,33 @@ fn preparation_recovery_and_native_finality_have_distinct_safe_codes() {
 }
 
 #[test]
+fn retained_bootstrap_failures_preserve_unresolved_journals_without_signed_terminal_claims() {
+    for reason in [
+        ManagedBootstrapFailure::RetainedMaterial,
+        ManagedBootstrapFailure::Cancelled,
+        ManagedBootstrapFailure::TransitionPending,
+        ManagedBootstrapFailure::SignedUnresolved,
+        ManagedBootstrapFailure::AuthorizationExpired,
+        ManagedBootstrapFailure::PayloadExpired,
+        ManagedBootstrapFailure::EnrollmentExpired,
+        ManagedBootstrapFailure::EnrollmentObservationExpired,
+        ManagedBootstrapFailure::EnrollmentPredecessorChanged,
+        ManagedBootstrapFailure::ProfileExpired,
+        ManagedBootstrapFailure::EpochLimit,
+        ManagedBootstrapFailure::ReplacementLimit,
+    ] {
+        let failure = ManagedAttachmentFailure::from(Error::Bootstrap(reason));
+        assert_eq!(failure, ManagedAttachmentFailure::Bootstrap(reason));
+        assert!(!failure.is_terminal_operation());
+        let original = norito::json::to_vec(&failure).unwrap();
+        assert_eq!(
+            norito::json::from_slice::<ManagedAttachmentFailure>(&original).unwrap(),
+            failure,
+        );
+    }
+}
+
+#[test]
 fn public_failure_codes_roundtrip_and_reject_arbitrary_text() {
     for failure in [
         ManagedAttachmentFailure::PreparationFailed,

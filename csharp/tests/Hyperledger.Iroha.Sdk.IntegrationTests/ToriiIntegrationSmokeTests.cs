@@ -1,5 +1,6 @@
 using System.Net;
 using Hyperledger.Iroha.Address;
+using Hyperledger.Iroha.Query;
 using Hyperledger.Iroha.Torii;
 using Hyperledger.Iroha.Http;
 
@@ -127,75 +128,83 @@ public sealed class ToriiIntegrationSmokeTests
         var activeAbi = await client.GetRuntimeAbiActiveAsync(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(1, activeAbi.AbiVersion);
 
-        var accounts = await client.GetAccountsAsync(limit: 5, cancellationToken: TestContext.Current.CancellationToken);
+        var accounts = await client.Accounts.GetPageAsync(
+            new ListQuery { Limit = 5, IncludeTotal = true },
+            TestContext.Current.CancellationToken);
         Assert.NotEmpty(accounts.Items);
-        Assert.True(accounts.Total >= accounts.Items.Count);
+        Assert.True(accounts.Total >= (ulong)accounts.Items.Length);
 
         var qrSnapshot = await client.GetExplorerAccountQrAsync(accounts.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(accounts.Items[0].Id, qrSnapshot.CanonicalId);
         Assert.Contains("<svg", qrSnapshot.Svg, StringComparison.Ordinal);
 
-        var explorerAccounts = await client.GetExplorerAccountsAsync(new ToriiExplorerAccountsQuery
+        var explorerAccounts = await client.ExplorerAccounts.GetPageAsync(new ListQuery
         {
             Limit = 1,
         }, cancellationToken: TestContext.Current.CancellationToken);
-        Assert.True(explorerAccounts.Items.Count <= explorerAccounts.Pagination.Limit);
-        if (explorerAccounts.Items.Count > 0)
+        Assert.True(explorerAccounts.Items.Length <= 1);
+        Assert.Null(explorerAccounts.Total);
+        if (explorerAccounts.Items.Length > 0)
         {
             var explorerAccount = await client.GetExplorerAccountAsync(explorerAccounts.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(explorerAccounts.Items[0].Id, explorerAccount.Id);
         }
 
-        var explorerDomains = await client.GetExplorerDomainsAsync(new ToriiExplorerDomainsQuery
+        var explorerDomains = await client.ExplorerDomains.GetPageAsync(new ListQuery
         {
             Limit = 1,
         }, cancellationToken: TestContext.Current.CancellationToken);
-        Assert.True(explorerDomains.Items.Count <= explorerDomains.Pagination.Limit);
-        if (explorerDomains.Items.Count > 0)
+        Assert.True(explorerDomains.Items.Length <= 1);
+        Assert.Null(explorerDomains.Total);
+        if (explorerDomains.Items.Length > 0)
         {
             var explorerDomain = await client.GetExplorerDomainAsync(explorerDomains.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(explorerDomains.Items[0].Id, explorerDomain.Id);
         }
 
-        var explorerAssetDefinitions = await client.GetExplorerAssetDefinitionsAsync(new ToriiExplorerAssetDefinitionsQuery
+        var explorerAssetDefinitions = await client.ExplorerAssetDefinitions.GetPageAsync(new ListQuery
         {
             Limit = 1,
         }, cancellationToken: TestContext.Current.CancellationToken);
-        Assert.True(explorerAssetDefinitions.Items.Count <= explorerAssetDefinitions.Pagination.Limit);
-        if (explorerAssetDefinitions.Items.Count > 0)
+        Assert.True(explorerAssetDefinitions.Items.Length <= 1);
+        Assert.Null(explorerAssetDefinitions.Total);
+        if (explorerAssetDefinitions.Items.Length > 0)
         {
             var explorerAssetDefinition = await client.GetExplorerAssetDefinitionAsync(explorerAssetDefinitions.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(explorerAssetDefinitions.Items[0].Id, explorerAssetDefinition.Id);
         }
 
-        var explorerAssets = await client.GetExplorerAssetsAsync(new ToriiExplorerAssetsQuery
+        var explorerAssets = await client.ExplorerAssets.GetPageAsync(new ListQuery
         {
             Limit = 1,
         }, cancellationToken: TestContext.Current.CancellationToken);
-        Assert.True(explorerAssets.Items.Count <= explorerAssets.Pagination.Limit);
-        if (explorerAssets.Items.Count > 0)
+        Assert.True(explorerAssets.Items.Length <= 1);
+        Assert.Null(explorerAssets.Total);
+        if (explorerAssets.Items.Length > 0)
         {
             var explorerAsset = await client.GetExplorerAssetAsync(explorerAssets.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(explorerAssets.Items[0].Id, explorerAsset.Id);
         }
 
-        var explorerNfts = await client.GetExplorerNftsAsync(new ToriiExplorerNftsQuery
+        var explorerNfts = await client.ExplorerNfts.GetPageAsync(new ListQuery
         {
             Limit = 1,
         }, cancellationToken: TestContext.Current.CancellationToken);
-        Assert.True(explorerNfts.Items.Count <= explorerNfts.Pagination.Limit);
-        if (explorerNfts.Items.Count > 0)
+        Assert.True(explorerNfts.Items.Length <= 1);
+        Assert.Null(explorerNfts.Total);
+        if (explorerNfts.Items.Length > 0)
         {
             var explorerNft = await client.GetExplorerNftAsync(explorerNfts.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(explorerNfts.Items[0].Id, explorerNft.Id);
         }
 
-        var explorerRwas = await client.GetExplorerRwasAsync(new ToriiExplorerRwasQuery
+        var explorerRwas = await client.ExplorerRwas.GetPageAsync(new ListQuery
         {
             Limit = 1,
         }, cancellationToken: TestContext.Current.CancellationToken);
-        Assert.True(explorerRwas.Items.Count <= explorerRwas.Pagination.Limit);
-        if (explorerRwas.Items.Count > 0)
+        Assert.True(explorerRwas.Items.Length <= 1);
+        Assert.Null(explorerRwas.Total);
+        if (explorerRwas.Items.Length > 0)
         {
             var explorerRwa = await client.GetExplorerRwaAsync(explorerRwas.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(explorerRwas.Items[0].Id, explorerRwa.Id);
@@ -220,9 +229,9 @@ public sealed class ToriiIntegrationSmokeTests
         Assert.Equal(SmokeUaidLiteral, bindings.Uaid);
         Assert.True(bindings.Dataspaces.Count >= 0);
 
-        var manifests = await client.GetUaidManifestsAsync(SmokeUaidLiteral, cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(SmokeUaidLiteral, manifests.Uaid);
-        Assert.True(manifests.Total >= (ulong)manifests.Manifests.Count);
+        var manifests = await client.UaidManifests(SmokeUaidLiteral).GetPageAsync(new Hyperledger.Iroha.Query.ListQuery { IncludeTotal = true }, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.All(manifests.Items, row => Assert.Equal(SmokeUaidLiteral, row.Manifest["uaid"]!.GetValue<string>()));
+        Assert.True(manifests.Total >= (ulong)manifests.Items.Length);
 
         var aliases = await client.LookupAliasesByAccountAsync(accounts.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(aliases);

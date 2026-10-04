@@ -104,6 +104,18 @@ pub(crate) enum LeafError {
     /// that validator's scratch/error custody remains separate from codec custody.
     #[error("State table source validation failed: {0}")]
     SourceValidation(String),
+    /// Exact domain-owner derivation failed or its local capture must be deferred.
+    #[error("State domain-owner derivation failed: {0}")]
+    DomainOwnership(#[from] super::domain_ownership::DomainOwnershipError),
+    /// Alias ownership, primary labels or reverse membership failed at the retained cut.
+    #[error("State account-alias derivation failed: {0}")]
+    AliasOwnership(#[from] super::account_alias_ownership::AliasOwnershipError),
+    /// Original account identity/index checks refused this native cut.
+    #[error(transparent)]
+    IdentityOwnership(#[from] super::account_identity_ownership::IdentityOwnershipError),
+    /// Original NFT or RWA rows and grouped indexes disagree or cannot be retained.
+    #[error(transparent)]
+    GroupedOwnership(#[from] super::grouped_ownership::GroupedOwnershipError),
     /// A local allocation was refused before a canonical table frame was written.
     #[error("State table canonical frame allocation failed")]
     Allocation,
@@ -204,6 +216,10 @@ fn fold_schema(accumulator: Hash, field: &Field, key: Schema, value: Schema) -> 
     ])
 }
 
+#[cfg(test)]
+#[path = "leaf/overflow_pause.rs"]
+pub(in crate::state) mod overflow_pause;
+
 struct BoundedWriter<'a> {
     inner: &'a mut dyn Write,
     remaining: usize,
@@ -214,6 +230,8 @@ impl Write for BoundedWriter<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         if *self.exceeded || bytes.len() > self.remaining {
             *self.exceeded = true;
+            #[cfg(test)]
+            overflow_pause::observe_overflow();
             return Err(io::ErrorKind::InvalidData.into());
         }
         let written = self.inner.write(bytes)?;

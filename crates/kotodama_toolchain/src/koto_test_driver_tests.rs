@@ -160,19 +160,15 @@ fn compiler_owned_test_callables_preserve_artifact_verification() {
             .iter()
             .find(|callable| callable.entry_pc == relative)
             .expect("each private test root has an authenticated callable descriptor");
-        assert!(callable.argument_words.is_empty());
-        assert_eq!(callable.result_words, [ivm_abi::call::CallWordV1::Unit]);
+        assert_eq!(callable.arguments, ivm_abi::call::CallSchemaV1::empty());
+        assert_eq!(callable.results, ivm_abi::call::CallSchemaV1::unit());
     }
     let mut vm = IVM::new(u64::MAX);
     vm.load_koto_test_harness(&compiled.suite.program)
         .expect("authenticated test artifact loads");
     let error =
         ivm::prepare_contract(Arc::from(suite_program)).expect_err("test image cannot deploy");
-    assert!(
-        error
-            .to_string()
-            .contains("expected IVM 1.1 contract artifact")
-    );
+    assert!(error.to_string().contains("missing required CNTR section"));
     let mut invalid_interface = interface.clone();
     invalid_interface.callables[0].frame_bytes |= 1;
     assert!(
@@ -625,8 +621,7 @@ fn machine_reports_preserve_failure_details() {
         elapsed: Duration::from_millis(2),
         passed: false,
         failure: Some("expected rejection".to_owned()),
-        trace_pcs: Vec::new(),
-        delta_trace: Vec::new(),
+        trace: None,
     }];
     let json = render_test_json(Path::new("demo.ko"), &results, 42).expect("JSON report");
     let junit = render_test_junit(Path::new("demo.ko"), &results, 42);
@@ -875,7 +870,9 @@ fn execute_suite_supports_native_contract_flow_helpers() {
     host.syscall(TEST_SYSCALL_EXPECT_REJECT_AS, &mut vm)
         .expect("expect reject");
     assert!(
-        !host.supplemental_trace_pcs().is_empty(),
+        host.supplemental_trace
+            .as_ref()
+            .is_some_and(|trace| !trace.pcs().is_empty()),
         "expected coverage trace from nested entrypoint execution"
     );
 }
@@ -1356,8 +1353,8 @@ fn execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test() {
             suite_metadata.metadata.version_major,
             suite_metadata.metadata.version_minor,
         ),
-        (1, 0),
-        "the compiler-owned test suite must remain a generic IVM 1.0 image"
+        (1, 1),
+        "the compiler-owned test suite must remain a generic IVM 1.1 image"
     );
     let runtime_metadata = ProgramMetadata::parse(runtime.program.artifact())
         .expect("parse deployable runtime metadata");
@@ -1374,11 +1371,11 @@ fn execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test() {
     let production_error = ivm::prepare_contract(std::sync::Arc::from(
         compiled.suite.program.prepared().artifact(),
     ))
-    .expect_err("production admission must reject the generic IVM 1.0 test harness");
+    .expect_err("production admission must reject the generic IVM 1.1 test harness");
     assert!(
         production_error
             .to_string()
-            .contains("expected IVM 1.1 contract artifact"),
+            .contains("missing required CNTR section"),
         "unexpected production-admission failure: {production_error}"
     );
     let results = execute_suite(&compiled, TraceMode::PcOnly, 2).expect("execute suite");
@@ -1401,7 +1398,7 @@ fn execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test() {
     assert!(
         results
             .iter()
-            .any(|result| !result.trace_pcs.is_empty() || !result.delta_trace.is_empty()),
+            .any(|result| result.trace.as_ref().is_some_and(|trace| !trace.is_empty())),
         "expected compiled helpers to emit execution traces"
     );
 }

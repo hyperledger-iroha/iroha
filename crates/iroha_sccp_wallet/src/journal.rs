@@ -2,7 +2,7 @@
 //!
 //! Every flow journals its raw evidence and state transitions before it submits anything, so a
 //! crashed flow resumes where it stopped and never blindly resubmits. The journal reuses
-//! `iroha_wallet::operation_journal::Journal` for every step: one owner-private directory whose
+//! `iroha_operation_journal::Journal` for every step: one owner-private directory whose
 //! records are written once, atomically (temporary file, `fsync`, hard link) and owner-only,
 //! under an exclusive lock.
 //!
@@ -47,20 +47,20 @@ use std::{
 };
 
 use iroha_data_model::{NetworkId, bridge::SccpNetworkV1};
-use iroha_wallet::operation_journal::Journal;
+use iroha_operation_journal::Journal;
 use norito::json;
 
 /// Prefix of step directory names.
 pub const STEP_DIR_PREFIX: &str = "step-";
 /// Most steps of one flow (six decimal digits).
 pub const MAX_STEPS: u32 = 999_999;
-/// Largest journal record read back (the wallet journal's own bound).
+/// Largest journal record read back (the shared operation journal's own bound).
 pub const MAX_RECORD_BYTES: u64 = 4 * 1024 * 1024;
 
 const OPERATION_FILE: &str = "operation.json";
 const SUBMISSION_FILE: &str = "submission.json";
 const APPLIED_FILE: &str = "applied.json";
-/// Lock file `iroha_wallet::operation_journal::Journal::create` makes right after the directory.
+/// Lock file `iroha_operation_journal::Journal::create` makes right after the directory.
 const LOCK_FILE: &str = "lock";
 
 /// Kind of a resumable flow.
@@ -303,8 +303,8 @@ pub enum JournalError {
     Inconsistent(String),
     /// A record is not canonical Norito JSON of its type.
     Malformed(PathBuf),
-    /// The underlying wallet operation journal refused an operation.
-    Wallet(String),
+    /// The underlying shared operation journal refused an operation.
+    Storage(String),
     /// Owner-only journals require Unix permissions.
     Unsupported,
 }
@@ -318,7 +318,7 @@ impl fmt::Display for JournalError {
                 "SCCP journal path `{}` must be an owner-only, non-symlink entry of the current user",
                 path.display()
             ),
-            Self::Inconsistent(message) | Self::Wallet(message) => {
+            Self::Inconsistent(message) | Self::Storage(message) => {
                 write!(formatter, "SCCP journal: {message}")
             }
             Self::Malformed(path) => write!(
@@ -342,8 +342,8 @@ fn io(context: &'static str) -> impl FnOnce(std::io::Error) -> JournalError {
     }
 }
 
-fn wallet(error: impl fmt::Display) -> JournalError {
-    JournalError::Wallet(format!("{error:#}"))
+fn storage(error: impl fmt::Display) -> JournalError {
+    JournalError::Storage(format!("{error:#}"))
 }
 
 #[cfg(unix)]
@@ -707,7 +707,7 @@ impl SccpFlowJournal {
         }
         self.check_record(record, count)?;
         SccpJournalStep::install(
-            Journal::create(&self.step_dir(count)).map_err(wallet)?,
+            Journal::create(&self.step_dir(count)).map_err(storage)?,
             record,
         )
     }
@@ -721,10 +721,10 @@ impl SccpFlowJournal {
     fn reclaim_empty_step(&self, index: u32) -> Result<Journal, JournalError> {
         let dir = self.step_dir(index);
         match fs::symlink_metadata(dir.join(LOCK_FILE)) {
-            Ok(_) => Journal::open(&dir).map_err(wallet),
+            Ok(_) => Journal::open(&dir).map_err(storage),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 fs::remove_dir(&dir).map_err(io("remove an unprepared step"))?;
-                Journal::create(&dir).map_err(wallet)
+                Journal::create(&dir).map_err(storage)
             }
             Err(error) => Err(io("inspect a step lock")(error)),
         }
@@ -734,7 +734,7 @@ impl SccpFlowJournal {
     ///
     /// # Errors
     ///
-    /// Returns a wallet-journal, consistency or format error; an [`SccpStepStateV1::Empty`] step
+    /// Returns an operation-journal, consistency or format error; an [`SccpStepStateV1::Empty`] step
     /// is refused (append its record again instead).
     pub fn open_step(&self, index: u32) -> Result<SccpJournalStep, JournalError> {
         if self.status(index)?.state == SccpStepStateV1::Empty {
@@ -742,8 +742,8 @@ impl SccpFlowJournal {
                 "step {index} was never prepared; journal it again first"
             )));
         }
-        let journal = Journal::open(&self.step_dir(index)).map_err(wallet)?;
-        let record: SccpJournalRecordV1 = journal.read_operation().map_err(wallet)?;
+        let journal = Journal::open(&self.step_dir(index)).map_err(storage)?;
+        let record: SccpJournalRecordV1 = journal.read_operation().map_err(storage)?;
         self.check_record(&record, index)?;
         Ok(SccpJournalStep { journal, record })
     }
@@ -759,7 +759,7 @@ pub struct SccpJournalStep {
 impl SccpJournalStep {
     /// Install `record` as the prepared record of the locked step `journal`.
     fn install(journal: Journal, record: &SccpJournalRecordV1) -> Result<Self, JournalError> {
-        journal.write_operation(record).map_err(wallet)?;
+        journal.write_operation(record).map_err(storage)?;
         Ok(Self {
             journal,
             record: record.clone(),
@@ -777,29 +777,33 @@ impl SccpJournalStep {
     ///
     /// # Errors
     ///
-    /// Returns a wallet-journal error.
+    /// Returns an operation-journal error.
     pub fn begin_submission(&self) -> Result<bool, JournalError> {
-        self.journal.record_submission(&self.record).map_err(wallet)
+        self.journal
+            .record_submission(&self.record)
+            .map_err(storage)
     }
 
     /// Whether the pre-dispatch marker exists.
     ///
     /// # Errors
     ///
-    /// Returns a wallet-journal error.
+    /// Returns an operation-journal error.
     pub fn submission_recorded(&self) -> Result<bool, JournalError> {
         self.journal
             .submission_recorded(&self.record)
-            .map_err(wallet)
+            .map_err(storage)
     }
 
     /// Record the step's outcome, once (an identical rewrite is accepted).
     ///
     /// # Errors
     ///
-    /// Returns a wallet-journal error, including for a different outcome.
+    /// Returns an operation-journal error, including for a different outcome.
     pub fn complete(&self, outcome: &SccpJournalOutcomeV1) -> Result<(), JournalError> {
-        self.journal.write_applied_evidence(outcome).map_err(wallet)
+        self.journal
+            .write_applied_evidence(outcome)
+            .map_err(storage)
     }
 }
 
@@ -990,7 +994,7 @@ mod tests {
         assert!(
             matches!(
                 flow_journal.append(&record(&network, 1)),
-                Err(JournalError::Wallet(_))
+                Err(JournalError::Storage(_))
             ),
             "a step another process holds is not reclaimed"
         );

@@ -321,6 +321,7 @@ async fn openapi_enforces_token_policy() {
     assert_eq!(ok.status(), axum::http::StatusCode::OK);
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn soracloud_status_handler_returns_snapshot_sections() {
     let mut app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
     Arc::get_mut(&mut app)
@@ -392,6 +393,7 @@ async fn soracloud_status_handler_returns_snapshot_sections() {
         Some("embedded_runtime_manager")
     );
 }
+#[cfg(feature = "app_api")]
 async fn soracloud_status_routing_for_test(
     nexus: iroha_config::parameters::actual::Nexus,
 ) -> norito::json::Map {
@@ -427,9 +429,11 @@ async fn soracloud_status_routing_for_test(
         .expect("routing section")
         .clone()
 }
+#[cfg(feature = "app_api")]
 fn soracloud_routing_count(routing: &norito::json::Map, field: &str) -> Option<u64> {
     routing.get(field).and_then(norito::json::Value::as_u64)
 }
+#[cfg(feature = "app_api")]
 fn soracloud_routing_lane_ids(routing: &norito::json::Map, field: &str) -> Option<Vec<u64>> {
     routing
         .get(field)
@@ -442,6 +446,7 @@ fn soracloud_routing_lane_ids(routing: &norito::json::Map, field: &str) -> Optio
         })
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn soracloud_status_routing_counts_only_active_autoscale_capacity_lanes() {
     let future_lane = LaneId::new(1);
     let mut future_autoscale_lane = iroha_data_model::nexus::LaneConfig {
@@ -509,6 +514,7 @@ async fn soracloud_status_routing_counts_only_active_autoscale_capacity_lanes() 
     );
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn soracloud_status_routing_reports_sparse_configured_lane_namespace() {
     let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
         NonZeroU32::new(4).expect("nonzero lane namespace"),
@@ -553,6 +559,7 @@ async fn soracloud_status_routing_reports_sparse_configured_lane_namespace() {
     );
 }
 #[test]
+#[cfg(feature = "app_api")]
 fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
     let mut world = seed_public_soracloud_world();
     let service_name: iroha_model_base::name::Name =
@@ -833,6 +840,7 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
     assert!(topology.get("backend_mix").is_none());
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn soracloud_runtime_status_sections_report_degraded_for_hydrating_snapshots() {
     let mut app = mk_app_state_for_tests();
     Arc::get_mut(&mut app)
@@ -858,6 +866,7 @@ async fn soracloud_runtime_status_sections_report_degraded_for_hydrating_snapsho
     );
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn soracloud_runtime_status_sections_report_unavailable_without_runtime() {
     let app = mk_app_state_for_tests();
     let (service_health, runtime_pressure, runtime_manager) =
@@ -882,6 +891,7 @@ async fn soracloud_runtime_status_sections_report_unavailable_without_runtime() 
     );
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn proof_rate_limit_sets_retry_after_header() {
     let mut app = mk_app_state_for_tests();
     {
@@ -1138,6 +1148,7 @@ async fn telemetry_params_and_bls_keys_ok() {
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn app_api_vk_and_proofs_lists_ok() {
     let app = mk_app_state_for_tests();
     let headers = HeaderMap::new();
@@ -1176,6 +1187,7 @@ async fn app_api_vk_and_proofs_lists_ok() {
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn app_api_get_by_id_not_found_returns_404() {
     let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
     let key_pair = checked_torii_test_ed25519_keypair(0xc1, "contract artifact read fixture");
@@ -2026,6 +2038,7 @@ async fn contract_route_mounts_authenticate_mutation_and_compute_before_decode()
     fixture.shutdown().await;
 }
 #[tokio::test]
+#[cfg(feature = "app_api")]
 async fn contract_compute_routes_bind_authenticated_authority_before_work() {
     use axum::{
         body::Body,

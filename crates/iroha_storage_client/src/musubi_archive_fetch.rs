@@ -5,6 +5,8 @@
 //! manifest and every page of the storage plan against the immutable Musubi
 //! archive commitment, mints a short-lived provider-bound stream token, and
 //! regenerates the canonical CAR through a bounded reader.
+use sorafs_car::gateway::AuthenticatedGeneratedLocalProviderTransportV1;
+pub use sorafs_car::gateway::GeneratedLocalProviderTransportV1;
 use std::{
     collections::{BTreeMap, HashSet},
     fmt, fs,
@@ -175,8 +177,11 @@ impl std::error::Error for MusubiArchiveRuntimeErrorV1 {}
 struct ProviderRuntimeV1 {
     provider: ProviderId,
     base_url: Url,
-    credential: ProviderCredentialV1,
+    // Original intent only. Every local client/session additionally needs the native join.
+    local_transport: Option<GeneratedLocalProviderTransportV1>,
     http: HttpClient,
+    // Drop transport graphs before the callback and any original allocation custody it holds.
+    credential: ProviderCredentialV1,
 }
 #[derive(Clone)]
 struct PreparedProviderRuntimeV1 {
@@ -247,13 +252,14 @@ struct GatewaySessionV1 {
 }
 /// Authenticated production `SoraFS` transport with bounded, pinned provider clients.
 pub struct AuthenticatedMusubiArchiveFetchClientV1 {
-    account_registry: Option<Arc<AccountRegistryV1>>,
     providers: BTreeMap<ProviderId, ProviderRuntimeV1>,
     network_id: NetworkId,
     client_id: String,
     request_timeout: Duration,
     prepared: BTreeMap<(ManifestDigest, ProviderId, ArchiveId), PreparedPlanV1>,
     stream_failure: Option<Arc<Mutex<Option<MusubiArchiveRuntimeErrorV1>>>>,
+    // Registry callback custody outlives every locally retained provider transport.
+    account_registry: Option<Arc<AccountRegistryV1>>,
 }
 impl fmt::Debug for AuthenticatedMusubiArchiveFetchClientV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -395,6 +401,7 @@ impl PreparedMusubiArchiveFetchConfigV1 {
                     provider: prepared.provider,
                     base_url: prepared.base_url.clone(),
                     credential: ProviderCredentialV1::Operator(operator_key_pair),
+                    local_transport: None,
                     http,
                 },
             );
@@ -417,12 +424,27 @@ impl AuthenticatedMusubiArchiveFetchClientV1 {
         self.network_id
     }
 
-    /// Canonical configured HTTPS root for one provider, without exposing runtime credentials.
-    #[must_use]
-    pub fn provider_gateway_origin(&self, provider: ProviderId) -> Option<&str> {
+    /// Resolve one canonical HTTPS root without exposing runtime credentials or fetching data.
+    ///
+    /// Account mode performs fresh native discovery and joins any generated-local original
+    /// transport before returning, even on a cold client. Operator mode returns the configured
+    /// origin whose public DNS and TLS policy were fixed when the client was constructed.
+    /// This does not create a provider client, issue a token, or request provider data.
+    /// # Errors
+    /// Refuses an unknown provider, rejected discovery, or changed original transport material.
+    pub fn resolve_provider_gateway_origin(
+        &self,
+        provider: ProviderId,
+    ) -> Result<String, MusubiArchiveRuntimeErrorV1> {
+        if let Some(registry) = &self.account_registry {
+            return registry
+                .resolve_provider(self.network_id, provider)
+                .map(|selected| selected.base_url.to_string());
+        }
         self.providers
             .get(&provider)
-            .map(|runtime| runtime.base_url.as_str())
+            .map(|runtime| runtime.base_url.to_string())
+            .ok_or_else(|| unavailable("MUSUBI_ARCHIVE_PROVIDER_NOT_CONFIGURED"))
     }
 
     /// Load only `[musubi.fetch]` from one required platform `client.toml`.
@@ -443,7 +465,7 @@ impl AuthenticatedMusubiArchiveFetchClientV1 {
     /// Build the production boundary from the typed platform-client fetch subtree.
     ///
     /// Relative operator-key paths are resolved beside `client.toml`. Every gateway is
-    /// HTTPS-only, canonical, credential-free, standard-port, and pinned to an
+    /// HTTPS-only, canonical, credential-free, nonzero-port, and pinned to an
     /// exclusively public bounded DNS answer set before this function returns.
     ///
     /// # Errors
@@ -579,29 +601,42 @@ impl GatewaySessionFactoryV1 {
             requests_per_minute,
             ttl_epoch,
             rate_limit_bytes,
+            local_transport,
         } = token;
-        let context = GatewayFetchContext::new_with_timeouts(
-            GatewayFetchConfig {
-                manifest_id_hex: hex::encode(self.pin_manifest.as_bytes()),
-                chunker_handle: self.chunker_handle.clone(),
-                manifest_envelope_b64: None,
-                client_id: Some(self.client_id.clone()),
-                expected_manifest_cid_hex: Some(self.root_cid_hex.clone()),
-                blinded_cid_b64: None,
-                salt_epoch: None,
-                expected_cache_version: None,
-            },
-            [GatewayProviderInput {
-                name: hex::encode(self.runtime.provider.as_bytes()),
-                provider_id_hex: hex::encode(self.runtime.provider.as_bytes()),
-                gateway_public_key_hex: verifying_key_hex,
-                base_url: self.runtime.base_url.as_str().to_owned(),
-                stream_token_b64: encoded,
-                privacy_events_url: None,
-            }],
-            self.request_timeout.min(Duration::from_secs(10)),
-            self.request_timeout,
-        )
+        let config = GatewayFetchConfig {
+            manifest_id_hex: hex::encode(self.pin_manifest.as_bytes()),
+            chunker_handle: self.chunker_handle.clone(),
+            manifest_envelope_b64: None,
+            client_id: Some(self.client_id.clone()),
+            expected_manifest_cid_hex: Some(self.root_cid_hex.clone()),
+            blinded_cid_b64: None,
+            salt_epoch: None,
+            expected_cache_version: None,
+        };
+        let provider_input = GatewayProviderInput {
+            name: hex::encode(self.runtime.provider.as_bytes()),
+            provider_id_hex: hex::encode(self.runtime.provider.as_bytes()),
+            gateway_public_key_hex: verifying_key_hex,
+            base_url: self.runtime.base_url.as_str().to_owned(),
+            stream_token_b64: encoded,
+            privacy_events_url: None,
+        };
+        let connect_timeout = self.request_timeout.min(Duration::from_secs(10));
+        let context = match local_transport {
+            Some(selected) => GatewayFetchContext::new_with_generated_local_transport(
+                config,
+                provider_input,
+                connect_timeout,
+                self.request_timeout,
+                &selected,
+            ),
+            None => GatewayFetchContext::new_with_timeouts(
+                config,
+                [provider_input],
+                connect_timeout,
+                self.request_timeout,
+            ),
+        }
         .map_err(|_| permanent("MUSUBI_ARCHIVE_GATEWAY_CONTEXT_INVALID"))?;
         let provider = context
             .providers()
@@ -1019,6 +1054,7 @@ fn parse_plan_page(
     })
 }
 struct StreamTokenEvidenceV1 {
+    local_transport: Option<AuthenticatedGeneratedLocalProviderTransportV1>,
     encoded: String,
     verifying_key_hex: String,
     requests_per_minute: u32,
@@ -1038,6 +1074,18 @@ fn mint_stream_token(
     }
     let nonce = random_nonce()?;
     let account_authority = account_registry::refresh_account_authority(runtime, *network_id)?;
+    // Reuse this exact fresh native result for both the mint and subsequent chunk transport.
+    let local_transport = match (&runtime.local_transport, &account_authority) {
+        (Some(original), Some(authority)) => Some(
+            original
+                .authenticate_current(authority)
+                .map_err(|_| control_integrity("MUSUBI_ARCHIVE_LOCAL_TRANSPORT_MISMATCH"))?,
+        ),
+        (Some(_), None) => {
+            return Err(control_integrity("MUSUBI_ARCHIVE_LOCAL_TRANSPORT_MISMATCH"));
+        }
+        (None, _) => None,
+    };
     if let Some(authority) = &account_authority {
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1142,6 +1190,7 @@ fn mint_stream_token(
         return Err(control_integrity("MUSUBI_ARCHIVE_TOKEN_RESPONSE_INVALID"));
     }
     Ok(StreamTokenEvidenceV1 {
+        local_transport,
         encoded,
         verifying_key_hex,
         requests_per_minute: token.body.requests_per_minute,
@@ -1293,8 +1342,9 @@ fn stream_canonical_car(
 }
 struct GatewayPayloadReaderV1 {
     runtime: tokio::runtime::Runtime,
-    sessions: GatewaySessionFactoryV1,
     session: GatewaySessionV1,
+    // Active TLS/session graphs drop before the factory's final callback custody.
+    sessions: GatewaySessionFactoryV1,
     chunks: Vec<ChunkFetchSpec>,
     next_chunk: usize,
     current: Cursor<Vec<u8>>,
@@ -1545,7 +1595,7 @@ fn parse_gateway_base_url(raw: &str) -> Result<Url, MusubiArchiveRuntimeErrorV1>
         .is_some_and(|without_slash| raw == without_slash && url.path() == "/");
     if (raw != canonical && !omitted_root_slash)
         || url.scheme() != "https"
-        || url.port_or_known_default() != Some(443)
+        || url.port_or_known_default().is_none_or(|port| port == 0)
         || !url.username().is_empty()
         || url.password().is_some()
         || url.query().is_some()
@@ -1557,7 +1607,8 @@ fn parse_gateway_base_url(raw: &str) -> Result<Url, MusubiArchiveRuntimeErrorV1>
     let host = url
         .host()
         .ok_or_else(|| permanent("MUSUBI_ARCHIVE_FETCH_GATEWAY_URL_INVALID"))?;
-    if matches!(host, Host::Ipv4(address) if !is_public_ip(IpAddr::V4(address)))
+    if matches!(host, Host::Domain(name) if name == "localhost" || name.ends_with(".localhost"))
+        || matches!(host, Host::Ipv4(address) if !is_public_ip(IpAddr::V4(address)))
         || matches!(host, Host::Ipv6(address) if !is_public_ip(IpAddr::V6(address)))
     {
         return Err(permanent("MUSUBI_ARCHIVE_FETCH_GATEWAY_URL_INVALID"));
@@ -1571,22 +1622,16 @@ fn pinned_http_client(
     let host = base_url
         .host_str()
         .ok_or_else(|| permanent("MUSUBI_ARCHIVE_FETCH_GATEWAY_URL_INVALID"))?;
-    let mut builder = HttpClient::builder()
-        .no_proxy()
-        .no_gzip()
-        .no_brotli()
-        .no_deflate()
-        .no_zstd()
-        .https_only(true)
-        .redirect(RedirectPolicy::none())
-        .retry(reqwest::retry::never())
-        .connect_timeout(request_timeout.min(Duration::from_secs(10)))
-        .timeout(request_timeout);
+    let mut builder = bounded_http_builder(request_timeout);
     if !matches!(base_url.host(), Some(Host::Ipv4(_) | Host::Ipv6(_))) {
         let deadline = Instant::now()
             .checked_add(request_timeout.min(Duration::from_secs(10)))
             .ok_or_else(|| permanent("MUSUBI_ARCHIVE_FETCH_DNS_INVALID"))?;
-        let addresses = dns::resolve(host, 443, deadline).map_err(|error| match error {
+        let port = base_url
+            .port_or_known_default()
+            .filter(|p| *p != 0)
+            .ok_or_else(|| permanent("MUSUBI_ARCHIVE_FETCH_GATEWAY_URL_INVALID"))?;
+        let addresses = dns::resolve(host, port, deadline).map_err(|error| match error {
             dns::Error::Invalid => permanent("MUSUBI_ARCHIVE_FETCH_DNS_INVALID"),
             dns::Error::Deadline => retryable("MUSUBI_ARCHIVE_FETCH_DNS_DEADLINE"),
             dns::Error::Busy | dns::Error::Unavailable => {
@@ -1598,6 +1643,31 @@ fn pinned_http_client(
     builder
         .build()
         .map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_HTTP_CLIENT_INVALID"))
+}
+fn pinned_generated_local_http_client(
+    selected: &AuthenticatedGeneratedLocalProviderTransportV1,
+    request_timeout: Duration,
+) -> Result<HttpClient, MusubiArchiveRuntimeErrorV1> {
+    selected
+        .blocking_http_client(
+            request_timeout.min(Duration::from_secs(10)),
+            request_timeout,
+        )
+        .map_err(|_| permanent("MUSUBI_ARCHIVE_LOCAL_TLS_INVALID"))
+}
+
+fn bounded_http_builder(request_timeout: Duration) -> reqwest::blocking::ClientBuilder {
+    HttpClient::builder()
+        .no_proxy()
+        .no_gzip()
+        .no_brotli()
+        .no_deflate()
+        .no_zstd()
+        .https_only(true)
+        .redirect(RedirectPolicy::none())
+        .retry(reqwest::retry::never())
+        .connect_timeout(request_timeout.min(Duration::from_secs(10)))
+        .timeout(request_timeout)
 }
 fn is_public_ip(address: IpAddr) -> bool {
     match address {
@@ -2088,8 +2158,11 @@ mod tests {
         };
         assert_eq!(client.network_id(), network_id);
         assert_eq!(
-            client.provider_gateway_origin(ProviderId::new([0x11; 32])),
-            None
+            client
+                .resolve_provider_gateway_origin(ProviderId::new([0x11; 32]))
+                .unwrap_err()
+                .code(),
+            "MUSUBI_ARCHIVE_PROVIDER_NOT_CONFIGURED"
         );
     }
     #[test]
@@ -2124,6 +2197,7 @@ mod tests {
     fn operator_headers_bind_network_path_body_and_single_freshness_tuple() {
         let operator_key_pair = KeyPair::try_random().expect("operator key");
         let runtime = ProviderRuntimeV1 {
+            local_transport: None,
             provider: ProviderId::new([0x11; 32]),
             base_url: Url::parse("https://8.8.8.8/").expect("fixed provider URL"),
             credential: ProviderCredentialV1::Operator(operator_key_pair.clone()),
@@ -2367,8 +2441,10 @@ operator_private_key_file = "provider.key"
         let client = AuthenticatedMusubiArchiveFetchClientV1::load_platform_file(&config_path)
             .expect("invalid account keys must be irrelevant to fetch configuration");
         assert_eq!(
-            client.provider_gateway_origin(ProviderId::new([0x11; 32])),
-            Some("https://8.8.8.8/")
+            client
+                .resolve_provider_gateway_origin(ProviderId::new([0x11; 32]))
+                .unwrap(),
+            "https://8.8.8.8/"
         );
         let debug = format!("{client:?}");
         assert!(debug.contains("provider_count: 1"));
@@ -2467,7 +2543,9 @@ operator_private_key_file = "provider.key"
             "https://provider.example/path",
             "https://provider.example/?token=secret",
             "https://provider.example/#fragment",
-            "https://provider.example:444/",
+            "https://provider.example:0/",
+            "https://localhost:8443/",
+            "https://provider.localhost:8443/",
             "https://127.0.0.1/",
             "https://10.0.0.1/",
             " https://provider.example/",
@@ -2478,6 +2556,11 @@ operator_private_key_file = "provider.key"
             );
         }
         assert!(parse_gateway_base_url("https://8.8.8.8/").is_ok());
+        for origin in ["https://provider.example:444/", "https://8.8.8.8:8443/"] {
+            let parsed = parse_gateway_base_url(origin).unwrap();
+            assert_eq!(parsed.as_str(), origin);
+            assert_eq!(gateway_origin(&parsed).unwrap().2, parsed.port().unwrap());
+        }
     }
     #[test]
     fn native_files_are_bounded_private_and_single_linked() {

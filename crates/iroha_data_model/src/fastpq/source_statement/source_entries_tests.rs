@@ -35,12 +35,15 @@ fn leaf(entry: FastpqSourceExecutionEntryV1) -> FastpqOrdinarySourceStatementLea
         source: source(),
         statement_index: 0,
         entry_index: 0,
-        entry_transcript_count: 3,
+        effect_count: 3,
         entry_hash: entry.entry_hash,
         execution_kind: entry.execution_kind,
         route: entry.route,
         dataspace_id: entry.dataspace_id,
-        statement_digest: [7; 32],
+        effects_digest: [7; 32],
+        slot: 19_000_000,
+        perm_root: Hash::new(b"source entry original permission context").into(),
+        tx_set_hash: Hash::new(b"source entry original ordered transaction wires").into(),
     }
 }
 

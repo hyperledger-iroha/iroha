@@ -191,7 +191,7 @@ impl crate::runtime_provider_broker::BootleLanternIssuanceBrokerBackendV1
     ) -> Result<
         iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternIssuanceAuthorizationV1,
         crate::runtime_provider_broker::BootleLanternIssuanceBrokerBackendErrorV1,
-    > {
+    >{
         panic!("qualification-only adversarial backend must not issue")
     }
     fn validate_request(
@@ -219,7 +219,7 @@ impl crate::runtime_provider_broker::BootleLanternIssuanceBrokerBackendV1
     ) -> Result<
         iroha_core_privacy::privacy_engines::bootle_lantern::issuer::BootleLanternBlindIssuanceResponseV1,
         crate::runtime_provider_broker::BootleLanternIssuanceBrokerBackendErrorV1,
-    > {
+    >{
         panic!("qualification-only adversarial backend must not issue")
     }
 }
@@ -897,12 +897,9 @@ fn outbound_admission_is_process_wide_and_follows_result_lifetime() {
         "a concurrent large request must be rejected before canonical encoding"
     );
     let result = ScrubbedBytes::with_decode_admission(vec![0xA5], first);
-    assert_eq!(
-        pool.used_bytes.load(Ordering::Acquire),
-        policy.max_composed_bytes
-    );
+    assert_eq!(pool.allocation.reserved_bytes(), policy.max_composed_bytes);
     drop(result);
-    assert_eq!(pool.used_bytes.load(Ordering::Acquire), 0);
+    assert_eq!(pool.allocation.reserved_bytes(), 0);
 }
 struct ServerTestPrivacyCyclePrfProvider {
     revision: AtomicU64,

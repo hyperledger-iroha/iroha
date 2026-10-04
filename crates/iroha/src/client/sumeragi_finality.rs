@@ -44,7 +44,7 @@ impl Client {
     ) -> Result<iroha_data_model::sorafs::provider_admission::discovery::account_read::VerifiedAccountReadProviderV1>{
         let proof = self.read_provider_discovery_frame(provider, block)?;
         let verified = proof.verify_account_read(
-            &self.chain.to_string(),
+            self.chain.as_ref(),
             self.network_id,
             provider,
             native_schema,
@@ -55,7 +55,7 @@ impl Client {
         Ok(verified)
     }
 
-    /// Read current native StreamToken control for an independently selected signer binding.
+    /// Read current native `StreamToken` control for an independently selected signer binding.
     ///
     /// The caller supplies the complete expected binding, qualified World schema and fresh
     /// certified decision. This reuses the bounded provider-discovery transport and returns only
@@ -97,6 +97,76 @@ impl Client {
             expected_binding,
             block,
             now_unix_ms,
+        )?;
+        self.ensure_activation_evidence_deadline()?;
+        Ok(verified)
+    }
+
+    /// Read native custody presence or absence without requiring admission or an advertisement.
+    ///
+    /// The caller independently selects the exact owner, complete signer binding, qualified
+    /// native World schema and fresh certified decision. An absent record is authenticated
+    /// against the complete World; HTTP absence or failure never means unconfigured custody.
+    /// This grants no enrollment, current-use, token or account spending authority.
+    /// # Errors
+    /// Invalid independent scope before dispatch, expired deadline, bounded transport/codec
+    /// failure, concealed state, changed owner, substituted binding or native preimages.
+    pub fn get_stream_token_custody_state(
+        &self,
+        provider: iroha_data_model::sorafs::capacity::ProviderId,
+        expected_owner: &iroha_data_model::account::AccountId,
+        expected_binding: &sorafs_manifest::signer::custody::SignerCustodyBindingV1,
+        native_schema: iroha_crypto::Hash,
+        block: &iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock,
+    ) -> Result<
+        iroha_data_model::sorafs::stream_token_custody::proof::VerifiedStreamTokenCustodyStateV1,
+    > {
+        use iroha_data_model::sorafs::stream_token_custody::proof::{
+            MAX_STREAM_TOKEN_CUSTODY_PROOF_BYTES_V1, StreamTokenCustodyProofV1,
+        };
+        use sorafs_manifest::signer::protocol::{SignerPurposeBindingV1, SignerRoleV1};
+        expected_binding.validate()?;
+        block.verify_global_scope(self.network_id, self.chain.as_ref())?;
+        if provider.as_bytes() == &[0; 32]
+            || block.height() < 2
+            || block.commitment().schedule.current.network_id != self.network_id
+            || expected_binding.chain_id != self.chain.to_string()
+            || expected_binding.network_id != *self.network_id.as_bytes()
+            || expected_binding.role != SignerRoleV1::StreamToken
+            || expected_binding.purpose
+                != (SignerPurposeBindingV1::StreamToken {
+                    provider_id: *provider.as_bytes(),
+                })
+        {
+            return Err(eyre!(
+                "custody state requires independently selected scope on this chain and network"
+            ));
+        }
+        self.ensure_data_model_compatibility()?;
+        let path = iroha_torii_shared::route_catalog::sorafs::STREAM_TOKEN_CUSTODY
+            .path()
+            .replace("{provider_id}", &hex::encode(provider.as_bytes()))
+            .replace("{height}", &block.height().to_string());
+        let response = self.send_activation_evidence_read(
+            &path,
+            MAX_STREAM_TOKEN_CUSTODY_PROOF_BYTES_V1,
+            None,
+            ActivationEvidenceReadAuth::Public,
+        )?;
+        let body = Self::bounded_norito_response_body(
+            &response,
+            StatusCode::OK,
+            MAX_STREAM_TOKEN_CUSTODY_PROOF_BYTES_V1,
+            "Failed to get native custody state",
+        )?;
+        let proof = StreamTokenCustodyProofV1::decode_frame(body)?;
+        let verified = proof.verify(
+            self.network_id,
+            provider,
+            expected_owner,
+            expected_binding,
+            native_schema,
+            block,
         )?;
         self.ensure_activation_evidence_deadline()?;
         Ok(verified)
@@ -191,7 +261,7 @@ impl Client {
             Self::decode_canonical_norito_response(
                 &response,
                 SUMERAGI_FINALITY_RESPONSE_MAX_BYTES,
-                "Failed to get current genesis readiness",
+                "sumeragi.genesis_readiness.read",
             )?;
         attestation.verify()?;
         let body = &attestation.body;
@@ -262,7 +332,7 @@ impl Client {
             Self::decode_canonical_norito_response(
                 &response,
                 SUMERAGI_FINALITY_RESPONSE_MAX_BYTES,
-                "Failed to get current finality attestation",
+                "sumeragi.finality_attestation.read",
             )?;
         attestation.verify()?;
         if attestation.body.challenge != challenge
@@ -301,7 +371,7 @@ impl Client {
             Self::decode_canonical_norito_response(
                 &response,
                 SUMERAGI_FINALITY_RESPONSE_MAX_BYTES,
-                "Failed to get current finality proof",
+                "sumeragi.finality_proof.read",
             )?;
         if proof.height() != height.get() {
             return Err(eyre!(
@@ -545,7 +615,7 @@ impl Client {
             Self::decode_canonical_norito_response(
                 &response,
                 MAX,
-                "FI current World original unavailable",
+                "kagemusha.authority_state.read",
             )?;
         original.attestation.verify()?;
         let body = &original.attestation.body;
@@ -656,7 +726,7 @@ impl Client {
             verifier,
             proof,
             compiled_schema,
-            snapshot.ok_or_else(|| eyre!("FI complete World absent"))?,
+            &snapshot.ok_or_else(|| eyre!("FI complete World absent"))?,
             signatory.into_key_value(),
             wallet.into_key_value(),
             nodes,

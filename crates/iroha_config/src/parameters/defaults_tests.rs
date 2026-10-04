@@ -28,8 +28,8 @@ fn jdg_signature_schemes_includes_simple_threshold() {
 }
 #[test]
 fn soracloud_public_runtime_defaults_are_non_zero() {
-    assert_eq!(torii::SORACLOUD_PUBLIC_RATE_PER_IP_PER_SEC, Some(10_000));
-    assert_eq!(torii::SORACLOUD_PUBLIC_BURST_PER_IP, Some(100_000));
+    assert_eq!(torii::SORACLOUD_PUBLIC_RATE_PER_IP_PER_SEC, Some(1_000_000));
+    assert_eq!(torii::SORACLOUD_PUBLIC_BURST_PER_IP, Some(10_000_000));
     assert_eq!(torii::SORACLOUD_PUBLIC_MAX_INFLIGHT.get(), 32);
     assert_eq!(
         torii::SORACLOUD_PUBLIC_MAX_RESPONSE_BYTES.get(),
@@ -37,11 +37,11 @@ fn soracloud_public_runtime_defaults_are_non_zero() {
     );
     assert_eq!(
         torii::SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC,
-        Some(10_000)
+        Some(1_000_000)
     );
     assert_eq!(
         torii::SORACLOUD_MUTATION_BURST_PER_ACCOUNT_ORIGIN,
-        Some(100_000)
+        Some(10_000_000)
     );
     assert_eq!(torii::SORACLOUD_MUTATION_MAX_INFLIGHT.get(), 64);
 }

@@ -2350,7 +2350,7 @@ mod tests {
         vm.alloc_input_tlv(&envelope).expect("allocate test TLV")
     }
     fn int_envelope(value: i64) -> Vec<u8> {
-        ivm::numeric_tlv::encode_int(&BigInt::from_i128(i128::from(value)))
+        ivm_abi::numeric_tlv::encode_int(&BigInt::from_i128(i128::from(value)))
             .expect("encode V1 int envelope")
     }
     fn int_atom(value: i64) -> EntrypointValueAtomV1 {
@@ -2363,7 +2363,7 @@ mod tests {
     fn input_quantity(vm: &mut IVM, value: &str) -> u64 {
         let quantity: Quantity = value.parse().expect("canonical quantity");
         let envelope =
-            ivm::numeric_tlv::encode_quantity(&quantity).expect("encode V1 quantity envelope");
+            ivm_abi::numeric_tlv::encode_quantity(&quantity).expect("encode V1 quantity envelope");
         vm.alloc_input_tlv(&envelope)
             .expect("allocate V1 quantity TLV")
     }

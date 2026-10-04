@@ -155,6 +155,7 @@ pub struct RunningNode {
     config_fingerprint: iroha_crypto::Hash,
     beacon_readiness: super::epoch_beacon::producer::NativeBeaconReadiness,
     startup_recovery: crate::snapshot::StartupRecovery,
+    private_counters: Option<Arc<super::private_counters::PrivateCounterService>>,
     /// The driver.
     pub driver: RunningDriver,
     /// The instance id (`I`).
@@ -180,6 +181,7 @@ impl RunningNode {
             config_fingerprint: self.config_fingerprint,
             beacon_readiness: self.beacon_readiness.clone(),
             startup_recovery: self.startup_recovery.clone(),
+            private_counters: self.private_counters.clone(),
         }
     }
 }
@@ -195,6 +197,7 @@ pub struct NodeHandle {
     config_fingerprint: iroha_crypto::Hash,
     beacon_readiness: super::epoch_beacon::producer::NativeBeaconReadiness,
     startup_recovery: crate::snapshot::StartupRecovery,
+    private_counters: Option<Arc<super::private_counters::PrivateCounterService>>,
 }
 
 /// Immutable identity and resolved configuration of the running consensus instance.
@@ -214,7 +217,33 @@ impl core::fmt::Debug for NodeHandle {
     }
 }
 
+/// Original private-counter response owner retaining genuine native State funding.
+pub use super::private_counters::PrivateCounterOriginalV1;
+
 impl NodeHandle {
+    /// Compute and sign bounded categorical private counters from the complete original
+    /// reader request. This cannot sign caller-supplied counts, hashes or claims.
+    ///
+    /// # Errors
+    /// Unready/halted native owner, foreign or unauthorized request, replay/freshness,
+    /// changed certified cut, incomplete native history or finite resource refusal.
+    pub fn private_transaction_counters_v1(
+        &self,
+        original_request: &[u8],
+    ) -> Result<
+        PrivateCounterOriginalV1,
+        iroha_data_model::private_transaction_counters::PrivateCountersErrorV1,
+    > {
+        self.private_counters
+            .as_ref()
+            .ok_or(
+                iroha_data_model::private_transaction_counters::PrivateCountersErrorV1::Unavailable,
+            )?
+            .compute_original(original_request, || {
+                self.startup_recovery.is_ready() && self.driver.ready() && self.halted().is_none()
+            })
+    }
+
     /// Successful authenticated replay and startup, revoked on a native worker failure or halt.
     /// Snapshot maintenance must retain this gate and check it before every storage operation.
     pub fn startup_recovery(&self) -> crate::snapshot::StartupRecovery {
@@ -423,6 +452,23 @@ pub fn root_instance(
         })
 }
 
+/// The original failed startup replay operation, retaining local refusal ownership.
+#[derive(Debug, thiserror::Error)]
+pub enum ReplayError {
+    /// Reading or restoring the original committed body did not finish.
+    #[error(transparent)]
+    Read(crate::execution_attempt::ExecutionAttemptError<std::io::Error>),
+    /// The committed height has no body in its authoritative store.
+    #[error("committed body missing")]
+    MissingBody,
+    /// The serialized original execution or completion acknowledgement did not finish.
+    #[error(transparent)]
+    Execution(super::driver::traits::PublicationError),
+    /// The final cold World-root check could not acquire its original storage or rejected content.
+    #[error(transparent)]
+    StateRoot(crate::state::WorldStateVerificationError),
+}
+
 /// Why the instance could not start.
 #[derive(Debug, thiserror::Error)]
 pub enum NodeError {
@@ -443,15 +489,39 @@ pub enum NodeError {
     Replay {
         /// Height.
         height: u64,
-        /// Reason.
-        reason: String,
+        /// Original read, execution, or authenticated State failure.
+        #[source]
+        reason: ReplayError,
     },
+    /// The exact committed startup prefix could not be read under its original owner.
+    #[error("startup history: {0}")]
+    History(
+        #[from] crate::execution_attempt::ExecutionAttemptError<super::driver::StartupHistoryError>,
+    ),
     /// Records, bodies or the schedule could not be loaded.
     #[error("startup input: {0}")]
     Input(String),
-    /// The driver did not start.
+    /// The native execution worker thread could not start.
+    #[error("executor thread: {0}")]
+    ExecutorStart(#[source] std::io::Error),
+    /// The original attestation mailbox could not be admitted or constructed.
+    #[error("native attestation startup: {0}")]
+    Attestation(#[from] super::attestation::NativeAttestationError),
+    /// The serialized worker retained an unfinished original control attachment.
+    #[error("native control attachment: {0}")]
+    ControlAttachment(#[from] super::driver::traits::PublicationError),
+    /// The lane runner thread could not start.
+    #[error("lane runner thread: {0}")]
+    LaneRunner(#[source] std::io::Error),
+    /// The driver did not start under its original configuration and resource owners.
     #[error("driver: {0}")]
-    Driver(String),
+    Driver(#[from] super::driver::DriverError),
+    /// The retained P2P actor refused the original FIFO subscriptions.
+    #[error(transparent)]
+    Subscription(#[from] super::net::SubscribeError),
+    /// The original inbound FIFO thread could not start.
+    #[error("ingress thread: {0}")]
+    IngressThread(#[source] std::io::Error),
 }
 
 fn node_policy_error(error: crate::execution_attempt::ExecutionAttemptError<String>) -> NodeError {
@@ -507,6 +577,9 @@ pub fn start<N: Net + 'static>(inputs: NodeInputs<N>) -> Result<RunningNode, Nod
 /// The instance with its state rebuilt, ready to start.
 pub struct Prepared {
     state: Arc<State>,
+    // Fixed policy/manifest custody of a private root, captured from the same original
+    // genesis authority used by deterministic startup execution. HTTP cannot choose it.
+    private_counter_authority: AccountId,
     crypto: Arc<BlsCrypto>,
     instance: Hash32,
     tip: GenesisTip,
@@ -677,14 +750,14 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         queue: None,
         staging,
         events,
-        genesis_account,
+        genesis_account: genesis_account.clone(),
         consensus_mode,
         applied: (GENESIS_HEIGHT, tip.block_hash),
         crypto: Some(Arc::clone(&crypto)),
         applied_watch: Arc::clone(&applied_watch),
         lane_blocks: lane_stores.clone(),
     })
-    .map_err(|error| NodeError::Driver(error.to_string()))?;
+    .map_err(NodeError::ExecutorStart)?;
     admit_window(&state, &crypto, GENESIS_HEIGHT).map_err(NodeError::Input)?;
     // Replay what Kura holds above genesis.
     let stored = blocks.height();
@@ -693,15 +766,18 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
             .committed_body(height)
             .map_err(|error| NodeError::Replay {
                 height,
-                reason: error.to_string(),
+                reason: ReplayError::Read(error),
             })?
             .ok_or_else(|| NodeError::Replay {
                 height,
-                reason: "committed body missing".into(),
+                reason: ReplayError::MissingBody,
             })?;
         executor
             .replay(&body, &commit_qc)
-            .map_err(|reason| NodeError::Replay { height, reason })?;
+            .map_err(|reason| NodeError::Replay {
+                height,
+                reason: ReplayError::Execution(reason),
+            })?;
     }
     // Every replayed result bound the complete World state roots; the incrementally advanced
     // accumulator must also equal a cold capture of the rebuilt World (Appendix E, E51).
@@ -709,11 +785,12 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         .verify_world_state_accumulator()
         .map_err(|reason| NodeError::Replay {
             height: stored.max(GENESIS_HEIGHT),
-            reason,
+            reason: ReplayError::StateRoot(reason),
         })?;
     admit_window(&state, &crypto, stored.max(GENESIS_HEIGHT)).map_err(NodeError::Input)?;
     Ok(Prepared {
         state,
+        private_counter_authority: genesis_account,
         crypto,
         instance,
         tip,
@@ -759,6 +836,7 @@ impl Prepared {
     pub fn start<N: Net + 'static>(self, inputs: StartInputs<N>) -> Result<RunningNode, NodeError> {
         let Self {
             state,
+            private_counter_authority,
             crypto,
             instance,
             tip,
@@ -781,9 +859,9 @@ impl Prepared {
             driver,
         } = inputs;
         let node_gate = state.view().kura().native_consensus_gate();
-        let _startup = node_gate.enter().ok_or_else(|| {
-            NodeError::Driver("canonical storage is closed; restart is required".into())
-        })?;
+        let _startup = node_gate
+            .enter()
+            .ok_or(NodeError::Driver(super::driver::DriverError::StorageClosed))?;
         executor.attach_queue(Arc::clone(&queue));
         let shared: SharedCrypto = crypto.clone();
         // Records of the node's keys.
@@ -813,10 +891,10 @@ impl Prepared {
             super::attestation::NativePastaVerifier::new(instance, *state.view().network_id());
         let (attestor, publisher) =
             super::attestation::channel(instance, &key, mint_finality_authority.is_some(), &budget)
-                .map_err(|error| NodeError::Key(error.to_string()))?;
+                .map_err(NodeError::from)?;
         executor
             .attach_attestation(verifier, mint_finality_authority, publisher)
-            .map_err(|error| NodeError::Driver(error.to_string()))?;
+            .map_err(NodeError::from)?;
         let mut keys: Vec<(PublicKey, bool)> = vec![(key, false)];
         for retired in &config.retired_keys {
             keys.push((
@@ -829,6 +907,30 @@ impl Prepared {
                 .map_err(|error| NodeError::Input(error.to_string()))?,
         );
         let assertion = FreshKeyAssertion::from_operator_flag(config.assert_fresh_key);
+        let signer = Arc::new(
+            KeyPairSigner::new(&key_pair).map_err(|error| NodeError::Key(error.to_string()))?,
+        );
+        // Acquire private replay custody before the first durable Instance event. Existing
+        // instances never recreate a missing ledger; Global has no private counter owner.
+        let private_counters = if matches!(
+            super::lanes::routing::committed_root_scope(state.view().world()),
+            Some(iroha_data_model::block::consensus::SumeragiRootScope::Dataspace { .. })
+        ) {
+            Some(Arc::new(
+                super::private_counters::PrivateCounterService::new(
+                    Arc::clone(&state),
+                    private_counter_authority,
+                    PeerId::new(key_pair.public_key().clone()),
+                    Arc::clone(&signer),
+                    instance,
+                    &records,
+                    assertion.as_ref(),
+                )
+                .map_err(|error| NodeError::Input(error.to_string()))?,
+            ))
+        } else {
+            None
+        };
         let found = install(
             &*records,
             &*crypto,
@@ -880,7 +982,7 @@ impl Prepared {
             configs,
             startup_nonce(),
         )
-        .map_err(|error| NodeError::Input(error.to_string()))?;
+        .map_err(NodeError::from)?;
         let bodies = Arc::new(
             FileBodyStore::open(
                 &config.bodies_dir,
@@ -891,8 +993,6 @@ impl Prepared {
             )
             .map_err(|error| NodeError::Input(error.to_string()))?,
         );
-        let signer =
-            KeyPairSigner::new(&key_pair).map_err(|error| NodeError::Key(error.to_string()))?;
         let (_, beacon_key) = key_pair
             .public_key()
             .try_to_bytes()
@@ -902,7 +1002,7 @@ impl Prepared {
         })?;
         let beacon_readiness = executor
             .attach_beacon(instance, Some(beacon_key), beacon_signer)
-            .map_err(|error| NodeError::Driver(error.to_string()))?;
+            .map_err(NodeError::from)?;
         // Inbound frames reach the driver of their instance: the global one and each lane's.
         let ingress = Arc::new(SumeragiIngress::new(FrameCaps::TRANSPORT));
         // Lane instances (`specs/sumeragi_lanes.md` §4.1) share the transport, ingress,
@@ -925,7 +1025,7 @@ impl Prepared {
                 network: *state.network_id_ref(),
                 chain_id,
             })
-            .map_err(|error| NodeError::Driver(format!("sumeragi lane runner: {error}")))?;
+            .map_err(NodeError::LaneRunner)?;
         let (recovery_publisher, startup_recovery) = crate::snapshot::startup_recovery_channel();
         let recovery_publisher = Arc::new(parking_lot::Mutex::new(recovery_publisher));
         let driver_owner = Driver::new(
@@ -954,13 +1054,13 @@ impl Prepared {
                     allocation_budget: budget,
                     local: local_params(n, &config.local),
                     init,
-                    signers: vec![Arc::new(signer)],
+                    signers: vec![signer],
                     crypto: shared,
                     attestor: Box::new(attestor),
                     verifier: Box::new(verifier),
                 },
             )
-            .map_err(|error| NodeError::Driver(error.to_string()))?;
+            .map_err(NodeError::from)?;
         ingress.register(instance, Arc::new(running.handle()));
         recovery_publisher.lock().ready();
         Ok(RunningNode {
@@ -968,6 +1068,7 @@ impl Prepared {
             config_fingerprint,
             beacon_readiness,
             startup_recovery,
+            private_counters,
             driver: running,
             instance,
             crypto,
@@ -983,8 +1084,8 @@ impl Prepared {
     /// construction and key-record installation.
     ///
     /// # Errors
-    /// See [`NodeError`]; the subscription or the ingress thread failing is
-    /// [`NodeError::Driver`].
+    /// See [`NodeError`]; subscription and ingress-thread errors retain their
+    /// concrete owners as [`NodeError::Subscription`] and [`NodeError::IngressThread`].
     pub fn start_on_network(
         self,
         inputs: StartInputs<P2pNet<IrohaNetwork>>,
@@ -993,7 +1094,7 @@ impl Prepared {
         let subscription = inputs
             .net
             .subscribe(fifo_capacity)
-            .map_err(|error| NodeError::Driver(error.to_string()))?;
+            .map_err(NodeError::from)?;
         let node = self.start(inputs)?;
         let ingress = Arc::clone(&node.ingress);
         let ingress_thread = match spawn_ingress(subscription, Arc::clone(&ingress)) {
@@ -1001,9 +1102,7 @@ impl Prepared {
             Err(error) => {
                 node.lanes.shutdown();
                 node.driver.shutdown();
-                return Err(NodeError::Driver(format!(
-                    "sumeragi ingress thread: {error}"
-                )));
+                return Err(NodeError::IngressThread(error));
             }
         };
         Ok(NetworkedNode {
@@ -1496,9 +1595,21 @@ mod tests {
         payload_retry_interval_ms: u64,
         extra: impl FnOnce(&[KeyPair]) -> Vec<Parameter>,
     ) -> Chain {
-        // Each independently executed node-test group needs its own logger initialization.
-        // The maintained static handle retains the configured diagnostics after this helper.
-        let _logger = iroha_logger::test_logger();
+        // The global logger's actor must outlive each synchronous node fixture.
+        // Keep its actual reactor alive even when this is the first selected test.
+        static LOGGER_RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> =
+            std::sync::OnceLock::new();
+        let _logger = {
+            let runtime = LOGGER_RUNTIME.get_or_init(|| {
+                tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(1)
+                    .enable_all()
+                    .build()
+                    .expect("node fixture logger runtime")
+            });
+            let _entered = runtime.enter();
+            iroha_logger::test_logger()
+        };
         iroha_genesis::init_instruction_registry();
         let chain_id = ChainId::from("sumeragi-node-test");
         let mut keys = (0..validators)
@@ -1822,7 +1933,11 @@ mod tests {
                         let block = validator
                             .state
                             .kura()
-                            .get_block(core::num::NonZeroUsize::new(height).expect("non-zero"))
+                            .get_block(
+                                core::num::NonZeroUsize::new(height).expect("non-zero"),
+                                &validator.state.ivm_execution_budget(),
+                            )
+                            .expect("original block read attempt")
                             .expect("stored");
                         eprintln!(
                             "  block {height}: {} entrypoints, queued {}",
@@ -1937,11 +2052,17 @@ mod tests {
     /// Every validator stored the same blocks up to `height`, each with its commit certificate
     /// (genesis with its result-only one).
     fn assert_same_certified_blocks(disks: &[Disk], height: usize) {
+        let inspection_budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
         for height in 1..=height {
             let height = core::num::NonZeroUsize::new(height).expect("non-zero");
             let blocks = disks
                 .iter()
-                .map(|disk| disk.kura.get_block(height).expect("stored"))
+                .map(|disk| {
+                    disk.kura
+                        .get_block(height, &inspection_budget)
+                        .expect("original block read attempt")
+                        .expect("stored")
+                })
                 .collect::<Vec<_>>();
             for block in &blocks {
                 assert!(block.commit_certificate().is_some(), "height {height}");
@@ -2000,7 +2121,11 @@ mod tests {
                 (1..=validator.state.view().height())
                     .filter_map(|height| {
                         disk.kura
-                            .get_block(core::num::NonZeroUsize::new(height).expect("non-zero"))
+                            .get_block(
+                                core::num::NonZeroUsize::new(height).expect("non-zero"),
+                                &validator.state.ivm_execution_budget(),
+                            )
+                            .expect("original block read attempt")
                     })
                     .map(|block| block.merged_entrypoint_count())
                     .sum::<usize>()
@@ -2555,13 +2680,69 @@ mod tests {
         let error = executor
             .replay(&body, &forged)
             .expect_err("a differing certified result");
-        assert!(error.contains("diverges"), "{error}");
+        assert!(
+            matches!(&error, super::super::driver::traits::PublicationError::Retryable(reason) if reason.contains("diverges")),
+            "{error}"
+        );
         assert_eq!(startup::applied_height(&state), GENESIS_HEIGHT);
         // The stored certificate replays.
         executor
             .replay(&body, &commit_qc)
             .expect("the certified result reproduces");
         assert_eq!(startup::applied_height(&state), 2);
+        {
+            use iroha_allocation::{AllocationBudget, AllocationRefusal};
+            use std::task::{Context, Waker};
+
+            let _epoch = crossbeam_epoch::pin();
+            let budget = state.ivm_execution_budget();
+            let mut registration = crate::unit_test_support::release_registration(&budget);
+            let occupied = budget
+                .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+                .unwrap();
+            let error = NodeError::Replay {
+                height: 2,
+                reason: ReplayError::Execution(
+                    executor
+                        .replay(&body, &commit_qc)
+                        .expect_err("completed replay still needs original-pool encoding scratch"),
+                ),
+            };
+            let NodeError::Replay {
+                reason:
+                    ReplayError::Execution(super::super::driver::traits::PublicationError::Deferred(
+                        source,
+                    )),
+                ..
+            } = &error
+            else {
+                panic!("serialized replay erased its original refusal: {error}");
+            };
+            let refusal = source.allocation_refusal().unwrap();
+            let AllocationRefusal::Capacity {
+                requested_bytes, ..
+            } = refusal
+            else {
+                panic!("actual occupied State pool: {refusal}");
+            };
+            assert_eq!(
+                refusal,
+                &budget.try_reserve_bytes(*requested_bytes).unwrap_err()
+            );
+            let release = source.release_wait().unwrap();
+            let mut context = Context::from_waker(Waker::noop());
+            assert!(registration.poll_wait(release, &mut context).is_pending());
+            let foreign = AllocationBudget::new(1);
+            drop(foreign.try_reserve_bytes(1).unwrap());
+            assert!(registration.poll_wait(release, &mut context).is_pending());
+            drop(occupied);
+            assert!(registration.poll_wait(release, &mut context).is_ready());
+            registration.cancel();
+            executor
+                .replay(&body, &commit_qc)
+                .expect("actual source release preserves the original completion");
+            assert_eq!(startup::applied_height(&state), 2);
+        }
         // Even a deployment without SoraFS archives binds its empty capture
         // catalog after replay. A completed replay receipt is no live overlay
         // and must retire before this same-worker startup handoff.

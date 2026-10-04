@@ -1,30 +1,39 @@
 //! Exact function signatures and checked stack layouts for the V1 call-table ABI.
 
-use ivm_abi::call::{CallWordV1, MAX_CALL_FRAME_BYTES_V1, MAX_CALL_WORDS_V1};
+use ivm_abi::call::{
+    CallSchemaV1, CallTypeNodeV1, MAX_CALL_FRAME_BYTES_V1, MAX_CALL_SCHEMA_NODES_V1,
+    MAX_CALL_WORDS_V1,
+};
 
 use crate::semantic::{Type, TypedFunction};
 
-/// Flattened runtime roles for one typed function.
+/// Complete schemas for one typed function.
 pub(crate) struct CallSignature {
-    pub(crate) arguments: Vec<CallWordV1>,
-    pub(crate) results: Vec<CallWordV1>,
+    pub(crate) arguments: CallSchemaV1,
+    pub(crate) results: CallSchemaV1,
 }
 impl CallSignature {
     pub(crate) fn for_function(function: &TypedFunction) -> Result<Self, String> {
-        let mut arguments = Vec::new();
+        let mut arguments = CallSchemaV1::empty();
         for parameter in &function.param_types {
             if parameter.is_state {
-                arguments.push(CallWordV1::StateRoot);
+                arguments.nodes.push(CallTypeNodeV1::StateRoot);
             } else {
-                append_roles(&parameter.ty, &mut arguments)?;
+                append_nodes(&parameter.ty, &mut arguments.nodes)?;
             }
         }
-        let mut results = Vec::new();
-        append_roles(
+        let mut results = CallSchemaV1::empty();
+        append_nodes(
             function.ret_ty.as_ref().unwrap_or(&Type::Unit),
-            &mut results,
+            &mut results.nodes,
         )?;
-        if arguments.len() > MAX_CALL_WORDS_V1 || results.len() > MAX_CALL_WORDS_V1 {
+        let argument_words = arguments
+            .word_count()
+            .ok_or("invalid complete argument schema")?;
+        let result_words = results
+            .word_count()
+            .ok_or("invalid complete result schema")?;
+        if argument_words > MAX_CALL_WORDS_V1 || result_words > MAX_CALL_WORDS_V1 {
             return Err(format!(
                 "function `{}` exceeds the V1 limit of {MAX_CALL_WORDS_V1} words per call table",
                 function.name
@@ -32,51 +41,91 @@ impl CallSignature {
         }
         Ok(Self { arguments, results })
     }
+    pub(crate) fn argument_word_count(&self) -> usize {
+        self.arguments
+            .word_count()
+            .expect("validated callable arguments")
+    }
+    pub(crate) fn result_word_count(&self) -> usize {
+        self.results
+            .word_count()
+            .expect("validated callable result")
+    }
 }
-fn append_roles(ty: &Type, output: &mut Vec<CallWordV1>) -> Result<(), String> {
+fn append_nodes(ty: &Type, output: &mut Vec<CallTypeNodeV1>) -> Result<(), String> {
+    use ivm_abi::{entrypoint::EntrypointValueKindV1 as Kind, pointer_abi::PointerType};
     let mut pending = vec![ty];
     while let Some(ty) = pending.pop() {
-        let role = match ty {
-            Type::Struct { fields, .. } if fields.is_empty() => CallWordV1::Unit,
-            Type::Tuple(fields) if fields.is_empty() => CallWordV1::Unit,
-            Type::Struct { fields, .. } => {
+        if output.len() >= MAX_CALL_SCHEMA_NODES_V1 {
+            return Err(format!(
+                "callable type exceeds {MAX_CALL_SCHEMA_NODES_V1} nodes"
+            ));
+        }
+        let node = match ty {
+            Type::Struct { name, fields } => {
                 pending.extend(fields.iter().rev().map(|(_, field)| field));
-                continue;
+                CallTypeNodeV1::Struct {
+                    name: name.clone(),
+                    fields: fields.iter().map(|(name, _)| name.clone()).collect(),
+                }
             }
+            Type::Tuple(fields) if fields.is_empty() => CallTypeNodeV1::Unit,
             Type::Tuple(fields) => {
                 pending.extend(fields.iter().rev());
-                continue;
+                CallTypeNodeV1::Tuple(
+                    u32::try_from(fields.len()).map_err(|_| "callable tuple arity overflow")?,
+                )
             }
-            Type::Unit => CallWordV1::Unit,
-            Type::Bool => CallWordV1::Bool,
-            Type::ErrorEnum(_) => CallWordV1::Error,
-            Type::Option(_) | Type::Result(_, _) => CallWordV1::Sum,
-            Type::List(_, _) => CallWordV1::List,
-            Type::StateCursor(_) => CallWordV1::StateCursor,
-            Type::StateMap(_, _) => CallWordV1::StateRoot,
+            Type::Option(inner) => {
+                pending.push(inner);
+                CallTypeNodeV1::Option
+            }
+            Type::Result(ok, err) => {
+                pending.push(err);
+                pending.push(ok);
+                CallTypeNodeV1::Result
+            }
+            Type::List(element, capacity) => {
+                pending.push(element);
+                CallTypeNodeV1::List {
+                    capacity: *capacity,
+                }
+            }
+            Type::Unit => CallTypeNodeV1::Unit,
+            Type::ErrorEnum(descriptor) => CallTypeNodeV1::Error(descriptor.as_ref().clone()),
+            Type::StateCursor(key) => CallTypeNodeV1::StateCursor(
+                crate::abi_schema::state_cursor_key_kind(key)
+                    .ok_or("invalid callable state cursor key type")?,
+            ),
+            Type::StateMap(_, _) => CallTypeNodeV1::StateRoot,
             Type::Secret(inner) => {
                 let kind = crate::abi_schema::state_value_kind_for_type(inner)
                     .and_then(|kind| kind.pointer_type())
-                    .ok_or_else(|| "invalid private call-table value type".to_owned())?;
-                let role = CallWordV1::SecretNumeric(kind as u16);
-                if !role.validate() {
-                    return Err("invalid private call-table numeric type".to_owned());
+                    .ok_or("invalid private callable numeric type")?;
+                if !matches!(
+                    kind,
+                    PointerType::Int | PointerType::Decimal | PointerType::Quantity
+                ) {
+                    return Err("invalid private callable numeric type".into());
                 }
-                role
+                CallTypeNodeV1::SecretNumeric(kind as u16)
             }
-            leaf => CallWordV1::Pointer(
-                crate::abi_schema::state_value_kind_for_type(leaf)
-                    .and_then(|kind| kind.pointer_type())
-                    .ok_or_else(|| format!("unresolved call-table value type `{leaf:?}`"))?
-                    as u16,
+            Type::Json => CallTypeNodeV1::Leaf(Kind::Json),
+            Type::AxtDescriptor => CallTypeNodeV1::Pointer(PointerType::AxtDescriptor as u16),
+            Type::AxtAnchoredSpendV1 => {
+                CallTypeNodeV1::Pointer(PointerType::AxtAnchoredSpendV1 as u16)
+            }
+            Type::ProofBlob => CallTypeNodeV1::Pointer(PointerType::ProofBlob as u16),
+            Type::SoracloudRequest => CallTypeNodeV1::Pointer(PointerType::SoracloudRequest as u16),
+            Type::SoracloudResponse => {
+                CallTypeNodeV1::Pointer(PointerType::SoracloudResponse as u16)
+            }
+            leaf => CallTypeNodeV1::Leaf(
+                crate::abi_schema::state_cursor_key_kind(leaf)
+                    .ok_or_else(|| format!("unresolved callable value type `{leaf:?}`"))?,
             ),
         };
-        output.push(role);
-        if output.len() > MAX_CALL_WORDS_V1 {
-            return Err(format!(
-                "call table exceeds {MAX_CALL_WORDS_V1} flattened words"
-            ));
-        }
+        output.push(node);
     }
     Ok(())
 }
@@ -168,9 +217,45 @@ mod tests {
         assert!(CallFrameLayout::new(false, 0, 0, 0, 8193, 1).is_err());
     }
     #[test]
+    fn cursor_roles_keep_the_declared_key_kind_through_flattening() {
+        use ivm_abi::entrypoint::EntrypointValueKindV1 as Kind;
+        let kinds = [
+            (Type::Int, Kind::Int),
+            (Type::Decimal, Kind::Decimal),
+            (Type::Quantity, Kind::Quantity),
+            (Type::Bool, Kind::Bool),
+            (Type::String, Kind::String),
+            (Type::Bytes, Kind::Blob),
+            (Type::AccountId, Kind::AccountId),
+            (Type::AssetDefinitionId, Kind::AssetDefinitionId),
+            (Type::AssetId, Kind::AssetId),
+            (Type::DomainId, Kind::DomainId),
+            (Type::NftId, Kind::NftId),
+            (Type::Name, Kind::Name),
+            (Type::DataSpaceId, Kind::DataSpaceId),
+        ];
+        for (ty, kind) in kinds {
+            let mut roles = Vec::new();
+            append_nodes(
+                &Type::Tuple(vec![Type::Bool, Type::StateCursor(Box::new(ty))]),
+                &mut roles,
+            )
+            .unwrap();
+            assert_eq!(
+                roles,
+                [
+                    CallTypeNodeV1::Tuple(2),
+                    CallTypeNodeV1::Leaf(ivm_abi::entrypoint::EntrypointValueKindV1::Bool),
+                    CallTypeNodeV1::StateCursor(kind)
+                ]
+            );
+        }
+        assert!(append_nodes(&Type::StateCursor(Box::new(Type::Json)), &mut Vec::new()).is_err());
+    }
+    #[test]
     fn signature_flattening_keeps_active_handles_and_secret_tags() {
         let mut roles = Vec::new();
-        append_roles(
+        append_nodes(
             &Type::Tuple(vec![
                 Type::Unit,
                 Type::Bool,
@@ -183,12 +268,14 @@ mod tests {
         assert_eq!(
             roles,
             [
-                CallWordV1::Unit,
-                CallWordV1::Bool,
-                CallWordV1::Sum,
-                CallWordV1::SecretNumeric(ivm_abi::pointer_abi::PointerType::Int as u16)
+                CallTypeNodeV1::Tuple(4),
+                CallTypeNodeV1::Unit,
+                CallTypeNodeV1::Leaf(ivm_abi::entrypoint::EntrypointValueKindV1::Bool),
+                CallTypeNodeV1::Option,
+                CallTypeNodeV1::Leaf(ivm_abi::entrypoint::EntrypointValueKindV1::Int),
+                CallTypeNodeV1::SecretNumeric(ivm_abi::pointer_abi::PointerType::Int as u16)
             ]
         );
-        assert!(append_roles(&Type::NamedStruct("Unresolved".into()), &mut Vec::new()).is_err());
+        assert!(append_nodes(&Type::NamedStruct("Unresolved".into()), &mut Vec::new()).is_err());
     }
 }

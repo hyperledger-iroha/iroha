@@ -1,6 +1,10 @@
 //! Transaction structures and related implementations.
 pub use self::model::*;
 mod ivm_proved_intent;
+/// Exact original-pool allocation custody for closed native pin/outbox transaction graphs.
+pub mod pin_allocation;
+mod wire_v1;
+mod wire_v1_api;
 use super::{
     error,
     executable::{Executable, ExecutableBatchItem, IvmBytecode},
@@ -29,7 +33,6 @@ use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use iroha_primitives::{const_vec::ConstVec, json::Json, time::TimeSource};
 use iroha_schema::IntoSchema;
-use iroha_version::Version;
 pub use ivm_proved_intent::{
     IVM_PROVED_TRANSACTION_INTENT_DIGEST_DOMAIN_V1, IvmProvedTransactionIntentDigestV1,
     IvmProvedTransactionIntentErrorV1,
@@ -50,6 +53,7 @@ use std::{
     vec::Vec,
 };
 use thiserror::Error;
+pub use wire_v1::WireV1Plan;
 /// Default signature-bound lifetime assigned by [`TransactionBuilder`].
 ///
 /// Networks govern the admission ceiling through
@@ -1597,8 +1601,18 @@ impl SignedTransaction {
     /// This matches the canonical transaction hash returned by [`Self::hash`].
     #[inline]
     pub fn hash_as_entrypoint(&self) -> HashOf<TransactionEntrypoint> {
-        let entry_hash = HashOf::new(&ExternalEntrypointRef(self.payload()));
-        HashOf::from_untyped_unchecked(Hash::from(entry_hash))
+        self.try_hash_as_entrypoint()
+            .expect("external transaction hash encoding should not fail")
+    }
+    /// Hash the original external intent without erasing a serializer or allocation refusal.
+    ///
+    /// Uses the same borrowed payload projection and fixed V1 hash domain as [`Self::hash`].
+    ///
+    /// # Errors
+    /// Returns the original codec failure without producing a partial transaction identity.
+    pub fn try_hash_as_entrypoint(&self) -> Result<HashOf<TransactionEntrypoint>, norito::Error> {
+        let entry_hash = HashOf::try_new(&ExternalEntrypointRef(self.payload()))?;
+        Ok(HashOf::from_untyped_unchecked(Hash::from(entry_hash)))
     }
     /// Injects a set of fictitious instructions into the transaction payload for testing.
     ///
@@ -1881,19 +1895,6 @@ impl iroha_version::Version for SignedTransaction {
         1..2
     }
 }
-fn encode_default_layout_versioned<T>(
-    version: u8,
-    value: &T,
-) -> Result<Vec<u8>, norito::core::Error>
-where
-    T: norito::NoritoSerialize,
-{
-    let mut bytes = Vec::with_capacity(1 + value.encoded_len_hint().unwrap_or(0));
-    bytes.push(version);
-    let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    norito::core::serialize_to_buffer(value, &mut bytes)?;
-    Ok(bytes)
-}
 impl SignedTransaction {
     /// Encode the complete canonical fixed-V1 transaction wire.
     ///
@@ -1907,7 +1908,7 @@ impl SignedTransaction {
     /// Returns an error if the transaction cannot be serialized with the canonical V1 Norito
     /// layout.
     pub fn encode_wire_v1(&self) -> Result<Vec<u8>, norito::core::Error> {
-        encode_default_layout_versioned(self.version(), self)
+        self.wire_plan_v1()?.into_vec()
     }
 }
 impl iroha_version::codec::EncodeVersioned for SignedTransaction {
@@ -1950,7 +1951,7 @@ impl TransactionEntrypoint {
     ///
     /// Returns an error if the entrypoint cannot be serialized with the canonical V1 Norito layout.
     pub fn encode_wire_v1(&self) -> Result<Vec<u8>, norito::core::Error> {
-        encode_default_layout_versioned(self.version(), self)
+        self.wire_plan_v1()?.into_vec()
     }
 }
 impl iroha_version::codec::EncodeVersioned for TransactionEntrypoint {

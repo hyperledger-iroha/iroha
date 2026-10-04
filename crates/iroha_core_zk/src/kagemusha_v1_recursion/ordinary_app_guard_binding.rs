@@ -73,6 +73,7 @@ pub(super) fn constrain_ordinary_credential_original_v1<F: KagemushaPoseidonFiel
 
 /// Canonical union reconstruction; the selected digest is bound by the enclosing public column
 /// and genuine issuer equation. Both None and Some layouts must be constructed before selection.
+#[cfg(test)]
 pub(super) fn reconstruct_ordinary_credential_original_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     jobs: &mut PastaSha256JobsV1<F>,

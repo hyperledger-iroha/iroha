@@ -3,10 +3,12 @@ namespace Hyperledger.Iroha.Torii;
 /// <summary>
 /// Raised when a Torii mutation target advertises a data-model version that this SDK cannot encode.
 /// </summary>
-public sealed class ToriiDataModelMismatchException : InvalidOperationException
+public sealed class ToriiDataModelMismatchException : IrohaException
 {
     public ToriiDataModelMismatchException(int expected, int actual)
-        : base($"Torii node data_model_version {actual} does not match client version {expected}.")
+        : base(
+            "data_model_mismatch",
+            $"Torii node data_model_version {actual} does not match client version {expected}.")
     {
         Expected = expected;
         Actual = actual;
@@ -20,10 +22,11 @@ public sealed class ToriiDataModelMismatchException : InvalidOperationException
 /// <summary>
 /// Raised when a Torii mutation target advertises a different signed-transaction schema.
 /// </summary>
-public sealed class ToriiTransactionSchemaMismatchException : InvalidOperationException
+public sealed class ToriiTransactionSchemaMismatchException : IrohaException
 {
     public ToriiTransactionSchemaMismatchException(string expected, string actual)
         : base(
+            "transaction_schema_mismatch",
             "Torii node signed_transaction_schema_hash_hex "
             + $"{actual} does not match client schema {expected}.")
     {

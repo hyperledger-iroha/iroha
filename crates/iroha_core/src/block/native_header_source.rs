@@ -7,12 +7,15 @@ pub(crate) struct NativeHeaderSource<'state> {
     state: &'state State,
     generation: u64,
     header: BlockHeader,
+    #[cfg(test)]
     proposal_hash: Hash,
+    #[cfg(test)]
     consensus_hash: Hash,
     expected_context: iroha_data_model::consensus::GlobalThresholdBeaconPulseContextV1,
     pulse: Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
 }
 impl NativeHeaderSource<'_> {
+    #[cfg(test)]
     fn validate_body(&self, block: &SignedBlock) -> Result<(), BlockValidationError> {
         if !block.is_resultless_proposal()
             || block.header() != self.header
@@ -80,10 +83,11 @@ impl ValidBlock {
             &block.header(),
             &expected_context,
         );
-        if !crate::state::is_stable_state_view_generation(generation, state.state_view_generation())
-        {
-            return Err(BlockValidationError::LocalStorageRecoveryRequired {
-                reason: "native source State cut advanced during context authentication".into(),
+        let observed_generation = state.state_view_generation();
+        if !crate::state::is_stable_state_view_generation(generation, observed_generation) {
+            return Err(BlockValidationError::NativeSourceChanged {
+                authenticated_generation: generation,
+                observed_generation,
             });
         }
         authenticated.map_err(BlockValidationError::from)?;
@@ -91,7 +95,9 @@ impl ValidBlock {
             state,
             generation,
             header: block.header(),
+            #[cfg(test)]
             proposal_hash: Hash::new(native_payload),
+            #[cfg(test)]
             consensus_hash: Hash::prehashed(
                 native_header
                     .hash(&crate::sumeragi::crypto::BlsCrypto::new())

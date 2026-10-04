@@ -82,13 +82,10 @@ use incoming_state_commit::{
     IncomingStateAdvanceAcknowledgment, IncomingStateAdvanceOriginals,
     RetainedFinancialStateAdvance, RetainedIncomingCommit,
 };
-pub(crate) use received_source::KagemushaAuthenticatedOrdinaryReceivedSourceCustodyV1;
 use received_source::{ReceivedSourceAdmission, ReceivedSourceOriginals};
 use receiver_request::{CapturedReceiverRequestOriginals, ReceiverRequestOriginals};
 pub(crate) use receiver_request::{
-    KagemushaAuthenticatedOrdinaryReceivedCreditOpeningV1,
     KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1,
-    KagemushaHistoricalOrdinaryReceivedCreditOpeningV1,
     KagemushaHistoricalOrdinaryReceiverRequestCustodyV1,
 };
 use state_commit::{
@@ -1183,16 +1180,6 @@ impl KagemushaNativeOrdinaryCashOwnerV1 {
             .recheck_historical_sources(self, retained.lease.as_deref())?;
         self.require_current_financial_control()?;
         Ok(retained.captured.original().to_vec())
-    }
-
-    /// Lend the actual fsynced receiver request and current custody to Native proof admission.
-    /// The key remains private and retained; this creates no Receive or global head effect.
-    pub(crate) fn receiver_request_custody(
-        &self,
-        request_id: DigestV1,
-    ) -> Result<KagemushaAuthenticatedOrdinaryReceiverRequestCustodyV1<'_>, KagemushaStateErrorV1>
-    {
-        receiver_request::loan_main_request(self, request_id)
     }
 
     /// Cancel only an unfenced request. Its identity remains in the global never-reuse set.

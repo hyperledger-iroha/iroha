@@ -6,6 +6,8 @@ use super::*;
 pub(crate) fn validate_public_lane_stake_reserves(
     world: &impl WorldReadOnly,
 ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
+    crate::validation_fee_rewards::validate_fee_custody_backing(world)
+        .map_err(|error| error.map_rejection(|error| error.to_string()))?;
     let currency = world
         .sumeragi_npos_parameters()?
         .map(|params| params.xor_asset_definition_id);
@@ -82,6 +84,7 @@ pub(crate) fn validate_public_lane_stake_reserves(
     }
     let mut expected_reserves = BTreeMap::<AssetId, Quantity>::new();
     for (key, (asset, held)) in world.public_lane_stake_custody().iter() {
+        validate_xor_custody_shape(world, asset).map_err(|error| error.to_string())?;
         if currency.as_ref() != Some(asset.definition()) {
             return Err(
                 "staking custody does not use the committed network XOR identity".to_owned(),
@@ -293,6 +296,86 @@ mod tests {
             validate_public_lane_stake_reserves(&world.view()).is_err(),
             "aggregate must be exact"
         );
+    }
+
+    #[test]
+    fn pinned_stake_custody_rejects_wrong_xor_scope_and_precision() {
+        use iroha_data_model::asset::{AssetBalancePolicy, AssetBalanceScope};
+        use iroha_primitives::numeric::NumericSpec;
+        let (world, asset) = fixture();
+        validate_public_lane_stake_reserves(&world.view()).unwrap();
+        for (spec, scope) in [
+            (NumericSpec::default(), AssetBalancePolicy::Global),
+            (NumericSpec::fractional(18), AssetBalancePolicy::Global),
+            (
+                NumericSpec::fractional(9),
+                AssetBalancePolicy::DataspaceRestricted,
+            ),
+        ] {
+            let mut block = world.block();
+            let definition = block.asset_definitions.get_mut(asset.definition()).unwrap();
+            definition.spec = spec;
+            definition.balance_scope_policy = scope;
+            let error = validate_public_lane_stake_reserves(&block).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("global network XOR with scale nine"),
+                "{error}"
+            );
+        }
+        let mut block = world.block();
+        block
+            .public_lane_stake_custody
+            .get_mut(&(LaneId::SINGLE, ALICE_ID.clone()))
+            .unwrap()
+            .0 = AssetId::with_scope(
+            asset.definition().clone(),
+            ALICE_ID.clone(),
+            AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
+        );
+        assert!(
+            validate_public_lane_stake_reserves(&block)
+                .unwrap_err()
+                .to_string()
+                .contains("exact global XOR custody")
+        );
+    }
+
+    #[test]
+    fn pinned_stake_custody_snapshot_rejects_wrong_precision_in_both_cuts() {
+        use iroha_primitives::numeric::NumericSpec;
+        for invalid_previous in [false, true] {
+            let (world, asset) = fixture();
+            if invalid_previous {
+                let mut definitions = world.asset_definitions.block();
+                definitions.get_mut(asset.definition()).unwrap().spec = NumericSpec::fractional(18);
+                definitions.commit();
+            }
+            let state = State::new(
+                world,
+                Kura::blank_kura_for_testing(),
+                crate::query::store::LiveQueryStore::start_test(),
+            );
+            {
+                let mut block = state.world.block();
+                block
+                    .asset_definitions
+                    .get_mut(asset.definition())
+                    .unwrap()
+                    .spec = NumericSpec::fractional(if invalid_previous { 9 } else { 18 });
+                block.commit();
+            }
+            let error = restore(json::to_value(&state).unwrap())
+                .err()
+                .expect("wrong-precision retained XOR must reject");
+            assert!(
+                error
+                    .to_string()
+                    .contains("global network XOR with scale nine"),
+                "{error}"
+            );
+        }
     }
 
     #[test]

@@ -3345,7 +3345,7 @@ def test_call_contract_preserves_shared_rust_argument_record_fixture() -> None:
     )
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
     assert fixture["codec"] == "EntrypointArgumentRecordV1"
-    assert fixture["generator"] == "ivm::encode_argument_record_from_json"
+    assert fixture["generator"] == "ivm_abi::arguments::encode_argument_record_from_json"
     assert re.fullmatch(
         r"[0-9a-f]{64}",
         fixture["entrypoint_argument_schema_v1"]["schema_hash_hex"],
@@ -5205,11 +5205,9 @@ def test_get_uaid_bindings_rejects_padded_account() -> None:
 
 def _uaid_manifests_payload(uaid_literal: str) -> Dict[str, Any]:
     return {
-        "uaid": uaid_literal,
         "total": 1,
-        "has_more": False,
-        "count_mode": "exact",
-        "manifests": [
+        "next_cursor": None,
+        "items": [
             {
                 "dataspace_id": 5,
                 "dataspace_alias": "lane-5",
@@ -5242,75 +5240,62 @@ def _uaid_manifests_payload(uaid_literal: str) -> Dict[str, Any]:
     }
 
 
-def test_get_uaid_manifests_parses_payload_and_filters() -> None:
+def test_uaid_manifest_collection_rejects_record_for_another_uaid() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload=_uaid_manifests_payload("uaid:" + "cd" * 32)))
+    client = ToriiClient("http://node.test", session=session)
+    with pytest.raises(ValueError, match="requested UAID"):
+        client.uaid_manifests("uaid:" + "ab" * 32).list()
+
+
+def test_uaid_manifests_parses_payload_and_filters() -> None:
     uaid_literal = "uaid:" + "cd" * 32
     manifest_hash = "dd" * 32
     session = RecordingSession()
     session.queue(StubResponse(payload=_uaid_manifests_payload(uaid_literal)))
     client = ToriiClient("http://node.test", session=session)
 
-    manifests = client.get_uaid_manifests(
-        uaid_literal,
-        dataspace_id=9,
-        status="active",
-        limit=25,
-        offset=2,
-        count_mode="exact",
+    manifests = client.uaid_manifests(uaid_literal).list(
+        filter='dataspace_id = 9 and status = "Active"', limit=25,
+        cursor="prior-page", include_total=True,
     )
-
-    assert len(manifests.manifests) == 1
+    assert len(manifests.items) == 1
     assert manifests.total == 1
-    assert manifests.has_more is False
-    assert manifests.count_mode == "exact"
-    record = manifests.manifests[0]
+    assert manifests.next_cursor is None
+    record = manifests.items[0]
     assert record.manifest_hash == manifest_hash
     assert record.lifecycle.revocation is not None
     assert record.manifest.version == 1
     assert record.manifest.expiry_epoch is None
     assert record.manifest.entries[0].notes == "demo"
-    assert session.calls[0]["params"] == {
-        "dataspace": 9,
-        "status": "active",
-        "limit": 25,
-        "offset": 2,
-        "count_mode": "exact",
-    }
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"].endswith("/manifests/query")
+    body = json.loads(call["data"])
+    assert body["limit"] == 25
+    assert body["cursor"] == "prior-page"
+    assert body["include_total"] is True
 
 
-@pytest.mark.parametrize(
-    ("kwargs", "message"),
-    [
-        ({"status": "Active"}, "status must be active"),
-        ({"status": " active"}, "surrounding whitespace"),
-        ({"count_mode": "Exact"}, "count_mode must be bounded"),
-        ({"count_mode": "exact "}, "surrounding whitespace"),
-        ({"limit": 0}, "limit must be positive"),
-        ({"offset": True}, "unsigned 64-bit integer"),
-    ],
-)
-def test_get_uaid_manifests_rejects_noncanonical_filters_before_dispatch(
-    kwargs: Dict[str, Any],
-    message: str,
-) -> None:
+@pytest.mark.parametrize("kwargs", [{"offset": 0}, {"count_mode": "exact"}, {"dataspace_id": 9}])
+def test_uaid_manifests_reject_removed_params_before_dispatch(kwargs: Dict[str, Any]) -> None:
     session = RecordingSession()
     client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises((TypeError, ValueError), match=message):
-        client.get_uaid_manifests("uaid:" + "cd" * 32, **kwargs)
-
+    with pytest.raises(TypeError):
+        client.uaid_manifests("uaid:" + "cd" * 32).list(**kwargs)
     assert session.calls == []
 
 
 @pytest.mark.parametrize(
     "mutation",
     [
-        lambda payload: payload.pop("total"),
+        lambda payload: payload.pop("next_cursor"),
         lambda payload: payload.__setitem__("legacy_total", 1),
-        lambda payload: payload["manifests"][0]["manifest"].__setitem__("version", "1"),
-        lambda payload: payload["manifests"][0]["manifest"].__setitem__(
+        lambda payload: payload["items"][0]["manifest"].__setitem__("version", "1"),
+        lambda payload: payload["items"][0]["manifest"].__setitem__(
             "expiry_epoch", None
         ),
-        lambda payload: payload["manifests"][0]["manifest"]["entries"][0].__setitem__(
+        lambda payload: payload["items"][0]["manifest"]["entries"][0].__setitem__(
             "legacy_action", "allow"
         ),
     ],
@@ -5322,7 +5307,7 @@ def test_get_uaid_manifests_rejects_noncanonical_filters_before_dispatch(
         "unknown-entry-field",
     ],
 )
-def test_get_uaid_manifests_rejects_noncanonical_response_shapes(
+def test_uaid_manifests_rejects_noncanonical_response_shapes(
     mutation: Callable[[Dict[str, Any]], Any],
 ) -> None:
     uaid_literal = "uaid:" + "cd" * 32
@@ -5333,7 +5318,7 @@ def test_get_uaid_manifests_rejects_noncanonical_response_shapes(
     client = ToriiClient("http://node.test", session=session)
 
     with pytest.raises((TypeError, ValueError, RuntimeError)):
-        client.get_uaid_manifests(uaid_literal)
+        client.uaid_manifests(uaid_literal).list()
 
 
 def test_get_configuration_returns_snapshot() -> None:
@@ -5726,7 +5711,6 @@ def test_sumeragi_native_evidence_accepts_exact_classes(evidence_class: str) -> 
     ("status", "status_type"),
     [
         ("applied", client_module.SumeragiEvidenceAppliedPenaltyStatus),
-        ("cancelled", client_module.SumeragiEvidenceCancelledPenaltyStatus),
     ],
 )
 def test_sumeragi_evidence_accepts_committed_penalty_statuses(
@@ -5844,10 +5828,10 @@ def test_sumeragi_native_evidence_rejects_missing_fields(
         ({"status": "pending", "details": {}}, r"details must be null"),
         ({"status": "applied", "details": None}, r"must be a JSON object"),
         (
-            {"status": "cancelled", "details": {"height": 4, "note": "x"}},
+            {"status": "applied", "details": {"height": 4, "note": "x"}},
             r"must contain exactly height",
         ),
-        ({"status": "retired", "details": None}, r"must be pending, applied, or cancelled"),
+        ({"status": "retired", "details": None}, r"must be pending or applied"),
     ],
 )
 def test_sumeragi_evidence_rejects_invalid_penalty_status(
@@ -6694,3 +6678,12 @@ def test_retired_generic_multisig_proposal_has_no_shipping_base_api() -> None:
         assert not hasattr(client, name)
     assert not hasattr(torii_module, "MultisigDraftIntent")
     assert session.calls == []
+
+
+@pytest.mark.parametrize("details", [{"height": 44}, None, {}, {"height": 44, "note": "x"}])
+def test_sumeragi_evidence_rejects_retired_cancelled_status(details: Any) -> None:
+    record = _sumeragi_native_evidence_record(
+        penalty_status={"status": "cancelled", "details": details}
+    )
+    with pytest.raises(RuntimeError, match="status must be pending or applied"):
+        ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")

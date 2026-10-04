@@ -20,7 +20,9 @@
 //! back this operational retirement. Core's committed-state retirement gates
 //! remain the authority for deciding when an old share may be removed.
 
+mod parliament_funding;
 mod prepared;
+pub use parliament_funding::RuntimeParliamentTleCredentialFundingErrorV1;
 mod provisioning_command;
 pub use prepared::{
     RuntimePreparedGlobalBeaconCredentialV1, prepare_global_beacon_transition_credential_v1,
@@ -36,10 +38,11 @@ use crate::{
     ParliamentTlePartialReleaseSignerBrokerBackendV1, RuntimeProviderBrokerBackendRegistryV1,
     RuntimeProviderBrokerBackendsV1,
 };
-use iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1 as _;
+use iroha_allocation::AllocationBudget;
 use iroha_core::beacon::RuntimeGlobalThresholdBeaconShareCustodyV1;
 use iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1;
 use iroha_core::beacon::credential::CONSENSUS_THRESHOLD_CREDENTIAL_VERSION_V1;
+use iroha_core::beacon::credential::ConsensusThresholdCredentialDecodeErrorV1;
 use iroha_core::beacon::credential::ConsensusThresholdCredentialErrorV1;
 use iroha_core::beacon::credential::ConsensusThresholdCredentialHeaderV1;
 use iroha_core::beacon::credential::ConsensusThresholdSecretScalarTripleV1;
@@ -55,6 +58,13 @@ use iroha_core::beacon::credential::encode_global_beacon_partial_signer_credenti
 use iroha_core::beacon::credential::global_beacon_partial_signer_inventory_digest_v1;
 use iroha_core::beacon::credential::validate_consensus_threshold_provisioning_v1;
 use iroha_core::beacon::credential::validate_consensus_threshold_session_count_v1;
+use iroha_core::beacon::credential::{
+    GlobalBeaconCredentialEncodeErrorV1, GlobalBeaconCredentialImportErrorV1,
+    PreparedGlobalBeaconCredentialV1, SecretConsensusThresholdCredentialV1,
+};
+use iroha_core::beacon::{
+    GlobalThresholdBeaconPartialSignerV1 as _, GlobalThresholdBeaconSessionError,
+};
 use iroha_core::tle_release::RuntimeTleReleaseShareCustodyV1;
 use iroha_core::tle_release::TlePartialReleaseSignerV1 as _;
 use iroha_core::tle_release::TleProjectedPartialReleaseSignerV1 as _;
@@ -93,8 +103,8 @@ const PARLIAMENT_TLE_SIGNER_CREDENTIAL_SCHEMA_NAME_V1: &str =
 const PARLIAMENT_TLE_PUBLIC_INVENTORY_SCHEMA_NAME_V1: &str =
     "iroha.runtime_provider_broker.v1.consensus_threshold.parliament_tle_public_inventory";
 
-/// Payload-free runtime threshold-signer credential failure.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Secret-free runtime threshold-signer credential failure with payload-free display.
+#[derive(Debug)]
 #[non_exhaustive]
 pub enum RuntimeConsensusThresholdSignerCredentialErrorV1 {
     /// The public qualification, network, session inventory, or share was invalid.
@@ -103,6 +113,14 @@ pub enum RuntimeConsensusThresholdSignerCredentialErrorV1 {
     Unavailable,
     /// Canonical credential encoding failed or exceeded its fixed byte ceiling.
     Encoding,
+    /// Local original-pool admission failed; the credential has not been judged invalid.
+    Session(GlobalThresholdBeaconSessionError),
+    /// Exact original raw-decoder refusal, classified before its scopes ended.
+    DecodeResource(norito::core::DecodeAttemptError),
+    /// Original prepared-output or share-import failure, retaining local source identity.
+    Output(GlobalBeaconCredentialEncodeErrorV1),
+    /// Exact local refusal constructing the original Parliament decoded graph.
+    ParliamentFunding(RuntimeParliamentTleCredentialFundingErrorV1),
 }
 
 impl fmt::Display for RuntimeConsensusThresholdSignerCredentialErrorV1 {
@@ -111,11 +129,71 @@ impl fmt::Display for RuntimeConsensusThresholdSignerCredentialErrorV1 {
             Self::Rejected => "consensus threshold-signer runtime credential was rejected",
             Self::Unavailable => "consensus threshold-signer runtime credential is unavailable",
             Self::Encoding => "consensus threshold-signer runtime credential encoding failed",
+            Self::Session(_) => "consensus threshold-signer original session admission failed",
+            Self::Output(_) => "consensus threshold-signer prepared output failed",
+            Self::ParliamentFunding(_) => "Parliament credential backing is unavailable",
+            Self::DecodeResource(_) => {
+                "consensus threshold-signer credential decoder is unavailable"
+            }
         })
     }
 }
 
-impl std::error::Error for RuntimeConsensusThresholdSignerCredentialErrorV1 {}
+impl std::error::Error for RuntimeConsensusThresholdSignerCredentialErrorV1 {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Session(error) => Some(error),
+            Self::DecodeResource(error) => Some(error),
+            Self::Output(error) => Some(error),
+            Self::ParliamentFunding(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<GlobalBeaconCredentialEncodeErrorV1>
+    for RuntimeConsensusThresholdSignerCredentialErrorV1
+{
+    fn from(error: GlobalBeaconCredentialEncodeErrorV1) -> Self {
+        match error {
+            GlobalBeaconCredentialEncodeErrorV1::Credential(error) => error.into(),
+            original => Self::Output(original),
+        }
+    }
+}
+
+impl From<GlobalBeaconCredentialImportErrorV1>
+    for RuntimeConsensusThresholdSignerCredentialErrorV1
+{
+    fn from(error: GlobalBeaconCredentialImportErrorV1) -> Self {
+        match error {
+            GlobalBeaconCredentialImportErrorV1::Credential(error) => error.into(),
+            GlobalBeaconCredentialImportErrorV1::DecodeResource(error) => {
+                Self::DecodeResource(error)
+            }
+            GlobalBeaconCredentialImportErrorV1::Session(error) => Self::Session(error),
+        }
+    }
+}
+
+impl From<GlobalThresholdBeaconSessionError> for RuntimeConsensusThresholdSignerCredentialErrorV1 {
+    fn from(error: GlobalThresholdBeaconSessionError) -> Self {
+        GlobalBeaconCredentialImportErrorV1::from(error).into()
+    }
+}
+
+impl From<ConsensusThresholdCredentialDecodeErrorV1>
+    for RuntimeConsensusThresholdSignerCredentialErrorV1
+{
+    fn from(error: ConsensusThresholdCredentialDecodeErrorV1) -> Self {
+        match error {
+            ConsensusThresholdCredentialDecodeErrorV1::Rejected => Self::Rejected,
+            ConsensusThresholdCredentialDecodeErrorV1::Resource(error) => {
+                Self::DecodeResource(error)
+            }
+        }
+    }
+}
 
 impl From<ConsensusThresholdCredentialErrorV1>
     for RuntimeConsensusThresholdSignerCredentialErrorV1
@@ -156,6 +234,7 @@ impl RuntimeParliamentTleShareProvisioningV1 {
 }
 
 #[derive(NoritoSerialize, NoritoDeserialize)]
+#[norito(decode_fields)]
 struct RuntimeParliamentTleShareCredentialWireV1 {
     public_session: TleKeySessionPublicStateV1,
     participant_index: u16,
@@ -167,6 +246,7 @@ struct RuntimeParliamentTleShareCredentialWireV1 {
     name = "irohad::external_software_signer::consensus_threshold::RuntimeParliamentTleSignerCredentialWireV1",
     frame = "iroha.runtime_provider_broker.v1.consensus_threshold.parliament_tle_signer_credential"
 )]
+#[norito(decode_fields)]
 struct RuntimeParliamentTleSignerCredentialWireV1 {
     header: ConsensusThresholdCredentialHeaderV1,
     sessions: Vec<RuntimeParliamentTleShareCredentialWireV1>,
@@ -188,6 +268,37 @@ struct RuntimeParliamentTlePublicInventoryWireV1 {
     slot: u16,
     network_id: NetworkId,
     sessions: Vec<RuntimeParliamentTlePublicInventoryEntryWireV1>,
+}
+
+#[derive(NoritoSerialize)]
+struct ParliamentPublicInventoryEntryViewV1<'a> {
+    public_session: norito::core::PayloadRef<'a, TleKeySessionPublicStateV1>,
+    participant_index: u16,
+}
+struct ParliamentPublicInventoryEntriesV1<'a>(&'a [RuntimeParliamentTleShareCredentialWireV1]);
+impl norito::core::SerializePayload for ParliamentPublicInventoryEntriesV1<'_> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+        norito::core::write_element_sequence::<ParliamentPublicInventoryEntryViewV1<'_>, _>(
+            writer,
+            self.0
+                .iter()
+                .map(|session| ParliamentPublicInventoryEntryViewV1 {
+                    public_session: norito::core::PayloadRef(&session.public_session),
+                    participant_index: session.participant_index,
+                }),
+        )
+    }
+}
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::external_software_signer::consensus_threshold::RuntimeParliamentTlePublicInventoryWireV1",
+    frame = "iroha.runtime_provider_broker.v1.consensus_threshold.parliament_tle_public_inventory"
+)]
+struct ParliamentPublicInventoryViewV1<'a> {
+    version: u16,
+    slot: u16,
+    network_id: NetworkId,
+    sessions: ParliamentPublicInventoryEntriesV1<'a>,
 }
 
 fn parliament_tle_public_inventory_wire_v1(
@@ -433,6 +544,7 @@ impl RuntimeConsensusThresholdSignerBackendsV1 {
     pub fn load_from_launchd_credential_bundle_v1(
         catalog: &IrohaRuntimeProviderBindingsV1,
         reader: &mut impl std::io::Read,
+        budget: &AllocationBudget,
     ) -> Result<Self, RuntimeConsensusThresholdSignerCredentialErrorV1> {
         let mut requested_flags = 0_u16;
         for configured in catalog.iter() {
@@ -512,6 +624,7 @@ impl RuntimeConsensusThresholdSignerBackendsV1 {
                         global_credential,
                         catalog.network_id(),
                         configured,
+                        budget,
                     )?);
                 }
                 IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner => {
@@ -519,6 +632,7 @@ impl RuntimeConsensusThresholdSignerBackendsV1 {
                         tle_credential,
                         catalog.network_id(),
                         configured,
+                        budget,
                     )?);
                 }
                 _ => {}
@@ -542,6 +656,7 @@ impl RuntimeConsensusThresholdSignerBackendsV1 {
     pub fn load_from_credential_directory_v1(
         catalog: &IrohaRuntimeProviderBindingsV1,
         credential_directory: Option<&Path>,
+        budget: &AllocationBudget,
     ) -> Result<Self, RuntimeConsensusThresholdSignerCredentialErrorV1> {
         let mut loaded = Self::new();
         for configured in catalog.iter() {
@@ -560,6 +675,7 @@ impl RuntimeConsensusThresholdSignerBackendsV1 {
                         &bytes,
                         catalog.network_id(),
                         configured,
+                        budget,
                     )?);
                 }
                 IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner => {
@@ -576,6 +692,7 @@ impl RuntimeConsensusThresholdSignerBackendsV1 {
                         &bytes,
                         catalog.network_id(),
                         configured,
+                        budget,
                     )?);
                 }
                 _ => {}
@@ -608,6 +725,7 @@ fn decode_global_beacon_credential_v1(
     bytes: &[u8],
     network_id: &NetworkId,
     configured: &IrohaRuntimeProviderBindingV1,
+    budget: &AllocationBudget,
 ) -> Result<
     Arc<RuntimeGlobalBeaconPartialSignerBackendV1>,
     RuntimeConsensusThresholdSignerCredentialErrorV1,
@@ -622,6 +740,7 @@ fn decode_global_beacon_credential_v1(
         configured.handle(),
         qualification.revision,
         qualification.policy_digest,
+        budget,
     )?;
     Ok(Arc::new(RuntimeGlobalBeaconPartialSignerBackendV1 {
         handle: configured.handle().to_owned(),
@@ -638,6 +757,7 @@ fn decode_global_beacon_credential_shares_v1(
     bytes: &[u8],
     network_id: &NetworkId,
     configured: &IrohaRuntimeProviderBindingV1,
+    budget: &AllocationBudget,
 ) -> Result<
     Vec<RuntimeGlobalBeaconShareProvisioningV1>,
     RuntimeConsensusThresholdSignerCredentialErrorV1,
@@ -652,6 +772,7 @@ fn decode_global_beacon_credential_shares_v1(
         configured.handle(),
         qualification.revision,
         qualification.policy_digest,
+        budget,
     )
     .map_err(Into::into)
 }
@@ -661,11 +782,12 @@ pub(crate) fn decode_global_beacon_runtime_signer_v1(
     bytes: &[u8],
     network_id: &NetworkId,
     configured: &IrohaRuntimeProviderBindingV1,
+    budget: &AllocationBudget,
 ) -> Result<
     Arc<dyn iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1>,
     RuntimeConsensusThresholdSignerCredentialErrorV1,
 > {
-    let backend = decode_global_beacon_credential_v1(bytes, network_id, configured)?;
+    let backend = decode_global_beacon_credential_v1(bytes, network_id, configured, budget)?;
     Ok(backend.custody.clone())
 }
 
@@ -673,60 +795,65 @@ fn decode_parliament_tle_credential_v1(
     bytes: &[u8],
     network_id: &NetworkId,
     configured: &IrohaRuntimeProviderBindingV1,
+    budget: &AllocationBudget,
 ) -> Result<
     Arc<RuntimeParliamentTlePartialReleaseSignerBackendV1>,
     RuntimeConsensusThresholdSignerCredentialErrorV1,
 > {
-    let wire: RuntimeParliamentTleSignerCredentialWireV1 =
-        decode_consensus_threshold_credential_v1(bytes)
-            .map_err(|_| RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)?;
-    let qualification = validate_credential_header_v1(
-        &wire.header,
-        IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner,
-        network_id,
-        configured,
-    )?;
-    validate_consensus_threshold_session_count_v1(wire.sessions.len())?;
-    if wire.sessions.windows(2).any(|pair| {
-        pair[0]
-            .public_session
-            .key_session_id
-            .cmp(&pair[1].public_session.key_session_id)
-            .then_with(|| pair[0].participant_index.cmp(&pair[1].participant_index))
-            .is_ge()
-    }) {
-        return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
-    }
-    let public_inventory = parliament_tle_public_inventory_wire_v1(
-        *network_id,
-        wire.sessions
-            .iter()
-            .map(|session| (session.public_session.clone(), session.participant_index)),
-    )?;
-    if consensus_threshold_public_inventory_digest_v1(&public_inventory)?
-        != qualification.policy_digest
-    {
-        return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
-    }
-    let custody = Arc::new(RuntimeTleReleaseShareCustodyV1::new());
-    for session in wire.sessions {
-        if session.public_session.network_id != *network_id.as_bytes() {
+    let funded = parliament_funding::decode(bytes, budget)?;
+    let funded = funded.try_map(|wire| {
+        let qualification = validate_credential_header_v1(
+            &wire.header,
+            IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner,
+            network_id,
+            configured,
+        )?;
+        validate_consensus_threshold_session_count_v1(wire.sessions.len())?;
+        if wire.sessions.windows(2).any(|pair| {
+            pair[0]
+                .public_session
+                .key_session_id
+                .cmp(&pair[1].public_session.key_session_id)
+                .then_with(|| pair[0].participant_index.cmp(&pair[1].participant_index))
+                .is_ge()
+        }) {
             return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
         }
-        custody
-            .import_components(
-                session.public_session,
-                session.participant_index,
-                session.components.into_zeroizing(),
-            )
-            .map_err(|_| RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)?;
-    }
-    Ok(Arc::new(
-        RuntimeParliamentTlePartialReleaseSignerBackendV1 {
+        let public_inventory = ParliamentPublicInventoryViewV1 {
+            version: CONSENSUS_THRESHOLD_CREDENTIAL_VERSION_V1,
+            slot: IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner.wire_id(),
+            network_id: *network_id,
+            sessions: ParliamentPublicInventoryEntriesV1(&wire.sessions),
+        };
+        if consensus_threshold_public_inventory_digest_v1(&public_inventory)?
+            != qualification.policy_digest
+        {
+            return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
+        }
+        let custody = Arc::new(RuntimeTleReleaseShareCustodyV1::new());
+        for session in wire.sessions {
+            if session.public_session.network_id != *network_id.as_bytes() {
+                return Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected);
+            }
+            custody
+                .import_components(
+                    session.public_session,
+                    session.participant_index,
+                    session.components.into_zeroizing(),
+                )
+                .map_err(|_| RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)?;
+        }
+        Ok(RuntimeParliamentTleDecodedGraphV1 {
             handle: wire.header.handle,
             qualification,
             custody,
-        },
+        })
+    })?;
+    // TODO: fund outer std Arc controls, Core BTreeMap nodes and supervisor
+    // I/O backing with exact original owners. This ledger covers only the
+    // decoded handle/session graph and its actual fixed charge-ledger backing.
+    Ok(Arc::new(
+        RuntimeParliamentTlePartialReleaseSignerBackendV1 { funded },
     ))
 }
 
@@ -818,17 +945,21 @@ impl GlobalBeaconPartialSignerBrokerBackendV1 for RuntimeGlobalBeaconPartialSign
     }
 }
 
-struct RuntimeParliamentTlePartialReleaseSignerBackendV1 {
+struct RuntimeParliamentTleDecodedGraphV1 {
     handle: String,
     qualification: ConsensusSignerProviderQualificationV1,
     custody: Arc<RuntimeTleReleaseShareCustodyV1>,
+}
+
+struct RuntimeParliamentTlePartialReleaseSignerBackendV1 {
+    funded: parliament_funding::FundedOwner<RuntimeParliamentTleDecodedGraphV1>,
 }
 
 impl ParliamentTlePartialReleaseSignerBrokerBackendV1
     for RuntimeParliamentTlePartialReleaseSignerBackendV1
 {
     fn handle(&self) -> &str {
-        &self.handle
+        &self.funded.get().handle
     }
 
     fn qualification(
@@ -837,7 +968,7 @@ impl ParliamentTlePartialReleaseSignerBrokerBackendV1
         ConsensusSignerProviderQualificationV1,
         ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
     > {
-        Ok(self.qualification)
+        Ok(self.funded.get().qualification)
     }
 
     fn attest_partial_release_capability(
@@ -848,7 +979,9 @@ impl ParliamentTlePartialReleaseSignerBrokerBackendV1
         iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1,
         ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
     > {
-        self.custody
+        self.funded
+            .get()
+            .custody
             .attest_partial_release_capability(session, expected_participant_index)
             .map_err(|error| match error {
                 iroha_core::tle_release::TlePartialReleaseCapabilityErrorV1::Unavailable => {
@@ -866,7 +999,9 @@ impl ParliamentTlePartialReleaseSignerBrokerBackendV1
         projection: &ValidatedTleReleaseProjectionV1,
     ) -> Result<TlePartialReleaseShareV1, ParliamentTlePartialReleaseSignerBrokerBackendErrorV1>
     {
-        self.custody
+        self.funded
+            .get()
+            .custody
             .sign_projected_partial_release(projection)
             .map_err(|_| ParliamentTlePartialReleaseSignerBrokerBackendErrorV1::Rejected)
     }
@@ -897,7 +1032,11 @@ impl RuntimeProviderBrokerBackendRegistryV1 for RuntimeConsensusThresholdSignerB
                         .parliament_tle
                         .as_deref()
                         .ok_or(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)?;
-                    exact_backend_binding_v1(configured, backend.handle(), backend.qualification)?;
+                    exact_backend_binding_v1(
+                        configured,
+                        backend.handle(),
+                        backend.funded.get().qualification,
+                    )?;
                     if requested_tle {
                         return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
                     }
@@ -942,6 +1081,240 @@ fn exact_backend_binding_v1(
 /// Direct credential tests and proof-valid fixtures shared with broker socket tests.
 #[cfg(test)]
 pub(crate) mod tests {
+    fn test_credential_budget() -> AllocationBudget {
+        AllocationBudget::new(256 * 1024 * 1024)
+    }
+
+    fn parliament_funding_fixture_v1() -> (
+        IrohaRuntimeProviderBindingsV1,
+        Zeroizing<Vec<u8>>,
+        TleFixtureV1,
+    ) {
+        let network = network_id_v1(0xC1);
+        let fixture = tle_fixture_v1(network, 0xC2);
+        let provisions = vec![RuntimeParliamentTleShareProvisioningV1::new(
+            fixture.validated.public_state().clone(),
+            1,
+            Zeroizing::new(*fixture.components),
+        )];
+        let digest =
+            parliament_tle_partial_release_signer_inventory_digest_v1(network, &provisions)
+                .expect("exact Parliament funding fixture inventory");
+        let catalog = tle_catalog_v1(digest);
+        let bytes = encode_parliament_tle_partial_release_signer_credential_v1(
+            network, HANDLE, REVISION, digest, provisions,
+        )
+        .expect("canonical Parliament funding fixture");
+        (catalog, bytes, fixture)
+    }
+
+    #[test]
+    fn parliament_prepaid_fields_preserve_canonical_frame_and_borrowed_inventory() {
+        let (catalog, bytes, fixture) = parliament_funding_fixture_v1();
+        let pool = test_credential_budget();
+        let foreign = AllocationBudget::new(pool.limit_bytes());
+        let funded = parliament_funding::decode(&bytes, &pool).unwrap();
+        assert!(funded.belongs_to(&pool));
+        assert!(!funded.belongs_to(&foreign));
+        assert_eq!(foreign.reserved_bytes(), 0);
+        assert_eq!(
+            norito::encode_canonical(funded.get()).unwrap(),
+            bytes.as_slice()
+        );
+        assert_eq!(
+            funded.get().sessions[0].public_session,
+            *fixture.validated.public_state()
+        );
+        let view = ParliamentPublicInventoryViewV1 {
+            version: CONSENSUS_THRESHOLD_CREDENTIAL_VERSION_V1,
+            slot: IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner.wire_id(),
+            network_id: *catalog.network_id(),
+            sessions: ParliamentPublicInventoryEntriesV1(&funded.get().sessions),
+        };
+        let owning = parliament_tle_public_inventory_wire_v1(
+            *catalog.network_id(),
+            [(fixture.validated.public_state().clone(), 1)],
+        )
+        .unwrap();
+        assert_eq!(
+            norito::encode_canonical(&view).unwrap(),
+            norito::encode_canonical(&owning).unwrap()
+        );
+        assert_eq!(
+            consensus_threshold_public_inventory_digest_v1(&view).unwrap(),
+            consensus_threshold_public_inventory_digest_v1(&owning).unwrap()
+        );
+        assert!(pool.reserved_bytes() > 0);
+        drop(funded);
+        assert_eq!(pool.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn parliament_decoded_graph_stays_charged_through_final_registry_reader() {
+        let (catalog, bytes, fixture) = parliament_funding_fixture_v1();
+        let pool = test_credential_budget();
+        let backend = decode_parliament_tle_credential_v1(
+            &bytes,
+            catalog.network_id(),
+            catalog.iter().next().unwrap(),
+            &pool,
+        )
+        .unwrap();
+        assert!(backend.funded.belongs_to(&pool));
+        assert_eq!(Arc::strong_count(&backend.funded.get().custody), 1);
+        let retained = pool.reserved_bytes();
+        assert!(retained > 0);
+        let registry = RuntimeConsensusThresholdSignerBackendsV1 {
+            global_beacon: None,
+            parliament_tle: Some(backend),
+        };
+        pool.set_limit_bytes(0);
+        let another = registry.clone();
+        assert_eq!(
+            pool.reserved_bytes(),
+            retained,
+            "cloning charges the same graph once"
+        );
+        registry
+            .parliament_tle
+            .as_ref()
+            .unwrap()
+            .attest_partial_release_capability(&fixture.validated, 1)
+            .unwrap();
+        let final_reader = another.resolve(&catalog).unwrap();
+        drop(registry);
+        drop(another);
+        assert_eq!(
+            pool.reserved_bytes(),
+            retained,
+            "trait dispatch retains the original owner"
+        );
+        drop(final_reader);
+        assert_eq!(
+            pool.reserved_bytes(),
+            0,
+            "only final reclamation releases graph credit"
+        );
+    }
+
+    #[test]
+    fn parliament_actual_backing_shortage_keeps_original_refusal_and_retries_same_bytes() {
+        let (catalog, bytes, _) = parliament_funding_fixture_v1();
+        let input_hash = Hash::new(bytes.as_slice());
+        let funded_probe = test_credential_budget();
+        let probe = parliament_funding::decode(&bytes, &funded_probe).unwrap();
+        let peak = funded_probe.peak_reserved_bytes();
+        assert!(peak > parliament_funding::preparation_bytes() + HANDLE.len());
+        drop(probe);
+        assert_eq!(funded_probe.reserved_bytes(), 0);
+
+        let pool = AllocationBudget::new(peak - 1);
+        let error = decode_parliament_tle_credential_v1(
+            &bytes,
+            catalog.network_id(),
+            catalog.iter().next().unwrap(),
+            &pool,
+        )
+        .err()
+        .expect("one byte below actual admitted peak must refuse");
+        let RuntimeConsensusThresholdSignerCredentialErrorV1::ParliamentFunding(
+            RuntimeParliamentTleCredentialFundingErrorV1::Storage(
+                iroha_allocation::ChargedBufferError::Admission(
+                    iroha_allocation::AllocationRefusal::Capacity {
+                        reserved_bytes,
+                        limit_bytes,
+                        ..
+                    },
+                ),
+            ),
+        ) = &error
+        else {
+            panic!("physical funding refusal must remain typed and local");
+        };
+        assert!(*reserved_bytes > 0);
+        assert_eq!(*limit_bytes, peak - 1);
+        assert_eq!(
+            pool.reserved_bytes(),
+            0,
+            "failed DTO owners are reclaimed before refund"
+        );
+        assert!(!error.to_string().contains(HANDLE));
+        assert_eq!(Hash::new(bytes.as_slice()), input_hash);
+        drop(error);
+        pool.set_limit_bytes(peak);
+        let retried = decode_parliament_tle_credential_v1(
+            &bytes,
+            catalog.network_id(),
+            catalog.iter().next().unwrap(),
+            &pool,
+        )
+        .unwrap();
+        assert!(retried.funded.belongs_to(&pool));
+        assert_eq!(Hash::new(bytes.as_slice()), input_hash);
+        drop(retried);
+        assert_eq!(pool.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn parliament_invalid_private_share_refunds_only_after_decoded_graph_retirement() {
+        let (catalog, bytes, _) = parliament_funding_fixture_v1();
+        let mut wire: RuntimeParliamentTleSignerCredentialWireV1 =
+            decode_consensus_threshold_credential_v1(&bytes).unwrap();
+        wire.sessions[0].components =
+            ConsensusThresholdSecretScalarTripleV1::from_zeroizing(Zeroizing::new([[0; 32]; 3]));
+        let invalid = encode_consensus_threshold_secret_credential_v1(&wire).unwrap();
+        let pool = test_credential_budget();
+        assert!(matches!(
+            decode_parliament_tle_credential_v1(
+                &invalid,
+                catalog.network_id(),
+                catalog.iter().next().unwrap(),
+                &pool,
+            ),
+            Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
+        ));
+        assert_eq!(pool.reserved_bytes(), 0);
+        assert!(pool.peak_reserved_bytes() > parliament_funding::preparation_bytes());
+    }
+
+    #[test]
+    fn parliament_prepaid_import_preserves_existing_committee_profiles_through_maximum() {
+        for committee in [
+            4,
+            7,
+            iroha_crypto::threshold_bls::THRESHOLD_BLS_MAX_COMMITTEE_SIZE_V1,
+        ] {
+            let network = network_id_v1(0xD1);
+            let fixture = tle_fixture_with_committee_v1(network, committee as u8 + 0x20, committee);
+            let provisions = vec![RuntimeParliamentTleShareProvisioningV1::new(
+                fixture.validated.public_state().clone(),
+                1,
+                fixture.components,
+            )];
+            let digest =
+                parliament_tle_partial_release_signer_inventory_digest_v1(network, &provisions)
+                    .unwrap();
+            let catalog = tle_catalog_v1(digest);
+            let bytes = encode_parliament_tle_partial_release_signer_credential_v1(
+                network, HANDLE, REVISION, digest, provisions,
+            )
+            .unwrap();
+            let pool = test_credential_budget();
+            let backend = decode_parliament_tle_credential_v1(
+                &bytes,
+                catalog.network_id(),
+                catalog.iter().next().unwrap(),
+                &pool,
+            )
+            .unwrap();
+            backend
+                .attest_partial_release_capability(&fixture.validated, 1)
+                .unwrap();
+            assert!(backend.funded.belongs_to(&pool));
+            drop(backend);
+            assert_eq!(pool.reserved_bytes(), 0);
+        }
+    }
     use super::*;
     use crate::external_software_signer::ExternalSoftwareSignerBackendsV1;
     use iroha_config::parameters::actual::Root as Config;
@@ -1005,7 +1378,7 @@ pub(crate) mod tests {
         /// Independently validated public session used to verify partials.
         pub(crate) session: ValidatedGlobalThresholdBeaconSessionV1,
         /// Synthetic canonical credential retained only for consumed-descriptor tests.
-        pub(crate) credential: Zeroizing<Vec<u8>>,
+        pub(crate) credential: SecretConsensusThresholdCredentialV1,
     }
 
     /// Fully resolved TLE signer fixture used by authenticated broker tests.
@@ -1105,12 +1478,14 @@ pub(crate) mod tests {
         network_id: NetworkId,
         session_byte: u8,
         committee_size: u16,
+        budget: &AllocationBudget,
     ) -> BeaconFixtureV1 {
         beacon_fixture_with_roster_hash_v1(
             network_id,
             session_byte,
             committee_size,
             beacon_fixture_roster_hash_v1(committee_size),
+            &budget,
         )
     }
 
@@ -1119,8 +1494,15 @@ pub(crate) mod tests {
         session_byte: u8,
         committee_size: u16,
         roster_hash: [u8; 32],
+        budget: &AllocationBudget,
     ) -> BeaconFixtureV1 {
-        beacon_fixture_with_session_v1(network_id, [session_byte; 32], committee_size, roster_hash)
+        beacon_fixture_with_session_v1(
+            network_id,
+            [session_byte; 32],
+            committee_size,
+            roster_hash,
+            &budget,
+        )
     }
 
     fn beacon_fixture_with_session_v1(
@@ -1128,8 +1510,16 @@ pub(crate) mod tests {
         session_id: [u8; 32],
         committee_size: u16,
         roster_hash: [u8; 32],
+        budget: &AllocationBudget,
     ) -> BeaconFixtureV1 {
-        beacon_fixture_for_seat_v1(network_id, session_id, committee_size, roster_hash, 1)
+        beacon_fixture_for_seat_v1(
+            network_id,
+            session_id,
+            committee_size,
+            roster_hash,
+            1,
+            &budget,
+        )
     }
 
     fn beacon_fixture_for_seat_v1(
@@ -1138,6 +1528,7 @@ pub(crate) mod tests {
         committee_size: u16,
         roster_hash: [u8; 32],
         signer_index: u16,
+        budget: &AllocationBudget,
     ) -> BeaconFixtureV1 {
         let (record, components) = complete_beacon_dkg_fixture_for_seat_v1(
             network_id,
@@ -1150,7 +1541,7 @@ pub(crate) mod tests {
             "beacon fixture must use the exact signed BLS roster"
         );
         let binding = beacon_binding_v1(&record);
-        let validated = validate_global_threshold_beacon_session_v1(record.clone(), &binding)
+        let validated = validate_global_threshold_beacon_session_v1(&record, &binding, &budget)
             .expect("revalidate beacon fixture transcript");
         BeaconFixtureV1 {
             record,
@@ -1159,8 +1550,51 @@ pub(crate) mod tests {
         }
     }
 
-    fn beacon_fixture_v1(network_id: NetworkId, session_byte: u8) -> BeaconFixtureV1 {
-        beacon_fixture_with_committee_v1(network_id, session_byte, 4)
+    fn beacon_credential_fixture_v1(
+        network: NetworkId,
+        handle: &str,
+        revision: u64,
+        digest: [u8; 32],
+        shares: Vec<RuntimeGlobalBeaconShareProvisioningV1>,
+        budget: &AllocationBudget,
+    ) -> Result<SecretConsensusThresholdCredentialV1, ConsensusThresholdCredentialErrorV1> {
+        let produce = || -> Result<_, GlobalBeaconCredentialEncodeErrorV1> {
+            let mut prepared = PreparedGlobalBeaconCredentialV1::new(
+                network,
+                handle,
+                revision,
+                digest,
+                shares
+                    .iter()
+                    .map(|share| (share.authenticated_session(), share.signer_index())),
+                budget,
+            )?;
+            encode_global_beacon_partial_signer_credential_v1(
+                &mut prepared,
+                shares
+                    .iter()
+                    .map(RuntimeGlobalBeaconShareProvisioningV1::credential_source),
+            )?;
+            prepared.into_credential().map_err(|(_, error)| error)
+        };
+        produce().map_err(|error| match error {
+            GlobalBeaconCredentialEncodeErrorV1::Credential(error) => error,
+            GlobalBeaconCredentialEncodeErrorV1::Share(
+                iroha_core::beacon::GlobalThresholdBeaconError::ThresholdBls(
+                    iroha_crypto::threshold_bls::ThresholdBlsError::SecretShareMismatch
+                    | iroha_crypto::threshold_bls::ThresholdBlsError::InvalidScalar,
+                ),
+            ) => ConsensusThresholdCredentialErrorV1::Rejected,
+            local => panic!("unexpected credential fixture failure: {local:?}"),
+        })
+    }
+
+    fn beacon_fixture_v1(
+        network_id: NetworkId,
+        session_byte: u8,
+        budget: &AllocationBudget,
+    ) -> BeaconFixtureV1 {
+        beacon_fixture_with_committee_v1(network_id, session_byte, 4, &budget)
     }
 
     fn tle_fixture_with_committee_v1(
@@ -1343,11 +1777,18 @@ pub(crate) mod tests {
         committee_size: u16,
         session_byte: u8,
     ) -> ConsensusThresholdBeaconBrokerTestFixtureV1 {
+        let producer_budget = test_credential_budget();
+        let budget = test_credential_budget();
         let network_id = network_id_v1(0xC1);
-        let fixture = beacon_fixture_with_committee_v1(network_id, session_byte, committee_size);
-        let session = fixture.validated;
+        let fixture = beacon_fixture_with_committee_v1(
+            network_id,
+            session_byte,
+            committee_size,
+            &producer_budget,
+        );
+        let session = fixture.validated.clone();
         let provisioning = vec![RuntimeGlobalBeaconShareProvisioningV1::new(
-            fixture.record,
+            fixture.validated.clone(),
             1,
             fixture.components,
         )];
@@ -1355,18 +1796,20 @@ pub(crate) mod tests {
             global_beacon_partial_signer_inventory_digest_v1(network_id, &provisioning)
                 .expect("derive broker-roundtrip beacon inventory digest");
         let catalog = beacon_catalog_v1(policy_digest);
-        let credential = encode_global_beacon_partial_signer_credential_v1(
+        let credential = beacon_credential_fixture_v1(
             network_id,
             HANDLE,
             REVISION,
             policy_digest,
             provisioning,
+            &producer_budget,
         )
         .expect("encode broker-roundtrip beacon credential");
         let backend = decode_global_beacon_credential_v1(
             &credential,
             catalog.network_id(),
             catalog.iter().next().expect("one beacon binding"),
+            &budget,
         )
         .expect("decode broker-roundtrip beacon credential");
         let registry = RuntimeConsensusThresholdSignerBackendsV1 {
@@ -1396,6 +1839,8 @@ pub(crate) mod tests {
         iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
         iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalitySeatReadinessContextV1,
     ) {
+        let producer_budget = test_credential_budget();
+        let budget = test_credential_budget();
         use iroha_data_model::isi::kagemusha_v1::{
             BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
             KagemushaMintFinalityAuthorityGenerationV1,
@@ -1421,6 +1866,7 @@ pub(crate) mod tests {
             0x89,
             4,
             iroha_core::beacon::global_threshold_beacon_roster_hash_v1(&peers),
+            &producer_budget,
         );
         let session = fixture.validated.clone();
         let authority = KagemushaMintFinalityAuthorityGenerationV1 {
@@ -1444,25 +1890,27 @@ pub(crate) mod tests {
             }),
         };
         let provisioning = vec![RuntimeGlobalBeaconShareProvisioningV1::new(
-            fixture.record,
+            fixture.validated.clone(),
             1,
             fixture.components,
         )];
         let policy =
             global_beacon_partial_signer_inventory_digest_v1(network_id, &provisioning).unwrap();
         let catalog = beacon_catalog_v1(policy);
-        let credential = encode_global_beacon_partial_signer_credential_v1(
+        let credential = beacon_credential_fixture_v1(
             network_id,
             HANDLE,
             REVISION,
             policy,
             provisioning,
+            &producer_budget,
         )
         .unwrap();
         let backend = decode_global_beacon_credential_v1(
             &credential,
             &network_id,
             catalog.iter().next().unwrap(),
+            &budget,
         )
         .unwrap();
         let registry = RuntimeConsensusThresholdSignerBackendsV1 {
@@ -1521,6 +1969,7 @@ pub(crate) mod tests {
             &credential,
             catalog.network_id(),
             catalog.iter().next().expect("one TLE binding"),
+            &test_credential_budget(),
         )
         .expect("decode broker-roundtrip TLE credential");
         let registry = RuntimeConsensusThresholdSignerBackendsV1 {
@@ -1621,11 +2070,13 @@ pub(crate) mod tests {
 
     #[test]
     fn global_beacon_credential_loads_resolves_and_signs_verified_partial() {
+        let producer_budget = test_credential_budget();
+        let budget = test_credential_budget();
         let network_id = network_id_v1(0xC1);
-        let fixture = beacon_fixture_v1(network_id, 0x71);
+        let fixture = beacon_fixture_v1(network_id, 0x71, &producer_budget);
         let validated = fixture.validated.clone();
         let provisioning = vec![RuntimeGlobalBeaconShareProvisioningV1::new(
-            fixture.record,
+            fixture.validated.clone(),
             1,
             fixture.components,
         )];
@@ -1637,12 +2088,13 @@ pub(crate) mod tests {
             REVISION,
             policy_digest,
         );
-        let credential = encode_global_beacon_partial_signer_credential_v1(
+        let credential = beacon_credential_fixture_v1(
             network_id,
             HANDLE,
             REVISION,
             policy_digest,
             provisioning,
+            &producer_budget,
         )
         .expect("encode beacon runtime credential");
         let bundle = encode_consensus_threshold_credential_bundle_v1(Some(&credential), None)
@@ -1651,6 +2103,7 @@ pub(crate) mod tests {
             RuntimeConsensusThresholdSignerBackendsV1::load_from_launchd_credential_bundle_v1(
                 &catalog,
                 &mut Cursor::new(bundle.as_slice()),
+                &budget,
             )
             .expect("load beacon credential from launchd bundle");
         bundled
@@ -1662,6 +2115,7 @@ pub(crate) mod tests {
             RuntimeConsensusThresholdSignerBackendsV1::load_from_launchd_credential_bundle_v1(
                 &catalog,
                 &mut Cursor::new(wrong_presence.as_slice()),
+                &budget,
             ),
             Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
         ));
@@ -1669,6 +2123,7 @@ pub(crate) mod tests {
             RuntimeConsensusThresholdSignerBackendsV1::load_from_launchd_credential_bundle_v1(
                 &catalog,
                 &mut Cursor::new(&bundle[..bundle.len() - 1]),
+                &budget,
             ),
             Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Unavailable)
         ));
@@ -1682,6 +2137,7 @@ pub(crate) mod tests {
         let loaded = RuntimeConsensusThresholdSignerBackendsV1::load_from_credential_directory_v1(
             &catalog,
             Some(&directory),
+            &budget,
         )
         .expect("load beacon runtime credential");
         loaded
@@ -1718,6 +2174,7 @@ pub(crate) mod tests {
 
     #[test]
     fn parliament_tle_credential_loads_resolves_and_signs_verified_partial() {
+        let budget = test_credential_budget();
         let network_id = network_id_v1(0xC1);
         let fixture = tle_fixture_v1(network_id, 0x72);
         let (projection, identity) = tle_projection_v1(&fixture);
@@ -1749,6 +2206,7 @@ pub(crate) mod tests {
             RuntimeConsensusThresholdSignerBackendsV1::load_from_launchd_credential_bundle_v1(
                 &catalog,
                 &mut Cursor::new(bundle.as_slice()),
+                &budget,
             )
             .expect("load Parliament TLE credential from launchd bundle");
         bundled
@@ -1764,6 +2222,7 @@ pub(crate) mod tests {
         let loaded = RuntimeConsensusThresholdSignerBackendsV1::load_from_credential_directory_v1(
             &catalog,
             Some(&directory),
+            &budget,
         )
         .expect("load Parliament TLE runtime credential");
         loaded.resolve(&catalog).expect("resolve exact TLE backend");
@@ -1787,29 +2246,36 @@ pub(crate) mod tests {
 
     #[test]
     fn beacon_supervisor_restart_rotation_requires_revision_bump_and_removes_predecessor() {
+        let producer_budget = test_credential_budget();
+        let budget = test_credential_budget();
         let network_id = network_id_v1(0xC1);
-        let predecessor = beacon_fixture_v1(network_id, 0x7B);
+        let predecessor = beacon_fixture_v1(network_id, 0x7B, &producer_budget);
         let predecessor_session = predecessor.validated.clone();
-        let successor = beacon_fixture_v1(network_id, 0x7C);
+        let successor = beacon_fixture_v1(network_id, 0x7C, &producer_budget);
         let successor_session = successor.validated.clone();
         let old_provisioning = vec![
             RuntimeGlobalBeaconShareProvisioningV1::new(
-                predecessor.record,
+                predecessor.validated.clone(),
                 1,
                 predecessor.components,
             ),
-            RuntimeGlobalBeaconShareProvisioningV1::new(successor.record, 1, successor.components),
+            RuntimeGlobalBeaconShareProvisioningV1::new(
+                successor.validated.clone(),
+                1,
+                successor.components,
+            ),
         ];
         let old_policy_digest =
             global_beacon_partial_signer_inventory_digest_v1(network_id, &old_provisioning)
                 .expect("derive predecessor-plus-successor beacon inventory digest");
         let old_catalog = beacon_catalog_v1(old_policy_digest);
-        let old_credential = encode_global_beacon_partial_signer_credential_v1(
+        let old_credential = beacon_credential_fixture_v1(
             network_id,
             HANDLE,
             REVISION,
             old_policy_digest,
             old_provisioning,
+            &producer_budget,
         )
         .expect("encode predecessor-plus-successor beacon credential");
         let (old_directory_guard, old_directory) = secure_credential_directory_v1();
@@ -1823,6 +2289,7 @@ pub(crate) mod tests {
             RuntimeConsensusThresholdSignerBackendsV1::load_from_credential_directory_v1(
                 &old_catalog,
                 Some(&old_directory),
+                &budget,
             )
             .expect("start revision-N beacon backend");
         old_backend
@@ -1843,9 +2310,9 @@ pub(crate) mod tests {
             );
         }
 
-        let replacement_successor = beacon_fixture_v1(network_id, 0x7C);
+        let replacement_successor = beacon_fixture_v1(network_id, 0x7C, &producer_budget);
         let new_provisioning = vec![RuntimeGlobalBeaconShareProvisioningV1::new(
-            replacement_successor.record,
+            replacement_successor.validated.clone(),
             1,
             replacement_successor.components,
         )];
@@ -1858,6 +2325,7 @@ pub(crate) mod tests {
             RuntimeConsensusThresholdSignerBackendsV1::load_from_credential_directory_v1(
                 &new_catalog,
                 Some(&old_directory),
+                &budget,
             ),
             Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
         ));
@@ -1865,12 +2333,13 @@ pub(crate) mod tests {
         drop(old_credential);
         drop(old_directory_guard);
 
-        let new_credential = encode_global_beacon_partial_signer_credential_v1(
+        let new_credential = beacon_credential_fixture_v1(
             network_id,
             HANDLE,
             REVISION + 1,
             new_policy_digest,
             new_provisioning,
+            &producer_budget,
         )
         .expect("encode successor-only beacon credential");
         let (_new_directory_guard, new_directory) = secure_credential_directory_v1();
@@ -1884,6 +2353,7 @@ pub(crate) mod tests {
             RuntimeConsensusThresholdSignerBackendsV1::load_from_credential_directory_v1(
                 &new_catalog,
                 Some(&new_directory),
+                &budget,
             )
             .expect("restart with revision-N-plus-one beacon backend");
         restarted_backend
@@ -1916,6 +2386,7 @@ pub(crate) mod tests {
 
     #[test]
     fn tle_supervisor_restart_rotation_requires_revision_bump_and_removes_predecessor() {
+        let budget = test_credential_budget();
         let network_id = network_id_v1(0xC1);
         let predecessor = tle_fixture_v1(network_id, 0x7D);
         let predecessor_session = predecessor.validated.clone();
@@ -1960,6 +2431,7 @@ pub(crate) mod tests {
             RuntimeConsensusThresholdSignerBackendsV1::load_from_credential_directory_v1(
                 &old_catalog,
                 Some(&old_directory),
+                &budget,
             )
             .expect("start revision-N TLE backend");
         old_backend
@@ -2005,6 +2477,7 @@ pub(crate) mod tests {
             RuntimeConsensusThresholdSignerBackendsV1::load_from_credential_directory_v1(
                 &new_catalog,
                 Some(&old_directory),
+                &budget,
             ),
             Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
         ));
@@ -2031,6 +2504,7 @@ pub(crate) mod tests {
             RuntimeConsensusThresholdSignerBackendsV1::load_from_credential_directory_v1(
                 &new_catalog,
                 Some(&new_directory),
+                &budget,
             )
             .expect("restart with revision-N-plus-one TLE backend");
         restarted_backend
@@ -2093,6 +2567,8 @@ pub(crate) mod tests {
 
     #[test]
     fn consensus_threshold_frames_separate_credentials_and_public_inventories() {
+        let producer_budget = test_credential_budget();
+        let budget = test_credential_budget();
         let tle = RuntimeParliamentTleSignerCredentialWireV1 {
             header: tle_header_v1(),
             sessions: Vec::new(),
@@ -2104,21 +2580,22 @@ pub(crate) mod tests {
         );
         // A real Core-encoded beacon credential is a distinct signer credential root.
         let network_id = network_id_v1(0xC1);
-        let fixture = beacon_fixture_v1(network_id, 0x78);
+        let fixture = beacon_fixture_v1(network_id, 0x78, &producer_budget);
         let provisioning = vec![RuntimeGlobalBeaconShareProvisioningV1::new(
-            fixture.record,
+            fixture.validated.clone(),
             1,
             fixture.components,
         )];
         let policy_digest =
             global_beacon_partial_signer_inventory_digest_v1(network_id, &provisioning)
                 .expect("derive beacon inventory digest");
-        let beacon_bytes = encode_global_beacon_partial_signer_credential_v1(
+        let beacon_bytes = beacon_credential_fixture_v1(
             network_id,
             HANDLE,
             REVISION,
             policy_digest,
             provisioning,
+            &producer_budget,
         )
         .expect("encode Core beacon credential");
         assert!(matches!(
@@ -2131,6 +2608,7 @@ pub(crate) mod tests {
                 &tle_bytes,
                 beacon_catalog.network_id(),
                 beacon_catalog.iter().next().expect("one beacon binding"),
+                &budget,
             ),
             Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
         ));
@@ -2211,12 +2689,22 @@ pub(crate) mod tests {
 
     #[test]
     fn public_inventory_digests_are_order_stable_and_seat_bound() {
+        let producer_budget = test_credential_budget();
+        let budget = test_credential_budget();
         let network_id = network_id_v1(0xC1);
-        let first = beacon_fixture_v1(network_id, 0x81);
-        let second = beacon_fixture_v1(network_id, 0x82);
+        let first = beacon_fixture_v1(network_id, 0x81, &producer_budget);
+        let second = beacon_fixture_v1(network_id, 0x82, &producer_budget);
         let mut beacon_inventory = vec![
-            RuntimeGlobalBeaconShareProvisioningV1::new(first.record, 1, first.components),
-            RuntimeGlobalBeaconShareProvisioningV1::new(second.record, 1, second.components),
+            RuntimeGlobalBeaconShareProvisioningV1::new(
+                first.validated.clone(),
+                1,
+                first.components,
+            ),
+            RuntimeGlobalBeaconShareProvisioningV1::new(
+                second.validated.clone(),
+                1,
+                second.components,
+            ),
         ];
         let beacon_forward =
             global_beacon_partial_signer_inventory_digest_v1(network_id, &beacon_inventory)
@@ -2226,25 +2714,35 @@ pub(crate) mod tests {
             global_beacon_partial_signer_inventory_digest_v1(network_id, &beacon_inventory)
                 .expect("derive reverse beacon inventory digest");
         assert_eq!(beacon_forward, beacon_reverse);
-        let reverse_credential = encode_global_beacon_partial_signer_credential_v1(
+        let reverse_credential = beacon_credential_fixture_v1(
             network_id,
             HANDLE,
             REVISION,
             beacon_reverse,
             beacon_inventory,
+            &producer_budget,
         )
         .expect("encode reverse-ordered beacon inventory");
-        let first = beacon_fixture_v1(network_id, 0x81);
-        let second = beacon_fixture_v1(network_id, 0x82);
-        let forward_credential = encode_global_beacon_partial_signer_credential_v1(
+        let first = beacon_fixture_v1(network_id, 0x81, &producer_budget);
+        let second = beacon_fixture_v1(network_id, 0x82, &producer_budget);
+        let forward_credential = beacon_credential_fixture_v1(
             network_id,
             HANDLE,
             REVISION,
             beacon_forward,
             vec![
-                RuntimeGlobalBeaconShareProvisioningV1::new(first.record, 1, first.components),
-                RuntimeGlobalBeaconShareProvisioningV1::new(second.record, 1, second.components),
+                RuntimeGlobalBeaconShareProvisioningV1::new(
+                    first.validated.clone(),
+                    1,
+                    first.components,
+                ),
+                RuntimeGlobalBeaconShareProvisioningV1::new(
+                    second.validated.clone(),
+                    1,
+                    second.components,
+                ),
             ],
+            &producer_budget,
         )
         .expect("encode forward-ordered beacon inventory");
         assert_eq!(&*forward_credential, &*reverse_credential);
@@ -2253,17 +2751,18 @@ pub(crate) mod tests {
             &forward_credential,
             beacon_catalog.network_id(),
             beacon_catalog.iter().next().expect("one beacon binding"),
+            &budget,
         )
         .expect("decode canonical two-session beacon inventory");
 
-        let seat_fixture = beacon_fixture_v1(network_id, 0x83);
+        let seat_fixture = beacon_fixture_v1(network_id, 0x83, &producer_budget);
         let seat_one = vec![RuntimeGlobalBeaconShareProvisioningV1::new(
-            seat_fixture.record.clone(),
+            seat_fixture.validated.clone(),
             1,
             Zeroizing::new(*seat_fixture.components),
         )];
         let seat_two = vec![RuntimeGlobalBeaconShareProvisioningV1::new(
-            seat_fixture.record,
+            seat_fixture.validated.clone(),
             2,
             seat_fixture.components,
         )];
@@ -2338,6 +2837,7 @@ pub(crate) mod tests {
                 &reordered_credential,
                 tle_catalog.network_id(),
                 tle_catalog.iter().next().expect("one TLE binding"),
+                &test_credential_budget(),
             ),
             Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
         ));
@@ -2410,6 +2910,7 @@ pub(crate) mod tests {
                 &rebound,
                 catalog.network_id(),
                 catalog.iter().next().expect("one TLE binding"),
+                &test_credential_budget(),
             ),
             Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
         ));
@@ -2417,10 +2918,12 @@ pub(crate) mod tests {
 
     #[test]
     fn credential_header_substitution_and_noncanonical_bytes_fail_closed() {
+        let producer_budget = test_credential_budget();
+        let budget = test_credential_budget();
         let network_id = network_id_v1(0xC1);
-        let fixture = beacon_fixture_v1(network_id, 0x73);
+        let fixture = beacon_fixture_v1(network_id, 0x73, &producer_budget);
         let provisioning = vec![RuntimeGlobalBeaconShareProvisioningV1::new(
-            fixture.record,
+            fixture.validated.clone(),
             1,
             fixture.components,
         )];
@@ -2428,18 +2931,20 @@ pub(crate) mod tests {
             global_beacon_partial_signer_inventory_digest_v1(network_id, &provisioning)
                 .expect("derive substituted-header inventory digest");
         let catalog = beacon_catalog_v1(policy_digest);
-        let credential = encode_global_beacon_partial_signer_credential_v1(
+        let credential = beacon_credential_fixture_v1(
             network_id,
             HANDLE,
             REVISION,
             policy_digest,
             provisioning,
+            &producer_budget,
         )
         .expect("encode valid beacon credential");
         decode_global_beacon_credential_v1(
             &credential,
             catalog.network_id(),
             catalog.iter().next().expect("one binding"),
+            &budget,
         )
         .expect("exact catalog binding");
         // Every configured qualification field is bound to the Core credential header.
@@ -2467,6 +2972,7 @@ pub(crate) mod tests {
                     &credential,
                     &network,
                     catalog.iter().next().expect("one binding"),
+                    &budget,
                 ),
                 Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
             ));
@@ -2478,6 +2984,7 @@ pub(crate) mod tests {
                 &noncanonical,
                 catalog.network_id(),
                 catalog.iter().next().expect("one binding"),
+                &budget,
             ),
             Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
         ));
@@ -2527,6 +3034,7 @@ pub(crate) mod tests {
                     &substituted,
                     catalog.network_id(),
                     catalog.iter().next().expect("one binding"),
+                    &test_credential_budget(),
                 ),
                 Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
             ));
@@ -2535,34 +3043,45 @@ pub(crate) mod tests {
 
     #[test]
     fn duplicate_empty_and_invalid_session_inventories_fail_closed() {
+        let producer_budget = test_credential_budget();
         let network_id = network_id_v1(0xC1);
         assert!(matches!(
-            encode_global_beacon_partial_signer_credential_v1(
+            beacon_credential_fixture_v1(
                 network_id,
                 HANDLE,
                 REVISION,
                 POLICY_DIGEST,
                 Vec::new(),
+                &producer_budget
             ),
             Err(ConsensusThresholdCredentialErrorV1::Rejected)
         ));
 
-        let fixture = beacon_fixture_v1(network_id, 0x74);
-        let duplicate = beacon_fixture_v1(network_id, 0x74);
+        let fixture = beacon_fixture_v1(network_id, 0x74, &producer_budget);
+        let duplicate = beacon_fixture_v1(network_id, 0x74, &producer_budget);
         let duplicate_provisioning = vec![
-            RuntimeGlobalBeaconShareProvisioningV1::new(fixture.record, 1, fixture.components),
-            RuntimeGlobalBeaconShareProvisioningV1::new(duplicate.record, 1, duplicate.components),
+            RuntimeGlobalBeaconShareProvisioningV1::new(
+                fixture.validated.clone(),
+                1,
+                fixture.components,
+            ),
+            RuntimeGlobalBeaconShareProvisioningV1::new(
+                duplicate.validated.clone(),
+                1,
+                duplicate.components,
+            ),
         ];
         let duplicate_policy_digest =
             global_beacon_partial_signer_inventory_digest_v1(network_id, &duplicate_provisioning)
                 .expect("derive duplicate beacon inventory digest");
         assert!(matches!(
-            encode_global_beacon_partial_signer_credential_v1(
+            beacon_credential_fixture_v1(
                 network_id,
                 HANDLE,
                 REVISION,
                 duplicate_policy_digest,
                 duplicate_provisioning,
+                &producer_budget
             ),
             Err(ConsensusThresholdCredentialErrorV1::Rejected)
         ));
@@ -2592,10 +3111,12 @@ pub(crate) mod tests {
 
     #[test]
     fn missing_insecure_and_symlink_credentials_fail_closed() {
+        let producer_budget = test_credential_budget();
+        let budget = test_credential_budget();
         let network_id = network_id_v1(0xC1);
-        let fixture = beacon_fixture_v1(network_id, 0x76);
+        let fixture = beacon_fixture_v1(network_id, 0x76, &producer_budget);
         let provisioning = vec![RuntimeGlobalBeaconShareProvisioningV1::new(
-            fixture.record,
+            fixture.validated.clone(),
             1,
             fixture.components,
         )];
@@ -2603,17 +3124,18 @@ pub(crate) mod tests {
             global_beacon_partial_signer_inventory_digest_v1(network_id, &provisioning)
                 .expect("derive credential-source inventory digest");
         let catalog = beacon_catalog_v1(policy_digest);
-        let credential = encode_global_beacon_partial_signer_credential_v1(
+        let credential = beacon_credential_fixture_v1(
             network_id,
             HANDLE,
             REVISION,
             policy_digest,
             provisioning,
+            &producer_budget,
         )
         .expect("encode valid credential");
         assert!(matches!(
             RuntimeConsensusThresholdSignerBackendsV1::load_from_credential_directory_v1(
-                &catalog, None,
+                &catalog, None, &budget,
             ),
             Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Unavailable)
         ));
@@ -2622,6 +3144,7 @@ pub(crate) mod tests {
             RuntimeConsensusThresholdSignerBackendsV1::load_from_credential_directory_v1(
                 &catalog,
                 Some(&directory),
+                &budget,
             ),
             Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Unavailable)
         ));
@@ -2636,6 +3159,7 @@ pub(crate) mod tests {
             RuntimeConsensusThresholdSignerBackendsV1::load_from_credential_directory_v1(
                 &catalog,
                 Some(&directory),
+                &budget,
             ),
             Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
         ));
@@ -2646,6 +3170,7 @@ pub(crate) mod tests {
             RuntimeConsensusThresholdSignerBackendsV1::load_from_credential_directory_v1(
                 &catalog,
                 Some(&directory),
+                &budget,
             ),
             Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
                 | Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Unavailable)
@@ -2654,10 +3179,12 @@ pub(crate) mod tests {
 
     #[test]
     fn qualification_drift_and_test_marking_remain_fail_closed() {
+        let producer_budget = test_credential_budget();
+        let budget = test_credential_budget();
         let network_id = network_id_v1(0xC1);
-        let fixture = beacon_fixture_v1(network_id, 0x77);
+        let fixture = beacon_fixture_v1(network_id, 0x77, &producer_budget);
         let provisioning = vec![RuntimeGlobalBeaconShareProvisioningV1::new(
-            fixture.record,
+            fixture.validated.clone(),
             1,
             fixture.components,
         )];
@@ -2665,18 +3192,20 @@ pub(crate) mod tests {
             global_beacon_partial_signer_inventory_digest_v1(network_id, &provisioning)
                 .expect("derive qualification inventory digest");
         let catalog = beacon_catalog_v1(policy_digest);
-        let credential = encode_global_beacon_partial_signer_credential_v1(
+        let credential = beacon_credential_fixture_v1(
             network_id,
             HANDLE,
             REVISION,
             policy_digest,
             provisioning,
+            &producer_budget,
         )
         .expect("encode valid credential");
         let backend = decode_global_beacon_credential_v1(
             &credential,
             catalog.network_id(),
             catalog.iter().next().expect("one binding"),
+            &budget,
         )
         .expect("decode exact credential");
         let mut drifted = RuntimeConsensusThresholdSignerBackendsV1 {
@@ -2714,5 +3243,273 @@ pub(crate) mod tests {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([marker; 32]),
         ))
+    }
+    #[test]
+    fn global_beacon_runtime_import_preserves_original_pool_and_aggregate_inventory_limit() {
+        let producer_budget = test_credential_budget();
+        let network = network_id_v1(0xC1);
+        let first = beacon_fixture_v1(network, 0xC2, &producer_budget);
+        let second = beacon_fixture_v1(network, 0xC3, &producer_budget);
+        let inventory = vec![
+            RuntimeGlobalBeaconShareProvisioningV1::new(
+                first.validated.clone(),
+                1,
+                Zeroizing::new(*first.components),
+            ),
+            RuntimeGlobalBeaconShareProvisioningV1::new(
+                second.validated.clone(),
+                1,
+                Zeroizing::new(*second.components),
+            ),
+        ];
+        let policy = global_beacon_partial_signer_inventory_digest_v1(network, &inventory).unwrap();
+        let catalog = beacon_catalog_v1(policy);
+        let binding = catalog.iter().next().unwrap();
+        let bytes = beacon_credential_fixture_v1(
+            network,
+            HANDLE,
+            REVISION,
+            policy,
+            inventory,
+            &producer_budget,
+        )
+        .unwrap();
+        let original_hash = Hash::new(bytes.as_slice());
+        let first_bytes = iroha_core::beacon::global_threshold_beacon_session_allocation_bytes_v1(
+            &first.record,
+            &beacon_binding_v1(&first.record),
+        )
+        .unwrap();
+        let second_bytes = iroha_core::beacon::global_threshold_beacon_session_allocation_bytes_v1(
+            &second.record,
+            &beacon_binding_v1(&second.record),
+        )
+        .unwrap();
+        let budget = AllocationBudget::new(first_bytes.max(second_bytes));
+        let error = decode_global_beacon_runtime_signer_v1(&bytes, &network, binding, &budget)
+            .err()
+            .expect("one-session credits cannot retain both current and pending sessions");
+        let RuntimeConsensusThresholdSignerCredentialErrorV1::Session(
+            GlobalThresholdBeaconSessionError::Admission(
+                iroha_allocation::AllocationRefusal::Capacity {
+                    requested_bytes,
+                    reserved_bytes,
+                    limit_bytes,
+                    ..
+                },
+            ),
+        ) = error
+        else {
+            panic!(
+                "aggregate retained inventory pressure must preserve local capacity classification"
+            )
+        };
+        assert!(
+            reserved_bytes > 0,
+            "the first original graph remained charged when the second was admitted"
+        );
+        assert!(requested_bytes <= limit_bytes);
+        assert_eq!(limit_bytes, budget.limit_bytes());
+        assert_eq!(
+            budget.reserved_bytes(),
+            0,
+            "failed complete import releases earlier entries"
+        );
+        assert_eq!(Hash::new(bytes.as_slice()), original_hash);
+        budget.set_limit_bytes(first_bytes + second_bytes);
+        let signer =
+            decode_global_beacon_runtime_signer_v1(&bytes, &network, binding, &budget).unwrap();
+        signer
+            .attest_partial_signing_capability(&first.validated, 1)
+            .unwrap();
+        signer
+            .attest_partial_signing_capability(&second.validated, 1)
+            .unwrap();
+        let retained = budget.reserved_bytes();
+        assert!(retained > 0);
+        let last = Arc::clone(&signer);
+        drop(signer);
+        assert_eq!(budget.reserved_bytes(), retained);
+        drop(last);
+        assert_eq!(budget.reserved_bytes(), 0);
+        assert_eq!(Hash::new(bytes.as_slice()), original_hash);
+    }
+
+    #[test]
+    fn global_beacon_credential_loader_retains_exact_original_refusal() {
+        let producer_budget = test_credential_budget();
+        let network = network_id_v1(0xC1);
+        let fixture = beacon_fixture_v1(network, 0xC4, &producer_budget);
+        let inventory = vec![RuntimeGlobalBeaconShareProvisioningV1::new(
+            fixture.validated.clone(),
+            1,
+            fixture.components,
+        )];
+        let policy = global_beacon_partial_signer_inventory_digest_v1(network, &inventory).unwrap();
+        let catalog = beacon_catalog_v1(policy);
+        let bytes = beacon_credential_fixture_v1(
+            network,
+            HANDLE,
+            REVISION,
+            policy,
+            inventory,
+            &producer_budget,
+        )
+        .unwrap();
+        let bundle = encode_consensus_threshold_credential_bundle_v1(Some(&bytes), None).unwrap();
+        let budget = test_credential_budget();
+        let held = budget.try_reserve_bytes(budget.limit_bytes()).unwrap();
+        let error =
+            RuntimeConsensusThresholdSignerBackendsV1::load_from_launchd_credential_bundle_v1(
+                &catalog,
+                &mut bundle.as_slice(),
+                &budget,
+            )
+            .err()
+            .expect("original registry pool is full");
+        let RuntimeConsensusThresholdSignerCredentialErrorV1::Session(
+            GlobalThresholdBeaconSessionError::Admission(actual),
+        ) = error
+        else {
+            panic!("loader must preserve original admission refusal")
+        };
+        let iroha_allocation::AllocationRefusal::Capacity {
+            requested_bytes, ..
+        } = &actual
+        else {
+            panic!("actual pool is temporarily held")
+        };
+        assert_eq!(
+            actual,
+            budget.try_reserve_bytes(*requested_bytes).unwrap_err()
+        );
+        assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+        drop(held);
+        let loaded =
+            RuntimeConsensusThresholdSignerBackendsV1::load_from_launchd_credential_bundle_v1(
+                &catalog,
+                &mut bundle.as_slice(),
+                &budget,
+            )
+            .unwrap();
+        assert!(budget.reserved_bytes() > 0);
+        loaded
+            .global_beacon
+            .as_ref()
+            .unwrap()
+            .attest_partial_signing_capability(&fixture.validated, 1)
+            .unwrap();
+        drop(loaded);
+        assert_eq!(budget.reserved_bytes(), 0);
+        assert!(matches!(
+            decode_global_beacon_runtime_signer_v1(
+                &bytes,
+                &network_id_v1(0xCE),
+                catalog.iter().next().unwrap(),
+                &budget
+            ),
+            Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
+        ));
+    }
+
+    #[test]
+    fn global_and_tle_credentials_keep_local_decode_origin_after_scope_and_retry_exact_bytes() {
+        let beacon = consensus_threshold_beacon_broker_test_fixture_v1();
+        let budget = test_credential_budget();
+        let beacon_hash = Hash::new(beacon.credential.as_slice());
+        let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+        let failed = norito::with_decode_limits_scope(limits, || {
+            decode_global_beacon_credential_v1(
+                &beacon.credential,
+                beacon.catalog.network_id(),
+                beacon.catalog.iter().next().unwrap(),
+                &budget,
+            )
+        })
+        .err()
+        .expect("actual inherited decoder limit");
+        assert_eq!(
+            failed.to_string(),
+            "consensus threshold-signer credential decoder is unavailable"
+        );
+        assert!(std::error::Error::source(&failed).is_some());
+        let RuntimeConsensusThresholdSignerCredentialErrorV1::DecodeResource(error) = failed else {
+            panic!("local decoder failure cannot reject a credential");
+        };
+        assert_eq!(
+            error.kind(),
+            norito::core::DecodeAttemptErrorKind::EnclosingLimit
+        );
+        assert!(matches!(
+            error.into_error(),
+            norito::Error::ScopedDecodeResource(_)
+        ));
+        assert_eq!(budget.reserved_bytes(), 0);
+        let backend = decode_global_beacon_credential_v1(
+            &beacon.credential,
+            beacon.catalog.network_id(),
+            beacon.catalog.iter().next().unwrap(),
+            &budget,
+        )
+        .unwrap();
+        assert_eq!(Hash::new(beacon.credential.as_slice()), beacon_hash);
+        drop(backend);
+        assert_eq!(budget.reserved_bytes(), 0);
+
+        let network = network_id_v1(0xC1);
+        let fixture = tle_fixture_v1(network, 0xD8);
+        let provisions = vec![RuntimeParliamentTleShareProvisioningV1::new(
+            fixture.validated.public_state().clone(),
+            1,
+            fixture.components,
+        )];
+        let digest =
+            parliament_tle_partial_release_signer_inventory_digest_v1(network, &provisions)
+                .unwrap();
+        let catalog = tle_catalog_v1(digest);
+        let bytes = encode_parliament_tle_partial_release_signer_credential_v1(
+            network, HANDLE, REVISION, digest, provisions,
+        )
+        .unwrap();
+        let original = Hash::new(bytes.as_slice());
+        let failed = norito::with_decode_limits_scope(limits, || {
+            decode_parliament_tle_credential_v1(
+                &bytes,
+                &network,
+                catalog.iter().next().unwrap(),
+                &test_credential_budget(),
+            )
+        })
+        .err()
+        .expect("actual inherited TLE decoder limit");
+        assert_eq!(
+            failed.to_string(),
+            "consensus threshold-signer credential decoder is unavailable"
+        );
+        let RuntimeConsensusThresholdSignerCredentialErrorV1::DecodeResource(error) = failed else {
+            panic!("TLE must preserve the same shared decoder failure");
+        };
+        assert_eq!(
+            error.kind(),
+            norito::core::DecodeAttemptErrorKind::EnclosingLimit
+        );
+        let backend = decode_parliament_tle_credential_v1(
+            &bytes,
+            &network,
+            catalog.iter().next().unwrap(),
+            &test_credential_budget(),
+        )
+        .unwrap();
+        assert_eq!(Hash::new(bytes.as_slice()), original);
+        drop(backend);
+        assert!(matches!(
+            decode_parliament_tle_credential_v1(
+                &[],
+                &network,
+                catalog.iter().next().unwrap(),
+                &test_credential_budget(),
+            ),
+            Err(RuntimeConsensusThresholdSignerCredentialErrorV1::Rejected)
+        ));
     }
 }

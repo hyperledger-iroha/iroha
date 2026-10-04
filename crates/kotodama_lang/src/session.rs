@@ -2391,8 +2391,8 @@ mod tests {
             .iter()
             .find(|callable| callable.entry_pc == smoke.pc_start)
             .expect("authenticated test callable");
-        assert!(callable.argument_words.is_empty());
-        assert_eq!(callable.result_words, [ivm_abi::call::CallWordV1::Unit]);
+        assert!(callable.arguments.nodes.is_empty());
+        assert_eq!(callable.results, ivm_abi::call::CallSchemaV1::unit());
         assert!(
             outputs
                 .suite
@@ -2435,7 +2435,7 @@ mod tests {
         .expect("valid compiler intrinsics must survive the production projection");
         let suite_metadata = crate::metadata::ProgramMetadata::parse(&outputs.suite.artifact)
             .expect("parse generic test harness");
-        assert_eq!(suite_metadata.metadata.version_minor, 0);
+        assert_eq!(suite_metadata.metadata.version_minor, 1);
         assert!(suite_metadata.contract_interface.is_none());
         assert!(matches!(
             outputs.suite.contract_interface().states.as_slice(),

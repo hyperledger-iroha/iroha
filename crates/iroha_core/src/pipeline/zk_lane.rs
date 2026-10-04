@@ -1011,7 +1011,7 @@ mod tests {
                     index: 128,
                     value: 7,
                     tag: true,
-                    path: vec![[0x51; 32]],
+                    path: [[0x51; 32]; ivm::REGISTER_MERKLE_PATH_DEPTH],
                     root: root(0x61),
                 }],
                 step_log: (0..3)

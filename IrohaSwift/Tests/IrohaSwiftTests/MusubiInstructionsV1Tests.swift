@@ -21,7 +21,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
         )
 
         let cases = try XCTUnwrap(fixture["cases"] as? [[String: Any]])
-        XCTAssertEqual(cases.count, 20)
+        XCTAssertEqual(cases.count, 22)
         XCTAssertEqual(
             try cases.map { try XCTUnwrap($0["id"] as? String) },
             [
@@ -40,6 +40,8 @@ final class MusubiInstructionsV1Tests: XCTestCase {
                 "takedown-max-major-prerelease",
                 "register-archive-max-bounds-signed-receipt",
                 "advance-signed-pin-outbox-inventory",
+                "check-authority-wide-pin-outbox-absent",
+                "check-complete-pin-outbox-present",
                 "register-provider-bundle-attestation",
                 "add-location-three-signed-providers",
                 "publish-delegated-domain-release",
@@ -118,11 +120,11 @@ final class MusubiInstructionsV1Tests: XCTestCase {
     func testTypedInstructionsEmbedExactFixturePairsInCanonicalNetworkSignedBatch() throws {
         let fixture = try loadFixture()
         let cases = try XCTUnwrap(fixture["cases"] as? [[String: Any]])
-        XCTAssertEqual(cases.count, 20)
+        XCTAssertEqual(cases.count, 22)
         let instructions = try cases.map { try instruction(for: $0) }
         let frames = try instructions.map { try $0.transactionInstructionFrame() }
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x42, count: 32))
-        let authority = AccountId.make(publicKey: try signingKey.publicKey())
+        let authority = try AccountId.make(publicKey: try signingKey.publicKey())
         let networkId = TestNetworkIds.canonical
         let sdk = IrohaSDK(
             baseURL: URL(string: "https://torii.example")!,
@@ -682,6 +684,147 @@ final class MusubiInstructionsV1Tests: XCTestCase {
         XCTAssertNotEqual(try initial.barePayload(), try predecessor.barePayload())
     }
 
+    func testPinOutboxCheckFloorAndHighWaterRejectInertFields() throws {
+        let digest = [UInt8](repeating: 3, count: 32)
+        let zero = [UInt8](repeating: 0, count: 32)
+        var markedZero = zero
+        markedZero[31] = 1
+        for context in [zero, markedZero, [UInt8](repeating: 2, count: 32), Array(digest.dropLast())] {
+            XCTAssertThrowsError(try MusubiPinOutboxCheckFloorV1(
+                height: 1, blockHash: digest, contextID: context
+            ))
+        }
+        XCTAssertThrowsError(try MusubiPinOutboxCheckFloorV1(
+            height: 0, blockHash: digest, contextID: digest
+        ))
+        XCTAssertThrowsError(try MusubiPinOutboxCheckFloorV1(
+            height: 1, blockHash: zero, contextID: digest
+        ))
+        XCTAssertThrowsError(try MusubiPinOutboxCheckFloorV1(
+            height: 1, blockHash: Array(digest.dropLast()), contextID: digest
+        ))
+        let authority = try AccountId.make(publicKey: try Keypair(
+            privateKeyBytes: Data(repeating: 0x42, count: 32)
+        ).publicKey)
+        func row(
+            version: UInt8 = 1, revision: UInt64 = 1, height: UInt64 = 1,
+            session: [UInt8]? = nil, inventory: [UInt8]? = nil, transaction: [UInt8]? = nil,
+            owner: String? = nil
+        ) throws -> MusubiPinOutboxHighWaterV1 {
+            try MusubiPinOutboxHighWaterV1(
+                version: version, networkID: TestNetworkIds.canonical,
+                pinAuthority: owner ?? authority, sessionID: session ?? digest,
+                revision: revision, inventoryDigest: inventory ?? digest,
+                recordedAtHeight: height, transactionHash: transaction ?? digest
+            )
+        }
+        XCTAssertNoThrow(try row(revision: UInt64.max, height: UInt64.max))
+        XCTAssertThrowsError(try row(version: 0))
+        XCTAssertThrowsError(try row(revision: 0))
+        XCTAssertThrowsError(try row(height: 0))
+        for malformed in [zero, Array(digest.dropLast()), digest + [1]] {
+            XCTAssertThrowsError(try row(session: malformed))
+            XCTAssertThrowsError(try row(inventory: malformed))
+            XCTAssertThrowsError(try row(transaction: malformed))
+        }
+        XCTAssertThrowsError(try row(owner: authority + " "))
+    }
+
+    func testPinOutboxCheckBindsCompleteRowAndPreservesFullUnsignedCoordinates() throws {
+        let network = TestNetworkIds.canonical
+        let authority = try AccountId.make(publicKey: try Keypair(
+            privateKeyBytes: Data(repeating: 0x42, count: 32)
+        ).publicKey)
+        let digest = [UInt8](repeating: 3, count: 32)
+        let otherDigest = [UInt8](repeating: 5, count: 32)
+        let floor = try MusubiPinOutboxCheckFloorV1(
+            height: UInt64.max, blockHash: digest, contextID: digest
+        )
+        let row = try MusubiPinOutboxHighWaterV1(
+            networkID: network, pinAuthority: authority, sessionID: digest,
+            revision: UInt64.max, inventoryDigest: digest,
+            recordedAtHeight: UInt64.max, transactionHash: otherDigest
+        )
+        func check(
+            networkID: NetworkId? = nil, owner: String? = nil,
+            session: [UInt8]? = nil, inventory: [UInt8]? = nil,
+            challenge: [UInt8]? = nil, expected: MusubiPinOutboxCheckExpectationV1
+        ) throws -> CheckMusubiPinOutboxV1 {
+            try CheckMusubiPinOutboxV1(
+                networkID: networkID ?? network, pinAuthority: owner ?? authority,
+                sessionID: session ?? digest, inventoryDigest: inventory ?? digest,
+                challenge: challenge ?? digest, floor: floor, expected: expected
+            )
+        }
+        let present = try check(expected: .present(row))
+        var payload = CanonicalNoritoReader(data: try present.barePayload())
+        for _ in 0..<5 { _ = try payload.readCompactField() }
+        var floorPayload = CanonicalNoritoReader(data: try payload.readCompactField())
+        XCTAssertEqual(try floorPayload.readCompactField(), Data(repeating: 0xff, count: 8))
+        XCTAssertEqual(try floorPayload.readCompactField(), Data(digest))
+        var context = CanonicalNoritoReader(data: try floorPayload.readCompactField())
+        XCTAssertEqual(try context.readCompactField(), Data(digest))
+        XCTAssertEqual(context.remaining(), 0)
+        XCTAssertEqual(floorPayload.remaining(), 0)
+        var expectation = CanonicalNoritoReader(data: try payload.readCompactField())
+        XCTAssertEqual(try expectation.readUInt32LE(), 1)
+        var record = CanonicalNoritoReader(data: try expectation.readCompactField())
+        for _ in 0..<4 { _ = try record.readCompactField() }
+        XCTAssertEqual(try record.readCompactField(), Data(repeating: 0xff, count: 8))
+        XCTAssertEqual(try record.readCompactField(), Data(digest))
+        XCTAssertEqual(try record.readCompactField(), Data(repeating: 0xff, count: 8))
+        XCTAssertEqual(try record.readCompactField(), Data(otherDigest))
+        XCTAssertEqual(record.remaining(), 0)
+        XCTAssertEqual(expectation.remaining(), 0)
+        XCTAssertEqual(payload.remaining(), 0)
+        let absent = try check(expected: .absent)
+        XCTAssertNotEqual(try absent.barePayload(), try present.barePayload())
+        let changedChallenge = try check(challenge: otherDigest, expected: .present(row))
+        XCTAssertNotEqual(try present.barePayload(), try changedChallenge.barePayload())
+        XCTAssertThrowsError(try check(
+            networkID: NetworkId(bytes: Data(otherDigest)), expected: .present(row)
+        ))
+        let stranger = try AccountId.make(publicKey: try Keypair(
+            privateKeyBytes: Data(repeating: 0x43, count: 32)
+        ).publicKey)
+        XCTAssertThrowsError(try check(owner: stranger, expected: .present(row)))
+        XCTAssertThrowsError(try check(session: otherDigest, expected: .present(row)))
+        XCTAssertThrowsError(try check(inventory: otherDigest, expected: .present(row)))
+        XCTAssertThrowsError(try check(owner: authority + " ", expected: .absent))
+        for malformed in [[UInt8](repeating: 0, count: 32), Array(digest.dropLast()), digest + [1]] {
+            XCTAssertThrowsError(try check(session: malformed, expected: .absent))
+            XCTAssertThrowsError(try check(inventory: malformed, expected: .absent))
+            XCTAssertThrowsError(try check(challenge: malformed, expected: .absent))
+        }
+    }
+
+    func testPinOutboxCheckCapsCompleteFrameWithIndividuallyValidAuthority() throws {
+        let keys = try (1...64).map { index in
+            try Keypair(privateKeyBytes: Data(repeating: UInt8(index), count: 32)).publicKey
+        }.sorted { $0.lexicographicallyPrecedes($1) }
+        // Canonical V1 account address: multisig header, threshold one, 64 sorted Ed25519 keys.
+        var canonical = Data([0x0a, 1, 1, 0, 1, 0, 64])
+        for key in keys {
+            canonical.append(contentsOf: [1, 0, 1, 0, 32])
+            canonical.append(key)
+        }
+        let authority = try AccountAddress.fromCanonicalBytes(canonical).toI105(networkPrefix: 753)
+        let digest = [UInt8](repeating: 3, count: 32)
+        let row = try MusubiPinOutboxHighWaterV1(
+            networkID: TestNetworkIds.canonical, pinAuthority: authority, sessionID: digest,
+            revision: 1, inventoryDigest: digest, recordedAtHeight: 1, transactionHash: digest
+        )
+        let floor = try MusubiPinOutboxCheckFloorV1(height: 1, blockHash: digest, contextID: digest)
+        XCTAssertThrowsError(try CheckMusubiPinOutboxV1(
+            networkID: TestNetworkIds.canonical, pinAuthority: authority, sessionID: digest,
+            inventoryDigest: digest, challenge: digest, floor: floor, expected: .present(row)
+        )) { error in
+            XCTAssertEqual(error as? MusubiV1Error, .invalidValue(
+                "Musubi pin-outbox Check frame exceeds its bound."
+            ))
+        }
+    }
+
     private func instruction(
         for fixtureCase: [String: Any]
     ) throws -> any MusubiInstructionV1 {
@@ -894,6 +1037,44 @@ final class MusubiInstructionsV1Tests: XCTestCase {
                 expectedRevision: fixtureUInt64(semantic, "expected_revision"),
                 expectedInventoryDigest: fixedBytes32(semantic["expected_inventory_digest"]),
                 inventoryDigest: fixedBytes32(semantic["inventory_digest"])
+            )
+        case "check-authority-wide-pin-outbox-absent", "check-complete-pin-outbox-present":
+            try requireKeys(
+                semantic,
+                ["network_id", "pin_authority", "session_id", "inventory_digest",
+                 "challenge", "floor", "expected"]
+            )
+            let floor = try fixtureObject(semantic["floor"])
+            try requireKeys(floor, ["height", "block_hash", "context_id"])
+            let context = try fixtureArray(floor["context_id"])
+            XCTAssertEqual(context.count, 1)
+            // HashOf uses the same canonical marked-hash literal as NetworkId.
+            let contextHash = try NetworkId(literal: XCTUnwrap(context.first as? String)).bytes
+            let expectedObject = try fixtureObject(semantic["expected"])
+            let expected: MusubiPinOutboxCheckExpectationV1
+            switch try XCTUnwrap(expectedObject["kind"] as? String) {
+            case "Absent":
+                try requireKeys(expectedObject, ["kind", "value"])
+                XCTAssertTrue(expectedObject["value"] is NSNull)
+                expected = .absent
+            case "Present":
+                try requireKeys(expectedObject, ["kind", "value"])
+                expected = .present(try pinOutboxHighWater(expectedObject["value"]))
+            default:
+                throw MusubiV1Error.invalidValue("Unknown pin-outbox Check expectation.")
+            }
+            return try CheckMusubiPinOutboxV1(
+                networkID: NetworkId(literal: XCTUnwrap(semantic["network_id"] as? String)),
+                pinAuthority: XCTUnwrap(semantic["pin_authority"] as? String),
+                sessionID: fixedBytes32(semantic["session_id"]),
+                inventoryDigest: fixedBytes32(semantic["inventory_digest"]),
+                challenge: fixedBytes32(semantic["challenge"]),
+                floor: MusubiPinOutboxCheckFloorV1(
+                    height: fixtureUInt64(floor, "height"),
+                    blockHash: fixedBytes32(floor["block_hash"]),
+                    contextID: Array(contextHash)
+                ),
+                expected: expected
             )
         case "register-provider-bundle-attestation":
             try requireKeys(
@@ -1167,7 +1348,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
             ]
         )
         let authority = try fixtureObject(binding["completion_authority"])
-        try requireKeys(authority, ["provider_owner", "signer_policy"])
+        try requireKeys(authority, ["provider_owner", "completion_signer", "signer_policy"])
         let policy = try fixtureObject(authority["signer_policy"])
         try requireKeys(
             policy,
@@ -1181,6 +1362,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
         }
         let completionAuthority = try MusubiProviderIngestCompletionAuthorityV1(
             providerOwner: XCTUnwrap(authority["provider_owner"] as? String),
+            completionSigner: XCTUnwrap(authority["completion_signer"] as? String),
             signerPolicy: MusubiProviderIngestCompletionSignerPolicyV1(
                 policyID: fixedBytes32(policy["policy_id"]),
                 revision: fixtureUInt64(policy, "revision"),
@@ -1463,6 +1645,25 @@ final class MusubiInstructionsV1Tests: XCTestCase {
             actionDigest: digest32(decision["action_digest"]),
             enactedAtHeight: fixtureUInt64(decision, "enacted_at_height"),
             executeAfterHeight: fixtureUInt64(decision, "execute_after_height")
+        )
+    }
+
+    private func pinOutboxHighWater(_ raw: Any?) throws -> MusubiPinOutboxHighWaterV1 {
+        let row = try fixtureObject(raw)
+        try requireKeys(
+            row,
+            ["version", "network_id", "pin_authority", "session_id", "revision",
+             "inventory_digest", "recorded_at_height", "transaction_hash"]
+        )
+        return try MusubiPinOutboxHighWaterV1(
+            version: XCTUnwrap(UInt8(exactly: fixtureUInt64(row, "version"))),
+            networkID: NetworkId(literal: XCTUnwrap(row["network_id"] as? String)),
+            pinAuthority: XCTUnwrap(row["pin_authority"] as? String),
+            sessionID: fixedBytes32(row["session_id"]),
+            revision: fixtureUInt64(row, "revision"),
+            inventoryDigest: fixedBytes32(row["inventory_digest"]),
+            recordedAtHeight: fixtureUInt64(row, "recorded_at_height"),
+            transactionHash: fixedBytes32(row["transaction_hash"])
         )
     }
 

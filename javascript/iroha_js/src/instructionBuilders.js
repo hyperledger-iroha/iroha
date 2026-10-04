@@ -2623,11 +2623,15 @@ function normalizeProviderIngestCompletionSignerPolicy(value, name) {
 
 function normalizeProviderIngestCompletionAuthority(value, name) {
   const source = assertPlainObject(value, name);
-  assertExactFields(source, ["providerOwner", "signerPolicy"], name);
+  assertExactFields(source, ["providerOwner", "completionSigner", "signerPolicy"], name);
   return {
     provider_owner: normalizeSorafsProviderOwner(
       source.providerOwner,
       `${name}.providerOwner`,
+    ),
+    completion_signer: normalizeSorafsProviderOwner(
+      source.completionSigner,
+      `${name}.completionSigner`,
     ),
     signer_policy: normalizeProviderIngestCompletionSignerPolicy(
       source.signerPolicy,
@@ -2739,12 +2743,12 @@ export function buildIssueReplicationOrderInstruction(options) {
 /**
  * Build the canonical provider-specific `CompleteReplicationOrder` instruction.
  *
- * The six top-level fields bind the completion to the exact owner, governed
- * signer-policy chain, assignment revision, and finalized chain prefix that
+ * The six top-level fields bind the completion to the exact owner, dedicated completion signer,
+ * governed signer-policy chain, assignment revision, and finalized chain prefix that
  * were checked before submission.
  *
- * @param {{orderId: string, providerId: string, completionEpoch: number|string|bigint, expectedAuthority: {providerOwner: string, signerPolicy: {policyId: string, revision: number|string|bigint, predecessorDigest: string|null, policyDigest: string}}, expectedAssignmentRevision: number|string|bigint, finalizedAnchor: {height: number|string|bigint, blockHash: string}}} options
- * @returns {{CompleteReplicationOrder: {order_id: string, provider_id: string, completion_epoch: number, expected_authority: {provider_owner: string, signer_policy: {policy_id: string, revision: number, predecessor_digest: string|null, policy_digest: string}}, expected_assignment_revision: number, finalized_anchor: {height: number, block_hash: string}}}}
+ * @param {{orderId: string, providerId: string, completionEpoch: number|string|bigint, expectedAuthority: {providerOwner: string, completionSigner: string, signerPolicy: {policyId: string, revision: number|string|bigint, predecessorDigest: string|null, policyDigest: string}}, expectedAssignmentRevision: number|string|bigint, finalizedAnchor: {height: number|string|bigint, blockHash: string}}} options
+ * @returns {{CompleteReplicationOrder: {order_id: string, provider_id: string, completion_epoch: number, expected_authority: {provider_owner: string, completion_signer: string, signer_policy: {policy_id: string, revision: number, predecessor_digest: string|null, policy_digest: string}}, expected_assignment_revision: number, finalized_anchor: {height: number, block_hash: string}}}}
  */
 export function buildCompleteReplicationOrderInstruction(options) {
   const source = assertPlainObject(options, "completeReplicationOrder");

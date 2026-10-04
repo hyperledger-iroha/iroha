@@ -116,6 +116,10 @@ pub use self::signature::bls::{
     ethereum_bls_pop_validate_public_key,
 };
 pub use blake2;
+mod prepared_decode;
+pub use prepared_decode::{
+    PreparedCryptoDecodeError, PreparedPublicKeyDecode, PreparedSignatureDecode,
+};
 mod public_key_allocation;
 mod public_key_decode;
 mod public_key_input;
@@ -881,6 +885,15 @@ pub fn ed25519_parse_public_key(payload: &[u8]) -> Result<Ed25519ParsedPublicKey
     signature::ed25519::Ed25519Sha512::parse_public_key(payload)
         .map(Ed25519ParsedPublicKey)
         .map_err(Error::from)
+}
+/// Check a fixed Ed25519 public-key candidate against the canonical strict key relation.
+///
+/// This performs the same canonical-encoding, non-weak-point and prime-order-subgroup checks
+/// as [`PublicKey::from_bytes`] for [`Algorithm::Ed25519`], without consulting or populating
+/// the parse cache. Success and rejection allocate no key backing or error text.
+#[must_use]
+pub fn ed25519_public_key_is_valid(candidate: &[u8; 32]) -> bool {
+    signature::ed25519::Ed25519Sha512::parse_public_key_uncached_for_decode(candidate).is_ok()
 }
 /// Parse raw Ed25519 signature bytes for admission before storing them as an opaque signature.
 ///

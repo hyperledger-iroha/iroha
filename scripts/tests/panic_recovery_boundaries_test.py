@@ -2018,3 +2018,66 @@ def test_halo2_parameter_source_boundary_rejects_nonmodule_brace_owners(wrapper:
     elif wrapper == "macro":
         source = "unreviewed_macro! { " + source + " }\n"
     assert module._halo2_parameter_source_test_boundary_failures(source)
+
+
+@pytest.mark.parametrize("name", (
+    "executor_runtime_memory_tests.rs",
+    "executor_public_pin_admission_tests.rs",
+    "executor_opaque_monetary_tests.rs",
+))
+def test_current_executor_path_children_seal_full_original_callers(
+    tmp_path: Path, name: str,
+) -> None:
+    module = load_guard_module()
+    relative = Path("crates/iroha_core/src") / name
+    assert module.CORE_RECOVERY_SUPPORT_PATHS.count(relative) == 1
+    assert module.AUDITED_SOURCE_PATHS.count(relative) == 1
+    assert Path("crates/iroha_core/src") not in module.AUDITED_SOURCE_PATHS
+    parent = tmp_path / "crates/iroha_core/src"
+    parent.mkdir(parents=True)
+    executor = parent / "executor.rs"
+    included = parent / name
+    executor.write_text(
+        f'#[cfg(test)]\n#[path = "{name}"]\nmod original_caller;\n',
+        encoding="utf-8",
+    )
+    included.write_text("fn original_caller() { original_custody_policy(); }\n", encoding="utf-8")
+    sources, failures = module.torii_rust_source_closure(tmp_path)
+    assert failures == []
+    assert included.resolve() in sources
+    records, _, counts = module.torii_boundary_inventory(tmp_path, sources)
+    assert any(record.startswith(relative.as_posix() + "\t") for record in records)
+    included.write_text("fn original_caller() { substituted_custody_policy(); }\n", encoding="utf-8")
+    observed = module.torii_boundary_inventory(tmp_path)
+    assert observed[2] == counts, "a caller mutation must be detected without an added panic boundary"
+    failures = module.closed_torii_boundary_inventory_failures(
+        tmp_path, records, observed_inventory=observed,
+    )
+    assert any("source inventory drifted" in error for error in failures), failures
+
+
+@pytest.mark.parametrize("name", (
+    "executor_runtime_memory_tests.rs",
+    "executor_public_pin_admission_tests.rs",
+    "executor_opaque_monetary_tests.rs",
+))
+def test_current_executor_path_children_refuse_absence_and_guessed_neighbor(
+    tmp_path: Path, name: str,
+) -> None:
+    module = load_guard_module()
+    parent = tmp_path / "crates/iroha_core/src"
+    parent.mkdir(parents=True)
+    original = parent / name
+    guessed = parent / ("guessed_" + name)
+    (parent / "executor.rs").write_text(
+        f'#[cfg(test)]\n#[path = "{name}"]\nmod original_caller;\n',
+        encoding="utf-8",
+    )
+    guessed.write_text("fn unreviewed_neighbor() {}\n", encoding="utf-8")
+    sources, failures = module.torii_rust_source_closure(tmp_path)
+    assert original.resolve() not in sources
+    assert guessed.resolve() not in sources
+    assert guessed.relative_to(tmp_path) not in module.CORE_RECOVERY_SUPPORT_PATHS
+    assert failures == [
+        f"crates/iroha_core/src/executor.rs:2: #[path] source path is missing or not a regular file: {name}"
+    ]

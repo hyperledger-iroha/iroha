@@ -3,12 +3,120 @@
 mod tests {
     use super::*;
     #[test]
+    fn private_counters_have_one_closed_signed_compute_route() {
+        let route = sumeragi::PRIVATE_TRANSACTION_COUNTERS;
+        assert_eq!(route.path(), "/v1/private/transaction-counters");
+        assert_eq!(route.method(), HttpMethod::Post);
+        assert_eq!(route.route_match(), RouteMatch::Exact);
+        assert_eq!(route.effect(), RouteEffect::ExpensiveCompute);
+        assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+        assert_eq!(route.authentication(), AuthenticationPolicy::CanonicalSignedBody);
+        assert!(route.requires_private_no_store());
+        assert_eq!(
+            CATALOGED_ROUTES.iter().filter(|candidate| candidate.path() == route.path()).count(),
+            1,
+        );
+        assert_eq!(validate_catalog(CATALOGED_ROUTES), Ok(()));
+    }
+    #[test]
+    fn reserve_policy_proof_is_an_account_authenticated_private_read() {
+        let route = contracts_and_verification_keys::SORAFS_RESERVE_POLICY_PROOF_GET;
+        assert_eq!(route.path(), "/v1/sorafs/reserve/policy/{height}");
+        assert_eq!(route.method(), HttpMethod::Get);
+        assert_eq!(route.effect(), RouteEffect::ReadOnly);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert!(route.authentication().requires_private_no_store());
+        assert!(CATALOGED_ROUTES.contains(&route));
+    }
+    #[test]
+    fn reserve_account_proof_is_an_account_authenticated_private_read() {
+        let route = contracts_and_verification_keys::SORAFS_RESERVE_ACCOUNT_PROOF_GET;
+        assert_eq!(
+            route.path(),
+            "/v1/sorafs/reserve/providers/{provider_id}/proof/{height}"
+        );
+        assert_eq!(route.method(), HttpMethod::Get);
+        assert_eq!(route.effect(), RouteEffect::ReadOnly);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert!(route.authentication().requires_private_no_store());
+        assert!(CATALOGED_ROUTES.contains(&route));
+    }
+    #[test]
     fn staking_preparation_is_bounded_read_only_post() {
         let route = core::NEXUS_STAKING_PREPARATION_POST;
         assert_eq!(route.path(), "/v1/nexus/staking/prepare");
         assert_eq!(route.method(), HttpMethod::Post);
         assert_eq!(route.effect(), RouteEffect::ReadOnly);
         assert!(CATALOGED_ROUTES.contains(&route));
+    }
+    #[test]
+    fn collection_query_posts_are_read_only_without_relaxing_principal_policy() {
+        let visible = [
+            telemetry::ASSET_HOLDERS_QUERY,
+            application_api::DOMAINS_QUERY_POST,
+            application_api::ACCOUNTS_QUERY_POST,
+            application_api::ASSETS_DEFINITIONS_QUERY_POST,
+            application_api::NFTS_QUERY_POST,
+            application_api::RWAS_QUERY_POST,
+            application_api::ACCOUNTS_BY_ACCOUNT_ID_ASSETS_QUERY_POST,
+            application_api::ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_QUERY_POST,
+            application_api::TRANSACTIONS_QUERY_POST,
+            application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST,
+            application_api::ACCOUNTS_BY_ACCOUNT_ID_HISTORY_QUERY_POST,
+            application_api::CONTRACTS_ACTIVITY_QUERY_POST,
+            application_api::CONTRACTS_EVENTS_QUERY_POST,
+            application_api::SPACE_DIRECTORY_UAIDS_BY_UAID_MANIFESTS_QUERY_POST,
+            application_api::EXPLORER_ACCOUNTS_QUERY_POST,
+            application_api::EXPLORER_DOMAINS_QUERY_POST,
+            application_api::EXPLORER_ASSET_DEFINITIONS_QUERY_POST,
+            application_api::EXPLORER_ASSETS_QUERY_POST,
+            application_api::EXPLORER_NFTS_QUERY_POST,
+            application_api::EXPLORER_RWAS_QUERY_POST,
+            application_api::EXPLORER_BLOCKS_QUERY_POST,
+            application_api::EXPLORER_TRANSACTIONS_QUERY_POST,
+            application_api::EXPLORER_TRANSACTIONS_LATEST_QUERY_POST,
+            application_api::EXPLORER_INSTRUCTIONS_QUERY_POST,
+            application_api::EXPLORER_INSTRUCTIONS_LATEST_QUERY_POST,
+        ];
+        for route in visible {
+            assert_eq!(route.method(), HttpMethod::Post, "{}", route.path());
+            assert_eq!(route.effect(), RouteEffect::ReadOnly, "{}", route.path());
+            assert_eq!(
+                route.admission(),
+                AdmissionPolicy::DataspaceVisible,
+                "{}",
+                route.path()
+            );
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::OptionalCanonicalAccountSignature,
+                "{}",
+                route.path()
+            );
+            assert!(CATALOGED_ROUTES.contains(&route));
+        }
+        let repo = application_api::REPO_AGREEMENTS_QUERY_POST;
+        assert_eq!(repo.effect(), RouteEffect::ReadOnly);
+        assert_eq!(repo.admission(), AdmissionPolicy::AuthenticatedAccount);
+        assert_eq!(
+            repo.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        for route in [
+            application_api::SUBSCRIPTIONS_PLANS_QUERY_POST,
+            application_api::SUBSCRIPTIONS_QUERY_POST,
+        ] {
+            assert_eq!(route.method(), HttpMethod::Post);
+            assert_eq!(route.effect(), RouteEffect::ReadOnly);
+            assert_eq!(route.admission(), AdmissionPolicy::Public);
+            assert_eq!(route.authentication(), AuthenticationPolicy::ToriiDefault);
+        }
     }
     #[test]
     fn diagnostic_status_routes_are_explicit() {
@@ -101,14 +209,15 @@ mod tests {
     }
 
     #[test]
-    fn provider_discovery_is_finite_private_no_store_sdk_evidence() {
-        let route = sorafs::PROVIDER_DISCOVERY;
-        assert_eq!(route.method(), HttpMethod::Get);
-        assert_eq!(route.authentication(), AuthenticationPolicy::ToriiDefault);
-        assert_eq!(route.effect(), RouteEffect::ReadOnly);
-        assert_eq!(route.projections(), RouteProjections::SDK);
-        assert!(route.requires_private_no_store());
-        assert!(RouteCatalog::new(&[route]).validate().is_ok());
+    fn provider_and_custody_discovery_are_finite_private_no_store_sdk_evidence() {
+        for route in [sorafs::PROVIDER_DISCOVERY, sorafs::STREAM_TOKEN_CUSTODY] {
+            assert_eq!(route.method(), HttpMethod::Get);
+            assert_eq!(route.authentication(), AuthenticationPolicy::ToriiDefault);
+            assert_eq!(route.effect(), RouteEffect::ReadOnly);
+            assert_eq!(route.projections(), RouteProjections::SDK);
+            assert!(route.requires_private_no_store());
+            assert!(RouteCatalog::new(&[route]).validate().is_ok());
+        }
     }
 
     #[test]
@@ -389,8 +498,10 @@ mod tests {
             "ledger.authority_originals",
             "kagemusha.ordinary_wallet_current",
             "kagemusha.ordinary_mint_issuer_purpose",
+            "kagemusha.ordinary_mint_finalized",
+            "kagemusha.ordinary_mint_credit",
         ]);
-        assert_eq!(complete.len(), 9);
+        assert_eq!(complete.len(), 11);
         for enabled in [EnabledFeatures::none(), EnabledFeatures::new(&["app_api"])] {
             for projection in [
                 CatalogProjection::Mounted,
@@ -405,7 +516,7 @@ mod tests {
                         .map(|route| route.stable_route_id())
                         .collect::<BTreeSet<_>>(),
                     complete,
-                    "every node and authored client surface must expose all nine native KAGEMUSHA and original-carrier routes"
+                    "every node and authored client surface must expose all eleven native KAGEMUSHA and original-carrier routes"
                 );
             }
         }
@@ -489,6 +600,38 @@ mod tests {
         assert_eq!(
             kagemusha::ORDINARY_MINT_ISSUER_PURPOSE.effect(),
             RouteEffect::ReadOnly
+        );
+        for (route, signed_target, exact_path) in [
+            (
+                kagemusha::ORDINARY_MINT_FINALIZED,
+                crate::ordinary_mint_finalized::ORDINARY_MINT_FINALIZED_ROUTE_V1,
+                "/v1/kagemusha/ordinary/top-up/finality",
+            ),
+            (
+                kagemusha::ORDINARY_MINT_CREDIT,
+                crate::ordinary_mint_finalized::ORDINARY_MINT_CREDIT_ROUTE_V1,
+                "/v1/kagemusha/ordinary/top-up/credit",
+            ),
+        ] {
+            assert_eq!(signed_target, exact_path);
+            assert_eq!(route.path(), signed_target);
+            assert_eq!(route.route_match(), RouteMatch::Exact);
+            assert_eq!(route.surface(), ApiSurface::Public);
+            assert_eq!(route.listener(), Listener::Torii);
+            assert_eq!(route.feature_gate(), FeatureGate::Always);
+            assert_eq!(route.projections(), RouteProjections::OPENAPI_AND_SDK);
+            assert_eq!(route.method(), HttpMethod::Post);
+            assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature
+            );
+            assert_eq!(route.effect(), RouteEffect::ReadOnly);
+            assert!(route.cors_options());
+        }
+        assert_ne!(
+            crate::ordinary_mint_finalized::ORDINARY_MINT_FINALIZED_ROUTE_V1,
+            crate::ordinary_mint_finalized::ORDINARY_MINT_CREDIT_ROUTE_V1
         );
         let mcp = catalog.project(CatalogProjection::Mcp, EnabledFeatures::none());
         assert_eq!(mcp.len(), 5);
@@ -1456,9 +1599,9 @@ mod tests {
         }
     }
     #[test]
-    fn transaction_queries_distinguish_optional_visible_and_required_account_scopes() {
+    fn transaction_collection_queries_preserve_optional_visible_scope() {
         let visible_fanout = application_api::TRANSACTIONS_QUERY_POST;
-        assert_eq!(visible_fanout.effect(), RouteEffect::ExpensiveCompute);
+        assert_eq!(visible_fanout.effect(), RouteEffect::ReadOnly);
         assert_eq!(
             visible_fanout.admission(),
             AdmissionPolicy::DataspaceVisible
@@ -1536,13 +1679,11 @@ mod tests {
     }
     #[test]
     fn contract_and_application_route_policies_are_projection_safe() {
-        assert_eq!(
-            application_api::TRANSACTIONS_HISTORY_GET.authentication(),
-            AuthenticationPolicy::CanonicalAccountSignature
-        );
-        assert_eq!(
-            application_api::TRANSACTIONS_HISTORY_GET.admission(),
-            AdmissionPolicy::AuthenticatedAccount
+        assert!(
+            contract_and_application_routes()
+                .iter()
+                .all(|route| route.path() != "/v1/transactions/history"),
+            "the retired offset history route must not be exposed",
         );
         for route in [
             contracts_and_verification_keys::CONTRACTS_ARTIFACTS_BY_DATASPACE_ID_BY_CODE_HASH_BYTES_GET,

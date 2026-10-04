@@ -57,7 +57,7 @@ fn local_sorafs_pack_accepts_no_config_and_rejects_transaction_globals() {
     with_config.config = Some(PathBuf::from("must-not-read.toml"));
     assert!(reject_irrelevant_local_tool_globals(&with_config, "app sorafs toolkit pack").is_err());
     with_config.config = None;
-    with_config.output = true;
+    with_config.emit_instructions = true;
     assert!(reject_irrelevant_local_tool_globals(&with_config, "app sorafs toolkit pack").is_err());
 }
 #[test]
@@ -227,18 +227,20 @@ fn cli_quantities_accept_canonical_boundaries_and_reject_signed_or_oversized_val
         assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
     }
 }
-fn test_context(output_format: CliOutputFormat) -> PrintJsonContext<Vec<u8>, Vec<u8>> {
+pub(crate) fn test_context(output_format: CliOutputFormat) -> PrintJsonContext<Vec<u8>, Vec<u8>> {
     PrintJsonContext {
         write: Vec::new(),
         err_write: Vec::new(),
         config: fallback_config(),
         filesystem_config: client_config::FilesystemConfig::default(),
+        offline_fallback: false,
         operator_key_pair: None,
         transaction_metadata: None,
         fee_payment: FeePaymentArgs::default(),
         input_instructions: false,
         output_instructions: false,
         output_format,
+        json_lines: false,
         i18n: Localizer::new(Bundle::Cli, Language::English),
     }
 }
@@ -422,36 +424,251 @@ fn fixture_key_pair_uses_checked_seed_derivation() {
 }
 #[test]
 fn output_format_override_from_args_parses_flags() {
-    let args = ["--output-format", "text"];
     assert_eq!(
-        output_format_override_from_args(args),
-        Some(CliOutputFormat::Text)
+        output_format_override_from_args(["--output-format", "text"]),
+        (Some(OutputFormatArg::Text), false)
     );
-    let args = ["--output-format=json"];
     assert_eq!(
-        output_format_override_from_args(args),
-        Some(CliOutputFormat::Json)
+        output_format_override_from_args(["--output-format=json"]),
+        (Some(OutputFormatArg::Json), false)
+    );
+    assert_eq!(
+        output_format_override_from_args(["account", "list", "-o", "jsonl"]),
+        (Some(OutputFormatArg::Jsonl), false)
+    );
+    assert_eq!(
+        output_format_override_from_args(["-otext", "--machine"]),
+        (Some(OutputFormatArg::Text), true)
+    );
+    assert_eq!(
+        output_format_override_from_args(["--machine", "--", "-o", "text"]),
+        (None, true),
+        "arguments after `--` are values, not options"
     );
 }
 #[test]
-fn effective_output_format_for_address_tools_uses_cli_flag() {
+fn output_selection_defaults_to_text_only_on_an_interactive_terminal() {
+    let text = OutputSelection {
+        format: CliOutputFormat::Text,
+        json_lines: false,
+    };
+    let json = OutputSelection {
+        format: CliOutputFormat::Json,
+        json_lines: false,
+    };
+    assert_eq!(OutputSelection::resolve(None, false, true), text);
+    assert_eq!(OutputSelection::resolve(None, false, false), json);
+    assert_eq!(
+        OutputSelection::resolve(None, true, true),
+        json,
+        "--machine never depends on terminal detection"
+    );
+    assert_eq!(
+        OutputSelection::resolve(Some(OutputFormatArg::Json), false, true),
+        json
+    );
+    assert_eq!(
+        OutputSelection::resolve(Some(OutputFormatArg::Jsonl), false, true),
+        OutputSelection {
+            format: CliOutputFormat::Json,
+            json_lines: true,
+        }
+    );
+}
+#[test]
+fn output_format_is_a_global_short_option() {
+    for argv in [
+        vec!["iroha", "-o", "json", "tools", "version"],
+        vec!["iroha", "tools", "version", "-o", "json"],
+        vec!["iroha", "tools", "version", "--output-format", "json"],
+    ] {
+        let args = Args::try_parse_from(&argv).expect("parse args");
+        assert_eq!(args.output_format, Some(OutputFormatArg::Json), "{argv:?}");
+        assert_eq!(effective_output_format(&args), CliOutputFormat::Json);
+    }
+    let args = Args::try_parse_from(["iroha", "--machine", "tools", "version"]).unwrap();
+    assert_eq!(effective_output_format(&args), CliOutputFormat::Json);
+}
+#[test]
+fn instruction_pipeline_flags_are_unambiguous_long_options() {
     let args = Args::try_parse_from([
         "iroha",
-        "--output-format",
-        "json",
-        "tools",
-        "address",
-        "convert",
-        "0x00",
+        "--stdin-instructions",
+        "--emit-instructions",
+        "tx",
+        "ping",
+        "--msg",
+        "hi",
     ])
-    .expect("parse args");
-    assert_eq!(effective_output_format(&args), CliOutputFormat::Json);
+    .expect("parse instruction pipeline flags");
+    assert!(args.stdin_instructions);
+    assert!(args.emit_instructions);
+    for retired in [
+        ["iroha", "-i", "tx"],
+        ["iroha", "--input", "tx"],
+        ["iroha", "--output", "tx"],
+    ] {
+        assert!(Args::try_parse_from(retired).is_err(), "{retired:?}");
+    }
 }
 #[test]
-fn effective_output_format_uses_args_for_other_tools() {
-    let args = Args::try_parse_from(["iroha", "--output-format", "json", "tools", "version"])
-        .expect("parse args");
-    assert_eq!(effective_output_format(&args), CliOutputFormat::Json);
+fn positive_counts_reject_zero() {
+    assert_eq!(positive_u64("1"), Ok(1));
+    assert_eq!(positive_u64("500"), Ok(500));
+    assert!(positive_u64("0").is_err());
+    assert!(positive_u64("-1").is_err());
+    assert!(positive_u64("many").is_err());
+    for flag in ["--limit", "--fetch-size"] {
+        assert!(
+            Args::try_parse_from(["iroha", "ledger", "peer", "list", "all", flag, "0"]).is_err(),
+            "{flag} 0 must be rejected while parsing"
+        );
+    }
+}
+#[test]
+fn json_lines_rendering_prints_array_elements_one_per_line() {
+    let rendered =
+        render_json_output(&norito::json!([{"id": 1}, {"id": 2}]), true).expect("render");
+    assert_eq!(rendered, "{\"id\":1}\n{\"id\":2}\n");
+    let rendered = render_json_output(&norito::json!({"id": 1}), true).expect("render");
+    assert_eq!(rendered, "{\"id\":1}\n");
+    let pretty = render_json_output(&norito::json!({"id": 1}), false).expect("render");
+    assert!(
+        pretty.ends_with('\n') && pretty.contains("\"id\": 1"),
+        "{pretty}"
+    );
+}
+#[test]
+fn command_errors_render_each_cause_once_with_a_causes_array() {
+    let inner = eyre!("tcp connect error: Connection refused");
+    let embedded = inner.wrap_err("Failed to send request: tcp connect error: Connection refused");
+    let outer = embedded.wrap_err("Torii node capability probe failed");
+    let report = command_error_report(&outer);
+    let description = describe_cli_error(&report);
+    assert_eq!(description.message, "Torii node capability probe failed");
+    assert_eq!(
+        description.causes,
+        vec!["Failed to send request: tcp connect error: Connection refused".to_owned()],
+        "a cause already contained in a shown message is not repeated"
+    );
+    let text = render_cli_error(
+        &report,
+        OutputSelection {
+            format: CliOutputFormat::Text,
+            json_lines: false,
+        },
+    );
+    assert_eq!(text.kind, CliErrorKind::Command);
+    assert_eq!(
+        text.output.matches("Connection refused").count(),
+        1,
+        "{}",
+        text.output
+    );
+    assert!(
+        text.output
+            .starts_with("error: Torii node capability probe failed\n")
+    );
+    let json = render_cli_error(
+        &report,
+        OutputSelection {
+            format: CliOutputFormat::Json,
+            json_lines: true,
+        },
+    );
+    assert_eq!(json.output.lines().count(), 1, "jsonl errors are one line");
+    let value: norito::json::Value = norito::json::from_str(json.output.trim()).unwrap();
+    assert_eq!(
+        value
+            .pointer("/error/message")
+            .and_then(norito::json::Value::as_str),
+        Some("Torii node capability probe failed")
+    );
+    assert_eq!(
+        value
+            .pointer("/error/causes")
+            .and_then(norito::json::Value::as_array)
+            .map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        value
+            .pointer("/error/exit_code")
+            .and_then(norito::json::Value::as_u64),
+        Some(1)
+    );
+}
+#[test]
+fn config_errors_keep_their_causes_and_hint() {
+    let report = Report::new(MainError::Config)
+        .attach("missing exact network identity; configure exactly one of network_id or network_id_file")
+        .change_context(MainError::Config)
+        .attach_opaque(CliHint("pass `--config <PATH>`".to_owned()));
+    let description = describe_cli_error(&report);
+    assert_eq!(description.message, "Failed to load config");
+    assert_eq!(
+        description.causes,
+        vec![
+            "missing exact network identity; configure exactly one of network_id or network_id_file"
+                .to_owned()
+        ]
+    );
+    assert_eq!(description.hints, vec!["pass `--config <PATH>`".to_owned()]);
+    let text = render_cli_error(
+        &report,
+        OutputSelection {
+            format: CliOutputFormat::Text,
+            json_lines: false,
+        },
+    );
+    assert!(
+        text.output
+            .contains("Caused by:\n    missing exact network identity")
+    );
+    assert!(text.output.contains("hint: pass `--config <PATH>`"));
+    assert_eq!(text.kind.exit_code(), 3);
+}
+#[test]
+fn argument_errors_keep_clap_tips_readable() {
+    let error = Args::try_parse_from(["iroha", "acount"]).expect_err("typo must fail");
+    let report = Report::new(MainError::CliArgs(error.render().to_string()));
+    let text = render_cli_error(
+        &report,
+        OutputSelection {
+            format: CliOutputFormat::Text,
+            json_lines: false,
+        },
+    );
+    assert!(
+        text.output
+            .starts_with("error: unrecognized subcommand 'acount'")
+    );
+    assert!(text.output.contains("tip:"), "{}", text.output);
+    assert!(!text.output.contains("\\n"));
+    let description = describe_cli_error(&report);
+    assert_eq!(description.message, "unrecognized subcommand 'acount'");
+    assert!(
+        description
+            .hints
+            .iter()
+            .any(|hint| hint.contains("'account'")),
+        "{description:?}"
+    );
+    assert_eq!(
+        render_cli_error(&report, OutputSelection::resolve(None, true, false))
+            .kind
+            .exit_code(),
+        4
+    );
+}
+#[test]
+fn missing_subcommand_is_reported_as_help() {
+    let error = Args::try_parse_from(["iroha", "account"]).expect_err("group needs a subcommand");
+    assert_eq!(
+        error.kind(),
+        ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+    );
+    assert!(error.render().to_string().contains("Usage: iroha account"));
 }
 #[test]
 fn raw_domain_registration_command_is_not_parseable() {
@@ -809,10 +1026,13 @@ fn trigger_completed_list_rejects_retired_timeout_flag() {
     assert!(error.to_string().contains("--timeout-ms"));
 }
 
+fn json_output() -> OutputSelection {
+    OutputSelection::resolve(Some(OutputFormatArg::Json), true, false)
+}
 #[test]
 fn render_cli_error_includes_kind_and_exit_code() {
     let report = Report::new(MainError::Config);
-    let rendered = render_cli_error(&report, CliOutputFormat::Json);
+    let rendered = render_cli_error(&report, json_output());
     assert_eq!(rendered.kind, CliErrorKind::Config);
     let value: norito::json::Value =
         norito::json::from_str(&rendered.output).expect("parse error json");
@@ -830,7 +1050,7 @@ fn render_cli_error_includes_kind_and_exit_code() {
 #[test]
 fn render_cli_error_includes_command_message() {
     let report = Report::new(MainError::Command("missing budget".to_string()));
-    let rendered = render_cli_error(&report, CliOutputFormat::Json);
+    let rendered = render_cli_error(&report, json_output());
     let value: norito::json::Value =
         norito::json::from_str(&rendered.output).expect("parse error json");
     let err = value
@@ -847,7 +1067,7 @@ fn render_cli_error_includes_command_message() {
 #[test]
 fn render_cli_error_marks_cli_argument_failures_as_input() {
     let report = Report::new(MainError::CliArgs("unknown flag".to_string()));
-    let rendered = render_cli_error(&report, CliOutputFormat::Json);
+    let rendered = render_cli_error(&report, json_output());
     assert_eq!(rendered.kind, CliErrorKind::Input);
     let value: norito::json::Value =
         norito::json::from_str(&rendered.output).expect("parse error json");
@@ -1706,7 +1926,7 @@ fn resolve_account_id_with_resolves_encoded_literal() {
 #[test]
 fn stream_timeout_driver_propagates_errors() {
     let mut processed = 0usize;
-    let result = drive_stream_until_timeout(
+    let result = drive_stream_until_deadline(
         |_timeout| {
             Err::<Option<DummyEvent>, _>(iroha::Error::Transport {
                 operation: "events.subscribe",
@@ -1727,12 +1947,15 @@ fn stream_timeout_driver_propagates_errors() {
 }
 
 #[test]
-fn stream_timeout_driver_preserves_idle_wait_and_stops_at_timeout() {
+fn stream_timeout_driver_waits_only_for_the_remaining_deadline() {
     let mut calls = 0;
     let mut received = Vec::new();
-    drive_stream_until_timeout(
+    drive_stream_until_deadline(
         |timeout| {
-            assert_eq!(timeout, Duration::from_secs(7));
+            assert!(
+                timeout <= Duration::from_secs(7) && timeout > Duration::from_secs(6),
+                "each receive waits only for the time left before the deadline: {timeout:?}"
+            );
             calls += 1;
             match calls {
                 1 | 2 => Ok(Some(calls)),
@@ -1755,8 +1978,33 @@ fn stream_timeout_driver_preserves_idle_wait_and_stops_at_timeout() {
 }
 
 #[test]
+fn stream_timeout_driver_stops_a_busy_stream_at_the_deadline() {
+    let started = std::time::Instant::now();
+    let mut received = 0_u32;
+    drive_stream_until_deadline(
+        |timeout| {
+            assert!(timeout <= Duration::from_millis(40));
+            std::thread::sleep(Duration::from_millis(2));
+            Ok::<Option<u32>, _>(Some(1))
+        },
+        |item| {
+            received += item;
+            Ok(())
+        },
+        Duration::from_millis(40),
+        "timeout",
+    )
+    .expect("the deadline completes a stream that never idles");
+    assert!(received > 0);
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "a busy stream must not extend the deadline"
+    );
+}
+
+#[test]
 fn stream_timeout_driver_preserves_transport_timeout_errors() {
-    let result = drive_stream_until_timeout(
+    let result = drive_stream_until_deadline(
         |_| {
             Err::<Option<DummyEvent>, _>(iroha::Error::Timeout {
                 operation: "events.subscribe",
@@ -1772,7 +2020,7 @@ fn stream_timeout_driver_preserves_transport_timeout_errors() {
 #[test]
 fn stream_timeout_driver_stops_at_clean_eof() {
     let mut calls = 0;
-    drive_stream_until_timeout(
+    drive_stream_until_deadline(
         |_| {
             calls += 1;
             Ok::<Option<DummyEvent>, _>(None)
@@ -2858,6 +3106,12 @@ fn trigger_register_data_domain_filter_builds() {
 #[path = "main_shared_tests/canonical_reads.rs"]
 mod canonical_reads;
 
+#[path = "main_shared_tests/point_reads.rs"]
+mod point_reads;
+
+#[path = "main_shared_tests/collection_lists.rs"]
+mod collection_lists;
+
 #[test]
 fn library_test_build_metadata_is_an_explicit_development_identity() {
     let build = build_metadata();
@@ -2910,4 +3164,204 @@ fn version_is_supplied_by_the_executable() {
         .expect_err("version display exits through clap");
     assert_eq!(error.kind(), ErrorKind::DisplayVersion);
     assert_eq!(error.render().to_string(), "iroha executable-version\n");
+}
+/// Run an actual CLI asset-definition read against a fixture with only exact-ID access.
+fn run_exact_asset_definition_cli_fixture(metadata: bool) {
+    use iroha::data_model::asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId};
+    use iroha::data_model::query::{
+        QueryRequest, QueryResponse, SignedQuery, SingularQueryBox, SingularQueryOutputBox,
+    };
+    use iroha_version::codec::DecodeVersioned;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+        time::Instant,
+    };
+
+    let mut context = test_context(CliOutputFormat::Json);
+    let discriminant = context.config.account_chain_discriminant;
+    let _profile = ChainDiscriminantGuard::enter(discriminant);
+    let definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+        .parse()
+        .expect("exact fixture asset ID");
+    let metadata_key: Name = "fixture_note".parse().expect("fixture metadata key");
+    let metadata_value = Json::from(norito::json!("exact scoped read"));
+    let mut definition = AssetDefinition::numeric(
+        definition_id.clone(),
+        "Fixture XOR",
+        AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&context.config.account);
+    definition
+        .metadata_mut()
+        .insert(metadata_key.clone(), metadata_value.clone());
+    let expected_json = if metadata {
+        norito::json::to_value(&metadata_value).expect("metadata JSON")
+    } else {
+        norito::json::to_value(&definition).expect("definition JSON")
+    };
+    let authority = context.config.account.clone();
+    let network_id = context.config.network_id;
+    let exact_response = norito::to_bytes(&QueryResponse::Singular(
+        SingularQueryOutputBox::AssetDefinition(definition),
+    ))
+    .expect("canonical exact definition response");
+    let forbidden_response = norito::json::to_vec(&iroha_torii_shared::ErrorEnvelope::new(
+        "permission_denied",
+        "fixture permits exact definition reads only",
+    ))
+    .expect("canonical public refusal");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind scoped-query fixture");
+    let address = listener.local_addr().expect("fixture address");
+    listener
+        .set_nonblocking(true)
+        .expect("bounded fixture listener");
+    let expected_id = definition_id.clone();
+    let server = thread::spawn(move || {
+        let _profile = ChainDiscriminantGuard::enter(discriminant);
+        let mut exact_queries = 0;
+        let mut broad_queries = 0;
+        for step in 0..2 {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "fixture request deadline");
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("fixture accept failed: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("bounded fixture read");
+            stream
+                .set_write_timeout(Some(Duration::from_secs(5)))
+                .expect("bounded fixture write");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            let header_end = loop {
+                let read = stream.read(&mut buffer).expect("read fixture request");
+                assert_ne!(read, 0, "incomplete fixture request");
+                request.extend_from_slice(&buffer[..read]);
+                assert!(request.len() <= 64 * 1024, "bounded fixture headers");
+                if let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                    break end + 4;
+                }
+            };
+            let headers = std::str::from_utf8(&request[..header_end]).expect("fixture headers");
+            let first_line = headers.lines().next().expect("request line").to_owned();
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length").then(|| {
+                        value
+                            .trim()
+                            .parse::<usize>()
+                            .expect("fixture content length")
+                    })
+                })
+                .unwrap_or(0);
+            assert!(length <= 64 * 1024, "bounded fixture body");
+            let (status, content_type, body) = if step == 0 {
+                assert!(first_line.starts_with("GET /v1/node/capabilities "));
+                ("200 OK", "application/json", norito::json::to_vec(&norito::json!({"data_model_version": iroha::data_model::DATA_MODEL_VERSION})).expect("matching capabilities"))
+            } else {
+                assert!(first_line.starts_with("POST /v1/query "));
+                assert!(headers.lines().any(|line| {
+                    line.split_once(':').is_some_and(|(name, value)| {
+                        name.eq_ignore_ascii_case("accept")
+                            && value.trim() == "application/x-norito, application/json;q=0.8"
+                    })
+                }));
+                while request.len() < header_end + length {
+                    let read = stream.read(&mut buffer).expect("read signed query");
+                    assert_ne!(read, 0, "incomplete signed query");
+                    request.extend_from_slice(&buffer[..read]);
+                }
+                let signed =
+                    SignedQuery::decode_all_versioned(&request[header_end..header_end + length])
+                        .expect("canonical signed query");
+                signed
+                    .verify_signature()
+                    .expect("fixture authority signature");
+                assert_eq!(signed.authority(), &authority);
+                assert_eq!(signed.payload.network_id, network_id);
+                if let QueryRequest::Singular(SingularQueryBox::FindAssetDefinitionById(query)) =
+                    signed.request()
+                {
+                    assert_eq!(query.asset_definition_id(), &expected_id);
+                    exact_queries += 1;
+                    ("200 OK", "application/x-norito", exact_response.clone())
+                } else {
+                    assert!(
+                        matches!(
+                            signed.request(),
+                            QueryRequest::Start(_) | QueryRequest::Continue(_)
+                        ),
+                        "unexpected singular query"
+                    );
+                    broad_queries += 1;
+                    (
+                        "403 Forbidden",
+                        "application/json",
+                        forbidden_response.clone(),
+                    )
+                }
+            };
+            write!(stream, "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).expect("write fixture response headers");
+            stream.write_all(&body).expect("write fixture response");
+        }
+        (exact_queries, broad_queries)
+    });
+    context.config.torii_api_url =
+        Url::parse(&format!("http://{address}/")).expect("fixture Torii URL");
+    let id_literal = definition_id.to_string();
+    let args = if metadata {
+        Args::try_parse_from([
+            "iroha",
+            "ledger",
+            "asset",
+            "definition",
+            "meta",
+            "get",
+            "--id",
+            &id_literal,
+            "--key",
+            "fixture_note",
+        ])
+    } else {
+        Args::try_parse_from([
+            "iroha",
+            "ledger",
+            "asset",
+            "definition",
+            "get",
+            "--id",
+            &id_literal,
+        ])
+    }
+    .expect("parse actual asset-definition CLI command");
+    let result = args.command.run(&mut context);
+    let (exact_queries, broad_queries) = server.join().expect("scoped-query fixture thread");
+    result.expect("exact definition access must succeed without an inventory grant");
+    assert_eq!(exact_queries, 1);
+    assert_eq!(broad_queries, 0, "get must not enumerate all definitions");
+    let actual: norito::json::Value =
+        norito::json::from_slice(&context.write).expect("actual CLI printed JSON");
+    assert_eq!(actual, expected_json);
+}
+
+#[test]
+fn asset_definition_get_uses_singular_query_with_narrow_scope() {
+    run_exact_asset_definition_cli_fixture(false);
+}
+
+#[test]
+fn asset_definition_metadata_get_uses_singular_query_with_narrow_scope() {
+    run_exact_asset_definition_cli_fixture(true);
 }

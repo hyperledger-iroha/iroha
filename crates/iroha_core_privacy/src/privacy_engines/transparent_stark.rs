@@ -787,12 +787,28 @@ fn goldilocks_fft_stage_v1<T: Send, const PARALLEL_INNER: bool>(
     values: &mut [T],
     width: usize,
     step: GoldilocksFieldV1,
+    powers: Option<&[GoldilocksFieldV1]>,
     butterfly: impl Fn(&mut T, &mut T, GoldilocksFieldV1) + Sync,
 ) {
+    let stride = values.len() / width;
+    let window = |left: &mut [T], right: &mut [T], first: usize| {
+        if let Some(powers) = powers {
+            for (offset, (even, odd)) in left.iter_mut().zip(right).enumerate() {
+                butterfly(even, odd, powers[(first + offset) * stride]);
+            }
+        } else {
+            let initial = if first == 0 {
+                GoldilocksFieldV1::ONE
+            } else {
+                step.pow(first as u128)
+            };
+            goldilocks_fft_window_v1(left, right, initial, step, &butterfly);
+        }
+    };
     let serial_block = |block: &mut [T]| {
         for chunk in block.chunks_exact_mut(width) {
             let (left, right) = chunk.split_at_mut(width / 2);
-            goldilocks_fft_window_v1(left, right, GoldilocksFieldV1::ONE, step, &butterfly);
+            window(left, right, 0);
         }
     };
     if values.len() < FFT_PARALLEL_MIN_VALUES_V1 || rayon::current_num_threads() == 1 {
@@ -814,13 +830,7 @@ fn goldilocks_fft_stage_v1<T: Send, const PARALLEL_INNER: bool>(
                     .enumerate()
                 {
                     let first = index * FFT_BUTTERFLIES_PER_TASK_V1;
-                    goldilocks_fft_window_v1(
-                        left,
-                        right,
-                        step.pow(first as u128),
-                        step,
-                        &butterfly,
-                    );
+                    window(left, right, first);
                 }
             }
         }
@@ -837,13 +847,7 @@ fn goldilocks_fft_stage_v1<T: Send, const PARALLEL_INNER: bool>(
                 .enumerate()
                 .for_each(|(index, (left, right))| {
                     let first = index * FFT_BUTTERFLIES_PER_TASK_V1;
-                    goldilocks_fft_window_v1(
-                        left,
-                        right,
-                        step.pow(first as u128),
-                        step,
-                        &butterfly,
-                    );
+                    window(left, right, first);
                 });
         });
     }
@@ -858,6 +862,7 @@ pub(crate) fn goldilocks_fft_v1(
 }
 /// In-place FFT for a column whose bounded batch already owns parallelism.
 /// Validation and arithmetic use the same kernel as the single-column route.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn goldilocks_fft_coarse_v1(
     values: &mut [GoldilocksFieldV1],
     root: GoldilocksFieldV1,
@@ -865,9 +870,117 @@ pub(crate) fn goldilocks_fft_coarse_v1(
     goldilocks_fft_with_inner_parallelism_v1::<false>(values, root)
 }
 
+/// Immutable public root powers shared by a bounded column batch.
+///
+/// The caller admits both this owner and its complete allocated capacity before
+/// dispatch. No coefficient, mask, or private row is retained in this table.
+pub(crate) struct GoldilocksFftPowersV1 {
+    values: Vec<GoldilocksFieldV1>,
+    root: GoldilocksFieldV1,
+    size: usize,
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl GoldilocksFftPowersV1 {
+    /// Minimum public payload, including the inline owner, before allocation.
+    pub(crate) fn required_payload_bytes_v1(size: usize) -> Result<usize, TransparentStarkErrorV1> {
+        if size == 0 || !size.is_power_of_two() {
+            return Err(TransparentStarkErrorV1::InvalidDomain);
+        }
+        (size / 2)
+            .checked_mul(core::mem::size_of::<GoldilocksFieldV1>())
+            .and_then(|bytes| bytes.checked_add(core::mem::size_of::<Self>()))
+            .ok_or(TransparentStarkErrorV1::AllocationFailure)
+    }
+    /// Construct exact powers of a public primitive root for one domain.
+    pub(crate) fn new_v1(
+        size: usize,
+        root: GoldilocksFieldV1,
+        admitted_payload_bytes: usize,
+    ) -> Result<Self, TransparentStarkErrorV1> {
+        if Self::required_payload_bytes_v1(size)? > admitted_payload_bytes {
+            return Err(TransparentStarkErrorV1::AllocationFailure);
+        }
+        if root.0 >= GOLDILOCKS_MODULUS_V1
+            || root.pow(size as u128) != GoldilocksFieldV1::ONE
+            || (size > 1 && root.pow((size / 2) as u128) == GoldilocksFieldV1::ONE)
+        {
+            return Err(TransparentStarkErrorV1::InvalidDomain);
+        }
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(size / 2)
+            .map_err(|_| TransparentStarkErrorV1::AllocationFailure)?;
+        let actual = values
+            .capacity()
+            .checked_mul(core::mem::size_of::<GoldilocksFieldV1>())
+            .and_then(|bytes| bytes.checked_add(core::mem::size_of::<Self>()))
+            .ok_or(TransparentStarkErrorV1::AllocationFailure)?;
+        if actual > admitted_payload_bytes {
+            return Err(TransparentStarkErrorV1::AllocationFailure);
+        }
+        let mut power = GoldilocksFieldV1::ONE;
+        for _ in 0..size / 2 {
+            values.push(power);
+            power = power.mul(root);
+        }
+        Ok(Self { values, root, size })
+    }
+    /// Actual retained capacity plus inline owner, including any allocator excess.
+    pub(crate) fn allocated_payload_bytes_v1(&self) -> Result<usize, TransparentStarkErrorV1> {
+        self.values
+            .capacity()
+            .checked_mul(core::mem::size_of::<GoldilocksFieldV1>())
+            .and_then(|bytes| bytes.checked_add(core::mem::size_of::<Self>()))
+            .ok_or(TransparentStarkErrorV1::AllocationFailure)
+    }
+}
+
+/// Coarse FFT using an admitted public power table and the original shared kernel.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(crate) fn goldilocks_fft_coarse_with_powers_v1(
+    values: &mut [GoldilocksFieldV1],
+    root: GoldilocksFieldV1,
+    powers: &GoldilocksFftPowersV1,
+) -> Result<(), TransparentStarkErrorV1> {
+    goldilocks_fft_with_powers_v1::<false>(values, root, Some(powers))
+}
+
+/// Coarse inverse FFT using a table constructed from the inverse public root.
+/// Original root validation, inversion, domain checks and scaling retain their order.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(crate) fn goldilocks_ifft_coarse_with_powers_v1(
+    values: &mut [GoldilocksFieldV1],
+    root: GoldilocksFieldV1,
+    powers: &GoldilocksFftPowersV1,
+) -> Result<(), TransparentStarkErrorV1> {
+    if root.0 >= GOLDILOCKS_MODULUS_V1 {
+        return Err(TransparentStarkErrorV1::InvalidDomain);
+    }
+    goldilocks_fft_with_powers_v1::<false>(
+        values,
+        root.inv().ok_or(TransparentStarkErrorV1::DivisionByZero)?,
+        Some(powers),
+    )?;
+    let inverse_size = GoldilocksFieldV1::reduce(values.len() as u128)
+        .inv()
+        .ok_or(TransparentStarkErrorV1::DivisionByZero)?;
+    for value in values {
+        *value = value.mul(inverse_size);
+    }
+    Ok(())
+}
+
 fn goldilocks_fft_with_inner_parallelism_v1<const PARALLEL_INNER: bool>(
     values: &mut [GoldilocksFieldV1],
     root: GoldilocksFieldV1,
+) -> Result<(), TransparentStarkErrorV1> {
+    goldilocks_fft_with_powers_v1::<PARALLEL_INNER>(values, root, None)
+}
+
+fn goldilocks_fft_with_powers_v1<const PARALLEL_INNER: bool>(
+    values: &mut [GoldilocksFieldV1],
+    root: GoldilocksFieldV1,
+    powers: Option<&GoldilocksFftPowersV1>,
 ) -> Result<(), TransparentStarkErrorV1> {
     let size = values.len();
     if size == 0
@@ -876,6 +989,9 @@ fn goldilocks_fft_with_inner_parallelism_v1<const PARALLEL_INNER: bool>(
         || root.pow(size as u128) != GoldilocksFieldV1::ONE
         || (size > 1 && root.pow((size / 2) as u128) == GoldilocksFieldV1::ONE)
     {
+        return Err(TransparentStarkErrorV1::InvalidDomain);
+    }
+    if powers.is_some_and(|powers| powers.size != size || powers.root != root) {
         return Err(TransparentStarkErrorV1::InvalidDomain);
     }
     if values.iter().any(|value| value.0 >= GOLDILOCKS_MODULUS_V1) {
@@ -896,12 +1012,18 @@ fn goldilocks_fft_with_inner_parallelism_v1<const PARALLEL_INNER: bool>(
     let mut width = 2_usize;
     while width <= size {
         let step = root.pow((size / width) as u128);
-        goldilocks_fft_stage_v1::<_, PARALLEL_INNER>(values, width, step, |even, odd, twiddle| {
-            let scaled_odd = (*odd).mul(twiddle);
-            let original_even = *even;
-            *even = original_even.add(scaled_odd);
-            *odd = original_even.sub(scaled_odd);
-        });
+        goldilocks_fft_stage_v1::<_, PARALLEL_INNER>(
+            values,
+            width,
+            step,
+            powers.map(|powers| powers.values.as_slice()),
+            |even, odd, twiddle| {
+                let scaled_odd = (*odd).mul(twiddle);
+                let original_even = *even;
+                *even = original_even.add(scaled_odd);
+                *odd = original_even.sub(scaled_odd);
+            },
+        );
         width <<= 1;
     }
     Ok(())
@@ -914,6 +1036,7 @@ pub(crate) fn goldilocks_ifft_v1(
     goldilocks_ifft_with_inner_parallelism_v1::<true>(values, root)
 }
 /// In-place inverse FFT for a column in an already parallel bounded batch.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn goldilocks_ifft_coarse_v1(
     values: &mut [GoldilocksFieldV1],
     root: GoldilocksFieldV1,
@@ -947,6 +1070,15 @@ pub(crate) fn goldilocks_evaluate_coset_v1(
     root: GoldilocksFieldV1,
     shift: GoldilocksFieldV1,
 ) -> Result<Vec<GoldilocksFieldV1>, TransparentStarkErrorV1> {
+    goldilocks_evaluate_coset_with_inner_parallelism_v1::<true>(coefficients, size, root, shift)
+}
+
+fn goldilocks_evaluate_coset_with_inner_parallelism_v1<const PARALLEL_INNER: bool>(
+    coefficients: &[GoldilocksFieldV1],
+    size: usize,
+    root: GoldilocksFieldV1,
+    shift: GoldilocksFieldV1,
+) -> Result<Vec<GoldilocksFieldV1>, TransparentStarkErrorV1> {
     if coefficients.len() > size
         || size == 0
         || !size.is_power_of_two()
@@ -967,7 +1099,7 @@ pub(crate) fn goldilocks_evaluate_coset_v1(
         *target = coefficient.mul(shift_power);
         shift_power = shift_power.mul(shift);
     }
-    goldilocks_fft_v1(&mut evaluations, root)?;
+    goldilocks_fft_with_inner_parallelism_v1::<PARALLEL_INNER>(&mut evaluations, root)?;
     Ok(evaluations)
 }
 /// In-place radix-two FFT over the quartic Goldilocks extension.
@@ -1005,7 +1137,7 @@ pub(crate) fn goldilocks_fp4_fft_v1(
     let mut width = 2_usize;
     while width <= size {
         let step = root.pow((size / width) as u128);
-        goldilocks_fft_stage_v1::<_, true>(values, width, step, |even, odd, twiddle| {
+        goldilocks_fft_stage_v1::<_, true>(values, width, step, None, |even, odd, twiddle| {
             let scaled_odd = (*odd).mul_base(twiddle);
             let original_even = *even;
             *even = original_even.add(scaled_odd);
@@ -1186,6 +1318,33 @@ pub(crate) fn masked_trace_coefficients_on_coset_v1(
     base_log_size: u8,
     evaluation_log_size: u8,
 ) -> Result<Vec<GoldilocksFieldV1>, TransparentStarkErrorV1> {
+    masked_trace_coefficients_on_coset_with_inner_parallelism_v1::<true>(
+        coefficients,
+        base_log_size,
+        evaluation_log_size,
+    )
+}
+
+/// Diagnostic-only alternative for a bounded batch that owns outer parallelism.
+/// Production dispatch remains on the original inner-parallel function above.
+#[cfg(test)]
+pub(crate) fn masked_trace_coefficients_on_coset_coarse_for_test_v1(
+    coefficients: &[GoldilocksFieldV1],
+    base_log_size: u8,
+    evaluation_log_size: u8,
+) -> Result<Vec<GoldilocksFieldV1>, TransparentStarkErrorV1> {
+    masked_trace_coefficients_on_coset_with_inner_parallelism_v1::<false>(
+        coefficients,
+        base_log_size,
+        evaluation_log_size,
+    )
+}
+
+fn masked_trace_coefficients_on_coset_with_inner_parallelism_v1<const PARALLEL_INNER: bool>(
+    coefficients: &[GoldilocksFieldV1],
+    base_log_size: u8,
+    evaluation_log_size: u8,
+) -> Result<Vec<GoldilocksFieldV1>, TransparentStarkErrorV1> {
     let base_size = 1_usize
         .checked_shl(u32::from(base_log_size))
         .ok_or(TransparentStarkErrorV1::InvalidDomain)?;
@@ -1205,7 +1364,12 @@ pub(crate) fn masked_trace_coefficients_on_coset_v1(
     {
         return Err(TransparentStarkErrorV1::InvalidDomain);
     }
-    goldilocks_evaluate_coset_v1(coefficients, evaluation_size, evaluation_root, shift)
+    goldilocks_evaluate_coset_with_inner_parallelism_v1::<PARALLEL_INNER>(
+        coefficients,
+        evaluation_size,
+        evaluation_root,
+        shift,
+    )
 }
 /// Interpolate and mask one trace column before evaluating its LDE.
 ///

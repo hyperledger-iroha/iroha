@@ -6,6 +6,7 @@ use iroha_data_model::{
     isi::{InstructionBox, Log, SetParameter},
 };
 use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
+use mv::storage::StorageReadOnly as _;
 
 use crate::{
     state::{RootScopeDecodeRefusal, StateStorageAdmissionError, StateTransaction},
@@ -282,7 +283,21 @@ fn ensure_private_instruction(
         // bootstrap initializes its own alias registry, never a foreign dataspace or parent registry.
         return Ok(());
     }
-    if let Ok(multisig) = MultisigInstructionBox::try_from(instruction) {
+    let multisig = match MultisigInstructionBox::try_from(instruction) {
+        Ok(multisig) => Some(multisig),
+        Err(error) => {
+            match crate::smartcontracts::isi::multisig::multisig_instruction_decode_attempt(
+                error,
+                |_| (),
+            ) {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    return Err(state.defer_execution(reason));
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(()) => None,
+            }
+        }
+    };
+    if let Some(multisig) = multisig {
         match multisig {
             MultisigInstructionBox::Propose(propose) => {
                 for nested in &propose.instructions {
@@ -294,6 +309,7 @@ fn ensure_private_instruction(
                     crate::smartcontracts::isi::multisig::live_proposal_instructions_for_approval(
                         state, &approve,
                     )
+                    .map_err(|error| state.attempt_error_to_validation_fail(error))?
                 {
                     for nested in &instructions {
                         ensure_private_instruction(nested, state, dataspace, depth + 1)?;
@@ -306,6 +322,17 @@ fn ensure_private_instruction(
         }
         return Ok(());
     }
+    // A recipient's routing scope cannot establish ownership of a token naming another
+    // contract. Review this exact mutation even when native routing already found a local target.
+    if ensure_private_entrypoint_permission_scope(instruction, state, dataspace)? {
+        return Ok(());
+    }
+    if ensure_private_holding_limit_scope(instruction, state, dataspace)? {
+        return Ok(());
+    }
+    if ensure_private_account_metadata_scope(instruction, state, dataspace)? {
+        return Ok(());
+    }
     if target.dataspace == Some(dataspace) || is_reviewed_root_local_instruction(instruction) {
         return Ok(());
     }
@@ -315,6 +342,260 @@ fn ensure_private_instruction(
     Err(denied(
         "instruction has no reviewed private-root scope owner",
     ))
+}
+
+/// Account metadata mutations own one actual retained account, including an account with no
+/// routing label. The authenticated private World supplies its resource scope; this grants no
+/// metadata permission and does not replace native reserved-key or value-size validation.
+fn ensure_private_account_metadata_scope(
+    instruction: &InstructionBox,
+    state: &StateTransaction<'_, '_>,
+    dataspace: iroha_model_base::topology::DataSpaceId,
+) -> Result<bool, ValidationFail> {
+    use iroha_data_model::isi::{RemoveKeyValueBox, SetKeyValueBox};
+
+    let account = if let Some(SetKeyValueBox::Account(set)) =
+        instruction.as_any().downcast_ref::<SetKeyValueBox>()
+    {
+        set.object()
+    } else if let Some(RemoveKeyValueBox::Account(remove)) =
+        instruction.as_any().downcast_ref::<RemoveKeyValueBox>()
+    {
+        remove.object()
+    } else {
+        return Ok(false);
+    };
+    if state
+        .world
+        .contract_subject_addresses
+        .get(account)
+        .is_some_and(|address| &address.subject_id() != account)
+    {
+        return Err(denied(
+            "private account metadata requires its original contract subject index",
+        ));
+    }
+    // Reuse the existing retained account/directory/contract-subject scope guard. Unlabelled
+    // accounts belong to this authenticated private World; no caller route or new fallback
+    // invents an account binding, and an explicit foreign directory entry remains a refusal.
+    ensure_private_permission_account_scope(state, account, dataspace)?;
+    Ok(true)
+}
+
+/// A holding limit mutates one actual account and asset definition, including when the
+/// instruction has no routing hint. This establishes only resource scope: the native handler
+/// still requires the asset owner or the exact account-and-asset holding-limit permission.
+fn ensure_private_holding_limit_scope(
+    instruction: &InstructionBox,
+    state: &mut StateTransaction<'_, '_>,
+    dataspace: iroha_model_base::topology::DataSpaceId,
+) -> Result<bool, ValidationFail> {
+    let Some(limit) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::SetAssetHoldingLimit>()
+    else {
+        return Ok(false);
+    };
+    review_private_holding_limit_scope(limit, state, dataspace)
+        .map_err(|error| state.attempt_error_to_validation_fail(error))?;
+    Ok(true)
+}
+
+fn review_private_holding_limit_scope(
+    limit: &iroha_data_model::isi::SetAssetHoldingLimit,
+    state: &StateTransaction<'_, '_>,
+    dataspace: iroha_model_base::topology::DataSpaceId,
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
+    use crate::state::WorldReadOnly as _;
+    use iroha_data_model::asset::AssetBalancePolicy;
+
+    ensure_private_permission_account_scope(state, &limit.account_id, dataspace)?;
+    // Borrow the original retained definition and indexes; scope admission must not clone
+    // arbitrary asset metadata before its resource owner has been established.
+    let definition = state
+        .world
+        .asset_definitions()
+        .get(&limit.asset_definition_id)
+        .ok_or_else(|| denied("private holding limit requires an existing asset definition"))?;
+    if definition.id != limit.asset_definition_id
+        || definition.balance_scope_policy() != AssetBalancePolicy::DataspaceRestricted
+    {
+        return Err(denied("private holding limit requires its original restricted asset").into());
+    }
+    let domain = definition
+        .owning_domain()
+        .as_ref()
+        .ok_or_else(|| denied("private holding limit requires an immutable owning domain"))?;
+    if state
+        .world
+        .asset_definition_domains()
+        .get(&limit.asset_definition_id)
+        != Some(domain)
+        || state.world.domains().get(domain).is_none()
+    {
+        return Err(
+            denied("private holding limit requires its original asset-domain binding").into(),
+        );
+    }
+    ensure_private_permission_account_scope(state, definition.owned_by(), dataspace)?;
+    ensure_private_holding_limit_dataspace(state, domain.dataspace().as_ref(), dataspace)?;
+
+    let binding = state
+        .world
+        .asset_definition_alias_bindings()
+        .get(&limit.asset_definition_id);
+    match binding {
+        Some(binding) => {
+            if binding.is_grace_expired_at(state.block_unix_timestamp_ms())
+                || state.world.asset_definition_aliases().get(&binding.alias)
+                    != Some(&limit.asset_definition_id)
+                || definition
+                    .alias()
+                    .as_ref()
+                    .is_some_and(|alias| alias != &binding.alias)
+            {
+                return Err(denied(
+                    "private holding limit requires its retained asset-alias binding",
+                )
+                .into());
+            }
+            ensure_private_holding_limit_dataspace(
+                state,
+                binding.alias.dataspace_segment(),
+                dataspace,
+            )?;
+        }
+        None if definition.alias().is_some() => {
+            return Err(denied("private holding limit cannot use an unbound asset alias").into());
+        }
+        None => {}
+    }
+    Ok(())
+}
+
+fn ensure_private_holding_limit_dataspace(
+    state: &StateTransaction<'_, '_>,
+    alias: &str,
+    dataspace: iroha_model_base::topology::DataSpaceId,
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
+    let resolved = crate::sns::resolve_active_dataspace_id_by_alias(
+        &state.world,
+        &state.nexus.dataspace_catalog,
+        alias,
+        state.block_unix_timestamp_ms(),
+    )
+    .map_err(|error| {
+        error.into_attempt_error(|_| {
+            denied("private holding limit requires an exact active asset dataspace binding")
+        })
+    })?;
+    if resolved != dataspace {
+        return Err(denied("private holding limit cannot target a foreign asset dataspace").into());
+    }
+    Ok(())
+}
+
+/// An exact invocation token is owned by its actual retained contract, never by the caller's
+/// default route. This scope check grants no delegation authority: the native lifecycle-owner
+/// permission boundary still runs for every owned, borrowed and contract-emitted mutation.
+fn ensure_private_entrypoint_permission_scope(
+    instruction: &InstructionBox,
+    state: &mut StateTransaction<'_, '_>,
+    dataspace: iroha_model_base::topology::DataSpaceId,
+) -> Result<bool, ValidationFail> {
+    use iroha_data_model::smart_contract::ContractLifecycleOwnerV1;
+
+    let Some(super::PermissionOrRoleMutation::AccountPermission {
+        permission,
+        destination,
+        ..
+    }) = super::extract_permission_or_role_mutation(instruction)
+    else {
+        return Ok(false);
+    };
+    if permission.name() != "CanInvokeContractEntrypoint" {
+        return Ok(false);
+    }
+    #[derive(crate::json_macros::JsonDeserialize)]
+    #[norito(deny_unknown_fields)]
+    struct ExactEntrypointScope {
+        contract: iroha_data_model::smart_contract::ContractAddress,
+        entrypoint: String,
+    }
+    let token = super::read_permission_payload::<ExactEntrypointScope>(permission)
+        .map_err(|error| state.attempt_error_to_validation_fail(error))?
+        .ok_or_else(|| denied("private entrypoint permission requires its exact typed payload"))?;
+    if token.entrypoint.is_empty() || token.entrypoint.trim() != token.entrypoint {
+        return Err(denied(
+            "private entrypoint permission requires a canonical non-empty selector",
+        ));
+    }
+    if token.contract.dataspace_id().ok() != Some(dataspace) {
+        return Err(denied(
+            "private entrypoint permission cannot name a foreign contract dataspace",
+        ));
+    }
+    let (subject, lifecycle) =
+        crate::smartcontracts::code::fetch_contract_lifecycle(&state.world, &token.contract)
+            .map_err(ValidationFail::NotPermitted)?
+            .ok_or_else(|| {
+                denied("private entrypoint permission requires a deployed lifecycle owner")
+            })?;
+    if state.world.contract_subject_addresses.get(&subject) != Some(&token.contract) {
+        return Err(denied(
+            "private entrypoint permission requires its original contract subject index",
+        ));
+    }
+    ensure_private_permission_account_scope(state, destination, dataspace)?;
+    ensure_private_permission_account_scope(state, &subject, dataspace)?;
+    for owner in [Some(&lifecycle.owner), lifecycle.pending_owner.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        if let ContractLifecycleOwnerV1::Account(account) = owner {
+            ensure_private_permission_account_scope(state, account, dataspace)?;
+        }
+    }
+    Ok(true)
+}
+
+fn ensure_private_permission_account_scope(
+    state: &StateTransaction<'_, '_>,
+    account: &iroha_data_model::account::AccountId,
+    dataspace: iroha_model_base::topology::DataSpaceId,
+) -> Result<(), ValidationFail> {
+    use crate::state::WorldReadOnly as _;
+    use iroha_model_base::topology::DataSpaceId;
+
+    state
+        .world
+        .account(account)
+        .map_err(|_| denied("private entrypoint permission requires an existing local account"))?;
+    if crate::smartcontracts::code::historical_contract_for_subject(&state.world, account)
+        .is_some_and(|address| address.dataspace_id().ok() != Some(dataspace))
+    {
+        return Err(denied(
+            "private entrypoint permission cannot target a foreign contract subject",
+        ));
+    }
+    // Unlabelled accounts retained by this private World have only the universal read fallback.
+    // An explicit application scope must still belong to this signed root; it cannot narrow a
+    // foreign or shared account into the token's contract dataspace.
+    if state
+        .world
+        .account_scope_directory()
+        .get(account)
+        .is_some_and(|entry| {
+            entry
+                .iter()
+                .any(|(scope, _)| *scope != DataSpaceId::UNIVERSAL && *scope != dataspace)
+        })
+    {
+        return Err(denied(
+            "private entrypoint permission cannot target a foreign account scope",
+        ));
+    }
+    Ok(())
 }
 
 fn is_global_amx_coordinator_instruction(instruction: &InstructionBox) -> bool {

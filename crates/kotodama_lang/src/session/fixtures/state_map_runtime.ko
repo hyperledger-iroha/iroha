@@ -6,7 +6,11 @@ seiyaku StateMapRuntime {
                         Option::none => 0,
                     };
                 }
-                view fn paused() -> int { return current(); }
+                view fn paused() -> int {
+                    let observed = current();
+                    if observed == 0 { return current(); }
+                    return observed;
+                }
                 #[test]
                 fn absent_flag_is_zero() { test::assert(current() == 0); }
             }

@@ -7,9 +7,7 @@ final class ZkAssetMerklePathTests: XCTestCase {
         ToriiCanonicalRequestAuth(
             accountId: try! Keypair(privateKeyBytes: signingSeed)
                 .accountId(networkPrefix: AccountId.defaultNetworkPrefix),
-            privateKey: signingSeed,
-            timestampMs: 4_102_444_801_000,
-            nonce: "zk-merkle-path-test"
+            privateKey: signingSeed
         )
     }
 

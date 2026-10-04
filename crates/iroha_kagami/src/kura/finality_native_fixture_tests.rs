@@ -6,7 +6,7 @@
 //! separately. These captures provide no monetary or hardware authority.
 
 use super::*;
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use iroha_core::state::WorldReadOnly;
 use iroha_crypto::{Algorithm, KeyPair};

@@ -31,6 +31,7 @@ fn check_execution_refund_retirement(case: ExecutionRefundCase) {
         .try_detach(|_| Ok::<_, ()>(()))
         .unwrap();
     let budget = state.ivm_execution_budget();
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let occupied = budget.try_reserve_bytes(1).unwrap();
     let mut block = super::direct_commit_musubi_scratch_tests::staged_block(
         &state,
@@ -73,7 +74,7 @@ fn check_execution_refund_retirement(case: ExecutionRefundCase) {
         unavailable: AtomicUsize::new(0),
     });
     let waker = Waker::from(Arc::clone(&callback));
-    let mut wait = release.wait_for_release();
+    let mut wait = release.wait_for_release(&mut registration);
     assert!(
         Pin::new(&mut wait)
             .poll(&mut Context::from_waker(&waker))
@@ -82,7 +83,7 @@ fn check_execution_refund_retirement(case: ExecutionRefundCase) {
     if matches!(case, ExecutionRefundCase::RetainedDrop) {
         let fields = block.fields.as_mut().unwrap();
         let effects = fields
-            .ivm_refunds
+            ._ivm_refunds
             .with_scope(|_| {
                 crate::state::world_commit::PreparedWorldCommit::prepare_overlay(
                     &mut fields.world,

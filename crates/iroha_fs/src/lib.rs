@@ -17,6 +17,7 @@ use std::{
 use zeroize::Zeroizing;
 
 mod private_files;
+pub use private_files::{BorrowedPendingPrivateFile, BorrowedSealedPrivateFile};
 pub use private_files::{PendingPrivateFile, PrivateFileMetadata, SealedPrivateFile};
 
 #[cfg(unix)]
@@ -154,6 +155,23 @@ impl PrivateDirectory {
         })
     }
 
+    /// Retain this same native directory custody, sharing its already-open ancestor handles.
+    ///
+    /// The original and returned owners are revalidated. This neither resolves another path nor
+    /// creates directories, changes permissions, or duplicates retained directory handles. Native
+    /// identity and ownership checks remain active on both owners for their entire lifetimes.
+    ///
+    /// # Errors
+    /// Refuses changed directory or ancestor custody and native revalidation errors.
+    pub fn retain(&self) -> io::Result<Self> {
+        self.revalidate()?;
+        let retained = Self {
+            inner: self.inner.clone(),
+        };
+        retained.revalidate()?;
+        Ok(retained)
+    }
+
     /// The absolute retained directory path, for display and explicit child-process arguments.
     pub fn path(&self) -> &Path {
         self.inner.path()
@@ -247,6 +265,37 @@ impl PrivateDirectory {
     ) -> io::Result<()> {
         let name = checked_name(name.as_ref())?;
         self.inner.write_atomic(name, bytes, mode, true)
+    }
+
+    /// Discard bounded unpublished files left by an interrupted [`Self::write_atomic`].
+    ///
+    /// The caller must hold its original exclusive operation lock. Every required file must
+    /// already exist; this operation never initializes committed state. The complete directory
+    /// inventory and writable private single-link custody are checked before any removal. Only
+    /// this crate's exact staging names are eligible; file bodies are never allocated or read.
+    /// At most sixteen required files and sixteen staged files may be inspected.
+    ///
+    /// # Errors
+    /// Refuses missing required files, unknown names, unsafe or changed custody, excessive
+    /// staging count/extent, and native I/O errors. Once deletion starts, an I/O error can leave
+    /// a partially cleaned staging set; committed files are never removed or replaced.
+    pub fn reconcile_atomic_staging(
+        &self,
+        required_names: &[&str],
+        maximum_staged: usize,
+        maximum_bytes: usize,
+    ) -> io::Result<usize> {
+        if required_names.is_empty() || required_names.len() > 16 || maximum_staged > 16 {
+            return Err(invalid("atomic staging inventory bound exceeded"));
+        }
+        for (index, name) in required_names.iter().enumerate() {
+            checked_name(OsStr::new(name))?;
+            if name.starts_with(".iroha-fs-") || required_names[..index].contains(name) {
+                return Err(invalid("invalid required atomic staging inventory"));
+            }
+        }
+        self.inner
+            .reconcile_atomic_staging(required_names, maximum_staged, maximum_bytes)
     }
 
     /// Open or create a private read/write lock file without truncation or taking its lock.
@@ -441,6 +490,17 @@ impl OwnerDirectory {
     /// Returns an error for replaced paths, changed access or native I/O failures.
     pub fn revalidate(&self) -> io::Result<()> {
         self.inner.revalidate()
+    }
+
+    /// List bounded direct child names through this retained project authority.
+    ///
+    /// Names are sorted; no child is followed or recursively visited. This validates the
+    /// directory during enumeration, but callers must retain and validate any children they use.
+    ///
+    /// # Errors
+    /// Refuses changed custody, invalid child names, excessive entries and native I/O errors.
+    pub fn entries(&self, maximum: usize) -> io::Result<Vec<std::ffi::OsString>> {
+        self.inner.entries(maximum)
     }
 
     /// Read this directory's retained kernel identity.
@@ -800,19 +860,17 @@ fn checked_name(name: &OsStr) -> io::Result<&OsStr> {
     {
         return Err(invalid("file name has a nonportable spelling"));
     }
-    let stem = text
-        .split('.')
-        .next()
-        .unwrap_or_default()
-        .to_ascii_uppercase();
-    if matches!(
-        stem.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
-    ) || ["COM", "LPT"].iter().any(|prefix| {
-        stem.strip_prefix(prefix).is_some_and(|n| {
-            (n.len() == 1 && matches!(n.as_bytes()[0], b'1'..=b'9')) || matches!(n, "¹" | "²" | "³")
-        })
-    }) {
+    // Compare borrowed spelling instead of allocating an uppercase copy for each open.
+    let stem = text.split('.').next().unwrap_or_default();
+    let named_device = ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"]
+        .iter()
+        .any(|reserved| stem.eq_ignore_ascii_case(reserved));
+    let numbered_device = stem.get(..3).is_some_and(|prefix| {
+        prefix.eq_ignore_ascii_case("COM") || prefix.eq_ignore_ascii_case("LPT")
+    }) && stem.get(3..).is_some_and(|n| {
+        (n.len() == 1 && matches!(n.as_bytes()[0], b'1'..=b'9')) || matches!(n, "¹" | "²" | "³")
+    });
+    if named_device || numbered_device {
         return Err(invalid("reserved device name is not a regular file name"));
     }
     Ok(name)
@@ -835,6 +893,56 @@ fn temporary_name() -> String {
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     )
+}
+
+fn is_atomic_staging_name(name: &OsStr) -> bool {
+    let Some(body) = name
+        .to_str()
+        .and_then(|name| name.strip_prefix(".iroha-fs-"))
+        .and_then(|name| name.strip_suffix(".tmp"))
+    else {
+        return false;
+    };
+    let Some((pid, ordinal)) = body.split_once('-') else {
+        return false;
+    };
+    pid.parse::<u32>()
+        .is_ok_and(|value| value != 0 && value.to_string() == pid)
+        && ordinal
+            .parse::<u64>()
+            .is_ok_and(|value| value.to_string() == ordinal)
+}
+
+fn validate_atomic_staging_inventory(
+    names: &[std::ffi::OsString],
+    required: &[&str],
+    maximum_staged: usize,
+) -> io::Result<()> {
+    for name in required {
+        if !names
+            .iter()
+            .any(|present| present.as_os_str() == OsStr::new(name))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "required atomic staging inventory is missing",
+            ));
+        }
+    }
+    let mut staged = 0usize;
+    for name in names {
+        if required
+            .iter()
+            .any(|required| name.as_os_str() == OsStr::new(required))
+        {
+            continue;
+        }
+        if !is_atomic_staging_name(name) || staged >= maximum_staged {
+            return Err(invalid("unexpected atomic staging inventory"));
+        }
+        staged += 1;
+    }
+    Ok(())
 }
 
 fn bounded_read(file: &mut File, length: u64, maximum: usize) -> io::Result<Zeroizing<Vec<u8>>> {

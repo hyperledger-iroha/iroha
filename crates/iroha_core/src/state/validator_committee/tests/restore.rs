@@ -123,6 +123,7 @@ fn committee_restore_requires_retained_finality_even_when_all_progress_is_omitte
         fixture.incumbent.network_id,
         &[],
         &kura,
+        &iroha_allocation::AllocationBudget::new(64 * 1024 * 1024),
     )
     .expect("empty uncommitted State needs no finality");
     let hash = HashOf::from_untyped_unchecked(Hash::new(b"missing-certified-cut"));
@@ -132,11 +133,14 @@ fn committee_restore_requires_retained_finality_even_when_all_progress_is_omitte
         fixture.incumbent.network_id,
         &[hash],
         &kura,
+        &iroha_allocation::AllocationBudget::new(64 * 1024 * 1024),
     )
     .expect_err("absence of progress does not permit absence of its authentication");
     assert_eq!(
         error,
-        crate::sumeragi::certified_chain::ChainReadError::NotInView { height: 1 }.to_string()
+        crate::execution_attempt::ExecutionAttemptError::Rejected(
+            crate::sumeragi::certified_chain::ChainReadError::NotInView { height: 1 }.to_string()
+        )
     );
     assert!(
         validate_committed_progress(
@@ -144,7 +148,8 @@ fn committee_restore_requires_retained_finality_even_when_all_progress_is_omitte
             &chain_id,
             fixture.incumbent.network_id,
             &[],
-            &kura
+            &kura,
+            &iroha_allocation::AllocationBudget::new(64 * 1024 * 1024),
         )
         .is_err(),
         "a pre-genesis snapshot cannot invent preparation progress"
@@ -172,6 +177,7 @@ fn committee_restore_authenticates_actual_native_prefix_and_rejects_schedule_omi
                     *view.network_id(),
                     &hashes,
                     chain.kura(),
+                    &chain.state().ivm_execution_budget(),
                 )
                 .expect("same verified native cut and complete schedule");
                 assert!(
@@ -180,7 +186,8 @@ fn committee_restore_authenticates_actual_native_prefix_and_rejects_schedule_omi
                         view.chain_id(),
                         *view.network_id(),
                         &hashes,
-                        chain.kura()
+                        chain.kura(),
+                        &chain.state().ivm_execution_budget(),
                     )
                     .is_err(),
                     "a retained certified prefix cannot excuse omission of its schedule"
@@ -193,7 +200,8 @@ fn committee_restore_authenticates_actual_native_prefix_and_rejects_schedule_omi
                         view.chain_id(),
                         *view.network_id(),
                         &changed,
-                        chain.kura()
+                        chain.kura(),
+                        &chain.state().ivm_execution_budget(),
                     )
                     .is_err()
                 );

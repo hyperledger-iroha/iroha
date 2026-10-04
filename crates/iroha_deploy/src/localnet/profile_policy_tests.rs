@@ -7,7 +7,7 @@ fn sora_localnet_profiles_never_restrict_the_universal_dataspace() {
         SoraProfile::PrivateBpng,
         SoraProfile::Nexus,
     ] {
-        let (_, lanes) = localnet_lane_catalog(Some(profile), false)
+        let (_, lanes) = localnet_lane_catalog(Some(profile), false, TairaParentCatalog::WithIs)
             .expect("Sora localnet profile should define a lane catalog");
         for lane in lanes {
             let lane = lane.as_table().expect("lane catalog entry");

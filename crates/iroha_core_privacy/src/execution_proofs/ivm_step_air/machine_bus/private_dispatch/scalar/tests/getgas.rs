@@ -98,7 +98,7 @@ fn getgas_rejects_substituted_gas_words_coherent_wrong_tariffs_tags_and_all_orig
         }
         assert!(!substituted.accepts(&program));
     }
-    for cost in [1, 2, 3] {
+    for cost in [1, 2, 3, 1 << 16, 1 << 32] {
         let mut forged = fixture.clone();
         let wrong = gas_before - cost;
         bits(&mut forged.0.row[WORDS + 128..WORDS + 192], wrong);
@@ -139,6 +139,56 @@ fn getgas_rejects_substituted_gas_words_coherent_wrong_tariffs_tags_and_all_orig
         forged.0.row[index] = forged.0.row[index].add(F::ONE);
         assert!(!forged.accepts(&program), "workspace {index}");
     }
+}
+
+#[test]
+fn native_getgas_completes_with_zero_remaining_gas() {
+    let instruction = enc::encode_rr(wide::system::GETGAS, 4, 2, 3);
+    let needs_gas = enc::encode_ri(wide::arithmetic::ADDI, 5, 0, 1);
+    let (program, recorder, outcome) = shifts::capture(
+        &[instruction, needs_gas],
+        &[(4, 17, true)],
+        root_setup_gas(),
+        32,
+    );
+    // Invocation setup is funded. GETGAS itself succeeds with no remaining
+    // gas; the following one-gas instruction is the only attempted opcode
+    // that traps. No invocation-success claim is made from this partial row.
+    assert!(matches!(outcome, Err(ivm::VMError::OutOfGas)));
+    assert_eq!(recorder.records().len(), 2);
+    let record = &recorder.records()[0];
+    assert_eq!(record.instruction, Some(instruction));
+    assert_eq!(record.opcode_gas, Some(0));
+    assert_eq!(record.outcome, DiagnosticStepOutcome::Completed);
+    assert_eq!(record.before.gas_remaining, 0);
+    assert_eq!(record.after.gas_remaining, 0);
+    assert_eq!(record.before.registers[4], 17);
+    assert!(record.before.tags[4]);
+    assert_eq!(record.after.registers[4], 0);
+    assert!(!record.after.tags[4]);
+    assert_eq!(record.after.pc, record.before.pc + 4);
+    assert_eq!(record.after.cycles, record.before.cycles + 1);
+    let fixture = ScalarFixture::from_record(&program, record);
+    assert!(fixture.accepts(&program));
+    let next = &recorder.records()[1];
+    assert_eq!(next.instruction, Some(needs_gas));
+    assert_eq!(next.opcode_gas, Some(1));
+    assert!(matches!(next.outcome, DiagnosticStepOutcome::Trapped(_)));
+    assert_eq!(next.before.registers, next.after.registers);
+    assert_eq!(next.before.tags, next.after.tags);
+    assert_eq!(next.before.pc, next.after.pc);
+    assert_eq!(next.before.cycles, next.after.cycles);
+
+    // A wrapped subtraction is not a way to turn a zero-cost read into a
+    // fabricated maximum gas value. Bind the exact original zero-gas input.
+    let mut forged = fixture.clone();
+    bits(&mut forged.0.row[WORDS + 128..WORDS + 192], u64::MAX);
+    carries(&mut forged.0.row[CARRIES..CARRIES + 4], 0, 1, true);
+    for limb in 0..4 {
+        forged.0.packets.fields[GAS_DEBIT][AFTER + limb] = constant_limb(u64::MAX, limb);
+        forged.0.packets.fields[SCALAR_DESTINATION][AFTER + limb] = constant_limb(u64::MAX, limb);
+    }
+    assert!(!forged.accepts(&program));
 }
 
 #[test]

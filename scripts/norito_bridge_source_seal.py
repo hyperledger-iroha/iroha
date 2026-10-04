@@ -59,13 +59,12 @@ COMMON_ROOT_INPUTS = (
     "scripts/run_mobile_hermetic_command.py",
 )
 APPLE_ROOT_INPUTS = (
-    "crates/connect_norito_bridge/NoritoBridge.podspec.template",
     "crates/connect_norito_bridge/RELEASE_NOTES.md",
-    "IrohaSwift/IrohaSwift.podspec",
     "IrohaSwift/Package.swift",
     "IrohaSwift/Package.resolved",
     "IrohaSwift/Sources/IrohaSwift",
     "IrohaSwift/Sources/IrohaSwiftMobileTransports",
+    "IrohaSwift/Sources/NoritoBridgeRetention",
     "IrohaSwift/VERSION",
     "scripts/archive_norito_xcframework.py",
     "scripts/build_norito_xcframework.sh",
@@ -73,7 +72,7 @@ APPLE_ROOT_INPUTS = (
     "scripts/exec_with_file_lock.py",
     "scripts/norito_bridge_apple_slice_handoff.py",
     "scripts/package_mobile_sdk_artifacts.sh",
-    "scripts/render_norito_bridge_podspec.py",
+    "scripts/validate_norito_bridge_archive.py",
     "scripts/update_norito_bridge_swift_pins.py",
     "scripts/validate_norito_bridge_xcframework.py",
     "scripts/norito_bridge_local_integration.py",
@@ -186,7 +185,7 @@ _REVIEWED_PUBLIC_ANDROID_RESOURCE_INPUTS = frozenset({
     "kotlin/kagemusha-wallet-android/src/main/resources/META-INF/services/org.hyperledger.iroha.sdk.offline.wallet.KagemushaAndroidHardwareProviderFactoryV1",
 })
 # Exact public trybuild diagnostics in the maintained package closures.
-# These are 62 expected originals plus three tracked event-set diagnostic copies
+# These are 68 expected originals plus three tracked event-set diagnostic copies
 # retained under iroha_data_model_derive/wip; their full bytes remain sealed.
 # This admits no other .stderr name or material/provider/path/custody exception.
 _REVIEWED_PUBLIC_RUST_DIAGNOSTIC_INPUTS = frozenset({
@@ -228,10 +227,12 @@ _REVIEWED_PUBLIC_RUST_DIAGNOSTIC_INPUTS = frozenset({
     "crates/iroha_primitives_derive/tests/ui/fail/socket_addr_bad.stderr",
     "crates/iroha_primitives_derive/tests/ui/fail/socket_addr_missing_colon.stderr",
     "crates/iroha_schema_derive/tests/ui_fail/duplicate_binary_validation_hook.stderr",
+    "crates/iroha_schema_derive/tests/ui_fail/duplicate_prepared_field_decode.stderr",
     "crates/iroha_schema_derive/tests/ui_fail/enum_duplicate_index.stderr",
     "crates/iroha_schema_derive/tests/ui_fail/malformed_binary_validation_hook.stderr",
     "crates/iroha_schema_derive/tests/ui_fail/transparent_enum_multi_variant.stderr",
     "crates/iroha_schema_derive/tests/ui_fail/transparent_struct_multiple_fields.stderr",
+    "crates/iroha_schema_derive/tests/ui_fail/valued_prepared_field_decode.stderr",
     "crates/iroha_telemetry_derive/tests/ui_fail/args_no_wsv.stderr",
     "crates/iroha_telemetry_derive/tests/ui_fail/bare_spec.stderr",
     "crates/iroha_telemetry_derive/tests/ui_fail/doubled_plus.stderr",
@@ -251,6 +252,10 @@ _REVIEWED_PUBLIC_RUST_DIAGNOSTIC_INPUTS = frozenset({
     "crates/norito_derive/tests/ui/fail/json_deny_unknown_fields_tuple.stderr",
     "crates/norito_derive/tests/ui/fail/json_enum_missing_tag.stderr",
     "crates/norito_derive/tests/ui/fail/json_required_option_misuse.stderr",
+    "crates/norito_derive/tests/ui/fail/prepared_record_generic.stderr",
+    "crates/norito_derive/tests/ui/fail/prepared_record_tuple.stderr",
+    "crates/norito_derive/tests/ui/fail/prepared_record_unit.stderr",
+    "crates/norito_derive/tests/ui/fail/prepared_record_validation.stderr",
     "crates/norito_derive/tests/ui/fail/schema_identity_duplicate.stderr",
     "crates/norito_derive/tests/ui/fail/schema_identity_generic_frame.stderr",
     "crates/norito_derive/tests/ui/fail/schema_identity_missing.stderr",
@@ -939,6 +944,8 @@ def metadata(
     )
     configuration_owner = None
     configuration = None
+    invocation_directory = root
+    invocation_observation = None
     if target in APPLE_TARGETS + ANDROID_TARGETS:
         helper = pathlib.Path(__file__).with_name("run_mobile_hermetic_command.py")
         specification = importlib.util.spec_from_file_location(
@@ -948,12 +955,20 @@ def metadata(
             raise RuntimeError("Native Cargo configuration owner is unavailable")
         configuration_owner = importlib.util.module_from_spec(specification)
         specification.loader.exec_module(configuration_owner)
+        configured_invocation = os.environ.get("NORITO_BRIDGE_SEAL_CARGO_INVOCATION_DIR", str(root))
+        if configured_invocation != str(root):
+            if target not in APPLE_TARGETS:
+                raise RuntimeError("an explicit Cargo invocation directory requires an Apple target")
+            invocation_observation = configuration_owner.authenticate_cargo_invocation_directory(
+                root, pathlib.Path(configured_invocation)
+            )
+            invocation_directory = invocation_observation[0]
         configuration = configuration_owner.authenticate_build_cargo_configuration(
-            root, pathlib.Path(environment["CARGO_HOME"])
+            invocation_directory, pathlib.Path(environment["CARGO_HOME"])
         )
     try:
         output = run(
-            root,
+            invocation_directory,
             cargo,
             [
                 "metadata",
@@ -975,6 +990,8 @@ def metadata(
         rustdoc.authenticate()
         if configuration_owner is not None:
             configuration_owner.recheck_build_cargo_configuration(configuration)
+            if invocation_observation is not None:
+                configuration_owner.recheck_cargo_invocation_directory(root, invocation_observation)
         if lockfile_identity(lockfile) != lock_identity_before:
             raise RuntimeError("selected Cargo lock changed during metadata authentication")
         if lockfile_identity(root_lock) != root_lock_identity_before:

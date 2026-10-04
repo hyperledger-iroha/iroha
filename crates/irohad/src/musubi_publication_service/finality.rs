@@ -67,8 +67,10 @@ impl MusubiPublicationFinalizedArchiveRegistrationQueryV1 {
     }
 }
 /// Closed, redacted failure from the daemon-owned finalized reader.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MusubiPublicationFinalizedArchiveRegistrationReadErrorV1 {
+    /// Original local allocation admission has not completed; retry the same read.
+    Deferred(iroha_core::execution_attempt::ExecutionDeferred),
     /// The supplied evidence is ahead of this node's coherent finalized view.
     LocallyAhead,
     /// Evidence is malformed, substituted, absent from canonical history, or otherwise invalid.
@@ -77,13 +79,14 @@ pub enum MusubiPublicationFinalizedArchiveRegistrationReadErrorV1 {
 impl MusubiPublicationFinalizedArchiveRegistrationReadErrorV1 {
     /// Whether retrying after the local finalized view advances may succeed.
     #[must_use]
-    pub const fn is_retryable(self) -> bool {
-        matches!(self, Self::LocallyAhead)
+    pub const fn is_retryable(&self) -> bool {
+        matches!(self, Self::LocallyAhead | Self::Deferred(_))
     }
 }
 impl core::fmt::Display for MusubiPublicationFinalizedArchiveRegistrationReadErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self {
+            Self::Deferred(_) => "finalized history read is waiting for local capacity",
             Self::LocallyAhead => {
                 "finalized Musubi archive-registration evidence is ahead of local state"
             }
@@ -92,6 +95,27 @@ impl core::fmt::Display for MusubiPublicationFinalizedArchiveRegistrationReadErr
     }
 }
 impl std::error::Error for MusubiPublicationFinalizedArchiveRegistrationReadErrorV1 {}
+impl From<iroha_core::execution_attempt::ExecutionDeferred>
+    for MusubiPublicationFinalizedArchiveRegistrationReadErrorV1
+{
+    fn from(error: iroha_core::execution_attempt::ExecutionDeferred) -> Self {
+        Self::Deferred(error)
+    }
+}
+impl From<iroha_core::execution_attempt::ExecutionAttemptError<iroha_core::kura::Error>>
+    for MusubiPublicationFinalizedArchiveRegistrationReadErrorV1
+{
+    fn from(
+        error: iroha_core::execution_attempt::ExecutionAttemptError<iroha_core::kura::Error>,
+    ) -> Self {
+        match error {
+            iroha_core::execution_attempt::ExecutionAttemptError::Deferred(error) => {
+                Self::Deferred(error)
+            }
+            iroha_core::execution_attempt::ExecutionAttemptError::Rejected(_) => Self::Invalid,
+        }
+    }
+}
 const fn invalid() -> MusubiPublicationFinalizedArchiveRegistrationReadErrorV1 {
     MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Invalid
 }
@@ -177,14 +201,17 @@ impl MusubiPublicationFinalizedArchiveRegistrationReaderV1 {
             .get(registered_height.get() - 1)
             .copied()
             .ok_or(invalid())?;
-        let block = view.kura().get_block(registered_height).ok_or(invalid())?;
+        let block = view
+            .kura()
+            .get_block(registered_height, &view.execution_budget())?
+            .ok_or(invalid())?;
         if !validate_finalized_block_wire(
             view,
             &query.network_id,
             query.registration.registered_at_height,
             canonical_hash,
             &block,
-        ) || !validate_registration_transaction(query, &block)
+        )? || !validate_registration_transaction(query, &block)
         {
             return Err(invalid());
         }
@@ -226,7 +253,10 @@ impl MusubiPublicationFinalizedArchiveRegistrationReaderV1 {
             .get(tip_number.get() - 1)
             .copied()
             .ok_or_else(invalid)?;
-        let tip_block = view.kura().get_block(tip_number).ok_or_else(invalid)?;
+        let tip_block = view
+            .kura()
+            .get_block(tip_number, &view.execution_budget())?
+            .ok_or_else(invalid)?;
         let attestation_key = MusubiProviderBundleAttestationKeyV1 {
             archive_id: archive.archive_id,
             replication_order: location.replication_order,
@@ -238,7 +268,7 @@ impl MusubiPublicationFinalizedArchiveRegistrationReaderV1 {
             tip_height,
             tip_hash,
             &tip_block,
-        ) || !complete_location_attestations_match(&archive, location, view.world())
+        )? || !complete_location_attestations_match(&archive, location, view.world())
             || !current_readback_target_matches(
                 &archive,
                 location,
@@ -321,7 +351,7 @@ fn current_readback_target_matches(
             .is_ok()
         && attestation.registered_at_height >= archive.registered_at_height
         && binding.network_id == archive.staging_receipt.payload.binding.network_id
-        && binding.completed_by == *owner
+        && binding.completed_by == binding.completion_authority.completion_signer
         && binding.completion_authority.provider_owner == *owner
         && binding.archive_id == archive.archive_id
         && binding.bundle_digest == archive.commitment.bundle_digest
@@ -340,33 +370,35 @@ pub(super) fn validate_finalized_block_wire(
     registered_height: u64,
     canonical_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
     block: &SignedBlock,
-) -> bool {
+) -> Result<bool, iroha_core::execution_attempt::ExecutionDeferred> {
     if registered_height < 2
         || view.network_id() != network_id
         || block.header().height().get() != registered_height
         || block.hash() != canonical_hash
     {
-        return false;
+        return Ok(false);
     }
     let Some(index) = usize::try_from(registered_height)
         .ok()
         .and_then(|height| height.checked_sub(1))
     else {
-        return false;
+        return Ok(false);
     };
     if view.block_hashes().get(index) != Some(&canonical_hash) {
-        return false;
+        return Ok(false);
     }
     // This reader verifies native exact-quorum BLS and the paired application
     // attestation against the same immutable State cut. A structural decode or
     // self-declared committee cannot issue this historical execution capability.
-    let Ok(proof) = iroha_core::sumeragi::finality::build_proof(view, registered_height) else {
-        return false;
+    let proof = match iroha_core::sumeragi::finality::build_proof(view, registered_height) {
+        Ok(proof) => proof,
+        Err(iroha_core::sumeragi::finality::ProofError::Deferred(error)) => return Err(error),
+        Err(_) => return Ok(false),
     };
-    proof.block_header == block.header()
+    Ok(proof.block_header == block.header()
         && block
             .encode_wire()
-            .is_ok_and(|wire| proof.block_wire == wire)
+            .is_ok_and(|wire| proof.block_wire == wire))
 }
 fn validate_registration_transaction(
     query: &MusubiPublicationFinalizedArchiveRegistrationQueryV1,
@@ -617,191 +649,6 @@ pub(crate) mod tests {
             vec![registration_instruction(&material.archive).into()],
         )
     }
-    #[test]
-    fn pin_outbox_high_water_requires_exact_successful_signed_advance() {
-        use iroha_data_model::isi::musubi::AdvanceMusubiPinOutboxV1;
-        let material = registration_material();
-        let advance = AdvanceMusubiPinOutboxV1 {
-            network_id: material.network_id,
-            pin_authority: AccountId::new(material.publisher_key.public_key().clone()),
-            session_id: [0x81; 32],
-            expected_revision: 0,
-            expected_inventory_digest: [0; 32],
-            inventory_digest: [0x82; 32],
-        };
-        let transaction = signed_transaction(
-            material.network_id,
-            &material.publisher_key,
-            vec![advance.clone().into()],
-        );
-        let block = signed_block_with_results(vec![transaction.clone()], None);
-        let record = advance
-            .recorded_high_water(block.header().height().get(), *transaction.hash().as_ref())
-            .expect("canonical high-water");
-        assert!(super::super::pin_outbox_finality::validate_advance_transaction(&record, &block));
-        for case in 0..8 {
-            let mut changed = record.clone();
-            match case {
-                0 => changed.version = 2,
-                1 => {
-                    changed.network_id = NetworkId::from_genesis_hash(
-                        HashOf::from_untyped_unchecked(Hash::new([0x91; 32])),
-                    );
-                }
-                2 => changed.pin_authority = AccountId::new(keypair(0x92).public_key().clone()),
-                3 => changed.session_id = [0x93; 32],
-                4 => changed.revision += 1,
-                5 => changed.inventory_digest = [0x94; 32],
-                6 => changed.recorded_at_height += 1,
-                7 => changed.transaction_hash = [0x95; 32],
-                _ => unreachable!("closed mutation matrix"),
-            }
-            assert!(
-                !super::super::pin_outbox_finality::validate_advance_transaction(&changed, &block),
-                "mutation {case} must fail",
-            );
-        }
-        let rejected = signed_block_with_results(vec![transaction], Some(0));
-        assert!(
-            !super::super::pin_outbox_finality::validate_advance_transaction(&record, &rejected)
-        );
-    }
-    #[test]
-    fn pin_outbox_high_water_reader_binds_network_and_reports_absence_without_invention() {
-        let fixture = reader_fixture();
-        let reader =
-            super::super::pin_outbox_finality::MusubiPublicationPinOutboxHighWaterReaderV1::new(
-                fixture.query.network_id,
-                Arc::clone(&fixture.state),
-            )
-            .expect("same-network finalized reader");
-        assert!(
-            reader
-                .read_current(&fixture.archive.registered_by)
-                .expect("no high-water has been submitted")
-                .is_none()
-        );
-        let anchor = reader
-            .read_current_anchor(&fixture.archive.registered_by)
-            .expect("the empty signer lineage still has an authenticated local tip");
-        assert_eq!(anchor.network_id, fixture.query.network_id);
-        assert_eq!(anchor.tip_height, fixture.query.snapshot.finalized_height);
-        assert_eq!(
-            anchor.tip_block_hash,
-            fixture.query.snapshot.finalized_block_hash
-        );
-        assert!(anchor.high_water.is_none());
-        let uncommitted_height = anchor.tip_height + 1;
-        let synthetic_header = BlockHeader::new(
-            NonZeroU64::new(uncommitted_height).expect("next height is nonzero"),
-            Some(HashOf::from_untyped_unchecked(Hash::prehashed(
-                anchor.tip_block_hash,
-            ))),
-            None,
-            2_001,
-            0,
-        );
-        fixture
-            .state
-            .block(synthetic_header)
-            .commit_empty_block_for_testing()
-            .expect("advance State only for a mismatched-tip test");
-        assert_eq!(
-            reader.read_current_anchor(&fixture.archive.registered_by),
-            Err(super::super::pin_outbox_finality::MusubiPublicationPinOutboxHighWaterReadErrorV1::LocallyAhead),
-            "a State tip beyond durable Kura cannot yield a signer anchor",
-        );
-        assert!(
-            super::super::pin_outbox_finality::MusubiPublicationPinOutboxHighWaterReaderV1::new(
-                network_id(0x77),
-                fixture.state,
-            )
-            .is_err()
-        );
-    }
-    fn advance_pin_outbox(
-        fixture: &mut ReaderFixture,
-    ) -> (
-        Arc<SignedBlock>,
-        iroha_data_model::musubi::MusubiPinOutboxHighWaterV1,
-    ) {
-        use iroha_data_model::isi::musubi::AdvanceMusubiPinOutboxV1;
-        let advance = AdvanceMusubiPinOutboxV1 {
-            network_id: fixture.query.network_id,
-            pin_authority: fixture.archive.registered_by.clone(),
-            session_id: [0x81; 32],
-            expected_revision: 0,
-            expected_inventory_digest: [0; 32],
-            inventory_digest: [0x82; 32],
-        };
-        let transaction = signed_transaction(
-            fixture.query.network_id,
-            &keypair(0x31),
-            vec![advance.clone().into()],
-        );
-        let transaction_hash = *transaction.hash().as_ref();
-        assert_eq!(fixture.chain.commit_at(2_500, vec![transaction]), [true]);
-        let height = fixture.chain.height();
-        let block = fixture
-            .chain
-            .kura()
-            .get_block(NonZeroUsize::new(height.try_into().unwrap()).unwrap())
-            .unwrap();
-        let high_water = advance
-            .recorded_high_water(height, transaction_hash)
-            .unwrap();
-        (block, high_water)
-    }
-    #[test]
-    fn pin_outbox_high_water_reader_authenticates_executed_finalized_advance() {
-        let mut fixture = reader_fixture();
-        let (committed, high_water) = advance_pin_outbox(&mut fixture);
-        let reader =
-            super::super::pin_outbox_finality::MusubiPublicationPinOutboxHighWaterReaderV1::new(
-                fixture.query.network_id,
-                Arc::clone(&fixture.state),
-            )
-            .expect("same-network finalized reader");
-        let anchor = reader
-            .read_current_anchor(&fixture.archive.registered_by)
-            .expect("authenticate the native State record and exact successful transaction");
-        assert_eq!(anchor.network_id, fixture.query.network_id);
-        assert_eq!(anchor.tip_height, committed.header().height().get());
-        assert_eq!(anchor.tip_block_hash, *committed.hash().as_ref());
-        assert_eq!(anchor.high_water, Some(high_water.clone()));
-        assert_eq!(
-            reader.read_current(&fixture.archive.registered_by),
-            Ok(Some(high_water))
-        );
-    }
-    #[test]
-    fn pin_outbox_high_water_reader_rejects_kura_ahead_of_state() {
-        let fixture = reader_fixture();
-        let mut source = reader_fixture();
-        assert_eq!(source.query, fixture.query, "same original native prefix");
-        let (committed, _) = advance_pin_outbox(&mut source);
-        let state_height = fixture.state.query_view().block_hashes().len();
-        fixture.chain.kura().store_block(committed).expect(
-            "persist original native successor without publishing its State on this replica",
-        );
-        assert_eq!(
-            fixture.chain.kura().exact_durable_blocks_count().unwrap(),
-            state_height + 1
-        );
-        assert_eq!(
-            fixture.state.query_view().block_hashes().len(),
-            state_height
-        );
-        let reader =
-            super::super::pin_outbox_finality::MusubiPublicationPinOutboxHighWaterReaderV1::new(
-                fixture.query.network_id,
-                Arc::clone(&fixture.state),
-            )
-            .unwrap();
-        assert_eq!(reader.read_current_anchor(&fixture.archive.registered_by),
-            Err(super::super::pin_outbox_finality::MusubiPublicationPinOutboxHighWaterReadErrorV1::LocallyAhead),
-            "an absent State record cannot bypass a durable Kura tip ahead of State");
-    }
     fn signed_proposal(transactions: Vec<SignedTransaction>) -> SignedBlock {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 1_001, 0);
         let mut builder = BlockBuilder::new(header);
@@ -1009,7 +856,11 @@ pub(crate) mod tests {
             );
             let canonical = chain
                 .kura()
-                .get_block(NonZeroUsize::new(2).unwrap())
+                .get_block(
+                    NonZeroUsize::new(2).unwrap(),
+                    &state.query_view().execution_budget(),
+                )
+                .unwrap()
                 .unwrap();
             let registered = state
                 .query_view()
@@ -1035,12 +886,20 @@ pub(crate) mod tests {
             assert_eq!(source.commit(vec![transaction]), [true]);
             let original = source
                 .kura()
-                .get_block(NonZeroUsize::new(2).unwrap())
+                .get_block(
+                    NonZeroUsize::new(2).unwrap(),
+                    &source.state().query_view().execution_budget(),
+                )
+                .unwrap()
                 .unwrap();
-            let uncertified = Arc::new(original.as_ref().clone().with_commit_certificate(None));
+            let uncertified = iroha_data_model::block::SharedSignedBlock::try_new(
+                original.as_ref().clone().with_commit_certificate(None),
+                &state.query_view().execution_budget(),
+            )
+            .expect("admit deliberately invalid fixture block");
             chain
                 .kura()
-                .store_block(Arc::clone(&uncertified))
+                .store_block(uncertified.clone())
                 .expect("retain invalid missing-certificate body");
             state
                 .block(uncertified.header())
@@ -1054,7 +913,8 @@ pub(crate) mod tests {
                     2,
                     uncertified.hash(),
                     &uncertified
-                ),
+                )
+                .expect("completed finality read"),
                 "native source rejects the absent certificate"
             );
             uncertified
@@ -1158,14 +1018,16 @@ pub(crate) mod tests {
             revision: 1,
             state: MusubiArchiveLocationStateV1::Healthy,
         };
-        let provider_key = keypair(0x32);
-        let owner = AccountId::new(provider_key.public_key().clone());
+        let provider_key = keypair(0x34);
+        let owner = AccountId::new(keypair(0x32).public_key().clone());
+        let signer = AccountId::new(provider_key.public_key().clone());
         let binding = MusubiProviderBundleVerificationBindingV1 {
             network_id: archive.staging_receipt.payload.binding.network_id,
             provider_id: location.providers[0],
-            completed_by: owner.clone(),
+            completed_by: signer.clone(),
             completion_authority: ProviderIngestCompletionAuthorityV1::new(
                 owner,
+                signer,
                 ProviderIngestCompletionSignerPolicyV1 {
                     policy_id: [0x71; 32],
                     revision: 1,
@@ -1229,7 +1091,13 @@ pub(crate) mod tests {
     fn current_readback_target_requires_exact_location_and_registered_provider() {
         let mut archive = registration_material().archive;
         let (location, record) = readback_target(&archive);
-        let owner = &record.attestation.payload.binding.completed_by;
+        let owner = &record
+            .attestation
+            .payload
+            .binding
+            .completion_authority
+            .provider_owner;
+        assert_ne!(*owner, record.attestation.payload.binding.completed_by);
         archive.location_ids.push(location.location_id);
         assert!(current_readback_target_matches(
             &archive,
@@ -1238,6 +1106,16 @@ pub(crate) mod tests {
             Some(owner),
             Some(&record),
         ));
+        assert!(
+            !current_readback_target_matches(
+                &archive,
+                &location,
+                Some(&location),
+                Some(&record.attestation.payload.binding.completed_by),
+                Some(&record),
+            ),
+            "completion signer cannot replace the registered provider owner"
+        );
         let mut changed = location.clone();
         changed.pin_manifest = ManifestDigest::new([0x65; 32]);
         assert!(!current_readback_target_matches(
@@ -1357,7 +1235,13 @@ pub(crate) mod tests {
             Some(&substituted_attestation),
             Some((
                 provider,
-                record.attestation.payload.binding.completed_by.clone(),
+                record
+                    .attestation
+                    .payload
+                    .binding
+                    .completion_authority
+                    .provider_owner
+                    .clone(),
             )),
         );
         assert_eq!(
@@ -1376,7 +1260,9 @@ pub(crate) mod tests {
         assert_eq!(archive.location_revision, 2);
         assert_eq!(archive.location_ids, fixture.archive.location_ids);
     }
-    #[cfg(unix)]
+    mod storage_authorization_tests {
+        include!("finality/storage_authorization_tests.rs");
+    }
     #[test]
     fn storage_preflight_never_dispatches_unfinalized_registration() {
         use super::super::storage_coordination::FinalizedRegistrationCheckedStorageBackendV1;
@@ -1398,7 +1284,7 @@ pub(crate) mod tests {
 
             fn coordinate_storage(
                 &mut self,
-                _request: &MusubiStorageCoordinationRequestV1,
+                _request: &iroha_musubi_service::VerifiedStorageCoordinationRequestV1<'_>,
             ) -> Result<MusubiStorageCoordinationResponseV1, MusubiPublicationServiceBackendErrorV1>
             {
                 self.0.fetch_add(1, Ordering::SeqCst);
@@ -1431,16 +1317,25 @@ pub(crate) mod tests {
 
         let fixture = reader_fixture();
         let calls = Arc::new(AtomicUsize::new(0));
-        let mut checked = FinalizedRegistrationCheckedStorageBackendV1::new(
+        let checked = FinalizedRegistrationCheckedStorageBackendV1::new(
             fixture.reader.clone(),
             Box::new(MutationProbe(Arc::clone(&calls))),
         );
+        let dispatch = |source: &ReaderFixture, request: &MusubiStorageCoordinationRequestV1| {
+            storage_authorization_tests::dispatch(
+                Box::new(FinalizedRegistrationCheckedStorageBackendV1::new(
+                    source.reader.clone(),
+                    Box::new(MutationProbe(Arc::clone(&calls))),
+                )),
+                request,
+            )
+        };
         let exact = request(&fixture);
         exact.validate().expect("canonical coordination request");
         assert_eq!(checked.verify_current_registration(&exact), Ok(()));
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         assert_eq!(
-            checked.coordinate_storage(&exact),
+            dispatch(&fixture, &exact),
             Err(MusubiPublicationServiceBackendErrorV1::Retryable),
         );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -1448,19 +1343,31 @@ pub(crate) mod tests {
         let mut wrong_transaction = exact.clone();
         wrong_transaction.finalized_registration.transaction_hash = [0x91; 32];
         assert_eq!(
-            checked.coordinate_storage(&wrong_transaction),
+            checked.verify_current_registration(&wrong_transaction),
+            Err(MusubiPublicationServiceBackendErrorV1::Permanent),
+        );
+        assert_eq!(
+            dispatch(&fixture, &wrong_transaction),
             Err(MusubiPublicationServiceBackendErrorV1::Permanent),
         );
         let mut wrong_policy = exact.clone();
         wrong_policy.expected_policy_revision += 1;
         assert_eq!(
-            checked.coordinate_storage(&wrong_policy),
+            checked.verify_current_registration(&wrong_policy),
+            Err(MusubiPublicationServiceBackendErrorV1::Permanent),
+        );
+        assert_eq!(
+            dispatch(&fixture, &wrong_policy),
             Err(MusubiPublicationServiceBackendErrorV1::Permanent),
         );
         let mut foreign_network = exact.clone();
         foreign_network.network_id = network_id(0x67);
         assert_eq!(
-            checked.coordinate_storage(&foreign_network),
+            checked.verify_current_registration(&foreign_network),
+            Err(MusubiPublicationServiceBackendErrorV1::Permanent),
+        );
+        assert_eq!(
+            dispatch(&fixture, &foreign_network),
             Err(MusubiPublicationServiceBackendErrorV1::Permanent),
         );
         let mut locally_ahead = exact.clone();
@@ -1469,18 +1376,26 @@ pub(crate) mod tests {
             .snapshot
             .finalized_height += 1;
         assert_eq!(
-            checked.coordinate_storage(&locally_ahead),
+            checked.verify_current_registration(&locally_ahead),
+            Err(MusubiPublicationServiceBackendErrorV1::Retryable),
+        );
+        assert_eq!(
+            dispatch(&fixture, &locally_ahead),
             Err(MusubiPublicationServiceBackendErrorV1::Retryable),
         );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
         let uncertified = reader_fixture_with_finality(false);
-        let mut checked_uncertified = FinalizedRegistrationCheckedStorageBackendV1::new(
+        let checked_uncertified = FinalizedRegistrationCheckedStorageBackendV1::new(
             uncertified.reader.clone(),
             Box::new(MutationProbe(Arc::clone(&calls))),
         );
         assert_eq!(
-            checked_uncertified.coordinate_storage(&request(&uncertified)),
+            checked_uncertified.verify_current_registration(&request(&uncertified)),
+            Err(MusubiPublicationServiceBackendErrorV1::Permanent),
+        );
+        assert_eq!(
+            dispatch(&uncertified, &request(&uncertified)),
             Err(MusubiPublicationServiceBackendErrorV1::Permanent),
         );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -1495,16 +1410,35 @@ pub(crate) mod tests {
                 .expect_err("an uncertified Kura body must fail closed"),
             invalid()
         );
-        let pin_reader =
-            super::super::pin_outbox_finality::MusubiPublicationPinOutboxHighWaterReaderV1::new(
-                fixture.query.network_id,
-                Arc::clone(&fixture.state),
-            )
-            .expect("same-network pin-outbox reader");
-        assert_eq!(
-            pin_reader.read_current_anchor(&fixture.archive.registered_by),
-            Err(super::super::pin_outbox_finality::MusubiPublicationPinOutboxHighWaterReadErrorV1::Invalid),
-            "an absent high-water cannot bypass missing tip finality",
+        use iroha_core::query::musubi_pin_outbox::{
+            MusubiPinOutboxCheckExpectedV1, begin_musubi_pin_outbox_check_v1,
+        };
+        use iroha_data_model::musubi::{
+            MusubiPinOutboxCheckExpectationV1, MusubiPinOutboxCheckFloorV1,
+        };
+        let block = fixture
+            .chain
+            .committed(fixture.query.snapshot.finalized_height);
+        let result = begin_musubi_pin_outbox_check_v1(
+            Arc::clone(&fixture.state),
+            MusubiPinOutboxCheckExpectedV1 {
+                chain_id: fixture.state.chain_id_ref().clone(),
+                network_id: fixture.query.network_id,
+                pin_authority: fixture.archive.registered_by.clone(),
+                session_id: [0x81; 32],
+                inventory_digest: [0x82; 32],
+                floor: MusubiPinOutboxCheckFloorV1 {
+                    height: block.height(),
+                    block_hash: *block.block_hash().as_ref(),
+                    context_id: block.id(),
+                },
+                expected: MusubiPinOutboxCheckExpectationV1::Absent,
+            },
+            std::time::Instant::now() + std::time::Duration::from_secs(60),
+        );
+        assert!(
+            result.is_err(),
+            "an absent high-water cannot bypass missing tip finality"
         );
     }
     #[test]
@@ -1677,16 +1611,21 @@ pub(crate) mod tests {
             .get_block(
                 NonZeroUsize::new(usize::try_from(height).unwrap())
                     .expect("nonzero fixture height"),
+                &view.execution_budget(),
             )
+            .expect("completed fixture read")
             .expect("fixture Kura block");
         let canonical_hash = block.hash();
-        assert!(validate_finalized_block_wire(
-            &view,
-            &fixture.query.network_id,
-            height,
-            canonical_hash,
-            &block
-        ));
+        assert!(
+            validate_finalized_block_wire(
+                &view,
+                &fixture.query.network_id,
+                height,
+                canonical_hash,
+                &block
+            )
+            .expect("completed finality read")
+        );
         let mut added = block.as_ref().clone();
         let mut outputs = added.execution_outputs().to_vec();
         outputs.extend(structural_registration_callbacks(&fixture.archive));
@@ -1700,7 +1639,8 @@ pub(crate) mod tests {
                 height,
                 canonical_hash,
                 &added
-            ),
+            )
+            .expect("completed finality read"),
             "additional internal outputs cannot inherit original native finality"
         );
         let mut substituted = block.as_ref().clone();
@@ -1717,13 +1657,16 @@ pub(crate) mod tests {
         install_fixture_outputs(&mut substituted, outputs, 0)
             .expect("replace the result while retaining the consensus header hash");
         assert_eq!(substituted.hash(), canonical_hash);
-        assert!(!validate_finalized_block_wire(
-            &view,
-            &fixture.query.network_id,
-            height,
-            canonical_hash,
-            &substituted
-        ));
+        assert!(
+            !validate_finalized_block_wire(
+                &view,
+                &fixture.query.network_id,
+                height,
+                canonical_hash,
+                &substituted
+            )
+            .expect("completed finality read")
+        );
     }
     #[test]
     fn current_registration_projection_substitution_is_invalid() {
@@ -1746,15 +1689,16 @@ pub(crate) mod tests {
             invalid()
         );
     }
-    #[cfg(unix)]
     #[test]
     fn finalized_seed_capability_reads_exact_car_once_per_bounded_lease() {
         use super::super::{
-            seed_staging::{MusubiSeedStagingBackendV1, MusubiSeedStagingErrorV1, tests::fixture},
+            MusubiPublicationFinalizedSeedReadErrorV1,
             shared_seed_staging::SharedSeedStagingBackendV1,
         };
-        use iroha_musubi_service::MusubiSeedIngressBackendV1;
-        use std::{fs, os::unix::fs::PermissionsExt as _};
+        use iroha_musubi_service::{
+            MusubiSeedIngressBackendV1, MusubiSeedStagingBackendV1, MusubiSeedStagingErrorV1,
+            seed_test_support::fixture,
+        };
 
         let (seed_binding, commitment, plan, car) = fixture();
         let fixture = reader_fixture_with_finality_using(
@@ -1762,14 +1706,12 @@ pub(crate) mod tests {
             Some((commitment, seed_binding.semantic_release_manifest_digest)),
         );
         let binding = &fixture.archive.staging_receipt.payload.binding;
-        let root = tempfile::tempdir().expect("private seed fixture root");
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
-            .expect("owner-only seed directory");
-        let seed_root = root
-            .path()
-            .canonicalize()
-            .expect("canonical seed fixture root");
-        let seed = MusubiSeedStagingBackendV1::open(
+        let workspace = tempfile::tempdir().expect("seed fixture workspace");
+        let directory =
+            iroha_fs::PrivateDirectory::open_or_create(workspace.path().join("private"))
+                .expect("native private seed fixture root");
+        let seed_root = directory.path().to_owned();
+        let seed = MusubiSeedStagingBackendV1::initialize(
             &seed_root,
             binding.seed_provider,
             2,
@@ -1803,8 +1745,23 @@ pub(crate) mod tests {
             capability
                 .read_finalized_seed(&wrong_transaction)
                 .unwrap_err(),
-            MusubiSeedStagingErrorV1::Invalid,
+            MusubiPublicationFinalizedSeedReadErrorV1::Finality(
+                MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Invalid
+            ),
         );
+        let budget = fixture.state.ivm_execution_budget();
+        let held = budget
+            .try_reserve_bytes(budget.limit_bytes().saturating_sub(budget.reserved_bytes()))
+            .unwrap();
+        let error = capability.read_finalized_seed(&fixture.query).unwrap_err();
+        let MusubiPublicationFinalizedSeedReadErrorV1::Finality(
+            MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Deferred(ref original),
+        ) = error
+        else {
+            panic!("original native seed-read refusal was lost: {error:?}")
+        };
+        assert!(original.allocation_refusal().is_some());
+        drop(held);
         let lease = capability
             .read_finalized_seed(&fixture.query)
             .expect("exact finalized registration opens exact staged bytes");
@@ -1812,7 +1769,7 @@ pub(crate) mod tests {
         assert_eq!(lease.car(), car.as_slice());
         assert_eq!(
             capability.read_finalized_seed(&fixture.query).unwrap_err(),
-            MusubiSeedStagingErrorV1::Capacity,
+            MusubiPublicationFinalizedSeedReadErrorV1::Custody(MusubiSeedStagingErrorV1::Capacity),
         );
         drop(lease);
         let replay = capability
@@ -1832,7 +1789,9 @@ pub(crate) mod tests {
         );
         assert_eq!(
             capability.read_finalized_seed(&fixture.query).unwrap_err(),
-            MusubiSeedStagingErrorV1::Invalid,
+            MusubiPublicationFinalizedSeedReadErrorV1::Finality(
+                MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Invalid
+            ),
             "a completed seed lease must not authorize a substituted current registration",
         );
         drop(ingress);
@@ -1841,7 +1800,7 @@ pub(crate) mod tests {
             .expect("last owner releases exclusive seed lease");
     }
     #[test]
-    fn only_evidence_ahead_of_local_finality_is_retryable() {
+    fn invalid_evidence_is_permanent_while_future_finality_is_retryable() {
         let fixture = reader_fixture();
         let wrong_reader_error = MusubiPublicationFinalizedArchiveRegistrationReaderV1::new(
             network_id(0x25),
@@ -1881,5 +1840,41 @@ pub(crate) mod tests {
             .expect_err("same-height fork evidence is invalid");
         assert_eq!(invalid_error, invalid());
         assert!(!invalid_error.is_retryable());
+    }
+
+    #[test]
+    fn finalized_archive_capacity_refusal_retains_original_owner_and_retries_exact_read() {
+        let fixture = reader_fixture();
+        let view = fixture.state.query_view();
+        let budget = view.execution_budget();
+        let held = budget
+            .try_reserve_bytes(budget.limit_bytes().saturating_sub(budget.reserved_bytes()))
+            .expect("hold remaining original State allocation capacity");
+        let error = fixture
+            .reader
+            .read_current_archive_in_view(&fixture.query, &view)
+            .expect_err("unfinished native finality read cannot become invalid evidence");
+        assert!(error.is_retryable());
+        let MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Deferred(ref local) = error
+        else {
+            panic!("original resource refusal was lost: {error:?}");
+        };
+        assert!(
+            local.allocation_refusal().is_some(),
+            "retain original pool release source"
+        );
+        let pin = super::super::pin_registration::MusubiPublicationFinalizedPinRegistrationReadErrorV1::from(local.clone());
+        assert!(
+            matches!(pin, super::super::pin_registration::MusubiPublicationFinalizedPinRegistrationReadErrorV1::Deferred(ref retained) if retained == local)
+        );
+        drop(held);
+        assert_eq!(
+            fixture
+                .reader
+                .read_current_archive_in_view(&fixture.query, &view)
+                .unwrap(),
+            fixture.archive,
+            "retry authenticates exactly the same original registration"
+        );
     }
 }

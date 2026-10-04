@@ -241,17 +241,11 @@ mod tests {
                     .expect("one valid request fits its process cap")
             })
         });
-        assert_eq!(
-            fixture.client_pool.used_bytes.load(Ordering::Acquire),
-            required
-        );
-        assert_eq!(
-            fixture.server_pool.used_bytes.load(Ordering::Acquire),
-            required
-        );
+        assert_eq!(fixture.client_pool.allocation.reserved_bytes(), required);
+        assert_eq!(fixture.server_pool.allocation.reserved_bytes(), required);
         drop(held);
-        assert_eq!(fixture.client_pool.used_bytes.load(Ordering::Acquire), 0);
-        assert_eq!(fixture.server_pool.used_bytes.load(Ordering::Acquire), 0);
+        assert_eq!(fixture.client_pool.allocation.reserved_bytes(), 0);
+        assert_eq!(fixture.server_pool.allocation.reserved_bytes(), 0);
         let held = DecodeResourceAdmissionV1::acquire_operation_from(
             Arc::clone(&fixture.client_pool),
             operation,
@@ -268,12 +262,9 @@ mod tests {
             "a clone cannot escape its process's unchanged cap"
         );
         let response = ScrubbedBytes::with_decode_admission(vec![7], held);
-        assert_eq!(
-            fixture.client_pool.used_bytes.load(Ordering::Acquire),
-            required
-        );
+        assert_eq!(fixture.client_pool.allocation.reserved_bytes(), required);
         drop(response);
-        assert_eq!(fixture.client_pool.used_bytes.load(Ordering::Acquire), 0);
+        assert_eq!(fixture.client_pool.allocation.reserved_bytes(), 0);
     }
 
     #[test]
@@ -330,7 +321,7 @@ mod tests {
             })
             .expect("healthy session retains current connection");
         assert!(Arc::ptr_eq(&session.decode_pool, &endpoint.client_pool));
-        assert_eq!(session.decode_pool.used_bytes.load(Ordering::Acquire), 0);
+        assert_eq!(session.decode_pool.allocation.reserved_bytes(), 0);
     }
 
     #[test]
@@ -371,7 +362,7 @@ mod tests {
             )
         };
         assert_eq!(decode(&frame), Ok(7));
-        assert_eq!(pool.used_bytes.load(Ordering::Acquire), 0);
+        assert_eq!(pool.allocation.reserved_bytes(), 0);
         let full = pool
             .try_acquire(pool.max_bytes)
             .expect("exhaust selected process");
@@ -395,15 +386,15 @@ mod tests {
             &enclosing,
         ));
         assert_eq!(
-            enclosing_pool.used_bytes.load(Ordering::Acquire),
+            enclosing_pool.allocation.reserved_bytes(),
             operation_decode_policy(OPERATION_QUALIFY_V1).max_composed_bytes
         );
-        assert_eq!(pool.used_bytes.load(Ordering::Acquire), pool.max_bytes);
+        assert_eq!(pool.allocation.reserved_bytes(), pool.max_bytes);
         drop(scope);
         drop(enclosing);
-        assert_eq!(enclosing_pool.used_bytes.load(Ordering::Acquire), 0);
+        assert_eq!(enclosing_pool.allocation.reserved_bytes(), 0);
         drop(full);
         assert_eq!(decode(&frame), Ok(7));
-        assert_eq!(pool.used_bytes.load(Ordering::Acquire), 0);
+        assert_eq!(pool.allocation.reserved_bytes(), 0);
     }
 }

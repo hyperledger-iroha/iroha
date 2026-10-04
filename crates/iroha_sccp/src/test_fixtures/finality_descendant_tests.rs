@@ -13,7 +13,7 @@ use iroha_data_model::{
     },
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
-use std::{collections::BTreeSet, time::Duration};
+use std::time::Duration;
 
 fn candidate(chain: &NativeFinalityFixture, label: &str) -> SignedBlock {
     let signer = KeyPair::from_seed(vec![0x73; 32], Algorithm::Ed25519);
@@ -28,7 +28,7 @@ fn candidate(chain: &NativeFinalityFixture, label: &str) -> SignedBlock {
         .sign(signer.private_key());
     let mut builder = BlockBuilder::new(chain.next_header());
     builder.push_transaction(transaction);
-    let mut block = builder.build(BTreeSet::new());
+    let mut block = builder.build(iroha_data_model::block::BlockSignatures::default());
     NativeFinalityFixture::install_network_results(&mut block, vec![Ok(Vec::new())]);
     block
 }
@@ -46,8 +46,7 @@ fn changed_certificate(
     proof: &SumeragiFinalityProof,
     change: impl FnOnce(&mut Vec<u8>, &mut Vec<u8>, &mut Vec<u8>),
 ) -> SumeragiFinalityProof {
-    let mut block =
-        iroha_data_model::block::decode_versioned_signed_block(&proof.block_wire).unwrap();
+    let mut block = iroha_data_model::block::decode_framed_signed_block(&proof.block_wire).unwrap();
     let certificate = block.commit_certificate().unwrap();
     let mut header = certificate.consensus_header().to_vec();
     let mut qc = certificate.commit_qc().to_vec();
@@ -275,8 +274,7 @@ fn native_fixture_signer_rejects_skipped_and_substituted_parents() {
         }))
         .is_err()
     );
-    let decoded =
-        iroha_data_model::block::decode_versioned_signed_block(&child.block_wire).unwrap();
+    let decoded = iroha_data_model::block::decode_framed_signed_block(&child.block_wire).unwrap();
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             root.clone().certify(decoded);

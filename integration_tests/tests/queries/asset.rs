@@ -137,7 +137,7 @@ fn test_total_quantity(
         for attempt in 1..=MAX_ATTEMPTS {
             match test_client
                 .client()
-                .query(FindAssetsDefinitions::new())
+                .query(FindAssetDefinitions::new())
                 .execute_all()
             {
                 Ok(defs) => {

@@ -69,10 +69,9 @@ use halo2curves::{bn256::Fr as Bn254Fr, ff::PrimeField};
 #[cfg(test)]
 use iroha_zkp_halo2::{Bn254Scalar, IpaScalar};
 use metal::{
-    Buffer, CommandBuffer, CommandBufferRef, CommandQueue, CommandQueueRef, CompileOptions,
+    Buffer, CommandBuffer, CommandBufferRef, CommandQueue, CommandQueueRef,
     ComputeCommandEncoderRef, ComputePipelineState, Device, DeviceRef, Library,
-    MTLCommandBufferStatus, MTLDeviceLocation, MTLLanguageVersion, MTLResourceOptions, MTLSize,
-    NSUInteger,
+    MTLCommandBufferStatus, MTLDeviceLocation, MTLResourceOptions, MTLSize, NSUInteger,
     foreign_types::{ForeignType, ForeignTypeRef},
     objc::{msg_send, rc::autoreleasepool, runtime::Object, sel, sel_impl},
 };
@@ -87,7 +86,6 @@ use std::{
     iter::FusedIterator,
     mem,
     ops::Range,
-    path::Path,
     process::{Command, Stdio},
     ptr,
     sync::{
@@ -2949,76 +2947,18 @@ fn register_metal_device_hints(device: &Device) {
     ));
 }
 fn load_metal_library(device: &Device) -> MetalResult<Library> {
-    if let Some(library_path) = resolve_metal_library_path() {
-        return device
-            .new_library_with_file(&library_path)
-            .map_err(|err| GpuError::Execution {
-                backend: GpuBackend::Metal,
-                message: format!("failed to load Metal library {}: {err}", library_path),
-            });
-    }
-    debug!(
-        target: "fastpq::metal",
-        "offline fastpq.metallib unavailable; compiling embedded Metal source"
-    );
-    compile_embedded_metal_library(device)
-}
-fn compile_embedded_metal_library(device: &Device) -> MetalResult<Library> {
-    let options = CompileOptions::new();
-    options.set_language_version(MTLLanguageVersion::V2_4);
-    options.set_fast_math_enabled(false);
+    let bundle = crate::metal_artifact::admitted_bundle().map_err(|refusal| {
+        debug!(target: "fastpq::metal", ?refusal, "compiled Metal artifact unavailable");
+        GpuError::Unsupported(GpuBackend::Metal)
+    })?;
+    // The Metal crate copies this immutable compiled-data slice into its library
+    // owner. Driver/library metadata allocations remain a separate funding gate.
     device
-        .new_library_with_source(&embedded_metal_library_source(), &options)
+        .new_library_with_data(bundle.bytes())
         .map_err(|err| GpuError::Execution {
             backend: GpuBackend::Metal,
-            message: format!("failed to compile embedded Metal library: {err}"),
+            message: format!("failed to load admitted compiled Metal library: {err}"),
         })
-}
-fn embedded_metal_library_source() -> String {
-    const PRELUDE: &str = "#include <metal_stdlib>\nusing namespace metal;\n";
-    const PARAMS: &str = include_str!("../metal/include/params.h");
-    const FIELD: &str = include_str!("../metal/kernels/field.metal");
-    const NTT: &str = include_str!("../metal/kernels/ntt_stage.metal");
-    const EXACT_ROOT: &str = include_str!("../metal/kernels/exact_root.metal");
-    const POSEIDON: &str = include_str!("../metal/kernels/poseidon.metal");
-    const KECCAK256: &str = include_str!("../metal/kernels/keccak256.metal");
-    const DIGEST384: &str = include_str!("../metal/kernels/digest384.metal");
-    const BN254: &str = include_str!("../metal/kernels/bn254.metal");
-
-    let mut source = String::with_capacity(
-        PRELUDE.len()
-            + PARAMS.len()
-            + FIELD.len()
-            + NTT.len()
-            + EXACT_ROOT.len()
-            + POSEIDON.len()
-            + KECCAK256.len()
-            + DIGEST384.len()
-            + BN254.len(),
-    );
-    source.push_str(PRELUDE);
-    source.push_str(PARAMS);
-    source.push('\n');
-    source.push_str(FIELD);
-    source.push('\n');
-    append_embedded_translation_unit(&mut source, NTT);
-    append_embedded_translation_unit(&mut source, EXACT_ROOT);
-    append_embedded_translation_unit(&mut source, POSEIDON);
-    append_embedded_translation_unit(&mut source, KECCAK256);
-    append_embedded_translation_unit(&mut source, DIGEST384);
-    append_embedded_translation_unit(&mut source, BN254);
-    source
-}
-fn append_embedded_translation_unit(destination: &mut String, translation_unit: &str) {
-    for line in translation_unit.lines() {
-        // Quoted includes are repository-local files already embedded above.
-        // System includes remain in the source for the runtime compiler.
-        if line.trim_start().starts_with("#include \"") {
-            continue;
-        }
-        destination.push_str(line);
-        destination.push('\n');
-    }
 }
 fn build_bn254_poseidon_context() -> MetalResult<Bn254PoseidonMetalPipelines> {
     let Some(device) = select_metal_device() else {
@@ -3109,29 +3049,8 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
         bn254_twiddles: Mutex::new(bn254_twiddles),
     })
 }
-fn resolve_metal_library_path() -> Option<String> {
-    resolve_metal_library_path_candidates(
-        debug_env_var("FASTPQ_METAL_LIB"),
-        option_env!("FASTPQ_METAL_LIB"),
-    )
-}
-fn resolve_metal_library_path_candidates(
-    runtime_override: Option<String>,
-    build_path: Option<&str>,
-) -> Option<String> {
-    runtime_override
-        .filter(|path| !path.is_empty())
-        .or_else(|| {
-            build_path
-                // Build-script paths live under Cargo's output directory and may
-                // disappear when a binary is packaged or moved. Unlike an explicit
-                // runtime override, a stale embedded path should use the source
-                // fallback instead of making otherwise valid Metal hardware unusable.
-                .filter(|path| !path.is_empty() && Path::new(path).is_file())
-                .map(str::to_owned)
-        })
-}
 fn select_metal_device() -> Option<Device> {
+    crate::metal_artifact::admitted_bundle().ok()?;
     Device::system_default().or_else(|| Device::all().into_iter().next())
 }
 fn resolve_queue_policy(device: &Device) -> QueuePolicy {

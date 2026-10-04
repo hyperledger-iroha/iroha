@@ -31,15 +31,24 @@ fn commit_with_signers_accepts_quorum_without_proxy_tail_signature() {
         3,
         checked_block_signature(kp_set_b.private_key(), hash),
     ));
-    let block =
-        ValidBlock::new_unverified_for_tests(DataBlockBuilder::new(header).build(signatures));
+    let block = ValidBlock::new_unverified_for_tests(
+        DataBlockBuilder::new(header).build(
+            iroha_data_model::block::BlockSignatures::try_from_iter(signatures)
+                .expect("at most 31 block signatures"),
+        ),
+    );
     let signers = BTreeSet::from([
         ValidatorIndex::try_from(0).expect("validator index parses"),
         ValidatorIndex::try_from(1).expect("validator index parses"),
         ValidatorIndex::try_from(2).expect("validator index parses"),
     ]);
     let result = block
-        .commit_with_signers(&topology, &signers, false)
+        .commit_with_signers(
+            &topology,
+            &signers,
+            false,
+            crate::block::reserve_block_for_tests(),
+        )
         .unpack(|_| {});
     assert!(
         result.is_ok(),
@@ -80,15 +89,24 @@ fn commit_with_signers_allows_block_signer_not_in_qc() {
         3,
         checked_block_signature(kp_proxy.private_key(), hash),
     ));
-    let block =
-        ValidBlock::new_unverified_for_tests(DataBlockBuilder::new(header).build(signatures));
+    let block = ValidBlock::new_unverified_for_tests(
+        DataBlockBuilder::new(header).build(
+            iroha_data_model::block::BlockSignatures::try_from_iter(signatures)
+                .expect("at most 31 block signatures"),
+        ),
+    );
     let signers = BTreeSet::from([
         ValidatorIndex::try_from(0).expect("validator index parses"),
         ValidatorIndex::try_from(1).expect("validator index parses"),
         ValidatorIndex::try_from(3).expect("validator index parses"),
     ]);
     let result = block
-        .commit_with_signers(&topology, &signers, false)
+        .commit_with_signers(
+            &topology,
+            &signers,
+            false,
+            crate::block::reserve_block_for_tests(),
+        )
         .unpack(|_| {});
     assert!(
         result.is_ok(),
@@ -113,7 +131,13 @@ fn replace_signatures_restores_previous_on_failure() {
         1,
         checked_block_signature(kp_proxy.private_key(), hash),
     ));
-    let result = vb.replace_signatures(invalid, &topology).unpack(|_| {});
+    let result = vb
+        .replace_signatures(
+            iroha_data_model::block::BlockSignatures::try_from_iter(invalid)
+                .expect("at most 31 block signatures"),
+            &topology,
+        )
+        .unpack(|_| {});
     assert!(matches!(
         result,
         Err(SignatureVerificationError::LeaderMissing)

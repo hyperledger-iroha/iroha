@@ -229,7 +229,7 @@ fn checked_block_signature(index: u64, keypair: &KeyPair, header: &BlockHeader) 
 fn block_with_execution_context(execution_context: BlockExecutionContextBundle) -> SignedBlock {
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 1, 0);
     SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -288,7 +288,7 @@ fn merged_lane_entrypoints_are_an_execution_suffix_of_the_proposal() {
     };
     SignedBlock::refresh_entrypoint_roots(&mut payload);
     let proposal = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload,
         result: None,
         commit_certificate: None,
@@ -376,7 +376,7 @@ fn block_payload_ordering_includes_execution_context() {
 fn signed_block_is_empty_without_entrypoints_or_artifacts() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -402,7 +402,7 @@ fn signed_block_with_empty_execution_context_is_empty() {
 fn signed_block_try_sign_adds_verifiable_signature() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -442,7 +442,7 @@ fn signed_block_wire_roundtrips_canonical_external_entrypoints() {
     let entrypoint = TransactionEntrypoint::from(tx.clone());
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: vec![entrypoint.clone()],
@@ -738,7 +738,7 @@ fn signed_block_is_not_empty_with_internal_outputs() {
 fn signed_block_is_not_empty_with_da_commitments() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -759,7 +759,7 @@ fn signed_block_is_not_empty_with_da_commitments() {
 fn signed_block_is_not_empty_with_da_pin_intents() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -897,7 +897,7 @@ fn encode_versioned_prefixes_norito_payload() {
     use nonzero_ext::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -950,7 +950,7 @@ fn versioned_block_roundtrip_preserves_instruction_order() {
     .with_instructions(ordered.clone())
     .sign(key_pair.private_key());
     let block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: vec![TransactionEntrypoint::from(tx.clone())],
@@ -990,7 +990,7 @@ fn deframe_rejects_payload_exceeding_max_len() {
     const LENGTH_OFFSET: usize = 1 + 4 + 1 + 1 + 16 + 1;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -1032,7 +1032,7 @@ fn decode_versioned_signed_block_rejects_trailing_bytes() {
     use nonzero_ext::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -1068,7 +1068,7 @@ fn frame_deframe_versioned_bytes_roundtrip() {
     use nonzero_ext::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -1111,7 +1111,7 @@ fn canonical_wire_matches_framed_payload() {
     use nonzero_ext::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -1161,7 +1161,7 @@ fn signed_block_decoders_reject_nested_instruction_type_name_alias() {
 
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: vec![TransactionEntrypoint::from(transaction)],
@@ -1206,8 +1206,8 @@ fn signed_block_decoders_reject_nested_instruction_type_name_alias() {
     let framed_error = decode_framed_signed_block(&framed)
         .expect_err("framed V1 blocks must reject nested instruction aliases");
     assert!(matches!(
-        framed_error,
-        iroha_version::error::Error::NoritoCodec(reason)
+        framed_error.into_error(),
+        NoritoFrameError::Message(reason)
             if reason == "unknown instruction wire identifier"
     ));
 }
@@ -1264,7 +1264,7 @@ fn set_da_commitments_updates_header_hash() {
     use nonzero_ext::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -1342,7 +1342,7 @@ fn decode_versioned_signed_block_accepts_framed_payload() {
     use nonzero_ext::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -1359,11 +1359,11 @@ fn decode_versioned_signed_block_accepts_framed_payload() {
     let versioned = block.encode_versioned();
     let framed = frame_versioned_signed_block_bytes(&versioned).expect("frame versioned payload");
     let decoded_from_framed =
-        decode_versioned_signed_block(&framed).expect("decode framed payload via versioned API");
+        decode_framed_signed_block(&framed).expect("decode framed payload via versioned API");
     assert_eq!(decoded_from_framed, block);
-    let err = decode_versioned_signed_block(&versioned)
-        .expect_err("headerless payloads must be rejected");
-    assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
+    let err =
+        decode_framed_signed_block(&versioned).expect_err("headerless payloads must be rejected");
+    assert_eq!(err.kind(), norito::core::DecodeAttemptErrorKind::Invalid);
 }
 fn plain_block_at(height: u64) -> SignedBlock {
     let header = BlockHeader::new(
@@ -1374,7 +1374,7 @@ fn plain_block_at(height: u64) -> SignedBlock {
         1,
     );
     SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -1489,14 +1489,10 @@ fn commit_certificate_leaves_block_and_wire_hashes_unchanged() {
             .expect("valid original proposal"),
         plain
     );
-    assert!(
-        matches!(plain.without_commit_certificate(), Cow::Borrowed(_)),
-        "a block without a certificate is borrowed, not copied"
-    );
-    assert!(matches!(
-        certified.without_commit_certificate(),
-        Cow::Owned(ref block) if block.commit_certificate().is_none()
-    ));
+    let plain_wire = plain.encode_wire().expect("plain canonical wire");
+    let identity = (plain_wire.len() as u64, Hash::new(&plain_wire));
+    assert_eq!(plain.executed_block_wire_identity().unwrap(), identity);
+    assert_eq!(certified.executed_block_wire_identity().unwrap(), identity);
 }
 #[test]
 fn commit_certificate_wire_json_and_versioned_round_trip() {
@@ -1506,7 +1502,7 @@ fn commit_certificate_wire_json_and_versioned_round_trip() {
     ] {
         let wire = block.encode_wire().expect("wire");
         assert_eq!(
-            decode_versioned_signed_block(&wire).expect("decode wire"),
+            decode_framed_signed_block(&wire).expect("decode wire"),
             block
         );
         assert_eq!(
@@ -1555,7 +1551,7 @@ fn framed_signed_block_uses_v1_layout_flags() {
     use nonzero_ext::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -1580,7 +1576,7 @@ fn signed_block_da_commitments_roundtrip() {
     use nonzero_ext::nonzero;
     let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -1611,7 +1607,7 @@ fn set_da_pin_intents_updates_header_hash() {
     use nonzero_ext::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -2259,7 +2255,7 @@ fn canonical_wire_and_deframe_preserve_layout_flags() {
     super::decode_framed_signed_block(wire.as_framed()).expect("decode canonical wire");
     let err = super::decode_framed_signed_block(&versioned)
         .expect_err("headerless payloads must be rejected");
-    assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
+    assert_eq!(err.kind(), norito::core::DecodeAttemptErrorKind::Invalid);
 }
 #[test]
 fn framing_derives_flags_instead_of_reusing_tls_state() {
@@ -2356,7 +2352,7 @@ fn sealed_reveal_batch_outcome_aliases_are_unique_and_single_assignment() {
     };
     let mut builder = sealed_alias_block_builder();
     builder.push_sealed_transaction_reveal(first_reveal.clone());
-    let mut positive = builder.build(BTreeSet::new());
+    let mut positive = builder.build(crate::block::BlockSignatures::default());
     let mut result = crate::transaction::TransactionResult::new(Ok(DataTriggerSequence::default()));
     result.set_batch_transfer_outcomes(vec![outcome.clone()]);
     fixture::install(&mut positive, vec![network(0, result)], 1).unwrap();
@@ -2385,7 +2381,7 @@ fn sealed_reveal_batch_outcome_aliases_are_unique_and_single_assignment() {
     let mut builder = sealed_alias_block_builder();
     builder.push_sealed_transaction_reveal(first_reveal);
     builder.push_sealed_transaction_reveal(second_reveal);
-    let mut ambiguous = builder.build(BTreeSet::new());
+    let mut ambiguous = builder.build(crate::block::BlockSignatures::default());
     assert!(
         fixture::install(
             &mut ambiguous,
@@ -2424,4 +2420,111 @@ fn full_output_replacement_rebuilds_exact_cache() {
     assert_eq!(block.output_merkle_commitment(), expected.commitment());
     assert_eq!(block.header(), header);
     block.validate_output_merkle_cache().unwrap();
+}
+
+#[test]
+fn canonical_block_and_journal_share_strict_header_and_version_rejections() {
+    use crate::sumeragi::finality::{
+        NativeFinalityArtifact, NativeFinalityDecodeError, NativeFinalityLimits,
+    };
+    let mut block = plain_block_at(1);
+    let key = checked_random_keypair();
+    block
+        .signatures
+        .try_insert(checked_block_signature(0, &key, &block.header()))
+        .unwrap();
+    let wire = block.encode_wire().unwrap();
+    let limits = NativeFinalityLimits {
+        block_bytes: 1024 * 1024,
+        journal_bytes: 1024 * 1024,
+        block_count: 1,
+        allocated_bytes: 64 * 1024 * 1024,
+    };
+    assert_eq!(decode_framed_signed_block(&wire).unwrap(), block);
+    assert_eq!(
+        NativeFinalityArtifact {
+            block_wire: wire.clone()
+        }
+        .decode_block(limits)
+        .unwrap(),
+        block
+    );
+    let mut malformed = Vec::new();
+    for offset in [0, 1, 5, 6, 7, 23, 24, 32, norito::core::Header::SIZE] {
+        let mut changed = wire.clone();
+        changed[offset] ^= 0x80;
+        malformed.push(changed);
+    }
+    let mut oversized = wire.clone();
+    oversized[24..32].copy_from_slice(
+        &norito::core::max_archive_len()
+            .saturating_add(1)
+            .to_le_bytes(),
+    );
+    malformed.push(oversized);
+    let mut trailing = wire.clone();
+    trailing.push(0);
+    malformed.push(trailing);
+    malformed.extend([block.encode_versioned(), Vec::new(), vec![1]]);
+    for bytes in malformed {
+        let direct = norito::core::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+            || decode_framed_signed_block(&bytes),
+        )
+        .unwrap_err();
+        assert_eq!(
+            direct.kind(),
+            norito::core::DecodeAttemptErrorKind::Invalid,
+            "{direct:?}"
+        );
+        let journal = NativeFinalityArtifact {
+            block_wire: bytes.clone(),
+        }
+        .decode_block(limits)
+        .unwrap_err();
+        match journal {
+            NativeFinalityDecodeError::Malformed(original) => {
+                assert_eq!(original.kind(), direct.kind());
+                assert_eq!(original.to_string(), direct.to_string());
+            }
+            NativeFinalityDecodeError::Invalid(_) if bytes.is_empty() => {}
+            other => panic!("journal changed canonical invalidity: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn canonical_block_refusal_survives_outer_unwind_and_retries_identical_frame() {
+    let mut block = plain_block_at(1);
+    let key = checked_random_keypair();
+    block
+        .signatures
+        .try_insert(checked_block_signature(0, &key, &block.header()))
+        .unwrap();
+    let wire = block.encode_wire().unwrap();
+    let saved = std::cell::RefCell::new(None);
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            norito::core::with_decode_limits_scope(
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+                || {
+                    *saved.borrow_mut() = Some(decode_framed_signed_block(&wire).unwrap_err());
+                    panic!("retire original decoder scope");
+                },
+            )
+        }))
+        .is_err()
+    );
+    let original = saved.into_inner().unwrap();
+    assert_eq!(
+        original.kind(),
+        norito::core::DecodeAttemptErrorKind::EnclosingLimit
+    );
+    assert!(matches!(
+        original.into_error().decode_resource_error(),
+        Some(norito::core::DecodeResourceError::TotalAllocationExceeded { limit: 0, .. })
+    ));
+    let retried = decode_framed_signed_block(&wire).unwrap();
+    assert_eq!(retried, block);
+    assert_eq!(retried.encode_wire().unwrap(), wire);
 }

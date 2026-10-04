@@ -16,7 +16,6 @@ use iroha_data_model::{
     transaction::{Executable, ExecutableBatchItem, TransactionEntrypoint},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
-use mv::storage::StorageReadOnly as _;
 use std::{num::NonZeroUsize, time::Duration};
 
 const SCAN_INSTRUCTIONS_PER_ROUND: usize = 256;
@@ -341,7 +340,7 @@ mod tests {
     fn ordinary_producer_bounded_scan_preserves_exact_position_without_skipping_originals() {
         let fixture =
             iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture::new();
-        let block = iroha_data_model::block::decode_versioned_signed_block(
+        let block = iroha_data_model::block::decode_framed_signed_block(
             &fixture.genesis_proof().block_wire,
         )
         .unwrap();

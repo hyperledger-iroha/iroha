@@ -8,7 +8,7 @@ use crate::{
     block::{
         CommitCertificate,
         consensus::{ExecKv, ExecWitness},
-        decode_versioned_signed_block,
+        decode_framed_signed_block,
     },
     sumeragi_finality::{
         ExecutionCommitment, ExecutionResultCommitment, NativeLaneStateProof,
@@ -69,7 +69,7 @@ fn resign_result(
     commitment: &ExecutionResultCommitment,
     decision_view: u64,
 ) -> SumeragiFinalityProof {
-    let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
+    let mut block = decode_framed_signed_block(&proof.block_wire).unwrap();
     let certificate = block.commit_certificate().unwrap();
     let header = certificate.consensus_header().to_vec();
     let availability = certificate.availability().to_vec();
@@ -147,7 +147,7 @@ fn attachment(
         NativeLaneStateProof::from_witness(&witness, &AllocationBudget::new(100_000)).unwrap();
     let ordinary_root = native_lanes.computed_root().unwrap();
     assert!(reserve_receipt_witness.verify(ordinary_root));
-    let block = decode_versioned_signed_block(&fixture.second.block_wire).unwrap();
+    let block = decode_framed_signed_block(&fixture.second.block_wire).unwrap();
     let mut commitment =
         ExecutionResultCommitment::decode(block.commit_certificate().unwrap().result_preimage())
             .unwrap();
@@ -259,7 +259,7 @@ fn native_finality_refuses_unsigned_genesis_result_and_corrupt_original_certific
     genesis.finality_proof = fixture.first;
     assert!(genesis.validate_against(&genesis_anchor).is_err());
 
-    let mut block = decode_versioned_signed_block(&finality.finality_proof.block_wire).unwrap();
+    let mut block = decode_framed_signed_block(&finality.finality_proof.block_wire).unwrap();
     let certificate = block.commit_certificate().unwrap();
     let mut qc: Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
     qc.agg_sig.0[0] ^= 1;
@@ -344,7 +344,7 @@ fn native_top_up_attachment_preserves_exact_root_count_and_leaf_bindings() {
 #[test]
 fn native_finality_accepts_another_valid_quorum_witness_for_the_same_selected_decision() {
     let (fixture, mut finality, anchor) = attachment(KagemushaOperationKindV1::Redemption);
-    let block = decode_versioned_signed_block(&finality.finality_proof.block_wire).unwrap();
+    let block = decode_framed_signed_block(&finality.finality_proof.block_wire).unwrap();
     let commitment =
         ExecutionResultCommitment::decode(block.commit_certificate().unwrap().result_preimage())
             .unwrap();

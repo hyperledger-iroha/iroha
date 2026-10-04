@@ -22,7 +22,7 @@ pub(super) struct CommittedRead {
 }
 impl CommittedRead {
     pub(super) fn new(
-        block: Arc<SignedBlock>,
+        block: iroha_data_model::block::SharedSignedBlock,
         height: u64,
         budget: AllocationBudget,
         crypto: SharedCrypto,

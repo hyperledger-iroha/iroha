@@ -14,116 +14,38 @@
 /// cycles. As the proving backend and hardware improved we can handle larger
 /// traces, so the limit is now 2^17 cycles by default.
 pub const MAX_CYCLES: u64 = 1 << 17; // 131_072 cycles
-use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
+use iroha_crypto::{HashOf, MerkleTree};
 use rayon::prelude::*;
-use sha2::{Digest, Sha256};
-use std::{
-    cell::RefCell,
-    marker::PhantomData,
-    num::NonZeroU64,
-    rc::Rc,
-    sync::{
-        Arc, LazyLock, OnceLock,
-        atomic::{AtomicUsize, Ordering},
-    },
+use std::sync::{
+    LazyLock, OnceLock,
+    atomic::{AtomicUsize, Ordering},
 };
+mod cycle_roots;
+mod delta_rows;
+mod runtime_trace;
+mod trace_storage;
+pub use delta_rows::{DeltaEntry, DeltaTraceLog};
+pub use runtime_trace::RuntimeTraceCapture;
+pub(crate) use trace_storage::PcTraceLog;
 mod diagnostic_snapshot;
+mod register_authentication;
+pub(crate) use crate::cache_memory::SharedRegLog;
+pub(crate) use cycle_roots::StepLog;
 pub use diagnostic_snapshot::{
     DiagnosticMemoryEvent, DiagnosticRegisterEvent, DiagnosticRegisterSource,
     DiagnosticTraceSnapshot, DiagnosticTraceSource,
 };
-pub(crate) type SharedRegLog = Arc<parking_lot::Mutex<RegLog>>;
-#[derive(Clone)]
-struct RegLoggerState {
-    log: Option<SharedRegLog>,
-    logging_enabled: bool,
-}
-thread_local! {
-    /// Thread-local, ownership-safe sink used by [`Registers`] to log Merkle proofs.
-    ///
-    /// The outer `Option` distinguishes execution outside a VM run from an
-    /// explicitly masked run. That distinction prevents an untraced nested VM
-    /// from inheriting its caller's logger.
-    static REG_LOGGER: RefCell<Option<RegLoggerState>> = const { RefCell::new(None) };
-}
+mod register_batches;
+mod register_events;
+pub(crate) use register_batches::{
+    RegEventBatch, RegLoggerGuard, event_reg_logger, record_register_event, scoped_reg_logger,
+    scoped_reg_logger_enabled,
+};
+pub use register_events::RegLog;
 static PROVER_THREADS: AtomicUsize = AtomicUsize::new(0);
 static PROVER_STACK_SIZE: LazyLock<AtomicUsize> =
     LazyLock::new(|| AtomicUsize::new(crate::parallel::thread_stack_size()));
 static PROVER_POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
-/// RAII helper that clears the register logger when dropped.
-pub(crate) struct RegLoggerGuard {
-    previous: Option<RegLoggerState>,
-    // A thread-local installation must be removed on the thread that created it.
-    _not_send_or_sync: PhantomData<Rc<()>>,
-}
-impl RegLoggerGuard {
-    /// Install an active or explicitly masked register logger scope and restore
-    /// any outer scope on drop.
-    pub(crate) fn install(log: Option<SharedRegLog>) -> Self {
-        let logging_enabled = log.is_some();
-        let previous = REG_LOGGER.with(|slot| {
-            slot.replace(Some(RegLoggerState {
-                log,
-                logging_enabled,
-            }))
-        });
-        Self {
-            previous,
-            _not_send_or_sync: PhantomData,
-        }
-    }
-    /// Temporarily suppress events while retaining the surrounding
-    /// invocation's logger identity and fixed trace policy.
-    pub(crate) fn mask() -> Self {
-        let previous = REG_LOGGER.with(|slot| {
-            let masked = slot.borrow().as_ref().map(|state| RegLoggerState {
-                log: state.log.clone(),
-                logging_enabled: false,
-            });
-            slot.replace(masked)
-        });
-        Self {
-            previous,
-            _not_send_or_sync: PhantomData,
-        }
-    }
-}
-impl Drop for RegLoggerGuard {
-    fn drop(&mut self) {
-        REG_LOGGER.with(|slot| *slot.borrow_mut() = self.previous.take());
-    }
-}
-/// Return whether the current VM invocation fixed trace collection as enabled.
-///
-/// `None` means execution is outside a VM run and the VM's configured mode
-/// should be consulted instead.
-pub(crate) fn scoped_reg_logger_enabled() -> Option<bool> {
-    REG_LOGGER.with(|slot| slot.borrow().as_ref().map(|state| state.log.is_some()))
-}
-/// Clone the invocation-owned logger, if trace collection is active.
-pub(crate) fn scoped_reg_logger() -> Option<SharedRegLog> {
-    REG_LOGGER.with(|slot| slot.borrow().as_ref().and_then(|state| state.log.clone()))
-}
-/// Clone the invocation logger only when the current scope may emit events.
-pub(crate) fn event_reg_logger() -> Option<SharedRegLog> {
-    REG_LOGGER.with(|slot| {
-        slot.borrow()
-            .as_ref()
-            .and_then(|state| state.logging_enabled.then(|| state.log.clone()).flatten())
-    })
-}
-/// Execute `f` if a register logger is installed.
-pub(crate) fn with_reg_logger<F: FnOnce(&mut RegLog)>(f: F) {
-    REG_LOGGER.with(|l| {
-        let installed = l
-            .borrow()
-            .as_ref()
-            .and_then(|state| state.logging_enabled.then(|| state.log.clone()).flatten());
-        if let Some(log) = installed {
-            f(&mut log.lock());
-        }
-    });
-}
 fn configured_prover_threads() -> usize {
     let raw = PROVER_THREADS.load(Ordering::Relaxed);
     if raw == 0 {
@@ -161,6 +83,15 @@ fn prover_pool() -> &'static rayon::ThreadPool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn register_event_fixture() -> RegEvent {
+        RegEvent::Read {
+            index: 0,
+            value: 0,
+            tag: false,
+            path: [[0; 32]; crate::REGISTER_MERKLE_PATH_DEPTH],
+            root: iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new([0])),
+        }
+    }
     #[test]
     fn fallible_trace_copies_preserve_nested_paths_and_snapshots() {
         let root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(vec![[7; 32]])
@@ -195,33 +126,45 @@ mod tests {
         }
         assert_ne!(copied_memory.events, memory.events);
 
-        let mut registers = RegLog::default();
-        registers.record(RegEvent::Write {
+        let mut registers = RegLog::new(None);
+        registers.prepare_events(1, None).unwrap();
+        registers.record_reserved(RegEvent::Write {
             index: 7,
             value: 21,
             tag: true,
-            path: vec![[3; 32]],
+            path: [[3; 32]; crate::REGISTER_MERKLE_PATH_DEPTH],
             root,
         });
         let copied_registers = registers
-            .try_clone_allocation()
+            .try_clone_allocation(None)
             .expect("bounded register paths");
-        assert_eq!(copied_registers.events, registers.events);
-        assert!(
+        assert_eq!(copied_registers.as_slice(), registers.as_slice());
+        assert_eq!(
             copied_registers
                 .allocated_bytes()
-                .expect("checked capacity")
-                > 0
+                .expect("checked capacity"),
+            copied_registers.capacity() * std::mem::size_of::<RegEvent>()
         );
+        let mut changed = registers.as_slice()[0].clone();
+        if let RegEvent::Write { path, .. } = &mut changed {
+            path[0] = [9; 32];
+        }
+        registers.scrub();
+        registers.record_reserved(changed);
+        assert_ne!(copied_registers.as_slice(), registers.as_slice());
 
-        let mut trace = DeltaTraceLog::default();
+        let mut trace = DeltaTraceLog::new(None);
         let mut gpr = [0; 256];
         gpr[7] = 21;
-        trace.record(4, gpr, [false; 256]);
+        trace.prepare_batch(1, 256, 0, None).unwrap();
+        trace.record_reserved(4, gpr, [false; 256]);
         gpr[7] = 22;
-        trace.record(8, gpr, [false; 256]);
-        let copied_trace = trace.try_clone_allocation().expect("bounded delta trace");
-        assert_eq!(copied_trace.entries, trace.entries);
+        trace.prepare_batch(1, 1, 0, None).unwrap();
+        trace.record_reserved(8, gpr, [false; 256]);
+        let copied_trace = trace
+            .try_clone_allocation(None)
+            .expect("bounded delta trace");
+        assert!(copied_trace.entries().eq(trace.entries()));
         let budget = iroha_allocation::AllocationBudget::new(64 * 1024);
         let capture = |rows| {
             DiagnosticTraceSource {
@@ -234,119 +177,140 @@ mod tests {
             .try_snapshot(&budget)
             .expect("fund copied trace fixture")
         };
-        assert_eq!(
-            capture(&copied_trace.entries).states(),
-            capture(&trace.entries).states()
-        );
+        assert_eq!(capture(&copied_trace).states(), capture(&trace).states());
         assert!(copied_trace.allocated_bytes().expect("checked capacity") > 0);
 
-        let mut steps = StepLog::default();
-        steps.record(4, root, root);
+        let mut steps = StepLog::new(None);
+        steps.prepare_cycles(1).expect("bounded steps");
+        steps.record_reserved(4, root, root);
         let copied_steps = steps.try_clone_allocation().expect("bounded steps");
-        assert_eq!(copied_steps.steps, steps.steps);
+        assert_eq!(copied_steps.as_slice(), steps.as_slice());
         assert!(copied_steps.allocated_bytes().expect("checked capacity") > 0);
     }
     #[test]
     fn reg_logger_guard_clears_on_drop() {
-        let log = Arc::new(parking_lot::Mutex::new(RegLog::default()));
+        let log = SharedRegLog::try_new(None).expect("test logger allocation");
         {
-            let _guard = RegLoggerGuard::install(Some(Arc::clone(&log)));
+            let _guard = RegLoggerGuard::install(Some(log.clone()));
+            let _batch = RegEventBatch::begin(1).unwrap();
             let mut observed = false;
-            with_reg_logger(|_| {
+            record_register_event(|| {
                 observed = true;
+                register_event_fixture()
             });
             assert!(observed, "guard must expose logger while active");
         }
         let mut ran_after_drop = false;
-        with_reg_logger(|_| {
+        record_register_event(|| {
             ran_after_drop = true;
+            register_event_fixture()
         });
         assert!(!ran_after_drop, "logger should be cleared after guard drop");
     }
     #[test]
     fn reg_logger_guard_clears_on_unwind() {
-        let log = Arc::new(parking_lot::Mutex::new(RegLog::default()));
+        let log = SharedRegLog::try_new(None).expect("test logger allocation");
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = RegLoggerGuard::install(Some(Arc::clone(&log)));
+            let _guard = RegLoggerGuard::install(Some(log.clone()));
             panic!("intentional");
         }));
         assert!(result.is_err(), "expected panic to be captured");
         let mut ran_after_panic = false;
-        with_reg_logger(|_| {
+        record_register_event(|| {
             ran_after_panic = true;
+            register_event_fixture()
         });
         assert!(!ran_after_panic, "logger should be cleared after panic");
     }
     #[test]
     fn nested_reg_logger_install_restores_outer_logger() {
-        let outer_log = Arc::new(parking_lot::Mutex::new(RegLog::default()));
+        let outer_log = SharedRegLog::try_new(None).expect("test logger allocation");
         let outer_address = {
             let log = outer_log.lock();
             std::ptr::from_ref(&*log) as usize
         };
-        let guard = RegLoggerGuard::install(Some(Arc::clone(&outer_log)));
-        let inner_log = Arc::new(parking_lot::Mutex::new(RegLog::default()));
+        let guard = RegLoggerGuard::install(Some(outer_log.clone()));
+        let inner_log = SharedRegLog::try_new(None).expect("test logger allocation");
         let inner_address = {
             let log = inner_log.lock();
             std::ptr::from_ref(&*log) as usize
         };
         {
-            let _nested = RegLoggerGuard::install(Some(Arc::clone(&inner_log)));
-            with_reg_logger(|installed| {
+            let _nested = RegLoggerGuard::install(Some(inner_log.clone()));
+            let _batch = RegEventBatch::begin(1).unwrap();
+            record_register_event(|| {
+                let installed = event_reg_logger().unwrap();
+                let installed = installed.lock();
                 assert_eq!(
-                    std::ptr::from_mut(installed) as usize,
+                    std::ptr::from_ref(&*installed) as usize,
                     inner_address,
                     "nested logger must be active in its scope"
                 );
+                register_event_fixture()
             });
         }
-        with_reg_logger(|installed| {
+        let batch = RegEventBatch::begin(1).unwrap();
+        record_register_event(|| {
+            let installed = event_reg_logger().unwrap();
+            let installed = installed.lock();
             assert_eq!(
-                std::ptr::from_mut(installed) as usize,
+                std::ptr::from_ref(&*installed) as usize,
                 outer_address,
                 "nested scope must restore the outer logger"
             );
+            register_event_fixture()
         });
+        drop(batch);
         drop(guard);
     }
     #[test]
     fn masked_nested_reg_logger_scope_restores_outer_logger() {
-        let outer_log = Arc::new(parking_lot::Mutex::new(RegLog::default()));
-        let _outer = RegLoggerGuard::install(Some(Arc::clone(&outer_log)));
+        let outer_log = SharedRegLog::try_new(None).expect("test logger allocation");
+        let _outer = RegLoggerGuard::install(Some(outer_log.clone()));
         assert_eq!(scoped_reg_logger_enabled(), Some(true));
         {
             let _masked = RegLoggerGuard::install(None);
             assert_eq!(scoped_reg_logger_enabled(), Some(false));
             let mut observed = false;
-            with_reg_logger(|_| observed = true);
+            record_register_event(|| {
+                observed = true;
+                register_event_fixture()
+            });
             assert!(
                 !observed,
                 "masked nested scope must suppress the outer logger"
             );
         }
         assert_eq!(scoped_reg_logger_enabled(), Some(true));
-        assert!(Arc::ptr_eq(
+        assert!(SharedRegLog::ptr_eq(
             &scoped_reg_logger().expect("outer logger restored"),
             &outer_log
         ));
     }
     #[test]
     fn callback_mask_suppresses_events_but_retains_invocation_identity() {
-        let outer_log = Arc::new(parking_lot::Mutex::new(RegLog::default()));
-        let _outer = RegLoggerGuard::install(Some(Arc::clone(&outer_log)));
+        let outer_log = SharedRegLog::try_new(None).expect("test logger allocation");
+        let _outer = RegLoggerGuard::install(Some(outer_log.clone()));
         {
             let _masked = RegLoggerGuard::mask();
             assert_eq!(scoped_reg_logger_enabled(), Some(true));
-            assert!(Arc::ptr_eq(
+            assert!(SharedRegLog::ptr_eq(
                 &scoped_reg_logger().expect("invocation logger retained"),
                 &outer_log
             ));
             let mut observed = false;
-            with_reg_logger(|_| observed = true);
+            record_register_event(|| {
+                observed = true;
+                register_event_fixture()
+            });
             assert!(!observed, "callback mask must suppress register events");
         }
+        let _batch = RegEventBatch::begin(1).unwrap();
         let mut observed = false;
-        with_reg_logger(|_| observed = true);
+        record_register_event(|| {
+            observed = true;
+            register_event_fixture()
+        });
         assert!(observed, "dropping callback mask restores event logging");
     }
     #[test]
@@ -580,92 +544,23 @@ impl MemLog {
         self.events.clear();
     }
 }
-/// Record of a register access together with its Merkle proof.
+/// Record of a register access with the canonical eight-sibling path stored inline.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegEvent {
     Read {
         index: usize,
         value: u64,
         tag: bool,
-        path: Vec<[u8; 32]>,
+        path: [[u8; 32]; crate::REGISTER_MERKLE_PATH_DEPTH],
         root: HashOf<MerkleTree<[u8; 32]>>,
     },
     Write {
         index: usize,
         value: u64,
         tag: bool,
-        path: Vec<[u8; 32]>,
+        path: [[u8; 32]; crate::REGISTER_MERKLE_PATH_DEPTH],
         root: HashOf<MerkleTree<[u8; 32]>>,
     },
-}
-#[derive(Default, Clone)]
-pub struct RegLog {
-    pub events: Vec<RegEvent>,
-}
-impl RegLog {
-    pub fn record(&mut self, e: RegEvent) {
-        self.events.push(e);
-    }
-    #[cfg(test)]
-    pub(crate) fn allocated_bytes(&self) -> Result<usize, crate::error::VMError> {
-        self.events.iter().try_fold(
-            trace_vector_bytes::<RegEvent>(self.events.capacity())?,
-            |bytes, event| {
-                let path = match event {
-                    RegEvent::Read { path, .. } | RegEvent::Write { path, .. } => path,
-                };
-                trace_add_bytes(bytes, trace_vector_bytes::<[u8; 32]>(path.capacity())?)
-            },
-        )
-    }
-    #[cfg(test)]
-    pub(crate) fn try_clone_allocation(&self) -> Result<Self, crate::error::VMError> {
-        let _ = trace_vector_bytes::<RegEvent>(self.events.len())?;
-        let mut events = Vec::new();
-        events
-            .try_reserve_exact(self.events.len())
-            .map_err(|_| trace_allocation_error())?;
-        for event in &self.events {
-            events.push(match event {
-                RegEvent::Read {
-                    index,
-                    value,
-                    tag,
-                    path,
-                    root,
-                } => RegEvent::Read {
-                    index: *index,
-                    value: *value,
-                    tag: *tag,
-                    path: try_copy_trace_slice(path)?,
-                    root: *root,
-                },
-                RegEvent::Write {
-                    index,
-                    value,
-                    tag,
-                    path,
-                    root,
-                } => RegEvent::Write {
-                    index: *index,
-                    value: *value,
-                    tag: *tag,
-                    path: try_copy_trace_slice(path)?,
-                    root: *root,
-                },
-            });
-        }
-        Ok(Self { events })
-    }
-    /// Zero retained register values before discarding the event log.
-    pub(crate) fn scrub(&mut self) {
-        for event in &mut self.events {
-            match event {
-                RegEvent::Read { value, .. } | RegEvent::Write { value, .. } => *value = 0,
-            }
-        }
-        self.events.clear();
-    }
 }
 /// Snapshot of the VM state for one cycle used when generating ZK proofs.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -674,129 +569,12 @@ pub struct RegisterState {
     pub gpr: [u64; 256],
     pub tags: [bool; 256],
 }
-/// Collector for the register trace. When zero-knowledge padding is enabled the prover needs the
-/// complete sequence of register states to construct the witness.
-#[derive(Default, Clone)]
-pub struct TraceLog {
-    pub states: Vec<RegisterState>,
-}
-impl TraceLog {
-    pub fn record(&mut self, pc: u64, gpr: [u64; 256], tags: [bool; 256]) {
-        self.states.push(RegisterState { pc, gpr, tags });
-    }
-}
-/// Compact trace log storing only changed registers.
-#[derive(Default, Clone)]
-pub struct DeltaTraceLog {
-    pub entries: Vec<DeltaEntry>,
-    last: Option<RegisterState>,
-}
-/// One compact trace entry.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DeltaEntry {
-    pub pc: u64,
-    pub changes: Vec<(usize, u64, bool)>,
-}
-impl DeltaTraceLog {
-    pub(crate) fn allocated_bytes(&self) -> Result<usize, crate::error::VMError> {
-        self.entries.iter().try_fold(
-            trace_vector_bytes::<DeltaEntry>(self.entries.capacity())?,
-            |bytes, entry| {
-                trace_add_bytes(
-                    bytes,
-                    trace_vector_bytes::<(usize, u64, bool)>(entry.changes.capacity())?,
-                )
-            },
-        )
-    }
-    #[cfg(test)]
-    pub(crate) fn try_clone_allocation(&self) -> Result<Self, crate::error::VMError> {
-        let _ = trace_vector_bytes::<DeltaEntry>(self.entries.len())?;
-        let mut entries = Vec::new();
-        entries
-            .try_reserve_exact(self.entries.len())
-            .map_err(|_| trace_allocation_error())?;
-        for entry in &self.entries {
-            entries.push(DeltaEntry {
-                pc: entry.pc,
-                changes: try_copy_trace_slice(&entry.changes)?,
-            });
-        }
-        Ok(Self {
-            entries,
-            last: self.last.clone(),
-        })
-    }
-    pub fn record(&mut self, pc: u64, gpr: [u64; 256], tags: [bool; 256]) {
-        if let Some(prev) = &self.last {
-            let mut changes = Vec::new();
-            for (i, (&a, &b)) in prev.gpr.iter().zip(&gpr).enumerate() {
-                if a != b || prev.tags[i] != tags[i] {
-                    changes.push((i, b, tags[i]));
-                }
-            }
-            self.entries.push(DeltaEntry { pc, changes });
-        } else {
-            let changes = gpr
-                .iter()
-                .zip(tags.iter())
-                .enumerate()
-                .map(|(i, (&v, &t))| (i, v, t))
-                .collect();
-            self.entries.push(DeltaEntry { pc, changes });
-        }
-        self.last = Some(RegisterState { pc, gpr, tags });
-    }
-    /// Zero retained register values before discarding the compact trace.
-    pub(crate) fn scrub(&mut self) {
-        for entry in &mut self.entries {
-            for (_, value, tag) in &mut entry.changes {
-                *value = 0;
-                *tag = false;
-            }
-        }
-        if let Some(last) = &mut self.last {
-            last.gpr.fill(0);
-            last.tags.fill(false);
-        }
-        self.entries.clear();
-        self.last = None;
-    }
-}
 /// Merkle roots of registers and memory for a single cycle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StepEntry {
     pub pc: u64,
     pub reg_root: HashOf<MerkleTree<[u8; 32]>>,
     pub mem_root: HashOf<MerkleTree<[u8; 32]>>,
-}
-/// Collector for per-cycle Merkle roots.
-#[derive(Default, Clone)]
-pub struct StepLog {
-    pub steps: Vec<StepEntry>,
-}
-impl StepLog {
-    pub(crate) fn allocated_bytes(&self) -> Result<usize, crate::error::VMError> {
-        trace_vector_bytes::<StepEntry>(self.steps.capacity())
-    }
-    #[cfg(test)]
-    pub(crate) fn try_clone_allocation(&self) -> Result<Self, crate::error::VMError> {
-        Ok(Self {
-            steps: try_copy_trace_slice(&self.steps)?,
-        })
-    }
-    pub fn record(
-        &mut self,
-        pc: u64,
-        reg_root: HashOf<MerkleTree<[u8; 32]>>,
-        mem_root: HashOf<MerkleTree<[u8; 32]>>,
-    ) {
-        self.steps.push(StepEntry {
-            pc,
-            reg_root,
-            mem_root,
-        });
-    }
 }
 /// Check locally recorded trace diagnostics.
 ///
@@ -844,38 +622,7 @@ pub fn check_diagnostic_trace(
                 let event = snapshot
                     .register_event(index)
                     .expect("initialized register descriptor");
-                let (idx, value, tag, path, root) =
-                    (event.index, event.value, event.tag, event.path, event.root);
-                let leaf_index = u32::try_from(idx)
-                    .ok()
-                    .filter(|index| *index < 256)
-                    .ok_or(crate::error::VMError::AssertionFailed)?;
-                let mut leaf = [0u8; 9];
-                leaf[0] = if tag { 1 } else { 0 };
-                leaf[1..].copy_from_slice(&value.to_le_bytes());
-                let mut leaf_hash = [0u8; 32];
-                leaf_hash.copy_from_slice(&Sha256::digest(leaf));
-                iroha_crypto::zeroize_value_for_confidential_discard(&mut leaf);
-                let leaf = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(leaf_hash));
-                // A complete 256-register tree has exactly eight siblings. Reject
-                // both missing and extra paths before filling fixed stack storage.
-                let path: &[[u8; 32]; 8] = path
-                    .try_into()
-                    .map_err(|_| crate::error::VMError::AssertionFailed)?;
-                let siblings = path.map(|sibling| {
-                    (sibling != [0; 32])
-                        .then(|| HashOf::from_untyped_unchecked(Hash::prehashed(sibling)))
-                });
-                let commitment = MerkleTreeCommitment::new(
-                    HashOf::from_untyped_unchecked(Hash::prehashed(*root)),
-                    NonZeroU64::new(256).expect("register tree leaf count is non-zero"),
-                );
-                if MerkleProof::verify_audit_path_sha256(leaf_index, &siblings, &leaf, &commitment)
-                {
-                    Ok(())
-                } else {
-                    Err(crate::error::VMError::AssertionFailed)
-                }
+                register_authentication::check(event)
             })?;
         Ok(())
     })

@@ -10,13 +10,26 @@
 //! from that width.  When no SIMD support is available, a 32-bit scalar fallback
 //! is used.  Additional cryptographic primitives such as AESENC or BLAKE2s
 //! should also be implemented here with optional hardware acceleration.
+#[cfg(any(test, all(target_os = "macos", feature = "metal")))]
 use crate::sha256_ref::sha256_compress_scalar_ref;
 #[cfg(all(target_os = "macos", feature = "metal"))]
 mod metal_buffers;
 #[cfg(all(target_os = "macos", feature = "metal"))]
 mod metal_cost;
 #[cfg(all(target_os = "macos", feature = "metal"))]
+mod metal_ed25519_cost;
+#[cfg(all(target_os = "macos", feature = "metal"))]
+mod metal_merkle_cost_rehash;
+#[cfg(all(target_os = "macos", feature = "metal"))]
+mod metal_merkle_cost_root;
+#[cfg(all(target_os = "macos", feature = "metal"))]
+mod metal_merkle_cost_tree;
+mod sha256_cpu;
+#[cfg(all(target_os = "macos", feature = "metal"))]
 use metal_buffers::MetalBuffer;
+#[cfg(test)]
+pub(crate) use sha256_cpu::context::Sha256Backend;
+pub(crate) use sha256_cpu::context::{Sha256Context, Sha256Observed};
 #[cfg(any(test, all(target_os = "macos", feature = "metal")))]
 mod metal_owner;
 #[cfg(all(target_os = "macos", feature = "metal"))]
@@ -27,6 +40,8 @@ mod metal_receipts;
 pub use metal_receipts::{MetalKernel, metal_completed_dispatches};
 #[cfg(all(test, feature = "metal-hardware-tests"))]
 mod metal_qualification;
+#[cfg(test)]
+mod metal_qualification_wait;
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
 use objc2_foundation::NSUInteger;
@@ -68,12 +83,6 @@ pub enum SimdChoice {
     Sse2,
     Neon,
     Scalar,
-}
-#[cfg(target_os = "macos")]
-#[derive(Clone, Copy)]
-pub(crate) enum MetalMerkleWork {
-    Leaves,
-    Root,
 }
 static SIMD_CHOICE: OnceLock<SimdChoice> = OnceLock::new();
 static SIMD_POLICY_ENABLED: AtomicBool = AtomicBool::new(true);
@@ -426,8 +435,11 @@ struct MetalState {
     aesenc_rounds: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
     aesdec_rounds: Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
     ed25519_signature: Option<Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>>,
-    merkle_cost: Mutex<metal_cost::MetalMerkleCostCache>,
-    batch_cost: [Mutex<metal_cost::MetalBatchCostCache>; metal_cost::BATCH_FAMILIES],
+    merkle_rehash_cost: Mutex<metal_merkle_cost_rehash::CostCache>,
+    merkle_tree_cost: Mutex<metal_merkle_cost_tree::CostCache>,
+    merkle_root_cost: Mutex<metal_merkle_cost_root::CostCache>,
+    ed25519_cost: Mutex<metal_ed25519_cost::CostCache>,
+    batch_cost: [Mutex<metal_cost::exact::CostCache>; metal_cost::BATCH_FAMILIES],
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
 trait MetalBufferElement: Copy {}
@@ -1293,10 +1305,13 @@ impl MetalState {
             #[cfg(all(test, feature = "metal-hardware-tests"))]
             keccak,
             ed25519_signature,
-            merkle_cost: Mutex::new(metal_cost::MetalMerkleCostCache::default()),
-            batch_cost: std::array::from_fn(|_| {
-                Mutex::new(metal_cost::MetalBatchCostCache::default())
-            }),
+            merkle_rehash_cost: Mutex::new(metal_merkle_cost_rehash::CostCache::default()),
+            merkle_tree_cost: Mutex::new(metal_merkle_cost_tree::CostCache::default()),
+            merkle_root_cost: Mutex::new(metal_merkle_cost_root::CostCache::default()),
+            ed25519_cost: Mutex::new(metal_ed25519_cost::CostCache::default()),
+            batch_cost: std::array::from_fn(
+                |_| Mutex::new(metal_cost::exact::CostCache::default()),
+            ),
         })
     }
 }
@@ -1314,41 +1329,41 @@ where
 {
     with_metal_state(f).flatten()
 }
-#[cfg(all(test, target_os = "macos", feature = "metal"))]
-fn metal_merkle_cost_profile() -> Option<metal_cost::MetalMerkleCostProfile> {
-    with_metal_state(|state| {
-        state
-            .merkle_cost
-            .try_lock()
-            .ok()?
-            .get_or_calibrate(Instant::now(), || metal_cost::calibrate(Instant::now()))
-    })
-    .flatten()
+#[cfg(all(target_os = "macos", feature = "metal"))]
+pub(crate) fn metal_rehash_tree_auto(tree: &crate::ByteMerkleTree, data: &[u8]) -> bool {
+    metal_runtime::metal_rehash_tree_auto(tree, data)
+}
+#[cfg(all(target_os = "macos", not(feature = "metal")))]
+pub(crate) fn metal_rehash_tree_auto(_tree: &crate::ByteMerkleTree, _data: &[u8]) -> bool {
+    false
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
-pub(crate) fn select_metal_merkle(work: MetalMerkleWork, leaves: usize) -> Option<MetalSelection> {
-    metal_runtime::select_merkle(work, leaves)
+pub(crate) fn metal_root_from_bytes_auto(data: &[u8], chunk: usize) -> Option<[u8; 32]> {
+    metal_runtime::metal_root_from_bytes_auto(data, chunk)
 }
 #[cfg(all(target_os = "macos", not(feature = "metal")))]
-pub(crate) struct MetalSelection;
-#[cfg(all(target_os = "macos", not(feature = "metal")))]
-impl MetalSelection {
-    pub(crate) fn run<R>(self, _call: impl FnOnce() -> R) -> Option<R> {
-        None
-    }
+pub(crate) fn metal_root_from_bytes_auto(_data: &[u8], _chunk: usize) -> Option<[u8; 32]> {
+    None
+}
+#[cfg(all(target_os = "macos", feature = "metal"))]
+pub(crate) fn metal_tree_from_bytes_auto(
+    data: &[u8],
+    chunk: usize,
+) -> Option<crate::ByteMerkleTree> {
+    metal_runtime::metal_tree_from_bytes_auto(data, chunk)
 }
 #[cfg(all(target_os = "macos", not(feature = "metal")))]
-pub(crate) fn select_metal_merkle(
-    _work: MetalMerkleWork,
-    _leaves: usize,
-) -> Option<MetalSelection> {
+pub(crate) fn metal_tree_from_bytes_auto(
+    _data: &[u8],
+    _chunk: usize,
+) -> Option<crate::ByteMerkleTree> {
     None
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub(crate) fn select_metal_batch(
     work: metal_cost::MetalBatchWork,
     items: usize,
-) -> Option<MetalSelection> {
+) -> Option<metal_aes::MetalAesSelection> {
     metal_runtime::select_batch(work, items)
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
@@ -1573,146 +1588,19 @@ fn metal_sha256_compress(_state: &mut [u32; 8], _block: &[u8; 64]) -> bool {
     false
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
-pub(crate) fn metal_sha256_leaves(blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> {
-    metal_sha256_leaves_with_receipt(blocks, Some(MetalKernel::Sha256Leaves))
-}
-#[cfg(all(target_os = "macos", feature = "metal"))]
-fn metal_sha256_leaves_with_receipt(
-    blocks: &[[u8; 64]],
-    receipt: Option<MetalKernel>,
-) -> Option<Vec<[u8; 32]>> {
-    if !metal_runtime_allowed() {
-        return None;
-    }
-    use objc2::rc::autoreleasepool;
-    autoreleasepool(|_| {
-        with_metal_state_try(|ctx| {
-            let n = blocks.len();
-            if n == 0 {
-                return Some(Vec::new());
-            }
-            let flat: Vec<u8> = blocks.iter().flat_map(|b| b.iter()).copied().collect();
-            let buf_blocks = metal_input_buffer(&ctx.device, &flat[..], flat.len())?;
-            let buf_out = metal_output_buffer(&ctx.device, n * 8 * core::mem::size_of::<u32>())?;
-            metal_dispatch(
-                &ctx.queue,
-                &ctx.sha256_leaves,
-                &[&buf_blocks, &buf_out],
-                n as NSUInteger,
-                1,
-                "metal sha256 leaves",
-                receipt,
-            )?;
-            let ptr = buf_out.contents().as_ptr() as *const u32;
-            let words = unsafe { std::slice::from_raw_parts(ptr, n * 8) };
-            let mut out = Vec::with_capacity(n);
-            for i in 0..n {
-                let w = &words[i * 8..i * 8 + 8];
-                let mut d = [0u8; 32];
-                for (j, &word) in w.iter().enumerate() {
-                    d[j * 4..j * 4 + 4].copy_from_slice(&word.to_be_bytes());
-                }
-                out.push(d);
-            }
-            Some(out)
-        })
-    })
-}
+#[path = "vector/metal_merkle.rs"]
+mod metal_merkle;
+#[cfg(all(test, target_os = "macos", feature = "metal"))]
+pub(crate) use metal_merkle::{metal_merkle_root, metal_sha256_leaves, metal_sha256_pairs_reduce};
 #[cfg(all(
+    test,
     not(all(target_os = "macos", feature = "metal")),
     any(target_os = "macos", test)
 ))]
-pub(crate) fn metal_sha256_leaves(_blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> {
+pub(crate) fn metal_sha256_leaves(
+    _blocks: &[[u8; 64]],
+) -> Option<iroha_accel::HostOutput<[u8; 32]>> {
     None
-}
-#[cfg(all(test, target_os = "macos", feature = "metal"))]
-pub(crate) fn metal_sha256_pairs_reduce(digests: &[[u8; 32]]) -> Option<[u8; 32]> {
-    metal_sha256_pairs_reduce_with_receipt(digests, Some(MetalKernel::Sha256Pairs), false)
-}
-#[cfg(all(target_os = "macos", feature = "metal"))]
-pub(crate) fn metal_merkle_root(digests: &[[u8; 32]]) -> Option<[u8; 32]> {
-    metal_sha256_pairs_reduce_with_receipt(digests, Some(MetalKernel::Sha256Pairs), true)
-}
-#[cfg(all(target_os = "macos", feature = "metal"))]
-fn metal_sha256_pairs_reduce_with_receipt(
-    digests: &[[u8; 32]],
-    receipt: Option<MetalKernel>,
-    canonical_merkle: bool,
-) -> Option<[u8; 32]> {
-    if !metal_runtime_allowed() {
-        return None;
-    }
-    use objc2::rc::autoreleasepool;
-    if digests.is_empty() {
-        return None;
-    }
-    if digests.len() == 1 {
-        let mut root = digests[0];
-        if canonical_merkle {
-            root[31] |= 1;
-        }
-        return Some(root);
-    }
-    let mut cur: Vec<u8> = digests.iter().flat_map(|d| d.iter()).copied().collect();
-    autoreleasepool(|_| {
-        with_metal_state_try(|ctx| {
-            let mut count = cur.len() / 32;
-            while count > 1 {
-                if canonical_merkle {
-                    // Hash::prehashed marks the low bit of every child before
-                    // canonical parent hashing. The raw SHA pair helper keeps
-                    // its original semantics for non-Merkle callers.
-                    for node in cur.chunks_exact_mut(32) {
-                        node[31] |= 1;
-                    }
-                }
-                let pairs = count / 2;
-                let has_leftover = (count & 1) != 0;
-                let mut next = vec![0u8; (pairs + if has_leftover { 1 } else { 0 }) * 32];
-                if pairs > 0 {
-                    let pair_len = pairs * 64;
-                    let in_buf = metal_input_buffer(&ctx.device, &cur[..], pair_len)?;
-                    let out_buf =
-                        metal_output_buffer(&ctx.device, pairs * 8 * core::mem::size_of::<u32>())?;
-                    metal_dispatch(
-                        &ctx.queue,
-                        &ctx.sha256_pairs,
-                        &[&in_buf, &out_buf],
-                        pairs as NSUInteger,
-                        1,
-                        "metal sha256 pairs reduce",
-                        receipt,
-                    )?;
-                    let words = unsafe {
-                        std::slice::from_raw_parts(
-                            out_buf.contents().as_ptr() as *const u32,
-                            pairs * 8,
-                        )
-                    };
-                    for pair in 0..pairs {
-                        for j in 0..8 {
-                            let word = words[pair * 8 + j];
-                            next[pair * 32 + j * 4..pair * 32 + j * 4 + 4]
-                                .copy_from_slice(&word.to_be_bytes());
-                        }
-                    }
-                }
-                if has_leftover {
-                    let src_idx = (count - 1) * 32;
-                    let dst_idx = pairs * 32;
-                    next[dst_idx..dst_idx + 32].copy_from_slice(&cur[src_idx..src_idx + 32]);
-                }
-                cur = next;
-                count = cur.len() / 32;
-            }
-            let mut root = [0u8; 32];
-            root.copy_from_slice(&cur[..32]);
-            if canonical_merkle {
-                root[31] |= 1;
-            }
-            Some(root)
-        })
-    })
 }
 #[cfg(all(
     test,
@@ -1722,10 +1610,7 @@ fn metal_sha256_pairs_reduce_with_receipt(
 pub(crate) fn metal_sha256_pairs_reduce(_digests: &[[u8; 32]]) -> Option<[u8; 32]> {
     None
 }
-#[cfg(all(
-    not(all(target_os = "macos", feature = "metal")),
-    any(target_os = "macos", test)
-))]
+#[cfg(all(test, not(all(target_os = "macos", feature = "metal"))))]
 pub(crate) fn metal_merkle_root(_digests: &[[u8; 32]]) -> Option<[u8; 32]> {
     None
 }
@@ -1733,11 +1618,9 @@ pub(crate) fn metal_merkle_root(_digests: &[[u8; 32]]) -> Option<[u8; 32]> {
 #[path = "vector/metal_signature.rs"]
 mod metal_signature;
 #[cfg(all(target_os = "macos", feature = "metal"))]
-pub(crate) use metal_signature::metal_ed25519_items_into;
+pub(crate) use metal_runtime::metal_ed25519_auto_into;
 #[cfg(all(target_os = "macos", feature = "metal", test))]
 pub(crate) use metal_signature::metal_ed25519_verify_batch_into;
-#[cfg(all(target_os = "macos", feature = "metal"))]
-use metal_signature::metal_ed25519_verify_batch_with_receipt_into;
 #[cfg(all(target_os = "macos", feature = "metal", test))]
 fn metal_ed25519_run_kernel_for_tests(
     function_name: &str,
@@ -2097,7 +1980,7 @@ pub fn metal_keccak_f1600(state: &mut [u64; 25]) -> bool {
 #[cfg(all(target_os = "macos", feature = "metal"))]
 #[path = "vector/metal_aes.rs"]
 mod metal_aes;
-#[cfg(all(target_os = "macos", feature = "metal"))]
+#[cfg(all(target_os = "macos", feature = "metal", test))]
 pub(crate) use metal_aes::metal_aes_batch_in_place;
 #[cfg(all(target_os = "macos", feature = "metal", test))]
 pub use metal_aes::{
@@ -2131,254 +2014,7 @@ pub fn sha256_compress(state: &mut [u32; 8], block: &[u8; 64]) {
     {
         return;
     }
-    #[cfg(target_arch = "aarch64")]
-    {
-        if sha256_compress_armv8(state, block) {
-            return;
-        }
-    }
-    #[cfg(target_arch = "x86_64")]
-    {
-        if sha256_compress_x86_shani(state, block) {
-            return;
-        }
-    }
-    sha256_compress_scalar_ref(state, block)
-}
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-fn sha256_compress_armv8(state: &mut [u32; 8], block: &[u8; 64]) -> bool {
-    use std::sync::{
-        OnceLock,
-        atomic::{AtomicBool, Ordering},
-    };
-    static FORCED_DISABLED: AtomicBool = AtomicBool::new(false);
-    static SELFTEST_OK: OnceLock<bool> = OnceLock::new();
-    if FORCED_DISABLED.load(Ordering::SeqCst) {
-        return false;
-    }
-    if !std::arch::is_aarch64_feature_detected!("sha2") {
-        return false;
-    }
-    let ok = *SELFTEST_OK.get_or_init(|| {
-        // Golden self-test: compress the single-block padded "abc" starting from IV.
-        let mut st_scalar = [
-            0x6a09e667u32,
-            0xbb67ae85,
-            0x3c6ef372,
-            0xa54ff53a,
-            0x510e527f,
-            0x9b05688c,
-            0x1f83d9ab,
-            0x5be0cd19,
-        ];
-        let mut st_hw = st_scalar;
-        let mut blk = [0u8; 64];
-        blk[0] = b'a';
-        blk[1] = b'b';
-        blk[2] = b'c';
-        blk[3] = 0x80;
-        blk[63] = 24; // 24-bit length
-        sha256_compress_scalar_ref(&mut st_scalar, &blk);
-        unsafe { sha256_compress_armv8_impl(&mut st_hw, &blk) };
-        if st_scalar != st_hw {
-            FORCED_DISABLED.store(true, Ordering::SeqCst);
-            return false;
-        }
-        true
-    });
-    if !ok {
-        return false;
-    }
-    unsafe { sha256_compress_armv8_impl(state, block) };
-    true
-}
-#[cfg(target_arch = "aarch64")]
-#[target_feature(enable = "sha2")]
-#[allow(unused_unsafe)]
-unsafe fn sha256_compress_armv8_impl(state: &mut [u32; 8], block: &[u8; 64]) {
-    use core::arch::aarch64::*;
-    // Load state
-    let st0 = unsafe { vld1q_u32(state.as_ptr()) };
-    let st1 = unsafe { vld1q_u32(state.as_ptr().add(4)) };
-    let mut abcd = st0;
-    let mut efgh = st1;
-    // Helper to load 16 bytes -> 4 big-endian u32 lanes
-    #[inline(always)]
-    unsafe fn load_be_u32x4(ptr: *const u8) -> uint32x4_t {
-        let v = unsafe { vld1q_u8(ptr) };
-        let v = unsafe { vrev32q_u8(v) };
-        unsafe { vreinterpretq_u32_u8(v) }
-    }
-    // Load first 16 message words
-    let mut w0 = unsafe { load_be_u32x4(block.as_ptr().add(0)) };
-    let mut w1 = unsafe { load_be_u32x4(block.as_ptr().add(16)) };
-    let mut w2 = unsafe { load_be_u32x4(block.as_ptr().add(32)) };
-    let mut w3 = unsafe { load_be_u32x4(block.as_ptr().add(48)) };
-    // K constants
-    const K: [u32; 64] = crate::sha256_ref::SHA256_K;
-    let mut kptr = K.as_ptr();
-    // Process 64 rounds in 4 groups of 16 (vectors of 4)
-    for _ in 0..4 {
-        // Rounds: w0
-        let k0 = unsafe { vld1q_u32(kptr) };
-        let wk0 = unsafe { vaddq_u32(w0, k0) };
-        efgh = unsafe { vsha256hq_u32(efgh, abcd, wk0) };
-        abcd = unsafe { vsha256h2q_u32(abcd, efgh, wk0) };
-        // Prepare w1
-        w1 = unsafe { vsha256su0q_u32(w1, w0) };
-        let k1 = unsafe { vld1q_u32(kptr.add(4)) };
-        let wk1 = unsafe { vaddq_u32(w1, k1) };
-        efgh = unsafe { vsha256hq_u32(efgh, abcd, wk1) };
-        abcd = unsafe { vsha256h2q_u32(abcd, efgh, wk1) };
-        // Prepare w2
-        w2 = unsafe { vsha256su0q_u32(w2, w1) };
-        let k2 = unsafe { vld1q_u32(kptr.add(8)) };
-        let wk2 = unsafe { vaddq_u32(w2, k2) };
-        efgh = unsafe { vsha256hq_u32(efgh, abcd, wk2) };
-        abcd = unsafe { vsha256h2q_u32(abcd, efgh, wk2) };
-        // Prepare w3
-        w3 = unsafe { vsha256su0q_u32(w3, w2) };
-        let k3 = unsafe { vld1q_u32(kptr.add(12)) };
-        let wk3 = unsafe { vaddq_u32(w3, k3) };
-        efgh = unsafe { vsha256hq_u32(efgh, abcd, wk3) };
-        abcd = unsafe { vsha256h2q_u32(abcd, efgh, wk3) };
-        // Next schedule words
-        w0 = unsafe { vsha256su1q_u32(w0, w3, w2) };
-        kptr = unsafe { kptr.add(16) };
-    }
-    // state += (a..h)
-    let abcd_out = unsafe { vaddq_u32(abcd, st0) };
-    let efgh_out = unsafe { vaddq_u32(efgh, st1) };
-    unsafe { vst1q_u32(state.as_mut_ptr(), abcd_out) };
-    unsafe { vst1q_u32(state.as_mut_ptr().add(4), efgh_out) };
-}
-// x86/x86_64 SHA-NI accelerated SHA-256 compression. Returns `true` when the
-// SHA/SSSE3 intrinsics successfully ran and updated `state`, otherwise falls
-// back to the scalar reference path.
-#[cfg(target_arch = "x86_64")]
-#[inline(always)]
-fn sha256_compress_x86_shani(state: &mut [u32; 8], block: &[u8; 64]) -> bool {
-    use std::sync::{
-        OnceLock,
-        atomic::{AtomicBool, Ordering},
-    };
-    static FORCED_DISABLED: AtomicBool = AtomicBool::new(false);
-    static SELFTEST_OK: OnceLock<bool> = OnceLock::new();
-    if FORCED_DISABLED.load(Ordering::SeqCst) {
-        return false;
-    }
-    if !std::is_x86_feature_detected!("sha") || !std::is_x86_feature_detected!("ssse3") {
-        return false;
-    }
-    let ok = *SELFTEST_OK.get_or_init(|| {
-        let mut st_scalar = [
-            0x6a09e667u32,
-            0xbb67ae85,
-            0x3c6ef372,
-            0xa54ff53a,
-            0x510e527f,
-            0x9b05688c,
-            0x1f83d9ab,
-            0x5be0cd19,
-        ];
-        let mut st_hw = st_scalar;
-        let mut blk = [0u8; 64];
-        blk[0] = b'a';
-        blk[1] = b'b';
-        blk[2] = b'c';
-        blk[3] = 0x80;
-        blk[63] = 24;
-        sha256_compress_scalar_ref(&mut st_scalar, &blk);
-        unsafe { sha256_compress_x86_shani_impl(&mut st_hw, &blk) };
-        if st_scalar != st_hw {
-            FORCED_DISABLED.store(true, Ordering::SeqCst);
-            return false;
-        }
-        // Second vector: arbitrary 64-byte pattern to exercise schedule ops.
-        let mut blk2 = [0u8; 64];
-        for (i, byte) in blk2.iter_mut().enumerate() {
-            *byte = (i as u8).wrapping_mul(37).wrapping_add(13);
-        }
-        sha256_compress_scalar_ref(&mut st_scalar, &blk2);
-        unsafe { sha256_compress_x86_shani_impl(&mut st_hw, &blk2) };
-        if st_scalar != st_hw {
-            FORCED_DISABLED.store(true, Ordering::SeqCst);
-            return false;
-        }
-        true
-    });
-    if !ok {
-        return false;
-    }
-    unsafe { sha256_compress_x86_shani_impl(state, block) };
-    true
-}
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "sha")]
-#[target_feature(enable = "ssse3")]
-unsafe fn sha256_compress_x86_shani_impl(state: &mut [u32; 8], block: &[u8; 64]) {
-    use core::arch::x86_64::*;
-    unsafe {
-        // Byte-swap mask: reverse each 32-bit lane
-        let be_mask = _mm_set_epi8(3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12);
-        // Load state (a..h)
-        let st0 = _mm_loadu_si128(state.as_ptr() as *const __m128i);
-        let st1 = _mm_loadu_si128(state.as_ptr().add(4) as *const __m128i);
-        let mut abcd = st0;
-        let mut efgh = st1;
-        // Load message as big-endian words
-        let mut w0 = _mm_shuffle_epi8(_mm_loadu_si128(block.as_ptr() as *const __m128i), be_mask);
-        let mut w1 = _mm_shuffle_epi8(
-            _mm_loadu_si128(block.as_ptr().add(16) as *const __m128i),
-            be_mask,
-        );
-        let mut w2 = _mm_shuffle_epi8(
-            _mm_loadu_si128(block.as_ptr().add(32) as *const __m128i),
-            be_mask,
-        );
-        let mut w3 = _mm_shuffle_epi8(
-            _mm_loadu_si128(block.as_ptr().add(48) as *const __m128i),
-            be_mask,
-        );
-        // K constants in u32
-        const K: [u32; 64] = crate::sha256_ref::SHA256_K;
-        let mut kptr = K.as_ptr();
-        // Process 64 rounds in 4 groups of 16 rounds.
-        for _ in 0..4 {
-            // Rounds for w0
-            let mut wk = _mm_add_epi32(w0, _mm_loadu_si128(kptr as *const __m128i));
-            efgh = _mm_sha256rnds2_epu32(efgh, abcd, wk);
-            wk = _mm_shuffle_epi32(wk, 0x0E);
-            abcd = _mm_sha256rnds2_epu32(abcd, efgh, wk);
-            // Prepare w1
-            w1 = _mm_sha256msg1_epu32(w1, w0);
-            wk = _mm_add_epi32(w1, _mm_loadu_si128(kptr.add(4) as *const __m128i));
-            efgh = _mm_sha256rnds2_epu32(efgh, abcd, wk);
-            wk = _mm_shuffle_epi32(wk, 0x0E);
-            abcd = _mm_sha256rnds2_epu32(abcd, efgh, wk);
-            // Prepare w2
-            w2 = _mm_sha256msg1_epu32(w2, w1);
-            wk = _mm_add_epi32(w2, _mm_loadu_si128(kptr.add(8) as *const __m128i));
-            efgh = _mm_sha256rnds2_epu32(efgh, abcd, wk);
-            wk = _mm_shuffle_epi32(wk, 0x0E);
-            abcd = _mm_sha256rnds2_epu32(abcd, efgh, wk);
-            // Prepare w3
-            w3 = _mm_sha256msg1_epu32(w3, w2);
-            wk = _mm_add_epi32(w3, _mm_loadu_si128(kptr.add(12) as *const __m128i));
-            efgh = _mm_sha256rnds2_epu32(efgh, abcd, wk);
-            wk = _mm_shuffle_epi32(wk, 0x0E);
-            abcd = _mm_sha256rnds2_epu32(abcd, efgh, wk);
-            // Extend schedule for next group
-            w0 = _mm_sha256msg2_epu32(w0, w3);
-            kptr = kptr.add(16);
-        }
-        // state += working vars
-        let out0 = _mm_add_epi32(abcd, st0);
-        let out1 = _mm_add_epi32(efgh, st1);
-        _mm_storeu_si128(state.as_mut_ptr() as *mut __m128i, out0);
-        _mm_storeu_si128(state.as_mut_ptr().add(4) as *mut __m128i, out1);
-    }
+    Sha256Context::production().compress(state, block);
 }
 /// Lane-wise addition of two 32-bit vectors. The length of `a` and `b` must
 /// match and determines the number of lanes processed.
@@ -3091,7 +2727,7 @@ mod tests {
     fn metal_sha256_merkle_helpers_return_none_without_metal_feature() {
         let block = [0u8; 64];
         let digest = [0u8; 32];
-        assert_eq!(metal_sha256_leaves(&[block]), None);
+        assert!(metal_sha256_leaves(&[block]).is_none());
         assert_eq!(metal_sha256_pairs_reduce(&[digest]), None);
     }
     #[cfg(all(target_os = "macos", feature = "metal"))]
@@ -3102,7 +2738,6 @@ mod tests {
             return;
         }
         reset_metal_backend_for_tests();
-        let _ = metal_merkle_cost_profile();
         let mut block_a = [0u8; 64];
         block_a[0] = b'a';
         block_a[1] = b'b';
@@ -3146,7 +2781,7 @@ mod tests {
             );
             return;
         };
-        assert_eq!(actual, expected);
+        assert_eq!(actual.as_slice(), expected.as_slice());
     }
     #[cfg(all(target_os = "macos", feature = "metal"))]
     #[test]

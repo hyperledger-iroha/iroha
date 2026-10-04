@@ -16,6 +16,7 @@ use sorafs_manifest::signer::{
 };
 
 mod fixture;
+mod origin_attempt;
 mod recheck_interval;
 mod time_interval;
 use fixture::{DEPLOYMENT, Fixture, NOW, key};
@@ -108,7 +109,8 @@ fn successful_check_cannot_hide_later_same_block_custody_revocation() {
             .verify_finalized(FinalPromotionCheckSourceV1::Current, || Ok(interval(
                 NOW, NOW
             )))
-            .err(),
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Authority)
     );
 }
@@ -155,7 +157,8 @@ fn successful_check_cannot_hide_same_block_or_descendant_permission_revocation()
                         NOW + 1,
                         NOW + 1
                     )))
-                    .err(),
+                    .err()
+                    .and_then(|failure| failure.rejection()),
                 Some(Error::Authority)
             );
         }
@@ -182,7 +185,8 @@ fn rejection_result_is_not_a_successful_check_even_with_real_finality() {
             .verify_finalized(FinalPromotionCheckSourceV1::Current, || panic!(
                 "rejected result must precede clock"
             ))
-            .err(),
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Execution)
     );
 }
@@ -200,7 +204,8 @@ fn durable_check_without_actual_state_membership_is_not_observation() {
             .verify_finalized(FinalPromotionCheckSourceV1::Current, || panic!(
                 "unapplied member must precede clock"
             ))
-            .err(),
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::NotApplied)
     );
 }
@@ -218,7 +223,8 @@ fn applied_check_without_durable_finality_is_rejected() {
             .verify_finalized(FinalPromotionCheckSourceV1::Current, || panic!(
                 "missing finality must precede clock"
             ))
-            .err(),
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Finality)
     );
 }
@@ -247,7 +253,8 @@ fn independent_floor_hash_and_committee_context_cannot_come_from_candidate() {
                 .verify_finalized(FinalPromotionCheckSourceV1::Current, || panic!(
                     "foreign floor must precede clock"
                 ))
-                .err(),
+                .err()
+                .and_then(|failure| failure.rejection()),
             Some(Error::Finality)
         );
     }
@@ -265,12 +272,18 @@ fn each_round_has_fresh_entropy_and_signed_envelopes_cannot_be_replaced() {
     assert_ne!(first.instruction(), second.instruction());
     let signed_other = f.sign(prepared_instruction(&second), 3, NOW);
     assert_eq!(
-        first.bind_signed_transaction(signed_other).err(),
+        first
+            .bind_signed_transaction(signed_other)
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Transaction)
     );
     let signed_wrong_account = f.sign(prepared_instruction(&second), 1, NOW);
     assert_eq!(
-        second.bind_signed_transaction(signed_wrong_account).err(),
+        second
+            .bind_signed_transaction(signed_wrong_account)
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Transaction)
     );
 }
@@ -290,7 +303,10 @@ fn signature_verification_is_independent_of_signed_intent_identity() {
         "intent identity excludes authorization"
     );
     assert_eq!(
-        prepared.bind_signed_transaction(signed).err(),
+        prepared
+            .bind_signed_transaction(signed)
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Transaction)
     );
 }
@@ -359,7 +375,10 @@ fn signing_and_terminal_verification_never_reset_the_one_use_interval() {
     let signed = f.sign(prepared_instruction(&prepared), 3, NOW);
     prepared.round.expire_for_test();
     assert_eq!(
-        prepared.bind_signed_transaction(signed).err(),
+        prepared
+            .bind_signed_transaction(signed)
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Expired)
     );
     let mut pending = f.pending();
@@ -371,7 +390,8 @@ fn signing_and_terminal_verification_never_reset_the_one_use_interval() {
             .verify_finalized(FinalPromotionCheckSourceV1::Current, || panic!(
                 "expiry must precede clock"
             ))
-            .err(),
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Expired)
     );
 }
@@ -393,7 +413,8 @@ fn unavailable_or_invalid_eligibility_clock_fails_closed_after_proof() {
         assert_eq!(
             pending
                 .verify_finalized(FinalPromotionCheckSourceV1::Current, || now)
-                .err(),
+                .err()
+                .and_then(|failure| failure.rejection()),
             Some(Error::Clock)
         );
     }
@@ -412,7 +433,8 @@ fn current_eligibility_time_rechecks_expired_custody_after_successful_execution(
             .verify_finalized(FinalPromotionCheckSourceV1::Current, || Ok(interval(
                 100_000, 100_000
             )))
-            .err(),
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Authority)
     );
 }
@@ -432,7 +454,8 @@ fn historical_future_dated_qc_cannot_stand_in_for_a_new_round() {
             .verify_finalized(FinalPromotionCheckSourceV1::Current, || panic!(
                 "new challenge has no applied entry"
             ))
-            .err(),
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::NotApplied)
     );
 }
@@ -625,7 +648,8 @@ fn same_block_reserve_retry_cannot_replace_the_allocating_signed_entry() {
             .verify_finalized(FinalPromotionCheckSourceV1::Reserved(&retry), || {
                 panic!("substituted source must precede clock")
             })
-            .err(),
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Execution)
     );
 }
@@ -657,7 +681,8 @@ fn reserved_check_rejects_floor_selected_after_its_reserve() {
                 FinalPromotionCheckSourceV1::Reserved(f.reserve_signed.as_ref().unwrap()),
                 || panic!("post-Reserve floor must precede clock"),
             )
-            .err(),
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Execution)
     );
 }
@@ -669,7 +694,8 @@ fn reserved_check_requires_original_source_membership_and_durable_reserve_finali
         (true, false, Error::Finality),
     ] {
         let mut f = Fixture::new();
-        let row = reserve_reviewed_request_with_availability(&mut f, membership, finality);
+        let row = reserve_reviewed_request_with_availability(&mut f, membership, true);
+        let reserve_height = f.chain.height();
         let mut expected = f.expected();
         expected.floor = f.reserve_floor.expect("pre-Reserve independent floor");
         expected.subject = FinalPromotionCheckSubjectV1::BeforeProvider(row);
@@ -687,13 +713,21 @@ fn reserved_check_requires_original_source_membership_and_durable_reserve_finali
             ),
             [true]
         );
+        // Descendant execution needs a genuine valid parent; only the later local read is corrupt.
+        if !finality {
+            f.chain.corrupt_local_quorum_for_test(
+                reserve_height,
+                crate::sumeragi::test_chain::Signers::BelowQuorum,
+            );
+        }
         assert_eq!(
             pending
                 .verify_finalized(
                     FinalPromotionCheckSourceV1::Reserved(f.reserve_signed.as_ref().unwrap()),
                     || panic!("missing Reserve evidence must precede clock"),
                 )
-                .err(),
+                .err()
+                .and_then(|failure| failure.rejection()),
             Some(expected_error),
             "Reserve membership={membership}, finality={finality}"
         );
@@ -1065,7 +1099,8 @@ fn completed_checks_reject_wrong_role_substituted_and_replayed_sources_before_cl
                 },
                 || panic!("wrong-role source must precede clock"),
             )
-            .err(),
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Execution)
     );
 
@@ -1089,7 +1124,8 @@ fn completed_checks_reject_wrong_role_substituted_and_replayed_sources_before_cl
                 },
                 || panic!("rejected Complete retry must precede clock"),
             )
-            .err(),
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Execution)
     );
 
@@ -1112,7 +1148,8 @@ fn completed_checks_reject_wrong_role_substituted_and_replayed_sources_before_cl
                 },
                 || panic!("replayed Complete as Reserve must precede clock"),
             )
-            .err(),
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Execution)
     );
 }
@@ -1157,7 +1194,8 @@ fn completed_check_rejects_forked_floor_and_missing_complete_evidence() {
     ] {
         let mut f = Fixture::new();
         let (complete, row, _) =
-            complete_reviewed_request_with_availability(&mut f, membership, finality);
+            complete_reviewed_request_with_availability(&mut f, membership, true);
+        let complete_height = f.chain.height();
         let pending = pending_completed_check(&f, FinalPromotionCheckSubjectV1::AfterCommit(row));
         assert_eq!(
             f.commit(
@@ -1168,6 +1206,13 @@ fn completed_check_rejects_forked_floor_and_missing_complete_evidence() {
             ),
             [true]
         );
+        // Assemble the Check under the valid Complete parent before corrupting local evidence.
+        if !finality {
+            f.chain.corrupt_local_quorum_for_test(
+                complete_height,
+                crate::sumeragi::test_chain::Signers::BelowQuorum,
+            );
+        }
         assert_eq!(
             pending
                 .verify_finalized(
@@ -1177,9 +1222,35 @@ fn completed_check_rejects_forked_floor_and_missing_complete_evidence() {
                     },
                     || panic!("missing Complete evidence must precede clock"),
                 )
-                .err(),
+                .err()
+                .and_then(|failure| failure.rejection()),
             Some(expected_error),
             "Complete membership={membership}, finality={finality}"
         );
     }
+}
+
+#[test]
+fn binding_local_refusal_retries_only_original_signed_custody() {
+    let fixture = Fixture::new();
+    let prepared = fixture.prepared();
+    let signed = fixture.sign(prepared.instruction().clone().into(), 3, NOW);
+    let expected_wire = signed.encode_wire_v1().unwrap();
+    let deadline = prepared.deadline();
+    let zero = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
+    let failure =
+        match norito::with_decode_limits_scope(zero, || prepared.bind_signed_transaction(signed)) {
+            Err(failure) => failure,
+            Ok(_) => panic!("original caller allocation ceiling must survive"),
+        };
+    assert!(failure.error().is_retryable());
+    assert!(failure.rejection().is_none());
+    assert_eq!(failure.deadline(), deadline);
+    let pending = failure.retry().unwrap();
+    assert_eq!(pending.deadline(), deadline);
+    assert_eq!(
+        pending.signed_transaction().encode_wire_v1().unwrap(),
+        expected_wire
+    );
+    assert!(Arc::ptr_eq(&pending.prepared.state, &fixture.state));
 }

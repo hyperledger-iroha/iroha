@@ -39,11 +39,16 @@ fn equal_foreign_family_cannot_reopen_retained_reader() {
 
 #[test]
 fn pinned_reader_reopens_while_actual_active_lock_is_owned_without_a_notice() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     let map = BptreeMap::<usize, usize>::new();
     let original = map.read().predecessor().retain();
     let prepared = map.write().prepare_commit();
     let wait = map.observe_reader_release();
-    let mut future = std::pin::pin!(wait.wait_for_release());
+    let mut future = std::pin::pin!(wait.wait_for_release(&mut release_registration_1));
     let mut context = Context::from_waker(Waker::noop());
     assert!(future.as_mut().poll(&mut context).is_pending());
     let reader = without_allocations(|| map.read_predecessor(&original).unwrap());

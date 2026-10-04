@@ -1,15 +1,16 @@
 //! Native preparation adapter for the shared artifact-admission crate.
 use crate::{
-    ProgramMetadata, SyscallPolicy,
+    SyscallPolicy,
     ivm::{
         decode_literal_table, prepare_instruction_stream, validate_indexed_literal_instructions,
     },
     ivm_cache::global_get,
-    metadata::{EmbeddedContractInterfaceV1, ParsedProgramMetadata},
+    metadata::EmbeddedContractInterfaceV1,
     prepared::{PreparedContract, PreparedContractParts, PreparedControlFlow},
 };
 pub use ivm_artifact_admission::{
     ContractArtifactError, VerifiedContractArtifact, verify_contract_artifact,
+    verify_contract_artifact_with_memory_budget,
 };
 use std::sync::Arc;
 /// Prepare a validated self-describing contract for repeated VM loading.
@@ -18,6 +19,21 @@ use std::sync::Arc;
 /// and execution structures after that shared policy has accepted the immutable artifact bytes.
 pub fn prepare_contract(artifact: Arc<[u8]>) -> Result<PreparedContract, ContractArtifactError> {
     PreparedContract::prepare(artifact)
+}
+/// Prepare immutable instructions, runtime indexes and artifact bytes in the original State pool.
+///
+/// Funded operations stay outside process-global caches. The prepared shell,
+/// entrypoint index and traversal scratch use that same pool; nested metadata
+/// and analysis storage remain separate allocation obligations.
+///
+/// # Errors
+/// Returns canonical admission errors or the original local allocation refusal.
+pub fn prepare_contract_with_memory_budget(
+    artifact: &[u8],
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<PreparedContract, ContractArtifactError> {
+    let verified = verify_contract_artifact_with_memory_budget(artifact, budget)?;
+    PreparedContract::prepare_shared_verified(artifact, verified, Some(budget))
 }
 /// A prepared compiler-produced Kotodama test-suite artifact.
 ///
@@ -57,7 +73,7 @@ impl PreparedContract {
     /// Admit through the shared production verifier, then build native runtime indexes.
     pub fn prepare(artifact: Arc<[u8]>) -> Result<Self, ContractArtifactError> {
         let verified = ivm_artifact_admission::verify_contract_artifact(artifact.as_ref())?;
-        Self::prepare_shared_verified(artifact, verified)
+        Self::prepare_shared_verified(artifact.as_ref(), verified, None)
     }
     fn prepare_koto_test_harness(
         artifact: Arc<[u8]>,
@@ -67,27 +83,25 @@ impl PreparedContract {
             artifact.as_ref(),
             contract_interface,
         )?;
-        Self::prepare_shared_verified(artifact, verified)
+        Self::prepare_shared_verified(artifact.as_ref(), verified, None)
     }
     fn prepare_shared_verified(
-        artifact: Arc<[u8]>,
+        artifact: &[u8],
         verified: VerifiedContractArtifact,
+        budget: Option<&iroha_allocation::AllocationBudget>,
     ) -> Result<Self, ContractArtifactError> {
-        // Reparse only to recover native preparation ranges. Consensus policy
-        // and all artifact-derived outputs above came from the shared verifier.
-        let parsed = ProgramMetadata::parse(artifact.as_ref()).map_err(|error| {
-            ContractArtifactError::preparation("metadata reparse after shared admission", error)
-        })?;
-        ensure_shared_offsets_match(&parsed, &verified)?;
-        let decoded = decode_instruction_stream(artifact.as_ref(), &parsed)?;
-        let instruction_region = artifact.get(parsed.code_offset..).ok_or_else(|| {
+        // The verifier just admitted these same borrowed bytes. Carry its exact ranges through
+        // native preparation instead of allocating and decoding the CNTR graph a second time.
+        let decoded = decode_instruction_stream(artifact, verified.code_offset, budget)?;
+        let instruction_region = artifact.get(verified.code_offset..).ok_or_else(|| {
             ContractArtifactError::invalid("executable stream offset exceeds artifact length")
         })?;
         let literal_table = decode_literal_table(
             artifact.as_ref(),
-            parsed.header_len,
-            parsed.literal_section,
+            verified.header_len,
+            verified.literal_section(),
             SyscallPolicy::AbiV1,
+            budget,
         )
         .map_err(|error| {
             ContractArtifactError::preparation(
@@ -103,24 +117,42 @@ impl PreparedContract {
                 )
             },
         )?;
-        let instruction_entry_pc = u64::try_from(parsed.prefix_len()).map_err(|_| {
-            ContractArtifactError::invalid("executable stream offset does not fit a VM address")
-        })?;
+        let instruction_entry_pc = verified
+            .code_offset
+            .checked_sub(verified.header_len)
+            .and_then(|offset| u64::try_from(offset).ok())
+            .ok_or_else(|| {
+                ContractArtifactError::invalid("executable stream offset does not fit a VM address")
+            })?;
         let prepared_program = prepare_instruction_stream(
             instruction_region,
             decoded.as_ref(),
             instruction_entry_pc,
             literal_table.entries(),
+            budget,
         )
         .map_err(|error| ContractArtifactError::preparation("instruction preparation", error))?;
         let control_flow =
-            PreparedControlFlow::from_decoded(decoded.as_ref()).map_err(|error| {
+            PreparedControlFlow::from_decoded(decoded.as_ref(), budget).map_err(|error| {
                 ContractArtifactError::preparation("control-flow preparation", error)
             })?;
         PreparedContract::from_parts(PreparedContractParts {
             // Take our own byte allocation; an input Arc may have unrelated owners
             // whose lifetimes cannot be governed by this preparation reservation.
-            artifact: crate::cache_memory::SharedAllocation::from(artifact.as_ref().to_vec()),
+            artifact: match budget {
+                Some(budget) => {
+                    crate::cache_memory::SharedAllocation::try_copy_from_slice_with_memory_budget(
+                        artifact, budget,
+                    )
+                    .map_err(|error| {
+                        ContractArtifactError::preparation("artifact backing", error)
+                    })?
+                }
+                None => crate::cache_memory::SharedAllocation::try_from_iter(
+                    artifact.iter().copied().map(Ok::<_, crate::VMError>),
+                )
+                .map_err(|error| ContractArtifactError::preparation("artifact backing", error))?,
+            },
             metadata: verified.metadata,
             manifest: verified.manifest,
             header_len: verified.header_len,
@@ -138,29 +170,25 @@ impl PreparedContract {
             decoded,
             prepared_program,
             control_flow,
-        })
+        }, budget)
         .map_err(|error| ContractArtifactError::preparation("contract indexing", error))
     }
 }
-fn ensure_shared_offsets_match(
-    parsed: &ParsedProgramMetadata,
-    verified: &VerifiedContractArtifact,
-) -> Result<(), ContractArtifactError> {
-    if parsed.header_len != verified.header_len || parsed.code_offset != verified.code_offset {
-        return Err(ContractArtifactError::invalid(
-            "native metadata ranges diverge from shared artifact admission",
-        ));
-    }
-    Ok(())
-}
 fn decode_instruction_stream(
     artifact: &[u8],
-    parsed: &ParsedProgramMetadata,
+    code_offset: usize,
+    budget: Option<&iroha_allocation::AllocationBudget>,
 ) -> Result<crate::ivm_cache::DecodedStream, ContractArtifactError> {
-    let instruction_region = artifact.get(parsed.code_offset..).ok_or_else(|| {
+    let instruction_region = artifact.get(code_offset..).ok_or_else(|| {
         ContractArtifactError::invalid("executable stream offset exceeds artifact length")
     })?;
-    global_get(instruction_region).map_err(|error| {
+    let decoded = match budget {
+        Some(budget) => {
+            crate::ivm_cache::IvmCache::decode_stream_with_memory_budget(instruction_region, budget)
+        }
+        None => global_get(instruction_region),
+    };
+    decoded.map_err(|error| {
         ContractArtifactError::preparation("instruction decode after shared admission", error)
     })
 }
@@ -205,7 +233,16 @@ mod preparation_deferral_tests {
 
     #[test]
     fn preparation_keeps_exact_pool_release_observation_through_error_conversion() {
-        let budget = iroha_allocation::AllocationBudget::new(8);
+        use iroha_allocation::release::ReleaseRegistration;
+        let registration_bytes = ReleaseRegistration::allocation_layout().size();
+        let budget = iroha_allocation::AllocationBudget::new(8 + registration_bytes);
+        let mut registration = ReleaseRegistration::from_reservation(
+            &mut budget
+                .try_reserve(ReleaseRegistration::allocation_layout())
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(registration.belongs_to(&budget));
         let occupied = budget.try_reserve_bytes(8).unwrap();
         let original = budget.try_reserve_bytes(1).unwrap_err();
         let deferred = VMError::Metered {
@@ -227,7 +264,7 @@ mod preparation_deferral_tests {
         else {
             panic!("preparation must preserve the capacity owner's observation");
         };
-        let mut wait = release.wait_for_release();
+        let mut wait = release.wait_for_release(&mut registration);
         let mut cx = Context::from_waker(Waker::noop());
         assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
         // A refund from another pool cannot make this failed attempt ready.
@@ -236,7 +273,11 @@ mod preparation_deferral_tests {
         assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
         drop(occupied);
         assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Ready(()));
+        drop(wait);
+        assert_eq!(budget.reserved_bytes(), registration_bytes);
         assert!(budget.try_reserve_bytes(8).is_ok());
+        drop(registration);
+        assert_eq!(budget.reserved_bytes(), 0);
     }
 }
 
@@ -329,4 +370,52 @@ mod koto_test_harness_tests {
             "a production artifact must never become a test-harness capability"
         );
     }
+    #[test]
+    fn retired_header_rejects_compiler_harness_and_contract_without_granting_capability() {
+        let outputs = compile_suite();
+        let runtime = outputs.runtime.as_ref().unwrap();
+        let budget = iroha_allocation::AllocationBudget::new(16 * 1024 * 1024);
+        let mut vm = IVM::try_new_with_memory_budget(100_000, &budget).unwrap();
+        vm.set_register(7, 701);
+        let before = (
+            vm.pc(),
+            vm.remaining_gas(),
+            vm.code_hash(),
+            budget.reserved_bytes(),
+        );
+        budget.set_limit_bytes(0);
+        for output in [&outputs.suite, runtime] {
+            assert_eq!(output.artifact[5], 1);
+            let mut retired = output.artifact.clone();
+            retired[5] = 0;
+            let expected = VMError::UnsupportedProgramVersion { major: 1, minor: 0 };
+            assert_eq!(IVM::validate_program(&retired), Err(expected.clone()));
+            assert_eq!(vm.load_program(&retired), Err(expected));
+            assert_eq!(
+                (
+                    vm.pc(),
+                    vm.remaining_gas(),
+                    vm.code_hash(),
+                    budget.reserved_bytes()
+                ),
+                before
+            );
+            assert_eq!(vm.register(7), 701);
+            let error = prepare_contract_with_memory_budget(&retired, &budget).unwrap_err();
+            assert!(error.local_vm_error().is_none());
+            assert!(error.to_string().contains("program version 1.0"), "{error}");
+            let error =
+                prepare_koto_test_contract(Arc::from(retired), output.contract_interface().clone())
+                    .err()
+                    .expect("retired harness cannot grant a capability");
+            assert!(error.local_vm_error().is_none());
+            assert!(error.to_string().contains("program version 1.0"), "{error}");
+        }
+        drop(vm);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
 }
+
+#[cfg(test)]
+#[path = "contract_artifact/range_tests.rs"]
+mod range_tests;

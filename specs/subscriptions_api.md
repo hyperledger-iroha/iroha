@@ -254,14 +254,22 @@ Response:
 }
 ```
 
-### GET /v1/subscriptions/plans
-Query params:
-- `provider` (optional) - filter by provider account id.
-- `limit`, `offset` (optional) - pagination.
-Response:
+### GET /v1/subscriptions/plans and POST /v1/subscriptions/plans/query
+
+Plans use the shared [collection query contract](torii/collection_queries.md):
+`filter`, `sort`, `select`, `limit`, `cursor`, and `include_total`. The POST body
+also accepts `aggregate`. Filter `provider` with an exact canonical I105 account
+id; resolve aliases separately through their authenticated route.
+
+Rows expose `id`, `provider`, `billing`, and `pricing` directly, ordered by `id`
+unless `sort` is supplied. The response is one canonical page:
+
 ```json
-{ "items": [ { "plan_id": "...", "plan": { "...": "..." } } ], "total": 1 }
+{"items":[{"id":"<plan asset definition id>","provider":"<I105>","billing":{},"pricing":{}}],"next_cursor":null,"total":1}
 ```
+
+`total` is present only for `include_total=true`. Continue with `next_cursor`;
+there are no offset or count-mode controls.
 
 ### POST /v1/subscriptions
 Validates a subscription mutation and returns canonical framed instructions for the named
@@ -321,26 +329,21 @@ The caller must verify `version`, `authority`, `action`, the returned identifier
 state, reconstruct a transaction with exactly `tx_instructions`, sign it locally under
 `authority`, and submit it through the normal transaction pipeline.
 
-### GET /v1/subscriptions
-Query params:
-- `owned_by` (optional) - filter by subscriber account id.
-- `provider` (optional) - filter by provider account id.
-- `status` (optional) - one of `active`, `paused`, `past_due`, `canceled`, `suspended`.
-- `limit`, `offset` (optional) - pagination.
-Response:
+### GET /v1/subscriptions and POST /v1/subscriptions/query
+
+Subscriptions use the same `ListQuery` and `Page` contract as plans. Filter fields
+include `owned_by`, `provider`, `status`, `plan_id`, and the subscription state
+fields. `status` is one of `active`, `paused`, `past_due`, `canceled`, `suspended`.
+Rows flatten the subscription state alongside `id`, `owned_by`, `invoice`, and
+`plan`; the default order is `id`. The response always includes `items` and
+`next_cursor`, and includes `total` only when requested.
+
 ```json
-{
-  "items": [
-    {
-      "subscription_id": "sub-6f3a9c$subscriptions",
-      "subscription": { "...": "..." },
-      "invoice": { "...": "..." },
-      "plan": { "...": "..." }
-    }
-  ],
-  "total": 1
-}
+{"filter":{"op":"eq","args":["status","active"]},"limit":50,"include_total":true}
 ```
+
+The CLI uses shared collection flags, for example
+`iroha app subscriptions subscription list --filter 'status = "active"' --all`.
 
 ### GET /v1/subscriptions/{subscription_id}
 Returns the subscription state, latest invoice (if any), and plan metadata (if present).
@@ -432,8 +435,9 @@ Returns a draft that updates `next_charge_ms` and re-registers the billing trigg
 ## Rust SDK and CLI
 
 The canonical HTTP records live in `iroha_torii_shared::subscriptions` and are
-consumed directly by Torii. The SDK exposes public reads through
-`client.subscriptions().list_plans(...)`, `.list(...)`, and `.get(...)`.
+consumed directly by Torii. List reads use `client.list_page(...)` or `client.list(...)`
+with `Collection::SubscriptionPlans` or `Collection::Subscriptions` and a `ListQuery`.
+A single subscription uses `client.subscriptions().get(...)`.
 Account-bound preparation uses `account.subscriptions().prepare_plan(...)`,
 `.prepare(...)`, `.prepare_pause(...)`, `.prepare_resume(...)`,
 `.prepare_cancel(...)`, `.prepare_keep(...)`, `.prepare_charge(...)`, and
@@ -449,7 +453,7 @@ establish submission or finality. Executable programs in instruction drafts
 remain available for explicit review before signing.
 
 The explicit blocking capability uses the same implementation and one owned
-runtime: `iroha::blocking::Client::subscriptions()` for public reads and
+runtime: `iroha::blocking::Client::list_page()` for pages, `.subscriptions().get()` for one state, and
 `iroha::blocking::AccountClient::subscriptions()` for preparation. A blocking
 call from a Tokio runtime returns a typed error.
 
@@ -457,37 +461,40 @@ CLI preparation uses the configured signing account. Preparation commands emit
 typed unsigned drafts, and do not accept account or private-key overrides:
 
 ```bash
-iroha --config client.toml subscriptions plan prepare \
+iroha --config client.toml app subscriptions plan prepare \
   --plan-id '<canonical-asset-definition-id>' --plan-json plan.json
-iroha --config client.toml subscriptions plan list \
-  --provider '<canonical-account-id-or-alias>' --limit 10 --count-mode exact
-iroha --config client.toml subscriptions subscription prepare \
+iroha --config client.toml app subscriptions plan list \
+  --filter 'provider = "<canonical-account-id>"' --limit 10 --include-total
+iroha --config client.toml app subscriptions subscription prepare \
   --subscription-id 'sub-001$subscriptions.universal' \
   --plan-id '<canonical-asset-definition-id>'
-iroha --config client.toml subscriptions subscription pause \
+iroha --config client.toml app subscriptions subscription pause \
   --subscription-id 'sub-001$subscriptions.universal'
-iroha --config client.toml subscriptions subscription resume \
+iroha --config client.toml app subscriptions subscription resume \
   --subscription-id 'sub-001$subscriptions.universal' --charge-at-ms 1700000000000
-iroha --config client.toml subscriptions subscription cancel \
+iroha --config client.toml app subscriptions subscription cancel \
   --subscription-id 'sub-001$subscriptions.universal' --mode period-end
-iroha --config client.toml subscriptions subscription keep \
+iroha --config client.toml app subscriptions subscription keep \
   --subscription-id 'sub-001$subscriptions.universal'
-iroha --config client.toml subscriptions subscription charge-now \
+iroha --config client.toml app subscriptions subscription charge-now \
   --subscription-id 'sub-001$subscriptions.universal'
-iroha --config client.toml subscriptions subscription usage \
+iroha --config client.toml app subscriptions subscription usage \
   --subscription-id 'sub-001$subscriptions.universal' \
   --unit-key compute_ms --delta 3600000
 ```
 
 Cancellation requires an explicit `--mode immediate` or `--mode period-end`.
-Only resume and charge-now accept `--charge-at-ms`. Public lists forward the
-selected `count_mode` exactly.
+Only resume and charge-now accept `--charge-at-ms`. Public lists use shared
+collection controls and return `Page` envelopes.
 
 ## Query Patterns
+Listings use the [Torii collection endpoints](torii/collection_queries.md);
+signed `/v1/query` refuses filtered iterable queries.
 - List subscriptions for an account:
-  - `FindNfts` with predicate `owned_by == <account>` and `exists("content.subscription")`.
+  - `GET /v1/nfts?filter=owned_by = "<account>" and exists(metadata.subscription)`
+    (NFT rows expose their content as `metadata.*`).
 - List plans for a provider:
-  - `FindAssetsDefinitions` with predicate `metadata.subscription_plan.provider == <account>`.
+  - `GET /v1/assets/definitions?filter=metadata.subscription_plan.provider = "<account>"`.
 
 ## Events and Telemetry
 - Billing trigger completion events: subscribe to `TriggerCompletedEvent` and filter by the billing trigger id for a subscription.

@@ -1,5 +1,12 @@
 //! Local evidence of completed production Metal dispatches, separate from self-tests.
 
+#[cfg(any(test, all(target_os = "macos", feature = "metal")))]
+mod calibration;
+#[cfg(all(test, feature = "metal-hardware-tests"))]
+pub(in crate::vector) mod timing;
+#[cfg(all(target_os = "macos", feature = "metal"))]
+pub(super) use calibration::with_synthetic;
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Production Metal pipelines with independently observable completion counts.
@@ -87,10 +94,12 @@ impl CompletionCounts {
 }
 
 static COMPLETIONS: CompletionCounts = CompletionCounts::new();
+#[cfg(all(target_os = "macos", feature = "metal"))]
+static SYNTHETIC_COMPLETIONS: CompletionCounts = CompletionCounts::new();
 
 /// Completed production dispatches for a pipeline since process startup.
 ///
-/// Startup probes, diagnostic kernels, failed commands and CPU fallbacks do not
+/// Startup probes, synthetic calibration, diagnostic kernels, failed commands and CPU fallbacks do not
 /// increment this counter. A completion attests driver completion only; parity,
 /// performance and candidate provenance require separate qualification evidence.
 /// Counters are local telemetry and never enter gas, state or commitments.
@@ -100,13 +109,19 @@ pub fn metal_completed_dispatches(kernel: MetalKernel) -> u64 {
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub(super) fn record_completion(kernel: Option<MetalKernel>, completed: bool) {
+    let synthetic = calibration::synthetic();
     if completed
         && let Some(kernel) = kernel
         && let Some(health) = super::metal_runtime::current_health()
     {
-        health.record_completion(kernel as usize);
+        health.record_completion(kernel as usize, synthetic);
     }
-    COMPLETIONS.record(kernel, completed);
+    let bank = if synthetic {
+        &SYNTHETIC_COMPLETIONS
+    } else {
+        &COMPLETIONS
+    };
+    bank.record(kernel, completed);
 }
 
 #[cfg(test)]

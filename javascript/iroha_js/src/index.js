@@ -95,7 +95,6 @@ export {
   SorafsOrderbookSubmissionAmbiguousError,
   IsoMessageTimeoutError,
   ToriiDataModelMismatchError,
-  ToriiHttpError,
   extractPipelineStatusKind,
   decodePdpCommitmentHeader,
   buildConnectWebSocketUrl,
@@ -167,11 +166,40 @@ export {
   parliamentTleReleaseContextReadPathV1,
   validateParliamentTimedOvnCastingProofResponseFrameV1,
 } from "./parliamentApiV1.js";
+export { ToriiBrowserClient } from "./toriiBrowserClient.js";
 export {
-  ToriiBrowserClient,
-  ToriiBrowserHttpError,
-  ToriiBrowserStreamGapError,
-} from "./toriiBrowserClient.js";
+  ToriiError,
+  ToriiHttpError,
+  ToriiStreamGapError,
+  ListQueryError,
+  FilterSyntaxError,
+} from "./toriiErrors.js";
+export {
+  AGGREGATE_FUNCTIONS,
+  CURSOR_MAX_BYTES,
+  FIELD_PATH_MAX_BYTES,
+  FILTER_MAX_DEPTH,
+  FILTER_MAX_MEMBERSHIP_VALUES,
+  FILTER_MAX_NODES,
+  FILTER_MAX_TOTAL_MEMBERSHIP_VALUES,
+  FILTER_TEXT_MAX_BYTES,
+  LIST_QUERY_MEMBERS,
+  LIST_QUERY_PARAMETERS,
+  SELECT_MAX_FIELDS,
+  SORT_MAX_KEYS,
+  TORII_COLLECTION_PATHS,
+  FieldRef,
+  Filter,
+  ListQuery,
+  SortKey,
+  ToriiCollection,
+  decodePage,
+  field,
+  isDecimalText,
+  parseSort,
+  renderFieldPath,
+  sortToString,
+} from "./query/index.js";
 export {
   AtomicPrivateSettlementAuthV1,
   AtomicPrivateSettlementIdentifierV1,
@@ -271,6 +299,11 @@ export {
   computeAxtBinding,
 } from "./axt.js";
 export {
+  encodeValidatorStakingPreparationFrameV1,
+  decodeValidatorStakingPreparationFrameV1,
+  validateValidatorStakingPreparationV1,
+  encodeValidatorStakingValueV1,
+  decodeValidatorStakingValueV1,
   encodeAccountIdNoritoValue,
   decodeAccountIdNoritoValue,
   encodeAssetDefinitionIdNoritoValue,

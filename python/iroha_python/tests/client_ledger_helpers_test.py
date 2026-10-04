@@ -18,19 +18,24 @@ import iroha_python.crypto as crypto_module
 from client_expensive_query_test_support import authenticated_query_client
 from iroha_python import (
     AccountAsset,
-    AccountAssetsPage,
-    AssetHolderRecord,
+    AssetHolder,
+    CommittedTransaction,
     ContractCallIntent,
-    DataEventFilter,
     Ed25519KeyPair,
     ExplorerRwaRecord,
+    F,
+    FilterError,
     Instruction,
     KotodamaQuantity,
+    ListQuery,
+    ListQueryError,
     LocalSigningContext,
     NetworkId,
-    RwaListItem,
+    RwaLot,
     ToriiCanonicalRequestAuth,
     ToriiClient,
+    ToriiError,
+    ToriiQueryError,
     TransactionConfig,
     TransactionDraft,
     UaidPortfolioAsset,
@@ -44,7 +49,6 @@ from iroha_python._privacy_backends import (
 )
 from iroha_python.client import ACCOUNT_ONBOARDING_TOKEN_HEADER, DATA_MODEL_VERSION
 from iroha_python.repo import (
-    RepoAgreementListPage,
     RepoAgreementRecord,
     RepoCashLeg,
     RepoCollateralLeg,
@@ -2273,16 +2277,102 @@ def test_asset_balance_rejects_wrong_network_prefix_without_retry() -> None:
 
     with pytest.raises(RuntimeError, match="unexpected status 400"):
         client.asset_balance(taira_account, "ds#wonderland.is")
-    assert session.calls == [
-        {
-            "method": "GET",
-            "path": f"/v1/accounts/{quote(taira_account, safe='')}/assets",
-            "params": None,
-            "data": None,
-            "headers": {"Accept": "application/json"},
-            "allow_redirects": False,
-        }
+    assert len(session.calls) == 1
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["path"] == f"/v1/accounts/{quote(taira_account, safe='')}/assets/query"
+    assert json.loads(call["data"]) == {
+        "filter": {"op": "eq", "args": ["asset_alias", "ds#wonderland.is"]}
+    }
+    assert call["allow_redirects"] is False
+
+
+def test_asset_balance_sums_every_matching_bucket_across_pages() -> None:
+    account = account_address(0x6B)
+    alias = "ds#wonderland.is"
+    session = FakeSession(
+        [
+            response(
+                200,
+                {
+                    "items": [
+                        {
+                            "asset": "DEF",
+                            "asset_alias": alias,
+                            "scope": "global",
+                            "account_id": account,
+                            "quantity": "1.5",
+                        }
+                    ],
+                    "next_cursor": "c2",
+                },
+            ),
+            response(
+                200,
+                {
+                    "items": [
+                        {
+                            "asset": "DEF",
+                            "asset_alias": alias,
+                            "scope": "dataspace:7",
+                            "account_id": account,
+                            "quantity": "2",
+                        },
+                        {
+                            "asset": "OTHER",
+                            "asset_alias": "other#wonderland.is",
+                            "scope": "global",
+                            "account_id": account,
+                            "quantity": "100",
+                        },
+                    ],
+                    "next_cursor": None,
+                },
+            ),
+        ]
+    )
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    assert client.asset_balance(account, alias) == Decimal("3.5")
+    expected_filter = {"op": "eq", "args": ["asset_alias", alias]}
+    assert [json.loads(call["data"]) for call in session.calls] == [
+        {"filter": expected_filter},
+        {"filter": expected_filter, "cursor": "c2"},
     ]
+
+
+def test_asset_balance_reads_one_scope_by_base58_definition() -> None:
+    account = account_address(0x6C)
+    session = FakeSession(
+        [
+            response(
+                200,
+                {
+                    "items": [
+                        {
+                            "asset": "5Ff9",
+                            "scope": "global",
+                            "account_id": account,
+                            "quantity": "4",
+                        }
+                    ],
+                    "next_cursor": None,
+                },
+            )
+        ]
+    )
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    assert client.asset_balance(account, "5Ff9", scope="global") == Decimal("4")
+    assert json.loads(session.calls[0]["data"]) == {
+        "filter": {
+            "op": "and",
+            "args": [
+                {"op": "eq", "args": ["asset", "5Ff9"]},
+                {"op": "eq", "args": ["scope", "global"]},
+            ],
+        }
+    }
 
 
 def test_asset_balance_returns_zero_when_account_has_no_matching_asset() -> None:
@@ -2291,8 +2381,15 @@ def test_asset_balance_returns_zero_when_account_has_no_matching_asset() -> None
             response(
                 200,
                 {
-                    "items": [{"asset_id": "other#adult@is", "quantity": "3"}],
-                    "total": 1,
+                    "items": [
+                        {
+                            "asset": "other",
+                            "scope": "global",
+                            "account_id": "adult@is",
+                            "quantity": "3",
+                        }
+                    ],
+                    "next_cursor": None,
                 },
             )
         ]
@@ -2379,10 +2476,17 @@ def test_rwa_nested_quantity_fields_are_normalized_without_float_coercion() -> N
 def _quantity_readback_factories(
     quantity: object,
 ) -> tuple[Callable[[], object], ...]:
+    # Balances require their quantity; an RWA lot's quantity may be null or
+    # absent (only a row's identity fields are always present).
+    optional_quantity = () if quantity is None else (
+        lambda: RwaLot.from_json({"id": "rwa", "quantity": quantity}),
+    )
     return (
-        lambda: AccountAsset.from_payload({"asset_id": "asset#account", "quantity": quantity}),
-        lambda: AssetHolderRecord.from_payload(
-            {"account_id": "account", "quantity": quantity}
+        lambda: AccountAsset.from_json(
+            {"asset": "asset", "scope": "global", "account_id": "account", "quantity": quantity}
+        ),
+        lambda: AssetHolder.from_json(
+            {"account_id": "account", "asset": "asset", "scope": "global", "quantity": quantity}
         ),
         lambda: UaidPortfolioAsset.from_payload(
             {
@@ -2401,7 +2505,7 @@ def _quantity_readback_factories(
                 "is_frozen": False,
             }
         ),
-        lambda: RwaListItem.from_payload({"id": "rwa", "quantity": quantity}),
+        *optional_quantity,
     )
 
 
@@ -2414,22 +2518,19 @@ def test_typed_quantity_readbacks_reject_noncanonical_or_untyped_values(
             factory()
 
 
-def test_rwa_readback_rejects_noncanonical_nested_parent_quantity() -> None:
-    with pytest.raises(ValueError):
-        RwaListItem.from_payload(
-            {
-                "id": "rwa",
-                "quantity": "2",
-                "parents": [{"rwa": "parent", "quantity": "1.0"}],
-            }
-        )
+def test_rwa_lot_quantity_may_be_null_or_absent() -> None:
+    assert RwaLot.from_json({"id": "rwa", "quantity": None}).quantity is None
+    assert RwaLot.from_json({"id": "rwa"}).quantity is None
+    assert RwaLot.from_json({"id": "rwa", "quantity": "0.5"}).quantity == Decimal("0.5")
 
 
 def test_typed_quantity_readback_rejects_oversized_alternate_before_bigint_parsing() -> None:
     with pytest.raises(ValueError, match="canonical V1 text bound"):
-        AccountAsset.from_payload(
+        AccountAsset.from_json(
             {
-                "asset_id": "asset#account",
+                "asset": "asset",
+                "scope": "global",
+                "account_id": "account",
                 "quantity": "1." + "0" * 10_000,
             }
         )
@@ -2444,12 +2545,14 @@ def test_asset_balance_rejects_noncanonical_or_untyped_quantities(quantity: obje
                 {
                     "items": [
                         {
-                            "asset_id": "canonical-ds-id#adult@is",
+                            "asset": "canonical-ds-id",
                             "asset_alias": "ds#wonderland.is",
+                            "scope": "global",
+                            "account_id": "adult@is",
                             "quantity": quantity,
                         }
                     ],
-                    "total": 1,
+                    "next_cursor": None,
                 },
             )
         ]
@@ -2483,229 +2586,293 @@ def test_data_model_validation_uses_typed_node_capabilities() -> None:
     assert "X-Iroha-Account" in session.calls[0]["headers"]
 
 
-def test_query_accounts_typed_preserves_bounded_page_metadata() -> None:
+def test_accounts_list_returns_a_typed_cursor_page() -> None:
     session = FakeSession(
         [
             response(
                 200,
                 {
-                    "items": [{"id": "adult@is"}],
-                    "has_more": True,
-                    "count_mode": "bounded",
-                    "indexed_height": 7,
-                    "indexed_block_hash": "ab" * 32,
-                    "query_source": "live",
+                    "items": [
+                        {
+                            "id": "adult@is",
+                            "label": "Adult",
+                            "uaid": None,
+                            "metadata": {"tier": 1},
+                            "added_later": True,
+                        }
+                    ],
+                    "next_cursor": "q1_next",
+                    "total": 7,
                 },
             )
         ]
     )
     client = authenticated_query_client(session)
 
-    page = client.query_accounts_typed(
-        limit=1,
-        count_mode="bounded",
-        select=[" id ", {"metadata": {"tier": True}}],
+    page = client.accounts.list(
+        filter=F.label.is_not_null(), sort="-label", limit=1, include_total=True
     )
 
-    assert page.total is None
-    assert page.has_more is True
-    assert page.count_mode == "bounded"
-    assert page.indexed_height == 7
-    assert page.indexed_block_hash == "ab" * 32
-    assert page.query_source == "live"
-    body = json.loads(session.calls[0]["data"])
-    assert body["count_mode"] == "bounded"
-    assert body["pagination"] == {"offset": 0, "limit": 1}
-    assert body["select"] == ["id", {"metadata": {"tier": True}}]
+    assert (page.next_cursor, page.has_more, page.total) == ("q1_next", True, 7)
+    account = page.items[0]
+    assert (account.id, account.label, account.uaid, account.metadata) == (
+        "adult@is",
+        "Adult",
+        None,
+        {"tier": 1},
+    )
+    assert account.raw["added_later"] is True
+    call = session.calls[0]
+    assert (call["method"], call["path"]) == ("POST", "/v1/accounts/query")
+    assert json.loads(call["data"]) == {
+        "filter": {"op": "not", "args": [{"op": "is_null", "args": ["label"]}]},
+        "sort": ["-label"],
+        "limit": 1,
+        "include_total": True,
+    }
+    assert "X-Iroha-Signature" in call["headers"]
 
 
-def test_query_accounts_rejects_invalid_count_mode_without_request() -> None:
+def test_collection_controls_are_validated_before_any_request() -> None:
     session = FakeSession([])
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
-    with pytest.raises(ValueError, match="count_mode"):
-        client.query_accounts(count_mode="full")
+    for call, code in (
+        (lambda: client.accounts.list(limit=0), "invalid_limit"),
+        (lambda: client.domains.list(sort="id:desc"), "invalid_sort"),
+        (lambda: client.domains.list(filter=F.id.in_()), "invalid_filter"),
+        (lambda: client.domains.list(cursor="has space"), "invalid_cursor"),
+        (lambda: client.nfts.rows(select=[]), "invalid_select"),
+    ):
+        with pytest.raises(ListQueryError) as raised:
+            call()
+        assert raised.value.code == code
     assert session.calls == []
 
 
-def test_account_assets_page_rejects_malformed_page_metadata() -> None:
-    with pytest.raises(TypeError, match="has_more"):
-        AccountAssetsPage.from_payload(
-            {
-                "items": [{"asset": "rose#wonderland", "quantity": "1"}],
-                "has_more": "false",
-                "count_mode": "bounded",
-            }
-        )
-
-
-def test_list_domains_typed_passes_count_mode_and_preserves_bounded_metadata() -> None:
+def test_collection_page_envelope_is_strict() -> None:
     session = FakeSession(
         [
             response(
                 200,
                 {
-                    "items": [{"id": "wonderland"}],
-                    "has_more": False,
-                    "count_mode": "bounded",
+                    "items": [
+                        {"asset": "a", "scope": "global", "account_id": "x", "quantity": "1"}
+                    ],
+                    "next_cursor": 5,
                 },
             )
         ]
     )
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
-    page = client.list_domains_typed(limit=1, count_mode="bounded")
-
-    assert page.total is None
-    assert page.has_more is False
-    assert page.count_mode == "bounded"
-    assert session.calls[0]["params"] == {"limit": 1, "count_mode": "bounded"}
+    with pytest.raises(ValueError, match="next_cursor"):
+        client.accounts.assets("x").list()
 
 
-def test_query_rwas_typed_preserves_bounded_metadata_and_validates_count_mode() -> None:
+def test_domains_iter_follows_next_cursor_until_the_last_page() -> None:
+    session = FakeSession(
+        [
+            response(200, {"items": [{"id": "a"}, {"id": "b"}], "next_cursor": "c1"}),
+            response(200, {"items": [{"id": "c"}], "next_cursor": None}),
+        ]
+    )
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    assert [domain.id for domain in client.domains.iter(limit=2)] == ["a", "b", "c"]
+    assert [json.loads(call["data"]) for call in session.calls] == [
+        {"limit": 2},
+        {"limit": 2, "cursor": "c1"},
+    ]
+    assert all("X-Iroha-Signature" not in call["headers"] for call in session.calls)
+
+
+def test_rwa_lots_decode_exact_quantities() -> None:
     session = FakeSession(
         [
             response(
                 200,
                 {
-                    "items": [{"id": "rwa$bond"}],
-                    "has_more": True,
-                    "count_mode": "bounded",
+                    "items": [
+                        {
+                            "id": "rwa$bond",
+                            "quantity": "10.25",
+                            "is_frozen": False,
+                            "status": "active",
+                        }
+                    ],
+                    "next_cursor": None,
                 },
             )
         ]
     )
-    client = authenticated_query_client(session)
-
-    page = client.query_rwas_typed(limit=1, count_mode="bounded")
-
-    assert page.total is None
-    assert page.has_more is True
-    assert page.count_mode == "bounded"
-    assert json.loads(session.calls[0]["data"])["count_mode"] == "bounded"
-
-    rejecting = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
-    with pytest.raises(ValueError, match="count_mode"):
-        rejecting.list_rwas(count_mode="full")
-
-
-def test_query_account_transactions_posts_count_mode_and_select_projection() -> None:
-    account = account_address(0x31)
-    session = FakeSession([response(200, {"items": [], "total": 0})])
-    client = authenticated_query_client(session)
-
-    payload = client.query_account_transactions(
-        account,
-        count_mode="bounded",
-        select=[" authority ", {"metadata": {"amount": True}}],
-        query_name=" VisibleTransactions ",
-        limit=25,
-        offset=5,
-    )
-
-    assert payload == {"items": [], "total": 0}
-    assert session.calls[0]["path"] == f"/v1/accounts/{quote(account, safe='')}/transactions/query"
-    body = json.loads(session.calls[0]["data"])
-    assert body["pagination"] == {"limit": 25, "offset": 5}
-    assert "limit" not in body
-    assert "offset" not in body
-    assert body["count_mode"] == "bounded"
-    assert body["query"] == "VisibleTransactions"
-    assert "query_name" not in body
-    assert body["select"] == ["authority", {"metadata": {"amount": True}}]
-
-
-def test_query_triggers_posts_query_wire_name_and_count_mode() -> None:
-    session = FakeSession([response(200, {"items": [], "total": 0, "count_mode": "bounded"})])
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
-    payload = client.query_triggers(
-        fetch_size=3,
-        count_mode="bounded",
-        select=[" id ", {"authority": True}],
-        query_name=" recent-triggers ",
-        limit=10,
-        offset=2,
+    lot = client.rwas.list(filter=F.quantity > Decimal("10")).items[0]
+
+    assert (lot.id, lot.quantity, lot.is_frozen, lot.status) == (
+        "rwa$bond",
+        Decimal("10.25"),
+        False,
+        "active",
     )
-
-    assert payload == {"items": [], "total": 0, "count_mode": "bounded"}
-    assert session.calls[0]["path"] == "/v1/triggers/query"
-    body = json.loads(session.calls[0]["data"])
-    assert body["pagination"] == {"limit": 10, "offset": 2}
-    assert "limit" not in body
-    assert "offset" not in body
-    assert body["fetch_size"] == 3
-    assert body["count_mode"] == "bounded"
-    assert body["query"] == "recent-triggers"
-    assert "query_name" not in body
-    assert body["select"] == ["id", {"authority": True}]
-
-
-def test_query_account_transactions_rejects_bad_select_before_request() -> None:
-    account = account_address(0x32)
-    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
-
-    with pytest.raises(TypeError, match="select must be a sequence"):
-        client.query_account_transactions(account, select="authority")
-    with pytest.raises(ValueError, match=r"select\[1].*non-empty"):
-        client.query_account_transactions(account, select=["authority", " "])
-    with pytest.raises(TypeError, match=r"select\[1].*field-path string or mapping"):
-        client.query_account_transactions(account, select=["authority", 7])
-    with pytest.raises(ValueError, match="filter/select/sort"):
-        client.query_account_transactions(
-            account,
-            envelope={"select": ["authority"]},
-            select=["authority"],
-        )
-
-
-def test_repo_agreement_page_preserves_bounded_metadata_and_rejects_bad_flags() -> None:
-    payload = {
-        "items": [
-            {
-                "id": "repo-1",
-                "initiator": "alice@is",
-                "counterparty": "bob@is",
-                "custodian": None,
-                "cash_leg": {"asset_definition_id": "cash#is", "quantity": "100"},
-                "cash_source": "cash#is::bob@is",
-                "collateral_leg": {"asset_definition_id": "bond#is", "quantity": "120"},
-                "collateral_custody_asset": "bond#is::bob@is",
-                "rate_bps": 250,
-                "maturity_timestamp_ms": 2_000,
-                "initiated_timestamp_ms": 1_000,
-                "last_margin_check_timestamp_ms": 1_000,
-                "governance": {"haircut_bps": 500, "margin_frequency_secs": 3600},
-                "settlement_timestamp_ms": None,
-                "status": "active",
-            }
-        ],
-        "has_more": True,
-        "count_mode": "bounded",
-        "indexed_height": 11,
-        "indexed_block_hash": "cd" * 32,
-        "query_source": "live",
+    assert json.loads(session.calls[0]["data"]) == {
+        "filter": {"op": "gt", "args": ["quantity", 10]}
     }
 
-    page = RepoAgreementListPage.from_payload(payload)
 
-    assert page.total is None
-    assert page.has_more is True
-    assert page.count_mode == "bounded"
-    assert page.indexed_height == 11
-    assert page.indexed_block_hash == "cd" * 32
-    assert page.query_source == "live"
-    assert page.items[0].cash_source == "cash#is::bob@is"
-    assert page.items[0].collateral_custody_asset == "bond#is::bob@is"
-    assert page.items[0].settlement_timestamp_ms is None
-    assert page.items[0].status == "active"
+def test_account_transaction_rows_carry_projections() -> None:
+    account = account_address(0x31)
+    session = FakeSession(
+        [
+            response(
+                200,
+                {
+                    "items": [{"authority": "adult@is", "timestamp_ms": 5, "asset_ids": ["a#b"]}],
+                    "next_cursor": None,
+                },
+            )
+        ]
+    )
+    client = authenticated_query_client(session)
 
-    bad = dict(payload)
-    bad["has_more"] = "true"
-    with pytest.raises(TypeError, match="has_more"):
-        RepoAgreementListPage.from_payload(bad)
+    page = client.accounts.transactions(account).rows(
+        filter=F.asset_definition_ids == "a",
+        select=["authority", "timestamp_ms", "asset_ids"],
+        limit=25,
+    )
 
-    inconsistent = dict(payload["items"][0])
+    assert page.items == ({"authority": "adult@is", "timestamp_ms": 5, "asset_ids": ["a#b"]},)
+    call = session.calls[0]
+    assert call["path"] == f"/v1/accounts/{quote(account, safe='')}/transactions/query"
+    assert json.loads(call["data"]) == {
+        "filter": {"op": "eq", "args": ["asset_definition_ids", "a"]},
+        "select": ["authority", "timestamp_ms", "asset_ids"],
+        "limit": 25,
+    }
+
+
+def test_global_transactions_are_a_history_collection() -> None:
+    row = {
+        "entrypoint_hash": "ab" * 32,
+        "block_height": 9,
+        "block_index": 1,
+        "block_hash": "cd" * 32,
+        "authority": None,
+        "timestamp_ms": None,
+        "entrypoint_kind": "time_trigger",
+        "result_ok": False,
+        "asset_ids": [],
+        "asset_definition_ids": [],
+        "metadata": {},
+    }
+    session = FakeSession(
+        [
+            response(200, {"items": [], "next_cursor": "h1"}),
+            response(200, {"items": [row], "next_cursor": None}),
+        ]
+    )
+    client = authenticated_query_client(session)
+
+    history = list(client.transactions.iter(filter=F.block_height <= 9))
+
+    assert [(tx.block_height, tx.block_index, tx.authority) for tx in history] == [(9, 1, None)]
+    assert isinstance(history[0], CommittedTransaction)
+    assert [call["path"] for call in session.calls] == ["/v1/transactions/query"] * 2
+    assert [json.loads(call["data"]) for call in session.calls] == [
+        {"filter": {"op": "lte", "args": ["block_height", 9]}},
+        {"filter": {"op": "lte", "args": ["block_height", 9]}, "cursor": "h1"},
+    ]
+    with pytest.raises(ListQueryError) as raised:
+        client.transactions.list(sort="-block_height")
+    assert raised.value.code == "invalid_sort"
+    assert not hasattr(ToriiClient, "query_transactions")
+
+
+def test_typed_collection_calls_reject_projections_and_bad_select() -> None:
+    account = account_address(0x32)
+    transactions = ToriiClient(
+        "http://torii.example", session=FakeSession([]), max_retries=0
+    ).accounts.transactions(account)
+
+    with pytest.raises(ListQueryError, match="rows"):
+        transactions.list(ListQuery(select=["authority"]))
+    with pytest.raises(TypeError, match="select"):
+        transactions.rows(select="authority")
+    with pytest.raises(ListQueryError) as raised:
+        transactions.rows(select=["authority", "authority"])
+    assert raised.value.code == "invalid_select"
+
+
+def test_collection_query_errors_are_typed_and_text_filters_pass_through() -> None:
+    session = FakeSession(
+        [
+            response(
+                400,
+                {
+                    "code": "invalid_filter",
+                    "message": "invalid `filter`: use the keyword `and` instead of `&` or `&&` (column 17)",
+                    "details": {"field": "filter", "hint": "use `and`"},
+                },
+            )
+        ]
+    )
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    text_filter = 'owned_by == "x" && quantity > 1'
+
+    with pytest.raises(ToriiQueryError) as raised:
+        client.accounts.list(filter=text_filter)
+
+    error = raised.value
+    assert (error.status, error.code, error.parameter) == (400, "invalid_filter", "filter")
+    assert error.details["hint"] == "use `and`"
+    assert isinstance(error, ListQueryError) and isinstance(error, ToriiError)
+    assert json.loads(session.calls[0]["data"]) == {"filter": text_filter}
+
+
+_REPO_ROW = {
+    "id": "repo-1",
+    "initiator": "alice@is",
+    "counterparty": "bob@is",
+    "custodian": None,
+    "cash_leg": {"asset_definition_id": "cash#is", "quantity": "100"},
+    "cash_source": "cash#is::bob@is",
+    "collateral_leg": {"asset_definition_id": "bond#is", "quantity": "120"},
+    "collateral_custody_asset": "bond#is::bob@is",
+    "rate_bps": 250,
+    "maturity_timestamp_ms": 2_000,
+    "initiated_timestamp_ms": 1_000,
+    "last_margin_check_timestamp_ms": 1_000,
+    "governance": {"haircut_bps": 500, "margin_frequency_secs": 3600},
+    "settlement_timestamp_ms": None,
+    "status": "active",
+}
+
+
+def test_repo_agreements_collection_decodes_typed_records_anonymously() -> None:
+    session = FakeSession(
+        [response(200, {"items": [_REPO_ROW], "next_cursor": None, "total": 1})]
+    )
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    page = client.repo_agreements.list(filter=F.status == "active", include_total=True)
+
+    record = page.items[0]
+    assert isinstance(record, RepoAgreementRecord)
+    assert record.cash_source == "cash#is::bob@is"
+    assert record.collateral_custody_asset == "bond#is::bob@is"
+    assert record.settlement_timestamp_ms is None
+    assert record.status == "active"
+    assert page.total == 1
+    call = session.calls[0]
+    assert call["path"] == "/v1/repo/agreements/query"
+    assert json.loads(call["data"]) == {
+        "filter": {"op": "eq", "args": ["status", "active"]},
+        "include_total": True,
+    }
+    assert "X-Iroha-Signature" not in call["headers"]
+
+    inconsistent = dict(_REPO_ROW)
     inconsistent["status"] = "settled"
     with pytest.raises(ValueError, match="status must agree"):
         RepoAgreementRecord.from_payload(inconsistent)
@@ -2713,70 +2880,19 @@ def test_repo_agreement_page_preserves_bounded_metadata_and_rejects_bad_flags() 
 
 @pytest.mark.parametrize("quantity", ["1.0", "01", "+1", "-1", 1, 1.0, None])
 def test_repo_agreement_readback_rejects_noncanonical_quantities(quantity: object) -> None:
-    payload = {
-        "items": [
-            {
-                "id": "repo-1",
-                "initiator": "alice@is",
-                "counterparty": "bob@is",
-                "custodian": None,
-                "cash_leg": {"asset_definition_id": "cash#is", "quantity": quantity},
-                "cash_source": "cash#is::bob@is",
-                "collateral_leg": {
-                    "asset_definition_id": "bond#is",
-                    "quantity": "120",
-                },
-                "collateral_custody_asset": "bond#is::bob@is",
-                "rate_bps": 250,
-                "maturity_timestamp_ms": 2_000,
-                "initiated_timestamp_ms": 1_000,
-                "last_margin_check_timestamp_ms": 1_000,
-                "governance": {"haircut_bps": 500, "margin_frequency_secs": 3600},
-                "settlement_timestamp_ms": None,
-                "status": "active",
-            }
-        ]
-    }
+    row = copy.deepcopy(_REPO_ROW)
+    row["cash_leg"]["quantity"] = quantity
 
     with pytest.raises((TypeError, ValueError)):
-        RepoAgreementListPage.from_payload(payload)
+        RepoAgreementRecord.from_payload(row)
 
 
 def test_repo_agreement_readback_requires_quantity_fields() -> None:
-    payload = {
-        "id": "repo-1",
-        "initiator": "alice@is",
-        "counterparty": "bob@is",
-        "custodian": None,
-        "cash_leg": {"asset_definition_id": "cash#is"},
-        "cash_source": "cash#is::bob@is",
-        "collateral_leg": {"asset_definition_id": "bond#is", "quantity": "120"},
-        "collateral_custody_asset": "bond#is::bob@is",
-        "rate_bps": 250,
-        "maturity_timestamp_ms": 2_000,
-        "initiated_timestamp_ms": 1_000,
-        "last_margin_check_timestamp_ms": 1_000,
-        "governance": {"haircut_bps": 500, "margin_frequency_secs": 3600},
-        "settlement_timestamp_ms": None,
-        "status": "active",
-    }
+    row = copy.deepcopy(_REPO_ROW)
+    del row["cash_leg"]["quantity"]
 
     with pytest.raises(KeyError, match="quantity"):
-        RepoAgreementListPage.from_payload({"items": [payload]})
-
-
-def test_repo_agreement_client_normalizes_count_mode_before_request() -> None:
-    session = FakeSession([response(200, {"items": [], "has_more": False, "count_mode": "bounded"})])
-    client = ToriiClient("http://torii.example", session=session, max_retries=0)
-
-    page = client.list_repo_agreements(limit=1, count_mode="bounded")
-
-    assert page.count_mode == "bounded"
-    assert session.calls[0]["params"] == {"limit": 1, "count_mode": "bounded"}
-
-    rejecting = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
-    with pytest.raises(ValueError, match="count_mode"):
-        rejecting.query_repo_agreements({"count_mode": "full"})
+        RepoAgreementRecord.from_payload(row)
 
 
 def test_sns_helpers_read_policy_and_name() -> None:
@@ -3634,262 +3750,61 @@ def test_zk_verifying_key_read_helpers_reject_padded_names_before_request() -> N
     assert session.calls == []
 
 
-def test_zk_event_filters_reject_unsupported_backends_before_request() -> None:
-    session = FakeSession([])
-    client = ToriiClient("http://torii.example", session=session, max_retries=0)
-    for backend in (
-        " halo2/ipa",
-        "halo2/ipa ",
-        "\thalo2/ipa",
-        "halo2/ipa\n",
-        "halo2\uFF0Fipa",
-        "halo2/\u200Bipa",
-        "h\u0430lo2/ipa",
-        "stark/fri/miden",
-        "stark/fri/latest",
-        "stark/fri/attestation",
-        "stark/fri/contest",
-        "stark/fri/random-profile",
-        "stark/fri/sha512-goldilocks",
-        "stark/fri/audit-proof-v1",
-        "halo2/ipa:production-ready",
-        "halo2/ipa:claimed-production",
-        "halo2/ipa:mainnet-ready",
-        "stark/fri/audit-signoff",
-        "stark/fri/externally-audited",
-        "stark/fri/security-review-passed",
-        "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
-        "stark/fri/a-u-d-i-t-c-l-a-i-m",
-        "halo2/ipa/penumbra",
-        "halo2/ipa/masp",
-        "halo2/ipa/monero",
-        "halo2/ipa/curve-tree",
-        "halo2/pasta/tiny-add",
-        "halo2/ipa/tiny-add",
-        "halo2/ipa:tiny-add",
-        "halo2/pasta/tiny-commit-open",
-        "halo2/pasta/anon-transfer-2x2",
-        "halo2/ipa/anon-transfer-2x2",
-        "halo2/ipa:anon-transfer-2x2",
-        "halo2/pasta/anon-transfer-2x2-merkle2",
-        "halo2/ipa/anon-transfer-2x2-merkle8",
-        "halo2/ipa:anon-transfer-2x2-merkle16",
-        "halo2/pasta/vote-bool-commit",
-        "halo2/ipa/vote-bool-commit",
-        "halo2/ipa:vote-bool-commit",
-        "halo2/pasta/vote-bool-commit-merkle2",
-        "halo2/ipa/vote-bool-commit-merkle8",
-        "halo2/ipa:vote-bool-commit-merkle16",
-        "stark/fri/dev-fixture",
-        "stark/fri/d-e-v-f-i-x-t-u-r-e",
-        "stark/fri/dev",
-        "stark/fri/d-e-v",
-        "stark/fri/test",
-        "stark/fri/t-e-s-t",
-        "stark/fri/todo",
-        "stark/fri/t-o-d-o",
-        "stark/fri/draft-only",
-        "stark/fri/d-r-a-f-t",
-        "stark/fri/pending-audit",
-        "stark/fri/replace-before-mainnet",
-        "stark/fri/not-production-ready",
-        "stark/fri/placeholder",
-        " stark/fri/poseidon-x7-goldilocks-6x64-v1",
-        "stark/fri/poseidon-x7-goldilocks-6x64-v1 ",
-        "halo2/ipa/orchard",
-        "halo2/kzg",
-        "halo2/ipa\0",
-        "halo2/ipa:dev-fixture",
-        "halo2/ipa:dev",
-        "halo2/ipa:d-e-v",
-        "halo2/ipa:todo-proof",
-        "halo2/ipa:t-o-d-o-proof",
-        "halo2/ipa:draft-proof",
-        "halo2/ipa:d-r-a-f-t-proof",
-        "halo2/ipa:pending-audit",
-        "halo2/ipa:replace-before-production",
-        "halo2/ipa:not-for-production",
-        "halo2/ipa:dummy",
-        "halo2/ipa:f-a-k-e",
-        "halo2/ipa:stub",
-        "halo2/ipa:s-a-m-p-l-e",
-        "mock/dev",
-    ):
-        with pytest.raises(
-            ValueError,
-            match="unsupported verifier-registry label",
-        ):
-            DataEventFilter.verifying_key(backend=backend, name="vk_transfer")
-        with pytest.raises(
-            ValueError,
-            match="unsupported verifier-registry label",
-        ):
-            DataEventFilter.proof(backend=backend, proof_hash_hex="a" * 64)
-        with pytest.raises(
-            ValueError,
-            match="unsupported verifier-registry label",
-        ):
-            client.stream_verifying_key_events(backend=backend, name="vk_transfer")
-        with pytest.raises(
-            ValueError,
-            match="unsupported verifier-registry label",
-        ):
-            client.stream_proof_events(backend=backend, proof_hash_hex="a" * 64)
-    assert session.calls == []
-
-
-def test_zk_verifying_key_event_filters_reject_malformed_names_before_request() -> None:
-    session = FakeSession([])
-    client = ToriiClient("http://torii.example", session=session, max_retries=0)
-    for name in ("", "   ", "\t", "\n", " vk_transfer", "vk_transfer ", "vk:transfer", 42):
-        with pytest.raises((TypeError, ValueError), match="verifying_key_filter.name"):
-            DataEventFilter.verifying_key(backend="halo2/ipa", name=name)
-        with pytest.raises((TypeError, ValueError), match="verifying_key_filter.name"):
-            client.stream_verifying_key_events(backend="halo2/ipa", name=name)
-
-    payload = DataEventFilter.verifying_key(backend="halo2/ipa", name="vk_transfer").to_dict()
-    assert payload["VerifyingKey"]["id_matcher"]["name"] == "vk_transfer"
-    assert session.calls == []
-
-
-def test_zk_proof_event_filters_reject_malformed_hashes_before_request() -> None:
-    session = FakeSession([])
-    client = ToriiClient("http://torii.example", session=session, max_retries=0)
-    for proof_hash_hex in (
-        "",
-        "abc",
-        "z" * 64,
-        "a" * 63,
-        "0x" + "a" * 63,
-    ):
-        with pytest.raises((TypeError, ValueError), match="32-byte hex string"):
-            DataEventFilter.proof(backend="halo2/ipa", proof_hash_hex=proof_hash_hex)
-        with pytest.raises((TypeError, ValueError), match="32-byte hex string"):
-            client.stream_proof_events(backend="halo2/ipa", proof_hash_hex=proof_hash_hex)
-
-    payload = DataEventFilter.proof(
-        backend="halo2/ipa",
-        proof_hash_hex="0x" + "A" * 64,
-    ).to_dict()
-    assert payload["Proof"]["id_matcher"]["hash_hex"] == "a" * 64
-    assert session.calls == []
-
-
-def test_zk_raw_event_filters_reject_malformed_privacy_matchers_before_request() -> None:
-    session = FakeSession([])
-    client = ToriiClient("http://torii.example", session=session, max_retries=0)
-    raw_filters = [
-        {
-            "VerifyingKey": {
-                "id_matcher": {"backend": "halo2/ipa/orchard", "name": "vk_transfer"},
-                "event_set": {"Registered": True},
-            }
-        },
-        {
-            "VerifyingKey": {
-                "id_matcher": {"backend": "halo2/ipa", "name": "vk:transfer"},
-                "event_set": {"Registered": True},
-            }
-        },
-        {
-            "VerifyingKey": {
-                "id_matcher": {"backend": "halo2/ipa", "name": " vk_transfer"},
-                "event_set": {"Registered": True},
-            }
-        },
-        {
-            "VerifyingKey": {
-                "id_matcher": {"backend": "halo2/ipa", "name": 42},
-                "event_set": {"Registered": True},
-            }
-        },
-        {
-            "Proof": {
-                "id_matcher": {"backend": "mock/dev", "hash_hex": "a" * 64},
-                "event_set": {"Verified": True},
-            }
-        },
-        {
-            "Proof": {
-                "id_matcher": {"backend": "groth16/bls12-377", "hash_hex": "a" * 64},
-                "event_set": {"Verified": True},
-            }
-        },
-        {
-            "Proof": {
-                "id_matcher": {"backend": "halo2/ipa", "hash_hex": "z" * 64},
-                "event_set": {"Verified": True},
-            }
-        },
-    ]
-
-    for raw_filter in raw_filters:
-        with pytest.raises((TypeError, ValueError)):
-            client.stream_events(filter=raw_filter)
-        with pytest.raises((TypeError, ValueError)):
-            client.stream_events(filter=json.dumps(raw_filter))
-
-    with pytest.raises(ValueError, match="data_event_filter.VerifyingKey.id_matcher.name"):
-        DataEventFilter(
-            {
-                "VerifyingKey": {
-                    "id_matcher": {"backend": "halo2/ipa", "name": "vk:transfer"},
-                    "event_set": {"Registered": True},
-                }
-            }
-        )
-    assert session.calls == []
-
-
-def test_zk_raw_event_filters_canonicalize_privacy_matchers_before_request() -> None:
-    session = FakeSession([])
-    client = ToriiClient("http://torii.example", session=session, max_retries=0)
-    captured_params = []
+def test_event_stream_filters_use_the_collection_text_grammar() -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    captured = []
 
     def capture_stream(path, **kwargs):
-        captured_params.append(kwargs.get("params"))
+        captured.append((path, kwargs.get("params")))
         return iter(())
 
     client._stream_sse = capture_stream
+    tx_hash = "ab" * 31 + "a1"
 
-    client.stream_events(
-        filter={
-            "VerifyingKey": {
-                "id_matcher": {"backend": "halo2/ipa", "name": "vk_transfer"},
-                "event_set": {"Registered": True},
-            }
-        }
-    )
-    encoded_vk_filter = captured_params[-1]["filter"]
-    decoded_vk_filter = json.loads(encoded_vk_filter)
-    assert decoded_vk_filter["VerifyingKey"]["id_matcher"]["name"] == "vk_transfer"
+    list(client.stream_events(filter=(F.tx_hash == tx_hash) & F.tx_status.in_("Approved", "Rejected")))
+    list(client.stream_events(filter='proof_backend = "halo2/ipa"'))
+    list(client.stream_events())
 
-    client.stream_events(
-        filter=json.dumps(
-            {
-                "Proof": {
-                    "id_matcher": {
-                        "backend": "halo2/ipa",
-                        "hash_hex": "0x" + "A" * 64,
-                        "proof_hash_hex": "0x" + "B" * 64,
-                    },
-                    "event_set": {"Verified": True},
-                }
-            }
-        )
-    )
-    encoded_proof_filter = captured_params[-1]["filter"]
-    decoded_proof_filter = json.loads(encoded_proof_filter)
-    proof_matcher = decoded_proof_filter["Proof"]["id_matcher"]
-    assert proof_matcher["hash_hex"] == "a" * 64
-    assert proof_matcher["proof_hash_hex"] == "b" * 64
+    assert captured == [
+        (
+            "/v1/events/sse",
+            {"filter": f'tx_hash = "{tx_hash}" and tx_status in ["Approved", "Rejected"]'},
+        ),
+        ("/v1/events/sse", {"filter": 'proof_backend = "halo2/ipa"'}),
+        ("/v1/events/sse", None),
+    ]
 
+
+@pytest.mark.parametrize(
+    "retired",
+    [
+        {"Pipeline": {"Transaction": {"status": "Queued"}}},
+        {"VerifyingKey": {"id_matcher": None, "event_set": {"Registered": True}}},
+        {"op": "eq", "args": ["tx_status", "Queued"]},
+    ],
+)
+def test_event_stream_rejects_retired_and_json_filter_shapes(retired: object) -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    with pytest.raises(TypeError):
+        client.stream_events(filter=retired)  # type: ignore[arg-type]
     assert session.calls == []
 
 
-def test_account_has_permission_uses_typed_permission_listing() -> None:
+def test_event_stream_filters_reject_object_and_array_literals_before_request() -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    with pytest.raises(FilterError, match="no text form"):
+        client.stream_events(filter=F.metadata.tags == ["a"])
+    assert session.calls == []
+
+
+def test_account_has_permission_follows_effective_permission_collection() -> None:
     session = FakeSession(
         [
+            response(200, {"items": [], "next_cursor": "more"}),
             response(
                 200,
                 {
@@ -3899,7 +3814,7 @@ def test_account_has_permission_uses_typed_permission_listing() -> None:
                             "payload": {"asset_definition_id": "ds#wonderland.is"},
                         }
                     ],
-                    "total": 1,
+                    "next_cursor": None,
                 },
             )
         ]
@@ -3915,7 +3830,7 @@ def test_account_has_permission_uses_typed_permission_listing() -> None:
 
 def test_account_permission_listing_accepts_configured_chain_discriminant() -> None:
     taira_account = account_address(5, 0x0171)
-    session = FakeSession([response(200, {"items": [], "total": 0})])
+    session = FakeSession([response(200, {"items": [], "next_cursor": None})])
     client = ToriiClient(
         "http://torii.example",
         session=session,
@@ -3923,39 +3838,21 @@ def test_account_permission_listing_accepts_configured_chain_discriminant() -> N
         chain_discriminant=0x0171,
     )
 
-    assert client.list_account_permissions(taira_account) == {"items": [], "total": 0}
+    assert client.accounts.permissions(taira_account).list().items == ()
     assert session.calls == [
         {
-            "method": "GET",
-            "path": f"/v1/accounts/{quote(taira_account, safe='')}/permissions",
+            "method": "POST",
+            "path": f"/v1/accounts/{quote(taira_account, safe='')}/permissions/query",
             "params": None,
-            "data": None,
-            "headers": {"Accept": "application/json"},
+            "data": b"{}",
+            "headers": {"Accept": "application/json", "Content-Type": "application/json"},
             "allow_redirects": False,
         }
     ]
 
 
-def test_account_assets_sdk_uses_native_asset_filter_key() -> None:
-    account = account_address(0x45)
-    asset = "ds#boi.is2"
-    session = FakeSession(
-        [
-            response(200, {"items": [], "total": 0}),
-            response(200, {"items": [], "total": 0}),
-            response(200, {"items": [], "total": 0}),
-        ]
-    )
-    client = ToriiClient("http://torii.example", session=session, max_retries=0)
-
-    assert client.list_account_assets(account, asset_id=asset) == {"items": [], "total": 0}
-    assert client.find_account_assets(account, asset_id=asset) == []
-    assert client.find_account_asset_items(account, asset) == []
-    assert [call["params"] for call in session.calls] == [
-        {"asset": asset},
-        {"asset": asset},
-        {"asset": asset},
-    ]
+def _empty_page() -> requests.Response:
+    return response(200, {"items": [], "next_cursor": None})
 
 
 def test_dataspace_visible_account_reads_use_configured_canonical_signer() -> None:
@@ -3963,21 +3860,22 @@ def test_dataspace_visible_account_reads_use_configured_canonical_signer() -> No
     session = FakeSession(
         [
             response(200, {"id": account}),
-            response(200, {"items": [], "total": 0}),
-            response(200, {"items": [], "total": 0}),
-            response(200, {"items": [], "total": 0}),
-            response(200, {"items": [], "total": 0}),
+            _empty_page(),
+            _empty_page(),
+            response(200, {"items": [], "next_cursor": None}),
         ]
     )
     client = authenticated_query_client(session)
 
     assert client.find_account(account) == {"id": account}
-    assert client.list_account_assets(account) == {"items": [], "total": 0}
-    assert client.list_account_transactions(account) == {"items": [], "total": 0}
-    assert client.list_account_permissions(account) == {"items": [], "total": 0}
-    assert client.find_account_assets(account) == []
+    assert client.accounts.assets(account).list(filter=F.asset_alias == "ds#boi.is2").items == ()
+    assert client.accounts.transactions(account).list().items == ()
+    assert client.accounts.permissions(account).list().items == ()
 
-    assert len(session.calls) == 5
+    assert len(session.calls) == 4
+    assert json.loads(session.calls[1]["data"]) == {
+        "filter": {"op": "eq", "args": ["asset_alias", "ds#boi.is2"]}
+    }
     for call in session.calls:
         assert call["allow_redirects"] is False
         headers = call["headers"]
@@ -3996,21 +3894,19 @@ def test_dataspace_visible_account_reads_remain_anonymous_without_signer() -> No
     session = FakeSession(
         [
             response(200, {"id": account}),
-            response(200, {"items": [], "total": 0}),
-            response(200, {"items": [], "total": 0}),
-            response(200, {"items": [], "total": 0}),
-            response(200, {"items": [], "total": 0}),
+            _empty_page(),
+            _empty_page(),
+            response(200, {"items": [], "next_cursor": None}),
         ]
     )
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
     assert client.find_account(account) == {"id": account}
-    assert client.list_account_assets(account) == {"items": [], "total": 0}
-    assert client.list_account_transactions(account) == {"items": [], "total": 0}
-    assert client.list_account_permissions(account) == {"items": [], "total": 0}
-    assert client.find_account_assets(account) == []
+    assert client.accounts.assets(account).list().items == ()
+    assert client.accounts.transactions(account).list().items == ()
+    assert client.accounts.permissions(account).list().items == ()
 
-    assert len(session.calls) == 5
+    assert len(session.calls) == 4
     for call in session.calls:
         assert call["allow_redirects"] is False
         headers = call["headers"]
@@ -4033,7 +3929,7 @@ def test_account_permission_listing_rejects_foreign_chain_discriminant() -> None
         ValueError,
         match="account_id must be a canonical I105 account id or on-chain account alias",
     ):
-        client.list_account_permissions(taira_account)
+        client.accounts.permissions(taira_account).list()
     assert session.calls == []
 
 

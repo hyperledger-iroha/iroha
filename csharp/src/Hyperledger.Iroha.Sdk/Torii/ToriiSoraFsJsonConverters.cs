@@ -721,8 +721,8 @@ internal static class ToriiSoraFsJson
 
         try
         {
-            return AccountAddress.Parse(value, AccountAddress.DefaultChainDiscriminant)
-                .ToI105(AccountAddress.DefaultChainDiscriminant);
+            _ = AccountAddress.Parse(value);
+            return value;
         }
         catch (AccountAddressException exception)
         {

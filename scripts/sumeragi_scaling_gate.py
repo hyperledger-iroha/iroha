@@ -889,6 +889,30 @@ def toml_value(text: str, section: Optional[str], key: str) -> Optional[str]:
     return None
 
 
+_ACCOUNT_NETWORK_RE = re.compile(r'^(profile\s*=\s*"[^"\\]*"|chain_discriminant\s*=\s*[0-9]+)\s*(#.*)?$')
+
+
+def account_network_context(text: str) -> str:
+    """The verbatim ``profile``/``chain_discriminant`` assignments of ``[account]`` in ``text``.
+
+    Client configs state their network context explicitly (there is no default network), so
+    accounts generated from a base config inherit exactly the localnet client's context.
+    """
+    current = None
+    found = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("["):
+            current = stripped
+            continue
+        match = _ACCOUNT_NETWORK_RE.match(stripped) if current == "[account]" else None
+        if match:
+            found.append(match.group(1))
+    if not found:
+        raise GateError("the localnet client config states no [account] network context")
+    return "".join(f"{assignment}\n" for assignment in found)
+
+
 class GateNetwork(soak.Localnet):
     """A soak localnet (fresh four-validator ``kagami localnet``) with gate helpers."""
 
@@ -938,11 +962,11 @@ class GateNetwork(soak.Localnet):
             raise GateError("the localnet client config names no network_id_file")
         network_id = Path(network_id_file).read_text().strip()
         chain = toml_value(client_text, None, "chain")
-        domain = soak.toml_string_value(client_text, "account", "domain")
         write_private(
             base,
             f"chain = {json.dumps(chain)}\nnetwork_id = {json.dumps(network_id)}\n"
-            f'torii_url = "http://127.0.0.1:{self.api_port(0)}/"\n',
+            f'torii_url = "http://127.0.0.1:{self.api_port(0)}/"\n'
+            f"\n[account]\n{account_network_context(client_text)}",
         )
         names = [f"load{index}" for index in range(count)]
         command = [
@@ -953,8 +977,6 @@ class GateNetwork(soak.Localnet):
             str(base),
             "--out-dir",
             str(clients),
-            "--domain",
-            domain or "universal",
             "--seed-hex",
             hashlib.sha256(f"scaling-accounts:{seed}".encode()).hexdigest(),
             "--names",

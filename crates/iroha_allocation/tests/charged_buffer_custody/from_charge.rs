@@ -33,11 +33,14 @@ fn refusal<T: Copy>(
     }
 }
 
-fn wait(budget: &AllocationBudget) -> iroha_allocation::release::ReleaseFuture {
+fn wait<'a>(
+    budget: &AllocationBudget,
+    registration: &'a mut ReleaseRegistration,
+) -> iroha_allocation::release::ReleaseFuture<'a> {
     let Err(AllocationRefusal::Capacity { release, .. }) = budget.try_reserve_bytes(1) else {
         panic!("the original exact pool must remain occupied");
     };
-    release.wait_for_release()
+    release.wait_for_release(registration)
 }
 
 #[test]
@@ -51,9 +54,11 @@ fn original_charge_layout_mismatch_precedes_allocation_and_never_refunds() {
         Layout::from_size_align(16, 8).unwrap(),
         Layout::from_size_align(17, 4).unwrap(),
     ] {
-        let budget = AllocationBudget::new(actual.size());
+        let budget =
+            AllocationBudget::new(actual.size() + ReleaseRegistration::allocation_layout().size());
+        let mut budget_registration = registration(&budget);
         let original = charge(&budget, actual);
-        let mut released = pin!(wait(&budget));
+        let mut released = pin!(wait(&budget, &mut budget_registration));
         let mut context = Context::from_waker(Waker::noop());
         assert!(released.as_mut().poll(&mut context).is_pending());
         observe_next(expected.size(), false, &budget);
@@ -65,10 +70,16 @@ fn original_charge_layout_mismatch_precedes_allocation_and_never_refunds() {
         assert_eq!(returned.layout(), actual);
         assert_eq!(OBSERVED_COUNT.load(SeqCst), 0);
         assert_eq!(NEXT_SIZE.load(SeqCst), expected.size());
-        assert_eq!(budget.reserved_bytes(), actual.size());
+        assert_eq!(
+            budget.reserved_bytes(),
+            actual.size() + ReleaseRegistration::allocation_layout().size()
+        );
         assert!(released.as_mut().poll(&mut context).is_pending());
         drop(returned);
-        assert_eq!(budget.reserved_bytes(), 0);
+        assert_eq!(
+            budget.reserved_bytes(),
+            ReleaseRegistration::allocation_layout().size()
+        );
         assert!(released.as_mut().poll(&mut context).is_ready());
     }
 }
@@ -99,12 +110,14 @@ fn equal_pool_limits_do_not_move_refusal_or_refund_to_a_foreign_pool() {
     let _serial = SERIAL.lock().unwrap();
     let _reset = ResetObservation;
     let layout = Layout::array::<u8>(53).unwrap();
-    let original_pool = AllocationBudget::new(53);
-    let foreign_pool = AllocationBudget::new(53);
+    let original_pool = AllocationBudget::new(53 + ReleaseRegistration::allocation_layout().size());
+    let mut original_pool_registration = registration(&original_pool);
+    let foreign_pool = AllocationBudget::new(53 + ReleaseRegistration::allocation_layout().size());
+    let mut foreign_pool_registration = registration(&foreign_pool);
     let original = charge(&original_pool, layout);
     let foreign = charge(&foreign_pool, layout);
-    let mut original_wait = pin!(wait(&original_pool));
-    let mut foreign_wait = pin!(wait(&foreign_pool));
+    let mut original_wait = pin!(wait(&original_pool, &mut original_pool_registration));
+    let mut foreign_wait = pin!(wait(&foreign_pool, &mut foreign_pool_registration));
     let mut context = Context::from_waker(Waker::noop());
     observe_next(53, true, &original_pool);
     let (returned, error) = refusal(ChargedBuffer::<u8>::try_from_charge(53, original));
@@ -114,10 +127,16 @@ fn equal_pool_limits_do_not_move_refusal_or_refund_to_a_foreign_pool() {
     drop(foreign);
     assert!(foreign_wait.as_mut().poll(&mut context).is_ready());
     assert!(original_wait.as_mut().poll(&mut context).is_pending());
-    assert_eq!(original_pool.reserved_bytes(), 53);
+    assert_eq!(
+        original_pool.reserved_bytes(),
+        53 + ReleaseRegistration::allocation_layout().size()
+    );
     drop(returned);
     assert!(original_wait.as_mut().poll(&mut context).is_ready());
-    assert_eq!(original_pool.reserved_bytes(), 0);
+    assert_eq!(
+        original_pool.reserved_bytes(),
+        ReleaseRegistration::allocation_layout().size()
+    );
 }
 
 #[test]
@@ -125,9 +144,11 @@ fn allocator_null_retains_exact_credit_for_retry_without_another_reservation() {
     let _serial = SERIAL.lock().unwrap();
     let _reset = ResetObservation;
     let layout = Layout::array::<u8>(113).unwrap();
-    let budget = AllocationBudget::new(layout.size());
+    let budget =
+        AllocationBudget::new(layout.size() + ReleaseRegistration::allocation_layout().size());
+    let mut budget_registration = registration(&budget);
     let original = charge(&budget, layout);
-    let mut released = pin!(wait(&budget));
+    let mut released = pin!(wait(&budget, &mut budget_registration));
     let observer = Arc::new(AfterFree {
         budget: budget.clone(),
         expected: 113,
@@ -144,14 +165,23 @@ fn allocator_null_retains_exact_credit_for_retry_without_another_reservation() {
     assert_eq!(OBSERVED_COUNT.load(SeqCst), 1);
     assert_eq!(POINTER.load(SeqCst), 0);
     assert!(!FREED.load(SeqCst));
-    assert_eq!(RESERVED_AT_ALLOCATION.load(SeqCst), 113);
-    assert_eq!(budget.reserved_bytes(), 113);
+    assert_eq!(
+        RESERVED_AT_ALLOCATION.load(SeqCst),
+        113 + ReleaseRegistration::allocation_layout().size()
+    );
+    assert_eq!(
+        budget.reserved_bytes(),
+        113 + ReleaseRegistration::allocation_layout().size()
+    );
     assert_eq!(observer.wakes.load(SeqCst), 0);
     assert!(released.as_mut().poll(&mut context).is_pending());
     observe_next(113, false, &budget);
     let mut buffer = ChargedBuffer::<u8>::try_from_charge(113, returned).unwrap();
     assert_eq!(OBSERVED_COUNT.load(SeqCst), 1);
-    assert_eq!(RESERVED_AT_ALLOCATION.load(SeqCst), 113);
+    assert_eq!(
+        RESERVED_AT_ALLOCATION.load(SeqCst),
+        113 + ReleaseRegistration::allocation_layout().size()
+    );
     let pointer = buffer.as_slice().as_ptr();
     buffer.append(&[7; 113]).unwrap();
     assert!(buffer.append(&[1]).is_err());
@@ -166,16 +196,23 @@ fn allocator_null_retains_exact_credit_for_retry_without_another_reservation() {
 fn aborting_a_refused_allocation_refunds_only_when_the_returned_charge_drops() {
     let _serial = SERIAL.lock().unwrap();
     let _reset = ResetObservation;
-    let budget = AllocationBudget::new(71);
+    let budget = AllocationBudget::new(71 + ReleaseRegistration::allocation_layout().size());
+    let mut budget_registration = registration(&budget);
     let original = charge(&budget, Layout::array::<u8>(71).unwrap());
-    let mut released = pin!(wait(&budget));
+    let mut released = pin!(wait(&budget, &mut budget_registration));
     let mut context = Context::from_waker(Waker::noop());
     observe_next(71, true, &budget);
     let (returned, _) = refusal(ChargedBuffer::<u8>::try_from_charge(71, original));
-    assert_eq!(budget.reserved_bytes(), 71);
+    assert_eq!(
+        budget.reserved_bytes(),
+        71 + ReleaseRegistration::allocation_layout().size()
+    );
     assert!(released.as_mut().poll(&mut context).is_pending());
     drop(returned);
-    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(
+        budget.reserved_bytes(),
+        ReleaseRegistration::allocation_layout().size()
+    );
     assert!(released.as_mut().poll(&mut context).is_ready());
     assert!(!FREED.load(SeqCst), "a refused allocation never existed");
 }
@@ -265,7 +302,8 @@ fn complete_buffer_and_header_demand_is_refused_before_either_allocation() {
     ));
     assert_eq!(OBSERVED_COUNT.load(SeqCst), 0);
     assert_eq!(short.reserved_bytes(), 0);
-    let exact = AllocationBudget::new(total);
+    let exact = AllocationBudget::new(total + ReleaseRegistration::allocation_layout().size());
+    let mut exact_registration = registration(&exact);
     let occupied = exact.try_reserve_bytes(1).unwrap();
     observe_next(header.size(), false, &exact);
     let error = exact.try_reserve_layouts([backing, header]).unwrap_err();
@@ -280,10 +318,14 @@ fn complete_buffer_and_header_demand_is_refused_before_either_allocation() {
     };
     assert_eq!(
         (requested_bytes, reserved_bytes, limit_bytes),
-        (total, 1, total)
+        (
+            total,
+            1 + ReleaseRegistration::allocation_layout().size(),
+            total + ReleaseRegistration::allocation_layout().size()
+        )
     );
     assert_eq!(OBSERVED_COUNT.load(SeqCst), 0);
-    let mut released = pin!(release.wait_for_release());
+    let mut released = pin!(release.wait_for_release(&mut exact_registration));
     let mut context = Context::from_waker(Waker::noop());
     assert!(released.as_mut().poll(&mut context).is_pending());
     drop(occupied);
@@ -295,9 +337,15 @@ fn complete_buffer_and_header_demand_is_refused_before_either_allocation() {
     assert_eq!(prepaid.remaining_bytes(), 0);
     drop(prepaid);
     let published = shell.initialize(buffer);
-    assert_eq!(exact.reserved_bytes(), total);
+    assert_eq!(
+        exact.reserved_bytes(),
+        total + ReleaseRegistration::allocation_layout().size()
+    );
     drop(published);
-    assert_eq!(exact.reserved_bytes(), 0);
+    assert_eq!(
+        exact.reserved_bytes(),
+        ReleaseRegistration::allocation_layout().size()
+    );
 }
 
 #[test]
@@ -542,7 +590,10 @@ impl Wake for AfterComposedRetirement {
         assert!(FREED.load(SeqCst));
         assert_eq!(FREED_SIZE.load(SeqCst), self.backing.size());
         assert_eq!(FREED_ALIGN.load(SeqCst), self.backing.align());
-        assert_eq!(self.budget.reserved_bytes(), 0);
+        assert_eq!(
+            self.budget.reserved_bytes(),
+            ReleaseRegistration::allocation_layout().size()
+        );
         self.wakes.fetch_add(1, SeqCst);
     }
 }
@@ -554,7 +605,8 @@ fn composed_last_reader_refunds_wait_until_outer_physical_guard_releases() {
     let backing = Layout::array::<u8>(241).unwrap();
     let header = Header::layout();
     let total = backing.size().checked_add(header.size()).unwrap();
-    let budget = AllocationBudget::new(total);
+    let budget = AllocationBudget::new(total + ReleaseRegistration::allocation_layout().size());
+    let mut budget_registration = registration(&budget);
     let physical = Arc::new(Mutex::new(()));
     let observer = Arc::new(AfterComposedRetirement {
         budget: budget.clone(),
@@ -574,9 +626,12 @@ fn composed_last_reader_refunds_wait_until_outer_physical_guard_releases() {
     let last_reader = published.clone();
     drop(published);
     assert_eq!(last_reader.as_slice().as_ptr(), original_backing);
-    assert_eq!(budget.reserved_bytes(), total);
+    assert_eq!(
+        budget.reserved_bytes(),
+        total + ReleaseRegistration::allocation_layout().size()
+    );
     assert!(!FREED.load(SeqCst));
-    let mut released = pin!(wait(&budget));
+    let mut released = pin!(wait(&budget, &mut budget_registration));
     let waker = Waker::from(Arc::clone(&observer));
     let mut context = Context::from_waker(&waker);
     assert!(released.as_mut().poll(&mut context).is_pending());
@@ -585,7 +640,10 @@ fn composed_last_reader_refunds_wait_until_outer_physical_guard_releases() {
         let guard = physical.lock().unwrap();
         drop(last_reader);
         assert!(FREED.load(SeqCst));
-        assert_eq!(budget.reserved_bytes(), 0);
+        assert_eq!(
+            budget.reserved_bytes(),
+            ReleaseRegistration::allocation_layout().size()
+        );
         assert_eq!(observer.wakes.load(SeqCst), 0);
         assert!(released.as_mut().poll(&mut context).is_pending());
         drop(guard);
@@ -602,7 +660,8 @@ fn partially_allocated_composition_unwind_defers_refunds_past_outer_guard() {
     let backing = Layout::array::<u8>(251).unwrap();
     let header = Header::layout();
     let total = backing.size().checked_add(header.size()).unwrap();
-    let budget = AllocationBudget::new(total);
+    let budget = AllocationBudget::new(total + ReleaseRegistration::allocation_layout().size());
+    let mut budget_registration = registration(&budget);
     let physical = Arc::new(Mutex::new(()));
     let observer = Arc::new(AfterComposedRetirement {
         budget: budget.clone(),
@@ -614,7 +673,7 @@ fn partially_allocated_composition_unwind_defers_refunds_past_outer_guard() {
     let header_charge = prepaid.try_split(header).unwrap();
     let buffer_charge = prepaid.try_split(backing).unwrap();
     drop(prepaid);
-    let mut released = pin!(wait(&budget));
+    let mut released = pin!(wait(&budget, &mut budget_registration));
     let waker = Waker::from(Arc::clone(&observer));
     let mut context = Context::from_waker(&waker);
     assert!(released.as_mut().poll(&mut context).is_pending());
@@ -626,7 +685,10 @@ fn partially_allocated_composition_unwind_defers_refunds_past_outer_guard() {
             observe_next(backing.size(), false, &budget);
             let mut buffer = ChargedBuffer::<u8>::try_from_charge(251, buffer_charge).unwrap();
             buffer.append(&[31; 19]).unwrap();
-            assert_eq!(budget.reserved_bytes(), total);
+            assert_eq!(
+                budget.reserved_bytes(),
+                total + ReleaseRegistration::allocation_layout().size()
+            );
             assert_eq!(observer.wakes.load(SeqCst), 0);
             panic!("later preparation failed before original shell initialization");
         });
@@ -638,7 +700,10 @@ fn partially_allocated_composition_unwind_defers_refunds_past_outer_guard() {
         "an earlier assertion must not masquerade as the intended unwind"
     );
     assert!(physical.is_poisoned());
-    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(
+        budget.reserved_bytes(),
+        ReleaseRegistration::allocation_layout().size()
+    );
     assert!(FREED.load(SeqCst));
     assert_eq!(observer.wakes.load(SeqCst), 1);
     assert!(released.as_mut().poll(&mut context).is_ready());

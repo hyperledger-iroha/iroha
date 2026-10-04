@@ -8,12 +8,12 @@ const TOP: u64 = Memory::STACK_START + 256;
 const ARG: u64 = Memory::HEAP_START + 64;
 const RESULT: u64 = Memory::HEAP_START + 8;
 
-fn callable(frame_bytes: u32, results: usize) -> EmbeddedCallableV1 {
-    EmbeddedCallableV1 {
+fn callable(frame_bytes: u32, results: usize) -> CallFrameShape {
+    CallFrameShape {
         entry_pc: 0,
         frame_bytes,
-        argument_words: vec![ivm_abi::call::CallWordV1::Bool],
-        result_words: vec![ivm_abi::call::CallWordV1::Bool; results],
+        argument_words: 1,
+        result_words: results,
     }
 }
 fn tables(argument: u64, result: u64, result_words: u64) -> CallTables {

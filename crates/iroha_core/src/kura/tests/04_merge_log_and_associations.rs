@@ -37,7 +37,7 @@ fn native_frame_metadata_requires_durable_marker_and_does_not_grant_authority() 
     }
     kura.block_data
         .lock()
-        .push((block_hash, Some(Arc::clone(&block))));
+        .push((block_hash, Some((block).clone())));
     kura.set_block_height_index_entry(1, block_hash);
     assert!(
         kura.native_frame_read(1, block_hash).unwrap().is_none(),
@@ -55,11 +55,22 @@ fn native_frame_metadata_requires_durable_marker_and_does_not_grant_authority() 
         .expect("exact durable frame");
     let wire = block.encode_wire().unwrap();
     assert_eq!(metadata.wire_len(), wire.len() as u64);
-    assert_eq!(metadata.read(wire.len() as u64).unwrap().unwrap(), wire);
+    assert_eq!(
+        metadata
+            .read(
+                wire.len() as u64,
+                &crate::state::AllocationBudget::new(64 * 1024 * 1024)
+            )
+            .unwrap()
+            .unwrap()
+            .as_slice(),
+        wire
+    );
     let hashes = vec![block_hash];
     let chain_id = ChainId::from("sumeragi-certified-test-chain");
     let network = native_storage_network_id();
-    let chain = CertifiedChain::from_pinned(&chain_id, &network, &hashes, &kura)
+    let history_budget = crate::state::AllocationBudget::new(64 * 1024 * 1024);
+    let chain = CertifiedChain::from_pinned(&chain_id, &network, &hashes, &kura, &history_budget)
         .expect("independently pinned native genesis");
     assert!(
         chain.authenticated_execution(1).is_err(),
@@ -86,10 +97,10 @@ fn store_block_exact_retry_requires_durable_marker() {
     }
     kura.block_data
         .lock()
-        .push((block_hash, Some(Arc::clone(&block))));
+        .push((block_hash, Some((block).clone())));
     kura.set_block_height_index_entry(1, block_hash);
     let err = kura
-        .store_block(Arc::clone(&block))
+        .store_block((block).clone())
         .expect_err("exact original retry still needs durable Kura marker");
     assert!(matches!(
         err,
@@ -140,7 +151,7 @@ fn store_block_is_durable_before_return() {
 fn store_block_is_idempotent_for_same_height_and_hash() {
     let (kura, block) = blank_kura_with_next_block();
     let block_hash = block.hash();
-    kura.store_block(Arc::clone(&block)).expect("store block");
+    kura.store_block((block).clone()).expect("store block");
     let (index_len, data_len, hashes_len) = {
         let mut store = kura.block_store.lock();
         (
@@ -164,7 +175,7 @@ fn store_block_is_idempotent_for_same_height_and_hash() {
 #[test]
 fn store_block_rejects_height_gap() {
     let kura = Kura::blank_kura_for_testing();
-    let block = Arc::clone(&native_storage_frames(2)[1]);
+    let block = (native_storage_frames(2)[1]).clone();
     let err = kura.store_block(block).expect_err("height gap");
     assert!(matches!(
         err,
@@ -182,7 +193,7 @@ fn store_block_rejects_same_height_different_hash() {
     let stored_hash = block.hash();
     kura.store_block(block).expect("store first block");
     let foreign = CertifiedTestChain::start(TestChainConfig::new(World::new(), 2_000)).unwrap();
-    let conflicting = Arc::clone(foreign.committed(1).block());
+    let conflicting = (foreign.committed(1).block()).clone();
     let conflicting_hash = conflicting.hash();
     assert_ne!(stored_hash, conflicting_hash);
     let err = kura
@@ -404,7 +415,7 @@ fn store_block_rejects_when_single_block_exceeds_budget() {
         "expected block to exceed budget"
     );
     let err = kura
-        .store_block(Arc::clone(&block1))
+        .store_block((block1).clone())
         .expect_err("single block larger than the budget should be rejected");
     assert!(matches!(err, Error::StorageBudgetExceeded { .. }));
     assert_eq!(kura.blocks_count(), 0);
@@ -874,7 +885,7 @@ fn store_block_treats_readable_new_marker_after_ack_failure_as_committed() {
         .fail_next_commit_marker_ack_after_persist
         .store(true, Ordering::Release);
     let block = NativeBlocks::new().next();
-    kura.store_block(Arc::clone(&block))
+    kura.store_block((block).clone())
         .expect("readable new marker is committed success");
     assert_eq!(kura.blocks_count(), 1);
     assert_eq!(
@@ -882,7 +893,12 @@ fn store_block_treats_readable_new_marker_after_ack_failure_as_committed() {
         Some(block.hash())
     );
     assert_eq!(
-        kura.get_block(nonzero!(1_usize)).as_deref(),
+        kura.get_block(
+            nonzero!(1_usize),
+            &crate::state::AllocationBudget::new(64 * 1024 * 1024)
+        )
+        .expect("completed structural storage read")
+        .as_deref(),
         Some(block.as_ref())
     );
     assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
@@ -906,7 +922,13 @@ fn unreadable_append_marker_state_poison_gates_live_kura_and_restart_rolls_back(
             Err(Error::DaBlockRewriteCommitStateUnknown { .. })
         ));
         assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
-        assert!(kura.get_block(nonzero!(1_usize)).is_none());
+        assert!(matches!(
+            kura.get_block(
+                nonzero!(1_usize),
+                &crate::state::AllocationBudget::new(64 * 1024 * 1024)
+            ),
+            Err(crate::execution_attempt::ExecutionAttemptError::Rejected(_))
+        ));
         assert!(matches!(
             kura.store_block(NativeBlocks::new().next()),
             Err(Error::CanonicalStoragePoisoned)

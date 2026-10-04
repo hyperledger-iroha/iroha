@@ -174,7 +174,7 @@ fn wait_for_asset_definition_owner(
         let client = clients.next();
         let last_err = match client
             .client()
-            .query(FindAssetsDefinitions::new())
+            .query(FindAssetDefinitions::new())
             .execute_all()
         {
             Ok(definitions) => definitions

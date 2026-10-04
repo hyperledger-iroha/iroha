@@ -6,23 +6,7 @@ use fastpq_isi::{CANONICAL_PARAMETER_SETS, poseidon as cpu_poseidon};
 use iroha_crypto::Hash;
 use std::{thread, time::Duration};
 const SCALAR_PAIR_DOMAIN_FOR_TESTS: &[u8] = b"fastpq:test:scalar-two-word-arithmetic";
-const REQUIRED_PIPELINES: &[&str] = &[
-    POSEIDON_PERMUTE_KERNEL,
-    POSEIDON_HASH_KERNEL,
-    POSEIDON_HASH_ROWS_KERNEL,
-    FFT_KERNEL,
-    LDE_KERNEL,
-    POST_TILE_KERNEL,
-    exact_root::BIT_REVERSE_KERNEL,
-    exact_root::LOCAL_TILES_KERNEL,
-    exact_root::GLOBAL_STAGE_KERNEL,
-    BN254_FFT_KERNEL,
-    BN254_LDE_KERNEL,
-    BN254_POSEIDON_HASH_KERNEL,
-    digest384::KERNEL,
-    "digest384_hash_frames_v1",
-    "digest384_indexed_first_coordinate_v1",
-];
+const REQUIRED_PIPELINES: &[&str] = &crate::metal_artifact::ENTRY_POINTS;
 #[test]
 fn private_column_rollback_clears_commit_restore_and_unwind_cells() {
     use crate::gpu_secret::ErasureObservation;
@@ -79,46 +63,66 @@ fn private_fft_staging_clears_pages_after_final_owner_drop_and_unwind() {
 }
 
 #[test]
-fn embedded_metal_source_is_self_contained() {
-    let source = embedded_metal_library_source();
-    assert!(
-        !source
-            .lines()
-            .any(|line| line.trim_start().starts_with("#include \"")),
-        "runtime Metal source must not depend on repository-relative includes"
-    );
-    for name in REQUIRED_PIPELINES {
-        assert_eq!(
-            source.matches(&format!("kernel void {name}(")).count(),
-            1,
-            "runtime Metal source must define {name} exactly once"
-        );
+fn admitted_metal_inventory_requires_all_sixteen_shipping_pipelines() {
+    assert_eq!(REQUIRED_PIPELINES.len(), 16);
+    for name in [
+        POSEIDON_PERMUTE_KERNEL,
+        POSEIDON_HASH_KERNEL,
+        POSEIDON_HASH_ROWS_KERNEL,
+        FFT_KERNEL,
+        LDE_KERNEL,
+        POST_TILE_KERNEL,
+        exact_root::BIT_REVERSE_KERNEL,
+        exact_root::LOCAL_TILES_KERNEL,
+        exact_root::GLOBAL_STAGE_KERNEL,
+        BN254_FFT_KERNEL,
+        BN254_LDE_KERNEL,
+        BN254_POSEIDON_HASH_KERNEL,
+        digest384::KERNEL,
+        "digest384_hash_frames_v1",
+        "digest384_indexed_first_coordinate_v1",
+        "fastpq_sha3_256_continuations",
+    ] {
+        assert!(REQUIRED_PIPELINES.contains(&name));
     }
 }
 #[test]
-fn metal_library_resolution_fails_closed_only_for_explicit_override() {
-    let missing = "/definitely/missing/fastpq.metallib";
-    assert_eq!(
-        resolve_metal_library_path_candidates(Some(missing.to_owned()), None).as_deref(),
-        Some(missing),
-        "an invalid explicit override must reach the loader and report an error"
-    );
-    assert_eq!(
-        resolve_metal_library_path_candidates(None, Some(missing)),
-        None,
-        "a stale build-time path must select embedded source fallback"
-    );
+fn absent_admitted_bundle_refuses_before_device_and_preserves_original_columns() {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TEST_QUARANTINE.with(|state| state.set(None));
+        }
+    }
+    TEST_QUARANTINE.with(|state| assert_eq!(state.replace(Some(false)), None));
+    let _reset = Reset;
+    assert!(matches!(
+        crate::metal_artifact::admitted_bundle(),
+        Err(crate::metal_artifact::ArtifactRefusal::Absent)
+    ));
+    assert!(select_metal_device().is_none());
+    let observed = crate::gpu_secret::ErasureObservation::begin();
+    let original = vec![vec![11, 13]];
+    let mut columns = original.clone();
+    assert!(matches!(
+        fft_columns_async(&mut columns, 1, 1),
+        Err(GpuError::Unsupported(GpuBackend::Metal))
+    ));
+    assert_eq!(columns, original);
+    assert_eq!(observed.counts(), (0, 0));
+    assert!(!backend_quarantined());
 }
 #[test]
-fn embedded_metal_source_builds_every_required_pipeline() {
-    let Some(device) = select_metal_device() else {
-        return;
-    };
-    let library = compile_embedded_metal_library(&device)
-        .expect("embedded Metal source should compile on a visible device");
+#[ignore = "requires genuinely admitted compiled bundle and real Metal device"]
+fn admitted_compiled_metal_bundle_loads_every_required_pipeline() {
+    crate::metal_artifact::admitted_bundle()
+        .expect("real native evidence requires independently admitted compiled bytes");
+    let device = select_metal_device().expect("real native evidence requires a visible device");
+    let library = load_metal_library(&device).expect("admitted compiled Metal library must load");
     for name in REQUIRED_PIPELINES {
-        load_pipeline(&device, &library, name)
-            .unwrap_or_else(|error| panic!("embedded Metal pipeline {name} failed: {error}"));
+        load_pipeline(&device, &library, name).unwrap_or_else(|error| {
+            panic!("admitted compiled Metal pipeline {name} failed: {error}")
+        });
     }
 }
 #[test]

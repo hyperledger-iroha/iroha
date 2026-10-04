@@ -2567,7 +2567,7 @@ version = "1.0.0"
 
         fn coordinate_storage(
             &mut self,
-            _request: &MusubiStorageCoordinationRequestV1,
+            _request: &iroha_musubi_service::VerifiedStorageCoordinationRequestV1<'_>,
         ) -> Result<MusubiStorageCoordinationResponseV1, MusubiPublicationServiceBackendErrorV1>
         {
             Err(MusubiPublicationServiceBackendErrorV1::Permanent)
@@ -3461,7 +3461,12 @@ exports = []
         };
         let mut car_reader = car.bytes();
         let prepared = runtime
-            .prepare_seed_ingress_request(&request, car.plan(), &mut car_reader)
+            .prepare_seed_ingress_request(
+                &url::Url::parse("https://seed.example/").expect("publication root"),
+                &request,
+                car.plan(),
+                &mut car_reader,
+            )
             .expect("memory-only prepared request");
         assert!(prepared.authorization_expires_at_ms() > prepared.authorization_issued_at_ms());
         let config = MusubiPublicationServiceConfigurationV1 {

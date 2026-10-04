@@ -42,7 +42,7 @@ mod sorafs_gateway_compliance_transport;
 /// Supervised committed `SoraFS` hedging/billing projector and delivery worker.
 pub mod sorafs_hedging_billing_runtime;
 /// Explicit owner-only software credentials for the four native transaction roles.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod sorafs_native_software_signers;
 /// Fail-closed config-bound `SoraFS` `PoP` runtime construction.
 pub mod sorafs_pop_runtime;
@@ -109,7 +109,7 @@ use iroha_core::{
     snapshot::{
         SnapshotMaker, TryReadError as TryReadSnapshotError, try_read_snapshot_with_limits,
     },
-    state::{State, World, WorldReadOnly as _},
+    state::{State, StateReadOnly as _, World, WorldReadOnly as _},
     streaming::{ManifestPublisher, run_ticket_event_listener},
     sumeragi::filter_validators_from_trusted,
 };
@@ -138,11 +138,6 @@ use iroha_telemetry::metrics::set_duplicate_metrics_panic;
 use iroha_torii::Torii;
 use norito::{codec::Encode, derive::JsonDeserialize, streaming::CapabilityFlags};
 use parking_lot::deadlock;
-#[cfg(all(
-    feature = "test-network-disposable-broker",
-    any(target_os = "linux", target_os = "macos")
-))]
-pub use runtime_provider_broker::load_owner_private_runtime_provider_broker_catalog_file_v1;
 pub use runtime_provider_broker::{
     BootleLanternIssuanceBrokerBackendErrorV1, BootleLanternIssuanceBrokerBackendV1,
     ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1,
@@ -154,9 +149,17 @@ pub use runtime_provider_broker::{
     RuntimeProviderBrokerExecutableV1, RuntimeProviderBrokerLauncherErrorV1,
     RuntimeProviderBrokerLifecycleV1, RuntimeProviderBrokerReadinessErrorV1,
     RuntimeProviderBrokerServerErrorV1, StockGovernanceDagServiceRuntimeProviderRegistryV1,
-    load_runtime_provider_broker_catalog_file_v1, serve_runtime_provider_broker_v1,
-    serve_runtime_provider_broker_with_fallible_readiness_v1,
+    load_runtime_provider_broker_catalog_file_v1, load_runtime_provider_broker_policy_file_v1,
+    serve_runtime_provider_broker_v1, serve_runtime_provider_broker_with_fallible_readiness_v1,
     serve_runtime_provider_broker_with_lifecycle_v1,
+};
+#[cfg(all(
+    feature = "test-network-disposable-broker",
+    any(target_os = "linux", target_os = "macos")
+))]
+pub use runtime_provider_broker::{
+    load_owner_private_runtime_provider_broker_catalog_file_v1,
+    load_owner_private_runtime_provider_broker_policy_file_v1,
 };
 pub use runtime_provider_registry::{
     IrohaRuntimeProviderBindingV1, IrohaRuntimeProviderBindingsV1,
@@ -858,6 +861,7 @@ pub struct Args {
     #[arg(long)]
     pub language: Option<String>,
     /// Enable Sora Nexus feature profile (`SoraFS`, `SoraNet` handshake, multi-lane consensus)
+    /// while preserving explicitly configured Nexus topology, including default-valued catalogs.
     #[arg(long, env = "IROHA_SORA_PROFILE")]
     pub sora: bool,
     #[cfg(feature = "test-network-parliament-signers")]
@@ -1582,12 +1586,24 @@ mod snapshot_read_error_tests {
     fn nonempty_kura_requires_its_original_signed_genesis_body() {
         let chain = native_snapshot_count_fixture(1);
         let count = iroha_core::kura::BlockCount(1);
-        let stored = read_stored_genesis_block(chain.kura(), count)
-            .expect("read native signed genesis")
-            .expect("nonempty chain has genesis");
-        assert_eq!(stored.0.hash(), chain.genesis().hash());
+        let stored = read_stored_genesis_block(
+            chain.kura(),
+            count,
+            &chain.state().view().execution_budget(),
+        )
+        .expect("read native signed genesis")
+        .expect("nonempty chain has genesis");
+        assert_eq!(stored.hash(), chain.genesis().hash());
+        assert!(
+            iroha_data_model::block::SharedSignedBlock::ptr_eq(&stored, chain.committed(1).block(),),
+            "startup must retain the original executed genesis graph"
+        );
+        assert!(stored.belongs_to(&chain.state().ivm_execution_budget()));
         let missing = Kura::blank_kura_for_testing();
-        assert!(read_stored_genesis_block(&missing, count).is_err());
+        assert!(
+            read_stored_genesis_block(&missing, count, &chain.state().view().execution_budget())
+                .is_err()
+        );
     }
     #[test]
     fn startup_nexus_merge_preserves_snapshot_catalogs_and_cooldown_only() {
@@ -1952,17 +1968,17 @@ fn validate_provider_ingest_archive_presence(
         }
     }
 }
-fn validate_provider_attestation_journal_activation(configured: bool) -> Result<(), &'static str> {
-    // Keep this pre-supervisor gate until the supervised child's archive scanner, local store,
-    // durable time, approval-signer, and authenticated-inventory boundaries qualify.
-    if configured {
-        Err(
-            "SoraFS provider-attestation journal capture is not yet activation-qualified; the concrete finalized-archive scanner, bounded store initialization, rollback-resistant time, approval signer, and authenticated inventory must be wired before enabling it",
-        )
+fn validate_provider_attestation_journal_activation(
+    configured: bool,
+    native: bool,
+) -> Result<(), &'static str> {
+    if configured && !native {
+        Err("provider-attestation activation requires the concrete native custody owner")
     } else {
         Ok(())
     }
 }
+
 fn validate_sorafs_native_signer_role_presence(
     role: &'static str,
     required: bool,
@@ -2010,9 +2026,12 @@ fn validate_selected_sorafs_native_signer_presence(
             "SoraFS {role} native software custody conflicts with an external adapter"
         ));
     }
-    if native && !cfg!(unix) {
+    // Runtime credentials use iroha_fs retained native custody on both supported hosts.
+    // This is a platform-presence check only; actual DACL/mode, key and State checks stay in
+    // the credential loader and qualified role adapter.
+    if native && !cfg!(any(unix, windows)) {
         return Err(format!(
-            "SoraFS {role} native software custody requires owner-only Unix runtime credentials"
+            "SoraFS {role} native software custody requires native Unix or Windows runtime credentials"
         ));
     }
     validate_sorafs_native_signer_role_presence(
@@ -2273,6 +2292,12 @@ impl Iroha {
                     .provider_ingest_runtime
                     .as_ref()
                     .is_some_and(|runtime| runtime.provider_attestation_journal.is_some()),
+                config
+                    .torii
+                    .sorafs_storage
+                    .provider_ingest_runtime
+                    .as_ref()
+                    .is_some_and(|runtime| runtime.native_completion_credential.is_some()),
             )
             .map_err(|message| Report::new(StartError::StartTorii).attach(message))?;
         }
@@ -2321,7 +2346,7 @@ impl Iroha {
             )
             .map_err(|message| Report::new(StartError::StartTorii).attach(message))?;
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let native_provider_ingest = if !emergency_fast {
             config
                 .torii
@@ -2363,9 +2388,24 @@ impl Iroha {
                             "native provider ingest rejects substituted external adapters"
                         ));
                     }
+                    if runtime_deps
+                        .sorafs_musubi_provider_attestation_clock_seal
+                        .is_some()
+                        || runtime_deps
+                            .sorafs_musubi_provider_attestation_approval_signer
+                            .is_some()
+                        || runtime_deps
+                            .sorafs_musubi_provider_attestation_inventory
+                            .is_some()
+                    {
+                        return Err(eyre::eyre!(
+                            "native provider attestation rejects external adapter substitution"
+                        ));
+                    }
                     sorafs_provider_ingest_runtime::native_software::NativeProducerV1::prepare(
                         ingest,
                         provider,
+                        NetworkId::from_genesis_hash(config.genesis.expected_hash),
                         &config.torii.sorafs_storage.data_dir,
                     )
                 })
@@ -2377,7 +2417,7 @@ impl Iroha {
         } else {
             None
         };
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         if config
             .torii
             .sorafs_storage
@@ -2385,8 +2425,9 @@ impl Iroha {
             .as_ref()
             .is_some_and(|ingest| ingest.native_completion_credential.is_some())
         {
-            return Err(Report::new(StartError::StartTorii)
-                .attach("native provider ingest requires owner-only Unix credential custody"));
+            return Err(Report::new(StartError::StartTorii).attach(
+                "native provider ingest requires native Unix or Windows credential custody",
+            ));
         }
         let sorafs_provider_ingest_preflight = if emergency_fast {
             None
@@ -2403,7 +2444,7 @@ impl Iroha {
                         )
                     })?;
             let native_preflight = {
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 {
                     if let Some(native) = native_provider_ingest.as_ref() {
                         Some(
@@ -2420,7 +2461,7 @@ impl Iroha {
                         None
                     }
                 }
-                #[cfg(not(unix))]
+                #[cfg(not(any(unix, windows)))]
                 {
                     None::<sorafs_provider_ingest_runtime::QualifiedProviderIngestRuntimeAdaptersV1>
                 }
@@ -2607,8 +2648,14 @@ impl Iroha {
             config.genesis.expected_hash,
             genesis.as_ref(),
         )?;
-        let stored_genesis_block = read_stored_genesis_block(kura.as_ref(), block_count)?;
-        let effective_genesis = stored_genesis_block.as_ref().or(genesis.as_ref());
+        let state_execution_budget =
+            iroha_allocation::AllocationBudget::new(config.pipeline.ivm_execution_max_bytes);
+        let stored_genesis_block =
+            read_stored_genesis_block(kura.as_ref(), block_count, &state_execution_budget)?;
+        let effective_genesis = stored_genesis_block
+            .as_ref()
+            .map(AsRef::as_ref)
+            .or_else(|| genesis.as_ref().map(|genesis| &genesis.0));
         let genesis_to_verify = effective_genesis.ok_or_else(|| {
             Report::new(StartError::InitKura).attach(
                 "startup has an exact genesis trust anchor but no local or stored signed genesis body; peer genesis retrieval is not supported",
@@ -2632,8 +2679,6 @@ impl Iroha {
                 })?
         };
         let mut loaded_state_from_snapshot = false;
-        let state_execution_budget =
-            iroha_allocation::AllocationBudget::new(config.pipeline.ivm_execution_max_bytes);
         let operation_index_budget = iroha_allocation::AllocationBudget::new(
             usize::try_from(config.nexus.storage.kagemusha_operation_index_bytes.get()).map_err(
                 |_| {
@@ -2710,10 +2755,10 @@ impl Iroha {
                     &state_execution_budget,
                 )
                 .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
-                if let Some(genesis_block) = stored_genesis_block.as_ref().or(genesis.as_ref()) {
+                if let Some(genesis_block) = effective_genesis {
                     iroha_core::sns::seed_genesis_alias_bootstrap(
                         &mut world,
-                        &genesis_block.0,
+                        genesis_block,
                         &config.nexus.dataspace_catalog,
                     )
                     .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
@@ -3080,22 +3125,17 @@ impl Iroha {
                     Report::new(StartError::InitKura)
                         .attach("emergency Fast startup found no signed genesis block")
                 })?;
-                iroha_core::sumeragi::node::root_instance(
-                    &genesis.0,
-                    &config.common.chain.to_string(),
-                )
-                .map_err(|error| Report::new(StartError::InitKura).attach(error))?
+                iroha_core::sumeragi::node::root_instance(genesis, &config.common.chain.to_string())
+                    .map_err(|error| Report::new(StartError::InitKura).attach(error))?
             }
         };
         config_caps.native_config_fingerprint = match prepared_sumeragi.as_ref() {
             Some(prepared) => prepared.config_fingerprint().into(),
             None => iroha_core::sumeragi::node::consensus_configuration_fingerprint(
-                &effective_genesis
-                    .ok_or_else(|| {
-                        Report::new(StartError::InitKura)
-                            .attach("native handshake requires exact signed genesis")
-                    })?
-                    .0,
+                effective_genesis.ok_or_else(|| {
+                    Report::new(StartError::InitKura)
+                        .attach("native handshake requires exact signed genesis")
+                })?,
             )
             .map_err(|error| Report::new(StartError::InitKura).attach(error))?
             .into(),
@@ -3304,7 +3344,12 @@ impl Iroha {
                 if let Some(sidecar) = kura.read_pipeline_metadata(h as u64) {
                     let exp = sidecar.dag.fingerprint;
                     if let Some(height) = std::num::NonZeroUsize::new(h) {
-                        if let Some(block) = kura.get_block(height) {
+                        if let Some(block) = kura
+                            .get_block(height, &view.execution_budget())
+                            .map_err(|error| {
+                                Report::new(error).change_context(StartError::InitKura)
+                            })?
+                        {
                             let txs: Vec<&iroha_data_model::transaction::SignedTransaction> =
                                 block.external_transactions().collect();
                             let access: Vec<_> = txs
@@ -3351,7 +3396,7 @@ impl Iroha {
             }
         }
         let state: Arc<State> = Arc::from(state);
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if let Some(native) = native_provider_ingest.as_ref() {
             native.bind_state(Arc::clone(&state)).map_err(|error| {
                 Report::new(StartError::StartTorii).attach(format!(
@@ -3856,7 +3901,7 @@ impl Iroha {
         let sorafs_appeal_finance_checkpoint_runtime = runtime_deps
             .sorafs_appeal_finance_checkpoint_runtime
             .clone();
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if !emergency_fast {
             sorafs_native_software_signers::install_native_software_signers(
                 &config.torii.sorafs_storage.native_transaction_signers,
@@ -4092,7 +4137,7 @@ impl Iroha {
                 })?,
             )
         };
-        let sorafs_provider_ingest_completed_musubi_capture = match (
+        let mut sorafs_provider_ingest_completed_musubi_capture = match (
             prepared_sorafs_provider_ingest_archive.as_mut(),
             sorafs_provider_ingest_config.as_ref(),
         ) {
@@ -4118,6 +4163,55 @@ impl Iroha {
                 ));
             }
         };
+        #[cfg(any(unix, windows))]
+        let native_provider_attestation_inventory = if let Some((native, ingest, journal)) =
+            native_provider_ingest.as_ref().and_then(|native| {
+                let ingest = sorafs_provider_ingest_config.as_ref()?;
+                Some((
+                    native,
+                    ingest,
+                    ingest.provider_attestation_journal.as_ref()?,
+                ))
+            }) {
+            let attestation = native.attestation().ok_or_else(|| {
+                Report::new(StartError::StartTorii)
+                    .attach("native provider attestation custody is absent")
+            })?;
+            let coordinator = sorafs_provider_ingest_completed_musubi_capture
+                .take()
+                .ok_or_else(|| {
+                    Report::new(StartError::StartTorii)
+                        .attach("native provider attestation capture was already taken")
+                })?;
+            let (driver, inventory) = attestation
+                .compose(
+                    sorafs_node
+                        .as_ref()
+                        .expect("native ingest requires storage"),
+                    coordinator,
+                    Arc::clone(&state),
+                    journal,
+                )
+                .map_err(|error| {
+                    Report::new(StartError::StartTorii)
+                        .attach(format!("native attestation composition rejected: {error}"))
+                })?;
+            let child = sorafs_provider_ingest_runtime::start_native_attestation(
+                driver,
+                ingest.scan_interval_ms,
+                supervisor.shutdown_signal(),
+            )
+            .map_err(|error| {
+                Report::new(StartError::StartTorii)
+                    .attach(format!("native attestation supervision rejected: {error}"))
+            })?;
+            supervisor.monitor(child);
+            Some(inventory)
+        } else {
+            None
+        };
+        #[cfg(not(any(unix, windows)))]
+        let native_provider_attestation_inventory = None;
         if let Some((view, providers)) = sorafs_governance_dag_service_launch {
             let runner = sorafs_node::prepare_governance_dag_service_from_view(view, providers)
                 .await
@@ -4690,7 +4784,19 @@ impl Iroha {
                 Arc::clone(&queue),
                 sorafs_node::NodeHandle::clone(sorafs_node),
             )
+            .with_native_provider_attestation_inventory(
+                native_provider_attestation_inventory.clone(),
+            )
         });
+        let musubi_publication_factory =
+            musubi_publication_service::stock_installation::select_factory(
+                &config.musubi_publication,
+                musubi_publication_context.as_ref(),
+                shared_sorafs_cache.clone(),
+                musubi_publication_factory,
+                emergency_fast,
+            )
+            .map_err(|error| Report::new(StartError::StartTorii).attach(error))?;
         let private_settlement_availability_signer = state
             .nexus_snapshot()
             .atomic_private_settlement
@@ -4726,6 +4832,11 @@ impl Iroha {
         };
         let runtime_deps = if let Some(signer) = private_settlement_phase_signer {
             runtime_deps.with_private_settlement_phase_signer(signer)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(inventory) = native_provider_attestation_inventory.as_ref() {
+            runtime_deps.with_sorafs_provider_attestation_inventory(Arc::clone(inventory))
         } else {
             runtime_deps
         };
@@ -5413,11 +5524,11 @@ impl ResolvedGenesisTrustAnchor {
             consensus_header_hash: configured_hash,
         };
         if let Some(local_genesis) = local_genesis {
-            anchor.verify(local_genesis)?;
+            anchor.verify(&local_genesis.0)?;
         }
         Ok(anchor)
     }
-    fn verify(&self, block: &GenesisBlock) -> ReportResult<(), StartError> {
+    fn verify(&self, block: &SignedBlock) -> ReportResult<(), StartError> {
         let embedded_key = genesis_public_key_from_genesis_block(block)?;
         if embedded_key != self.public_key {
             return Err(Report::new(StartError::InitKura).attach(format!(
@@ -5425,14 +5536,14 @@ impl ResolvedGenesisTrustAnchor {
                 self.public_key
             )));
         }
-        let block_hash = block.0.hash();
+        let block_hash = block.hash();
         if block_hash != self.consensus_header_hash {
             return Err(Report::new(StartError::InitKura).attach(format!(
                 "genesis hash {block_hash} does not match the resolved genesis trust-anchor hash {}",
                 self.consensus_header_hash
             )));
         }
-        let mut signatures = block.0.signatures();
+        let mut signatures = block.signatures();
         let signature = signatures.next().ok_or_else(|| {
             Report::new(StartError::InitKura)
                 .attach("genesis block has no configured-authority signature")
@@ -5456,21 +5567,25 @@ impl ResolvedGenesisTrustAnchor {
 fn read_stored_genesis_block(
     kura: &Kura,
     block_count: iroha_core::kura::BlockCount,
-) -> ReportResult<Option<GenesisBlock>, StartError> {
+    execution_budget: &iroha_allocation::AllocationBudget,
+) -> ReportResult<Option<iroha_data_model::block::SharedSignedBlock>, StartError> {
     if block_count.0 == 0 {
         return Ok(None);
     }
     let nz = std::num::NonZeroUsize::new(1).expect("nonzero");
-    let Some(stored) = kura.get_block(nz) else {
+    let Some(stored) = kura
+        .get_block(nz, execution_budget)
+        .map_err(|error| Report::new(error).change_context(StartError::InitKura))?
+    else {
         return Err(Report::new(StartError::InitKura)
             .attach("non-empty block store is missing genesis block at height 1"));
     };
-    Ok(Some(GenesisBlock((*stored).clone())))
+    Ok(Some(stored))
 }
 fn genesis_public_key_from_genesis_block(
-    block: &GenesisBlock,
+    block: &SignedBlock,
 ) -> ReportResult<PublicKey, StartError> {
-    let first = block.0.external_transactions().next().ok_or_else(|| {
+    let first = block.external_transactions().next().ok_or_else(|| {
         Report::new(StartError::InitKura).attach("stored genesis block contains no transactions")
     })?;
     let authority = first.authority();
@@ -5551,7 +5666,7 @@ mod genesis_key_tests {
             .expect("build genesis block");
         assert!(genesis_block.0.is_resultless_proposal());
         let derived =
-            genesis_public_key_from_genesis_block(&genesis_block).expect("derive genesis pubkey");
+            genesis_public_key_from_genesis_block(&genesis_block.0).expect("derive genesis pubkey");
         assert_eq!(&derived, keypair.public_key());
     }
     #[test]
@@ -5570,7 +5685,7 @@ mod genesis_key_tests {
             consensus_header_hash: genesis.0.hash(),
         };
         anchor
-            .verify(&genesis)
+            .verify(&genesis.0)
             .expect("matching configured genesis trust anchor should verify");
     }
     #[test]
@@ -5582,7 +5697,7 @@ mod genesis_key_tests {
             consensus_header_hash: genesis.0.hash(),
         };
         let error = anchor
-            .verify(&genesis)
+            .verify(&genesis.0)
             .expect_err("configured public-key mismatch must reject genesis");
         assert!(matches!(error.current_context(), StartError::InitKura));
         assert!(
@@ -5604,7 +5719,7 @@ mod genesis_key_tests {
         .expect("the local signed genesis matches the independently configured hash");
         let anchor = root;
         assert_eq!(anchor.consensus_header_hash, genesis.0.hash());
-        anchor.verify(&genesis).expect("resolved anchor verifies");
+        anchor.verify(&genesis.0).expect("resolved anchor verifies");
     }
     #[test]
     fn startup_loads_original_configured_genesis() {
@@ -5672,7 +5787,7 @@ mod genesis_key_tests {
         .expect("the local trusted genesis matches the configured exact anchor");
         let anchor = root;
         let error = anchor
-            .verify(&alternate)
+            .verify(&alternate.0)
             .expect_err("same signer and chain must not authorize another genesis instance");
         assert!(matches!(error.current_context(), StartError::InitKura));
         assert!(
@@ -5691,7 +5806,7 @@ mod genesis_key_tests {
                 .expect("configured expected hash resolves an exact anchor");
         let anchor = root;
         let error = anchor
-            .verify(&alternate)
+            .verify(&alternate.0)
             .expect_err("the configured hash must reject another genesis from the same signer");
         assert!(matches!(error.current_context(), StartError::InitKura));
         assert!(
@@ -6005,10 +6120,7 @@ fn read_config_and_genesis_with_filesystem_space(
     } else {
         (ConfigReader::new(), None)
     };
-    let sorafs_storage_enabled_is_explicit =
-        config.contains_toml_parameter(["sorafs", "storage", "enabled"]);
-    let sorafs_discovery_enabled_is_explicit =
-        config.contains_toml_parameter(["sorafs", "discovery", "discovery_enabled"]);
+    let sora_profile = iroha_config::sora_profile::SoraProfileSelection::from_reader(&config);
     let mut config = config
         .read_and_complete::<UserConfig>()
         .change_context(ConfigError::ReadConfig)?
@@ -6018,15 +6130,7 @@ fn read_config_and_genesis_with_filesystem_space(
         config.genesis.manifest_json = Some(WithOrigin::inline(path.clone()));
     }
     if args.sora {
-        let configured_sorafs_storage_enabled = config.torii.sorafs_storage.enabled;
-        let configured_sorafs_discovery_enabled = config.torii.sorafs_discovery.discovery_enabled;
-        config.apply_sora_profile();
-        if sorafs_storage_enabled_is_explicit {
-            config.torii.sorafs_storage.enabled = configured_sorafs_storage_enabled;
-        }
-        if sorafs_discovery_enabled_is_explicit {
-            config.torii.sorafs_discovery.discovery_enabled = configured_sorafs_discovery_enabled;
-        }
+        sora_profile.apply(&mut config);
     }
     let sora_features = sora_features_requiring_flag(&config);
     // A compiled profile owns its Nexus and SoraFS settings; `--sora` is rejected with it.
@@ -8458,6 +8562,7 @@ fn run_main_with_config_guard(
             let compatibility = compatibility_probe::config_compatibility_v1(
                 &config,
                 genesis.as_ref().zip(validated_genesis.as_ref()),
+                build,
             )?;
             let json = norito::json::to_json(&compatibility)
                 .map_err(|error| Report::new(MainError::Config).attach(error.to_string()))?;
@@ -8595,6 +8700,9 @@ fn run_main_with_config_guard(
                     test_network_id,
                     ordered_roster.clone(),
                     &config.common.peer.id,
+                    &iroha_allocation::AllocationBudget::new(
+                        config.runtime_provider_broker.credential_max_memory_bytes.get(),
+                    ),
                 )
                 .map_err(|_| Report::new(MainError::Config))
                 .attach(
@@ -8767,8 +8875,14 @@ fn resolve_node_secrets_runtime_deps(
     let secrets_error = |error: node_secrets::NodeSecretsErrorV1| {
         Report::new(MainError::Config).attach(error.to_string())
     };
-    let secrets = node_secrets::NodeSecretsV1::open(config)
-        .map_err(secrets_error)?
+    let credential_budget = iroha_allocation::AllocationBudget::new(
+        config
+            .runtime_provider_broker
+            .credential_max_memory_bytes
+            .get(),
+    );
+    let secrets = node_secrets::NodeSecretsV1::open(config, &credential_budget)
+        .map_err(|error| Report::new(error).change_context(MainError::Config))?
         .ok_or_else(|| Report::new(MainError::Config).attach("node secrets require data_dir"))?;
     let runtime_deps = secrets
         .resolve_runtime_deps(config)
@@ -8800,7 +8914,7 @@ fn validate_available_genesis_for_check(
 ) -> ReportResult<(crate::authenticated_genesis::AuthenticatedGenesis, u64), MainError> {
     let configured_key = &config.genesis.public_key;
     let embedded_key =
-        genesis_public_key_from_genesis_block(genesis).change_context(MainError::Config)?;
+        genesis_public_key_from_genesis_block(&genesis.0).change_context(MainError::Config)?;
     if &embedded_key != configured_key {
         return Err(Report::new(MainError::Config).attach(format!(
             "genesis authority `{embedded_key}` does not match configured genesis.public_key `{configured_key}`"
@@ -8817,7 +8931,7 @@ fn validate_available_genesis_for_check(
     iroha_core::validate_genesis_block(&genesis.0, &genesis_account)
         .map_err(Report::new)
         .change_context(MainError::Config)?;
-    let (signed_mode, signed_parameters) = signed_genesis_context_metadata(genesis)
+    let (signed_mode, signed_parameters) = signed_genesis_context_metadata(&genesis.0)
         .map_err(|error| Report::new(MainError::Config).attach(error))?;
     let config_caps =
         build_consensus_config_caps(&config.nexus, None, None).change_context(MainError::Config)?;
@@ -9002,6 +9116,17 @@ fn validate_genesis_execution_offline(
             .attach("native genesis execution failed")
     })?;
     let executed = state.world_view();
+    let initial_configs = executed
+        .consensus_schedule()
+        .init_configs(iroha_core::sumeragi::startup::GENESIS_HEIGHT)
+        .map_err(|error| Report::new(MainError::Config).attach(error.to_string()))?;
+    let initial_committee_size = initial_configs
+        .iter()
+        .find_map(|(_, slot)| slot.ready().map(|config| config.committee.n()))
+        .ok_or_else(|| {
+            Report::new(MainError::Config)
+                .attach("executed native genesis has no authenticated ready committee")
+        })?;
     if required_inrou_deployment_authority.is_some_and(|authority| {
         !iroha_core::smartcontracts::isi::soracloud::soracloud_management_authority_is_authorized(
             &executed, authority,
@@ -9028,6 +9153,7 @@ fn validate_genesis_execution_offline(
     let nexus_amx_context_hash = Hash::prehashed(metadata.sumeragi_context.nexus_amx_context_hash);
     Ok(crate::authenticated_genesis::AuthenticatedGenesis {
         network_id: epoch.network_id,
+        initial_committee_size,
         execution_policy_hash,
         nexus_amx_context_hash,
         kagemusha_mint_finality_authority: epoch.authority,
@@ -9181,7 +9307,7 @@ fn consensus_caps_from_genesis(
 }
 
 fn signed_genesis_context_metadata(
-    genesis: &GenesisBlock,
+    genesis: &SignedBlock,
 ) -> core::result::Result<
     (
         iroha_data_model::block::consensus::ConsensusMode,
@@ -9190,7 +9316,7 @@ fn signed_genesis_context_metadata(
     String,
 > {
     let mut metadata_entries = Vec::new();
-    for transaction in genesis.0.external_transactions() {
+    for transaction in genesis.external_transactions() {
         let Executable::Instructions(instructions) = transaction.instructions() else {
             return Err(
                 "Sumeragi genesis metadata must be carried by instruction batches".to_owned(),
@@ -10101,13 +10227,12 @@ mod tests {
         );
     }
     #[test]
-    fn provider_attestation_journal_remains_fail_closed_until_activation_is_qualified() {
-        assert!(validate_provider_attestation_journal_activation(false).is_ok());
+    fn provider_attestation_journal_requires_concrete_native_selection() {
+        assert!(validate_provider_attestation_journal_activation(false, false).is_ok());
+        assert!(validate_provider_attestation_journal_activation(true, true).is_ok());
         assert_eq!(
-            validate_provider_attestation_journal_activation(true),
-            Err(
-                "SoraFS provider-attestation journal capture is not yet activation-qualified; the concrete finalized-archive scanner, bounded store initialization, rollback-resistant time, approval signer, and authenticated inventory must be wired before enabling it"
-            )
+            validate_provider_attestation_journal_activation(true, false),
+            Err("provider-attestation activation requires the concrete native custody owner")
         );
         let startup = include_str!("main.rs")
             .split_once("pub(crate) async fn start_with_runtime_deps")
@@ -11304,7 +11429,7 @@ mod tests {
         use super::*;
         use iroha_config::base::toml::TomlSource;
         use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, ManifestCrypto};
-        use iroha_model_base::{chain::ChainId, domain::DomainId};
+        use iroha_model_base::chain::ChainId;
         fn sample_manifest() -> RawGenesisTransaction {
             complete_test_genesis_builder(GenesisBuilder::new_without_executor(
                 ChainId::from("test-chain"),
@@ -11482,7 +11607,7 @@ mod tests {
                 .expect("signed genesis voters");
             let topology = Topology::new(voters.into_keys());
             let (mode, _) =
-                signed_genesis_context_metadata(&provisional).expect("signed genesis mode");
+                signed_genesis_context_metadata(&provisional.0).expect("signed genesis mode");
             match ValidBlock::validate_signed_genesis(
                 provisional.0,
                 &topology,
@@ -11745,8 +11870,8 @@ mod tests {
                 &config,
             );
             config.genesis.expected_hash = genesis.0.hash();
-            let (mode, parameters) =
-                signed_genesis_context_metadata(&genesis).expect("signed genesis context metadata");
+            let (mode, parameters) = signed_genesis_context_metadata(&genesis.0)
+                .expect("signed genesis context metadata");
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .expect("default consensus config caps");
             let (_, _, _, cadence_ms, _) = consensus_caps_from_genesis(&genesis, &config_caps)
@@ -11799,16 +11924,27 @@ mod tests {
             let ready = compatibility_probe::config_compatibility_v1(
                 &fixture.config,
                 Some((&fixture.genesis, &bootstrap)),
+                test_build_metadata(),
             )
             .expect("ready compatibility values");
-            let pending = compatibility_probe::config_compatibility_v1(&fixture.config, None)
-                .expect("pending compatibility values");
+            let pending = compatibility_probe::config_compatibility_v1(
+                &fixture.config,
+                None,
+                test_build_metadata(),
+            )
+            .expect("pending compatibility values");
             let hex_hash = |hash: iroha_crypto::Hash| {
                 let bytes: &[u8; iroha_crypto::Hash::LENGTH] = hash.as_ref();
                 hex::encode(bytes)
             };
             assert_eq!(ready.status, "ready");
             assert_eq!(pending.status, "pending");
+            assert_eq!(pending.node_identity, None);
+            assert_eq!(ready.diagnostic_build, pending.diagnostic_build);
+            assert_eq!(
+                ready.node_identity.as_ref().unwrap().initial_committee_size,
+                bootstrap.initial_committee_size as u64
+            );
             assert_eq!(
                 ready.execution_policy_hash,
                 Some(hex::encode(fixture.parameters.execution_policy_hash))
@@ -11845,6 +11981,169 @@ mod tests {
             assert_eq!(ready.nexus_policy_digest, pending.nexus_policy_digest);
             assert_eq!(ready.gas_schedule_hash, pending.gas_schedule_hash);
         }
+
+
+        #[test]
+        fn check_config_node_identity_binds_resolved_local_settings_and_retired_keys() {
+            let _registry_guard = instruction_registry_test_guard();
+            iroha_genesis::init_instruction_registry();
+            let fixture = offline_semantic_genesis_fixture([]);
+            let bootstrap = validate_genesis_execution_offline(
+                &fixture.config,
+                &fixture.genesis,
+                &fixture.authority,
+                fixture.mode,
+                fixture.parameters,
+                fixture.cadence_ms,
+                None,
+            )
+            .expect("signed genesis executes offline");
+            let report = |config: &Config| {
+                compatibility_probe::config_compatibility_v1(
+                    config,
+                    Some((&fixture.genesis, &bootstrap)),
+                    test_build_metadata(),
+                )
+                .expect("native configuration projection")
+            };
+            let baseline = report(&fixture.config);
+            let identity = baseline
+                .node_identity
+                .as_ref()
+                .expect("executed genesis identity");
+            assert_eq!(bootstrap.initial_committee_size, 4);
+            assert_eq!(identity.initial_committee_size, 4);
+            assert_eq!(identity.network_id, bootstrap.network_id);
+            assert_eq!(
+                identity.node_id,
+                PeerId::new(fixture.config.common.key_pair.public_key().clone())
+            );
+            use norito::codec::Encode as _;
+            assert_eq!(
+                identity.node_fingerprint,
+                hex::encode(Hash::new(identity.node_id.encode()).as_ref())
+            );
+            assert_eq!(
+                identity.node_config_fingerprint,
+                hex::encode(
+                    iroha_core::sumeragi::node::configuration_fingerprint(
+                        bootstrap.initial_committee_size,
+                        &fixture.config.sumeragi.local,
+                        &iroha_core::sumeragi::driver::DriverConfig::default(),
+                        &fixture.config.sumeragi.retired_keys,
+                    )
+                    .as_ref(),
+                )
+            );
+            let mut changed = fixture.config.clone();
+            changed.sumeragi.local.sync_batch = Some(17);
+            let local = report(&changed);
+            assert_ne!(
+                local
+                    .node_identity
+                    .as_ref()
+                    .unwrap()
+                    .node_config_fingerprint,
+                identity.node_config_fingerprint
+            );
+            assert_eq!(local.config_fingerprint, baseline.config_fingerprint);
+            assert_eq!(local.diagnostic_build, baseline.diagnostic_build);
+            changed = fixture.config.clone();
+            changed.sumeragi.retired_keys = [0x61, 0x62]
+                .into_iter()
+                .map(|seed| {
+                    KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                        .expect("deterministic retired key")
+                        .public_key()
+                        .clone()
+                })
+                .collect();
+            let retired = report(&changed);
+            assert_ne!(
+                retired
+                    .node_identity
+                    .as_ref()
+                    .unwrap()
+                    .node_config_fingerprint,
+                identity.node_config_fingerprint
+            );
+            changed.sumeragi.retired_keys.reverse();
+            assert_eq!(report(&changed).node_identity, retired.node_identity);
+            changed = fixture.config.clone();
+            changed.sumeragi.records_dir = "unconsumed-diagnostic-records".into();
+            changed.sumeragi.installation_log = "unconsumed-diagnostic-installation".into();
+            assert_eq!(report(&changed).node_identity, baseline.node_identity);
+        }
+
+        #[test]
+        fn check_config_node_identity_separates_diagnostic_build_from_running_identity() {
+            let _registry_guard = instruction_registry_test_guard();
+            iroha_genesis::init_instruction_registry();
+            let fixture = offline_semantic_genesis_fixture([]);
+            let bootstrap = validate_genesis_execution_offline(
+                &fixture.config,
+                &fixture.genesis,
+                &fixture.authority,
+                fixture.mode,
+                fixture.parameters,
+                fixture.cadence_ms,
+                None,
+            )
+            .expect("signed genesis executes offline");
+            let build = |source| {
+                CompiledBuildMetadata::from_compiled_parts(
+                    env!("CARGO_PKG_VERSION"),
+                    Some(source),
+                    None,
+                    None,
+                    Some("test-diagnostic-features"),
+                    Some("test-diagnostic-target"),
+                )
+            };
+            let first = compatibility_probe::config_compatibility_v1(
+                &fixture.config,
+                Some((&fixture.genesis, &bootstrap)),
+                build("2222222222222222222222222222222222222222"),
+            )
+            .expect("first diagnostic identity");
+            let second = compatibility_probe::config_compatibility_v1(
+                &fixture.config,
+                Some((&fixture.genesis, &bootstrap)),
+                build("1111111111111111111111111111111111111111"),
+            )
+            .expect("second diagnostic identity");
+            assert_eq!(first.node_identity, second.node_identity);
+            assert_eq!(first.config_fingerprint, second.config_fingerprint);
+            assert_ne!(
+                first.diagnostic_build.build_fingerprint,
+                second.diagnostic_build.build_fingerprint
+            );
+            assert_eq!(
+                first.diagnostic_build.source_revision,
+                "2222222222222222222222222222222222222222"
+            );
+            assert_eq!(
+                second.diagnostic_build.source_revision,
+                "1111111111111111111111111111111111111111"
+            );
+            assert!(
+                compatibility_probe::config_compatibility_v1(
+                    &fixture.config,
+                    Some((&fixture.genesis, &bootstrap)),
+                    build("invalid-source"),
+                )
+                .is_err()
+            );
+            let pending = compatibility_probe::config_compatibility_v1(
+                &fixture.config,
+                None,
+                build("1111111111111111111111111111111111111111"),
+            )
+            .expect("pending report has only the diagnostic build identity");
+            assert_eq!(pending.node_identity, None);
+            assert_eq!(pending.diagnostic_build, second.diagnostic_build);
+        }
+
         #[test]
         fn check_config_offline_accepts_final_inrou_deployment_capability() {
             let _registry_guard = instruction_registry_test_guard();
@@ -12746,3 +13045,6 @@ mod authenticated_roster_capacity_tests {
         assert!(authenticated_maximum_validator_roster_len(ConsensusMode::Npos, 4, None).is_err());
     }
 }
+
+#[cfg(test)]
+mod sora_profile_geometry_tests;

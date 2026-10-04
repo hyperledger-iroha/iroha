@@ -48,7 +48,8 @@ fn bind(
     instruction: &MutateSorafsFinalPromotionAccountCustody,
 ) -> Result<BoundNativeCheckV1, Error> {
     let signed = sign(state, instruction.clone().into(), 2, 3_000);
-    bind_signed_check_v1(
+    bind_fixture(
+        &state,
         round,
         NativeCustodyCheckRefV1::FinalPromotionAccount(instruction),
         &state.view().chain_id().to_string(),
@@ -57,6 +58,49 @@ fn bind(
         floor(),
         signed,
     )
+}
+
+// Existing closed-purpose tests borrow their independent fixture inputs. The production binder
+// still owns its signed attempt; no production wrapper exposes this fixture-only projection.
+fn test_scope<'a>(scope: &'a mut BindingScope<'_>) -> Result<BindingScope<'a>, Error> {
+    Ok(BindingScope {
+        state: scope.state,
+        round: scope.round,
+        instruction: scope.instruction,
+        chain_id: scope.chain_id,
+        network_id: scope.network_id,
+        authority: scope.authority,
+        floor: scope.floor,
+    })
+}
+fn bind_fixture(
+    state: &State,
+    round: &mut NativeCheckRoundV1,
+    instruction: NativeCustodyCheckRefV1<'_>,
+    chain_id: &str,
+    network_id: [u8; 32],
+    authority: &AccountId,
+    floor: NativeCheckFloorV1,
+    signed: SignedTransaction,
+) -> Result<BoundNativeCheckV1, Error> {
+    bind_signed_check_v1(
+        BindingScope {
+            state,
+            round,
+            instruction,
+            chain_id,
+            network_id,
+            authority,
+            floor,
+        },
+        SignedCheckAttempt::new(signed),
+        test_scope,
+    )
+    .map(|(_, bound)| bound)
+    .map_err(|failure| match failure.error {
+        NativeCheckBindingErrorV1::Rejected(error) => error,
+        other => panic!("unexpected local fixture refusal: {other:?}"),
+    })
 }
 
 #[test]
@@ -69,10 +113,11 @@ fn bound_check_cannot_cross_native_purpose_or_replace_its_original_round() {
         authenticate_applied_check_v1(
             &state,
             NativeCustodyCheckPurposeV1::FinalPromotion,
-            bound,
+            &mut Some(bound),
             &round
         )
-        .err(),
+        .err()
+        .map(crate::execution_attempt::expect_completed_rejection),
         Some(Error::Invalid)
     );
 
@@ -85,10 +130,11 @@ fn bound_check_cannot_cross_native_purpose_or_replace_its_original_round() {
         authenticate_applied_check_v1(
             &state,
             NativeCustodyCheckPurposeV1::FinalPromotionAccount,
-            bound,
+            &mut Some(bound),
             &replacement
         )
-        .err(),
+        .err()
+        .map(crate::execution_attempt::expect_completed_rejection),
         Some(Error::Invalid)
     );
 }
@@ -108,10 +154,11 @@ fn one_round_issues_and_binds_only_once_and_failure_cannot_be_retried() {
         authenticate_applied_check_v1(
             &state,
             NativeCustodyCheckPurposeV1::FinalPromotionAccount,
-            bound,
+            &mut Some(bound),
             &round
         )
-        .err(),
+        .err()
+        .map(crate::execution_attempt::expect_completed_rejection),
         Some(Error::NotApplied)
     );
 
@@ -154,7 +201,8 @@ fn common_binding_rejects_non_check_actions_for_both_closed_purposes() {
         round.issue_challenge().unwrap();
         let signed = sign(&state, instruction.instruction(), 2, 3_000);
         assert_eq!(
-            bind_signed_check_v1(
+            bind_fixture(
+                &state,
                 &mut round,
                 instruction,
                 &state.view().chain_id().to_string(),
@@ -177,7 +225,7 @@ fn complete_external_bytes_and_signature_are_retained_by_the_single_owner() {
     let signed = sign(&state, instruction.clone().into(), 2, 3_000);
     let bytes = bounded_entry(&TransactionEntrypoint::External(signed.clone())).unwrap();
     let bound = bind(&mut round, &state, &instruction).unwrap();
-    assert_eq!(bound.entry_bytes, bytes);
+    assert_eq!(bound.entry_bytes.as_slice(), bytes);
     assert_eq!(bound.signed_transaction(), &signed);
     let mut changed = signed.clone();
     changed.set_signature(TransactionSignature(SignatureOf::from_signature(
@@ -193,7 +241,8 @@ fn complete_external_bytes_and_signature_are_retained_by_the_single_owner() {
     let mut forged = sign(&state, exact.clone().into(), 2, 3_000);
     forged.set_signature(changed.signature().clone());
     assert_eq!(
-        bind_signed_check_v1(
+        bind_fixture(
+            &state,
             &mut round,
             NativeCustodyCheckRefV1::FinalPromotionAccount(&exact),
             &state.view().chain_id().to_string(),
@@ -229,4 +278,72 @@ fn shared_check_replay_span_rejects_overlong_history_before_finality_io() {
         Err(Error::Finality)
     );
     assert_eq!(check_history_span_v1(1, u64::MAX), Err(Error::Finality));
+    assert_eq!(
+        check_history_span_v1(u64::MAX - 1, u64::MAX),
+        Ok(()),
+        "only relative work, never absolute height, is bounded"
+    );
+}
+
+#[test]
+fn canonical_check_frames_preserve_wire_and_charge_one_original_allocation_scope() {
+    let value = vec![7_u8; 64];
+    let canonical = norito::encode_canonical(&value).unwrap();
+    let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, canonical.len(), 32);
+    norito::core::with_decode_limits_scope(limits, || {
+        assert_eq!(bounded_frame(&value).unwrap(), canonical);
+        assert_eq!(
+            bounded_frame(&value),
+            Err(Error::Transaction),
+            "second retained frame cannot renew the original allowance"
+        );
+    });
+    norito::core::with_decode_limits_scope(limits, || {
+        assert_eq!(
+            bounded_frame(&vec![0_u8; FINAL_PROMOTION_NATIVE_TRANSACTION_MAX_BYTES_V1]),
+            Err(Error::Transaction)
+        );
+        assert_eq!(
+            bounded_frame(&value).unwrap(),
+            canonical,
+            "oversized input refuses before charging its nonexistent owned frame"
+        );
+    });
+}
+
+#[test]
+fn refused_signed_binding_retains_original_attempt_and_spends_round() {
+    let state = state();
+    let mut round = NativeCheckRoundV1::start(Duration::from_secs(60)).unwrap();
+    let instruction = instruction(&mut round, &state);
+    let signed = sign(&state, instruction.clone().into(), 2, 3_000);
+    let chain_id = state.view().chain_id().to_string();
+    let authority = AccountId::new(key(2).public_key().clone());
+    let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
+    let scope = BindingScope {
+        state: &state,
+        round: &mut round,
+        instruction: NativeCustodyCheckRefV1::FinalPromotionAccount(&instruction),
+        chain_id: &chain_id,
+        network_id: *state.network_id_ref().as_bytes(),
+        authority: &authority,
+        floor: floor(),
+    };
+    let failure: BindingFailure<_, Error> =
+        match norito::core::with_decode_limits_scope(limits, || {
+            bind_signed_check_v1(scope, SignedCheckAttempt::new(signed), test_scope)
+        }) {
+            Err(failure) => failure,
+            Ok(_) => panic!("original caller ceiling must refuse"),
+        };
+    assert!(matches!(
+        &failure.error,
+        NativeCheckBindingErrorV1::Codec { local: Some(_), .. }
+    ));
+    assert!(failure.prepared.round.bound);
+    drop(failure);
+    assert_eq!(
+        bind(&mut round, &state, &instruction).err(),
+        Some(Error::Invalid)
+    );
 }

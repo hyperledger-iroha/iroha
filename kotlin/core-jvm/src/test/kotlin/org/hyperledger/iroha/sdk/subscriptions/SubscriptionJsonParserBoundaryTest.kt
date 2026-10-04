@@ -1,6 +1,8 @@
 package org.hyperledger.iroha.sdk.subscriptions
 
 import java.math.BigInteger
+import org.hyperledger.iroha.sdk.json.Json
+import org.hyperledger.iroha.sdk.query.Page
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -53,25 +55,19 @@ class SubscriptionJsonParserBoundaryTest {
     }
 
     @Test
-    fun listTotalsPreserveNullFallbackButRejectInvalidUnsignedValues() {
-        assertEquals(
-            0L,
-            SubscriptionJsonParser.parsePlanList(
-                """{"total":null,"items":[]}""".toByteArray(),
-            ).total,
-        )
+    fun listTotalsRequireTheSharedCursorPageBoundary() {
+        assertEquals(null, Page.fromJson(Json.parse("""{"items":[],"next_cursor":null}""")).total)
         for (total in listOf("-1", "9223372036854775808")) {
-            assertFailsWith<IllegalStateException> {
-                SubscriptionJsonParser.parsePlanList(
-                    """{"total":$total,"items":[]}""".toByteArray(),
-                )
-            }
-            assertFailsWith<IllegalStateException> {
-                SubscriptionJsonParser.parseSubscriptionList(
-                    """{"total":$total,"items":[]}""".toByteArray(),
-                )
+            assertFailsWith<IllegalArgumentException> {
+                Page.fromJson(Json.parse("""{"total":$total,"items":[],"next_cursor":null}"""))
             }
         }
+        for (payload in listOf(
+            """{"items":[]}""",
+            """{"items":[],"next_cursor":""}""",
+            """{"items":[],"next_cursor":null,"has_more":false}""",
+            """{"items":[{}],"next_cursor":null,"total":0}""",
+        )) assertFailsWith<IllegalArgumentException> { Page.fromJson(Json.parse(payload)) }
     }
 
     @Test

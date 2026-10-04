@@ -2,7 +2,16 @@
 
 use super::IVM;
 use crate::{IVMHost, PointerType, VMError};
-use ivm_abi::call::{CallWordV1, EmbeddedCallableV1};
+use ivm_abi::{
+    call::{CallTypeNodeV1, EmbeddedCallableV1},
+    entrypoint::EntrypointValueKindV1,
+};
+
+#[path = "call_runtime/layouts.rs"]
+mod layouts;
+#[path = "call_runtime/values.rs"]
+mod values;
+pub(super) use layouts::CallLayouts;
 
 impl IVM {
     /// Select a public entrypoint from the loaded, authenticated contract interface.
@@ -64,6 +73,11 @@ impl IVM {
             .clone()
             .ok_or(VMError::DecodeError)?;
         let callable = &interface.callables[index];
+        let layout = self
+            .call_layouts
+            .as_ref()
+            .ok_or(VMError::DecodeError)?
+            .callable(index)?;
         let entrypoint = interface
             .entrypoints
             .iter()
@@ -71,34 +85,45 @@ impl IVM {
         if entrypoint.is_none() && !self.allow_koto_test_syscalls {
             return Err(VMError::PermissionDenied);
         }
-        if let Some(schema) = entrypoint.and_then(|entry| entry.argument_schema.as_ref()) {
-            if let Some(prepared) = host.prepared_entrypoint_arguments() {
-                if prepared.word_count() != callable.argument_words.len()
+        let schema = entrypoint.and_then(|entry| entry.argument_schema.as_ref());
+        let prepared = if schema.is_some() {
+            let _metadata_mask = crate::zk::RegLoggerGuard::mask();
+            host.prepared_entrypoint_arguments()
+        } else {
+            None
+        };
+        use crate::ivm::register_logging::RootArguments;
+        let route = match (schema.is_some(), prepared.is_some()) {
+            (false, _) => RootArguments::Empty,
+            (true, true) => RootArguments::Prepared,
+            (true, false) => RootArguments::DefaultHost,
+        };
+        let _register_batch = self.prepare_root_register_events(route)?;
+        if let Some(schema) = schema {
+            if let Some(prepared) = prepared {
+                if prepared.word_count() != layout.frame.argument_words
                     || !prepared.is_bound_to(schema, prepared.canonical_bytes())?
                 {
                     return Err(VMError::DecodeError);
                 }
-                prepared.install_call_arguments(self, callable.result_words.len())?;
+                prepared.install_call_arguments(self, layout.frame.result_words)?;
             } else {
                 crate::argument_record::prepare_default_call_arguments(
                     host,
                     self,
                     schema,
-                    callable.result_words.len(),
+                    layout.frame.result_words,
                 )?;
             }
         } else {
-            if !callable.argument_words.is_empty() {
+            if layout.frame.argument_words != 0 {
                 return Err(VMError::DecodeError);
             }
-            crate::argument_record::install_empty_call_arguments(
-                self,
-                callable.result_words.len(),
-            )?;
+            crate::argument_record::install_empty_call_arguments(self, layout.frame.result_words)?;
         }
         let prepared_frame = self.memory.call_frames.prepare_root(
             self.memory.stack_top(),
-            callable,
+            &layout.frame,
             crate::call_frame::CallTables {
                 argument_base: self.registers.get(10),
                 argument_words: self.registers.get(11),
@@ -114,6 +139,7 @@ impl IVM {
         self.contract_outer_return_pc = Some(self.memory.code_len());
         self.validate_call_tables(callable, true)?;
         self.memory.call_frames.enter_prepared_root(prepared_frame);
+        self.native_root_committed();
         Ok(())
     }
 
@@ -127,12 +153,17 @@ impl IVM {
             .clone()
             .ok_or(VMError::DecodeError)?;
         let callable = &interface.callables[index];
+        let layout = self
+            .call_layouts
+            .as_ref()
+            .ok_or(VMError::DecodeError)?
+            .callable(index)?;
         // Fund the protected return slot before validating tables debits gas
         // or entering the child frame mutates its ownership bitmap.
         self.preflight_contract_return()?;
         let prepared_frame = self.memory.call_frames.prepare_child(
             self.registers.get(31),
-            callable,
+            &layout.frame,
             crate::call_frame::CallTables {
                 argument_base: self.registers.get(10),
                 argument_words: self.registers.get(11),
@@ -151,36 +182,41 @@ impl IVM {
         callable: &EmbeddedCallableV1,
         root: bool,
     ) -> Result<(), VMError> {
+        let index = self
+            .contract_interface
+            .as_ref()
+            .ok_or(VMError::DecodeError)?
+            .callables
+            .binary_search_by_key(&callable.entry_pc, |entry| entry.entry_pc)
+            .map_err(|_| VMError::DecodeError)?;
+        let layout = self
+            .call_layouts
+            .as_ref()
+            .ok_or(VMError::DecodeError)?
+            .callable(index)?;
         self.zk_require_public_trap_operands(&[10, 11, 12, 13, 31])?;
         let argument = self.registers.get(10);
         let results = self.registers.get(12);
-        if self.registers.get(11) != callable.argument_words.len() as u64
-            || self.registers.get(13) != callable.result_words.len() as u64
+        if self.registers.get(11) != layout.frame.argument_words as u64
+            || self.registers.get(13) != layout.frame.result_words as u64
             || !argument.is_multiple_of(8)
             || !results.is_multiple_of(8)
-            || (callable.argument_words.is_empty() && argument != 0)
+            || (layout.frame.argument_words == 0 && argument != 0)
         {
             return Err(VMError::AssertionFailed);
         }
         if root {
-            if !callable.argument_words.is_empty() {
-                self.ensure_owned_heap_range(argument, callable.argument_words.len() as u64 * 8)?;
+            if layout.frame.argument_words != 0 {
+                self.ensure_owned_heap_range(argument, layout.frame.argument_words as u64 * 8)?;
             }
-            self.ensure_owned_heap_range(results, callable.result_words.len() as u64 * 8)?;
+            self.ensure_owned_heap_range(results, layout.frame.result_words as u64 * 8)?;
         }
         // Reserve deterministic bitmap work before the frame owner allocates it.
         self.debit_gas(crate::call_gas::frame(
             callable.frame_bytes,
-            callable.result_words.len(),
+            layout.frame.result_words,
         )?)?;
-        for (index, role) in callable.argument_words.iter().copied().enumerate() {
-            self.debit_gas(crate::call_gas::WORD)?;
-            let address = argument
-                .checked_add(index as u64 * 8)
-                .ok_or(VMError::MemoryOutOfBounds)?;
-            let word = self.memory.load_u64(address)?;
-            self.validate_call_word(address, word, role)?;
-        }
+        self.validate_call_values(&callable.arguments, layout.arguments, argument, false)?;
         Ok(())
     }
 
@@ -196,75 +232,86 @@ impl IVM {
             .binary_search_by_key(&entry_pc, |entry| entry.entry_pc)
             .map_err(|_| VMError::DecodeError)?;
         let callable = &interface.callables[index];
-        if self.registers.get(11) != callable.result_words.len() as u64 {
+        let layout = self
+            .call_layouts
+            .as_ref()
+            .ok_or(VMError::DecodeError)?
+            .callable(index)?;
+        if self.registers.get(11) != layout.frame.result_words as u64 {
             return Err(VMError::AssertionFailed);
         }
-        for (index, role) in callable.result_words.iter().copied().enumerate() {
-            self.debit_gas(crate::call_gas::WORD)?;
-            let (address, word) = self.memory.active_call_result(index)?;
-            self.validate_call_word(address, word, role)?;
-        }
+        let result_base = self.registers.get(10);
+        self.validate_call_values(&callable.results, layout.results, result_base, true)?;
+        self.native_before_return();
         self.memory.call_frames.finish(
             self.registers.get(31),
             self.registers.get(10),
             self.registers.get(11),
-        )
+        )?;
+        self.native_root_returned();
+        Ok(())
     }
 
     fn validate_call_word(
         &mut self,
         address: u64,
         word: u64,
-        role: CallWordV1,
+        role: &CallTypeNodeV1,
     ) -> Result<(), VMError> {
         if self.memory_load_privacy_tag(address, 8)? != role.is_private() {
             return Err(VMError::PrivacyViolation);
         }
         match role {
-            CallWordV1::Unit if word == 0 => Ok(()),
-            CallWordV1::Bool if word <= 1 => Ok(()),
-            CallWordV1::Error if u32::try_from(word).is_ok() => Ok(()),
-            CallWordV1::Pointer(expected) => self.validate_call_pointer(word, Some(expected)),
-            CallWordV1::StateCursor => self.validate_call_cursor_pointer(word),
-            CallWordV1::StateRoot => self.validate_call_pointer(word, None),
-            CallWordV1::SecretNumeric(expected) => {
-                self.validate_secret_call_pointer(word, expected)
-            }
-            CallWordV1::Sum => {
-                self.debit_gas(crate::call_gas::WORD)?;
-                self.ensure_owned_heap_range(word, 8)?;
-                if self.load_u64(word)? > 1 {
-                    return Err(VMError::DecodeError);
-                }
+            CallTypeNodeV1::Unit if word == 0 => Ok(()),
+            CallTypeNodeV1::Struct { fields, .. } if fields.is_empty() && word == 0 => Ok(()),
+            CallTypeNodeV1::Leaf(EntrypointValueKindV1::Bool) if word <= 1 => Ok(()),
+            CallTypeNodeV1::Error(error)
+                if u32::try_from(word).ok().is_some_and(|code| {
+                    error
+                        .variants
+                        .binary_search_by_key(&code, |variant| variant.code)
+                        .is_ok()
+                }) =>
+            {
                 Ok(())
             }
-            CallWordV1::List => {
-                self.debit_gas(2 * crate::call_gas::WORD)?;
-                self.ensure_owned_heap_range(word, 16)?;
-                let length = self.load_u64(word)?;
-                let capacity = self.load_u64(word + 8)?;
-                if !(1..=64).contains(&capacity) || length > capacity {
-                    return Err(VMError::DecodeError);
-                }
-                Ok(())
+            CallTypeNodeV1::Leaf(kind) if *kind != EntrypointValueKindV1::Bool => {
+                let expected = role.pointer_type().ok_or(VMError::DecodeError)?;
+                self.validate_call_pointer_role(word, Some(expected as u16), None, Some(*kind))
+            }
+            CallTypeNodeV1::Pointer(expected) => self.validate_call_pointer(word, Some(*expected)),
+            CallTypeNodeV1::StateCursor(key) => self.validate_call_cursor_pointer(word, *key),
+            CallTypeNodeV1::StateRoot => self.validate_call_pointer(word, None),
+            CallTypeNodeV1::SecretNumeric(expected) => {
+                self.validate_secret_call_pointer(word, *expected)
             }
             _ => Err(VMError::DecodeError),
         }
     }
 
     fn validate_call_pointer(&mut self, word: u64, expected: Option<u16>) -> Result<(), VMError> {
-        self.validate_call_pointer_role(word, expected, false)
+        self.validate_call_pointer_role(word, expected, None, None)
     }
 
-    fn validate_call_cursor_pointer(&mut self, word: u64) -> Result<(), VMError> {
-        self.validate_call_pointer_role(word, Some(PointerType::NoritoBytes as u16), true)
+    fn validate_call_cursor_pointer(
+        &mut self,
+        word: u64,
+        key: EntrypointValueKindV1,
+    ) -> Result<(), VMError> {
+        self.validate_call_pointer_role(
+            word,
+            Some(PointerType::NoritoBytes as u16),
+            Some(key),
+            None,
+        )
     }
 
     fn validate_call_pointer_role(
         &mut self,
         word: u64,
         expected: Option<u16>,
-        cursor: bool,
+        cursor_key: Option<EntrypointValueKindV1>,
+        leaf_kind: Option<EntrypointValueKindV1>,
     ) -> Result<(), VMError> {
         let (payload, _) = self.inspect_owned_public_tlv_header(word)?;
         self.debit_gas(crate::call_gas::pointer(payload)?)?;
@@ -275,13 +322,19 @@ impl IVM {
         {
             return Err(VMError::NoritoInvalid);
         }
-        if cursor {
-            // TODO: Include the declared key kind in CallWordV1 so helper calls
-            // can also reject a structurally valid cursor for the wrong map-key type.
-            iroha_data_model::smart_contract::state_cursor::StateCursorV1::decode_frame(
-                tlv.payload,
-            )
-            .map_err(|_| VMError::NoritoInvalid)?;
+        if let Some(key) = cursor_key {
+            let cursor =
+                iroha_data_model::smart_contract::state_cursor::StateCursorV1::decode_frame(
+                    tlv.payload,
+                )
+                .map_err(|_| VMError::NoritoInvalid)?;
+            if cursor.key_type != key {
+                return Err(VMError::NoritoInvalid);
+            }
+        }
+        if let Some(kind) = leaf_kind {
+            return crate::argument_record::validate_pointer_payload(kind, tlv.payload)
+                .map_err(|_| VMError::NoritoInvalid);
         }
         if matches!(
             tlv.type_id,
@@ -453,7 +506,7 @@ mod tests {
         let mut vm = IVM::new(100_000);
         let pointer = vm
             .alloc_host_tlv(
-                &crate::numeric_tlv::encode_envelope(PointerType::Blob, b"value").unwrap(),
+                &ivm_abi::numeric_tlv::encode_envelope(PointerType::Blob, b"value").unwrap(),
             )
             .unwrap();
         let before = vm.remaining_gas();
@@ -470,7 +523,9 @@ mod tests {
             Err(VMError::OutOfGas)
         );
         let pointer = vm
-            .alloc_host_tlv(&crate::numeric_tlv::encode_envelope(PointerType::Int, b"bad").unwrap())
+            .alloc_host_tlv(
+                &ivm_abi::numeric_tlv::encode_envelope(PointerType::Int, b"bad").unwrap(),
+            )
             .unwrap();
         vm.set_gas_limit(100_000);
         assert_eq!(
@@ -490,14 +545,18 @@ mod tests {
         let invalid_payload = b"not a cursor";
         let invalid_pointer = vm
             .alloc_host_tlv(
-                &crate::numeric_tlv::encode_envelope(PointerType::NoritoBytes, invalid_payload)
+                &ivm_abi::numeric_tlv::encode_envelope(PointerType::NoritoBytes, invalid_payload)
                     .unwrap(),
             )
             .unwrap();
         vm.store_u64(slot, invalid_pointer).unwrap();
         let before = vm.remaining_gas();
         assert_eq!(
-            vm.validate_call_word(slot, invalid_pointer, CallWordV1::StateCursor),
+            vm.validate_call_word(
+                slot,
+                invalid_pointer,
+                &CallTypeNodeV1::StateCursor(EntrypointValueKindV1::Int)
+            ),
             Err(VMError::NoritoInvalid)
         );
         assert_eq!(
@@ -515,20 +574,209 @@ mod tests {
         let valid_payload = cursor.encode_frame().unwrap();
         let valid_pointer = vm
             .alloc_host_tlv(
-                &crate::numeric_tlv::encode_envelope(PointerType::NoritoBytes, &valid_payload)
+                &ivm_abi::numeric_tlv::encode_envelope(PointerType::NoritoBytes, &valid_payload)
                     .unwrap(),
             )
             .unwrap();
         vm.store_u64(slot, valid_pointer).unwrap();
         let before = vm.remaining_gas();
         assert_eq!(
-            vm.validate_call_word(slot, valid_pointer, CallWordV1::StateCursor),
+            vm.validate_call_word(
+                slot,
+                valid_pointer,
+                &CallTypeNodeV1::StateCursor(EntrypointValueKindV1::Int)
+            ),
             Ok(())
         );
         assert_eq!(
             before - vm.remaining_gas(),
             crate::call_gas::pointer(valid_payload.len() as u64).unwrap()
         );
+    }
+
+    fn cursor_pointer(vm: &mut IVM, key: EntrypointValueKindV1) -> (u64, u64) {
+        let cursor = iroha_data_model::smart_contract::state_cursor::StateCursorV1 {
+            instance: "contract::instance".into(),
+            map: "balances".parse().unwrap(),
+            schema_hash: [7; 32],
+            key_type: key,
+            last_key: "balances/00".parse().unwrap(),
+        };
+        let payload = cursor.encode_frame().unwrap();
+        let pointer = vm
+            .alloc_host_tlv(
+                &ivm_abi::numeric_tlv::encode_envelope(PointerType::NoritoBytes, &payload).unwrap(),
+            )
+            .unwrap();
+        (
+            pointer,
+            crate::call_gas::pointer(payload.len() as u64).unwrap(),
+        )
+    }
+
+    fn frame_shape(vm: &IVM, callable: &EmbeddedCallableV1) -> crate::call_frame::CallFrameShape {
+        let index = vm
+            .contract_interface
+            .as_ref()
+            .unwrap()
+            .callables
+            .binary_search_by_key(&callable.entry_pc, |entry| entry.entry_pc)
+            .unwrap();
+        vm.call_layouts
+            .as_ref()
+            .unwrap()
+            .callable(index)
+            .unwrap()
+            .frame
+    }
+
+    fn cursor_root() -> (IVM, EmbeddedCallableV1, crate::call_frame::CallTables) {
+        let bytes = KotodamaCompiler::new().compile_source(
+            "seiyaku Cursors { fn echo(StateCursor<int> value) -> StateCursor<int> { value } view fn main(StateCursor<int> value) -> StateCursor<int> { echo(value: value) } }"
+        ).unwrap();
+        let parsed = ProgramMetadata::parse(&bytes).unwrap();
+        let interface = parsed.contract_interface.as_ref().unwrap();
+        let entry_pc = interface
+            .entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .unwrap()
+            .entry_pc;
+        let callable = interface
+            .callables
+            .iter()
+            .find(|callable| callable.entry_pc == entry_pc)
+            .unwrap()
+            .clone();
+        assert_eq!(
+            callable.arguments.nodes,
+            [CallTypeNodeV1::StateCursor(EntrypointValueKindV1::Int)]
+        );
+        assert_eq!(
+            callable.results.nodes,
+            [CallTypeNodeV1::StateCursor(EntrypointValueKindV1::Int)]
+        );
+        let mut vm = IVM::new(100_000);
+        vm.load_program(&bytes).unwrap();
+        let tables = crate::call_frame::CallTables {
+            argument_base: vm.alloc_heap(8).unwrap(),
+            argument_words: 1,
+            result_base: vm.alloc_heap(8).unwrap(),
+            result_words: 1,
+        };
+        vm.registers.set(10, tables.argument_base);
+        vm.registers.set(11, tables.argument_words);
+        vm.registers.set(12, tables.result_base);
+        vm.registers.set(13, tables.result_words);
+        vm.registers.set(31, vm.memory.stack_top());
+        (vm, callable, tables)
+    }
+
+    #[test]
+    fn cursor_argument_key_mismatch_rejects_before_frame_entry_with_staged_gas() {
+        let (mut vm, callable, tables) = cursor_root();
+        let (wrong, cost) = cursor_pointer(&mut vm, EntrypointValueKindV1::Bool);
+        vm.store_u64(tables.argument_base, wrong).unwrap();
+        let before = vm.remaining_gas();
+        assert_eq!(
+            vm.validate_call_tables(&callable, true),
+            Err(VMError::NoritoInvalid)
+        );
+        assert_eq!(
+            before - vm.remaining_gas(),
+            crate::call_gas::frame(callable.frame_bytes, 1).unwrap()
+                + crate::call_gas::NODE
+                + crate::call_gas::WORD
+                + cost
+        );
+        assert!(vm.memory.call_frames.entry_pc().is_err());
+        assert!(vm.call_result_word_count().is_err());
+        let (correct, _) = cursor_pointer(&mut vm, EntrypointValueKindV1::Int);
+        vm.store_u64(tables.argument_base, correct).unwrap();
+        vm.validate_call_tables(&callable, true).unwrap();
+    }
+
+    #[test]
+    fn nested_cursor_calls_reject_wrong_keys_on_arguments_and_returns() {
+        let (mut vm, root, tables) = cursor_root();
+        let child = vm
+            .contract_interface
+            .as_ref()
+            .unwrap()
+            .callables
+            .iter()
+            .find(|callable| callable.entry_pc != root.entry_pc)
+            .unwrap()
+            .clone();
+        let (correct, _) = cursor_pointer(&mut vm, EntrypointValueKindV1::Int);
+        let (wrong, _) = cursor_pointer(&mut vm, EntrypointValueKindV1::Bool);
+        vm.store_u64(tables.argument_base, correct).unwrap();
+        let frame = frame_shape(&vm, &root);
+        let prepared = vm
+            .memory
+            .call_frames
+            .prepare_root(vm.memory.stack_top(), &frame, tables, vm.memory.stack_top())
+            .unwrap();
+        vm.validate_call_tables(&root, true).unwrap();
+        vm.memory.call_frames.enter_prepared_root(prepared);
+        assert!(
+            root.frame_bytes >= 16,
+            "parent owns disjoint argument/result tables"
+        );
+        let parent_stack = vm.memory.stack_top() - u64::from(root.frame_bytes);
+        let child_results = parent_stack + 8;
+        vm.registers.set(31, parent_stack);
+        vm.registers.set(10, parent_stack);
+        vm.registers.set(11, 1);
+        vm.registers.set(12, child_results);
+        vm.registers.set(13, 1);
+        vm.store_u64(parent_stack, wrong).unwrap();
+        let target = vm.program_prefix_len + child.entry_pc;
+        assert_eq!(vm.begin_child_call(target), Err(VMError::NoritoInvalid));
+        assert_eq!(vm.memory.call_frames.entry_pc(), Ok(root.entry_pc));
+        vm.store_u64(parent_stack, correct).unwrap();
+        vm.begin_child_call(target).unwrap();
+        assert_eq!(vm.memory.call_frames.entry_pc(), Ok(child.entry_pc));
+        vm.store_u64(child_results, wrong).unwrap();
+        vm.registers.set(10, child_results);
+        assert_eq!(vm.finish_call(), Err(VMError::NoritoInvalid));
+        assert_eq!(vm.memory.call_frames.entry_pc(), Ok(child.entry_pc));
+        assert!(vm.call_result_word_count().is_err());
+        vm.store_u64(child_results, correct).unwrap();
+        vm.finish_call().unwrap();
+        assert_eq!(vm.memory.call_frames.entry_pc(), Ok(root.entry_pc));
+        assert!(vm.call_result_word_count().is_err());
+    }
+
+    #[test]
+    fn cursor_result_key_mismatch_cannot_publish_completed_results() {
+        let (mut vm, callable, tables) = cursor_root();
+        let (correct, _) = cursor_pointer(&mut vm, EntrypointValueKindV1::Int);
+        let (wrong, cost) = cursor_pointer(&mut vm, EntrypointValueKindV1::Bool);
+        vm.store_u64(tables.argument_base, correct).unwrap();
+        let frame = frame_shape(&vm, &callable);
+        let prepared = vm
+            .memory
+            .call_frames
+            .prepare_root(vm.memory.stack_top(), &frame, tables, vm.memory.stack_top())
+            .unwrap();
+        vm.validate_call_tables(&callable, true).unwrap();
+        vm.memory.call_frames.enter_prepared_root(prepared);
+        vm.store_u64(tables.result_base, wrong).unwrap();
+        vm.registers.set(10, tables.result_base);
+        vm.registers.set(11, tables.result_words);
+        let before = vm.remaining_gas();
+        assert_eq!(vm.finish_call(), Err(VMError::NoritoInvalid));
+        assert_eq!(
+            before - vm.remaining_gas(),
+            crate::call_gas::NODE + crate::call_gas::WORD + cost
+        );
+        assert!(vm.call_result_word_count().is_err());
+        assert!(vm.public_call_result_word(0).is_err());
+        vm.store_u64(tables.result_base, correct).unwrap();
+        vm.finish_call().unwrap();
+        assert_eq!(vm.call_result_word_count(), Ok(1));
+        assert_eq!(vm.public_call_result_word(0), Ok(correct));
     }
 
     #[test]
@@ -542,7 +790,7 @@ mod tests {
         for value in [BigInt::from(0), BigInt::pow10(120).unwrap()] {
             let record = crate::private_input::int_record(value).unwrap();
             let envelope =
-                crate::numeric_tlv::encode_envelope(PointerType::Int, &record.payload).unwrap();
+                ivm_abi::numeric_tlv::encode_envelope(PointerType::Int, &record.payload).unwrap();
             let pointer = vm.alloc_host_private_tlv(&envelope).unwrap();
             vm.memory.store_u64(slot, pointer).unwrap();
             vm.record_memory_store_privacy(slot, 8, true);
@@ -550,12 +798,16 @@ mod tests {
             vm.validate_call_word(
                 slot,
                 pointer,
-                CallWordV1::SecretNumeric(PointerType::Int as u16),
+                &CallTypeNodeV1::SecretNumeric(PointerType::Int as u16),
             )
             .unwrap();
             costs.push(before - vm.remaining_gas());
             assert_eq!(
-                vm.validate_call_word(slot, pointer, CallWordV1::Pointer(PointerType::Int as u16)),
+                vm.validate_call_word(
+                    slot,
+                    pointer,
+                    &CallTypeNodeV1::Leaf(EntrypointValueKindV1::Int)
+                ),
                 Err(VMError::PrivacyViolation)
             );
             assert_eq!(
@@ -566,7 +818,7 @@ mod tests {
         assert_eq!(costs, vec![16 + 39 + MAX_INT_FRAME_BYTES_V1 as u64; 2]);
         vm.store_u8(slot, 0).unwrap();
         assert_eq!(
-            vm.validate_call_word(slot, 0, CallWordV1::Unit),
+            vm.validate_call_word(slot, 0, &CallTypeNodeV1::Unit),
             Err(VMError::PrivacyViolation)
         );
     }

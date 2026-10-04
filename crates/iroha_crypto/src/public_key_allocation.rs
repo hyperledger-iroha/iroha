@@ -88,7 +88,7 @@ impl PublicKey {
     }
 
     #[allow(unsafe_code)]
-    fn bind_compact_allocation(bytes: ChargedBuffer<u8>) -> ChargedPublicKey {
+    pub(crate) fn bind_compact_allocation(bytes: ChargedBuffer<u8>) -> ChargedPublicKey {
         // SAFETY: the immediately constructed owner retains the same charge.
         // Length equals exact capacity, so into_boxed_slice performs no resize;
         // the compact key has no mutation/escape API on ChargedPublicKey.

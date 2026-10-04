@@ -38,6 +38,35 @@ instruction-offset boundary: lowering computes the full address before the same
 checked load/store. This does not change the 8,192-word call-table limit or the
 existing public record, schema-node and schema-depth limits.
 
+## Complete callable schemas
+
+`EmbeddedCallableV1` carries an argument forest and one result tree, each a flat
+preorder `CallSchemaV1` tape. Inline children preserve nominal products, finite
+error descriptors, both Result branches, List capacity and element type, cursor
+key kinds, and private numeric roles. There are no child references or erased
+Sum/List roles. Table counts are derived from the schema; Unit and empty named
+products occupy one zero word. Private tapes permit 250,000 nodes and depth 256;
+public records retain their existing 256-node limit. Each table remains bounded
+to 8,192 words, independently of a handle's checked payload allocation size.
+
+The JavaScript artifact boundary reads this same complete tape, including
+reserved query-view shapes, nominal error catalogs, cursor key kinds and private
+resource restrictions. Its bounded iterative traversal keeps the private limits
+separate from public-record limits and rejects the retired shallow-role layout.
+Structural validation of compiler output does not replace native artifact
+admission or execution-proof verification.
+
+Validation derives subtree ends and widths without allocating, and can fill
+caller-funded traversal storage. Runtime traversal charges one gas before each
+visited schema node, eight before each occupied scalar or handle word, eight
+for a sum tag or sixteen for a List header, followed by existing staged pointer
+validation charges. It checks the full reserved aggregate footprint and exact
+List capacity, then visits only the active branch or logical List elements.
+Inactive payloads and unused List capacity are not interpreted as values.
+Authenticated callable lookup and these complete scans still require integration
+with the production execution-proof relation; native validation is not proof
+qualification.
+
 ## Bounded live scan contract
 
 `STATE_SCAN = 0x010038` consumes `r10` canonical NoritoBytes(StatePath map),
@@ -50,7 +79,11 @@ produce wildcard read metadata, while unresolved accesses serialize.
 
 A cursor binds the authoritative host instance, map name, exact key/value schema
 hash, key kind and last examined canonical map path. Its canonical Norito frame
-is at most 64 KiB. The schema hash uses
+is at most 64 KiB. Every cursor node in the complete callable schema retains its
+declared key kind in `CallTypeNodeV1::StateCursor(EntrypointValueKindV1)`, including
+nodes below `Option`, `Result` and `List`. Argument and result validation reject
+a canonical frame carrying a different key kind; `Json` keys are invalid.
+The schema hash uses
 `KOTODAMA_STATE_MAP_CURSOR_SCHEMA_V1\0` plus the complete canonical Norito
 EmbeddedStateType::StateMap frame. Type identity and map position do not confer
 authorization. Hosts validate the current declaration and read permissions on

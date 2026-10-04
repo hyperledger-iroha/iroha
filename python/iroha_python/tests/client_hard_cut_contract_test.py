@@ -8,8 +8,7 @@ import pytest
 import requests
 
 from iroha_python import (
-    ExplorerCursorMeta,
-    ExplorerRwasPage,
+    F,
     ToriiCanonicalRequestAuth,
     ToriiClient,
     canonical_network_request_signature_message,
@@ -52,6 +51,7 @@ def response(status: int, payload: object) -> requests.Response:
     result = requests.Response()
     result.status_code = status
     result._content = json.dumps(payload).encode("utf-8")
+    result._content_consumed = True
     result.headers["Content-Type"] = "application/json"
     return result
 
@@ -65,12 +65,14 @@ def test_asset_balance_rejects_noncanonical_or_untyped_quantities(quantity: obje
                 {
                     "items": [
                         {
-                            "asset_id": "canonical-ds-id#adult@is",
+                            "asset": "canonical-ds-id",
                             "asset_alias": "ds#wonderland.is",
+                            "scope": "global",
+                            "account_id": "adult@is",
                             "quantity": quantity,
                         }
                     ],
-                    "total": 1,
+                    "next_cursor": None,
                 },
             )
         ]
@@ -84,7 +86,7 @@ def test_asset_balance_rejects_noncanonical_or_untyped_quantities(quantity: obje
 def test_explorer_rwa_list_uses_strict_cursor_contract() -> None:
     cursor = base64.urlsafe_b64encode(b"canonical explorer cursor").rstrip(b"=").decode()
     payload = {
-        "pagination": {"limit": 2, "next_cursor": cursor, "has_more": True},
+        "next_cursor": cursor,
         "items": [
             {
                 "id": "lot-001$commodities",
@@ -101,24 +103,22 @@ def test_explorer_rwa_list_uses_strict_cursor_contract() -> None:
     session = FakeSession([response(200, payload)])
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
-    page = client.list_explorer_rwas_typed(
+    page = client.explorer_rwas.list(
         cursor=cursor,
         limit=2,
-        owned_by="account",
-        domain="commodities",
+        filter=(F.owned_by == "account") & (F.domain == "commodities"),
     )
 
-    assert page.pagination == ExplorerCursorMeta(
-        limit=2,
-        next_cursor=cursor,
-        has_more=True,
-    )
+    assert page.next_cursor == cursor
+    assert page.has_more
     assert [item.id for item in page.items] == ["lot-001$commodities"]
-    assert session.calls[0]["params"] == {
+    assert json.loads(session.calls[0]["data"]) == {
         "cursor": cursor,
         "limit": 2,
-        "owned_by": "account",
-        "domain": "commodities",
+        "filter": {"op": "and", "args": [
+            {"op": "eq", "args": ["owned_by", "account"]},
+            {"op": "eq", "args": ["domain", "commodities"]},
+        ]},
     }
     assert not any(
         str(name).lower().startswith("x-iroha-")
@@ -129,7 +129,7 @@ def test_explorer_rwa_list_uses_strict_cursor_contract() -> None:
 def test_explorer_rwa_list_optionally_signs_exact_final_uri() -> None:
     cursor = base64.urlsafe_b64encode(b"signed explorer cursor").rstrip(b"=").decode()
     payload = {
-        "pagination": {"limit": 2, "next_cursor": None, "has_more": False},
+        "next_cursor": None,
         "items": [],
     }
     session = RecordingSession(StubResponse(payload=payload))
@@ -148,24 +148,25 @@ def test_explorer_rwa_list_optionally_signs_exact_final_uri() -> None:
         max_retries=3,
     )
 
-    page = client.list_explorer_rwas_typed(
+    page = client.explorer_rwas.list(
         cursor=cursor,
         limit=2,
-        domain="commodities",
+        filter=F.domain == "commodities",
     )
 
-    assert page.items == []
+    assert page.items == ()
     call = session.calls[0]
     prepared_url = str(call["url"])
     prepared = urlsplit(prepared_url)
     exact_target = prepared.path + (f"?{prepared.query}" if prepared.query else "")
-    assert prepared.query == f"cursor={cursor}&limit=2&domain=commodities"
+    assert prepared.query == ""
+    assert prepared.path == "/v1/explorer/rwas/query"
     assert captured == [
         canonical_network_request_signature_message(
             auth.network_id,
-            "GET",
+            "POST",
             exact_target,
-            b"",
+            call["data"],
             timestamp_ms=auth.timestamp_ms or 0,
             nonce=auth.nonce or "",
         )
@@ -174,47 +175,41 @@ def test_explorer_rwa_list_optionally_signs_exact_final_uri() -> None:
     assert "X-Iroha-Signature" in call["headers"]
 
 
-@pytest.mark.parametrize("limit", [0, 101, True, 1.5])
+@pytest.mark.parametrize("limit", [0, -1, True, 1.5])
 def test_explorer_rwa_list_rejects_invalid_limit_before_dispatch(limit: object) -> None:
     session = FakeSession([])
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
     with pytest.raises((TypeError, ValueError)):
-        client.list_explorer_rwas(limit=limit)  # type: ignore[arg-type]
+        client.explorer_rwas.list(limit=limit)  # type: ignore[arg-type]
     assert session.calls == []
 
 
-@pytest.mark.parametrize("cursor", ["", "padded=", "a", "contains space"])
-def test_explorer_rwa_list_rejects_noncanonical_cursor_before_dispatch(cursor: str) -> None:
+@pytest.mark.parametrize("cursor", ["", "a" * 4097])
+def test_explorer_rwa_list_rejects_invalid_cursor_before_dispatch(cursor: str) -> None:
     session = FakeSession([])
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
     with pytest.raises(ValueError, match="cursor"):
-        client.list_explorer_rwas(cursor=cursor)
+        client.explorer_rwas.list(cursor=cursor)
     assert session.calls == []
 
 
-def test_explorer_cursor_response_rejects_retired_or_inconsistent_fields() -> None:
-    with pytest.raises(TypeError, match="exactly"):
-        ExplorerCursorMeta.from_payload(
-            {"page": 1, "per_page": 25, "total_pages": 1, "total_items": 0}
-        )
-    with pytest.raises(ValueError, match="next_cursor"):
-        ExplorerCursorMeta.from_payload(
-            {"limit": 25, "next_cursor": None, "has_more": True}
-        )
-    with pytest.raises(TypeError, match="unknown"):
-        ExplorerRwasPage.from_payload(
-            {
-                "pagination": {"limit": 25, "next_cursor": None, "has_more": False},
-                "items": [],
-                "total_items": 0,
-            }
-        )
+@pytest.mark.parametrize("payload", [
+    {"items": [], "pagination": {"limit": 25, "next_cursor": None, "has_more": False}},
+    {"items": [], "next_cursor": None, "total": 0},
+    {"items": [], "next_cursor": None, "sampled_at": "today"},
+    {"items": []},
+    {"items": [{}, {}], "next_cursor": None},
+])
+def test_explorer_collection_response_rejects_retired_or_inconsistent_fields(payload: dict) -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([response(200, payload)]), max_retries=0)
+    with pytest.raises(ValueError, match="malformed page"):
+        client.explorer_rwas.list(limit=1)
 
 
 def test_explorer_rwa_list_hard_cuts_retired_page_arguments() -> None:
     client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
 
     with pytest.raises(TypeError, match="unexpected keyword argument"):
-        client.list_explorer_rwas(page=1, per_page=25)  # type: ignore[call-arg]
+        client.explorer_rwas.list(page=1, per_page=25)  # type: ignore[call-arg]

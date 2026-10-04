@@ -1,23 +1,11 @@
 //! Poseidon CUDA publication from one complete charged state owner.
 
 use super::policy::{Kernel, public_workload_task_id};
-use iroha_accel::{PtxArtifact, cuda::CudaFailure};
-use std::ffi::CStr;
+use iroha_accel::cuda::CudaFailure;
+#[path = "poseidon_cost.rs"]
+mod cost;
 #[path = "poseidon_launch.rs"]
 mod launch;
-
-static ARTIFACT: PtxArtifact = PtxArtifact::new(
-    match CStr::from_bytes_with_nul(
-        concat!(
-            include_str!(concat!(env!("OUT_DIR"), "/poseidon.ptx")),
-            "\0"
-        )
-        .as_bytes(),
-    ) {
-        Ok(bytes) => bytes,
-        Err(_) => panic!("embedded Poseidon artifact must have exactly one terminal NUL"),
-    },
-);
 
 #[derive(Clone, Copy)]
 enum Input<'a> {
@@ -60,7 +48,8 @@ impl Input<'_> {
 }
 
 fn stage(input: Input<'_>, geometry: launch::Geometry) -> Result<launch::Output, CudaFailure> {
-    let result = crate::cuda_dispatch::with_selected(input.kernel(), ARTIFACT, |device| {
+    let artifact = crate::cuda_artifact::artifact(input.kernel())?;
+    let result = crate::cuda_dispatch::with_selected(input.kernel(), artifact, |device| {
         match input {
             Input::Two(_) => {
                 let (constants, matrix) = crate::poseidon::poseidon2_params();
@@ -69,7 +58,7 @@ fn stage(input: Input<'_>, geometry: launch::Geometry) -> Result<launch::Output,
                 unsafe {
                     launch::output(
                         device,
-                        ARTIFACT,
+                        artifact,
                         geometry,
                         |i| input.word(i),
                         |i| constants[i / 12][(i / 4) % 3].0[i % 4],
@@ -83,7 +72,7 @@ fn stage(input: Input<'_>, geometry: launch::Geometry) -> Result<launch::Output,
                 unsafe {
                     launch::output(
                         device,
-                        ARTIFACT,
+                        artifact,
                         geometry,
                         |i| input.word(i),
                         |i| constants[i / 24][(i / 4) % 6].0[i % 4],
@@ -94,10 +83,9 @@ fn stage(input: Input<'_>, geometry: launch::Geometry) -> Result<launch::Output,
         }
     });
     match result {
-        Ok(output) => {
-            super::imp::record_completed_cuda_dispatch();
-            Ok(output)
-        }
+        // Completion credit belongs to validated caller publication, after the
+        // original selected policy and CPU identity have been rechecked.
+        Ok(output) => Ok(output),
         Err(error) => {
             if !matches!(
                 error,
@@ -111,22 +99,20 @@ fn stage(input: Input<'_>, geometry: launch::Geometry) -> Result<launch::Output,
 }
 
 fn valid_output(output: &launch::Output, input: Input<'_>) -> bool {
-    let Some(state) = output.state.as_ref() else {
-        return false;
-    };
-    output.status == [0, 0]
-        && state.len() == input.len() * input.width() * 4
-        && state.chunks_exact(4).all(|field| {
-            field
-                .iter()
-                .rev()
-                .cmp(crate::bn254_vec::MODULUS.iter().rev())
-                .is_lt()
-        })
+    super::output_validation::poseidon(
+        output.status,
+        output.state.as_deref(),
+        input.width(),
+        input.len(),
+        || {},
+    )
 }
 
 pub(super) fn admit(kernel: Kernel) -> bool {
-    crate::cuda_dispatch::admit_kernel(kernel, ARTIFACT, || {
+    let Ok(artifact) = crate::cuda_artifact::artifact(kernel) else {
+        return false;
+    };
+    crate::cuda_dispatch::admit_kernel(kernel, artifact, || {
         let Some(_guard) = super::imp::SelftestRunningGuard::enter() else {
             return Err(CudaFailure::Busy);
         };
@@ -165,11 +151,109 @@ pub(super) fn admit(kernel: Kernel) -> bool {
     })
 }
 
-fn into(input: Input<'_>, destination: &mut [u64]) -> bool {
-    if input.len() != destination.len()
-        || u32::try_from(input.len()).is_err()
-        || input.len().checked_mul(input.width() * 4).is_none()
+fn valid_request(input: Input<'_>, destination_len: usize) -> bool {
+    input.len() == destination_len
+        && u32::try_from(input.len()).is_ok()
+        && input.len().checked_mul(input.width() * 4).is_some()
+}
+
+// All state and policy checks finish before the first caller byte is written.
+fn publish(
+    status: [u32; 2],
+    state: Option<&[u64]>,
+    width: usize,
+    destination: &mut [u64],
+    still_selected: impl FnOnce() -> bool,
+) -> Result<(), CudaFailure> {
+    if !super::output_validation::poseidon(status, state, width, destination.len(), || {}) {
+        return Err(CudaFailure::Quarantined);
+    }
+    if !still_selected() {
+        return Err(CudaFailure::Unavailable);
+    }
+    let state = state.expect("validated complete state");
+    for (result, words) in destination.iter_mut().zip(state.chunks_exact(width * 4)) {
+        *result = words[0];
+    }
+    Ok(())
+}
+
+fn complete_current(
+    input: Input<'_>,
+    destination: &mut [u64],
+    still_selected: impl FnOnce() -> bool,
+) -> Result<(), CudaFailure> {
+    if !valid_request(input, destination.len()) {
+        return Err(CudaFailure::InvalidRequest);
+    }
+    let artifact = crate::cuda_artifact::artifact(input.kernel())?;
+    if !super::imp::cuda_policy_allows_attempt()
+        || !crate::cuda_dispatch::current_is_admitted(input.kernel(), artifact)
     {
+        return Err(CudaFailure::Unavailable);
+    }
+    let output = stage(
+        input,
+        launch::Geometry::canonical(input.width(), input.len()),
+    )?;
+    let result = publish(
+        output.status,
+        output.state.as_deref(),
+        input.width(),
+        destination,
+        || {
+            super::imp::cuda_policy_allows_attempt()
+                && crate::cuda_dispatch::current_is_admitted(input.kernel(), artifact)
+                && still_selected()
+        },
+    );
+    if result == Err(CudaFailure::Quarantined) {
+        crate::cuda_dispatch::quarantine_current_kernel();
+    }
+    result?;
+    super::imp::record_completed_cuda_dispatch(input.kernel(), artifact);
+    Ok(())
+}
+
+fn automatic_into(input: Input<'_>, destination: &mut [u64]) -> bool {
+    if !valid_request(input, destination.len()) || super::imp::cuda_disabled() {
+        return false;
+    }
+    if input.len() == 0 {
+        return true;
+    }
+    let cpu = crate::field_dispatch::field_impl();
+    let kernel = input.kernel();
+    let Ok(artifact) = crate::cuda_artifact::artifact(kernel) else {
+        return false;
+    };
+    let Some(selected) = crate::cuda_dispatch::measured::select(
+        kernel,
+        artifact,
+        input.len(),
+        cpu,
+        || super::imp::ensure_cuda_kernel(kernel),
+        |deadline| cost::calibrate(kernel, cpu, deadline),
+    ) else {
+        return false;
+    };
+    selected
+        .run(|token| {
+            super::imp::record_cuda_attempt();
+            complete_current(input, destination, || token.valid()).is_ok()
+        })
+        .unwrap_or(false)
+}
+
+pub(crate) fn poseidon2_auto_into(inputs: &[(u64, u64)], destination: &mut [u64]) -> bool {
+    automatic_into(Input::Two(inputs), destination)
+}
+pub(crate) fn poseidon6_auto_into(inputs: &[[u64; 6]], destination: &mut [u64]) -> bool {
+    automatic_into(Input::Six(inputs), destination)
+}
+
+fn into(input: Input<'_>, destination: &mut [u64]) -> bool {
+    if !valid_request(input, destination.len()) {
         return false;
     }
     if input.len() == 0 {
@@ -184,24 +268,7 @@ fn into(input: Input<'_>, destination: &mut [u64]) -> bool {
         if !super::imp::ensure_cuda_kernel(input.kernel()) {
             return false;
         }
-        let Ok(output) = stage(
-            input,
-            launch::Geometry::canonical(input.width(), input.len()),
-        ) else {
-            return false;
-        };
-        if !valid_output(&output, input) {
-            crate::cuda_dispatch::quarantine_current_kernel();
-            return false;
-        }
-        let state = output.state.as_ref().expect("validated complete state");
-        for (result, words) in destination
-            .iter_mut()
-            .zip(state.chunks_exact(input.width() * 4))
-        {
-            *result = words[0];
-        }
-        true
+        complete_current(input, destination, || true).is_ok()
     })
 }
 
@@ -247,6 +314,75 @@ pub(super) fn fault_probe(short_stride: bool) -> Option<[u32; 2]> {
 mod tests {
     use super::*;
     #[test]
+    fn checked_requests_and_unadmitted_completion_preserve_caller_storage() {
+        let two = [(1, 2), (3, 4)];
+        let six = [[1; 6], [u64::MAX; 6]];
+        assert!(valid_request(Input::Two(&two), 2));
+        assert!(valid_request(Input::Six(&six), 2));
+        assert!(!valid_request(Input::Two(&two), 1));
+        let mut destination = [17, 19];
+        assert_eq!(
+            complete_current(Input::Two(&two), &mut destination, || panic!("unadmitted")),
+            Err(CudaFailure::Unavailable)
+        );
+        assert_eq!(destination, [17, 19]);
+        assert!(!poseidon2_auto_into(&two, &mut destination[..1]));
+        assert!(!poseidon6_auto_into(&six, &mut destination[..1]));
+        assert_eq!(destination, [17, 19]);
+        assert!(!poseidon2_cuda_many_into(&two, &mut destination[..1]));
+        assert!(!poseidon6_cuda_many_into(&six, &mut destination[..1]));
+        assert!(poseidon2_cuda_many_into(&[], &mut []));
+        assert!(poseidon6_cuda_many_into(&[], &mut []));
+    }
+
+    #[test]
+    fn full_state_validation_and_late_policy_refusal_precede_every_write() {
+        for width in [3, 6] {
+            let mut state = [0u64; 48];
+            state[0] = 7;
+            state[width * 4] = 11;
+            let complete = &state[..width * 8];
+            let mut output = [91, 93];
+            assert_eq!(
+                publish([0, 0], Some(complete), width, &mut output, || false),
+                Err(CudaFailure::Unavailable)
+            );
+            assert_eq!(output, [91, 93]);
+            for (status, native) in [
+                ([1, 0], Some(complete)),
+                ([0, 0], None),
+                ([0, 0], Some(&complete[..complete.len() - 1])),
+            ] {
+                assert_eq!(
+                    publish(status, native, width, &mut output, || panic!(
+                        "invalid complete state"
+                    )),
+                    Err(CudaFailure::Quarantined)
+                );
+                assert_eq!(output, [91, 93]);
+            }
+            let mut noncanonical = state;
+            noncanonical[width * 4 + 4..width * 4 + 8].copy_from_slice(&crate::bn254_vec::MODULUS);
+            assert_eq!(
+                publish(
+                    [0, 0],
+                    Some(&noncanonical[..width * 8]),
+                    width,
+                    &mut output,
+                    || panic!("noncanonical later field")
+                ),
+                Err(CudaFailure::Quarantined)
+            );
+            assert_eq!(output, [91, 93]);
+            assert_eq!(
+                publish([0, 0], Some(complete), width, &mut output, || true),
+                Ok(())
+            );
+            assert_eq!(output, [7, 11]);
+        }
+    }
+
+    #[test]
     fn generated_state_words_preserve_every_input_and_zero_upper_limbs() {
         let pairs = [(u64::MAX, 7), (11, 13)];
         let input = Input::Two(&pairs);
@@ -269,5 +405,109 @@ mod tests {
             std::array::from_fn::<_, 6, _>(|i| input.word(i * 4)),
             lanes[0]
         );
+    }
+
+    #[test]
+    fn every_fixed_parameter_upload_limb_matches_the_canonical_width_owner() {
+        use iroha_zkp_halo2::poseidon::{
+            bn254_poseidon_params_width3, bn254_poseidon_params_width6,
+        };
+        let (rc3, m3) = crate::poseidon::poseidon2_params();
+        let (rc6, m6) = crate::poseidon::poseidon6_params();
+        let fixed3 = bn254_poseidon_params_width3();
+        let fixed6 = bn254_poseidon_params_width6();
+        for (actual, expected) in rc3.iter().flatten().chain(m3.iter().flatten()).zip(
+            fixed3
+                .round_constants
+                .iter()
+                .flatten()
+                .chain(fixed3.mds.iter().flatten()),
+        ) {
+            for limb in 0..4 {
+                assert_eq!(
+                    actual.0[limb],
+                    u64::from_le_bytes(expected[limb * 8..(limb + 1) * 8].try_into().unwrap())
+                );
+            }
+        }
+        for (actual, expected) in rc6.iter().flatten().chain(m6.iter().flatten()).zip(
+            fixed6
+                .round_constants
+                .iter()
+                .flatten()
+                .chain(fixed6.mds.iter().flatten()),
+        ) {
+            for limb in 0..4 {
+                assert_eq!(
+                    actual.0[limb],
+                    u64::from_le_bytes(expected[limb * 8..(limb + 1) * 8].try_into().unwrap())
+                );
+            }
+        }
+        assert_eq!((rc3.len(), rc6.len()), (64, 64));
+    }
+
+    #[test]
+    fn admitted_native_staged_complete_states_match_every_cpu_limb() {
+        crate::cuda_dispatch::with_task_scope(0, || {
+            let pairs = [(0, 0), (7, 11), (u64::MAX, u64::MAX)];
+            let six = [[0; 6], [1, 2, 3, 4, 5, 6], [u64::MAX; 6]];
+            for input in [Input::Two(&pairs), Input::Six(&six)] {
+                if !super::super::imp::ensure_cuda_kernel(input.kernel()) {
+                    assert!(
+                        !cfg!(feature = "cuda-hardware-tests"),
+                        "mandatory Poseidon native admission unavailable"
+                    );
+                    return;
+                }
+                let artifact = crate::cuda_artifact::artifact(input.kernel())
+                    .expect("original admitted artifact");
+                assert!(crate::cuda_dispatch::current_is_admitted(
+                    input.kernel(),
+                    artifact
+                ));
+                let result = stage(
+                    input,
+                    launch::Geometry::canonical(input.width(), input.len()),
+                );
+                let output = match result {
+                    Ok(output) => output,
+                    Err(error) => {
+                        assert!(
+                            !cfg!(feature = "cuda-hardware-tests"),
+                            "mandatory complete Poseidon dispatch refused: {error:?}"
+                        );
+                        return;
+                    }
+                };
+                assert!(valid_output(&output, input));
+                let states = output.state.as_ref().unwrap();
+                for (index, words) in states.chunks_exact(input.width() * 4).enumerate() {
+                    match input {
+                        Input::Two(values) => {
+                            let (a, b) = values[index];
+                            let expected = crate::poseidon::parameter_tests::state2([
+                                crate::bn254_vec::FieldElem::from_u64(a),
+                                crate::bn254_vec::FieldElem::from_u64(b),
+                                crate::bn254_vec::FieldElem([0; 4]),
+                            ]);
+                            for (actual, expected) in words.chunks_exact(4).zip(expected) {
+                                assert_eq!(actual, expected.0);
+                            }
+                        }
+                        Input::Six(values) => {
+                            let expected = crate::poseidon::parameter_tests::state6(
+                                values[index].map(crate::bn254_vec::FieldElem::from_u64),
+                            );
+                            for (actual, expected) in words.chunks_exact(4).zip(expected) {
+                                assert_eq!(actual, expected.0);
+                            }
+                        }
+                    }
+                }
+                // This is a validation probe, not production caller publication:
+                // stage completes without awarding ordinary completion credit.
+            }
+        });
     }
 }

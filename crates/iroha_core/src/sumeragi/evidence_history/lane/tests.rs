@@ -1,4 +1,7 @@
 //! Original global frontier, real signed native ancestry, and retained source refusal tests.
+#[path = "tests/replacement.rs"]
+mod replacement;
+
 use super::*;
 use crate::{
     state::{StateReadOnly, WorldReadOnly},
@@ -955,6 +958,158 @@ fn native_lane_observer_proposes_only_original_authenticated_reports_after_local
     evidence::validate_persisted_records(&state).unwrap();
 }
 
+fn original_validator_account_key() -> KeyPair {
+    KeyPair::from_seed(vec![0xE4; 32], Algorithm::Ed25519)
+}
+
+fn reported_original_lane_equivocation(context: &LaneEvidenceContext) -> Evidence {
+    use crate::sumeragi::driver::{
+        DriverConfig, Kernel, KernelStart, Op, Report,
+        ingress::{Ingress, IngressLimits},
+    };
+    use iroha_sumeragi::{
+        api::{Init, LocalParams},
+        crypto::Attestation,
+        message::WireMessage,
+        types::{ConfigSlot, PublicKey},
+    };
+
+    // This deterministic host starts a non-voting observer from the actual lane
+    // creation record. Only the scripted remote peer equivocates; production
+    // node configuration and signing paths have no fault controls.
+    let crypto = BlsCrypto::new();
+    context
+        .authority
+        .visit_members(|key, proof| {
+            let key = iroha_crypto::PublicKey::from_bytes(Algorithm::BlsNormal, key)
+                .expect("original lane member key");
+            crypto.admit(&key, proof).expect("original lane member PoP");
+            Ok(())
+        })
+        .expect("authenticated original lane committee");
+    let config = context.authority.config().clone();
+    let genesis = context.authority.genesis();
+    assert_eq!(genesis.height, 0);
+    let (mut kernel, _) = Kernel::start(KernelStart {
+        allocation_budget: context.budget.clone(),
+        local: LocalParams::default(),
+        init: Init {
+            instance: context.instance,
+            records: Vec::new(),
+            genesis_height: genesis.height,
+            demotion_window: context.authority.demotion_window(),
+            nonce: 1,
+            tip: CommittedTip {
+                height: genesis.height,
+                block_hash: Hash32(genesis.block_hash),
+                result: Hash32(genesis.result),
+                header: None,
+                commit_qc: None,
+            },
+            configs: vec![
+                (1, ConfigSlot::Ready(config.clone())),
+                (2, ConfigSlot::Ready(config.clone())),
+            ],
+            recent_headers: Vec::new(),
+        },
+        signers: Vec::new(),
+        crypto: Box::new(crypto),
+        hasher: Box::new(BlsCrypto::new()),
+        attestation: Attestation::none(),
+        now: 0,
+        ingress: Arc::new(parking_lot::Mutex::new(Ingress::new(
+            IngressLimits::default(),
+        ))),
+        config: DriverConfig::default(),
+    })
+    .expect("production detector starts from authenticated lane genesis");
+
+    fn deliver(kernel: &mut Kernel, from: &PublicKey, vote: Vote) -> Vec<Evidence> {
+        let message = WireMessage::Vote(vote);
+        let class = message.traffic_class();
+        kernel.receive(from.clone(), message, class);
+        let mut handled = 0;
+        while let Some(input) = kernel.next_input(0) {
+            handled += 1;
+            assert!(handled <= 16, "one deterministic input must drain promptly");
+            kernel.handle(0, input);
+        }
+        kernel
+            .poll(0)
+            .into_iter()
+            .filter_map(|operation| match operation {
+                Op::Report(Report::Evidence(evidence)) => Some(*evidence),
+                Op::Report(report) => panic!("unexpected detector report: {report:?}"),
+                Op::Exec(_) | Op::Persist { .. } => {
+                    panic!("the non-voting detector cannot fabricate execution or signing")
+                }
+                Op::Send { msg, .. } => {
+                    assert!(!matches!(msg, WireMessage::Vote(_)));
+                    None
+                }
+                Op::Serve(_) => None,
+            })
+            .collect()
+    }
+
+    let key = keys()[2].clone();
+    let signer = KeyPairSigner::new(&key).unwrap();
+    let from = crate::sumeragi::crypto::core_key(key.public_key()).unwrap();
+    assert_eq!(config.committee.members()[2], from);
+    let signed_vote = |block| {
+        let mut vote = Vote {
+            kind: VoteKind::Prepare,
+            instance: context.instance,
+            epoch: config.epoch.id,
+            height: 1,
+            view: 0,
+            block_hash: Hash32([block; 32]),
+            result: Hash32([73; 32]),
+            attest: false,
+            signer: 2,
+            sig: Signature([0; SIGNATURE_LEN]),
+            attestation: None,
+        };
+        vote.sig = signer.sign(&vote.preimage());
+        vote
+    };
+    let first = signed_vote(71);
+    let second = signed_vote(72);
+    assert!(deliver(&mut kernel, &from, first.clone()).is_empty());
+    let mut bad_signature = second.clone();
+    bad_signature.sig.0[0] ^= 1;
+    let mut foreign_epoch = second.clone();
+    foreign_epoch.epoch.epoch += 1;
+    foreign_epoch.sig = signer.sign(&foreign_epoch.preimage());
+    let mut foreign_instance = second.clone();
+    foreign_instance.instance.0[0] ^= 1;
+    foreign_instance.sig = signer.sign(&foreign_instance.preimage());
+    for invalid in [bad_signature, foreign_epoch, foreign_instance] {
+        assert!(
+            deliver(&mut kernel, &from, invalid).is_empty(),
+            "unauthenticated or foreign votes cannot become slash evidence"
+        );
+    }
+    let mut reports = deliver(&mut kernel, &from, second.clone());
+    assert_eq!(
+        reports.len(),
+        1,
+        "the actual detector reports the conflicting slot"
+    );
+    let report = reports.pop().unwrap();
+    assert_eq!(
+        report,
+        Evidence::VoteEquivocation(first.clone(), second.clone())
+    );
+    for replay in [first, second] {
+        assert!(
+            deliver(&mut kernel, &from, replay).is_empty(),
+            "replayed votes cannot report the same offence twice"
+        );
+    }
+    report
+}
+
 fn fund_original_validator_in_signed_genesis(
     config: &mut crate::sumeragi::test_chain::TestChainConfig,
 ) {
@@ -967,12 +1122,14 @@ fn fund_original_validator_in_signed_genesis(
         nexus::PublicLaneMonetaryPlanV1,
     };
     use iroha_model_base::domain::DomainId;
-    use iroha_primitives::numeric::Quantity;
+    use iroha_primitives::numeric::{NumericSpec, Quantity};
     let original_keys = keys();
     let peer = iroha_model_base::peer::PeerId::new(original_keys[2].public_key().clone());
     config.validator_keys = Some(original_keys);
     let owner = AccountId::new(config.genesis_key.public_key().clone());
-    let validator = AccountId::new(peer.public_key().clone());
+    // The staker signs account transactions with the admitted account algorithm;
+    // its independently registered BLS peer remains the original consensus seat.
+    let validator = AccountId::new(original_validator_account_key().public_key().clone());
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     // Both static lanes are configured in the same physical dataspace. Its canonical
     // lowest stake-elected owner is lane 0; merely sharing a BLS key is insufficient.
@@ -990,10 +1147,21 @@ fn fund_original_validator_in_signed_genesis(
     .unwrap();
     nexus.configured_lane_catalog = nexus.lane_catalog.clone();
     nexus.staking.max_slash_bps = 1_000;
+    let sink = AccountId::new(
+        KeyPair::from_seed(vec![0xE3; 32], Algorithm::Ed25519)
+            .public_key()
+            .clone(),
+    );
+    nexus.staking.slash_sink_account_id = sink.to_string();
     let staking = &nexus.staking;
     let definition: AssetDefinitionId = staking.stake_asset_id.parse().unwrap();
+    assert_eq!(
+        definition,
+        iroha_data_model::parameter::system::SumeragiNposParameters::default()
+            .xor_asset_definition_id
+    );
     let escrow = AccountId::parse_encoded(&staking.stake_escrow_account_id).unwrap();
-    let sink = AccountId::parse_encoded(&staking.slash_sink_account_id).unwrap();
+    assert_ne!(escrow, sink, "a slash must physically leave stake escrow");
     let source_asset = AssetId::new(definition.clone(), validator.clone());
     let escrow_asset = AssetId::new(definition.clone(), escrow.clone());
     let amount = Quantity::from(10_000_u64);
@@ -1004,11 +1172,20 @@ fn fund_original_validator_in_signed_genesis(
             Account::new(escrow).build(&owner),
             Account::new(sink).build(&owner),
         ],
-        [
-            AssetDefinition::numeric(definition, "Staked XOR", AssetBalancePolicy::Global, None)
-                .build(&owner),
-        ],
-        [Asset::new(source_asset.clone(), amount.clone())],
+        [AssetDefinition::new(
+            definition,
+            "XOR",
+            NumericSpec::fractional(9),
+            AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&owner)],
+        // Only `amount` enters stake custody. The second allocation stays liquid
+        // in this exact account-owned XOR asset to pay ordinary signed operations.
+        [Asset::new(
+            source_asset.clone(),
+            amount.checked_add(&Quantity::from(10_000_u64)).unwrap(),
+        )],
         [],
     );
     config.nexus = Some(nexus);
@@ -1032,20 +1209,60 @@ fn fund_original_validator_in_signed_genesis(
 
 #[test]
 fn native_lane_original_genesis_escrow_is_debited_only_by_delayed_authenticated_admission() {
-    use crate::sumeragi::{evidence, lanes::runner::evidence_observer};
+    // Quoted signed staking now reaches the real detector and full cold replay.
+    // Run that complete State/Kernel stack under its existing production bound,
+    // as the native publication fixtures do, rather than libtest's small default.
+    crate::sumeragi::threads::sumeragi_thread_builder("funded-lane-slashing-test")
+        .spawn(|| funded_original_lane_slashing_scenario(false))
+        .expect("spawn funded native lane fixture")
+        .join()
+        .expect("funded native lane fixture");
+}
+
+fn funded_original_lane_slashing_scenario(complete_replacement: bool) {
+    use crate::{
+        smartcontracts::isi::staking::preparation::prepare_public_lane_plan,
+        sumeragi::{evidence, lanes::runner::evidence_observer},
+    };
     use iroha_data_model::{
-        account::AccountId, block::consensus::EvidencePenaltyStatus,
+        account::AccountId,
+        asset::AssetId,
+        block::consensus::{EvidencePenaltyStatus, NexusFeeSettlementV1},
+        isi::{FinalizePublicLaneUnbond, SchedulePublicLaneUnbond},
+        nexus::{
+            FeeDebitSource, PublicLanePreparationOperationV1, PublicLanePreparationRequestV1,
+            PublicLanePrepareUnbondV1, PublicLanePreparedPlanV1, PublicLaneStakeShare,
+        },
         parameter::system::SumeragiNposParameters,
+        transaction::{FeeChargeKind, FeePaymentIntent, SignedTransaction, TransactionBuilder},
     };
     use iroha_primitives::numeric::Quantity;
-    let (mut chain, _guard) = anchored_chain_with_config(
-        7,
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct CustodySnapshot {
+        custody: (AssetId, Quantity),
+        reserve: Quantity,
+        share: PublicLaneStakeShare,
+        escrow_balance: Quantity,
+        sink_balance: Quantity,
+        staker_balance: Quantity,
+        total_supply: Quantity,
+    }
+
+    let policy = if complete_replacement {
+        replacement::policy()
+    } else {
         SumeragiNposParameters {
             slashing_delay_blocks: 2,
             ..SumeragiNposParameters::default()
-        },
-        fund_original_validator_in_signed_genesis,
-    );
+        }
+    };
+    let configure = if complete_replacement {
+        replacement::fund_signed_genesis
+    } else {
+        fund_original_validator_in_signed_genesis
+    };
+    let (mut chain, _guard) = anchored_chain_with_config(7, policy.clone(), configure);
     assert!(
         chain
             .genesis()
@@ -1054,21 +1271,247 @@ fn native_lane_original_genesis_escrow_is_debited_only_by_delayed_authenticated_
         "signed genesis executed original registration and escrow transfer"
     );
     let state = Arc::clone(chain.state());
-    let validator = AccountId::new(keys()[2].public_key().clone());
+    let original_height = chain.height();
+    let validator_key = original_validator_account_key();
+    let validator = AccountId::new(validator_key.public_key().clone());
     let stake_key = (LaneId::SINGLE, validator.clone());
-    let initial = state
-        .view()
-        .world()
-        .public_lane_stake_custody()
-        .get(&stake_key)
-        .unwrap()
-        .1
-        .clone();
-    assert_eq!(initial, Quantity::from(10_000_u64));
+    let share_key = (LaneId::SINGLE, validator.clone(), validator.clone());
+    let (escrow_asset, sink_asset, staker_asset) = {
+        let view = state.view();
+        let registration = view
+            .world()
+            .public_lane_validators()
+            .get(&stake_key)
+            .unwrap();
+        assert_eq!(registration.peer_id.public_key(), keys()[2].public_key());
+        assert_ne!(
+            registration.peer_id.public_key(),
+            validator_key.public_key()
+        );
+        let escrow = &view
+            .world()
+            .public_lane_stake_custody()
+            .get(&stake_key)
+            .unwrap()
+            .0;
+        let sink = AccountId::parse_encoded(&view.nexus().staking.slash_sink_account_id).unwrap();
+        (
+            escrow.clone(),
+            AssetId::with_scope(escrow.definition().clone(), sink, *escrow.scope()),
+            AssetId::with_scope(
+                escrow.definition().clone(),
+                validator.clone(),
+                *escrow.scope(),
+            ),
+        )
+    };
+    let snapshot = |state: &crate::state::State| {
+        let view = state.view();
+        let world = view.world();
+        let balance = |asset: &AssetId| {
+            world
+                .assets()
+                .get(asset)
+                .map_or_else(Quantity::zero, |value| value.as_ref().clone())
+        };
+        CustodySnapshot {
+            custody: world
+                .public_lane_stake_custody()
+                .get(&stake_key)
+                .unwrap()
+                .clone(),
+            reserve: world
+                .public_lane_stake_reserves()
+                .get(&escrow_asset)
+                .unwrap()
+                .clone(),
+            share: world
+                .public_lane_stake_shares()
+                .get(&share_key)
+                .unwrap()
+                .clone(),
+            escrow_balance: balance(&escrow_asset),
+            sink_balance: balance(&sink_asset),
+            staker_balance: balance(&staker_asset),
+            total_supply: world
+                .asset_definition(escrow_asset.definition())
+                .unwrap()
+                .total_quantity()
+                .clone(),
+        }
+    };
+    let initial = snapshot(&state);
+    let principal = Quantity::from(10_000_u64);
+    assert_eq!(initial.custody, (escrow_asset.clone(), principal.clone()));
+    assert_eq!(initial.reserve, principal);
+    assert_eq!(initial.share.bonded, principal);
+    assert_eq!(initial.escrow_balance, principal);
+    assert_eq!(initial.sink_balance, Quantity::zero());
+    assert_eq!(initial.staker_balance, Quantity::from(10_000_u64));
+
+    let sign_paid = |chain: &CertifiedTestChain,
+                     instruction: iroha_data_model::isi::InstructionBox,
+                     created_at_ms: u64| {
+        let mut builder = TransactionBuilder::new(
+            chain.network_id(),
+            validator.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction]);
+        builder.set_creation_time(Duration::from_millis(created_at_ms));
+        let draft = builder.clone().sign(validator_key.private_key());
+        let view = chain.state().view();
+        let quote = crate::executor::quote_nexus_fee_admission_draft(
+            view.world(),
+            view.nexus(),
+            view.pipeline(),
+            draft.payload(),
+            created_at_ms,
+            chain.height() + 1,
+            Some(iroha_model_base::topology::DataSpaceId::UNIVERSAL),
+        )
+        .expect("ordinary staking work has separately funded exact signed XOR fee bounds");
+        assert_eq!(
+            quote.quote.debit_source,
+            FeeDebitSource::Account(validator.clone())
+        );
+        assert_eq!(quote.quote.authority_balances.len(), 1);
+        assert_eq!(
+            quote
+                .quote
+                .authority_charge_assets
+                .get(&FeeChargeKind::Nexus),
+            Some(&staker_asset)
+        );
+        builder
+            .with_fee_payment_intent(quote.recommended_intent)
+            .sign(validator_key.private_key())
+    };
+    let actual_fee = |chain: &CertifiedTestChain, signed: &SignedTransaction| {
+        let committed = chain.committed(chain.height());
+        let receipt = committed
+            .block()
+            .network_output_at(0)
+            .unwrap()
+            .1
+            .result
+            .nexus_fee_receipt()
+            .expect("attempted staking work burns its separately funded fee");
+        assert_eq!(
+            receipt.source_id,
+            *iroha_crypto::Hash::from(signed.hash_as_entrypoint()).as_ref()
+        );
+        assert_eq!(receipt.block_height, chain.height());
+        assert_eq!(receipt.fee_asset_id, *staker_asset.definition());
+        assert_eq!(
+            receipt.debit_source,
+            FeeDebitSource::Account(validator.clone())
+        );
+        assert_eq!(receipt.settlement, NexusFeeSettlementV1::Burn);
+        assert!(!receipt.fee_amount.is_zero());
+        let view = chain.state().view();
+        let policy = &view.nexus().fees;
+        assert_eq!(receipt.schedule.base_fee, policy.base_fee);
+        assert_eq!(receipt.schedule.per_byte_fee, policy.per_byte_fee);
+        assert_eq!(
+            receipt.schedule.per_instruction_fee,
+            policy.per_instruction_fee
+        );
+        assert_eq!(receipt.schedule.per_gas_unit_fee, policy.per_gas_unit_fee);
+        let payload_bytes = norito::canonical_frame_len(signed.payload()).unwrap();
+        assert_eq!(receipt.schedule.tx_bytes_len, payload_bytes as u64);
+        assert_eq!(receipt.schedule.instruction_count, 1);
+        assert_eq!(
+            receipt.fee_amount,
+            crate::executor::compute_nexus_fee_amount(
+                policy,
+                payload_bytes,
+                1,
+                receipt.schedule.gas_used,
+            )
+            .unwrap()
+        );
+        let limit = signed
+            .fee_payment_intent()
+            .charge_limits()
+            .iter()
+            .find(|limit| limit.kind == FeeChargeKind::Nexus)
+            .unwrap();
+        assert_eq!(limit.asset_definition_id, *staker_asset.definition());
+        assert!(receipt.fee_amount <= limit.max_amount);
+        receipt.fee_amount.clone()
+    };
+
+    // The staker can request exit, but the original live seats keep all principal
+    // liable. Scheduling is an ordinary signed transaction, not an overlay edit.
+    let request_id = iroha_crypto::Hash::new(b"original lane offence pending unbond");
+    let schedule_created_at_ms = chain.committed(chain.height()).block_time_ms();
+    let release_at_ms = {
+        let view = state.view();
+        let cadence_ms = view
+            .world()
+            .consensus_schedule()
+            .ready(chain.height() + 1)
+            .expect("authenticated next carrier schedule")
+            .params
+            .block_time_ms;
+        let delay_ms = u64::try_from(view.nexus().staking.unbonding_delay.as_millis())
+            .expect("configured unbonding delay fits the fixture clock");
+        schedule_created_at_ms
+            .checked_add(cadence_ms)
+            .and_then(|time| time.checked_add(delay_ms))
+            .expect("exact configured unbond release time")
+    };
+    let schedule = sign_paid(
+        &chain,
+        SchedulePublicLaneUnbond {
+            lane_id: LaneId::SINGLE,
+            validator: validator.clone(),
+            staker: validator.clone(),
+            request_id,
+            amount: principal.clone(),
+            release_at_ms,
+        }
+        .into(),
+        schedule_created_at_ms,
+    );
+    let schedule_result = chain.commit(vec![schedule.clone()]);
+    assert_eq!(
+        schedule_result,
+        [true],
+        "signed unbond scheduling: {:?}",
+        chain
+            .committed(chain.height())
+            .block()
+            .network_output_at(0)
+            .map(|(_, output)| &output.result)
+    );
+    let schedule_fee = actual_fee(&chain, &schedule);
+    let scheduled = snapshot(&state);
+    assert_eq!(scheduled.share.bonded, Quantity::zero());
+    assert_eq!(scheduled.share.pending_unbonds.len(), 1);
+    let pending = scheduled.share.pending_unbonds.get(&request_id).unwrap();
+    assert_eq!(pending.amount, principal);
+    assert_eq!(pending.release_at_ms, release_at_ms);
+    let mut expected_scheduled = initial;
+    expected_scheduled.share = scheduled.share.clone();
+    expected_scheduled.staker_balance = expected_scheduled
+        .staker_balance
+        .checked_sub(&schedule_fee)
+        .unwrap();
+    expected_scheduled.total_supply = expected_scheduled
+        .total_supply
+        .checked_sub(&schedule_fee)
+        .unwrap();
+    assert_eq!(
+        scheduled, expected_scheduled,
+        "scheduling releases no custody and burns only the separate liquid fee"
+    );
+    let context = capture(&chain);
+    let native = reported_original_lane_equivocation(&context);
     let mut reader =
-        LaneProofRead::new(capture(&chain), 7).unwrap_or_else(|_| panic!("original merged branch"));
+        LaneProofRead::new(context, 1).unwrap_or_else(|_| panic!("original merged branch"));
     reader.poll().unwrap();
-    let native = vote_pair(&reader, 7);
     let original = reader.verify(&native).unwrap();
     assert_eq!(original.offenders().len(), 1);
     let binding = original.offenders()[0]
@@ -1080,6 +1523,15 @@ fn native_lane_original_genesis_escrow_is_debited_only_by_delayed_authenticated_
     let proof = iroha_data_model::block::consensus::Evidence::from_native(&native).unwrap();
     let key = evidence::evidence_key(&proof);
     evidence_observer(Arc::clone(&state), scope.lane, scope.incarnation).evidence(&native);
+    assert!(
+        state
+            .view()
+            .world()
+            .consensus_evidence()
+            .get(&key)
+            .is_none(),
+        "a real detector report still needs an independently finalized admission carrier"
+    );
     let carrier = state.view().height() as u64 + 1;
     chain.commit(Vec::new());
     assert_eq!(
@@ -1093,40 +1545,44 @@ fn native_lane_original_genesis_escrow_is_debited_only_by_delayed_authenticated_
         EvidencePenaltyStatus::Pending
     );
     assert_eq!(
-        state
-            .view()
-            .world()
-            .public_lane_stake_custody()
-            .get(&stake_key)
-            .unwrap()
-            .1,
-        initial,
+        snapshot(&state),
+        scheduled,
         "the admission carrier cannot debit its own report"
     );
     chain.commit(Vec::new());
     assert_eq!(
-        state
-            .view()
-            .world()
-            .public_lane_stake_custody()
-            .get(&stake_key)
-            .unwrap()
-            .1,
-        initial,
+        snapshot(&state),
+        scheduled,
         "the complete immutable delay is preserved"
     );
     chain.commit(Vec::new());
-    let view = state.view();
-    let after = &view
-        .world()
-        .public_lane_stake_custody()
-        .get(&stake_key)
+    let remainder = Quantity::from(9_000_u64);
+    let penalty = Quantity::from(1_000_u64);
+    let mut expected_custody = scheduled;
+    expected_custody.custody.1 = remainder.clone();
+    expected_custody.reserve = remainder.clone();
+    expected_custody
+        .share
+        .pending_unbonds
+        .get_mut(&request_id)
         .unwrap()
-        .1;
+        .amount = remainder.clone();
+    expected_custody.escrow_balance = remainder.clone();
+    expected_custody.sink_balance = penalty;
     assert_eq!(
-        initial.checked_sub(after).unwrap(),
-        Quantity::from(1_000_u64)
+        snapshot(&state),
+        expected_custody,
+        "delayed penalty physically transfers only the liable principal"
     );
+    assert_eq!(
+        expected_custody
+            .escrow_balance
+            .checked_add(&expected_custody.sink_balance)
+            .unwrap(),
+        principal,
+        "slashing conserves real XOR across the distinct custody accounts"
+    );
+    let view = state.view();
     let record = view.world().consensus_evidence().get(&key).unwrap();
     assert_eq!(
         record.penalty_status,
@@ -1136,22 +1592,110 @@ fn native_lane_original_genesis_escrow_is_debited_only_by_delayed_authenticated_
     );
     assert_eq!(record.attribution.offenders[0].lane_stake, Some(binding));
     let expected_record = record.clone();
-    let expected_custody = after.clone();
+    let registration = view
+        .world()
+        .public_lane_validators()
+        .get(&stake_key)
+        .unwrap();
+    assert!(
+        crate::state::validator_committee::peer_has_committee_obligation(
+            view.world(),
+            chain
+                .committed(chain.height())
+                .commitment()
+                .schedule
+                .current
+                .committee
+                .iter()
+                .map(|seat| &seat.validator),
+            &registration.peer_id,
+        )
+    );
+    assert!(
+        crate::sumeragi::lanes::custody::retains_registration(
+            view.world(),
+            registration,
+            chain.height() + 1,
+        )
+        .unwrap()
+    );
+    let prepared = prepare_public_lane_plan(
+        &view,
+        PublicLanePreparationRequestV1 {
+            lane_id: LaneId::SINGLE,
+            valid_for_blocks: 1,
+            operation: PublicLanePreparationOperationV1::FinalizeUnbond(
+                PublicLanePrepareUnbondV1 {
+                    validator: validator.clone(),
+                    staker: validator.clone(),
+                    request_id,
+                },
+            ),
+        },
+    )
+    .unwrap();
+    let PublicLanePreparedPlanV1::Monetary(monetary_plan) = prepared.plan else {
+        panic!("exact remaining unbond monetary plan");
+    };
+    assert_eq!(monetary_plan.amount, remainder);
+    assert_eq!(monetary_plan.source_asset, escrow_asset);
+    assert_eq!(monetary_plan.destination_asset, staker_asset);
     drop(view);
+
+    // Time maturity and an exact signed plan do not release an unchanged global
+    // or lane seat. Only an authenticated replacement can permit withdrawal.
+    let withdrawal_created_at_ms = chain
+        .committed(chain.height())
+        .block_time_ms()
+        .max(release_at_ms.saturating_sub(1));
+    let withdrawal = sign_paid(
+        &chain,
+        FinalizePublicLaneUnbond {
+            lane_id: LaneId::SINGLE,
+            validator: validator.clone(),
+            staker: validator.clone(),
+            request_id,
+            monetary_plan,
+        }
+        .into(),
+        withdrawal_created_at_ms,
+    );
+    assert_eq!(chain.commit(vec![withdrawal.clone()]), [false]);
+    let withdrawal_fee = actual_fee(&chain, &withdrawal);
+    expected_custody.staker_balance = expected_custody
+        .staker_balance
+        .checked_sub(&withdrawal_fee)
+        .unwrap();
+    expected_custody.total_supply = expected_custody
+        .total_supply
+        .checked_sub(&withdrawal_fee)
+        .unwrap();
+    let rejected = chain.committed(chain.height());
+    assert!(rejected.block_time_ms() >= release_at_ms);
+    let rejection = rejected
+        .block()
+        .network_output_at(0)
+        .unwrap()
+        .1
+        .result
+        .as_ref()
+        .unwrap_err();
+    assert!(format!("{rejection:?}").contains(
+        "unbond withdrawal requires authenticated release of current and frozen committee obligations"
+    ), "the unchanged seats reject withdrawal: {rejection:?}");
+    assert_eq!(
+        snapshot(&state),
+        expected_custody,
+        "rejected withdrawal preserves custody and burns only its separate liquid fee"
+    );
+    let final_height = chain.height();
     evidence::validate_persisted_records(&state).unwrap();
 
     // A new executor/State starts from the same original signed genesis and native
     // frontier, then independently replays the exact admitted and penalized suffix.
-    let (mut replay, _replay_guard) = anchored_chain_with_config(
-        7,
-        SumeragiNposParameters {
-            slashing_delay_blocks: 2,
-            ..SumeragiNposParameters::default()
-        },
-        fund_original_validator_in_signed_genesis,
-    );
+    let (mut replay, _replay_guard) = anchored_chain_with_config(7, policy, configure);
     assert_eq!(replay.genesis().hash(), chain.genesis().hash());
-    assert_eq!(replay.state().view().height() as u64, carrier - 1);
+    assert_eq!(replay.state().view().height() as u64, original_height);
     replay.replay_from(&chain).unwrap();
     evidence::validate_persisted_records(replay.state()).unwrap();
     for _ in 0..2 {
@@ -1160,17 +1704,21 @@ fn native_lane_original_genesis_escrow_is_debited_only_by_delayed_authenticated_
             view.world().consensus_evidence().get(&key),
             Some(&expected_record)
         );
-        assert_eq!(
-            view.world()
-                .public_lane_stake_custody()
-                .get(&stake_key)
-                .unwrap()
-                .1,
-            expected_custody
-        );
-        assert_eq!(view.height() as u64, carrier + 2);
+        assert_eq!(view.height() as u64, final_height);
         drop(view);
+        assert_eq!(snapshot(replay.state()), expected_custody);
         replay.replay_from(&chain).unwrap();
+    }
+    if complete_replacement {
+        replacement::finish_after_real_detector_penalty(
+            &mut chain,
+            &mut replay,
+            &validator_key,
+            request_id,
+            release_at_ms,
+            &key,
+            &expected_record,
+        );
     }
 }
 

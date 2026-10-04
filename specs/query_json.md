@@ -6,6 +6,12 @@ JSON and let the tooling convert it into a signed `SignedQuery`. The
 `iroha_data_model::query::json` module defines the canonical envelope used by
 `iroha_cli ledger query stdin` and other utilities.
 
+Signed `/v1/query` is not the listing API. It admits singular queries and four
+unfiltered iterable shapes (see [Admission](#admission-on-signed-v1query)).
+Read domains, accounts, asset definitions, NFTs, RWA lots, account assets,
+asset holders, transactions and repo agreements through the
+[Torii collection endpoints](torii/collection_queries.md).
+
 This authoring envelope is not the signed wire payload. Before submission, the
 client binds the exact genesis-derived `network_id`, authority, Unix creation
 time, non-zero TTL, a fresh 32-byte nonce, and the complete query request into
@@ -89,34 +95,49 @@ Example singular owned-asset lookup:
 ## Iterable queries
 
 Iterable requests identify the query and may carry optional execution modifiers
-and a predicate payload:
+and a predicate payload. The envelope supports selected typed iterable queries,
+including all four sources admitted by signed `/v1/query`. Execution admits
+only the shapes listed under
+[Admission](#admission-on-signed-v1query):
 
 ```json
 {
   "iterable": {
-    "type": "FindDomains",
+    "type": "FindAccountIds",
     "params": {
       "limit": 25,
-      "offset": 10,
-      "fetch_size": 50,
-      "sort_by_metadata_key": "ui.order",
-      "order": "Desc",
-      "ids_projection": false,
-      "lane_id": null,   // reserved for future cursor lanes (TBD)
-      "dsid": null       // reserved for future data shard identifiers (TBD)
-    },
-    "predicate": {
-      "equals": [
-        {"field": "authority", "value": "<i105-account-id>"}
-      ],
-      "in": [
-        {"field": "metadata.tier", "values": [1, 2, 3]}
-      ],
-      "exists": ["metadata.display_name"]
+      "fetch_size": 50
     }
   }
 }
 ```
+
+### Admission on signed `/v1/query`
+
+Torii admits these iterable starts, each with no predicate (the pass
+predicate), bounded counting (the default `count_mode`), a zero `offset` and no
+`sort_by_metadata_key`:
+
+| Query | Cursor modes |
+| --- | --- |
+| `FindPeers` | ephemeral only |
+| `FindAccountIds` | ephemeral and stored |
+| `FindTriggers` | ephemeral and stored |
+| `FindActiveTriggerIds` | ephemeral and stored |
+
+Every other iterable query, and any of these with a predicate, an offset,
+metadata sorting, exact counting or (for `FindPeers`) stored cursor mode, is
+refused before execution with HTTP 400 `query_validation_failed`. The message
+starts with the stable reason `signed_query_shape_not_admitted`, names the
+query and the refused modifier, and lists the collection endpoints:
+
+```text
+signed_query_shape_not_admitted: FindDomains has no bounded signed-query source. Signed POST /v1/query admits singular queries and FindPeers, FindAccountIds, FindTriggers and FindActiveTriggerIds starts with a pass predicate, bounded counting, zero offset and no sorting (FindPeers in ephemeral cursor mode only). Read listings through the Torii collection endpoints: /v1/domains, /v1/accounts, /v1/assets/definitions, /v1/nfts, /v1/rwas, /v1/accounts/{id}/assets, /v1/assets/{definition}/holders, /v1/transactions/query, /v1/repo/agreements.
+```
+
+The collection endpoints provide filters, sorting, projections and keyset
+cursors for those listings; see
+[Torii collection queries](torii/collection_queries.md).
 
 ### Parameters
 
@@ -129,18 +150,21 @@ The optional `params` object configures pagination and sorting:
   stable sorting.
 - `order` (`"Asc" | "Desc"`, optional) — sort order; only accepted when a
   metadata key is provided.
-- `ids_projection` (`bool`, optional) — request id-only responses when the
-  node is built with the experimental `ids_projection` feature.
-- `lane_id`, `dsid` (optional) — reserved fields for upcoming cursor lane and
-  data-shard routing support. They are accepted by the parser but currently
-  ignored (TBD).
 
 All numeric limits must be non-zero when provided. The sort key is validated
 using the canonical [`Name`](../crates/iroha_data_model/src/name.rs) rules.
+Any other member, including `lane_id`, `dsid` and `ids_projection`, is rejected
+as an unknown field. Iterable queries always
+return whole items: the selector has a single data-free layout and never projects.
+
+Signed `/v1/query` refuses a non-zero `offset` and any `sort_by_metadata_key`,
+as described under [Admission](#admission-on-signed-v1query).
 
 ### Predicate mini DSL
 
-The predicate payload is represented as an object with three optional arrays:
+Signed `/v1/query` refuses iterable starts that carry a predicate; filter
+listings through the collection endpoints instead. The predicate payload is
+represented as an object with three optional arrays:
 
 - `equals`: list of `{ "field": <path>, "value": <json value> }` entries.
 - `in`: list of `{ "field": <path>, "values": [<json value>, …] }` entries
@@ -157,16 +181,19 @@ The CLI reads the envelope from stdin, signs the request with the configured
 account, and submits it to `/v1/query`:
 
 ```shell
-$ cargo run -p iroha_cli -- query stdin <<'JSON'
+$ cargo run -p iroha_cli -- ledger query stdin <<'JSON'
 {
   "iterable": {
-    "type": "FindDomains",
-    "params": {"limit": 5, "sort_by_metadata_key": "ui.order", "order": "Asc"},
-    "predicate": {"exists": ["metadata.display_name"]}
+    "type": "FindAccountIds",
+    "params": {"limit": 5}
   }
 }
 JSON
 ```
+
+Filtered or sorted listings use the CLI collection commands, for example
+`iroha ledger domain list --filter 'exists(metadata.display_name)' --sort -id`
+(see [Torii collection queries](torii/collection_queries.md)).
 
 The response is printed using the configured output format. Programmatic
 callers convert the envelope into a raw `QueryRequest` with

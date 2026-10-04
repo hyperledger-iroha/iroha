@@ -111,7 +111,7 @@ async fn failed_trigger_revert() -> Result<()> {
             move || {
                 client
                     .client()
-                    .query(FindAssetsDefinitions::new())
+                    .query(FindAssetDefinitions::new())
                     .execute_all()
             }
         })

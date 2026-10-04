@@ -830,6 +830,8 @@ mod tests {
             .map(|member| member.package.selector.clone())
             .collect::<Vec<_>>();
         let options = WorkspaceResolutionOptionsV1 {
+            cache_root: None,
+            archive_transport: None,
             mode: GraphModeArgs::default(),
             config: Some(&path),
             config_image: selected.config_image.clone(),
@@ -840,7 +842,10 @@ mod tests {
         };
         let graph = resolve_and_persist_graph(&workspace, &packages, None, None, options.clone())
             .expect("resolve retained image");
-        assert_eq!(graph.account_chain_discriminant(), 369);
+        assert_eq!(
+            graph.account_chain_discriminant().expect("bound profile"),
+            369
+        );
         fs::remove_file(workspace.root().join(LOCK_FILE_NAME)).expect("remove test lock");
         let mut mismatch = options;
         mismatch.expected_network_id = Some(NetworkId::from_genesis_hash(

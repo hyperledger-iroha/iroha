@@ -474,11 +474,9 @@ struct ParsedHeaderV1<'a> {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn inverse_or_zero_v1(value: F) -> F {
-    if value == F::ZERO {
-        F::ZERO
-    } else {
-        value.inv().unwrap_or(F::ZERO)
-    }
+    // Only malformed residues take the rejection path; canonical zero uses
+    // the same fixed exponentiation schedule as every canonical nonzero value.
+    F::canonical(value.0).map_or(F::ZERO, F::inverse_or_zero_canonical_v1)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn pack_bits_v1(bits: &[F]) -> F {
@@ -1946,10 +1944,9 @@ const OID_COMMON_NAME_V1: &[u8] = &[0x55, 0x04, 0x03];
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 const OID_CLIENT_AUTHENTICATION_V1: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x02];
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-const OID_DOCUMENT_SIGNING_V1: &[u8] =
-    &[0x2b, 0x06, 0x01, 0x04, 0x01, 0x83, 0xb2, 0x03, 0x01, 0x01];
+const OID_DOCUMENT_SIGNING_V1: &[u8] = super::profile::ZK_X509_DOCUMENT_SIGNING_EKU_DER_VALUE_V1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-const OID_WALLET_IDENTITY_V1: &[u8] = &[0x2b, 0x06, 0x01, 0x04, 0x01, 0x83, 0xb2, 0x03, 0x01, 0x02];
+const OID_WALLET_IDENTITY_V1: &[u8] = super::profile::ZK_X509_WALLET_IDENTITY_EKU_DER_VALUE_V1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 const ECDSA_SHA256_ALGORITHM_V1: &[u8] = &[
     0x30, 0x0a, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02,
@@ -4764,6 +4761,75 @@ mod tests {
         der::{ZkX509DerLimitsV1, parse_single_der_value_v1},
         io_air::{ZkX509IoChallengesV1, ZkX509IoLaneChallengesV1, build_zk_x509_io_trace_v1},
     };
+    #[test]
+    fn canonical_profile_eku_subsets_and_retired_oids_are_independently_parsed() {
+        let entries = [
+            (
+                ZkX509DerEkuV1::ClientAuthentication,
+                OID_CLIENT_AUTHENTICATION_V1,
+            ),
+            (
+                ZkX509DerEkuV1::DocumentSigning,
+                super::super::profile::ZK_X509_DOCUMENT_SIGNING_EKU_DER_VALUE_V1,
+            ),
+            (
+                ZkX509DerEkuV1::WalletIdentity,
+                super::super::profile::ZK_X509_WALLET_IDENTITY_EKU_DER_VALUE_V1,
+            ),
+        ];
+        for mask in 1_u8..8 {
+            let selected: Vec<_> = entries
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| mask & (1_u8 << *index) != 0)
+                .map(|(_, entry)| *entry)
+                .collect();
+            let encoded = sequence(
+                &selected
+                    .iter()
+                    .map(|(_, value)| oid(value))
+                    .collect::<Vec<_>>(),
+            );
+            let expected: Vec<_> = selected.iter().map(|(usage, _)| *usage).collect();
+            assert_eq!(parse_eku_inner_v1(&encoded).unwrap(), expected);
+            if mask == 7 {
+                assert_eq!(encoded.len(), 55);
+            }
+        }
+        assert!(parse_eku_inner_v1(&sequence(&[])).is_err());
+        for (_, value) in entries {
+            assert!(parse_eku_inner_v1(&sequence(&[oid(value), oid(value)])).is_err());
+        }
+        for high in 1..entries.len() {
+            for low in 0..high {
+                assert!(
+                    parse_eku_inner_v1(&sequence(&[oid(entries[high].1), oid(entries[low].1)]))
+                        .is_err()
+                );
+            }
+        }
+        for last in [1, 2] {
+            let retired = [0x2b, 0x06, 0x01, 0x04, 0x01, 0x83, 0xb2, 0x03, 0x01, last];
+            assert!(parse_eku_inner_v1(&sequence(&[oid(&retired)])).is_err());
+        }
+    }
+    #[test]
+    fn private_inverse_witness_preserves_zero_bytes_and_malformed_fallback() {
+        use crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
+
+        for word in (0_u64..=255).chain([
+            65_535,
+            GOLDILOCKS_MODULUS_V1 - 1,
+            GOLDILOCKS_MODULUS_V1,
+            GOLDILOCKS_MODULUS_V1 + 1,
+            u64::MAX,
+        ]) {
+            let value = F(word);
+            let expected = value.inv().unwrap_or(F::ZERO);
+            assert_eq!(inverse_or_zero_v1(value), expected, "word {word}");
+        }
+    }
+
     fn tlv(tag: &[u8], contents: &[u8]) -> Vec<u8> {
         let mut encoded = tag.to_vec();
         if contents.len() < 128 {

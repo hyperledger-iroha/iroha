@@ -313,6 +313,7 @@ fn production_constants_embedded_in_openapi_remain_frozen() {
             u64::try_from(utils::MAX_REJECT_CODE_BYTES).expect("reject-code bound"),
         )
     );
+    #[cfg(feature = "app_api")]
     let multisig_limit = at(
         &document,
         &[
@@ -329,6 +330,7 @@ fn production_constants_embedded_in_openapi_remain_frozen() {
     .and_then(|variant| variant.get("maximum"))
     .and_then(Value::as_u64)
     .expect("multisig proposal query maximum");
+    #[cfg(feature = "app_api")]
     assert_eq!(
         multisig_limit,
         crate::routing::MULTISIG_PROPOSALS_MAX_PAGE_LIMIT
@@ -1114,6 +1116,7 @@ fn generated_spec_includes_documented_paths() {
         assert!(paths.contains_key(path), "missing current route: {path}");
     }
     for retired in [
+        "/v1/transactions/history",
         "/v1/node/query/projection/checkpoint/plan",
         "/v1/node/query/projection/checkpoint/publish",
     ] {
@@ -2377,9 +2380,9 @@ fn sumeragi_evidence_audit_contract_is_closed_and_bounded() {
         .and_then(Value::as_object)
         .and_then(|schema| schema.get("oneOf"))
         .and_then(Value::as_array)
-        .expect("closed evidence penalty variants");
-    assert_eq!(variants.len(), 3);
-    for status in ["pending", "applied", "cancelled"] {
+        .expect("closed pending and applied evidence penalty variants");
+    assert_eq!(variants.len(), 2);
+    for status in ["pending", "applied"] {
         let variant = variants
             .iter()
             .find(|variant| {
@@ -2929,5 +2932,154 @@ fn openapi_schemas_include_system_keys() {
             !schemas.contains_key(retired),
             "retired schema remains: {retired}"
         );
+    }
+}
+#[test]
+fn scoped_native_original_reads_match_canonical_media_and_resource_bounds() {
+    use iroha_torii_shared::{
+        authority_originals::{
+            NATIVE_AUTHORITY_ORIGINALS_MAX_BYTES_V1,
+            NATIVE_AUTHORITY_ORIGINALS_REQUEST_MAX_BYTES_V1,
+        },
+        ordinary_mint_finalized::ORDINARY_MINT_FINALIZED_REQUEST_MAX_BYTES_V1,
+        ordinary_mint_issuer_purpose::{
+            ORDINARY_MINT_ISSUER_PURPOSE_MAX_BYTES_V1,
+            ORDINARY_MINT_ISSUER_PURPOSE_REQUEST_MAX_BYTES_V1,
+        },
+        ordinary_wallet_current::{
+            ORDINARY_WALLET_CURRENT_MAX_BYTES_V1, ORDINARY_WALLET_CURRENT_REQUEST_MAX_BYTES_V1,
+        },
+        resource_names_state::NATIVE_RESOURCE_NAMES_STATE_MAX_BYTES_V1,
+    };
+    let document = canonical_document();
+    for (descriptor, method, request_bound, response_bound, binary_only) in [
+        (
+            route_catalog::kagemusha::RESOURCE_NAMES_STATE,
+            "get",
+            None,
+            NATIVE_RESOURCE_NAMES_STATE_MAX_BYTES_V1,
+            false,
+        ),
+        (
+            route_catalog::kagemusha::AUTHORITY_ORIGINALS,
+            "post",
+            Some(NATIVE_AUTHORITY_ORIGINALS_REQUEST_MAX_BYTES_V1),
+            NATIVE_AUTHORITY_ORIGINALS_MAX_BYTES_V1,
+            false,
+        ),
+        (
+            route_catalog::kagemusha::ORDINARY_WALLET_CURRENT,
+            "post",
+            Some(ORDINARY_WALLET_CURRENT_REQUEST_MAX_BYTES_V1),
+            ORDINARY_WALLET_CURRENT_MAX_BYTES_V1,
+            false,
+        ),
+        (
+            route_catalog::kagemusha::ORDINARY_MINT_ISSUER_PURPOSE,
+            "post",
+            Some(ORDINARY_MINT_ISSUER_PURPOSE_REQUEST_MAX_BYTES_V1),
+            ORDINARY_MINT_ISSUER_PURPOSE_MAX_BYTES_V1,
+            false,
+        ),
+        (
+            route_catalog::kagemusha::ORDINARY_MINT_FINALIZED,
+            "post",
+            Some(ORDINARY_MINT_FINALIZED_REQUEST_MAX_BYTES_V1),
+            iroha_data_model::kagemusha::KAGEMUSHA_ORDINARY_FINALIZED_TOPUP_MAX_BYTES_V1,
+            true,
+        ),
+        (
+            route_catalog::kagemusha::ORDINARY_MINT_CREDIT,
+            "post",
+            Some(ORDINARY_MINT_FINALIZED_REQUEST_MAX_BYTES_V1),
+            iroha_data_model::kagemusha::KAGEMUSHA_ORDINARY_FINALIZED_MINT_CREDIT_MAX_BYTES_V1,
+            true,
+        ),
+    ] {
+        let operation = openapi_operation(&document, descriptor.path(), method);
+        assert_eq!(
+            operation.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
+            Some("read")
+        );
+        assert_eq!(
+            operation.get(ROUTE_AUTH_EXTENSION),
+            Some(&route_auth_metadata(descriptor))
+        );
+        assert_eq!(
+            operation.get("security"),
+            standard_security_requirements(descriptor.authentication()).as_ref()
+        );
+        assert_eq!(
+            operation
+                .get("x-iroha-max-response-bytes")
+                .and_then(Value::as_u64),
+            Some(u64::try_from(response_bound).expect("native response ceiling")),
+            "{} response bound",
+            descriptor.path()
+        );
+        if let Some(bound) = request_bound {
+            assert_eq!(
+                operation
+                    .get("x-iroha-max-request-bytes")
+                    .and_then(Value::as_u64),
+                Some(u64::try_from(bound).expect("native request ceiling"))
+            );
+            let content = operation
+                .get("requestBody")
+                .and_then(|value| value.get("content"))
+                .and_then(Value::as_object)
+                .expect("native request content");
+            assert_eq!(
+                content.keys().map(String::as_str).collect::<Vec<_>>(),
+                ["application/x-norito"]
+            );
+            assert_eq!(
+                content
+                    .get("application/x-norito")
+                    .and_then(|value| value.get("schema"))
+                    .and_then(|value| value.get("maxLength"))
+                    .and_then(Value::as_u64),
+                Some(u64::try_from(bound).expect("native request frame ceiling"))
+            );
+        } else {
+            assert!(!operation.contains_key("requestBody"));
+        }
+        let responses = operation
+            .get("responses")
+            .and_then(Value::as_object)
+            .expect("native responses");
+        let content = responses
+            .get("200")
+            .and_then(|value| value.get("content"))
+            .and_then(Value::as_object)
+            .expect("native original content");
+        let expected = if binary_only {
+            vec!["application/x-norito"]
+        } else {
+            vec!["application/json", "application/x-norito"]
+        };
+        assert_eq!(
+            content.keys().map(String::as_str).collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(
+            content
+                .get("application/x-norito")
+                .and_then(|value| value.get("schema"))
+                .and_then(|value| value.get("maxLength"))
+                .and_then(Value::as_u64),
+            Some(u64::try_from(response_bound).expect("native output frame ceiling"))
+        );
+        if binary_only {
+            assert!(
+                responses
+                    .get("202")
+                    .expect("pending original response")
+                    .get("content")
+                    .is_none()
+            );
+        } else {
+            assert!(!responses.contains_key("202"));
+        }
     }
 }

@@ -35,7 +35,7 @@ fn store_tlv(vm: &mut IVM, cursor: &mut u64, type_id: PointerType, payload: &[u8
     ptr
 }
 fn store_quantity(vm: &mut IVM, cursor: &mut u64, amount: u64) -> u64 {
-    let tlv = ivm::numeric_tlv::encode_quantity(&Quantity::from(amount))
+    let tlv = ivm_abi::numeric_tlv::encode_quantity(&Quantity::from(amount))
         .expect("encode quantity pointer envelope");
     vm.memory
         .preload_input(*cursor, &tlv)

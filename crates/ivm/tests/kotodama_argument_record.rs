@@ -27,8 +27,8 @@ fn argument_record_tlv(entrypoint: &ivm::EmbeddedEntrypointDescriptor, payload: 
         .argument_schema
         .as_ref()
         .expect("parameterized entrypoint argument schema");
-    let record =
-        ivm::encode_argument_record_from_json(schema, payload).expect("encode argument record");
+    let record = ivm_abi::arguments::encode_argument_record_from_json(schema, payload)
+        .expect("encode argument record");
     tlv(PointerType::NoritoBytes, &record)
 }
 fn host_with_arguments(inputs: BTreeMap<Name, Vec<u8>>) -> WsvHost {
@@ -53,7 +53,7 @@ fn shared_sdk_fixture_is_generated_and_validated_by_rust() {
     );
     assert_eq!(
         root.get("generator").and_then(norito::json::Value::as_str),
-        Some("ivm::encode_argument_record_from_json")
+        Some("ivm_abi::arguments::encode_argument_record_from_json")
     );
     let contract = root
         .get("contract")
@@ -93,8 +93,8 @@ fn shared_sdk_fixture_is_generated_and_validated_by_rust() {
             .expect("fixture boundary payload")
             .clone(),
     );
-    let generated =
-        ivm::encode_argument_record_from_json(schema, &payload).expect("generate fixture record");
+    let generated = ivm_abi::arguments::encode_argument_record_from_json(schema, &payload)
+        .expect("generate fixture record");
     let expected_schema = root
         .get("entrypoint_argument_schema_v1")
         .and_then(norito::json::Value::as_object)

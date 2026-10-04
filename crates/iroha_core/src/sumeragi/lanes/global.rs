@@ -97,10 +97,19 @@ impl AnchorView for GlobalAnchors {
         view.block_hashes().hash_at(index).copied()
     }
 
-    fn creation_time_ms(&self, height: u64) -> Option<u64> {
-        let height = NonZeroUsize::new(usize::try_from(height).ok()?)?;
-        let block = self.state.view().kura().get_block(height)?;
-        u64::try_from(block.header().creation_time().as_millis()).ok()
+    fn creation_time_ms(
+        &self,
+        height: u64,
+    ) -> Result<Option<u64>, crate::execution_attempt::ExecutionAttemptError<std::io::Error>> {
+        let Some(height) = usize::try_from(height).ok().and_then(NonZeroUsize::new) else {
+            return Ok(None);
+        };
+        let view = self.state.view();
+        let block = view
+            .kura()
+            .get_block(height, &view.execution_budget())
+            .map_err(|error| error.map_rejection(std::io::Error::other))?;
+        Ok(block.and_then(|block| u64::try_from(block.header().creation_time().as_millis()).ok()))
     }
 }
 

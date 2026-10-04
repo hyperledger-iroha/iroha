@@ -356,7 +356,10 @@ impl Fixture {
     /// A merge-only proposal for the next height carrying `merges` with time floor `floor`.
     fn proposal(&self, merges: &[SumeragiLaneMerge], floor: u64) -> SignedBlock {
         let view = self.chain.state().view();
-        let parent = view.latest_block().expect("parent");
+        let parent = view
+            .latest_block()
+            .expect("parent history read completes")
+            .expect("parent");
         drop(view);
         payload::assemble_with_merges(
             self.chain.state(),
@@ -670,12 +673,18 @@ fn expansion_refuses_equivalent_foreign_state_and_changed_publication() {
     fixture.chain.commit(Vec::new());
     assert_ne!(state.state_view_generation(), captured);
     let (returned, reason) = expansion.apply(returned, &state, captured).unwrap_err();
-    assert!(matches!(reason, MergeError::Pending(_)));
+    assert!(
+        matches!(reason, MergeError::SourceChanged { authenticated_generation, observed_generation }
+        if authenticated_generation == captured && observed_generation == state.state_view_generation())
+    );
     assert_eq!(returned.canonical_proposal_wire_hash().unwrap(), expected);
 
     let expansion = expand(&state, &returned, &*fixture.stores, Duration::ZERO).unwrap();
     let (returned, reason) = expansion.apply(returned, &state, captured).unwrap_err();
-    assert!(matches!(reason, MergeError::Pending(_)));
+    assert!(
+        matches!(reason, MergeError::SourceChanged { authenticated_generation, observed_generation }
+        if authenticated_generation == state.state_view_generation() && observed_generation == captured)
+    );
     assert_eq!(returned.canonical_proposal_wire_hash().unwrap(), expected);
 }
 

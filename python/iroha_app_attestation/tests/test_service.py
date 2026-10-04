@@ -10,8 +10,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from iroha_app_attestation.attestation import RawPlatformProof, Selection, encode_android_chain
+from iroha_app_attestation.attestation import (
+    AttestationRejected, RawPlatformProof, Selection, VerificationUnavailable, encode_android_chain,
+)
 from iroha_app_attestation.issuance import CertificateFields, DurableCertificateStore, GovernedIssuanceScope
+from iroha_app_attestation.play_integrity import PlayIntegrityUnavailable
+from iroha_app_attestation.revocation import RevocationUnavailable
 from iroha_app_attestation.service import IssuerService, PATH, decode_request
 
 
@@ -56,6 +60,30 @@ class ServiceTests(unittest.TestCase):
         ):
             with self.subTest(body=bad):
                 self.assertEqual(service.handle("POST", PATH, bad, "application/json")[0], 400)
+
+    def test_unavailable_live_verification_is_retryable_not_a_rejected_certificate(self) -> None:
+        for error, expected in (
+            (RevocationUnavailable("Android revocation status unavailable"),
+             (503, b'{"error":"issuer_unavailable"}')),
+            (PlayIntegrityUnavailable("Play Integrity decoder unavailable"),
+             (503, b'{"error":"issuer_unavailable"}')),
+            (VerificationUnavailable("live dependency unavailable"),
+             (503, b'{"error":"issuer_unavailable"}')),
+            (AttestationRejected("revoked Android attestation certificate"),
+             (409, b'{"error":"certificate_rejected"}')),
+        ):
+            class FailingProvider:
+                def prepare(self, _request, *, issue, error=error):
+                    raise error
+
+            service = IssuerService(object(), FailingProvider(), lambda frame: b"unused",
+                                    caller_authorizer=lambda _environment: "core-api-mtls",
+                                    expected_caller_identity="core-api-mtls")
+            for operation in ("issue", "recover"):
+                with self.subTest(error=type(error).__name__, operation=operation):
+                    self.assertEqual(service.handle("POST", PATH, request_body(operation),
+                                                    "application/json",
+                                                    caller_identity="core-api-mtls"), expected)
 
     def test_handler_issues_once_and_recovers_without_signer(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

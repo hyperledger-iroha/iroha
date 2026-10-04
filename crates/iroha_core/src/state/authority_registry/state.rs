@@ -93,15 +93,15 @@ classified_owner!(State, check_state_fields, STATE_FIELDS, {
         Role::Local("Reusable execution/validation machinery; semantics belong to bytecode, ABI and canonical policy; capacity/refusal cannot select consensus validity"));
     contract_query_ivm_cache: parking_lot::Mutex<IvmCache> => ("state.contract_query_ivm_cache",
         Role::Local("Reusable execution/validation machinery; semantics belong to bytecode, ABI and canonical policy; capacity/refusal cannot select consensus validity"));
-    ivm_execution_pool: iroha_allocation::AllocationBudget => ("state.ivm_execution_pool",
-        Role::Local("Original finite execution allocation owner shared across cache reloads; resource refusal grants no consensus validity or publication authority"));
-    pipeline_ivm_prepared_cache: parking_lot::RwLock<PreparedContractCache> => ("state.pipeline_ivm_prepared_cache",
+    pipeline_ivm_prepared_cache: PublicationRwLock<PreparedContractCache> => ("state.pipeline_ivm_prepared_cache",
         Role::Local("Reusable execution/validation machinery; semantics belong to bytecode, ABI and canonical policy; capacity/refusal cannot select consensus validity"));
+    ivm_execution_budget: iroha_allocation::AllocationBudget => ("state.ivm_execution_budget",
+        Role::Local("Original immutable execution pool handle; capacity and release observations carry no consensus authority"));
     oracle: iroha_config::parameters::actual::Oracle => ("state.oracle",
         Role::Canonical(Canonical::Cell(Schema::Semantic { identity: "iroha:state:oracle:v1", encoder: "state::authority_registry::oracle_policy::OraclePolicyV1::from_actual; oracle state transitions and execution_policy_digest_v1", layout: V1_LAYOUT })));
-    crypto: parking_lot::RwLock<Arc<iroha_config::parameters::actual::Crypto>> => ("state.crypto",
+    crypto: PublicationRwLock<Arc<iroha_config::parameters::actual::Crypto>> => ("state.crypto",
         Role::Canonical(Canonical::Cell(Schema::Semantic { identity: "iroha:state:crypto:v1", encoder: "state::authority_registry::crypto_policy::CryptoAdmissionPolicyV1::from_actual; transaction/account admission and IVM SM host policy", layout: V1_LAYOUT })));
-    nexus: parking_lot::RwLock<iroha_config::parameters::actual::Nexus> => ("state.nexus",
+    nexus: PublicationRwLock<iroha_config::parameters::actual::Nexus> => ("state.nexus",
         Role::Canonical(Canonical::Cell(Schema::Semantic { identity: "iroha:state:nexus:v1", encoder: "state::authority_registry::nexus_policy::canonical_preimage_once; exact effective policy from generation-bound canonical runtime, protected World catalog, materialized manifests, and installed compliance", layout: V1_LAYOUT })));
     canonical_runtime: Cell<SnapshotNexusRuntime> => ("state.canonical_runtime",
         Role::Canonical(Canonical::Owner(super::runtime::RUNTIME_FIELDS)));
@@ -128,7 +128,7 @@ classified_owner!(State, check_state_fields, STATE_FIELDS, {
     settlement: iroha_config::parameters::actual::Settlement => ("state.settlement",
         Role::Canonical(Canonical::Cell(Schema::Semantic { identity: "iroha:state:settlement:v1", encoder: "state::authority_registry::settlement_policy::SettlementPolicyV1::from_actual; exact router inputs and reserve membership, excluding daemon-only proof-release file paths", layout: V1_LAYOUT })));
     kagemusha_v1_runtime_verifier: PublicationRwLock<Arc<dyn crate::smartcontracts::isi::kagemusha::KagemushaV1RuntimeVerifier>> => ("state.kagemusha_v1_runtime_verifier",
-        Role::Canonical(Canonical::Cell(Schema::Required { identity: "iroha:state:kagemusha_v1_runtime_verifier:v1", obligation: "TODO: permissioned finalized rotation/retirement and complete current/predecessor authority capture with checked recovery before complete-root publication; original governed World registry owns release eligibility, actual monetary execution defers missing/stale artifacts, exact-head reload checks every loaded identity, and State publication retains certified registry-transition tokens independently of local preload; local runtime availability and diagnostic projections are not root authority" })));
+        Role::Local("Immutable loaded verifier artifacts and availability; world.kagemusha_verifier_registry owns every release identity and eligibility decision. Exact-head reload authenticates the complete governed set; monetary execution checks that set and network before effects and locally defers missing or stale artifacts"));
     settlement_engine: crate::settlement::SettlementEngine => ("state.settlement_engine",
         Role::Derived { sources: &["state.settlement"], check: DerivationCheck::Rebuild("SettlementEngine::from_router_config(&State::settlement.router); SettlementEngine::matches_router_config before complete State root publication and after recovery") });
     chain_id: iroha_model_base::chain::ChainId => ("state.chain_id",

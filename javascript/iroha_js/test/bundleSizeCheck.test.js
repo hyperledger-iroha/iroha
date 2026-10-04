@@ -567,7 +567,9 @@ test("public browser aggregate audits eager, lazy, and unique combined closures"
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
-  assert.equal(Object.keys(result.metafile.inputs).length, 104);
+  // Includes the shared Torii query core (query/*, toriiErrors.js,
+  // toriiEventStream.js, toriiClientEncoding.js).
+  assert.equal(Object.keys(result.metafile.inputs).length, 116);
   assertSplitByteInventory(result, metrics);
   assert.deepEqual(metrics.lazyChunks.map(({ specifier }) => specifier), [
     "./sumeragiTyped.js",
@@ -610,9 +612,9 @@ test("IVM artifact browser leaf excludes Node and Buffer shims", async () => {
 
 test("bundle targets retain canonical module ownership and accurate byte inventories", async () => {
   const expected = new Map([
-    ["toriiClient.js", { modules: 129 }],
-    ["transactionCodec.js (browser)", { modules: 63 }],
-    ["nexusApp.js (browser)", { modules: 72 }],
+    ["toriiClient.js", { modules: 137 }],
+    ["transactionCodec.js (browser)", { modules: 65 }],
+    ["nexusApp.js (browser)", { modules: 74 }],
     ["canonicalRequest.js (browser)", { modules: 47 }],
   ]);
   const { build } = await import("esbuild");
@@ -649,6 +651,13 @@ test("bundle targets retain canonical module ownership and accurate byte invento
         ).length,
         1,
         `${target.label} must retain exactly one canonical ProofAttachment module`,
+      );
+      assert.equal(
+        Object.keys(result.metafile.inputs).filter((input) =>
+          /(?:^|[/\\])retailFeeAssessment\.js$/u.test(input),
+        ).length,
+        1,
+        `${target.label} must retain exactly one retail fee assessment validator`,
       );
     }
     if (target.label === "toriiClient.js") {
@@ -707,9 +716,9 @@ test("Kotodama compiler browser export excludes Node and Buffer shims", async ()
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
-  // The canonical nominal-error module shares validation across Unit, public
-  // signatures, and cursor/page schemas while preserving the compact compiler.
-  assert.equal(Object.keys(result.metafile.inputs).length, 8);
+  // Canonical nominal errors, identifiers, and entrypoint schemas share
+  // validation across Unit, public signatures, and cursor/page schemas.
+  assert.equal(Object.keys(result.metafile.inputs).length, 10);
   assert.doesNotMatch(
     result.outputFiles[0].text,
     /(?:globalThis|window|global)\.Buffer\s*=/u,

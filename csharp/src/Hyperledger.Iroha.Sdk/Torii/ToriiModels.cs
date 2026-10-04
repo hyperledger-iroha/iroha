@@ -1788,92 +1788,6 @@ public sealed record class ToriiAccountReadResponse
     }
 }
 
-[JsonConverter(typeof(ToriiAccountSummaryJsonConverter))]
-public sealed record class ToriiAccountSummary
-{
-    private string id = string.Empty;
-
-    [JsonPropertyName("id")]
-    public string Id
-    {
-        get => id;
-        init => id = ToriiAccountQueryDirectMetadata.RequireCanonicalAccountId(value, nameof(Id));
-    }
-}
-
-[JsonConverter(typeof(ToriiAccountsPageJsonConverter))]
-public sealed record class ToriiAccountsPage
-{
-    private ToriiAccountSummary[] items = Array.Empty<ToriiAccountSummary>();
-
-    [JsonPropertyName("items")]
-    public IReadOnlyList<ToriiAccountSummary> Items
-    {
-        get => ToriiListSnapshots.CopyRequired(items);
-        init => items = ToriiListSnapshots.CopyRequired(value);
-    }
-
-    [JsonPropertyName("total")]
-    public long Total { get; init; }
-}
-
-[JsonConverter(typeof(ToriiAssetBalanceJsonConverter))]
-public sealed record class ToriiAssetBalance
-{
-    private string asset = string.Empty;
-    private string accountId = string.Empty;
-    private string scope = string.Empty;
-    private string assetName = string.Empty;
-    private string? assetAlias;
-    private string quantity = string.Empty;
-
-    [JsonPropertyName("asset")]
-    public string Asset
-    {
-        get => asset;
-        init => asset = ToriiAccountQueryDirectMetadata.RequireExactNonEmptyText(value, nameof(Asset));
-    }
-
-    [JsonPropertyName("account_id")]
-    public string AccountId
-    {
-        get => accountId;
-        init => accountId = ToriiAccountQueryDirectMetadata.RequireCanonicalAccountId(value, nameof(AccountId));
-    }
-
-    [JsonPropertyName("scope")]
-    public string Scope
-    {
-        get => scope;
-        init => scope = ToriiAccountQueryDirectMetadata.RequireExactNonEmptyText(value, nameof(Scope));
-    }
-
-    [JsonPropertyName("asset_name")]
-    public string AssetName
-    {
-        get => assetName;
-        init => assetName = ToriiAccountQueryDirectMetadata.RequireExactNonEmptyText(value, nameof(AssetName));
-    }
-
-    [JsonPropertyName("asset_alias")]
-    public string? AssetAlias
-    {
-        get => assetAlias;
-        init => assetAlias = ToriiAccountQueryDirectMetadata.RequireOptionalExactNonEmptyText(
-            value,
-            nameof(AssetAlias));
-    }
-
-    [JsonPropertyName("quantity")]
-    public string Quantity
-    {
-        get => quantity;
-        init => quantity = ToriiAccountQueryDirectMetadata.RequireCanonicalQuantityText(
-            value,
-            nameof(Quantity));
-    }
-}
-
 [JsonConverter(typeof(ToriiAssetAliasBindingJsonConverter))]
 public sealed record class ToriiAssetAliasBinding
 {
@@ -1981,22 +1895,6 @@ public sealed record class ToriiAssetAliasResolution
         get => source;
         init => source = ToriiAliasDirectMetadata.RequireOptionalExactTokenText(value, nameof(Source));
     }
-}
-
-[JsonConverter(typeof(ToriiAssetBalancesPageJsonConverter))]
-public sealed record class ToriiAssetBalancesPage
-{
-    private ToriiAssetBalance[] items = Array.Empty<ToriiAssetBalance>();
-
-    [JsonPropertyName("items")]
-    public IReadOnlyList<ToriiAssetBalance> Items
-    {
-        get => ToriiListSnapshots.CopyRequired(items);
-        init => items = ToriiListSnapshots.CopyRequired(value);
-    }
-
-    [JsonPropertyName("total")]
-    public long Total { get; init; }
 }
 
 [JsonConverter(typeof(ToriiAccountAliasResolutionJsonConverter))]
@@ -2151,61 +2049,6 @@ public sealed record class ToriiAccountPermission
         get => ToriiJsonSnapshots.Copy(payload);
         init => payload = ToriiJsonSnapshots.Copy(value);
     }
-}
-
-[JsonConverter(typeof(ToriiAccountPermissionsPageJsonConverter))]
-public sealed record class ToriiAccountPermissionsPage
-{
-    private ToriiAccountPermission[] items = Array.Empty<ToriiAccountPermission>();
-
-    [JsonPropertyName("items")]
-    public IReadOnlyList<ToriiAccountPermission> Items
-    {
-        get => ToriiListSnapshots.CopyRequired(items);
-        init => items = ToriiListSnapshots.CopyRequired(value);
-    }
-
-    [JsonPropertyName("total")]
-    public long Total { get; init; }
-}
-
-[JsonConverter(typeof(ToriiTransactionSummaryJsonConverter))]
-public sealed record class ToriiTransactionSummary
-{
-    private string? authority;
-    private long? timestampMilliseconds;
-    private string entrypointHash = string.Empty;
-
-    [JsonPropertyName("authority")]
-    public string? Authority
-    {
-        get => authority;
-        init => authority = ToriiAccountQueryDirectMetadata.RequireOptionalCanonicalAccountId(
-            value,
-            nameof(Authority));
-    }
-
-    [JsonPropertyName("timestamp_ms")]
-    public long? TimestampMilliseconds
-    {
-        get => timestampMilliseconds;
-        init => timestampMilliseconds = ToriiAccountQueryDirectMetadata.RequireOptionalPositive(
-            value,
-            nameof(TimestampMilliseconds));
-    }
-
-    [JsonPropertyName("entrypoint_hash")]
-    public string EntrypointHash
-    {
-        get => entrypointHash;
-        init => entrypointHash = ToriiAccountQueryDirectMetadata.RequireExactSizedHex(
-            value,
-            nameof(EntrypointHash),
-            32);
-    }
-
-    [JsonPropertyName("result_ok")]
-    public bool ResultOk { get; init; }
 }
 
 internal static class ToriiAccountQueryDirectMetadata
@@ -2427,13 +2270,6 @@ internal static class ToriiAccountFaucetMetadata
     }
 }
 
-public record class ToriiExplorerCursorQuery
-{
-    public string? Cursor { get; init; }
-
-    public uint? Limit { get; init; }
-}
-
 public sealed record class ToriiContractStateQuery
 {
     private string[]? paths;
@@ -2455,148 +2291,6 @@ public sealed record class ToriiContractStateQuery
     public ulong? Limit { get; init; }
 
     public string? Decode { get; init; }
-}
-
-public sealed record class ToriiExplorerAccountsQuery : ToriiExplorerCursorQuery
-{
-    public string? Domain { get; init; }
-
-    public string? WithAsset { get; init; }
-}
-
-public sealed record class ToriiExplorerDomainsQuery : ToriiExplorerCursorQuery
-{
-    public string? OwnedBy { get; init; }
-}
-
-public sealed record class ToriiExplorerAssetDefinitionsQuery : ToriiExplorerCursorQuery
-{
-    public string? OwningDomain { get; init; }
-
-    public string? OwnedBy { get; init; }
-}
-
-public sealed record class ToriiExplorerAssetsQuery : ToriiExplorerCursorQuery
-{
-    public string? OwnedBy { get; init; }
-
-    public string? Definition { get; init; }
-
-    public string? AssetId { get; init; }
-}
-
-public sealed record class ToriiExplorerNftsQuery : ToriiExplorerCursorQuery
-{
-    public string? OwnedBy { get; init; }
-
-    public string? Domain { get; init; }
-}
-
-public sealed record class ToriiExplorerRwasQuery : ToriiExplorerCursorQuery
-{
-    public string? OwnedBy { get; init; }
-
-    public string? Domain { get; init; }
-}
-
-public enum ToriiExplorerTransactionStatusFilter
-{
-    Committed,
-    Rejected,
-}
-
-public sealed record class ToriiExplorerTransactionsQuery : ToriiExplorerCursorQuery
-{
-    public string? Authority { get; init; }
-
-    public ulong? Block { get; init; }
-
-    public ToriiExplorerTransactionStatusFilter? Status { get; init; }
-
-    public string? AssetId { get; init; }
-}
-
-public sealed record class ToriiExplorerInstructionsQuery : ToriiExplorerCursorQuery
-{
-    public string? Authority { get; init; }
-
-    public string? Account { get; init; }
-
-    public string? TransactionHash { get; init; }
-
-    public ToriiExplorerTransactionStatusFilter? TransactionStatus { get; init; }
-
-    public ulong? Block { get; init; }
-
-    public string? Kind { get; init; }
-
-    public string? AssetId { get; init; }
-}
-
-[JsonConverter(typeof(ToriiExplorerCursorMetaJsonConverter))]
-public sealed record class ToriiExplorerCursorMeta
-{
-    private uint limit;
-    private string? nextCursor;
-
-    [JsonPropertyName("limit")]
-    public uint Limit
-    {
-        get => limit;
-        init => limit = ToriiExplorerDirectMetadata.RequireExplorerCursorLimit(value, nameof(Limit));
-    }
-
-    [JsonPropertyName("next_cursor")]
-    public string? NextCursor
-    {
-        get => nextCursor;
-        init => nextCursor = ToriiExplorerDirectMetadata.RequireOptionalCanonicalExplorerCursor(
-            value,
-            nameof(NextCursor));
-    }
-
-    [JsonPropertyName("has_more")]
-    public bool HasMore { get; init; }
-}
-
-[JsonConverter(typeof(ToriiExplorerHistoryCursorMetaJsonConverter))]
-public sealed record class ToriiExplorerHistoryCursorMeta
-{
-    private uint limit;
-    private string? snapshotHash;
-    private string? nextCursor;
-
-    [JsonPropertyName("limit")]
-    public uint Limit
-    {
-        get => limit;
-        init => limit = ToriiExplorerDirectMetadata.RequireExplorerCursorLimit(value, nameof(Limit));
-    }
-
-    [JsonPropertyName("snapshot_height")]
-    public ulong SnapshotHeight { get; init; }
-
-    [JsonPropertyName("snapshot_hash")]
-    public string? SnapshotHash
-    {
-        get => snapshotHash;
-        init => snapshotHash = ToriiExplorerDirectMetadata.RequireOptionalExactSizedHex(
-            value,
-            nameof(SnapshotHash),
-            32);
-    }
-
-    [JsonPropertyName("next_cursor")]
-    public string? NextCursor
-    {
-        get => nextCursor;
-        init => nextCursor = ToriiExplorerDirectMetadata.RequireOptionalCanonicalExplorerCursor(
-            value,
-            nameof(NextCursor));
-    }
-
-    [JsonPropertyName("has_more")]
-    public bool HasMore { get; init; }
 }
 
 [JsonConverter(typeof(ToriiExplorerAccountJsonConverter))]
@@ -2638,22 +2332,6 @@ public sealed record class ToriiExplorerAccount
 
     [JsonPropertyName("owned_nfts")]
     public uint OwnedNfts { get; init; }
-}
-
-[JsonConverter(typeof(ToriiExplorerAccountsPageJsonConverter))]
-public sealed record class ToriiExplorerAccountsPage
-{
-    private ToriiExplorerAccount[] items = Array.Empty<ToriiExplorerAccount>();
-
-    [JsonPropertyName("pagination")]
-    public ToriiExplorerCursorMeta Pagination { get; init; } = new();
-
-    [JsonPropertyName("items")]
-    public IReadOnlyList<ToriiExplorerAccount> Items
-    {
-        get => ToriiListSnapshots.CopyRequired(items);
-        init => items = ToriiListSnapshots.CopyRequired(value);
-    }
 }
 
 [JsonConverter(typeof(ToriiExplorerDomainJsonConverter))]
@@ -2700,22 +2378,6 @@ public sealed record class ToriiExplorerDomain
 
     [JsonPropertyName("nfts")]
     public uint Nfts { get; init; }
-}
-
-[JsonConverter(typeof(ToriiExplorerDomainsPageJsonConverter))]
-public sealed record class ToriiExplorerDomainsPage
-{
-    private ToriiExplorerDomain[] items = Array.Empty<ToriiExplorerDomain>();
-
-    [JsonPropertyName("pagination")]
-    public ToriiExplorerCursorMeta Pagination { get; init; } = new();
-
-    [JsonPropertyName("items")]
-    public IReadOnlyList<ToriiExplorerDomain> Items
-    {
-        get => ToriiListSnapshots.CopyRequired(items);
-        init => items = ToriiListSnapshots.CopyRequired(value);
-    }
 }
 
 [JsonConverter(typeof(ToriiExplorerAssetDefinitionJsonConverter))]
@@ -2803,22 +2465,6 @@ public sealed record class ToriiExplorerAssetDefinition
         init => circulatingQuantity = ToriiExplorerDirectMetadata.RequireOptionalCanonicalQuantityText(
             value,
             nameof(CirculatingQuantity));
-    }
-}
-
-[JsonConverter(typeof(ToriiExplorerAssetDefinitionsPageJsonConverter))]
-public sealed record class ToriiExplorerAssetDefinitionsPage
-{
-    private ToriiExplorerAssetDefinition[] items = Array.Empty<ToriiExplorerAssetDefinition>();
-
-    [JsonPropertyName("pagination")]
-    public ToriiExplorerCursorMeta Pagination { get; init; } = new();
-
-    [JsonPropertyName("items")]
-    public IReadOnlyList<ToriiExplorerAssetDefinition> Items
-    {
-        get => ToriiListSnapshots.CopyRequired(items);
-        init => items = ToriiListSnapshots.CopyRequired(value);
     }
 }
 
@@ -3217,22 +2863,6 @@ public sealed record class ToriiExplorerAsset
     }
 }
 
-[JsonConverter(typeof(ToriiExplorerAssetsPageJsonConverter))]
-public sealed record class ToriiExplorerAssetsPage
-{
-    private ToriiExplorerAsset[] items = Array.Empty<ToriiExplorerAsset>();
-
-    [JsonPropertyName("pagination")]
-    public ToriiExplorerCursorMeta Pagination { get; init; } = new();
-
-    [JsonPropertyName("items")]
-    public IReadOnlyList<ToriiExplorerAsset> Items
-    {
-        get => ToriiListSnapshots.CopyRequired(items);
-        init => items = ToriiListSnapshots.CopyRequired(value);
-    }
-}
-
 [JsonConverter(typeof(ToriiExplorerNftJsonConverter))]
 public sealed record class ToriiExplorerNft
 {
@@ -3259,22 +2889,6 @@ public sealed record class ToriiExplorerNft
     {
         get => ToriiJsonSnapshots.Copy(metadata);
         init => metadata = ToriiJsonSnapshots.Copy(value);
-    }
-}
-
-[JsonConverter(typeof(ToriiExplorerNftsPageJsonConverter))]
-public sealed record class ToriiExplorerNftsPage
-{
-    private ToriiExplorerNft[] items = Array.Empty<ToriiExplorerNft>();
-
-    [JsonPropertyName("pagination")]
-    public ToriiExplorerCursorMeta Pagination { get; init; } = new();
-
-    [JsonPropertyName("items")]
-    public IReadOnlyList<ToriiExplorerNft> Items
-    {
-        get => ToriiListSnapshots.CopyRequired(items);
-        init => items = ToriiListSnapshots.CopyRequired(value);
     }
 }
 
@@ -3375,22 +2989,6 @@ public sealed record class ToriiExplorerRwa
     }
 }
 
-[JsonConverter(typeof(ToriiExplorerRwasPageJsonConverter))]
-public sealed record class ToriiExplorerRwasPage
-{
-    private ToriiExplorerRwa[] items = Array.Empty<ToriiExplorerRwa>();
-
-    [JsonPropertyName("pagination")]
-    public ToriiExplorerCursorMeta Pagination { get; init; } = new();
-
-    [JsonPropertyName("items")]
-    public IReadOnlyList<ToriiExplorerRwa> Items
-    {
-        get => ToriiListSnapshots.CopyRequired(items);
-        init => items = ToriiListSnapshots.CopyRequired(value);
-    }
-}
-
 [JsonConverter(typeof(ToriiExplorerBlockJsonConverter))]
 public sealed record class ToriiExplorerBlock
 {
@@ -3441,22 +3039,6 @@ public sealed record class ToriiExplorerBlock
 
     [JsonPropertyName("transactions_total")]
     public uint TransactionsTotal { get; init; }
-}
-
-[JsonConverter(typeof(ToriiExplorerBlocksPageJsonConverter))]
-public sealed record class ToriiExplorerBlocksPage
-{
-    private ToriiExplorerBlock[] items = Array.Empty<ToriiExplorerBlock>();
-
-    [JsonPropertyName("pagination")]
-    public ToriiExplorerHistoryCursorMeta Pagination { get; init; } = new();
-
-    [JsonPropertyName("items")]
-    public IReadOnlyList<ToriiExplorerBlock> Items
-    {
-        get => ToriiListSnapshots.CopyRequired(items);
-        init => items = ToriiListSnapshots.CopyRequired(value);
-    }
 }
 
 [JsonConverter(typeof(ToriiExplorerTransactionJsonConverter))]
@@ -3616,46 +3198,6 @@ public sealed record class ToriiExplorerTransactionDetail
     public ToriiExplorerDuration? TimeToLive { get; init; }
 }
 
-[JsonConverter(typeof(ToriiExplorerTransactionsPageJsonConverter))]
-public sealed record class ToriiExplorerTransactionsPage
-{
-    private ToriiExplorerTransaction[] items = Array.Empty<ToriiExplorerTransaction>();
-
-    [JsonPropertyName("pagination")]
-    public ToriiExplorerHistoryCursorMeta Pagination { get; init; } = new();
-
-    [JsonPropertyName("items")]
-    public IReadOnlyList<ToriiExplorerTransaction> Items
-    {
-        get => ToriiListSnapshots.CopyRequired(items);
-        init => items = ToriiListSnapshots.CopyRequired(value);
-    }
-}
-
-[JsonConverter(typeof(ToriiExplorerLatestTransactionsResponseJsonConverter))]
-public sealed record class ToriiExplorerLatestTransactionsResponse
-{
-    private ToriiExplorerTransaction[] items = Array.Empty<ToriiExplorerTransaction>();
-    private string sampledAt = string.Empty;
-
-    [JsonPropertyName("sampled_at")]
-    public string SampledAt
-    {
-        get => sampledAt;
-        init => sampledAt = ToriiExplorerDirectMetadata.RequireExactNonEmptyText(value, nameof(SampledAt));
-    }
-
-    [JsonPropertyName("pagination")]
-    public ToriiExplorerHistoryCursorMeta Pagination { get; init; } = new();
-
-    [JsonPropertyName("items")]
-    public IReadOnlyList<ToriiExplorerTransaction> Items
-    {
-        get => ToriiListSnapshots.CopyRequired(items);
-        init => items = ToriiListSnapshots.CopyRequired(value);
-    }
-}
-
 [JsonConverter(typeof(ToriiExplorerInstructionJsonJsonConverter))]
 public sealed record class ToriiExplorerInstructionJson
 {
@@ -3791,8 +3333,6 @@ public sealed record class ToriiExplorerInstruction
 
 internal static class ToriiExplorerDirectMetadata
 {
-    internal const uint ExplorerCursorLimitMaximum = 100;
-    internal const int ExplorerCursorMaximumLength = 1424;
 
     internal static ulong RequirePositive(ulong value, string paramName)
     {
@@ -3824,74 +3364,6 @@ internal static class ToriiExplorerDirectMetadata
         return value;
     }
 
-    internal static uint RequireExplorerCursorLimit(uint value, string paramName)
-    {
-        if (value is 0 or > ExplorerCursorLimitMaximum)
-        {
-            throw new ArgumentOutOfRangeException(
-                paramName,
-                $"Value must be between 1 and {ExplorerCursorLimitMaximum}.");
-        }
-
-        return value;
-    }
-
-    internal static string? RequireOptionalCanonicalExplorerCursor(string? value, string paramName)
-    {
-        return value is null ? null : RequireCanonicalExplorerCursor(value, paramName);
-    }
-
-    internal static string RequireCanonicalExplorerCursor(string? value, string paramName)
-    {
-        var exact = RequireExactNonEmptyText(value, paramName);
-        if (exact.Length > ExplorerCursorMaximumLength)
-        {
-            throw new ArgumentException(
-                $"Value must be at most {ExplorerCursorMaximumLength} characters.",
-                paramName);
-        }
-
-        if (!exact.All(character =>
-                character is (>= 'A' and <= 'Z')
-                    or (>= 'a' and <= 'z')
-                    or (>= '0' and <= '9')
-                    or '-'
-                    or '_'))
-        {
-            throw new ArgumentException(
-                "Value must use the canonical unpadded base64url alphabet.",
-                paramName);
-        }
-
-        byte[] decoded;
-        try
-        {
-            var paddingLength = (4 - exact.Length % 4) % 4;
-            var base64 = exact.Replace('-', '+').Replace('_', '/') + new string('=', paddingLength);
-            decoded = Convert.FromBase64String(base64);
-        }
-        catch (FormatException exception)
-        {
-            throw new ArgumentException(
-                "Value must be canonical unpadded base64url.",
-                paramName,
-                exception);
-        }
-
-        var canonical = Convert.ToBase64String(decoded)
-            .TrimEnd('=')
-            .Replace('+', '-')
-            .Replace('/', '_');
-        if (!string.Equals(canonical, exact, StringComparison.Ordinal))
-        {
-            throw new ArgumentException(
-                "Value must be canonical unpadded base64url.",
-                paramName);
-        }
-
-        return exact;
-    }
-
     internal static string RequireCanonicalAccountId(string? value, string paramName)
     {
         var exact = RequireExactNonEmptyText(value, paramName);
@@ -3902,10 +3374,8 @@ internal static class ToriiExplorerDirectMetadata
 
         try
         {
-            return global::Hyperledger.Iroha.Address.AccountAddress.Parse(
-                    exact,
-                    global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant)
-                .ToI105(global::Hyperledger.Iroha.Address.AccountAddress.DefaultChainDiscriminant);
+            _ = global::Hyperledger.Iroha.Address.AccountAddress.Parse(exact);
+            return exact;
         }
         catch (global::Hyperledger.Iroha.AccountAddressException exception)
         {
@@ -4062,46 +3532,6 @@ internal static class ToriiExplorerDirectMetadata
     }
 }
 
-[JsonConverter(typeof(ToriiExplorerInstructionsPageJsonConverter))]
-public sealed record class ToriiExplorerInstructionsPage
-{
-    private ToriiExplorerInstruction[] items = Array.Empty<ToriiExplorerInstruction>();
-
-    [JsonPropertyName("pagination")]
-    public ToriiExplorerHistoryCursorMeta Pagination { get; init; } = new();
-
-    [JsonPropertyName("items")]
-    public IReadOnlyList<ToriiExplorerInstruction> Items
-    {
-        get => ToriiListSnapshots.CopyRequired(items);
-        init => items = ToriiListSnapshots.CopyRequired(value);
-    }
-}
-
-[JsonConverter(typeof(ToriiExplorerLatestInstructionsResponseJsonConverter))]
-public sealed record class ToriiExplorerLatestInstructionsResponse
-{
-    private ToriiExplorerInstruction[] items = Array.Empty<ToriiExplorerInstruction>();
-    private string sampledAt = string.Empty;
-
-    [JsonPropertyName("sampled_at")]
-    public string SampledAt
-    {
-        get => sampledAt;
-        init => sampledAt = ToriiExplorerDirectMetadata.RequireExactNonEmptyText(value, nameof(SampledAt));
-    }
-
-    [JsonPropertyName("pagination")]
-    public ToriiExplorerHistoryCursorMeta Pagination { get; init; } = new();
-
-    [JsonPropertyName("items")]
-    public IReadOnlyList<ToriiExplorerInstruction> Items
-    {
-        get => ToriiListSnapshots.CopyRequired(items);
-        init => items = ToriiListSnapshots.CopyRequired(value);
-    }
-}
-
 [JsonConverter(typeof(ToriiExplorerHealthSnapshotJsonConverter))]
 public sealed record class ToriiExplorerHealthSnapshot
 {
@@ -4171,22 +3601,6 @@ public sealed record class ToriiExplorerMetricsSnapshot
 
     [JsonPropertyName("avg_block_time")]
     public ToriiExplorerDuration? AverageBlockTime { get; init; }
-}
-
-[JsonConverter(typeof(ToriiTransactionsPageJsonConverter))]
-public sealed record class ToriiTransactionsPage
-{
-    private ToriiTransactionSummary[] items = Array.Empty<ToriiTransactionSummary>();
-
-    [JsonPropertyName("items")]
-    public IReadOnlyList<ToriiTransactionSummary> Items
-    {
-        get => ToriiListSnapshots.CopyRequired(items);
-        init => items = ToriiListSnapshots.CopyRequired(value);
-    }
-
-    [JsonPropertyName("total")]
-    public long Total { get; init; }
 }
 
 [JsonConverter(typeof(ToriiSoraFsFileEntryJsonConverter))]
@@ -4536,38 +3950,12 @@ public sealed record class ToriiUaidPortfolioQuery
     public string? AssetId { get; init; }
 }
 
-public enum ToriiUaidManifestStatusFilter
-{
-    Active,
-    Inactive,
-    All,
-}
-
-public enum ToriiUaidManifestCountMode
-{
-    Exact = 1,
-    Bounded = 2,
-}
-
 public enum ToriiUaidManifestStatus
 {
     Active = 1,
     Pending = 2,
     Expired = 3,
     Revoked = 4,
-}
-
-public sealed record class ToriiUaidManifestQuery
-{
-    public ulong? DataspaceId { get; init; }
-
-    public ToriiUaidManifestStatusFilter? Status { get; init; }
-
-    public uint? Limit { get; init; }
-
-    public uint? Offset { get; init; }
-
-    public ToriiUaidManifestCountMode? CountMode { get; init; }
 }
 
 [JsonConverter(typeof(ToriiUaidPortfolioTotalsJsonConverter))]
@@ -4874,51 +4262,6 @@ public sealed record class ToriiUaidManifestRecord
     }
 }
 
-[JsonConverter(typeof(ToriiUaidManifestsResponseJsonConverter))]
-public sealed record class ToriiUaidManifestsResponse
-{
-    private string uaid = string.Empty;
-    private ulong total;
-    private bool hasMore;
-    private ToriiUaidManifestCountMode countMode;
-    private ToriiUaidManifestRecord[] manifests = Array.Empty<ToriiUaidManifestRecord>();
-
-    [JsonPropertyName("uaid")]
-    public string Uaid
-    {
-        get => uaid;
-        init => uaid = ToriiUaidDirectMetadata.RequireCanonicalUaidLiteral(value, nameof(Uaid));
-    }
-
-    [JsonPropertyName("total")]
-    public ulong Total
-    {
-        get => total;
-        init => total = value;
-    }
-
-    [JsonPropertyName("has_more")]
-    public bool HasMore
-    {
-        get => hasMore;
-        init => hasMore = value;
-    }
-
-    [JsonPropertyName("count_mode")]
-    public ToriiUaidManifestCountMode CountMode
-    {
-        get => countMode;
-        init => countMode = ToriiUaidDirectMetadata.RequireManifestCountMode(value, nameof(CountMode));
-    }
-
-    [JsonPropertyName("manifests")]
-    public IReadOnlyList<ToriiUaidManifestRecord> Manifests
-    {
-        get => ToriiListSnapshots.CopyRequired(manifests);
-        init => manifests = ToriiUaidDirectMetadata.CopyRequiredManifestRecords(value, nameof(Manifests));
-    }
-}
-
 internal static class ToriiUaidDirectMetadata
 {
     internal readonly record struct CanonicalAssetIdParts(
@@ -5031,15 +4374,6 @@ internal static class ToriiUaidDirectMetadata
             or ToriiUaidManifestStatus.Revoked
             ? value
             : throw new ArgumentOutOfRangeException(paramName, value, "Unknown UAID manifest status.");
-    }
-
-    internal static ToriiUaidManifestCountMode RequireManifestCountMode(
-        ToriiUaidManifestCountMode value,
-        string paramName)
-    {
-        return value is ToriiUaidManifestCountMode.Exact or ToriiUaidManifestCountMode.Bounded
-            ? value
-            : throw new ArgumentOutOfRangeException(paramName, value, "Unknown UAID manifest count mode.");
     }
 
     internal static JsonNode CopyRequiredAssetPermissionManifest(JsonNode? value, string paramName)

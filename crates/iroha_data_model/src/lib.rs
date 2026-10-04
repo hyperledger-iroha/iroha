@@ -145,6 +145,8 @@ pub mod permission;
 pub mod privacy;
 /// Opaque certified private-root anchors with owner-authorized parent registration.
 pub mod private_dataspace;
+/// Closed private transaction counters and independently verified committee computation claims.
+pub mod private_transaction_counters;
 /// Zero-knowledge proof payload types
 pub mod proof;
 /// QR stream framing types for offline payload handoff.

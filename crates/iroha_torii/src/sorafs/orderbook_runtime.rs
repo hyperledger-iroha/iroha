@@ -352,15 +352,9 @@ fn orderbook_finalized_tip_from_view(
     view: &impl StateReadOnly,
 ) -> Option<(OrderbookFinalizedCursorV1, u64)> {
     let finalized_cursor = orderbook_finalized_cursor_from_view(view)?;
-    let block = view.latest_block()?;
-    if block.header().height().get() != finalized_cursor.height
-        || block.hash().as_ref() != &finalized_cursor.block_hash
-    {
-        return None;
-    }
-    let finalized_at_unix = u64::try_from(block.header().creation_time().as_millis())
-        .ok()
-        .map(|millis| millis / 1_000)
+    let finalized_at_unix = view
+        .authenticated_query_ledger_time_ms()?
+        .checked_div(1_000)
         .filter(|timestamp| *timestamp != 0)?;
     Some((finalized_cursor, finalized_at_unix))
 }

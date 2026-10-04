@@ -3,10 +3,9 @@
 This guide covers producing and publishing the authenticated `NoritoBridge`
 XCFramework release asset. Swift Package Manager consumes that exact artifact
 from an ignored local `dist/` directory or an explicitly configured external
-artifact directory. CocoaPods consumes the same ZIP through the generated,
-checksum-pinned `NoritoBridge` binary pod. `IrohaSwift/VERSION` owns the shared
-source-pod, binary-pod, tag, and archive SemVer. The Rust sources are instead
-bound by the reviewed commit, source fingerprint, and root lockfile. For
+artifact directory. SwiftPM is the sole supported Swift packaging path.
+`IrohaSwift/VERSION` owns the Swift package, tag, and archive SemVer. The Rust
+sources are bound by the reviewed commit, source fingerprint, and root lockfile. For
 end-to-end instructions on consuming a published artifact inside an app, see the
 [public Swift SDK tutorial](https://docs.iroha.tech/guide/tutorials/swift.html).
 
@@ -16,18 +15,17 @@ that workflow for local release verification.
 
 ## Prerequisites
 
-- A macOS host with the latest stable Xcode command line tools installed.
+- A macOS host with the approved full Xcode installation and its sealed tools.
 - Exact Rust 1.93.1 `cargo`, `rustc`, and `rustdoc`.
 - Python 3.12.
 - Swift toolchain 5.9 or newer.
-- CocoaPods for the package-first binary/source lint.
 - Access to the Hyperledger Iroha release signing keys for tagging Swift artifacts.
 
 ## Versioning model
 
-1. Select the canonical pod/archive SemVer in `IrohaSwift/VERSION`.
+1. Select the canonical Swift package/archive SemVer in `IrohaSwift/VERSION`.
 2. Tag the workspace with that release identifier (`v<version>`). This one tag
-   owns the IrohaSwift source pod and the NoritoBridge binary release asset.
+   binds the IrohaSwift package source and the NoritoBridge binary release asset.
 3. Keep `IrohaSwift/VERSION`, the Swift loader's expected version, and the
    reviewed release version map aligned.
 4. Do not require numeric equality with `crates/norito/Cargo.toml`; authenticate
@@ -110,6 +108,27 @@ that workflow for local release verification.
    with its embedded manifest and canonical public manifest symlink already in
    the first-release layout; the builder does not migrate an older layout.
 
+   `MOBILE_SDK_CARGO_HOME` optionally selects an existing owned, writable,
+   non-symbolic canonical Cargo cache outside the source tree. The default remains
+   the user's `.cargo` directory. Use a separate populated cache when personal
+   Cargo configuration contains compiler wrappers or environment overrides that
+   the authenticated build rejects; keep the reviewed configuration checks intact.
+   For `--local-integration`, the exact mode-0700
+   `target/norito-bridge-local/build/cargo-home` directory is also admitted.
+   The selected cache is reused through rustup, source seals, every hermetic Cargo
+   command and artifact verification; builds remain locked and offline.
+
+   Cargo also reads configuration from its working directory and every ancestor.
+   If the checkout is below a home directory containing rejected Cargo overrides,
+   select `MOBILE_SDK_CARGO_INVOCATION_DIR` as an existing owned, writable,
+   non-symbolic canonical mode-0700 directory outside that ancestry and disjoint
+   from source, for example `/private/tmp/iroha-native-cargo-invocation`.
+   Metadata and real Apple builds then run there with the explicit authenticated
+   root `--manifest-path`. The checker, pin owner and archive owner use the same
+   directory; its identity and every effective Cargo configuration are checked
+   before and after Cargo. Keep both explicit inputs selected during verification
+   and packaging. Neither input changes the pinned compiler, profile or graph.
+
    PQClean archive normalization binds the registry package identity and checksum
    from the selected Cargo lock to the exact successful build's JSON messages and
    native link outputs. It removes only byte-identical duplicate members from
@@ -145,9 +164,9 @@ that workflow for local release verification.
    release archives or their checksums.
 
 4. Select a canonical existing external parent and an absent dedicated package
-   destination whose basename contains `mobile-sdk`, then package and lint the
+   destination whose basename contains `mobile-sdk`, then package and validate the
    final archive before tagging. `--version` is a diagnostic artifact label; the
-   pod/archive SemVer still comes only from `IrohaSwift/VERSION`.
+   Swift package/archive SemVer still comes only from `IrohaSwift/VERSION`.
 
    ```bash
    export MOBILE_SDK_APPLE_ARTIFACT_DIR="$NORITO_BRIDGE_OUT_DIR"
@@ -158,18 +177,19 @@ that workflow for local release verification.
    export MOBILE_SDK_VERSION="local-$(git rev-parse --short=12 HEAD)"
    scripts/package_mobile_sdk_artifacts.sh \
      --apple \
+     --lockfile-path /absolute/read-only-release-input/Cargo.lock \
      --version "$MOBILE_SDK_VERSION"
-   ci/check_swift_pod_bridge.sh
    ```
 
    The package command creates
-   `NoritoBridge-v<version>.xcframework.zip` and invokes
-   `scripts/render_norito_bridge_podspec.py`, which reads `IrohaSwift/VERSION`,
-   requires the embedded bridge-manifest version to match it, validates the
-   bounded deterministic ZIP, computes its SHA-256, and exclusively creates
-   `NoritoBridge-<version>.podspec` in the private package stage. The lint wrapper
-   reauthenticates that final package before compiling both pods. Do not hand-edit
-   a release URL or checksum, and do not place generated package outputs in Git.
+   `NoritoBridge-v<version>.xcframework.zip`, its versioned artifact manifest,
+   and the closed package/checksum inventory. The embedded bridge version must
+   equal `IrohaSwift/VERSION`. `scripts/validate_norito_bridge_archive.py`
+   authenticates the bounded deterministic ZIP before materialization. Compile
+   a SwiftPM binary-target consumer of that exact ZIP and execute an ordinary
+   public `IrohaSwift` dependency in Release without unsafe linker flags.
+   Reuse stable external Swift scratch directories. Do not hand-edit a release
+   URL or checksum, or place generated package outputs in Git.
 
 5. **Maintain the source header when exports or enum inventories change.** The build
    copies `crates/connect_norito_bridge/include/connect_norito_bridge.h` into each
@@ -185,12 +205,19 @@ that workflow for local release verification.
 6. Run the Swift validation suite before tagging:
 
    ```bash
-   swift test --package-path IrohaSwift --disable-automatic-resolution
+   export MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1
+   export MOBILE_SDK_APPLE_ARTIFACT_DIR="$NORITO_BRIDGE_OUT_DIR"
+   export MOBILE_SDK_SWIFT_SCRATCH_DIR=/absolute/cache/iroha-mobile-swift-build
+   export IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH=/absolute/read-only-release-input/Cargo.lock
+   mkdir -p "$MOBILE_SDK_SWIFT_SCRATCH_DIR"
+   ci/check_privacy_swift_sdk.sh
    make swift-ci
    ```
 
-   The first command ensures the Swift package (including `AccelerationSettings`) stays
-   green; the second validates fixture parity, renders the parity/CI dashboards, and
+   The native gate reauthenticates the framework, exact tools and canonical
+   external lock, then runs the complete Swift package suite, including native
+   fixture, crypto and lifecycle tests. The dashboard command validates fixture
+   parity, renders the parity/CI dashboards, and
    exercises the same telemetry checks enforced in Buildkite (including the
    `ci/xcframework-smoke:<lane>:device_tag` metadata requirement).
 
@@ -209,25 +236,19 @@ repository `dist/` path or in a canonical external directory selected with
 materialize the XCFramework and must not be reported as an installed native
 package.
 
-### CocoaPods
+The package's native retention target uses ordinary export references, so an
+application can depend on `IrohaSwift` without unsafe linker flags. Qualify both
+the authenticated ZIP consumer and a separate ordinary SDK dependency in
+Release. The SDK consumer must execute native key generation, public-key
+derivation and directional-key agreement, reject an all-zero peer key, and
+admit exact ABI 25. A library-only build does not establish this execution.
 
-`IrohaSwift` is a source pod with an exact same-version dependency on the
-`NoritoBridge` binary pod. The generated binary podspec uses the immutable
-`v<version>` GitHub release URL, pins the exact ZIP with CocoaPods `:sha256`, and
-declares `NoritoBridge.xcframework` as its vendored framework. CI first packages
-the final archive into an atomically published current-UID-owned mode-0700
-directory, requires single-link regular inputs that are not writable by others,
-authenticates the closed checksum/manifest inventory, renders
-an explicit `file://` copy into a current-UID-owned mode-0700 temporary directory,
-then runs binary `pod spec lint` and source `pod lib lint --include-podspecs`.
-The dependency archive is package-local, but CocoaPods itself may still consult
-configured spec sources; this lane is not evidence of network isolation.
-
-This closes repository source wiring and package-local dependency compilation only.
-CocoaPods registry publication remains blocked until the immutable GitHub asset
-and both same-version specs are published in dependency order and a clean public
-`pod install`/Release build plus signed provenance are captured. Generated
-`dist/*` stays untracked; only `dist/.gitkeep` belongs in Git.
+Publish the immutable `NoritoBridge-v<version>.xcframework.zip` with its
+authenticated manifest/checksum inventory and reviewed package source. Retain
+an installed SwiftPM Release consumer and signed provenance before claiming
+public installation readiness. CocoaPods support is retired. Generated `dist/*`
+stays untracked; only `dist/.gitkeep` belongs in Git. Host and simulator checks
+do not establish physical-device qualification.
 
 ## CI considerations
 
@@ -296,6 +317,19 @@ artifact. All other input changes require a native rebuild. Ordinary `swift test
 then links the real binary target, and `NativeBridge` validates the symbols from
 the executable/`RTLD_DEFAULT`; no replacement loader or projected Swift package is
 used. Physical-device qualification remains separate from these host unit tests.
+
+## Local macOS unit prerequisite
+
+The explicit `MOBILE_SDK_LOCAL_UNIT_ARTIFACT_DIR` input selects only debug macOS
+unit-test artifacts with scope `local-unit`. Its producer consumes a separately
+retained static archive named by a genuine, source-guarded successful host Cargo
+invocation. It normalizes only the current locked, Cargo-proven PQClean duplicate
+members in a derived copy and records an actual complete-archive consumer link/run.
+The archive/header/source/tool/receipt hashes remain bound through Swift execution.
+No universal architecture or release environment is claimed. Every Swift test
+stays enabled, and native ABI/symbol admission is unchanged. Selecting the release
+corridor, targeting iOS, or compiling Release rejects this input. Canonical release,
+pin, archive, and CI handoff owners retain the five-triple/three-slice contract.
 
 ## Canonical Android output and runtime inventory
 

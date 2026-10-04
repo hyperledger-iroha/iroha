@@ -107,7 +107,7 @@ impl Fixture {
         Self::with_projection_age(120_000)
     }
     fn with_projection_age(maximum_projection_age_ms: u64) -> Self {
-        let mut native = NativeFinalityFixture::start("ordinary-native-clock-tests");
+        let mut native = NativeFinalityFixture::new_with_explicit_parameters();
         native.certify_with_world_root(
             native.block_with_submitted_work(native.next_header()),
             Hash::new(b"explicitly synthetic clock fixture World"),
@@ -129,7 +129,7 @@ impl Fixture {
             KagemushaOrdinaryNativeClockOriginalsV1::from_selected_originals(
                 checkpoint,
                 native.network_id(),
-                "ordinary-native-clock-tests".into(),
+                native.chain_id().into(),
                 nodes.clone(),
                 KagemushaOrdinaryNativeClockPolicyV1 {
                     maximum_reply_age_ms: 10_000,
@@ -147,6 +147,11 @@ impl Fixture {
         }
     }
     fn replies(&self, nonce: [u8; 32], times: [u64; 4]) -> [Vec<u8>; 4] {
+        let status_config_fingerprint = self
+            .native
+            .verifier()
+            .consensus_configuration_fingerprint()
+            .unwrap();
         std::array::from_fn(|index| {
             let signer = KeyPair::from_seed(vec![index as u8 + 1; 32], Algorithm::BlsNormal);
             let selected = &self.nodes[index];
@@ -162,7 +167,7 @@ impl Fixture {
                 genesis_finality_proof: self.native.genesis_proof().clone(),
                 status: SumeragiStatus {
                     protocol_version: 1,
-                    config_fingerprint: selected.config_fingerprint,
+                    config_fingerprint: status_config_fingerprint,
                     beacon_horizon: None,
                     instance: self.native.verifier().instance().0,
                     height: self.native.latest().height() + 1,
@@ -206,6 +211,54 @@ impl Fixture {
             SignatureOf::try_from_hash(signer.private_key(), reply.body.signing_hash()).unwrap();
         *raw = norito::encode_canonical(&reply).unwrap();
     }
+}
+
+#[test]
+fn signed_clock_separates_local_configuration_from_original_genesis_status() {
+    let fixture = Fixture::new();
+    let verifier = SumeragiFinalityVerifier::from_trusted_checkpoint(
+        &fixture.selected.checkpoint,
+        &fixture.native.network_id(),
+        fixture.native.chain_id(),
+    )
+    .unwrap();
+    let consensus = verifier.consensus_configuration_fingerprint().unwrap();
+    assert_eq!(fixture.selected.status_config_fingerprint, consensus);
+    assert_ne!(fixture.nodes[0].config_fingerprint, consensus);
+    let nonce = [73; 32];
+    let originals = fixture.replies(nonce, [1_000_000; 4]);
+    verify_signed_observations(&fixture.selected, &verifier, nonce, &originals, None).unwrap();
+    for change in 0..5 {
+        let mut changed = originals.clone();
+        fixture.resign_changed(&mut changed[0], 0, |body| match change {
+            0 => body.status.config_fingerprint = body.config_fingerprint,
+            1 => body.status.config_fingerprint = Hash::new(b"foreign signed genesis status"),
+            2 => body.config_fingerprint = consensus,
+            3 => std::mem::swap(
+                &mut body.config_fingerprint,
+                &mut body.status.config_fingerprint,
+            ),
+            _ => body.config_fingerprint = Hash::new(b"foreign selected local config"),
+        });
+        let reply: SumeragiFinalityAttestation = norito::decode_canonical(&changed[0]).unwrap();
+        reply.verify().unwrap();
+        assert!(
+            verify_signed_observations(&fixture.selected, &verifier, nonce, &changed, None)
+                .is_err(),
+            "genuinely resigned configuration substitution {change}"
+        );
+    }
+    let omitted = NativeFinalityFixture::new();
+    assert!(
+        KagemushaOrdinaryNativeClockOriginalsV1::from_selected_originals(
+            omitted.checkpoint(),
+            omitted.network_id(),
+            omitted.chain_id().into(),
+            fixture.nodes.clone(),
+            fixture.selected.policy,
+        )
+        .is_err()
+    );
 }
 
 #[test]

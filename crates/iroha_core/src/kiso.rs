@@ -847,6 +847,8 @@ mod tests {
                 chain_discriminant: WithOrigin::inline(defaults::common::chain_discriminant()),
             },
             runtime_provider_broker: iroha_config::parameters::actual::RuntimeProviderBroker {
+                observer_operation_timeout: defaults::runtime_provider_broker::OBSERVER_OPERATION_TIMEOUT,
+                credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES,
                 endpoint_path:
                     iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath::try_new(
                         defaults::runtime_provider_broker::endpoint_path(),
@@ -1012,6 +1014,8 @@ mod tests {
                     iroha_config::parameters::defaults::torii::QUERY_HEAVY_MAX_INFLIGHT,
                 query_fanout_max_retained_bytes:
                     iroha_config::parameters::defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES,
+                query_fanout_max_working_set_bytes:
+                    iroha_config::parameters::defaults::torii::QUERY_FANOUT_MAX_WORKING_SET_BYTES,
                 app_api_routed_read_body_read_timeout: Duration::from_millis(
                     iroha_config::parameters::defaults::torii::APP_API_ROUTED_READ_BODY_READ_TIMEOUT_MS,
                 ),

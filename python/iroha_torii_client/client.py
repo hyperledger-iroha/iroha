@@ -127,7 +127,6 @@ from .client_status_models import (
     PeerTelemetryLocation,
     QueueConfig,
     SumeragiEvidenceAppliedPenaltyStatus,
-    SumeragiEvidenceCancelledPenaltyStatus,
     SumeragiEvidenceListPage,
     SumeragiEvidencePenaltyDetails,
     SumeragiEvidencePenaltyStatus,
@@ -137,7 +136,9 @@ from .client_status_models import (
     SumeragiEvidenceOffender,
     parse_sumeragi_json_object,
 )
+from .collection import Collection, CollectionsMixin
 from .election_tally import ElectionTally
+from .errors import error_for_response
 from .governance_ballot_client import create_governance_ballot_client_mixin
 from .governance_proposals import GovernanceProposalResult
 from .governance_proposals import _contract_address as _canonical_contract_address
@@ -731,7 +732,6 @@ __all__ = [
     "UaidManifestEntry",
     "UaidManifest",
     "UaidManifestRecord",
-    "UaidManifestsResponse",
     "LaneRuntimeUpgradeHook",
     "LaneGovernanceSnapshot",
     "DataspaceCatalogEntry",
@@ -757,7 +757,6 @@ __all__ = [
     "SumeragiEvidencePenaltyStatus",
     "SumeragiEvidencePendingPenaltyStatus",
     "SumeragiEvidenceAppliedPenaltyStatus",
-    "SumeragiEvidenceCancelledPenaltyStatus",
     "SumeragiEvidenceOffender",
     "SumeragiEvidenceRecord",
     "SumeragiEvidenceListPage",
@@ -772,11 +771,8 @@ __all__ = [
     "UnverifiedKagemushaOperationStatusV1",
     "AppApiTransactionDraft",
     "SubscriptionPlanCreateResult",
-    "SubscriptionPlanListItem",
-    "SubscriptionPlanListPage",
     "SubscriptionCreateResult",
-    "SubscriptionListItem",
-    "SubscriptionListPage",
+    "SubscriptionGetResponse",
     "SubscriptionActionResult",
     "SubscriptionUsageDraft",
     "SumeragiParamsSnapshot",
@@ -1045,6 +1041,67 @@ def _read_bounded_response_body(
         return bytes(body)
     finally:
         response.close()
+
+
+#: Upper bound for one collection page (500 full rows of the largest collection).
+_COLLECTION_PAGE_MAX_BYTES = 32 * 1024 * 1024
+
+
+def _release_response(response: requests.Response) -> None:
+    # A response without a transport (``raw is None``) holds no connection.
+    if getattr(response, "raw", None) is not None:
+        response.close()
+
+
+def _read_collection_page(response: requests.Response, context: str) -> bytes:
+    content_type = response.headers.get("Content-Type")
+    if (
+        not isinstance(content_type, str)
+        or content_type.split(";", 1)[0].strip().lower() != "application/json"
+    ):
+        _release_response(response)
+        raise ValueError(f"{context} response must be application/json")
+    buffered = getattr(response, "_content", False)
+    if isinstance(buffered, (bytes, bytearray)):
+        _release_response(response)
+        if len(buffered) > _COLLECTION_PAGE_MAX_BYTES:
+            raise ValueError(
+                f"{context} response exceeds its {_COLLECTION_PAGE_MAX_BYTES}-byte size bound"
+            )
+        return bytes(buffered)
+    return _read_bounded_response_body(response, _COLLECTION_PAGE_MAX_BYTES, context)
+
+
+def _decode_collection_json(raw: bytes, context: str) -> Any:
+    """Decode exact JSON: decimals stay ``Decimal``, duplicate keys and NaN are rejected."""
+
+    if not raw:
+        raise ValueError(f"{context} returned an empty body")
+    try:
+        text = raw.decode("utf-8", "strict")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{context} response must be strict UTF-8") from exc
+
+    def unique_object(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
+        decoded: Dict[str, Any] = {}
+        for key, value in pairs:
+            if key in decoded:
+                raise ValueError(f"{context} response repeats the JSON key {key!r}")
+            decoded[key] = value
+        return decoded
+
+    def reject_constant(name: str) -> Any:
+        raise ValueError(f"{context} response contains the non-finite number {name}")
+
+    try:
+        return json.loads(
+            text,
+            parse_float=Decimal,
+            parse_constant=reject_constant,
+            object_pairs_hook=unique_object,
+        )
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{context} response is not valid JSON: {exc}") from exc
 
 
 def canonical_request_message(
@@ -2661,53 +2718,8 @@ class SubscriptionPlanCreateResult(AppApiTransactionDraft):
 
 
 @dataclass(frozen=True)
-class SubscriptionPlanListItem:
-    """Subscription plan record returned from ``GET /v1/subscriptions/plans``."""
-
-    plan_id: str
-    plan: Dict[str, Any]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SubscriptionPlanListItem":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("subscription plan list item must be an object")
-        plan_id = payload.get("plan_id")
-        if not isinstance(plan_id, str) or not plan_id:
-            raise RuntimeError("subscription plan list item missing `plan_id`")
-        plan_value = payload.get("plan")
-        if not isinstance(plan_value, Mapping):
-            raise RuntimeError("subscription plan list item missing `plan` object")
-        return cls(plan_id=plan_id, plan=dict(plan_value))
-
-
-@dataclass(frozen=True)
-class SubscriptionPlanListPage:
-    """Paginated list of subscription plans."""
-
-    items: List[SubscriptionPlanListItem]
-    total: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SubscriptionPlanListPage":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("subscription plan list response must be an object")
-        items_value = payload.get("items", [])
-        if items_value is None:
-            items_value = []
-        if not isinstance(items_value, list):
-            raise RuntimeError("subscription plan list `items` must be a list")
-        try:
-            total = int(payload.get("total", len(items_value)))
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError("subscription plan list `total` must be numeric") from exc
-        items = [SubscriptionPlanListItem.from_payload(entry) for entry in items_value]
-        return cls(items=items, total=total)
-
-
-
-@dataclass(frozen=True)
-class SubscriptionListItem:
-    """Subscription record returned by list/get endpoints."""
+class SubscriptionGetResponse:
+    """Subscription detail returned by the single-resource endpoint."""
 
     subscription_id: str
     subscription: Dict[str, Any]
@@ -2715,7 +2727,7 @@ class SubscriptionListItem:
     plan: Optional[Dict[str, Any]]
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SubscriptionListItem":
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SubscriptionGetResponse":
         if not isinstance(payload, Mapping):
             raise RuntimeError("subscription item must be an object")
         subscription_id = payload.get("subscription_id")
@@ -2739,31 +2751,6 @@ class SubscriptionListItem:
             invoice=optional_object("invoice"),
             plan=optional_object("plan"),
         )
-
-
-@dataclass(frozen=True)
-class SubscriptionListPage:
-    """Paginated list of subscriptions."""
-
-    items: List[SubscriptionListItem]
-    total: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SubscriptionListPage":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("subscription list response must be an object")
-        items_value = payload.get("items", [])
-        if items_value is None:
-            items_value = []
-        if not isinstance(items_value, list):
-            raise RuntimeError("subscription list `items` must be a list")
-        try:
-            total = int(payload.get("total", len(items_value)))
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError("subscription list `total` must be numeric") from exc
-        items = [SubscriptionListItem.from_payload(entry) for entry in items_value]
-        return cls(items=items, total=total)
-
 
 
 @dataclass(frozen=True)
@@ -3542,20 +3529,7 @@ class UaidManifestRecord:
     manifest: UaidManifest
 
 
-@dataclass(frozen=True)
-class UaidManifestsResponse:
-    """Typed response for ``GET /v1/space-directory/uaids/{uaid}/manifests``."""
-
-    uaid: str
-    total: int
-    has_more: bool
-    count_mode: str
-    manifests: List[UaidManifestRecord]
-
-
 UAID_MANIFEST_STATUS_VALUES = {"Pending", "Active", "Expired", "Revoked"}
-UAID_MANIFEST_STATUS_FILTER_VALUES = {"active", "inactive", "all"}
-UAID_MANIFEST_COUNT_MODE_VALUES = {"bounded", "exact"}
 
 
 @dataclass(frozen=True)
@@ -3991,8 +3965,21 @@ class ToriiClient(
     _ToriiClientGovernanceBallotMixin,
     ParliamentApiV1Mixin,
     RuntimeGovernanceAuthMixin,
+    CollectionsMixin,
 ):
-    """HTTP helper for Torii attachments, prover, and governance endpoints."""
+    """HTTP client for Torii collections, attachments, prover and governance endpoints.
+
+    Collections (``client.domains``, ``client.accounts``, ``client.asset_definitions``,
+    ``client.nfts``, ``client.rwas``, ``client.transactions``,
+    ``client.repo_agreements`` and their nested ``accounts.assets(id)``,
+    ``accounts.transactions(id)`` and ``asset_definitions.holders(id)``) sign with
+    ``canonical_request_auth`` when it is
+    configured and are anonymous otherwise. ``timeout`` (seconds) applies to every
+    request that does not pass its own. Use the client as a context manager (or call
+    :meth:`close`) to release the HTTP session it creates; a caller-supplied
+    ``session`` stays caller-owned.
+    """
+
     def __init__(
         self,
         base_url: str,
@@ -4000,6 +3987,8 @@ class ToriiClient(
         *,
         local_signing_context: Optional[ToriiLocalSigningContext] = None,
         operator_signing_context: Optional[ToriiOperatorSigningContext] = None,
+        canonical_request_auth: Optional["ToriiCanonicalRequestAuth"] = None,
+        timeout: float = 30.0,
         orderbook_native_verifier: Any = None,
         orderbook_chain_discriminant: Optional[int] = None,
         private_settlement_native_verifier: Any = None,
@@ -4011,8 +4000,26 @@ class ToriiClient(
             raise TypeError(
                 "operator_signing_context must be ToriiOperatorSigningContext"
             )
+        if canonical_request_auth is not None and not isinstance(
+            canonical_request_auth,
+            ToriiCanonicalRequestAuth,
+        ):
+            raise TypeError("canonical_request_auth must be ToriiCanonicalRequestAuth")
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout)
+            or timeout <= 0
+        ):
+            raise ValueError("timeout must be a positive finite number of seconds")
         self._base_url = base_url.rstrip("/")
-        self._session = session if session is not None else requests.Session()
+        self._owns_session = session is None
+        if session is None:
+            session = requests.Session()
+            session.trust_env = False
+        self._session = session
+        self._timeout = float(timeout)
+        self._canonical_request_auth = canonical_request_auth
         self._status_state = _StatusMetricsState()
         self._local_signing_context = local_signing_context
         self._operator_signing_context = operator_signing_context
@@ -4021,6 +4028,18 @@ class ToriiClient(
         self._configure_private_settlement_native_verifier(
             private_settlement_native_verifier
         )
+
+    def close(self) -> None:
+        """Close the HTTP session this client created; a caller-supplied session stays open."""
+
+        if self._owns_session:
+            self._session.close()
+
+    def __enter__(self) -> "ToriiClient":
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc: Any, _traceback: Any) -> None:
+        self.close()
 
     def _sorafs_orderbook_expected_chain_discriminant(self, context: str) -> int:
         return require_orderbook_chain_discriminant(self._orderbook_chain_discriminant, context)
@@ -4925,39 +4944,6 @@ class ToriiClient(
     # ------------------------------------------------------------------
     # Subscriptions
     # ------------------------------------------------------------------
-    def list_subscription_plans(
-        self,
-        *,
-        provider: Optional[str] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-    ) -> SubscriptionPlanListPage:
-        """List subscription plans via ``GET /v1/subscriptions/plans``."""
-
-        params: Dict[str, Any] = {}
-        if provider is not None:
-            params["provider"] = self._normalize_optional_string(
-                provider,
-                "subscriptions.plans.provider",
-            )
-        limit_value = self._normalize_optional_int(limit, "subscriptions.plans.limit")
-        if limit_value is not None:
-            params["limit"] = limit_value
-        offset_value = self._normalize_optional_int(
-            offset,
-            "subscriptions.plans.offset",
-            allow_zero=True,
-        )
-        if offset_value is not None:
-            params["offset"] = offset_value
-        response = self._request(
-            "GET",
-            "/v1/subscriptions/plans",
-            params=self._clean_params(params),
-        )
-        self._expect_status(response, {200})
-        return SubscriptionPlanListPage.from_payload(response.json())
-
     def create_subscription_plan(
         self,
         *,
@@ -4990,51 +4976,6 @@ class ToriiClient(
                 "subscription plan create response plan_id does not match the request"
             )
         return result
-
-    def list_subscriptions(
-        self,
-        *,
-        owned_by: Optional[str] = None,
-        provider: Optional[str] = None,
-        status: Optional[str] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-    ) -> SubscriptionListPage:
-        """List subscriptions via ``GET /v1/subscriptions``."""
-
-        params: Dict[str, Any] = {}
-        if owned_by is not None:
-            params["owned_by"] = self._normalize_optional_string(
-                owned_by,
-                "subscriptions.owned_by",
-            )
-        if provider is not None:
-            params["provider"] = self._normalize_optional_string(
-                provider,
-                "subscriptions.provider",
-            )
-        if status is not None:
-            params["status"] = normalize_subscription_status(
-                status,
-                "subscriptions.status",
-            )
-        limit_value = self._normalize_optional_int(limit, "subscriptions.limit")
-        if limit_value is not None:
-            params["limit"] = limit_value
-        offset_value = self._normalize_optional_int(
-            offset,
-            "subscriptions.offset",
-            allow_zero=True,
-        )
-        if offset_value is not None:
-            params["offset"] = offset_value
-        response = self._request(
-            "GET",
-            "/v1/subscriptions",
-            params=self._clean_params(params),
-        )
-        self._expect_status(response, {200})
-        return SubscriptionListPage.from_payload(response.json())
 
     def create_subscription(
         self,
@@ -5095,7 +5036,7 @@ class ToriiClient(
         )
         return SubscriptionCreateResult.from_payload(body)
 
-    def get_subscription(self, subscription_id: str) -> Optional[SubscriptionListItem]:
+    def get_subscription(self, subscription_id: str) -> Optional[SubscriptionGetResponse]:
         """Fetch a single subscription (`GET /v1/subscriptions/{subscription_id}`)."""
 
         normalized_id = self._require_non_empty_string(
@@ -5108,7 +5049,7 @@ class ToriiClient(
             return None
         self._expect_status(response, {200})
         payload = self._ensure_mapping(response.json(), "subscription get response")
-        return SubscriptionListItem.from_payload(payload)
+        return SubscriptionGetResponse.from_payload(payload)
 
     def pause_subscription(
         self,
@@ -5373,57 +5314,23 @@ class ToriiClient(
         mapping = self._ensure_mapping(payload, "uaid bindings response")
         return self._parse_uaid_bindings_response(mapping, context="uaid bindings response")
 
-    def get_uaid_manifests(
-        self,
-        uaid: str,
-        *,
-        dataspace_id: Optional[int] = None,
-        status: Optional[str] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        count_mode: Optional[str] = None,
-    ) -> UaidManifestsResponse:
-        """Fetch Space Directory manifests for a UAID (`GET /v1/space-directory/uaids/{uaid}/manifests`)."""
+    def uaid_manifests(self, uaid: str) -> Collection[UaidManifestRecord]:
+        """Space Directory manifests with the shared filter, sort and cursor contract."""
 
         canonical = self._normalize_uaid_literal(uaid, context="uaid")
-        params: Dict[str, Any] = {}
-        if dataspace_id is not None:
-            params["dataspace"] = _require_u64(
-                dataspace_id,
-                "get_uaid_manifests.dataspace_id",
-            )
-        if status is not None:
-            status = _require_exact_non_empty_string(status, "get_uaid_manifests.status")
-            if status not in UAID_MANIFEST_STATUS_FILTER_VALUES:
-                raise ValueError("get_uaid_manifests.status must be active, inactive, or all")
-            params["status"] = status
-        if limit is not None:
-            checked_limit = _require_u64(limit, "get_uaid_manifests.limit")
-            if checked_limit == 0:
-                raise ValueError("get_uaid_manifests.limit must be positive")
-            params["limit"] = checked_limit
-        if offset is not None:
-            params["offset"] = _require_u64(offset, "get_uaid_manifests.offset")
-        if count_mode is not None:
-            count_mode = _require_exact_non_empty_string(
-                count_mode,
-                "get_uaid_manifests.count_mode",
-            )
-            if count_mode not in UAID_MANIFEST_COUNT_MODE_VALUES:
-                raise ValueError("get_uaid_manifests.count_mode must be bounded or exact")
-            params["count_mode"] = count_mode
-        response = self._request(
-            "GET",
+
+        def parse(row: Any) -> UaidManifestRecord:
+            record = self._parse_uaid_manifest_record(row, context="uaid manifest row")
+            if record.manifest.uaid != canonical:
+                raise ValueError("uaid manifest row UAID differs from the requested UAID")
+            return record
+
+        return Collection(
+            self,
             f"/v1/space-directory/uaids/{quote(canonical, safe='')}/manifests",
-            params=self._clean_params(params),
-            headers={"Accept": "application/json"},
+            parse,
+            "uaid manifests",
         )
-        self._expect_status(response, {200})
-        payload = self._maybe_json(response)
-        if payload is None:
-            raise RuntimeError("uaid manifests endpoint returned no payload")
-        mapping = self._ensure_mapping(payload, "uaid manifests response")
-        return self._parse_uaid_manifests_response(mapping, context="uaid manifests response")
 
     # ------------------------------------------------------------------
     # KAGEMUSHA V1 readiness
@@ -7518,7 +7425,7 @@ class ToriiClient(
         data: Optional[bytes] = None,
         stream: bool = False,
         allow_retry: bool = True,
-        allow_redirects: bool = True,
+        allow_redirects: bool = False,
         timeout: Optional[float] = None,
     ) -> requests.Response:
         return _send_request(
@@ -7532,7 +7439,7 @@ class ToriiClient(
             stream=stream,
             allow_retry=allow_retry,
             allow_redirects=allow_redirects,
-            timeout=timeout,
+            timeout=self._timeout if timeout is None else timeout,
             build_headers=build_canonical_request_headers,
             build_operator_headers=build_operator_request_headers,
         )
@@ -7545,23 +7452,66 @@ class ToriiClient(
         maximum_body_bytes: Optional[int] = None,
         context: str = "Torii",
     ) -> None:
+        """Raise the typed :class:`~iroha_torii_client.errors.ToriiError` for unexpected statuses.
+
+        ``maximum_body_bytes`` makes the error-body read strict (oversized or
+        non-UTF-8 bodies raise ``ValueError``); otherwise a bounded preview is read.
+        """
+
         expected_set = set(expected)
         if response.status_code in expected_set:
             return
+        label = None if context == "Torii" else context
         if maximum_body_bytes is None:
-            message = _format_error_body(response.text)
-        else:
-            body = _read_bounded_response_body(
-                response, maximum_body_bytes, f"{context} error"
-            )
-            try:
-                text = body.decode("utf-8", "strict")
-            except UnicodeDecodeError as exc:
-                raise ValueError(f"{context} error response body must be strict UTF-8") from exc
-            message = _format_error_body(text)
-        raise RuntimeError(
-            f"unexpected status {response.status_code}; expected {sorted(expected_set)}; body={message}"
+            raise error_for_response(response, expected=expected_set, context=label)
+        body = _read_bounded_response_body(
+            response, maximum_body_bytes, f"{context} error"
         )
+        try:
+            body.decode("utf-8", "strict")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"{context} error response body must be strict UTF-8") from exc
+        raise error_for_response(response, expected=expected_set, context=label, body=body)
+
+    def _query_collection(
+        self,
+        path: str,
+        body: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> Any:
+        """``POST`` a collection query and decode the JSON page (exact decimals, no floats).
+
+        The request is signed with ``canonical_request_auth`` when configured
+        (signed requests are sent once, without redirects); otherwise it is
+        anonymous. Errors raise :class:`~iroha_torii_client.errors.ToriiError`.
+        """
+
+        payload = json.dumps(
+            body, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+        canonical_auth = self._canonical_request_auth
+        headers = self._canonical_request_headers(
+            "POST",
+            path,
+            payload,
+            canonical_auth=canonical_auth,
+            headers={"Accept": "application/json"},
+            has_body=True,
+        )
+        response = self._request(
+            "POST",
+            path,
+            headers=headers,
+            data=payload,
+            stream=True,
+            allow_retry=canonical_auth is None,
+            allow_redirects=False,
+        )
+        if response.status_code != 200:
+            raise error_for_response(response, expected=(200,), context=context)
+        raw = _read_collection_page(response, context)
+        return _decode_collection_json(raw, context)
 
     @staticmethod
     def _clean_params(params: Optional[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -9994,39 +9944,6 @@ class ToriiClient(
         )
 
     @staticmethod
-    def _parse_uaid_manifests_response(payload: Mapping[str, Any], *, context: str) -> UaidManifestsResponse:
-        record = ToriiClient._ensure_mapping(payload, context)
-        ToriiClient._validate_exact_fields(
-            record,
-            {"uaid", "total", "has_more", "count_mode", "manifests"},
-            context,
-        )
-        uaid_literal = ToriiClient._normalize_uaid_literal(record.get("uaid"), context=f"{context}.uaid")
-        manifests_value = record["manifests"]
-        if not isinstance(manifests_value, list):
-            raise RuntimeError(f"{context}.manifests must be a list")
-        has_more = record["has_more"]
-        if not isinstance(has_more, bool):
-            raise RuntimeError(f"{context}.has_more must be a boolean")
-        count_mode = _require_exact_non_empty_string(
-            record["count_mode"],
-            f"{context}.count_mode",
-        )
-        if count_mode not in UAID_MANIFEST_COUNT_MODE_VALUES:
-            raise RuntimeError(f"{context}.count_mode must be bounded or exact")
-        manifests = [
-            ToriiClient._parse_uaid_manifest_record(entry, context=f"{context}.manifests[{index}]")
-            for index, entry in enumerate(manifests_value)
-        ]
-        return UaidManifestsResponse(
-            uaid=uaid_literal,
-            total=_require_u64(record["total"], f"{context}.total"),
-            has_more=has_more,
-            count_mode=count_mode,
-            manifests=manifests,
-        )
-
-    @staticmethod
     def _parse_uaid_manifest_record(value: Any, *, context: str) -> UaidManifestRecord:
         record = ToriiClient._ensure_mapping(value, context)
         ToriiClient._validate_exact_fields(
@@ -10870,7 +10787,7 @@ class ToriiClient(
                     details=None,
                 )
             )
-        elif penalty_literal in {"applied", "cancelled"}:
+        elif penalty_literal == "applied":
             penalty_details = ToriiClient._ensure_mapping(
                 penalty["details"], f"{context}.penalty_status.details"
             )
@@ -10888,19 +10805,13 @@ class ToriiClient(
                     f"{context}.penalty_status.details.height must be a non-negative JSON u64"
                 )
             typed_details = SumeragiEvidencePenaltyDetails(height=penalty_height)
-            if penalty_literal == "applied":
-                penalty_status = SumeragiEvidenceAppliedPenaltyStatus(
-                    status="applied",
-                    details=typed_details,
-                )
-            else:
-                penalty_status = SumeragiEvidenceCancelledPenaltyStatus(
-                    status="cancelled",
-                    details=typed_details,
-                )
+            penalty_status = SumeragiEvidenceAppliedPenaltyStatus(
+                status="applied",
+                details=typed_details,
+            )
         else:
             raise RuntimeError(
-                f"{context}.penalty_status.status must be pending, applied, or cancelled"
+                f"{context}.penalty_status.status must be pending or applied"
             )
         return SumeragiEvidenceRecord(
             kind="NativeSumeragiEvidence",

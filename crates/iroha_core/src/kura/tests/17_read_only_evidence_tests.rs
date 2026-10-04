@@ -7,12 +7,13 @@ mod canonical_evidence_reader_tests {
     struct Fixture {
         _directory: tempfile::TempDir,
         root: PathBuf,
-        blocks: Vec<Arc<SignedBlock>>,
+        blocks: Vec<iroha_data_model::block::SharedSignedBlock>,
     }
     impl Fixture {
         fn new() -> Self {
             // Native originals execute once; individual tests retain only immutable block images.
-            static BLOCKS: std::sync::OnceLock<Vec<Arc<SignedBlock>>> = std::sync::OnceLock::new();
+            static BLOCKS: std::sync::OnceLock<Vec<iroha_data_model::block::SharedSignedBlock>> =
+                std::sync::OnceLock::new();
             let blocks = BLOCKS
                 .get_or_init(|| {
                     use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
@@ -27,7 +28,11 @@ mod canonical_evidence_reader_tests {
                         .map(|height| {
                             chain
                                 .kura()
-                                .get_block(NonZeroUsize::new(height).unwrap())
+                                .get_block(
+                                    NonZeroUsize::new(height).unwrap(),
+                                    &chain.state().view().execution_budget(),
+                                )
+                                .expect("completed structural storage read")
                                 .unwrap()
                         })
                         .collect()
@@ -150,8 +155,7 @@ mod canonical_evidence_reader_tests {
                 } else {
                     reader.read_carrier(height).unwrap()
                 };
-                let decoded =
-                    iroha_data_model::block::decode_versioned_signed_block(&wire).unwrap();
+                let decoded = iroha_data_model::block::decode_framed_signed_block(&wire).unwrap();
                 let actual = decoded.commit_certificate().unwrap();
                 let expected = original.commit_certificate().unwrap();
                 assert_eq!(actual.consensus_header(), expected.consensus_header());
@@ -169,6 +173,231 @@ mod canonical_evidence_reader_tests {
             assert_eq!(fixture.snapshot(), before);
         }
     }
+
+    fn no_decode_allocation() -> norito::DecodeLimits {
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX)
+    }
+
+    fn assert_original_decode_refusal(error: CanonicalKuraEvidenceError) {
+        use std::error::Error as _;
+
+        assert!(error.source().is_some());
+        let CanonicalKuraEvidenceError::Decode(error) = error else {
+            panic!("original canonical decoder cause required");
+        };
+        assert_eq!(
+            error.kind(),
+            norito::core::DecodeAttemptErrorKind::EnclosingLimit
+        );
+        assert!(matches!(
+            error.into_error().decode_resource_error(),
+            Some(norito::core::DecodeResourceError::TotalAllocationExceeded { limit: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn read_only_evidence_marker_refusal_preserves_original_decode_origin() {
+        let fixture = Fixture::new();
+        let before = fixture.snapshot();
+        let error = norito::with_decode_limits_scope(no_decode_allocation(), || {
+            CanonicalKuraEvidenceReader::open(&fixture.root, fixture.limits())
+        })
+        .expect_err("actual marker decoding must respect the enclosing operation");
+        assert_original_decode_refusal(error);
+        assert_eq!(fixture.snapshot(), before);
+        let mut retry = fixture.open();
+        fixture.read_all(&mut retry);
+        assert_eq!(retry.finish().unwrap().carrier_count(), 3);
+        assert_eq!(fixture.snapshot(), before);
+
+        // An invalid frame remains invalid even under the same enclosing pressure.
+        let marker_path = fixture.root.join(COUNT_FILE_NAME);
+        let mut bytes = fs::read(&marker_path).unwrap();
+        bytes[0] ^= 0xff;
+        fs::write(marker_path, bytes).unwrap();
+        assert!(matches!(
+            norito::with_decode_limits_scope(no_decode_allocation(), || {
+                CanonicalKuraEvidenceReader::open(&fixture.root, fixture.limits())
+            }),
+            Err(CanonicalKuraEvidenceError::Decode(error))
+                if error.kind() == norito::core::DecodeAttemptErrorKind::Invalid
+        ));
+    }
+
+    #[test]
+    fn read_only_evidence_decoder_refusal_preserves_original_cursor_and_retries_source() {
+        let fixture = Fixture::new();
+        let mut reader = fixture.open();
+        let before_files = fixture.snapshot();
+        let before = (reader.next_height, reader.output_bytes);
+        let consumed = std::cell::Cell::new(false);
+        let error = norito::with_decode_limits_scope(no_decode_allocation(), || {
+            reader.read_carrier_with(1, |wire| {
+                consumed.set(true);
+                Ok(wire)
+            })
+        })
+        .expect_err("actual body decoder pressure");
+        assert_original_decode_refusal(error);
+        assert!(!consumed.get());
+        assert!(!reader.poisoned);
+        assert_eq!((reader.next_height, reader.output_bytes), before);
+        let bytes = fixture.read_all(&mut reader);
+        let complete = reader.finish().unwrap();
+        assert_eq!(complete.carrier_count(), 3);
+        assert_eq!(complete.output_bytes(), bytes);
+        assert_eq!(fixture.snapshot(), before_files);
+    }
+
+    #[test]
+    fn read_only_evidence_file_allocator_refusal_preserves_original_cursor_and_retry() {
+        use std::error::Error as _;
+
+        let fixture = Fixture::new();
+        let mut reader = fixture.open();
+        let wire = fixture.blocks[0].encode_wire().unwrap();
+        let before_files = fixture.snapshot();
+        let before = (reader.next_height, reader.output_bytes);
+        let consumed = std::cell::Cell::new(false);
+        let (result, refused) = crate::test_allocations::refuse_one_layout_during(
+            std::alloc::Layout::array::<u8>(wire.len()).unwrap(),
+            || {
+                reader.read_carrier_with(1, |wire| {
+                    consumed.set(true);
+                    Ok(wire)
+                })
+            },
+        );
+        assert!(
+            refused,
+            "the actual file buffer must request the exact layout"
+        );
+        let error = result.expect_err("physical allocator refused original file buffer");
+        assert!(error.source().is_some_and(|source| {
+            source
+                .downcast_ref::<std::collections::TryReserveError>()
+                .is_some()
+        }));
+        assert!(matches!(error, CanonicalKuraEvidenceError::Allocator(_)));
+        assert!(!consumed.get());
+        assert!(!reader.poisoned);
+        assert_eq!((reader.next_height, reader.output_bytes), before);
+        assert_eq!(reader.read_carrier(1).unwrap(), wire);
+        for (offset, block) in fixture.blocks.iter().enumerate().skip(1) {
+            assert_eq!(
+                reader.read_carrier(offset as u64 + 1).unwrap(),
+                block.encode_wire().unwrap()
+            );
+        }
+        let complete = reader.finish().unwrap();
+        assert_eq!(complete.carrier_count(), 3);
+        assert_eq!(
+            complete.output_bytes(),
+            fixture
+                .blocks
+                .iter()
+                .map(|block| block.encode_wire().unwrap().len() as u64)
+                .sum::<u64>()
+        );
+        assert_eq!(fixture.snapshot(), before_files);
+    }
+
+    #[test]
+    fn read_only_evidence_resource_retry_rechecks_every_original_descriptor() {
+        for source in 0..4 {
+            let fixture = Fixture::new();
+            let mut reader = fixture.open();
+            let before = (reader.next_height, reader.output_bytes);
+            reader.begin().unwrap();
+            let error = norito::with_decode_limits_scope(no_decode_allocation(), || {
+                reader.prepare_carrier(1)
+            })
+            .expect_err("actual pre-consumer decoder refusal");
+            assert!(matches!(
+                &error,
+                CanonicalKuraEvidenceError::Decode(error)
+                    if error.kind() == norito::core::DecodeAttemptErrorKind::EnclosingLimit
+            ));
+            // Exercise the actual post-refusal boundary after a genuine refusal,
+            // replacing one admitted inode with byte-identical content.
+            let path = &fixture.files()[source];
+            let bytes = fs::read(path).unwrap();
+            fs::rename(path, path.with_extension("retired")).unwrap();
+            fs::write(path, bytes).unwrap();
+            assert!(matches!(
+                reader.refuse_before_consumer::<Vec<u8>>(error),
+                Err(CanonicalKuraEvidenceError::Invalid(
+                    "held or named source changed"
+                ))
+            ));
+            assert!(reader.poisoned);
+            assert_eq!((reader.next_height, reader.output_bytes), before);
+            assert!(reader.finish().is_err(), "changed source {source}");
+        }
+    }
+
+    #[test]
+    fn read_only_evidence_consumer_resource_error_still_poisons_original_owner() {
+        let fixture = Fixture::new();
+        let mut reader = fixture.open();
+        let original = fixture.blocks[0].encode_wire().unwrap();
+        let consumed = std::cell::Cell::new(false);
+        let error = reader
+            .read_carrier_with::<()>(1, |wire| {
+                consumed.set(true);
+                assert_eq!(wire, original);
+                let error = norito::with_decode_limits_scope(no_decode_allocation(), || {
+                    iroha_data_model::block::decode_framed_signed_block(&wire)
+                })
+                .expect_err("genuine consumer-owned decoder refusal");
+                Err(CanonicalKuraEvidenceError::Decode(error))
+            })
+            .expect_err("consumer errors cannot grant a retry after provisional effects");
+        assert_original_decode_refusal(error);
+        assert!(consumed.get());
+        assert!(reader.poisoned);
+        assert_eq!(reader.next_height, 1);
+        assert_eq!(reader.output_bytes, original.len() as u64);
+        assert!(matches!(
+            reader.read_carrier(1),
+            Err(CanonicalKuraEvidenceError::Invalid("poisoned reader"))
+        ));
+        assert!(reader.finish().is_err());
+    }
+
+    #[test]
+    fn read_only_evidence_marker_recheck_is_allocation_free_and_exact() {
+        let fixture = Fixture::new();
+        let reader = fixture.open();
+        let mut result = None;
+        let allocations = crate::test_allocations::allocations_during(|| {
+            result = Some(reader.check_sources());
+        });
+        result.unwrap().unwrap();
+        assert_eq!(
+            allocations, 0,
+            "resource retry needs no second marker buffer"
+        );
+        let mut incorrect = reader.marker_bytes.clone();
+        let last = incorrect.last_mut().unwrap();
+        *last ^= 1;
+        assert!(matches!(
+            reader.sources.marker.check_marker_bytes(&incorrect),
+            Err(CanonicalKuraEvidenceError::Invalid(
+                "published marker changed"
+            ))
+        ));
+        assert!(matches!(
+            reader
+                .sources
+                .marker
+                .check_marker_bytes(&incorrect[..incorrect.len() - 1]),
+            Err(CanonicalKuraEvidenceError::Invalid(
+                "published marker recheck bound"
+            ))
+        ));
+    }
+
     #[test]
     fn read_only_evidence_requires_every_requested_native_carrier() {
         let fixture = Fixture::new();
@@ -430,7 +659,7 @@ mod canonical_evidence_reader_tests {
                 fs::write(path, bytes).expect("wrong first hash, same marker tip");
             }
             if variant == 2 {
-                fixture.blocks[1] = Arc::clone(&fixture.blocks[0]);
+                fixture.blocks[1] = (fixture.blocks[0]).clone();
                 fixture.write_store();
             }
             let mut reader = fixture.open();
@@ -484,7 +713,7 @@ mod canonical_evidence_reader_tests {
                 )),
             };
             block.set_commit_certificate(replacement);
-            fixture.blocks[at] = Arc::new(block);
+            fixture.blocks[at] = share_storage_fixture(block);
             fixture.write_store();
             let mut reader = fixture.open();
             if at > 0 {
@@ -514,7 +743,7 @@ mod canonical_evidence_reader_tests {
             original.result_preimage().to_vec(),
             Vec::new(),
         )));
-        fixture.blocks[1] = Arc::new(block);
+        fixture.blocks[1] = share_storage_fixture(block);
         fixture.write_store();
         let before = fixture.snapshot();
         let mut reader = fixture.open();
@@ -569,7 +798,7 @@ mod canonical_evidence_reader_tests {
             original.result_preimage().to_vec(),
             availability,
         )));
-        fixture.blocks[0] = Arc::new(block);
+        fixture.blocks[0] = share_storage_fixture(block);
         fixture.write_store();
         let before = fixture.snapshot();
         let mut reader = fixture.open();
@@ -610,12 +839,12 @@ mod canonical_evidence_reader_tests {
             availability.clone(),
         );
         block.set_commit_certificate(Some(changed));
-        fixture.blocks[1] = Arc::new(block);
+        fixture.blocks[1] = share_storage_fixture(block);
         fixture.write_store();
         let mut reader = fixture.open();
         reader.read_carrier(1).unwrap();
         let wire = reader.read_carrier(2).unwrap();
-        let decoded = iroha_data_model::block::decode_versioned_signed_block(&wire).unwrap();
+        let decoded = iroha_data_model::block::decode_framed_signed_block(&wire).unwrap();
         assert_eq!(decoded.commit_certificate().unwrap().commit_qc(), qc);
         assert_eq!(
             decoded.commit_certificate().unwrap().availability(),
@@ -787,10 +1016,8 @@ mod canonical_evidence_reader_tests {
             let wire = block.canonical_wire().expect("real canonical frame");
             let bare = iroha_version::codec::EncodeVersioned::encode_versioned(block.as_ref());
             assert_ne!(wire.as_framed(), bare.as_slice());
-            assert!(
-                iroha_data_model::block::decode_versioned_signed_block(wire.as_framed()).is_ok()
-            );
-            assert!(iroha_data_model::block::decode_versioned_signed_block(&bare).is_err());
+            assert!(iroha_data_model::block::decode_framed_signed_block(wire.as_framed()).is_ok());
+            assert!(iroha_data_model::block::decode_framed_signed_block(&bare).is_err());
             index.extend_from_slice(
                 &BlockIndex {
                     start: data.len() as u64,
@@ -807,7 +1034,8 @@ mod canonical_evidence_reader_tests {
         let mut reader = fixture.open();
         assert!(matches!(
             reader.read_carrier(1),
-            Err(CanonicalKuraEvidenceError::Invalid("carrier decode"))
+            Err(CanonicalKuraEvidenceError::Decode(error))
+                if error.kind() == norito::core::DecodeAttemptErrorKind::Invalid
         ));
         assert!(reader.finish().is_err());
     }

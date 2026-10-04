@@ -8,7 +8,6 @@ use iroha_allocation::AllocationRefusal;
 use iroha_data_model::musubi::{MusubiArchiveLocationIdV1, MusubiContentDigestV1};
 use std::{
     future::Future,
-    pin::pin,
     task::{Context, Poll, Waker},
 };
 
@@ -201,7 +200,10 @@ fn source_work_refusal_precedes_validation_but_sufficient_work_preserves_rejecti
 fn memory_deferral_retains_the_supplied_pool_release_not_an_unrelated_one() {
     let (world, _, _, _) = seeded_musubi_publication_snapshot();
     let before = json::to_json(&world).unwrap();
-    let budget = AllocationBudget::new(1_000_000);
+    let budget = AllocationBudget::new(
+        1_000_000 + iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut registration = crate::unit_test_support::release_registration(&budget);
     let held = budget.try_reserve_bytes(1_000_000).unwrap();
     let Err(SourceValidationError::Attempt(ExecutionAttemptError::Deferred(reason))) =
         validate(&world.view(), &budget, allowance())
@@ -211,7 +213,7 @@ fn memory_deferral_retains_the_supplied_pool_release_not_an_unrelated_one() {
     let Some(AllocationRefusal::Capacity { release, .. }) = reason.allocation_refusal() else {
         panic!("exact original capacity error")
     };
-    let mut waiter = pin!(release.clone().wait_for_release());
+    let mut waiter = Box::pin(release.clone().wait_for_release(&mut registration));
     let mut context = Context::from_waker(Waker::noop());
     assert_eq!(waiter.as_mut().poll(&mut context), Poll::Pending);
     let unrelated = AllocationBudget::new(1_000_000);
@@ -226,6 +228,8 @@ fn memory_deferral_retains_the_supplied_pool_release_not_an_unrelated_one() {
             ExecutionAttemptError::Deferred(_)
         ))
     ));
+    drop(waiter);
+    drop(registration);
     budget.set_limit_bytes(1_000_000);
     validate(&world.view(), &budget, allowance()).unwrap();
     assert_eq!(budget.reserved_bytes(), 0);
@@ -439,8 +443,13 @@ fn publication_renders_the_same_rejection_without_erasing_local_refusals() {
     row.source_digest = MusubiContentDigestV1::new([0x98; 32]);
     let mut block = world.block();
     block.musubi_resolver_index.insert(release, row);
-    let budget = AllocationBudget::new(1_000_000);
-    let occupied = budget.try_reserve_bytes(budget.limit_bytes()).unwrap();
+    let budget = AllocationBudget::new(
+        1_000_000 + iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut registration = crate::unit_test_support::release_registration(&budget);
+    let occupied = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
     let Err(ExecutionAttemptError::Deferred(reason)) =
         crate::state::world_commit::PreparedWorldCommit::validate_prepared_overlay(&block, &budget)
     else {
@@ -450,7 +459,7 @@ fn publication_renders_the_same_rejection_without_erasing_local_refusals() {
         reason.allocation_refusal(),
         Some(AllocationRefusal::Capacity { .. })
     ));
-    let mut wait = pin!(
+    let mut wait = Box::pin(
         reason
             .allocation_refusal()
             .and_then(|refusal| match refusal {
@@ -458,7 +467,7 @@ fn publication_renders_the_same_rejection_without_erasing_local_refusals() {
                 _ => None,
             })
             .unwrap()
-            .wait_for_release()
+            .wait_for_release(&mut registration),
     );
     let mut context = Context::from_waker(Waker::noop());
     assert_eq!(wait.as_mut().poll(&mut context), Poll::Pending);
@@ -476,6 +485,8 @@ fn publication_renders_the_same_rejection_without_erasing_local_refusals() {
         rejection,
         "Musubi World publication refused: JSON error: invalid field `world.musubi_resolver_index`: candidate World cut: resolver row diverges from authoritative release/archive projections"
     );
+    drop(wait);
+    drop(registration);
     assert_eq!(budget.reserved_bytes(), 0);
     drop(block);
     assert_eq!(json::to_json(&world).unwrap(), before);

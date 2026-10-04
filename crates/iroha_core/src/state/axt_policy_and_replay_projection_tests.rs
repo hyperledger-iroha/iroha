@@ -273,6 +273,7 @@ state_test! { sync committed_storage_projections_omit_absent_and_empty_changes
         LiveQueryStore::start_test(),
     );
     let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 1, 0));
+    assert!(!block.has_finalized_world_tail_for_snapshot());
     assert!(block.json_serialize_committed_axt_replay_ledger().is_none());
     assert!(block.json_serialize_committed_smart_contract_state().is_none());
     block.stage_da_pin_intent_bundle(1, Vec::new()).unwrap();
@@ -335,19 +336,27 @@ state_test! { sync staged_checkpoint_projects_deferred_da_quota_without_applying
     assert!(pending.inspect_prepared(|_| ()).is_err(), "a certificate alone has not finalized quota metadata");
     pending.prepare_publication_for_inspection(Signers::Quorum)
         .expect("real history contention retains original quota preparation before visibility");
-    let (writes, projected_storage, staged_bytes, staged_hash) = pending.inspect_prepared(|original| {
+    let inspect_state = Arc::clone(&state);
+    let (writes, projected_storage, staged_bytes, staged_hash) = pending.inspect_prepared(move |original| {
         let block = original.state;
     let writes = block.pending_da_pin_intents.as_ref()
         .expect("real block application stages its quota bundle").quota_writes.clone();
     assert!(!writes.is_empty(), "signed nonempty DA bundle must charge quota");
-    for key in writes.keys() {
-        assert!(block.world.smart_contract_state.get(key).is_none(),
-            "quota writes remain deferred until commit");
+    for (key, value) in &writes {
+        assert!(inspect_state.world.smart_contract_state.view().get(key).is_none(),
+            "preparing the sealed overlay must not publish committed quota state");
+        assert_eq!(block.world.smart_contract_state.get(key), Some(value),
+            "certified execution includes the exact once-prepared quota tail");
     }
     let before_storage = norito::json::to_json(&block.world.smart_contract_state)
         .expect("unprojected contract storage");
-    let projected_storage = block.json_serialize_committed_smart_contract_state()
-        .expect("pending quota charges require an exact projection");
+    assert!(block.has_finalized_world_tail_for_snapshot(),
+        "the exact original publisher completed its immutable World tail");
+    assert!(block.json_serialize_committed_smart_contract_state().is_none(),
+        "sealed quota values need no substitute executing projection");
+    assert!(block.json_serialize_committed_da_pin_indexes().iter().all(Option::is_none),
+        "sealed pin indexes need no recomputed admission plan");
+    let projected_storage = before_storage.clone();
     let staged_bytes = crate::snapshot::canonical_staged_state_snapshot_bytes(block);
     let staged_hash = crate::snapshot::canonical_staged_state_snapshot_hash(block);
     assert_eq!(staged_hash, Hash::new(&staged_bytes));

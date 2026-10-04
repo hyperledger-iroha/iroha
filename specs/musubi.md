@@ -391,11 +391,15 @@ imports. No ambient sibling discovery is performed. The named-path and
 descriptor identities must match before and after the bounded read, so a raced
 regular-file replacement is rejected. Each source is at
 most 16 MiB, the complete declared set is at most 64 MiB and 4,096 filesystem
-entries, and traversal is at most 64 directory levels. A raced Unix FIFO is
-opened nonblockingly and rejected by descriptor type before any byte read;
-qualified Unix opens also reject a raced final-component symlink without
-following it. Windows and other targets fail closed before reading until a
-stable handle-identity implementation is available. Symlinks, reparse points,
+entries, and traversal is at most 64 directory levels. Unix and Windows use
+the shared `iroha_fs` native owner: each directory retains its exact ancestor
+and object authority across bounded pre/post entry enumeration, and each file
+is read from its retained descriptor between exact native snapshots. Unix
+no-follow, nonblocking opens reject substituted symlinks and special files;
+Windows retained native handles reject reparse points and unsafe sharing.
+This provides stable per-file source snapshots, not an atomic snapshot of a
+concurrently edited workspace. Native Windows execution remains unqualified;
+other targets fail closed before reading. Symlinks, reparse points,
 hardlinks, special files, portable-name collisions, sensitive paths, and
 generated/VCS/config roots follow the same fail-closed positive-set policy as
 packaging.
@@ -406,13 +410,14 @@ portable member, default-member, and exclude paths plus
 one root `Musubi.lock`. Commands discover the nearest ancestor manifest and
 then the owning workspace.
 
-Every local `Musubi.toml` source read is capped at 1 MiB and, on qualified Unix,
-uses the same singly linked, no-follow, nonblocking final-component reader
-before UTF-8 and strict TOML parsing. Other targets fail closed before reading.
-A final-component identity swap or special-file substitution is rejected
-without contributing parser input. Canonical and no-symlink ancestor checks remain
-path-based: they detect ordinary drift but do not claim to close a deliberately
-timed ancestor-directory ABA on every supported host.
+Every local `Musubi.toml` source read is capped at 1 MiB. Unix uses the singly
+linked, no-follow, nonblocking final-component reader before UTF-8 and strict
+TOML parsing; Windows uses the shared `iroha_fs` retained native reader.
+Other targets fail closed before reading. A final-component identity swap or
+special-file substitution is rejected without contributing parser input. The Unix
+local-manifest reader's canonical and no-symlink ancestor checks remain path-based:
+they detect ordinary drift but do not claim to close a deliberately timed
+ancestor-directory ABA.
 
 V1 dependency kinds are registry, path, and development. A dependency may be
 renamed and may inherit with `{ workspace = true }`. V1 rejects git, optional,
@@ -511,11 +516,11 @@ each, matching provider verification and immutable-cache metadata admission.
 The TOML formatter stops at that aggregate ceiling, and package admission
 counts each exact canonical bare Norito payload before allocating its encoded
 buffer or computing a bound digest.
-On qualified Unix, filesystem reads use the shared singly linked,
-nonblocking/no-follow descriptor boundary and revalidate the final component
-before and after the bounded read; other targets fail closed before reading.
-The separate retained-ancestor/open-beneath roadmap gate still applies to a
-deliberately timed ancestor-directory ABA.
+Package collection retains its project root through `iroha_fs::OwnerDirectory`
+and reads bounded sources through the shared native regular-file reader on Unix
+and Windows. Each read validates ancestors, single-link custody and exact file
+identity. The separate Unix local-manifest reader retains the ancestor limitation
+described above. Native Windows runtime qualification remains outstanding.
 
 Lock writes use a same-directory private temporary file, flush and fsync the
 file, atomically rename, and fsync the parent directory. The previous complete
@@ -597,8 +602,9 @@ owner-private native key file or native client configuration; signing material n
 appears in argv, public wallet information, project bindings or operation reports.
 Native client imports retain the signer and exact network context while using native
 wallet defaults; unrelated publication sidecars and separate Basic Auth credentials
-are not imported. Public `list` and `show` do not load a private key. Custody currently
-requires supported native Unix filesystem operations.
+are not imported. Public `list` and `show` do not load a private key. Custody uses
+`iroha_fs` on Unix and Windows; Windows retains file identities and protected
+owner ACLs. Native Windows execution remains a separate qualification gate.
 
 `network configure taira --wallet default` records the selected wallet's native client
 file reference. A new binding defaults to authority-paid deployment fees; explicit
@@ -654,14 +660,17 @@ replace its local source during workspace development. Registry dependencies ret
 exact finalized resolution and immutable archive authentication. Packaging and
 publication explicitly require registry context, even for dependency-free packages.
 
-Local compilation uses the canonical account-address profile, or the explicitly
-selected client's public account profile. `--chain-discriminant` selects a local
-compiler input and must agree with an explicitly supplied client configuration
-or the authenticated registry profile. Purely local commands never construct a
-signer. `--locked` forbids graph changes; for registry dependencies, `--offline`
-uses only cached index and archives. `--frozen` combines both constraints.
-Workspace selection follows default members, `--workspace`, `--exclude`, and
-`-p`.
+Local compilation uses the selected network's account-address profile: the
+explicitly selected client's public account profile, the built-in profile of a
+named network (Taira when no network is selected), or `--chain-discriminant`.
+`--chain-discriminant` selects a local compiler input and must agree with an
+explicitly supplied client configuration or the authenticated registry profile.
+A local graph resolved without any of these, as by `fetch` or `update` without a
+client configuration, carries no address profile; no default network is assumed.
+Purely local commands never construct a signer. `--locked` forbids graph changes;
+for registry dependencies, `--offline` uses only cached index and archives.
+`--frozen` combines both constraints. Workspace selection follows default members,
+`--workspace`, `--exclude`, and `-p`.
 
 Offline resolver snapshots are canonical, bounded, and committed under a
 domain-separated digest after all captured pages agree on one exact `NetworkId`,
@@ -766,11 +775,11 @@ before contacting a provider. Equal finalized heights require the exact lock
 snapshot; later heights must not regress the resolver-index revision. A valid
 global content-addressed cache hit remains registry-independent because the
 exact bundle is revalidated against every locked node that consumes it.
-On qualified Unix, online resolution anchors the selected `client.toml` path
-once, then reads one bounded, singly linked image through a nonblocking,
-no-follow stable descriptor and parses both the authenticated registry signer/context and the
-secret-free fetch configuration from those exact bytes. Other targets fail
-closed before that read. The fetch subtree requires the exact `NetworkId` plus
+Online resolution anchors the selected `client.toml` path once, then reads one
+bounded, singly linked image and parses both the authenticated registry signer/context
+and the secret-free fetch configuration from those exact bytes. Unix uses the
+nonblocking, no-follow final-component reader; Windows uses retained `iroha_fs`
+handles. Other targets fail closed before that read. The fetch subtree requires the exact `NetworkId` plus
 each provider's canonical operator public key and a private-key file; legacy
 API-token and bearer fields are rejected. Bounded 0600, no-follow operator-key
 files, DNS answers, and redirect-free HTTP clients are loaded only after an
@@ -807,30 +816,24 @@ quarantines only structurally validated descendants; invalid registry inputs
 leave the cache untouched. Lock-controlled deletion, arbitrary replacement,
 and cache import do not exist.
 
-Private resolver-catalog reads retain a native directory descriptor and walk each
-ancestor with descriptor-relative, directory-only, no-follow opens on Unix,
-including macOS. The final leaf uses a nonblocking no-follow open, is bounded and
-single-linked, and must retain its identity through the read. Root and ancestor
-identities are revalidated before accepting either bytes or absence. Neither
-procfs nor a pathname fallback participates in the read.
+Private resolver-catalog reads retain `iroha_fs::PrivateDirectory` on Unix and
+Windows. Unix walks ancestors through descriptor-relative no-follow opens and
+opens final leaves nonblockingly; Windows retains native non-delete-sharing
+handles and rejects reparse points. Bounded single-link reads revalidate root,
+ancestor and file identities before accepting bytes or absence.
 
-Cache access is qualified only on Unix. Windows and other non-Unix targets
-return `UnsupportedPlatform` before inspecting or creating the requested cache
-root; package planning and workspace-test execution use their dedicated
-unsupported-platform errors at the same pre-I/O boundary. Safe stable Rust does
-not currently expose the handle identity, single-link, no-follow, and
-handle-relative no-replace primitives needed to preserve the same contract on
-those targets. No weaker pathname or metadata surrogate is accepted.
+Cache access and package planning use the shared native directory owner on Unix
+and Windows. Publication retains the exact source directory and uses the native
+no-replace sibling operation, preserving its identity across publication. Source
+support does not establish native Windows execution or signed release qualification.
 
 Unix install has a subprocess abrupt-exit matrix at the payload write and
 sync, source chunk and file sync, verified-payload retention, source-tree verification and
 sync, directory publication, and archive-directory sync boundaries. Reopen
 must either find no published `src` or fully reverify it, and retry must
 converge. This is process-crash evidence, not yet the complete power-loss,
-disk-full, or crash-at-every-write campaign. Unix mutation also retains one
-release blocker: replace its advisory-lock plus path-based `rename` with a safe
-descriptor-relative no-replace directory primitive. A second path absence
-check does not close the same-UID destination-planting race.
+disk-full, or crash-at-every-write campaign. Those campaigns and corresponding
+native Windows execution remain qualification requirements.
 
 `musubi cache prune` inventories canonical cache identities and obtains the
 bounded finalized decisions above. `--dry-run` reports the complete decisions
@@ -1268,7 +1271,13 @@ successful network output in a Kura-finalized block and the current non-retired
 pin record with its public fee payer. Three focused daemon tests cover the
 signed-intent, current-record and output boundaries. The reader cannot sign,
 submit an intent, prove current governance/pricing and configured paid-pin
-policy, approve a pending pin, or cause replication. A separate Unix outbox substrate
+policy, approve a pending pin, or cause replication. The purpose-bound paid-pin
+signer preserves original State allocation refusals through its initial read,
+captured-view read and final recheck; locally future evidence remains distinct
+from invalid finality. These outcomes do not authorize replacement signing.
+Retaining an already signed transaction across a refused final recheck still
+requires the durable outbox/control handoff before production activation.
+A separate Unix outbox substrate
 can retain the exact signed V1 pin transaction in an immutable, bounded,
 process-exclusive, owner-only directory before any Queue effect. Its canonical
 owner marker binds the network, exact public paid-pin authority, fresh signing
@@ -1282,13 +1291,94 @@ changed records or a changed paid-pin policy; exact retries are idempotent,
 and conflicting operation IDs or signed wires close in isolated controls. The
 daemon-facing outbox constructor returns `MissingFinalizedAnchor` even for a
 locally valid inventory. The first-release native `AdvanceMusubiPinOutboxV1`
-instruction now ratchets a publisher-owned State high-water under exact network,
-signer, session, contiguous revision, and predecessor inventory digest. The
-canonical State table is required in snapshots, and a daemon read-only adapter
-checks the current record against its exact successful signed transaction and
-Kura V2 finality artifact. Local custody computes a domain-separated digest of
-the entire owner marker and sorted immutable signed-intent inventory; isolated
-rollback tests show an older, well-formed directory differs from a later
+instruction ratchets a publisher-owned State high-water under exact network,
+signer, session, contiguous revision, and predecessor inventory digest. Both
+Advance and `CheckMusubiPinOutboxV1` require a sole direct signed Ed25519 External
+transaction in the original Global root, without attachments or multisig.
+Mixed batches, sealed reveals, contract calls and nested effects cannot acquire
+the one-use original input binding. Advance records the original signed intent
+hash and actual execution height.
+
+Check signs an explicit nonzero session, complete inventory digest, fresh
+challenge, exact native committed floor and either authority-wide `Absent` or
+`Present` with the entire expected high-water row. Absence never filters by
+session or inventory. Present compares every field, including the original
+advance's transaction hash and height. The canonical Check frame is bounded to
+4 KiB and the original signed External envelope to 64 KiB. Floor authentication
+uses the original State execution tip and exact reverse native ancestry, with
+bounded relative source work and cumulative physical frame bytes; chain height
+alone does not make a recent Check unavailable. A malformed signed floor or a
+different authenticated context is a deterministic rejection. Missing, corrupt
+or locally over-budget original history defers execution without a committed
+result, fee, gas charge or published overlay, preserving an earlier local
+allocation refusal and its original wake source. A successful Check does not
+modify the high-water row.
+
+The canonical State table is required in snapshots. The daemon's historical reader
+checks the current row against its original successful signed Advance. Core now
+also owns a fresh Check readback: independent network, chain and floor inputs are
+verified through original native execution and the Global instance before the
+exact signed Check is bound. One bounded ascending continuation compares each
+receipt to its original executed result before exposure. A final read reauthenticates
+the successful Check and compares the entire authority-keyed current row under a
+short same-generation publication fence. A different State handle is refused even
+when its bytes match. The opaque consumed result is read-only and grants no Queue,
+signing or replacement-custody authority. Failed reads retain the unchanged paid
+Check, challenge and absolute deadline; retry discards an old verified cut and must
+verify fresh native history, without re-signing or resubmitting. These source
+boundaries still require current-candidate native test execution.
+
+After the observer returns its exact reply, the shared stream-token signer runtime
+retains completed evidence in its receiving continuation. One move-only phase keeps that reply, the
+original challenged expectation and native Pending with its absolute deadline, and
+borrows the original receipt, token, prepared operation and custody markers. Original
+canonical decoder, bounded-encoder and allocation refusals have typed local outcomes;
+malformed or invalid evidence retains its semantic rejection. The three evidence verifiers
+mutably borrow the caller-owned expectation and return only the original admission error.
+The private attempt is retired before verification begins; success, completed rejection and
+unwind leave it retired. Only an original retryable local admission result restores readiness
+for the same request and reply. Repeated use is rejected before decoding, without allocating
+or reconstructing the expectation. Bounded local backoff
+revalidates the same returned bytes and fresh handles/time without holding a State
+view or history lock. Separate authentication, native-verification and acceptance
+owners prevent token release before every phase succeeds. Daemon and broker service
+mappings distinguish operational unavailability from semantic rejection, but those
+fixed errors alone do not retain a continuation or authorize producer replay.
+
+The native completed-observation producer separately retains its actual verified
+Check and charged canonical frame through unsigned body construction, fallible
+signing-payload encoding, one observer signature, signed-frame encoding, and the
+late native floor/time check. It copies the absolute deadline only from the exact
+Prepared Check before consumption. Original evidence-admission or native execution
+refusals keep the same owner; bounded local backoff neither reobserves nor signs or
+submits another transaction. A successful signature is retained across later
+encoding/refusal, and cryptographic signing failures remain terminal because they
+carry no trusted allocation provenance. Once encoded, the exact reply buffer stays
+owned through the late check. This Check and Torii's separately prepared Check are
+distinct operations; neither is a substitute for the other.
+
+The broker observer client retains one fully received response frame with its
+original operation request, admission permit, locked connection and absolute
+15-second call deadline. Its receiving stage preserves successful frame, response,
+reply and observation decoding phases while retrying only original typed local
+codec or bounded-encoding refusals. It validates the same envelope and request
+binding, transfers the same reply leaves, and never performs another request,
+observe, sign, submit or socket read. Protocol ceilings, malformed results and
+immutable metadata changes remain terminal. Other broker capability routes keep
+their existing semantic validation and do not inherit this observer continuation.
+
+Combined `finalize_check` signing/submission, server post-observe/pre-write reply
+custody, and partial socket I/O still have transport-custody gaps. The server needs
+an absolute request bound established before provider dispatch; per-I/O timeouts
+cannot be reset into a completed-reply retry deadline. Nested receipt/custody codec provenance, late consumer
+native/current-State acceptance refusal ownership, and original-pool funding for
+existing buffers, serializer/decoder scratch and native proof graphs also remain
+open. These process-local continuations do not establish durable publication
+recovery. Stock publication remains closed.
+
+Local custody computes
+a domain-separated digest of the entire owner marker and sorted immutable signed-intent
+inventory; isolated rollback tests show an older, well-formed directory differs from a later
 high-water. The effectful stage → finalized advance → same-view inventory
 comparison → Queue sequence is not yet owned and qualified, so these components
 do not authorize production recovery or Queue effects. Before effects, recovery
@@ -1304,6 +1394,27 @@ submits to Queue or claims provider publication. Deployment-sealed monotonic
 lineage, current fee and governance rechecks at admission, Queue submission,
 replication/provider completion, and physical network qualification still
 precede stock publication activation.
+
+The remaining Queue handoff needs a separate durable control journal for exact signed
+Advance and Check transactions; control bytes cannot be included in the pin inventory
+whose digest they sign. The native filesystem substrate can now borrow the existing
+private-directory authority and caller-owned basename for an opaque retained file,
+without cloning retained Rust lineage or names. It shares the owned file's strict
+custody checks, bounded I/O, consuming seal and one-use no-replace publication on
+Unix and Windows. Windows retains protected owner-only DACLs, reparse rejection,
+non-delete-sharing directory handles and publication through the original file handle.
+This does not fund the original directory, native ACL/directory scratch, inventory
+or recovery storage; the original caller's complete resource admission and native
+Windows execution qualification remain open. The control journal is still unlinked.
+Restart must reconcile those originals and acquire a newly
+challenged native Check. The final handoff must consume live verified Check custody
+and retain the exact pin and pending Check on refusal. Its shared Queue owner must
+reserve insertion storage and fee custody before publication, then acquire commit,
+lifecycle and Queue guards in that order; it must publish notifications after release.
+The existing enqueue routine still allocates during insertion, so merely exposing its
+prepared admission or passing a callback under the State fence does not close this gate.
+Installed-executor preflight must also preserve typed allocation/codec refusals before
+this handoff can enable production publication.
 
 The Unix clock and journal child reads, bounded enumeration, lock creation,
 pending-file creation, state replacement, and stale-file removal now use each
@@ -1342,15 +1453,18 @@ Effectful provider coordination, independent replica readbacks, live council
 admission refresh, qualified receipt-signer custody, and stock activation
 still gate production publication. A deployment may inject the daemon's
 prebound private TLS ingress builder with an in-memory server identity;
-`iroha_config` supplies only the bind socket, exact private mount prefix,
-and a maximum of four concurrent requests. The builder disables TLS early
+`iroha_config` supplies the bind socket and a maximum of four concurrent
+requests. This dedicated listener accepts only the three exact
+`/v1/musubi/publication/...` paths; prefixed paths and query strings refuse.
+The builder disables TLS early
 data, serves only the three closed HTTP/1.1 routes, rejects duplicate
 security-sensitive headers, and bounds header and body reads before handing
 the exact request to the service core. On supervised shutdown it drains
 in-flight blocking service calls. If the supervisor's bounded wait expires,
 the blocking call still retains the service and its durable custody until it
-finishes. Loopback and shutdown controls pass 5/5; configuration projection
-and invalid-geometry controls pass 2/2. Runtime TLS credentials, certificate
+finishes. Focused controls cover all three fixed paths, rejected prefixes and
+queries, configuration projection, invalid geometry and shutdown custody.
+Runtime TLS credentials, certificate
 rotation, provider coordination, and live network qualification remain
 deployment gates; the stock daemon opens no publication listener.
 
@@ -1606,8 +1720,9 @@ header, and proves writer output can be bounded-decoded back to the same
 canonical value. Capacity pruning removes only the oldest delivered entries;
 active work and dead letters are retained. The raw transition engine and every
 API which accepts a caller-supplied UNIX timestamp are crate-private; the
-daemon-facing runtime owns one qualified sealed clock and exposes no timestamp
-parameter.
+daemon-facing runtime privately selects its qualified clock and exposes no timestamp
+parameter. Native software custody uses a crash-durable host-time floor; separately authenticated
+external clock semantics remain distinct. Neither host UTC nor local inventory proves finality.
 
 The nested
 `[sorafs.storage.provider_ingest_runtime.provider_attestation_journal]`
@@ -1616,29 +1731,27 @@ by default. `max_entries` is an independent count cap of 1--4,096 (default
 1,024), while `checkpoint_max_bytes` is an independent viable byte cap of
 4--128 MiB (default 64 MiB); the journal still rejects a write that exceeds
 either cap. Enabling requires three complete public qualification triplets:
-`clock_seal_{handle,revision,policy_digest_hex}`,
+`clock_{handle,revision,policy_digest_hex}`,
 `approval_signer_{handle,revision,policy_digest_hex}`, and
 `inventory_{handle,revision,policy_digest_hex}`. Handles must use the canonical
 non-test production grammar, revisions and digests must be non-zero, and the
 digests must be canonical lowercase hexadecimal. The triplets have no defaults
 and every binding field is forbidden while the table is disabled. Paths,
 deployment nonces, endpoints, credentials, tokens, and keys remain absent.
-The three bindings project to runtime-provider slots 57--59 in durability,
-signer, inventory order. Slot 57 is one combined durability provider with
-separate authenticated small-record namespaces for the monotonic UNIX-time
-floor and journal checkpoint head, plus immutable content-addressed checkpoint
-blob storage. Its single qualification covers all three surfaces; it does not
-make the time and checkpoint-head records one atomic object. Their catalog and
-resolved objects are all-or-none. Registry resolution compares each production
-handle and public qualification with the configured binding both before and
-after a second metadata snapshot. It does not invoke readiness or any storage,
-signing, or inventory effect. The stock broker has no implementation for these
-slots, so the standard stock launcher fails during pre-Tokio provider
-resolution when it encounters the unsupported roles. If an injected registry
-resolves and qualifies all three roles, the shared
-`Iroha::start_with_runtime_deps` activation gate still rejects the configured
-journal before supervisor startup. No capture child or durability, signing, or
-inventory mutation is created from this configuration today.
+Native completion-credential selection binds three fixed native effects. Explicit provisioning
+atomically publishes all initial files under `provider-attestation-native`; ordinary startup refuses
+missing or changed history. Native `iroha_fs` custody and one retained ownership lock fence journal,
+clock and immutable signed inventory. Bounded blocking jobs retain the same ownership and admission
+permit through actual completion even if the caller is canceled. The existing journal/capture loop
+reverifies the admitted bundle and current full completion authority before deterministic approval.
+The native daemon supervises that loop and lends the same inventory read side to the publication
+factory. Inventory is local retention only: the existing archive-manager publication journal owns
+Register signing and independent native inclusion. No single-provider result meets Musubi's
+three-distinct-provider publication floor.
+
+External selection still projects to runtime-provider slots 57--59 and retains independently
+qualified seal/signer/inventory semantics. It is not relabeled native software custody. Stock native
+startup rejects injected external substitutions, and non-native journal activation remains closed.
 
 `MusubiProviderAttestationJournalFileStoreV1` is the inert public local-store
 adapter for that CAS contract. On Linux and macOS it binds one root-fenced

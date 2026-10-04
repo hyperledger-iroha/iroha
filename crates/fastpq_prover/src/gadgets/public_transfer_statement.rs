@@ -39,10 +39,8 @@ use crate::{
     Error, OperationKind, ProofSemantics, PublicInputs, Result, StateTransition, VerifyLimits,
 };
 
-// TODO: expose the complete-entry execution-effect relation once a production
-// proof dispatcher consumes it; until then it is compiled only for its tests.
-#[cfg(test)]
-mod execution_effect;
+// The complete-effect backend consumes this canonical preparation directly.
+pub mod execution_effect;
 pub(in crate::gadgets) mod materialize;
 mod quantity;
 mod quantity_prefix;

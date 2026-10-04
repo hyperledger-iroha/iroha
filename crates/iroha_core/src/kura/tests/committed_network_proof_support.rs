@@ -7,7 +7,7 @@ pub(crate) struct CommittedNetworkProofFixture {
     /// Physical store and execution journal published by the original native driver.
     pub(crate) kura: Arc<Kura>,
     /// Original immutable committed bodies, retained independently of Kura's cache.
-    pub(crate) blocks: Vec<Arc<SignedBlock>>,
+    pub(crate) blocks: Vec<iroha_data_model::block::SharedSignedBlock>,
     _chain: crate::sumeragi::test_chain::CertifiedTestChain,
 }
 
@@ -16,7 +16,7 @@ impl CommittedNetworkProofFixture {
     pub(crate) fn from_chain(chain: crate::sumeragi::test_chain::CertifiedTestChain) -> Self {
         assert!(chain.height() >= 2);
         let blocks = (1..=chain.height())
-            .map(|height| Arc::clone(chain.committed(height).block()))
+            .map(|height| (chain.committed(height).block()).clone())
             .collect();
         Self {
             state: Arc::clone(chain.state()),

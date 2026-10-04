@@ -54,6 +54,8 @@ use std::{
 };
 #[path = "koto_test_driver_source_set.rs"]
 mod source_set;
+#[path = "koto_test_driver_trace.rs"]
+mod trace_capture;
 use source_set::discover_declared_suite_from_source_set;
 pub use source_set::{
     declared_test_target_source_v1, discover_declared_test_names_source_set_v1,
@@ -178,8 +180,7 @@ struct TestRunResult {
     elapsed: Duration,
     passed: bool,
     failure: Option<String>,
-    trace_pcs: Vec<u64>,
-    delta_trace: Vec<ivm::zk::DeltaEntry>,
+    trace: Option<ivm::zk::RuntimeTraceCapture>,
 }
 /// One deterministic request for the non-printing Kotodama V1 test runner.
 ///
@@ -554,8 +555,7 @@ struct KotoTestHost {
     program: Option<ivm::PreparedContract>,
     contract_address: ContractAddress,
     last_test_error: Option<String>,
-    supplemental_trace_pcs: Vec<u64>,
-    supplemental_delta_trace: Vec<ivm::zk::DeltaEntry>,
+    supplemental_trace: Option<ivm::zk::RuntimeTraceCapture>,
 }
 /// Run the VM-backed Kotodama test harness for the unified `koto test` command.
 pub fn run_cli(mut args: Vec<String>) -> Result<(), String> {
@@ -1588,18 +1588,15 @@ fn execute_test(
     let failure = outcome
         .err()
         .map(|err| render_failure(&vm, host.last_test_error(), &err));
-    let mut trace_pcs = vm.trace_pcs().to_vec();
-    trace_pcs.extend_from_slice(host.supplemental_trace_pcs());
-    let mut delta_trace = vm.delta_register_trace().to_vec();
-    delta_trace.extend_from_slice(host.supplemental_delta_trace());
+    let trace = trace_capture::capture_report(&vm, host.supplemental_trace.as_ref())
+        .map_err(|err| format!("failed to retain test `{}` trace: {err:?}", test.name))?;
     Ok(TestRunResult {
         name: test.name.clone(),
         line: test.line,
         elapsed,
         passed,
         failure,
-        trace_pcs,
-        delta_trace,
+        trace,
     })
 }
 fn build_host_for_fixture(
@@ -1851,8 +1848,7 @@ struct KotoTestHostSnapshot {
     inner: Box<dyn Any + Send>,
     actors: HashMap<String, FixtureActor>,
     last_test_error: Option<String>,
-    supplemental_trace_pcs: Vec<u64>,
-    supplemental_delta_trace: Vec<ivm::zk::DeltaEntry>,
+    supplemental_trace: Option<ivm::zk::RuntimeTraceCapture>,
 }
 impl KotoTestHost {
     fn new(
@@ -1881,8 +1877,7 @@ impl KotoTestHost {
             program,
             contract_address,
             last_test_error: None,
-            supplemental_trace_pcs: Vec::new(),
-            supplemental_delta_trace: Vec::new(),
+            supplemental_trace: None,
         }
     }
     fn inner_mut(&mut self) -> &mut WsvHost {
@@ -1937,12 +1932,6 @@ impl KotoTestHost {
     }
     fn last_test_error(&self) -> Option<&str> {
         self.last_test_error.as_deref()
-    }
-    fn supplemental_trace_pcs(&self) -> &[u64] {
-        &self.supplemental_trace_pcs
-    }
-    fn supplemental_delta_trace(&self) -> &[ivm::zk::DeltaEntry] {
-        &self.supplemental_delta_trace
     }
     fn clear_test_error(&mut self) {
         self.last_test_error = None;
@@ -2007,12 +1996,6 @@ impl KotoTestHost {
     ) -> Result<u64, ivm::VMError> {
         let tlv = make_tlv(pointer_type, payload);
         vm.alloc_host_tlv(&tlv)
-    }
-    fn record_nested_trace(&mut self, nested_vm: &IVM) {
-        self.supplemental_trace_pcs
-            .extend_from_slice(nested_vm.trace_pcs());
-        self.supplemental_delta_trace
-            .extend_from_slice(nested_vm.delta_register_trace());
     }
     fn nested_failure_message(
         actor_alias: &str,
@@ -2131,7 +2114,9 @@ impl KotoTestHost {
         };
         let mut nested_inputs = self.base_public_inputs.clone();
         let encoded_payload = match runtime_entrypoint.argument_schema.as_ref() {
-            Some(schema) => ivm::encode_argument_record_from_json(schema, &payload).map(Some),
+            Some(schema) => {
+                ivm_abi::arguments::encode_argument_record_from_json(schema, &payload).map(Some)
+            }
             None if payload.get() == "{}" => Ok(None),
             None => Err(ivm::VMError::DecodeError),
         };
@@ -2163,7 +2148,7 @@ impl KotoTestHost {
                 make_tlv(PointerType::NoritoBytes, &encoded_payload),
             );
         }
-        let mut nested_vm = IVM::try_new(u64::MAX)?;
+        let mut nested_vm = vm.try_new_in_same_memory_pool(u64::MAX)?;
         nested_vm.reset()?;
         let clear = [0u8; 7 + iroha_crypto::Hash::LENGTH];
         nested_vm.memory.preload_input(0, &clear).map_err(|error| {
@@ -2188,8 +2173,21 @@ impl KotoTestHost {
             return self.fail_test(message);
         }
         self.inner.set_public_inputs(nested_inputs);
-        let nested_outcome = nested_vm.run_with_host(&mut self.inner);
-        self.record_nested_trace(&nested_vm);
+        let nested_outcome = match nested_vm.run_with_host(&mut self.inner) {
+            Err(error) if error.execution_deferral().is_some() => {
+                self.inner.restore(rollback.as_ref())?;
+                self.inner.clear_contract_runtime_context(previous_caller);
+                self.restore_public_inputs();
+                return Err(error);
+            }
+            completed => completed,
+        };
+        if let Err(error) = self.record_nested_trace(&nested_vm) {
+            self.inner.restore(rollback.as_ref())?;
+            self.inner.clear_contract_runtime_context(previous_caller);
+            self.restore_public_inputs();
+            return Err(error);
+        }
         match nested_outcome {
             Ok(()) if expect_reject => {
                 self.inner.restore(rollback.as_ref())?;
@@ -2212,12 +2210,6 @@ impl KotoTestHost {
                 self.inner.clear_contract_runtime_context(previous_caller);
                 self.restore_public_inputs();
                 Ok(0)
-            }
-            Err(err) if err.execution_deferral().is_some() => {
-                self.inner.restore(rollback.as_ref())?;
-                self.inner.clear_contract_runtime_context(previous_caller);
-                self.restore_public_inputs();
-                Err(err)
             }
             Err(err) if expect_reject => {
                 self.inner.restore(rollback.as_ref())?;
@@ -2333,8 +2325,7 @@ impl IVMHost for KotoTestHost {
             inner,
             actors: self.actors.clone(),
             last_test_error: self.last_test_error.clone(),
-            supplemental_trace_pcs: self.supplemental_trace_pcs.clone(),
-            supplemental_delta_trace: self.supplemental_delta_trace.clone(),
+            supplemental_trace: self.supplemental_trace.clone(),
         }))
     }
     fn restore(&mut self, snapshot: &dyn Any) -> Result<(), ivm::VMError> {
@@ -2344,8 +2335,7 @@ impl IVMHost for KotoTestHost {
         self.inner.restore(snapshot.inner.as_ref())?;
         self.actors = snapshot.actors.clone();
         self.last_test_error = snapshot.last_test_error.clone();
-        self.supplemental_trace_pcs = snapshot.supplemental_trace_pcs.clone();
-        self.supplemental_delta_trace = snapshot.supplemental_delta_trace.clone();
+        self.supplemental_trace = snapshot.supplemental_trace.clone();
         Ok(())
     }
     fn access_logging_supported(&self) -> bool {
@@ -2542,7 +2532,7 @@ fn eval_state_payload_expr(expr: &Expr) -> Result<Vec<u8>, String> {
         Expr::IntLiteral(value) => (
             StateValueKindV1::Int,
             StateValueAtomV1::Pointer(
-                ivm::numeric_tlv::encode_int(value)
+                ivm_abi::numeric_tlv::encode_int(value)
                     .map_err(|error| format!("invalid int state fixture: {error:?}"))?,
             ),
         ),
@@ -2556,7 +2546,7 @@ fn eval_state_payload_expr(expr: &Expr) -> Result<Vec<u8>, String> {
             (
                 StateValueKindV1::Decimal,
                 StateValueAtomV1::Pointer(
-                    ivm::numeric_tlv::encode_decimal(value.as_numeric())
+                    ivm_abi::numeric_tlv::encode_decimal(value.as_numeric())
                         .map_err(|error| format!("invalid decimal state fixture: {error:?}"))?,
                 ),
             )
@@ -2611,14 +2601,14 @@ fn encode_state_leaf(kind: StateValueKindV1, atom: StateValueAtomV1) -> Result<V
 fn eval_envelope_expr(expr: &Expr) -> Result<Vec<u8>, String> {
     match expr {
         Expr::Bool(value) => make_norito_envelope(value),
-        Expr::IntLiteral(value) => ivm::numeric_tlv::encode_int(value)
+        Expr::IntLiteral(value) => ivm_abi::numeric_tlv::encode_int(value)
             .map_err(|error| format!("invalid int fixture value: {error:?}")),
         Expr::DecimalLiteral(raw) => {
             let value = raw
                 .replace('_', "")
                 .parse::<Numeric>()
                 .map_err(|_| format!("invalid decimal fixture value `{raw}`"))?;
-            ivm::numeric_tlv::encode_decimal(&value)
+            ivm_abi::numeric_tlv::encode_decimal(&value)
                 .map_err(|error| format!("invalid decimal fixture value: {error:?}"))
         }
         Expr::String(raw) | Expr::Ident(raw) => Ok(make_tlv(PointerType::Blob, raw.as_bytes())),
@@ -2939,8 +2929,9 @@ fn render_failure(vm: &IVM, extra_detail: Option<&str>, err: &ivm::VMError) -> S
         } else {
             message.push_str(&format!(" at pc {}", diag.pc));
         }
-        if !diag.message.is_empty() && diag.message != message {
-            message.push_str(&format!(" ({})", diag.message));
+        let detail = err.to_string();
+        if !detail.is_empty() && detail != message {
+            message.push_str(&format!(" ({detail})"));
         }
     }
     if let Some(extra_detail) = extra_detail
@@ -3143,7 +3134,9 @@ fn escape_xml(raw: &str) -> String {
 fn print_coverage_report(compiled: &CompiledSuite, results: &[TestRunResult]) {
     let mut executed_pcs = HashSet::new();
     for result in results {
-        executed_pcs.extend(result.trace_pcs.iter().copied());
+        if let Some(trace) = &result.trace {
+            executed_pcs.extend(trace.pcs().iter().copied());
+        }
     }
     let total_functions = compiled.coverage_functions.len();
     let covered_functions = compiled
@@ -3196,7 +3189,12 @@ fn print_profile_report(compiled: &CompiledSuite, results: &[TestRunResult]) -> 
     println!("\nprofile:");
     let (profile_report, profile_pc_base) = compiled.profile_source();
     for result in results {
-        for (cycle, entry) in result.delta_trace.iter().enumerate() {
+        for (cycle, entry) in result
+            .trace
+            .iter()
+            .flat_map(|trace| trace.deltas())
+            .enumerate()
+        {
             let source = profile_report.source_map.iter().find(|map_entry| {
                 let start = profile_pc_base.saturating_add(map_entry.pc_start);
                 let end = profile_pc_base.saturating_add(map_entry.pc_end);

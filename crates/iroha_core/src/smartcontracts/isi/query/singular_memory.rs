@@ -77,6 +77,16 @@ where
     let _canonical_flags = DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     bounded_roundtrip_owned(output, limits).map_err(Into::into)
 }
+/// Keep the same measured retained-graph ledger active through an internal consumer.
+/// The caller must already retain physical reservations for both frame and graph ceilings.
+/// Unlike a wire-output query, this scope never rematerializes its retained internal rows.
+pub(crate) fn with_retained_singular_query_limits<T>(
+    limits: SingularQueryOutputLimits,
+    execute: impl FnOnce() -> T,
+) -> T {
+    let _guard = SingularOutputLimitGuard::enter(limits);
+    execute()
+}
 /// Own one borrowed producer value without invoking an unmetered deep clone.
 ///
 /// Ordinary/IVM queries have no active guard and retain their existing clone
@@ -202,13 +212,13 @@ where
     .map_err(|_| Error::CapacityLimit)
 }
 /// Internal frame for a wire-equivalent query source. Only the owned output selects its header.
-struct SingularQueryFrame<'a, T> {
+pub(super) struct SingularQueryFrame<'a, T> {
     source: &'a dyn SerializePayload,
     // A zero-length array preserves the output alignment without storing or constructing it.
     _alignment: [T; 0],
 }
 impl<'a, T> SingularQueryFrame<'a, T> {
-    fn new(source: &'a dyn SerializePayload) -> Self {
+    pub(super) fn new(source: &'a dyn SerializePayload) -> Self {
         Self {
             source,
             _alignment: [],

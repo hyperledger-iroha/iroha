@@ -9,7 +9,7 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     NetworkId,
     block::{
-        SignedBlock, decode_versioned_signed_block,
+        SignedBlock, decode_framed_signed_block,
         proofs::{BlockProofs, TrustedBlockProofAnchor},
     },
     game::game_message_hash_v1,
@@ -467,15 +467,10 @@ fn block_from_wire(bytes: &[u8]) -> Result<SignedBlock> {
         !bytes.is_empty() && bytes.len() <= MAX_BLOCK_BYTES,
         "executed block wire exceeds its byte bound"
     );
-    let block = norito::core::with_decode_limits(limits(bytes.len()), || {
-        decode_versioned_signed_block(bytes)
-            .map_err(|error| norito::core::Error::Message(error.to_string()))
+    let block = norito::core::with_decode_limits_scope(limits(bytes.len()), || {
+        decode_framed_signed_block(bytes)
     })
     .wrap_err("decode exact executed SignedBlockWire")?;
-    ensure!(
-        block.encode_wire().wrap_err("re-encode SignedBlockWire")? == bytes,
-        "executed block wire is not canonical"
-    );
     Ok(block)
 }
 impl VerifySettlementArgs {
@@ -758,7 +753,7 @@ mod tests {
         proof: &mut SumeragiFinalityProof,
         mutate: impl FnOnce(&mut iroha_sumeragi::message::Qc),
     ) {
-        let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
+        let mut block = decode_framed_signed_block(&proof.block_wire).unwrap();
         let certificate = block.commit_certificate().unwrap();
         let mut qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
         mutate(&mut qc);

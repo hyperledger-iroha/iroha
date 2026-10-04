@@ -369,8 +369,10 @@ pub enum Error {
     },
     /// Failed to create the directory {1:?}
     MkDir(#[source] std::io::Error, PathBuf),
-    /// Failed to serialize/deserialize versioned payloads
-    VersionedCodec(#[from] iroha_version::error::Error),
+    /// Original canonical block decoder outcome, including local admission refusal.
+    BlockDecode(#[from] norito::core::DecodeAttemptError),
+    /// The original native source pool or physical allocator refused the raw frame backing.
+    NativeFrameAllocation(#[source] iroha_allocation::ChargedBufferError),
     /// Failed to frame or deframe Norito payload
     NoritoFrame(#[from] norito::core::Error),
 

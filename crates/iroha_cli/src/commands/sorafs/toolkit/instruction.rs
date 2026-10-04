@@ -81,6 +81,9 @@ pub struct CompleteOrderArgs {
     /// Exact canonical I105 account ID of the expected owner.
     #[arg(long, value_name = "ACCOUNT_ID", value_parser = parse_canonical_owner)]
     expected_owner: AccountId,
+    /// Exact canonical I105 account selected by the governed completion authority.
+    #[arg(long, value_name = "ACCOUNT_ID", value_parser = parse_canonical_owner)]
+    expected_completion_signer: AccountId,
     /// Positive canonical assignment revision.
     #[arg(long, value_parser = parse_positive_u64)]
     assignment_revision: NonZeroU64,
@@ -230,8 +233,11 @@ fn complete_order_instruction(args: CompleteOrderArgs) -> Result<InstructionBox,
         },
         policy_digest: args.signer_policy_digest_hex,
     };
-    let expected_authority =
-        ProviderIngestCompletionAuthorityV1::new(args.expected_owner, signer_policy);
+    let expected_authority = ProviderIngestCompletionAuthorityV1::new(
+        args.expected_owner,
+        args.expected_completion_signer,
+        signer_policy,
+    );
     let finalized_anchor = ProviderIngestFinalizedAnchorV1 {
         height: args.finalized_height.get(),
         block_hash: args.finalized_block_hash_hex,
@@ -508,11 +514,18 @@ mod tests {
     }
     #[test]
     fn complete_order_requires_and_encodes_exact_commit_context() {
+        let completion_signer = AccountId::new(
+            iroha_crypto::KeyPair::try_from_seed(vec![0xD3; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("completion signer")
+                .public_key()
+                .clone(),
+        );
         let args = [
             format!("--order-id-hex={}", "11".repeat(32)),
             format!("--provider-id-hex={}", "22".repeat(32)),
             "--completion-epoch=25".to_owned(),
             format!("--expected-owner={OWNER_I105}"),
+            format!("--expected-completion-signer={completion_signer}"),
             "--assignment-revision=3".to_owned(),
             format!("--signer-policy-id-hex={}", "33".repeat(32)),
             "--signer-policy-revision=2".to_owned(),
@@ -530,6 +543,7 @@ mod tests {
             25,
             ProviderIngestCompletionAuthorityV1::new(
                 owner,
+                completion_signer,
                 ProviderIngestCompletionSignerPolicyV1 {
                     policy_id: [0x33; 32],
                     revision: 2,
@@ -558,7 +572,14 @@ mod tests {
                 parse_complete_instruction(invalid.into_iter()).is_err(),
                 "noncanonical expected owner must fail"
             );
+            let mut invalid = args.clone();
+            invalid[4] = format!("--expected-completion-signer={noncanonical_owner}");
+            assert!(parse_complete_instruction(invalid.into_iter()).is_err());
         }
+        let missing_signer = args
+            .into_iter()
+            .filter(|argument| !argument.starts_with("--expected-completion-signer="));
+        assert!(parse_complete_instruction(missing_signer).is_err());
     }
     #[test]
     fn complete_order_rejects_noncanonical_policy_predecessor_shape() {
@@ -567,6 +588,7 @@ mod tests {
             format!("--provider-id-hex={}", "22".repeat(32)),
             "--completion-epoch=25".to_owned(),
             format!("--expected-owner={OWNER_I105}"),
+            format!("--expected-completion-signer={OWNER_I105}"),
             "--assignment-revision=3".to_owned(),
             format!("--signer-policy-id-hex={}", "33".repeat(32)),
             format!("--signer-policy-digest-hex={}", "55".repeat(32)),

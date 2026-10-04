@@ -14,6 +14,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import org.hyperledger.iroha.sdk.crypto.keystore.AndroidKeystoreAliasStateV1
+import org.hyperledger.iroha.sdk.crypto.keystore.AndroidKeystoreUnavailableExceptionV1
 import org.junit.jupiter.api.Test
 
 class AndroidKeyMintSingleUseProbeV1Test {
@@ -72,6 +74,8 @@ class AndroidKeyMintSingleUseProbeV1Test {
         var secondSucceeds = false
         var generationFails = false
         var deleteFails = false
+        var aliasState = AndroidKeystoreAliasStateV1.ABSENT
+        var aliasProbeFails = false
         override fun hasHardwareSingleUseFeature(): Boolean {
             if (featureFails) throw IllegalStateException("feature query failed")
             return feature
@@ -79,7 +83,10 @@ class AndroidKeyMintSingleUseProbeV1Test {
         override fun newChallenge() = ByteArray(32) { challengeNumber.toByte() }.also {
             challengeNumber += 1
         }
-        override fun hasAlias(alias: String): Boolean = false
+        override fun aliasState(alias: String): AndroidKeystoreAliasStateV1 {
+            if (aliasProbeFails) throw AndroidKeystoreUnavailableExceptionV1("keystore2 binder failure")
+            return aliasState
+        }
         override fun generate(alias: String, challenge: ByteArray): ProbeKeyMaterialV1 {
             generations += 1
             if (generationFails) throw IllegalStateException("generated but chain unavailable")
@@ -144,6 +151,23 @@ class AndroidKeyMintSingleUseProbeV1Test {
         val result = SingleUseProbeRunnerV1(device).run() as SingleUseProbeResultV1.Failed
         assertEquals("generate", result.stage)
         assertEquals(1, device.deletions)
+    }
+
+    @Test fun keystoreThatCannotAnswerNeitherGeneratesNorDeletes() {
+        val device = FakeDevice().apply { aliasProbeFails = true }
+        val result = SingleUseProbeRunnerV1(device).run() as SingleUseProbeResultV1.Failed
+        assertEquals("alias", result.stage)
+        assertEquals(AndroidKeystoreUnavailableExceptionV1::class.java.name, result.exceptionClass)
+        assertEquals(0, device.generations)
+        assertEquals(0, device.deletions)
+    }
+
+    @Test fun occupiedAliasIsNeitherReplacedNorDeleted() {
+        val device = FakeDevice().apply { aliasState = AndroidKeystoreAliasStateV1.PRESENT }
+        val result = SingleUseProbeRunnerV1(device).run() as SingleUseProbeResultV1.Failed
+        assertEquals("alias", result.stage)
+        assertEquals(0, device.generations)
+        assertEquals(0, device.deletions)
     }
 
     @Test fun cleanupFailureIsNeverHidden() {

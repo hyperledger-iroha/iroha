@@ -214,6 +214,10 @@ public struct TransferRequest: Sendable {
     public let assetDefinitionId: String // e.g., "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
     public let quantity: String         // decimal string
     public let destination: String      // i105 account id
+    /// Transfer memo. Not encoded by the native bridge yet: building a transfer
+    /// with a non-empty description throws
+    /// `TransactionInputError.transferDescriptionUnsupported` instead of
+    /// silently signing a transaction without it.
     public let description: String?
     public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
@@ -224,7 +228,7 @@ public struct TransferRequest: Sendable {
                 assetDefinitionId: String,
                 quantity: String,
                 destination: String,
-                description: String?,
+                description: String? = nil,
                 feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = 100_000,
                 nonce: UInt32? = nil) {
@@ -791,6 +795,14 @@ public final class IrohaSDK: @unchecked Sendable {
     public let baseURL: URL
     public let defaultSigningAlgorithm: SigningAlgorithm
     private let toriiClient: ToriiTransactionSubmitting
+    /// REST collection access, including the Explorer feeds.
+    public var collections: ToriiClient {
+        get throws {
+            guard let toriiRestClient else { throw Self.restUnavailableError() }
+            return toriiRestClient
+        }
+    }
+
     private let toriiRestClient: ToriiClient?
 
     /// Requested hardware policy. Assignment attempts immediate native application.
@@ -2268,38 +2280,6 @@ public final class IrohaSDK: @unchecked Sendable {
         NoritoNativeBridge.shared.decodeSignedTransaction(envelope.norito)
     }
 
-    public func getAssets(accountId: String,
-                          limit: Int = 100,
-                          asset: String? = nil,
-                          scope: String? = nil,
-                          completion: @Sendable @escaping (Result<[ToriiAssetBalance], Error>) -> Void) {
-        guard let toriiRestClient else {
-            completion(.failure(Self.restUnavailableError()))
-            return
-        }
-        toriiRestClient.getAssets(accountId: accountId, limit: limit, asset: asset, scope: scope, completion: completion)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    public func getExplorerInstructions(params: ToriiExplorerInstructionsParams? = nil,
-                                         completion: @Sendable @escaping (Result<ToriiExplorerInstructionsPage, Error>) -> Void) {
-        guard let toriiRestClient else {
-            completion(.failure(Self.restUnavailableError()))
-            return
-        }
-        toriiRestClient.getExplorerInstructions(params: params, completion: completion)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    public func getExplorerTransactions(params: ToriiExplorerTransactionsParams? = nil,
-                                         completion: @Sendable @escaping (Result<ToriiExplorerTransactionsPage, Error>) -> Void) {
-        guard let toriiRestClient else {
-            completion(.failure(Self.restUnavailableError()))
-            return
-        }
-        toriiRestClient.getExplorerTransactions(params: params, completion: completion)
-    }
-
     @available(iOS 15.0, macOS 12.0, *)
     public func getExplorerTransactionDetail(hashHex: String,
                                               completion: @Sendable @escaping (Result<ToriiExplorerTransactionDetail, Error>) -> Void) {
@@ -2325,7 +2305,7 @@ public final class IrohaSDK: @unchecked Sendable {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func getExplorerTransfers(params: ToriiExplorerInstructionsParams? = nil,
+    public func getExplorerTransfers(query: ToriiListQuery = ToriiListQuery(),
                                      matchingAccount accountId: String? = nil,
                                      assetDefinitionId: String? = nil,
                                      completion: @Sendable @escaping (Result<[ToriiExplorerTransferRecord], Error>) -> Void) {
@@ -2333,14 +2313,14 @@ public final class IrohaSDK: @unchecked Sendable {
             completion(.failure(Self.restUnavailableError()))
             return
         }
-        toriiRestClient.getExplorerTransfers(params: params,
+        toriiRestClient.getExplorerTransfers(query: query,
                                              matchingAccount: accountId,
                                              assetDefinitionId: assetDefinitionId,
                                              completion: completion)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func getExplorerTransferSummaries(params: ToriiExplorerInstructionsParams? = nil,
+    public func getExplorerTransferSummaries(query: ToriiListQuery = ToriiListQuery(),
                                              matchingAccount accountId: String? = nil,
                                              assetDefinitionId: String? = nil,
                                              relativeTo relativeAccountId: String? = nil,
@@ -2349,7 +2329,7 @@ public final class IrohaSDK: @unchecked Sendable {
             completion(.failure(Self.restUnavailableError()))
             return
         }
-        toriiRestClient.getExplorerTransferSummaries(params: params,
+        toriiRestClient.getExplorerTransferSummaries(query: query,
                                                      matchingAccount: accountId,
                                                      assetDefinitionId: assetDefinitionId,
                                                      relativeTo: relativeAccountId,
@@ -2533,16 +2513,6 @@ extension IrohaSDK {
 
 @available(iOS 15.0, macOS 12.0, *)
 public extension IrohaSDK {
-    func getAssets(accountId: String,
-                   limit: Int = 100,
-                   asset: String? = nil,
-                   scope: String? = nil) async throws -> [ToriiAssetBalance] {
-        guard let toriiRestClient else {
-            throw Self.restUnavailableError()
-        }
-        return try await toriiRestClient.getAssets(accountId: accountId, limit: limit, asset: asset, scope: scope)
-    }
-
     func prepareDetachedAssetTransfer(
         _ request: ToriiAssetTransferRequest
     ) async throws -> ToriiAssetTransferDraft {
@@ -2763,20 +2733,6 @@ public extension IrohaSDK {
                                                                   dedupeLimit: dedupeLimit)
     }
 
-    func getExplorerInstructions(params: ToriiExplorerInstructionsParams? = nil) async throws -> ToriiExplorerInstructionsPage {
-        guard let toriiRestClient else {
-            throw Self.restUnavailableError()
-        }
-        return try await toriiRestClient.getExplorerInstructions(params: params)
-    }
-
-    func getExplorerTransactions(params: ToriiExplorerTransactionsParams? = nil) async throws -> ToriiExplorerTransactionsPage {
-        guard let toriiRestClient else {
-            throw Self.restUnavailableError()
-        }
-        return try await toriiRestClient.getExplorerTransactions(params: params)
-    }
-
     func getExplorerTransactionDetail(hashHex: String) async throws -> ToriiExplorerTransactionDetail {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
@@ -2793,25 +2749,25 @@ public extension IrohaSDK {
                                                                       index: index)
     }
 
-    func getExplorerTransfers(params: ToriiExplorerInstructionsParams? = nil,
+    func getExplorerTransfers(query: ToriiListQuery = ToriiListQuery(),
                               matchingAccount accountId: String? = nil,
                               assetDefinitionId: String? = nil) async throws -> [ToriiExplorerTransferRecord] {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
-        return try await toriiRestClient.getExplorerTransfers(params: params,
+        return try await toriiRestClient.getExplorerTransfers(query: query,
                                                               matchingAccount: accountId,
                                                               assetDefinitionId: assetDefinitionId)
     }
 
-    func getExplorerTransferSummaries(params: ToriiExplorerInstructionsParams? = nil,
+    func getExplorerTransferSummaries(query: ToriiListQuery = ToriiListQuery(),
                                       matchingAccount accountId: String? = nil,
                                       assetDefinitionId: String? = nil,
                                       relativeTo relativeAccountId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
-        return try await toriiRestClient.getExplorerTransferSummaries(params: params,
+        return try await toriiRestClient.getExplorerTransferSummaries(query: query,
                                                                       matchingAccount: accountId,
                                                                       assetDefinitionId: assetDefinitionId,
                                                                       relativeTo: relativeAccountId)

@@ -3,7 +3,7 @@
 //! This command performs no network requests or ledger writes. Its configured public identity is
 //! joined to the pinned request, while the original software-clock observations remain historical.
 //! Run with `--output-format json`, the selected native client configuration, and
-//! `bridge verify-retained-network --request <public-json> --request-sha256 <approved-digest>`.
+//! `ops bridge verify-retained-network --request <public-json> --request-sha256 <approved-digest>`.
 //! Request schema `iroha.bridge.retained-network-request.v1` contains the independently selected
 //! network, chain, discriminant and route; pinned signed/raw genesis and role manifest; a contiguous
 //! native JSON proof prefix; and four pinned original JSON attestations with original challenges
@@ -391,6 +391,11 @@ struct Report {
     configured_identity: bool,
 }
 
+/// Protocol results use stdout even when ordinary diagnostics use stderr.
+fn write_report(context: &mut impl RunContext, report: &Report) -> Result<()> {
+    context.println_data(json::to_json(report)?)
+}
+
 pub(super) fn run(context: &mut impl RunContext, args: Args) -> Result<()> {
     ensure!(
         context.output_format() == CliOutputFormat::Json,
@@ -547,7 +552,7 @@ pub(super) fn run(context: &mut impl RunContext, args: Args) -> Result<()> {
             challenge_and_window: true,
             configured_identity: true,
         };
-        context.println(json::to_json(&report)?)
+        write_report(context, &report)
     }
 }
 
@@ -562,6 +567,38 @@ mod tests {
         },
     };
     use norito::codec::Encode as _;
+
+    #[test]
+    fn machine_verification_report_uses_stdout_without_diagnostics() {
+        let fixture = NativeFinalityFixture::new();
+        let report = Report {
+            schema: "iroha.bridge.retained-network-verification.v1",
+            request_sha256: "01".repeat(32),
+            historical_observations_only: true,
+            chain_write_performed: false,
+            network_id: fixture.network_id(),
+            chain_id: fixture.chain_id().to_owned(),
+            chain_discriminant: 369,
+            torii_url: "https://taira.sora.org".to_owned(),
+            verified_roles: vec![1, 2, 3, 4],
+            verified_prefix_height: 2,
+            finality_signatures: true,
+            genesis_signature: true,
+            manifest_role_peer_join: true,
+            challenge_and_window: true,
+            configured_identity: true,
+        };
+        let mut context = crate::tests::test_context(CliOutputFormat::Json);
+        write_report(&mut context, &report).unwrap();
+        assert_eq!(
+            context.write,
+            format!("{}\n", json::to_json(&report).unwrap()).as_bytes()
+        );
+        assert!(context.err_write.is_empty());
+        let parsed: json::Value = json::from_slice(&context.write).unwrap();
+        assert_eq!(parsed["historical_observations_only"].as_bool(), Some(true));
+        assert_eq!(parsed["chain_write_performed"].as_bool(), Some(false));
+    }
 
     #[cfg(unix)]
     #[test]

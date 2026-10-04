@@ -2,6 +2,15 @@
 
 `iroha3d_taira beacon-bootstrap` prepares public DKG evidence and private
 per-seat credentials. It never submits a transaction or activates a committee.
+Every command requires a positive, explicit operation cap before its subcommand:
+`iroha3d_taira beacon-bootstrap --credential-max-memory-bytes <bytes> <subcommand> ...`.
+The supervisor supplies this cap from its deployment resource policy. One finite
+pool is retained for that command's authenticated session graphs and verification
+workspace; insufficient local capacity aborts without becoming cryptographic
+invalidity. The cap does not yet cover all raw public-frame, DKG-state or encoded
+credential buffers. The node's separately configured retained-credential pool is
+not a substitute for this standalone operation cap.
+
 The first release has one signed, encrypted all-edge DKG layout; the former
 central dealer and decimal-height commands are removed.
 

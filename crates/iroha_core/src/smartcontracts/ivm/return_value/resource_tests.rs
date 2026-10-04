@@ -105,7 +105,7 @@ fn public_return_collectors_preserve_actual_read_capacity_and_retry() {
 #[test]
 fn pointer_return_preserves_refusal_at_each_tracked_read_boundary() {
     let (mut vm, budget) = funded_return_vm();
-    let envelope = ivm::numeric_tlv::encode_int(&BigInt::from_i128(42)).unwrap();
+    let envelope = ivm_abi::numeric_tlv::encode_int(&BigInt::from_i128(42)).unwrap();
     let pointer = vm
         .alloc_heap(u64::try_from(envelope.len()).unwrap())
         .unwrap();
@@ -148,6 +148,7 @@ fn return_error_mapping_retains_all_local_variants_and_metered_owners() {
         VMError::ExecutionDeferred(ExecutionDeferral::AllocationUnavailable),
         VMError::ExecutionDeferred(ExecutionDeferral::ActiveMemoryCapacity),
         VMError::ExecutionDeferred(ExecutionDeferral::VerifierArtifactsUnavailable),
+        VMError::ExecutionDeferred(ExecutionDeferral::TraceOwnerUnavailable),
         VMError::Metered {
             gas: 17,
             source: Box::new(VMError::AllocationDeferred(capacity)),

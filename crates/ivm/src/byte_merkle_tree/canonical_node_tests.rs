@@ -134,13 +134,14 @@ fn complete_leaf_replacement_rejects_wrong_geometry_before_mutating_nodes_or_lea
     let original = tree.leaves.lock().to_vec();
     let node_bytes = tree.nodes.lock().allocated_bytes();
     let allocations = canonical_nodes::ALLOCATIONS.get();
-    assert!(!tree.install_leaf_digests(&[[0x11; 32]; 2]));
+    assert!(tree.lock_leaf_update(&[[0x11; 32]; 2]).is_none());
     assert!(tree.nodes.lock().is_current());
     assert_eq!(&**tree.leaves.lock(), original);
     assert_eq!(tree.root(), root);
     let replacement = [[0x37; 32]; 3];
-    assert!(tree.install_leaf_digests(&replacement));
-    assert!(!tree.nodes.lock().is_current());
+    tree.lock_leaf_update(&replacement).unwrap().install();
+    assert!(tree.nodes.lock().is_current());
+    assert_eq!(&**tree.leaves.lock(), &replacement);
     let expected = MerkleTree::from_hashed_leaves_sha256(replacement);
     assert_eq!(tree.root_hash(), expected.root().unwrap());
     assert_eq!(tree.nodes.lock().allocated_bytes(), node_bytes);

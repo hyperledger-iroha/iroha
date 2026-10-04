@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  ToriiBrowserClient,
-  ToriiBrowserHttpError,
-} from "../src/toriiBrowserClient.js";
+import { ToriiBrowserClient } from "../src/toriiBrowserClient.js";
+import { ToriiHttpError } from "../src/toriiErrors.js";
 
 function jsonResponse(payload) {
   return new Response(JSON.stringify(payload), {
@@ -157,6 +155,6 @@ test("deployment polling fails closed on unknown status kinds and non-200 status
   });
   await assert.rejects(
     accepted.getTransactionStatus(hash),
-    (error) => error instanceof ToriiBrowserHttpError && error.status === 202,
+    (error) => error instanceof ToriiHttpError && error.status === 202,
   );
 });

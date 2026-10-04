@@ -16,7 +16,8 @@ import json
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
-from .attestation import AttestationRejected, Selection, decode_android_chain, require
+from .attestation import (AttestationRejected, Selection, VerificationUnavailable,
+                          decode_android_chain, require)
 from .issuance import DurableCertificateStore, GovernedIssuanceScope
 
 
@@ -163,6 +164,9 @@ class IssuerService:
                 certificate = self.store.recover(
                     scope, request.signed_preparation, request.platform_evidence,
                 )
+        except VerificationUnavailable:
+            # A live dependency did not answer: not a rejected certificate; retry.
+            return 503, b'{"error":"issuer_unavailable"}'
         except AttestationRejected:
             return 409, b'{"error":"certificate_rejected"}'
         except Exception:

@@ -3,7 +3,7 @@
 use super::*;
 use iroha_data_model::{
     asset::{AssetBalancePolicy, AssetBalanceScope},
-    block::consensus::SumeragiRootScope,
+    block::consensus::{PrivateRootFeePolicy, SumeragiRootScope},
     nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig},
     transaction::{FeeChargeKind, FeeChargeLimit},
 };
@@ -48,7 +48,8 @@ fn work_instruction(text: &str) -> InstructionBox {
 fn work_fee(text: &str) -> u64 {
     let gas = crate::gas::meter_instruction(&work_instruction(text));
     assert!(gas > 0, "paid progress requires a positive metered charge");
-    gas
+    // The immutable signed policy burns a positive base charge plus metered gas.
+    gas.checked_add(1).unwrap()
 }
 
 fn bootstrap_world() -> World {
@@ -153,6 +154,17 @@ impl DataspaceChain {
         let mut context = SumeragiGenesisContextParameters::recommended();
         context.root_scope = scope;
         let builder = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
+            .append_parameter(Parameter::Custom(
+                PrivateRootFeePolicy {
+                    asset_definition_id: fee_asset.clone(),
+                    base_fee: 1_u32.into(),
+                    per_byte_fee: Quantity::zero(),
+                    per_instruction_fee: Quantity::zero(),
+                    per_gas_unit_fee: 1_u32.into(),
+                }
+                .into_custom_parameter()
+                .unwrap(),
+            ))
             .append_parameter(Parameter::Sumeragi(
                 SumeragiParameter::PayloadRetryIntervalMs(200_u64.try_into().unwrap()),
             ))
@@ -364,7 +376,7 @@ impl DataspaceChain {
             ALICE_ID.clone(),
             FeePaymentIntent::authority(
                 vec![FeeChargeLimit::new(
-                    FeeChargeKind::PipelineGas,
+                    FeeChargeKind::Nexus,
                     self.fee_asset.clone(),
                     work_fee(text).into(),
                 )],
@@ -405,7 +417,11 @@ impl DataspaceChain {
             let stored = validator
                 .state
                 .kura()
-                .get_block(height.try_into().unwrap())
+                .get_block(
+                    height.try_into().unwrap(),
+                    &validator.state.ivm_execution_budget(),
+                )
+                .expect("original block read attempt")
                 .unwrap();
             assert_eq!(stored.network_entrypoint_count(), 1);
             assert!(
@@ -430,9 +446,14 @@ impl DataspaceChain {
                     .map_or_else(Quantity::zero, |value| value.as_ref().clone())
             };
             assert_eq!(balance(ALICE_ID.clone()), Quantity::from(10_000 - paid));
+            assert_eq!(balance(SAMPLE_GENESIS_ACCOUNT_ID.clone()), Quantity::zero());
             assert_eq!(
-                balance(SAMPLE_GENESIS_ACCOUNT_ID.clone()),
-                Quantity::from(paid)
+                view.world()
+                    .asset_definition(&self.fee_asset)
+                    .unwrap()
+                    .total_quantity(),
+                &Quantity::from(10_000 - paid),
+                "private fees burn only the exact root's currency supply"
             );
         }
     }
@@ -506,8 +527,13 @@ fn independent_dataspace_roots_pay_and_restart_without_sharing_state_or_storage(
     shutdown(a);
     let (_, b_fee) = second.submit(&b, "B advances while A is stopped");
     second.balances(&b, b_fee);
+    let inspection_budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     let stored = |disks: &[Disk], height: usize| {
-        disks[0].kura.get_block(height.try_into().unwrap()).unwrap()
+        disks[0]
+            .kura
+            .get_block(height.try_into().unwrap(), &inspection_budget)
+            .expect("original block read attempt")
+            .unwrap()
     };
     let mut prefix = super::super::super::certified_chain::CertifiedPrefix::new(
         &first.chain.chain_id,
@@ -625,7 +651,11 @@ fn preaccepted_foreign_input_reaches_private_executor_but_cannot_publish_or_spen
     // already refused the original carrier. Native execution still authenticates it.
     let selected = [foreign];
     assert_eq!(selected[0].hash_as_entrypoint(), foreign_hash);
-    let parent = state.view().latest_block().unwrap();
+    let parent = state
+        .view()
+        .latest_block()
+        .expect("completed original State parent read")
+        .unwrap();
     let proposal = payload::assemble(
         &state,
         Assembly {
@@ -673,7 +703,7 @@ fn preaccepted_foreign_input_reaches_private_executor_but_cannot_publish_or_spen
     let fee = work_fee("valid local work after foreign rejection");
     for (account, expected) in [
         (ALICE_ID.clone(), 10_000 - fee),
-        (SAMPLE_GENESIS_ACCOUNT_ID.clone(), fee),
+        (SAMPLE_GENESIS_ACCOUNT_ID.clone(), 0),
     ] {
         assert_eq!(
             view.world()
@@ -683,9 +713,16 @@ fn preaccepted_foreign_input_reaches_private_executor_but_cannot_publish_or_spen
                     account,
                     scope
                 ))
-                .unwrap()
-                .as_ref(),
-            &Quantity::from(expected)
+                .map_or_else(Quantity::zero, |value| value.as_ref().clone()),
+            Quantity::from(expected)
         );
     }
+    assert_eq!(
+        view.world()
+            .asset_definition(&local_root.fee_asset)
+            .unwrap()
+            .total_quantity(),
+        &Quantity::from(10_000 - fee),
+        "the exact local root burns its paid fee"
+    );
 }

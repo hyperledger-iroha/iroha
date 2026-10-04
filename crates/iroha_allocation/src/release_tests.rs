@@ -1,8 +1,23 @@
 //! Release observations survive registration races without owning data locks.
 
 use super::*;
+use crate::AllocationBudget;
+
+fn registrations<const N: usize>(budget: &AllocationBudget) -> [ReleaseRegistration; N] {
+    std::array::from_fn(|_| {
+        ReleaseRegistration::from_reservation(
+            &mut budget
+                .try_reserve(ReleaseRegistration::allocation_layout())
+                .unwrap(),
+        )
+        .unwrap()
+    })
+}
 use std::{
-    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     task::Wake,
 };
 
@@ -13,20 +28,23 @@ impl Wake for WakeCount {
         self.0.fetch_add(1, Ordering::SeqCst);
     }
 }
-fn poll(wait: &mut ReleaseFuture, wake: &Arc<WakeCount>) -> Poll<()> {
+fn poll(wait: &mut ReleaseFuture<'_>, wake: &Arc<WakeCount>) -> Poll<()> {
     Pin::new(wait).poll(&mut Context::from_waker(&Waker::from(Arc::clone(wake))))
 }
 #[test]
 fn release_before_registration_is_retained_and_other_sources_do_not_wake() {
+    let registration_budget =
+        AllocationBudget::new(2 * ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0, mut registration_1] = registrations(&registration_budget);
     let source = ReleaseNotification::default();
     let other = ReleaseNotification::default();
     let lock = Mutex::new(());
     let guard = source.guard(lock.lock().unwrap());
-    let mut wait = source.observe().wait_for_release();
+    let mut wait = source.observe().wait_for_release(&mut registration_0);
     let wake = Arc::new(WakeCount::default());
     drop(other.guard(()));
     assert!(poll(&mut wait, &wake).is_pending());
-    let mut before_first_poll = source.observe().wait_for_release();
+    let mut before_first_poll = source.observe().wait_for_release(&mut registration_1);
     drop(guard);
     assert!(lock.try_lock().is_ok());
     assert_eq!(wake.0.load(Ordering::SeqCst), 1);
@@ -35,27 +53,28 @@ fn release_before_registration_is_retained_and_other_sources_do_not_wake() {
 }
 
 #[test]
-fn first_registered_wake_can_reenter_both_initialized_notification_locks() {
+fn first_registered_wake_reenters_unlocked_source_after_original_node_is_detached() {
     struct FirstWake {
         source: Arc<ReleaseNotification>,
-        registration: std::sync::OnceLock<Weak<Mutex<Option<Waker>>>>,
         calls: AtomicUsize,
     }
     impl Wake for FirstWake {
         fn wake(self: Arc<Self>) {
             assert!(self.source.state.try_lock().is_ok());
-            let registration = self.registration.get().unwrap().upgrade().unwrap();
-            assert!(registration.try_lock().is_ok());
+            assert_eq!(self.source.state.lock().unwrap().waiters.count, 0);
             drop(self.source.observe());
             self.calls.fetch_add(1, Ordering::SeqCst);
         }
     }
 
+    let registration_budget =
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0] = registrations(&registration_budget);
+
     let source = Arc::new(ReleaseNotification::default());
-    let mut wait = source.observe().wait_for_release();
+    let mut wait = source.observe().wait_for_release(&mut registration_0);
     let wake = Arc::new(FirstWake {
         source: Arc::clone(&source),
-        registration: std::sync::OnceLock::new(),
         calls: AtomicUsize::new(0),
     });
     let waker = Waker::from(Arc::clone(&wake));
@@ -63,11 +82,6 @@ fn first_registered_wake_can_reenter_both_initialized_notification_locks() {
         Pin::new(&mut wait)
             .poll(&mut Context::from_waker(&waker))
             .is_pending()
-    );
-    assert!(
-        wake.registration
-            .set(Arc::downgrade(wait.registration.as_ref().unwrap()))
-            .is_ok()
     );
     drop(source.guard(()));
     assert_eq!(wake.calls.load(Ordering::SeqCst), 1);
@@ -105,11 +119,15 @@ fn panicking_first_waker_still_notifies_the_remaining_original_cohort() {
         }
     }
 
+    let registration_budget =
+        AllocationBudget::new(2 * ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0, mut registration_1] = registrations(&registration_budget);
+
     for panic_in_drop in [false, true] {
         let source = Arc::new(ReleaseNotification::default());
         let observation = source.observe();
-        let mut first = observation.clone().wait_for_release();
-        let mut survivor = observation.wait_for_release();
+        let mut first = observation.clone().wait_for_release(&mut registration_0);
+        let mut survivor = observation.wait_for_release(&mut registration_1);
         let calls = Arc::new(AtomicUsize::new(0));
         let drops = Arc::new(AtomicUsize::new(0));
         let drop_was_unlocked = Arc::new(AtomicBool::new(false));
@@ -150,7 +168,7 @@ fn panicking_first_waker_still_notifies_the_remaining_original_cohort() {
         let completed_wakes = Arc::new(WakeCount::default());
         assert!(poll(&mut first, &completed_wakes).is_ready());
         assert!(poll(&mut survivor, &survivor_wakes).is_ready());
-        assert!(source.state.lock().unwrap().waiters.is_empty());
+        assert!(source.state.lock().unwrap().waiters.count == 0);
         drop(source.guard(()));
         assert_eq!(survivor_wakes.0.load(Ordering::SeqCst), 1);
     }
@@ -158,26 +176,30 @@ fn panicking_first_waker_still_notifies_the_remaining_original_cohort() {
 
 #[test]
 fn cancellation_and_waker_replacement_do_not_steal_another_wait() {
+    let registration_budget =
+        AllocationBudget::new(3 * ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0, mut registration_1, mut registration_2] =
+        registrations(&registration_budget);
     let source = ReleaseNotification::default();
     let observation = source.observe();
-    let mut canceled = observation.clone().wait_for_release();
-    let mut retained = observation.wait_for_release();
+    let mut canceled = observation.clone().wait_for_release(&mut registration_0);
+    let mut retained = observation.wait_for_release(&mut registration_1);
     let old = Arc::new(WakeCount::default());
     let new = Arc::new(WakeCount::default());
     assert!(poll(&mut canceled, &old).is_pending());
     assert!(poll(&mut retained, &old).is_pending());
     assert!(poll(&mut retained, &new).is_pending());
     drop(canceled);
-    assert_eq!(source.state.lock().unwrap().waiters.len(), 1);
+    assert_eq!(source.state.lock().unwrap().waiters.count, 1);
     drop(source.guard(()));
     assert_eq!(old.0.load(Ordering::SeqCst), 0);
     assert_eq!(new.0.load(Ordering::SeqCst), 1);
     assert!(poll(&mut retained, &new).is_ready());
-    assert!(source.state.lock().unwrap().waiters.is_empty());
-    let mut canceled = source.observe().wait_for_release();
+    assert!(source.state.lock().unwrap().waiters.count == 0);
+    let mut canceled = source.observe().wait_for_release(&mut registration_2);
     assert!(poll(&mut canceled, &old).is_pending());
     drop(canceled);
-    assert_eq!(source.state.lock().unwrap().waiters.capacity(), 0);
+    assert_eq!(source.state.lock().unwrap().waiters.count, 0);
 }
 
 struct ObserveOnDrop {
@@ -204,8 +226,11 @@ impl Drop for ObserveOnDrop {
 
 #[test]
 fn replacing_a_waker_allows_its_destructor_to_observe_the_same_source() {
+    let registration_budget =
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0] = registrations(&registration_budget);
     let source = Arc::new(ReleaseNotification::default());
-    let mut wait = source.observe().wait_for_release();
+    let mut wait = source.observe().wait_for_release(&mut registration_0);
     let state_was_unlocked = Arc::new(AtomicBool::new(false));
     let drops = Arc::new(AtomicUsize::new(0));
     let old = Waker::from(Arc::new(ObserveOnDrop {
@@ -244,10 +269,14 @@ fn ready_wait_releases_its_last_waker_outside_the_notification_lock() {
         }
     }
 
+    let registration_budget =
+        AllocationBudget::new(2 * ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0, mut registration_1] = registrations(&registration_budget);
+
     let source = Arc::new(ReleaseNotification::default());
     let observation = source.observe();
-    let mut first = observation.clone().wait_for_release();
-    let mut ready = observation.wait_for_release();
+    let mut first = observation.clone().wait_for_release(&mut registration_0);
+    let mut ready = observation.wait_for_release(&mut registration_1);
     let (started, started_rx) = mpsc::sync_channel(0);
     let (resume, resume_rx) = mpsc::sync_channel(0);
     let first_waker = Waker::from(Arc::new(PausedWake {
@@ -291,9 +320,12 @@ fn ready_wait_releases_its_last_waker_outside_the_notification_lock() {
 
 #[test]
 fn release_racing_first_poll_cannot_be_lost() {
+    let registration_budget =
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0] = registrations(&registration_budget);
     for _ in 0..128 {
         let source = ReleaseNotification::default();
-        let mut wait = source.observe().wait_for_release();
+        let mut wait = source.observe().wait_for_release(&mut registration_0);
         let wake = Arc::new(WakeCount::default());
         std::thread::scope(|scope| {
             let barrier = Arc::new(std::sync::Barrier::new(2));
@@ -317,10 +349,13 @@ fn release_racing_first_poll_cannot_be_lost() {
 
 #[test]
 fn ownership_phase_transfer_defers_original_release_until_final_owner_drops() {
+    let registration_budget =
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0] = registrations(&registration_budget);
     let source = ReleaseNotification::default();
     let lock = Mutex::new(());
     let guard = source.poisoning_guard(lock.lock().unwrap());
-    let mut wait = source.observe().wait_for_release();
+    let mut wait = source.observe().wait_for_release(&mut registration_0);
     let wake = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &wake).is_pending());
     let guard = guard.map_preserving_release(|guard| (guard, 7));
@@ -339,11 +374,14 @@ fn ownership_phase_transfer_defers_original_release_until_final_owner_drops() {
 
 #[test]
 fn ownership_phase_transfer_unwind_releases_and_poisons_original_observation() {
+    let registration_budget =
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0] = registrations(&registration_budget);
     let source = ReleaseNotification::default();
     let lock = Mutex::new(());
     let guard = source.poisoning_guard(lock.lock().unwrap());
     let observation = source.observe();
-    let mut wait = observation.clone().wait_for_release();
+    let mut wait = observation.clone().wait_for_release(&mut registration_0);
     let wake = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &wake).is_pending());
     assert!(
@@ -370,12 +408,16 @@ fn physical_release_disarms_only_later_retirement_poisoning() {
         }
     }
 
+    let registration_budget =
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0] = registrations(&registration_budget);
+
     for released in [false, true] {
         let source = ReleaseNotification::default();
         let lock = Mutex::new(());
         let guard = source.poisoning_guard(lock.lock().unwrap());
         let observation = source.observe();
-        let mut wait = observation.clone().wait_for_release();
+        let mut wait = observation.clone().wait_for_release(&mut registration_0);
         let wake = Arc::new(WakeCount::default());
         assert!(poll(&mut wait, &wake).is_pending());
         assert!(
@@ -430,6 +472,10 @@ fn paired_release_uses_actual_poison_and_unlocks_both_before_callback_unwind() {
             );
         }
     }
+
+    let registration_budget =
+        AllocationBudget::new(2 * ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0, mut registration_1] = registrations(&registration_budget);
     for mode in 0..4 {
         let first = Arc::new(Mutex::new(()));
         let second = Arc::new(Mutex::new(()));
@@ -451,8 +497,8 @@ fn paired_release_uses_actual_poison_and_unlocks_both_before_callback_unwind() {
         });
         let waker = Waker::from(Arc::clone(&probe));
         let mut context = Context::from_waker(&waker);
-        let mut wait_a = std::pin::pin!(source_a.observe().wait_for_release());
-        let mut wait_b = std::pin::pin!(source_b.observe().wait_for_release());
+        let mut wait_a = std::pin::pin!(source_a.observe().wait_for_release(&mut registration_0));
+        let mut wait_b = std::pin::pin!(source_b.observe().wait_for_release(&mut registration_1));
         assert!(wait_a.as_mut().poll(&mut context).is_pending());
         assert!(wait_b.as_mut().poll(&mut context).is_pending());
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -511,6 +557,10 @@ fn observed_release_reports_existing_physical_poison_and_excludes_later_wake_pan
             assert!(!self.panic, "wake after physical release");
         }
     }
+
+    let registration_budget =
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0] = registrations(&registration_budget);
     for already_poisoned in [false, true] {
         for panic_after_release in [false, true] {
             let lock = Arc::new(Mutex::new(()));
@@ -522,7 +572,7 @@ fn observed_release_reports_existing_physical_poison_and_excludes_later_wake_pan
             }
             let source = ReleaseNotification::default();
             let before = source.observe();
-            let mut wait = before.clone().wait_for_release();
+            let mut wait = before.clone().wait_for_release(&mut registration_0);
             let probe = Arc::new(Probe {
                 lock: Arc::clone(&lock),
                 unavailable: AtomicBool::new(false),
@@ -558,6 +608,9 @@ fn observed_release_reports_existing_physical_poison_and_excludes_later_wake_pan
 
 #[test]
 fn pair_construction_transfers_both_original_guards_without_early_release() {
+    let registration_budget =
+        AllocationBudget::new(2 * ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0, mut registration_1] = registrations(&registration_budget);
     let first = Mutex::new(());
     let second = Mutex::new(());
     let source_a = ReleaseNotification::default();
@@ -567,8 +620,8 @@ fn pair_construction_transfers_both_original_guards_without_early_release() {
     let before_a = source_a.observe();
     let before_b = source_b.observe();
     let wake = Arc::new(WakeCount::default());
-    let mut wait_a = before_a.clone().wait_for_release();
-    let mut wait_b = before_b.clone().wait_for_release();
+    let mut wait_a = before_a.clone().wait_for_release(&mut registration_0);
+    let mut wait_b = before_b.clone().wait_for_release(&mut registration_1);
     assert!(poll(&mut wait_a, &wake).is_pending());
     assert!(poll(&mut wait_b, &wake).is_pending());
     let (a, b) = a
@@ -599,11 +652,14 @@ fn pair_construction_transfers_both_original_guards_without_early_release() {
 
 #[test]
 fn deferred_release_keeps_original_wait_and_ignores_later_cleanup_unwind() {
+    let registration_budget =
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0] = registrations(&registration_budget);
     for panic_after in [false, true] {
         let source = ReleaseNotification::default();
         let physical = Mutex::new(());
         let observation = source.observe();
-        let mut wait = observation.clone().wait_for_release();
+        let mut wait = observation.clone().wait_for_release(&mut registration_0);
         let wake = Arc::new(WakeCount::default());
         assert!(poll(&mut wait, &wake).is_pending());
         let deferred = source
@@ -628,13 +684,16 @@ fn deferred_release_keeps_original_wait_and_ignores_later_cleanup_unwind() {
 
 #[test]
 fn fallible_phase_transfer_retains_the_original_guard_and_owned_cleanup() {
+    let registration_budget =
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0] = registrations(&registration_budget);
     let source = ReleaseNotification::default();
     #[expect(
         clippy::mutex_integer,
         reason = "exercise physical guard custody and original value through transfer"
     )]
     let physical = Mutex::new(7_u64);
-    let mut wait = source.observe().wait_for_release();
+    let mut wait = source.observe().wait_for_release(&mut registration_0);
     let wake = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &wake).is_pending());
     let guard = source.poisoning_guard(physical.lock().unwrap());
@@ -664,6 +723,9 @@ fn fallible_phase_transfer_retains_the_original_guard_and_owned_cleanup() {
 
 #[test]
 fn release_batch_empty_and_foreign_transfer_preserve_original_custody() {
+    let registration_budget =
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0] = registrations(&registration_budget);
     let source = ReleaseNotification::default();
     let foreign = ReleaseNotification::default();
     #[expect(
@@ -671,7 +733,7 @@ fn release_batch_empty_and_foreign_transfer_preserve_original_custody() {
         reason = "exercise physical guard custody and original value through transfer"
     )]
     let physical = Mutex::new(7_u64);
-    let mut wait = source.observe().wait_for_release();
+    let mut wait = source.observe().wait_for_release(&mut registration_0);
     let wake = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &wake).is_pending());
     drop(source.deferred_batch());
@@ -715,6 +777,16 @@ fn release_batch_coalesces_reacquisitions_without_allocating_or_early_wakes() {
             self.wakes.fetch_add(1, Ordering::SeqCst);
         }
     }
+
+    let registration_budget =
+        AllocationBudget::new(5 * ReleaseRegistration::allocation_layout().size());
+    let [
+        mut registration_0,
+        mut registration_1,
+        mut registration_2,
+        mut registration_3,
+        mut registration_4,
+    ] = registrations(&registration_budget);
     let source = Arc::new(ReleaseNotification::default());
     let physical = Arc::new(Mutex::new(()));
     // Initialize platform mutex storage before measuring release bookkeeping.
@@ -722,7 +794,7 @@ fn release_batch_coalesces_reacquisitions_without_allocating_or_early_wakes() {
     let outer = Arc::new(Mutex::new(()));
     let outer_guard = outer.lock().unwrap();
     let mut batch = without_allocations(|| source.deferred_batch());
-    let mut first = source.observe().wait_for_release();
+    let mut first = source.observe().wait_for_release(&mut registration_0);
     let callback = Arc::new(Reenter {
         source: Arc::clone(&source),
         physical: Arc::clone(&physical),
@@ -746,9 +818,9 @@ fn release_batch_coalesces_reacquisitions_without_allocating_or_early_wakes() {
     assert_eq!(source.state.lock().unwrap().sequence, 0);
     // Observation after a reacquisition still waits on this same deferred cut.
     let guard = source.guard(physical.lock().unwrap());
-    let mut later = source.observe().wait_for_release();
+    let mut later = source.observe().wait_for_release(&mut registration_1);
     let before_first_poll = source.observe();
-    let mut canceled = source.observe().wait_for_release();
+    let mut canceled = source.observe().wait_for_release(&mut registration_2);
     for wait in [&mut later, &mut canceled] {
         assert!(
             Pin::new(wait)
@@ -766,7 +838,7 @@ fn release_batch_coalesces_reacquisitions_without_allocating_or_early_wakes() {
     for wait in [
         &mut first,
         &mut later,
-        &mut before_first_poll.wait_for_release(),
+        &mut before_first_poll.wait_for_release(&mut registration_3),
     ] {
         assert!(
             Pin::new(wait)
@@ -774,7 +846,7 @@ fn release_batch_coalesces_reacquisitions_without_allocating_or_early_wakes() {
                 .is_ready()
         );
     }
-    let mut successor = source.observe().wait_for_release();
+    let mut successor = source.observe().wait_for_release(&mut registration_4);
     assert!(
         Pin::new(&mut successor)
             .poll(&mut Context::from_waker(&waker))
@@ -790,11 +862,14 @@ fn release_batch_coalesces_reacquisitions_without_allocating_or_early_wakes() {
 
 #[test]
 fn release_batch_records_actual_physical_poison_without_later_cleanup_poison() {
+    let registration_budget =
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0] = registrations(&registration_budget);
     for during_release in [false, true] {
         let source = ReleaseNotification::default();
         let physical = Mutex::new(());
         let observation = source.observe();
-        let mut wait = observation.clone().wait_for_release();
+        let mut wait = observation.clone().wait_for_release(&mut registration_0);
         let wake = Arc::new(WakeCount::default());
         assert!(poll(&mut wait, &wake).is_pending());
         let mut batch = source.deferred_batch();
@@ -824,6 +899,9 @@ fn release_batch_records_actual_physical_poison_without_later_cleanup_poison() {
 
 #[test]
 fn retained_phase_transfer_and_refusal_keep_original_source_without_early_wake() {
+    let registration_budget =
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0] = registrations(&registration_budget);
     let source = ReleaseNotification::default();
     let foreign = ReleaseNotification::default();
     #[expect(
@@ -834,7 +912,7 @@ fn retained_phase_transfer_and_refusal_keep_original_source_without_early_wake()
     let mut batch = source.deferred_batch();
     let mut foreign_batch = foreign.deferred_batch();
     let wake = Arc::new(WakeCount::default());
-    let mut wait = source.observe().wait_for_release();
+    let mut wait = source.observe().wait_for_release(&mut registration_0);
     assert!(poll(&mut wait, &wake).is_pending());
     let guard = source.poisoning_guard(lock.lock().unwrap());
     let guard = guard
@@ -882,12 +960,16 @@ fn retained_phase_transfer_and_refusal_keep_original_source_without_early_wake()
 #[test]
 fn retained_phase_unwind_records_actual_release_without_running_waiter() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let registration_budget =
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0] = registrations(&registration_budget);
     let source = ReleaseNotification::default();
     let lock = Mutex::new(());
     let mut batch = source.deferred_batch();
     let observation = source.observe();
     let wake = Arc::new(WakeCount::default());
-    let mut wait = observation.clone().wait_for_release();
+    let mut wait = observation.clone().wait_for_release(&mut registration_0);
     assert!(poll(&mut wait, &wake).is_pending());
     let guard = source.poisoning_guard(lock.lock().unwrap());
     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -947,6 +1029,10 @@ fn charged_notification_retains_original_control_through_observers_and_deferred_
             self.0.fetch_add(1, Ordering::SeqCst);
         }
     }
+
+    let registration_budget =
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0] = registrations(&registration_budget);
     assert_eq!(
         ReleaseNotification::allocation_layout::<Charge>(),
         Shared::<Mutex<State>, Charge>::layout(),
@@ -960,7 +1046,7 @@ fn charged_notification_retains_original_control_through_observers_and_deferred_
     assert_eq!(refunds.load(Ordering::SeqCst), 0);
     drop(deferred);
     assert_eq!(observation, same);
-    let mut future = observation.wait_for_release();
+    let mut future = observation.wait_for_release(&mut registration_0);
     assert!(poll(&mut future, &Arc::new(WakeCount::default())).is_ready());
     drop(future);
     assert_eq!(refunds.load(Ordering::SeqCst), 0);
@@ -970,12 +1056,15 @@ fn charged_notification_retains_original_control_through_observers_and_deferred_
 
 #[test]
 fn deferred_notice_merge_retains_exact_source_and_never_wakes_early() {
+    let registration_budget =
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0] = registrations(&registration_budget);
     let source = ReleaseNotification::default();
     let foreign = ReleaseNotification::default();
     let physical = Mutex::new(());
     let mut batch = source.deferred_batch();
     let mut wrong = foreign.deferred_batch();
-    let mut wait = source.observe().wait_for_release();
+    let mut wait = source.observe().wait_for_release(&mut registration_0);
     let wake = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &wake).is_pending());
     for _ in 0..3 {

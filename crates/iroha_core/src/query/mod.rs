@@ -11,17 +11,23 @@ mod finalized_archive_fs;
 mod fixture_write_tests;
 pub mod index_status;
 mod journal_io;
+/// Challenged native Musubi inventory readback; daemon effects remain separately owned.
+pub mod musubi_pin_outbox;
 /// Original complete native context projection archive, authenticated by canonical R.
 pub mod native_context_archive;
+pub mod native_musubi_storage;
 /// Historical receipt openings from original writes and native certified execution.
 pub mod native_receipts;
 pub mod pagination;
+/// Complete private counters from original certified inputs and fixed installed policy.
+pub mod private_transaction_counters;
 pub mod projection_checkpoint;
 pub mod projection_checkpoint_journal;
 pub mod projection_rowset;
 pub mod projection_shard;
 /// Finalized governed provider-admission authority.
 pub mod provider_admission;
+pub mod provider_attestation_inventory;
 pub mod provider_ingest_finalized;
 pub mod provider_ingest_source;
 /// Raw role-13 custody history and same-State block finality; signing still requires executed Check.

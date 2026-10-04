@@ -73,7 +73,6 @@ use super::ordinary_lineage_state_original::{
     KagemushaOrdinaryLineageStateOriginalV1, KagemushaOrdinaryLineageStateProjectionV1,
 };
 const CELLS: usize = RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT;
-type Column = [[u8; 32]; CELLS];
 type Result<T> = core::result::Result<T, String>;
 
 /// Verified mathematical lineage State; only the actual installed protocol verifier constructs it.
@@ -561,20 +560,6 @@ fn append_history<F: crate::kagemusha_v1_poseidon::KagemushaPoseidonFieldV1>(
             .map(|b| from_u128::<F>(u128::from_le_bytes(b.try_into().expect("fixed limb")))),
     );
     Ok(())
-}
-fn digest_at(column: &Column, low: usize) -> Result<DigestV1> {
-    if low + 1 >= CELLS
-        || column[low][16..]
-            .iter()
-            .chain(&column[low + 1][16..])
-            .any(|b| *b != 0)
-    {
-        return reject();
-    }
-    let mut digest = [0; 32];
-    digest[..16].copy_from_slice(&column[low][..16]);
-    digest[16..].copy_from_slice(&column[low + 1][..16]);
-    Ok(digest)
 }
 fn rejection() -> String {
     "ordinary stateless lineage proof binding rejected".into()

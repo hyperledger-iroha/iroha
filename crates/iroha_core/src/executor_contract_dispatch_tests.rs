@@ -43,7 +43,7 @@ fn trigger_dispatch_encodes_event_args_as_one_canonical_record() {
         .argument_schema
         .as_ref()
         .expect("run argument schema");
-    let expected = ivm::encode_argument_record_from_json(schema, &event_args)
+    let expected = ivm_abi::arguments::encode_argument_record_from_json(schema, &event_args)
         .expect("encode expected canonical record");
     assert_eq!(context.argument_record(), Some(expected.as_slice()));
     ivm::validate_argument_record(
@@ -60,9 +60,11 @@ fn malformed_invocation_arguments_fail_during_context_preparation() {
         .entrypoint_descriptor("run")
         .and_then(|descriptor| descriptor.argument_schema.as_ref())
         .expect("run argument schema");
-    let mut malformed =
-        ivm::encode_argument_record_from_json(schema, &Json::from(norito::json!({"val": "1.25"})))
-            .expect("encode valid argument fixture");
+    let mut malformed = ivm_abi::arguments::encode_argument_record_from_json(
+        schema,
+        &Json::from(norito::json!({"val": "1.25"})),
+    )
+    .expect("encode valid argument fixture");
     *malformed.last_mut().expect("record hash byte") ^= 0x80;
     let contract_address = ContractAddress::derive(
         &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -204,12 +206,81 @@ fn contract_entrypoint_permission_accepts_direct_and_role_grants() {
         enforce_contract_entrypoint_permission(&tx.world, &authority, &denied_context)
             .expect_err("a grant for another contract or selector must fail closed");
     }
-    Grant::account_permission(
-        Permission::new("CanInvokeContractEntrypoint".to_owned(), Json::new(())),
-        authority.clone(),
+    let malformed_permission =
+        Permission::new("CanInvokeContractEntrypoint".to_owned(), Json::new(()));
+    let staged_before = norito::to_bytes(
+        &tx.world
+            .account_permissions
+            .iter()
+            .map(|(account, permissions)| (account.clone(), permissions.clone()))
+            .collect::<Vec<_>>(),
     )
-    .execute(&authority, &mut tx)
-    .expect("store malformed name-only compatibility fixture");
+    .unwrap();
+    let published = state
+        .world
+        .account_permissions
+        .try_committed_view()
+        .unwrap();
+    let published_before = norito::to_bytes(&(
+        published
+            .current()
+            .iter()
+            .map(|(account, permissions)| (account.clone(), permissions.clone()))
+            .collect::<Vec<_>>(),
+        published
+            .undo()
+            .iter()
+            .map(|(account, permissions)| (account.clone(), permissions.clone()))
+            .collect::<Vec<_>>(),
+    ))
+    .unwrap();
+    tx.world.take_external_events();
+    let malformed_grant =
+        Grant::account_permission(malformed_permission.clone(), authority.clone())
+            .execute(&authority, &mut tx)
+            .expect_err("native Grant rejects the recognized malformed permission before mutation");
+    assert!(matches!(
+        malformed_grant,
+        iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(message)
+            if message.contains("payout runtime permission")
+    ));
+    assert_eq!(
+        norito::to_bytes(
+            &tx.world
+                .account_permissions
+                .iter()
+                .map(|(account, permissions)| (account.clone(), permissions.clone()))
+                .collect::<Vec<_>>()
+        )
+        .unwrap(),
+        staged_before
+    );
+    assert!(tx.world.take_external_events().is_empty());
+    let after = state
+        .world
+        .account_permissions
+        .try_committed_view()
+        .unwrap();
+    assert!(published.same_publication(&after));
+    assert_eq!(
+        norito::to_bytes(&(
+            after
+                .current()
+                .iter()
+                .map(|(account, permissions)| (account.clone(), permissions.clone()))
+                .collect::<Vec<_>>(),
+            after
+                .undo()
+                .iter()
+                .map(|(account, permissions)| (account.clone(), permissions.clone()))
+                .collect::<Vec<_>>(),
+        ))
+        .unwrap(),
+        published_before
+    );
+    // Seed adversarial retained DATA to test the executor's independent authority boundary.
+    tx.world
+        .add_account_permission(&authority, malformed_permission);
     let malformed_only = contract_permission_context(contract_address.clone(), "malformed_only");
     enforce_contract_entrypoint_permission(&tx.world, &authority, &malformed_only)
         .expect_err("a name-only permission must never bypass exact payload matching");
@@ -302,7 +373,11 @@ fn loaded_executor_stack_limit_tracks_gas_limit() {
     let large_limit = 50_000;
     {
         let vm_small = loaded
-            .checkout_runtime_for_gas_limit(small_limit, Memory::HEAP_MAX_SIZE)
+            .checkout_runtime_for_gas_limit(
+                small_limit,
+                Memory::HEAP_MAX_SIZE,
+                &executor_test_budget(),
+            )
             .expect("checkout small");
         assert_eq!(
             vm_small.memory.stack_limit(),
@@ -312,7 +387,11 @@ fn loaded_executor_stack_limit_tracks_gas_limit() {
     }
     {
         let vm_large = loaded
-            .checkout_runtime_for_gas_limit(large_limit, Memory::HEAP_MAX_SIZE)
+            .checkout_runtime_for_gas_limit(
+                large_limit,
+                Memory::HEAP_MAX_SIZE,
+                &executor_test_budget(),
+            )
             .expect("checkout large");
         assert_eq!(
             vm_large.memory.stack_limit(),
@@ -331,12 +410,10 @@ fn loaded_executor_runtime_tracks_governed_heap_limit() {
     const LARGE_HEAP_LIMIT: u64 = 128;
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(generate_ok_program()));
     let loaded = super::LoadedExecutor::load(raw).expect("load");
-    // This fixture measures two small governed variants. The constructor's unused
-    // default geometry is outside that comparison and consumes the same fixed pool.
-    loaded.runtime_pool.lock().unwrap().clear_storage();
+    // Static admission creates no eager default VM; both governed variants are funded below.
     {
         let mut runtime = loaded
-            .checkout_runtime_for_gas_limit(GAS_LIMIT, SMALL_HEAP_LIMIT)
+            .checkout_runtime_for_gas_limit(GAS_LIMIT, SMALL_HEAP_LIMIT, &executor_test_budget())
             .expect("small heap runtime");
         assert_eq!(runtime.memory.heap_max_limit(), SMALL_HEAP_LIMIT);
         assert_eq!(
@@ -346,13 +423,13 @@ fn loaded_executor_runtime_tracks_governed_heap_limit() {
     }
     {
         let runtime = loaded
-            .checkout_runtime_for_gas_limit(GAS_LIMIT, LARGE_HEAP_LIMIT)
+            .checkout_runtime_for_gas_limit(GAS_LIMIT, LARGE_HEAP_LIMIT, &executor_test_budget())
             .expect("large heap runtime");
         assert_eq!(runtime.memory.heap_max_limit(), LARGE_HEAP_LIMIT);
     }
     let (after_distinct_limits, _) = loaded.runtime_pool_snapshot();
     let runtime = loaded
-        .checkout_runtime_for_gas_limit(GAS_LIMIT, SMALL_HEAP_LIMIT)
+        .checkout_runtime_for_gas_limit(GAS_LIMIT, SMALL_HEAP_LIMIT, &executor_test_budget())
         .expect("warm small heap runtime");
     assert_eq!(runtime.memory.heap_max_limit(), SMALL_HEAP_LIMIT);
     drop(runtime);
@@ -375,7 +452,11 @@ fn loaded_executor_reuses_and_resets_runtime_after_error_return() {
     });
     fn dirty_then_fail(loaded: &super::LoadedExecutor) -> Result<(), *const u8> {
         let mut runtime = loaded
-            .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE)
+            .checkout_runtime_for_gas_limit(
+                GAS_LIMIT,
+                Memory::HEAP_MAX_SIZE,
+                &executor_test_budget(),
+            )
             .expect("checkout runtime");
         let allocation = runtime
             .memory
@@ -391,12 +472,13 @@ fn loaded_executor_reuses_and_resets_runtime_after_error_return() {
     }
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(generate_ok_program()));
     let loaded = super::LoadedExecutor::load(raw).expect("load");
-    // Keep the bounded validation baseline and its VM within the actual
-    // retention budget instead of retaining the maximum-stack default too.
-    loaded.runtime_pool.lock().unwrap().clear_storage();
     drop(
         loaded
-            .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE)
+            .checkout_runtime_for_gas_limit(
+                GAS_LIMIT,
+                Memory::HEAP_MAX_SIZE,
+                &executor_test_budget(),
+            )
             .expect("warm bounded-stack executor runtime"),
     );
     let (before, _) = loaded.runtime_pool_snapshot();
@@ -413,7 +495,7 @@ fn loaded_executor_reuses_and_resets_runtime_after_error_return() {
         ivm::cache_memory::memory_stats()
     );
     let runtime = loaded
-        .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE)
+        .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE, &executor_test_budget())
         .expect("warm checkout");
     assert_eq!(runtime.register(7), 0);
     assert_eq!(runtime.remaining_gas(), GAS_LIMIT);
@@ -459,7 +541,11 @@ fn loaded_executor_runtime_variants_are_bounded() {
             "test gas limits must resolve to distinct stack variants"
         );
         let runtime = loaded
-            .checkout_runtime_for_gas_limit(gas_limit, Memory::HEAP_MAX_SIZE)
+            .checkout_runtime_for_gas_limit(
+                gas_limit,
+                Memory::HEAP_MAX_SIZE,
+                &executor_test_budget(),
+            )
             .expect("checkout gas/stack variant");
         assert_eq!(runtime.memory.stack_limit(), key.stack_limit);
     }
@@ -668,7 +754,13 @@ fn validate_native_query_with_world(
 ) -> Result<(), ValidationFail> {
     let world_view = world.view();
     executor
-        .validate_query_with_world_parts(&world_view, None, authority, query)
+        .validate_query_with_world_parts(
+            &world_view,
+            None,
+            authority,
+            query,
+            &executor_test_budget(),
+        )
         .map_err(|error| match error {
             crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
             crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
@@ -944,6 +1036,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &orderbook,
+            &executor_test_budget(),
         )
         .expect_err("orderbook state must not be public under the Initial executor");
     assert!(matches!(
@@ -956,6 +1049,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &reserve_events,
+            &executor_test_budget(),
         )
         .expect_err("reserve committed events must remain governance-readable");
     assert!(matches!(
@@ -968,6 +1062,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &reputation_policy,
+            &executor_test_budget(),
         )
         .expect_err("reputation authority policy must remain operator-readable");
     assert!(matches!(
@@ -980,6 +1075,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &reputation_event,
+            &executor_test_budget(),
         )
         .expect("payload-free finalized reputation events must remain public");
     executor
@@ -988,6 +1084,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &own_eligibility,
+            &executor_test_budget(),
         )
         .expect("a juror must be able to read their own eligibility");
     let eligibility_error = executor
@@ -996,6 +1093,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &foreign_eligibility,
+            &executor_test_budget(),
         )
         .expect_err("another juror's eligibility must remain private");
     assert!(matches!(
@@ -1008,6 +1106,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &moderation_snapshot,
+            &executor_test_budget(),
         )
         .expect_err("complete moderation snapshots must remain private");
     assert!(matches!(
@@ -1020,6 +1119,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &moderation_events,
+            &executor_test_budget(),
         )
         .expect("payload-free committed moderation events must remain public");
     state_transaction.world.account_permissions.insert(
@@ -1039,6 +1139,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &orderbook,
+            &executor_test_budget(),
         )
         .expect("pricing operators must be able to read orderbook state");
     executor
@@ -1047,6 +1148,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &reserve_events,
+            &executor_test_budget(),
         )
         .expect("reserve governors must be able to read committed reserve events");
     executor
@@ -1055,6 +1157,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &reputation_policy,
+            &executor_test_budget(),
         )
         .expect("reputation policy managers must be able to read the active authority policy");
     executor
@@ -1063,6 +1166,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block.clone()),
             &ALICE_ID,
             &foreign_eligibility,
+            &executor_test_budget(),
         )
         .expect("moderation managers must be able to read juror eligibility");
     executor
@@ -1071,11 +1175,18 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             Some(latest_block),
             &ALICE_ID,
             &moderation_snapshot,
+            &executor_test_budget(),
         )
         .expect("moderation managers must be able to read complete snapshots");
     let public_query = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
     executor
-        .validate_query_with_world_parts(&state_transaction.world, None, &ALICE_ID, &public_query)
+        .validate_query_with_world_parts(
+            &state_transaction.world,
+            None,
+            &ALICE_ID,
+            &public_query,
+            &executor_test_budget(),
+        )
         .expect("standard public queries must remain available");
 }
 #[test]
@@ -1285,7 +1396,7 @@ fn migrate_fails_on_invalid_bytecode() {
     let mut prog = Vec::new();
     // Start with a fully valid authenticated header so rejection exercises the
     // oversized code section rather than an earlier metadata failure.
-    prog.extend_from_slice(&ivm::ProgramMetadata::default_for(1, 0, 1).encode());
+    prog.extend_from_slice(&ivm::ProgramMetadata::default_for(1, 1, 1).encode());
     // Oversized code
     let heap_start =
         usize::try_from(ivm::Memory::HEAP_START).expect("HEAP_START fits within usize");
@@ -1500,6 +1611,7 @@ fn initial_executor_gates_every_authoritative_sorafs_query_variant() {
                 Some(latest_block.clone()),
                 &ALICE_ID,
                 $query,
+                &executor_test_budget(),
             )
         };
     }
@@ -1534,10 +1646,19 @@ fn initial_executor_gates_every_authoritative_sorafs_query_variant() {
             "{error:?}"
         );
     }
-    for permission in [
-        Permission::from(executor_permission::sorafs::CanSetSorafsPricing),
-        Permission::from(executor_permission::sorafs::CanCompleteSorafsReplicationOrder),
-    ] {
+    // A provider-scoped completion token authorizes completion work, never global inventory.
+    hold_only!(
+        executor_permission::sorafs::CanCompleteSorafsReplicationOrder {
+            provider_id: iroha_data_model::sorafs::capacity::ProviderId::new([0x71; 32]),
+        }
+    );
+    for query in &orderbook_queries {
+        validate!(query)
+            .expect_err("provider-scoped completion must not expose the global orderbook");
+    }
+    for permission in [Permission::from(
+        executor_permission::sorafs::CanSetSorafsPricing,
+    )] {
         hold_only!(permission.clone());
         for query in &orderbook_queries {
             validate!(query).unwrap_or_else(|error| {
@@ -1851,17 +1972,17 @@ fn initial_executor_rejects_malformed_dpn_payloads_even_at_genesis() {
                 .expect("malformed DPN signed genesis rejects");
             assert!(
                 matches!(&error.error,
-                crate::sumeragi::test_chain::TestChainError::OriginalGenesisExecution(error)
-                if matches!(error.as_ref(),
-                    crate::block::BlockValidationError::InvalidGenesis(
-                        crate::block::InvalidGenesisError::RejectedOutput(output)
-                    ) if matches!(output.reason.as_ref(),
-                        iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                            ValidationFail::NotPermitted(reason)
-                        ) if reason.contains(name) && reason.contains("Invalid permission payload")
+                    crate::sumeragi::test_chain::TestChainError::OriginalGenesisExecution(error)
+                    if matches!(error.as_ref(),
+                        crate::block::BlockValidationError::InvalidGenesis(
+                            crate::block::InvalidGenesisError::RejectedOutput(output)
+                        ) if matches!(output.reason.as_ref(),
+                            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                                ValidationFail::NotPermitted(reason)
+                            ) if reason.contains(name) && reason.contains("Invalid permission payload")
+                        )
                     )
-                )
-            ),
+                ),
                 "{name} {payload}: {error:?}"
             );
             let view = error.state.view();
@@ -1905,34 +2026,20 @@ fn executor_cache_test_in_child(name: &str) -> bool {
 }
 
 #[test]
-fn loaded_executor_reclaims_unused_default_for_governed_runtime() {
-    if executor_cache_test_in_child("loaded_executor_reclaims_unused_default_for_governed_runtime")
-    {
+fn loaded_executor_materializes_only_governed_runtime() {
+    if executor_cache_test_in_child("loaded_executor_materializes_only_governed_runtime") {
         return;
     }
     const GAS_LIMIT: u64 = 10_000;
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(generate_ok_program()));
-    let loaded = super::LoadedExecutor::load(raw).expect("load constructor geometry");
-    let defaults = iroha_data_model::parameter::SmartContractParameters::default();
-    let constructor =
-        super::ExecutorRuntimeKey::for_limits(defaults.fuel().get(), defaults.memory().get());
-    let governed = super::ExecutorRuntimeKey::for_limits(GAS_LIMIT, Memory::HEAP_MAX_SIZE);
-    assert_ne!(constructor, governed);
-    assert!(
-        loaded
-            .runtime_pool
-            .lock()
-            .unwrap()
-            .variants
-            .get(&constructor)
-            .unwrap()
-            .available
-            .is_some(),
-        "the original constructor runtime must remain retained for the regression"
+    let loaded = super::LoadedExecutor::load(raw).expect("validate executor without a runtime");
+    assert_eq!(
+        loaded.runtime_pool_snapshot(),
+        (super::ExecutorRuntimePoolStats::default(), 0)
     );
     let limit_before = ivm::cache_memory::memory_stats().limit_bytes;
     let mut runtime = loaded
-        .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE)
+        .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE, &executor_test_budget())
         .unwrap();
     let allocation = runtime.memory.load_region(0, 1).unwrap().as_ptr();
     runtime.set_register(7, 99);
@@ -1940,13 +2047,13 @@ fn loaded_executor_reclaims_unused_default_for_governed_runtime() {
     drop(runtime);
     let (before_reuse, _) = loaded.runtime_pool_snapshot();
     let runtime = loaded
-        .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE)
+        .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE, &executor_test_budget())
         .unwrap();
     let (after_reuse, _) = loaded.runtime_pool_snapshot();
     assert_eq!(
         after_reuse.hits,
         before_reuse.hits + 1,
-        "an unused local default must not force every governed checkout to load cold"
+        "governed checkout must reuse its original funded runtime"
     );
     assert_eq!(after_reuse.program_loads, before_reuse.program_loads);
     assert_eq!(after_reuse.template_builds, before_reuse.template_builds);
@@ -1977,7 +2084,11 @@ fn executor_idle_retention_reclamation_preserves_lru_identity_and_original_owner
     .unwrap();
     loaded.runtime_pool.lock().unwrap().clear_storage();
     for heap in [64, 128] {
-        drop(loaded.checkout_runtime_for_gas_limit(GAS, heap).unwrap());
+        drop(
+            loaded
+                .checkout_runtime_for_gas_limit(GAS, heap, &executor_test_budget())
+                .unwrap(),
+        );
     }
     let first = super::ExecutorRuntimeKey::for_limits(GAS, 64);
     let second = super::ExecutorRuntimeKey::for_limits(GAS, 128);
@@ -2077,7 +2188,11 @@ fn executor_idle_retention_reclamation_rejects_replaced_or_filled_returning_slot
     .unwrap();
     loaded.runtime_pool.lock().unwrap().clear_storage();
     for heap in [64, 256] {
-        drop(loaded.checkout_runtime_for_gas_limit(GAS, heap).unwrap());
+        drop(
+            loaded
+                .checkout_runtime_for_gas_limit(GAS, heap, &executor_test_budget())
+                .unwrap(),
+        );
     }
     let idle_key = super::ExecutorRuntimeKey::for_limits(GAS, 64);
     let competing_idle = super::ExecutorRuntimeKey::for_limits(GAS, 256);
@@ -2202,4 +2317,37 @@ fn native_account_grant_reader_preserves_refusal_and_exact_token_shape() {
         Ok(false),
         "revoking the original role revokes its exact grant"
     );
+}
+
+#[test]
+fn completion_permission_payload_requires_exact_nonzero_provider_scope() {
+    use iroha_data_model::sorafs::capacity::ProviderId;
+    use iroha_executor_data_model::permission::sorafs::CanCompleteSorafsReplicationOrder;
+    let token = CanCompleteSorafsReplicationOrder {
+        provider_id: ProviderId::new([1; 32]),
+    };
+    let exact: Permission = token.into();
+    validate_initial_permission_payload_constraints(&exact).unwrap();
+    let bytes = norito::to_bytes(&exact).unwrap();
+    let decoded = norito::decode_from_bytes::<Permission>(&bytes).unwrap();
+    assert_eq!(decoded, exact);
+    assert_eq!(
+        CanCompleteSorafsReplicationOrder::try_from(&decoded).unwrap(),
+        token
+    );
+    let mut extra = norito::json::to_value(&token).unwrap();
+    extra
+        .as_object_mut()
+        .unwrap()
+        .insert("unrelated".into(), norito::json::Value::Bool(true));
+    for malformed in [
+        Permission::new(exact.name().to_owned(), Json::new(())),
+        Permission::new(exact.name().to_owned(), Json::new(norito::json!({}))),
+        Permission::new(exact.name().to_owned(), Json::new(extra)),
+        Permission::from(CanCompleteSorafsReplicationOrder {
+            provider_id: ProviderId::new([0; 32]),
+        }),
+    ] {
+        assert!(validate_initial_permission_payload_constraints(&malformed).is_err());
+    }
 }

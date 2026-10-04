@@ -61,10 +61,26 @@ KEYMINT_AUTH_TAGS = (KEYMINT_SET_TAGS | KEYMINT_INTEGER_TAGS
                      | KEYMINT_NULL_TAGS | KEYMINT_OCTET_TAGS | {704})
 HARDWARE_ONLY_TAGS = {1, 2, 3, 5, 10, 303, 405, 702, 704}
 ANDROID_APPROVAL_REQUIRED_HARDWARE_TAGS = {1, 2, 3, 5, 10, 702, 704}
+# KeyMint AuthorizationList OS version and patch-level tags. Only their
+# hardware-enforced copies describe the attested device.
+ANDROID_OS_VERSION_TAG = 705
+ANDROID_OS_PATCH_LEVEL_TAG = 706
+ANDROID_VENDOR_PATCH_LEVEL_TAG = 718
+ANDROID_BOOT_PATCH_LEVEL_TAG = 719
 
 
 class AttestationRejected(ValueError):
     """Raw evidence does not match the independently selected scope."""
+
+
+class VerificationUnavailable(AttestationRejected):
+    """A live verification dependency could not answer.
+
+    Raised when Google's revocation status, the Play Integrity decoder or its
+    OAuth token is unavailable. The evidence is not known to be bad. It stays
+    an ``AttestationRejected`` so every generic handler fails closed; issuer
+    routes report it as a retryable ``503 issuer_unavailable``.
+    """
 
 
 def require(condition: bool, message: str) -> None:
@@ -128,6 +144,22 @@ class Selection:
 
 
 @dataclass(frozen=True)
+class AndroidPatchLevels:
+    """Hardware-enforced OS facts of the KeyDescription the verifier selected.
+
+    Values are the exact signed integers (``None`` when the hardware list omits
+    the tag). They describe the device when the key was generated, not a live
+    examination. Software-enforced copies are never read.
+    """
+
+    attestation_version: int
+    os_version: int | None
+    os_patch_level: int | None
+    vendor_patch_level: int | None
+    boot_patch_level: int | None
+
+
+@dataclass(frozen=True)
 class RawPlatformProof:
     """Only checked platform key/app identity; deliberately not an issuance token."""
 
@@ -138,6 +170,68 @@ class RawPlatformProof:
     apple_validation_category: int | None = None
     apple_bundle_version: str | None = None
     android_security_level: int | None = None
+    android_patch_levels: AndroidPatchLevels | None = None
+
+
+def patch_level_yyyymm(value: int) -> int | None:
+    """Normalize a KeyMint patch level (YYYYMM or YYYYMMDD) to YYYYMM.
+
+    Returns ``None`` for any other value. Zero means "not reported" and is
+    handled by the caller.
+    """
+    if type(value) is not int:
+        return None
+    if 19000101 <= value <= 99991231:
+        value //= 100
+    if 190001 <= value <= 999912 and 1 <= value % 100 <= 12:
+        return value
+    return None
+
+
+def validate_android_patch_floor(floor_yyyymm: int) -> int:
+    """Check a configured enrollment patch floor (YYYYMM) and return it.
+
+    A malformed floor is a configuration fault, so this raises rather than
+    letting every device appear to miss the policy.
+    """
+    require(type(floor_yyyymm) is int and patch_level_yyyymm(floor_yyyymm) == floor_yyyymm,
+            "invalid Android patch floor")
+    return floor_yyyymm
+
+
+def android_patch_policy_met(levels: AndroidPatchLevels, floor_yyyymm: int) -> bool:
+    """Whether verified patch levels meet an enrollment floor.
+
+    This is the evidence-record fact ``PATCH_POLICY_MET`` (fact bit 4,
+    ``specs/kagemusha_wallet_wire_v1.md`` §3.1). Android enrollment does not
+    require that bit, so an unmet policy is a recorded fact, not a rejection.
+    The policy is met when the hardware-enforced OS patch level is present and
+    every reported OS, vendor or boot level parses and is at least
+    ``floor_yyyymm``; a vendor or boot level of zero or an absent tag means
+    "not reported". ``levels`` must come from a ``RawPlatformProof`` whose
+    chain verified. Only an invalid floor or levels object raises.
+
+    TODO: carry the floor in the Native-selected Android policy (the Rust
+    hardware-profile owner and ``native_policy_projection.py``) and set the
+    ``PATCH_POLICY_MET`` fact from this predicate when
+    ``ordinary_provider.GovernedOrdinaryEvidenceProvider.prepare_raw`` builds
+    the enrollment evidence record (spec §2.2 "enrollment patch policy").
+    """
+    require(type(levels) is AndroidPatchLevels
+            and all(level is None or type(level) is int
+                    for level in (levels.os_patch_level, levels.vendor_patch_level,
+                                  levels.boot_patch_level)),
+            "verified Android patch levels absent")
+    floor = validate_android_patch_floor(floor_yyyymm)
+    if levels.os_patch_level is None or levels.os_patch_level == 0:
+        return False
+    for level in (levels.os_patch_level, levels.vendor_patch_level, levels.boot_patch_level):
+        if level is None or level == 0:
+            continue
+        normalized = patch_level_yyyymm(level)
+        if normalized is None or normalized < floor:
+            return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -1056,6 +1150,15 @@ def _verify_android_raw(
             and positive_integer(boot[2], 10) == 0 and any(primitive(boot[0], 4))
             and (boot_fields == 3 or len(primitive(boot[3], 4)) == 32
                  and any(primitive(boot[3], 4))), "Android boot state is not locked and verified")
+
+    def hardware_integer(tag: int) -> int | None:
+        return positive_integer(hardware[tag]) if tag in hardware else None
+
+    patch_levels = AndroidPatchLevels(
+        version, hardware_integer(ANDROID_OS_VERSION_TAG),
+        hardware_integer(ANDROID_OS_PATCH_LEVEL_TAG),
+        hardware_integer(ANDROID_VENDOR_PATCH_LEVEL_TAG),
+        hardware_integer(ANDROID_BOOT_PATCH_LEVEL_TAG))
     digest = hashlib.sha256(encode_android_chain(chain_der)).digest()
     return RawPlatformProof(digest, point, device_key_reference(point), "android_keymint",
-                            android_security_level=level)
+                            android_security_level=level, android_patch_levels=patch_levels)

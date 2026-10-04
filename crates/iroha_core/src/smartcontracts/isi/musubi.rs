@@ -41,9 +41,11 @@ use std::collections::{BTreeMap, BTreeSet};
 mod attestation_records;
 use attestation_records::load_location_provider_attestations;
 mod current_providers;
+mod pin_outbox;
 mod replication_binding;
 pub(crate) use current_providers::current_location_providers;
-use replication_binding::validate_replication_order_archive_binding;
+pub(crate) use pin_outbox::{PinOutboxOperationOrigin, capture_pin_outbox_operation_origin};
+pub(crate) use replication_binding::validate_replication_order_archive_binding;
 impl Execute for RegisterMusubiNamespaceBindingV1 {
     fn execute(
         self,
@@ -221,52 +223,6 @@ impl Execute for RegisterMusubiArchiveV1 {
                 Ok(())
             },
         )
-    }
-}
-impl Execute for AdvanceMusubiPinOutboxV1 {
-    fn execute(
-        self,
-        authority: &AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        self.validate()
-            .map_err(|error| invalid_parameter(error.reason()))?;
-        if &self.pin_authority != authority || &self.network_id != state_transaction.network_id() {
-            return Err(invariant(
-                "Musubi pin-outbox advance signer or network mismatch",
-            ));
-        }
-        let transaction_hash = state_transaction
-            .current_tx_hash
-            .as_ref()
-            .map(|hash| *hash.as_ref())
-            .ok_or_else(|| invariant("Musubi pin-outbox advance requires a signed transaction"))?;
-        let current = state_transaction
-            .world
-            .musubi_pin_outbox_high_waters
-            .get(authority);
-        match current {
-            None if self.expected_revision == 0 => {}
-            Some(record)
-                if record.network_id == self.network_id
-                    && record.pin_authority == *authority
-                    && record.session_id == self.session_id
-                    && record.revision == self.expected_revision
-                    && record.inventory_digest == self.expected_inventory_digest => {}
-            _ => {
-                return Err(invariant(
-                    "Musubi pin-outbox predecessor is stale or substituted",
-                ));
-            }
-        }
-        let record = self
-            .recorded_high_water(execution_height(state_transaction), transaction_hash)
-            .map_err(|error| invalid_parameter(error.reason()))?;
-        state_transaction
-            .world
-            .musubi_pin_outbox_high_waters
-            .insert(authority.clone(), record);
-        Ok(())
     }
 }
 impl Execute for RegisterMusubiProviderBundleAttestationV1 {
@@ -2476,7 +2432,7 @@ fn ensure_package_capability(
         )))
     }
 }
-fn ensure_archive_manager(
+pub(crate) fn ensure_archive_manager(
     archive: &MusubiArchiveRecordV1,
     authority: &AccountId,
     world: &impl WorldReadOnly,
@@ -3030,10 +2986,10 @@ fn retire_location_reverse_indices(
     }
     Ok(())
 }
-fn validate_provider_bundle_attestation(
+pub(crate) fn validate_provider_bundle_attestation(
     archive: &MusubiArchiveRecordV1,
     attestation: &MusubiProviderBundleVerificationAttestationV1,
-    state_transaction: &StateTransaction<'_, '_>,
+    state_transaction: &impl StateReadOnly,
 ) -> Result<(), Error> {
     attestation
         .validate()
@@ -3046,16 +3002,16 @@ fn validate_provider_bundle_attestation(
     )
     .map_err(|error| invariant(error.reason()))?;
     let order = state_transaction
-        .world
-        .replication_orders
+        .world()
+        .replication_orders()
         .get(&binding.replication_order)
         .ok_or_else(|| invariant("Musubi provider attestation replication order was not found"))?;
     let completion = order
         .provider_completion(binding.provider_id)
         .ok_or_else(|| invariant("Musubi provider attestation has no finalized completion"))?;
     let current_owner = state_transaction
-        .world
-        .provider_owners
+        .world()
+        .provider_owners()
         .get(&binding.provider_id)
         .ok_or_else(|| invariant("Musubi provider attestation owner is no longer admitted"))?;
     let anchor_index = binding
@@ -3072,7 +3028,7 @@ fn validate_provider_bundle_attestation(
     if binding.network_id != *state_transaction.network_id()
         || order.order_id != binding.replication_order
         || order.manifest_root_cid != archive.commitment.root_cid
-        || current_owner != &completion.completed_by
+        || completion.completed_by != completion.completion_authority.completion_signer
         || current_owner != &completion.completion_authority.provider_owner
         || binding.completed_by != completion.completed_by
         || binding.completion_authority != completion.completion_authority
@@ -4338,4 +4294,5 @@ mod tests {
     include!("musubi/replication_binding_tests.rs");
     include!("musubi/governance_tests.rs");
     include!("musubi/pin_outbox_high_water_tests.rs");
+    include!("musubi/initial_publication_admission_tests.rs");
 }

@@ -880,6 +880,7 @@ mod tests {
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "runtime-scope-chain".to_owned(),
             network_id: crate::runtime_provider_registry::runtime_provider_test_network_id(),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings,
         }
     }

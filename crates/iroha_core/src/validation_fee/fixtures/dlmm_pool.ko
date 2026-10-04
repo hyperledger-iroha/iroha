@@ -682,21 +682,58 @@ seiyaku DlmmPool {
         return payout_base + payout_quote;
     }
 
-    fn swap_base_for_quote(
+    // The two private directions share traversal/custody logic while keeping
+    // their inverse price operations and exact floor/ceil policies explicit.
+    fn swap_output_from_gross(
+        quantity gross,
+        int fee_pips,
+        decimal price,
+        int output_scale,
+        int base_input,
+    ) -> quantity {
+        let net = fee_adjusted_amount(amount_in: gross, fee_pips: fee_pips);
+        if base_input == 1 {
+            return net.mul_div_round(
+                multiplier: price,
+                divisor: 1.0,
+                scale: output_scale,
+                mode: Rounding::floor,
+            );
+        }
+        return net.div_round(divisor: price, scale: output_scale, mode: Rounding::floor);
+    }
+
+    fn swap_net_for_available(quantity available, decimal price, int base_input) -> quantity {
+        if base_input == 1 {
+            return available.div_round(divisor: price, scale: 28, mode: Rounding::ceil);
+        }
+        return available.mul_div_round(
+            multiplier: price,
+            divisor: 1.0,
+            scale: 28,
+            mode: Rounding::ceil,
+        );
+    }
+
+    fn swap_direction(
         AccountId trader,
         AccountId recipient,
         quantity amount_in,
         quantity min_out,
         int require_full_fill,
+        int base_input,
     ) -> quantity {
-        let input_scale = asset_scale(BaseAsset);
-        let output_scale = asset_scale(QuoteAsset);
+        let input_asset = base_input == 1 ? BaseAsset : QuoteAsset;
+        let input_scale = asset_scale(input_asset);
+        let output_asset = base_input == 1 ? QuoteAsset : BaseAsset;
+        let output_scale = asset_scale(output_asset);
         require(
             floor_asset_amount(amount: amount_in, scale: input_scale) == amount_in,
             DlmmPoolError::InvalidAmount,
         );
         let fee_pips = FeePips;
-        let start_bin = find_quote_liquidity_from_active();
+        let start_bin = base_input == 1 ? find_quote_liquidity_from_active() : find_base_liquidity_from_active(
+        );
         let start_price = bin_price(bin_id: start_bin, bin_step: BinStep);
         var current_bin = start_bin;
         var amount_remaining = amount_in;
@@ -714,32 +751,35 @@ seiyaku DlmmPool {
             }
             let reserve_base = bin_reserve_base_value(current_bin);
             let reserve_quote = bin_reserve_quote_value(current_bin);
-            let available_quote = (reserve_quote > MinReserveQuote) ? reserve_quote - MinReserveQuote : zero_quantity(
-            );
+            let reserve_in = base_input == 1 ? reserve_base : reserve_quote;
+            let reserve_out = base_input == 1 ? reserve_quote : reserve_base;
+            let floor_out = base_input == 1 ? MinReserveQuote : MinReserveBase;
+            let available = reserve_out > floor_out ? reserve_out - floor_out : zero_quantity();
             var gross_limit = amount_remaining;
             if BinLiquidityCap > zero_quantity() {
-                if reserve_base >= BinLiquidityCap {
+                if reserve_in >= BinLiquidityCap {
                     gross_limit = zero_quantity();
                 } else {
                     gross_limit = min_quantity(
                         left: gross_limit,
-                        right: BinLiquidityCap - reserve_base,
+                        right: BinLiquidityCap - reserve_in,
                     );
                 }
             }
             gross_limit = floor_asset_amount(amount: gross_limit, scale: input_scale);
             var gross_used = gross_limit;
-            var output = fee_adjusted_amount(amount_in: gross_limit, fee_pips: fee_pips).mul_div_round(
-                multiplier: price,
-                divisor: 1.0,
-                scale: output_scale,
-                mode: Rounding::floor,
+            var output = swap_output_from_gross(
+                gross: gross_limit,
+                fee_pips: fee_pips,
+                price: price,
+                output_scale: output_scale,
+                base_input: base_input,
             );
-            if output > available_quote && available_quote > zero_quantity() {
-                let net_needed = available_quote.div_round(
-                    divisor: price,
-                    scale: 28,
-                    mode: Rounding::ceil,
+            if output > available && available > zero_quantity() {
+                let net_needed = swap_net_for_available(
+                    available: available,
+                    price: price,
+                    base_input: base_input,
                 );
                 gross_used = min_quantity(
                     left: gross_limit,
@@ -748,42 +788,63 @@ seiyaku DlmmPool {
                         scale: input_scale,
                     ),
                 );
-                output = fee_adjusted_amount(amount_in: gross_used, fee_pips: fee_pips).mul_div_round(
-                    multiplier: price,
-                    divisor: 1.0,
-                    scale: output_scale,
-                    mode: Rounding::floor,
+                output = swap_output_from_gross(
+                    gross: gross_used,
+                    fee_pips: fee_pips,
+                    price: price,
+                    output_scale: output_scale,
+                    base_input: base_input,
                 );
-                if output > available_quote {
-                    output = available_quote;
+                if output > available {
+                    output = available;
                 }
             }
             // Reserve deltas exactly equal ledger-payable quantities. Fractional
             // execution dust stays with liquidity and is never transferred or credited.
             output = floor_asset_amount(
-                amount: min_quantity(left: output, right: available_quote),
+                amount: min_quantity(left: output, right: available),
                 scale: output_scale,
             );
             if gross_used > zero_quantity() && output > zero_quantity() {
-                BinReserveBase[current_bin] = reserve_base + gross_used;
-                BinReserveQuote[current_bin] = reserve_quote - output;
-                credit_bin_fee_growth_base(
-                    bin_id: current_bin,
-                    fee_paid: fee_paid_amount(amount_in: gross_used, fee_pips: fee_pips),
-                );
+                if base_input == 1 {
+                    BinReserveBase[current_bin] = reserve_base + gross_used;
+                    BinReserveQuote[current_bin] = reserve_quote - output;
+                    credit_bin_fee_growth_base(
+                        bin_id: current_bin,
+                        fee_paid: fee_paid_amount(amount_in: gross_used, fee_pips: fee_pips),
+                    );
+                } else {
+                    BinReserveQuote[current_bin] = reserve_quote + gross_used;
+                    BinReserveBase[current_bin] = reserve_base - output;
+                    credit_bin_fee_growth_quote(
+                        bin_id: current_bin,
+                        fee_paid: fee_paid_amount(amount_in: gross_used, fee_pips: fee_pips),
+                    );
+                }
                 amount_remaining = amount_remaining - gross_used;
                 amount_used = amount_used + gross_used;
                 amount_out = amount_out + output;
             }
             bins_visited = bins_visited + 1;
             if amount_remaining > zero_quantity() {
-                if NextIndexedBin.contains(current_bin) {
-                    let next = NextIndexedBin.get(current_bin).unwrap_or(current_bin);
-                    require(next > current_bin, DlmmPoolError::BinIndexCorrupt);
-                    current_bin = next;
-                    ActiveBin = next;
+                if base_input == 1 {
+                    if NextIndexedBin.contains(current_bin) {
+                        let next = NextIndexedBin.get(current_bin).unwrap_or(current_bin);
+                        require(next > current_bin, DlmmPoolError::BinIndexCorrupt);
+                        current_bin = next;
+                        ActiveBin = next;
+                    } else {
+                        break;
+                    }
                 } else {
-                    break;
+                    if PreviousIndexedBin.contains(current_bin) {
+                        let previous = PreviousIndexedBin.get(current_bin).unwrap_or(current_bin);
+                        require(previous < current_bin, DlmmPoolError::BinIndexCorrupt);
+                        current_bin = previous;
+                        ActiveBin = previous;
+                    } else {
+                        break;
+                    }
                 }
             } else {
                 ActiveBin = current_bin;
@@ -797,16 +858,33 @@ seiyaku DlmmPool {
         move_asset_if_needed(
             source: trader,
             destination: VaultAccount,
-            asset: BaseAsset,
+            asset: input_asset,
             amount: amount_used,
         );
         move_asset_if_needed(
             source: VaultAccount,
             destination: recipient,
-            asset: QuoteAsset,
+            asset: output_asset,
             amount: amount_out,
         );
         return amount_out;
+    }
+
+    fn swap_base_for_quote(
+        AccountId trader,
+        AccountId recipient,
+        quantity amount_in,
+        quantity min_out,
+        int require_full_fill,
+    ) -> quantity {
+        return swap_direction(
+            trader: trader,
+            recipient: recipient,
+            amount_in: amount_in,
+            min_out: min_out,
+            require_full_fill: require_full_fill,
+            base_input: 1,
+        );
     }
 
     fn swap_quote_for_base(
@@ -816,123 +894,14 @@ seiyaku DlmmPool {
         quantity min_out,
         int require_full_fill,
     ) -> quantity {
-        let input_scale = asset_scale(QuoteAsset);
-        let output_scale = asset_scale(BaseAsset);
-        require(
-            floor_asset_amount(amount: amount_in, scale: input_scale) == amount_in,
-            DlmmPoolError::InvalidAmount,
+        return swap_direction(
+            trader: trader,
+            recipient: recipient,
+            amount_in: amount_in,
+            min_out: min_out,
+            require_full_fill: require_full_fill,
+            base_input: 0,
         );
-        let fee_pips = FeePips;
-        let start_bin = find_base_liquidity_from_active();
-        let start_price = bin_price(bin_id: start_bin, bin_step: BinStep);
-        var current_bin = start_bin;
-        var amount_remaining = amount_in;
-        var amount_used = zero_quantity();
-        var amount_out = zero_quantity();
-        var bins_visited = 0;
-        for _index_step in range(64) {
-            if amount_remaining == zero_quantity() || bins_visited >= MaxBinsPerSwap {
-                break;
-            }
-            require(BinIndexed.contains(current_bin), DlmmPoolError::BinIndexCorrupt);
-            let price = bin_price(bin_id: current_bin, bin_step: BinStep);
-            if ImpactCapBps > 0 && price_impact_bps(start_price: start_price, current_price: price) > ImpactCapBps {
-                break;
-            }
-            let reserve_base = bin_reserve_base_value(current_bin);
-            let reserve_quote = bin_reserve_quote_value(current_bin);
-            let available_base = (reserve_base > MinReserveBase) ? reserve_base - MinReserveBase : zero_quantity(
-            );
-            var gross_limit = amount_remaining;
-            if BinLiquidityCap > zero_quantity() {
-                if reserve_quote >= BinLiquidityCap {
-                    gross_limit = zero_quantity();
-                } else {
-                    gross_limit = min_quantity(
-                        left: gross_limit,
-                        right: BinLiquidityCap - reserve_quote,
-                    );
-                }
-            }
-            gross_limit = floor_asset_amount(amount: gross_limit, scale: input_scale);
-            var gross_used = gross_limit;
-            var output = fee_adjusted_amount(amount_in: gross_limit, fee_pips: fee_pips).div_round(
-                divisor: price,
-                scale: output_scale,
-                mode: Rounding::floor,
-            );
-            if output > available_base && available_base > zero_quantity() {
-                let net_needed = available_base.mul_div_round(
-                    multiplier: price,
-                    divisor: 1.0,
-                    scale: 28,
-                    mode: Rounding::ceil,
-                );
-                gross_used = min_quantity(
-                    left: gross_limit,
-                    right: ceil_asset_amount(
-                        amount: gross_from_net(net_amount: net_needed, fee_pips: fee_pips),
-                        scale: input_scale,
-                    ),
-                );
-                output = fee_adjusted_amount(amount_in: gross_used, fee_pips: fee_pips).div_round(
-                    divisor: price,
-                    scale: output_scale,
-                    mode: Rounding::floor,
-                );
-                if output > available_base {
-                    output = available_base;
-                }
-            }
-            // Reserve deltas exactly equal ledger-payable quantities. Fractional
-            // execution dust stays with liquidity and is never transferred or credited.
-            output = floor_asset_amount(
-                amount: min_quantity(left: output, right: available_base),
-                scale: output_scale,
-            );
-            if gross_used > zero_quantity() && output > zero_quantity() {
-                BinReserveQuote[current_bin] = reserve_quote + gross_used;
-                BinReserveBase[current_bin] = reserve_base - output;
-                credit_bin_fee_growth_quote(
-                    bin_id: current_bin,
-                    fee_paid: fee_paid_amount(amount_in: gross_used, fee_pips: fee_pips),
-                );
-                amount_remaining = amount_remaining - gross_used;
-                amount_used = amount_used + gross_used;
-                amount_out = amount_out + output;
-            }
-            bins_visited = bins_visited + 1;
-            if amount_remaining > zero_quantity() {
-                if PreviousIndexedBin.contains(current_bin) {
-                    let previous = PreviousIndexedBin.get(current_bin).unwrap_or(current_bin);
-                    require(previous < current_bin, DlmmPoolError::BinIndexCorrupt);
-                    current_bin = previous;
-                    ActiveBin = previous;
-                } else {
-                    break;
-                }
-            } else {
-                ActiveBin = current_bin;
-            }
-        }
-        require(amount_used > zero_quantity(), DlmmPoolError::InsufficientInputUsed);
-        if require_full_fill == 1 {
-            require(amount_used == amount_in, DlmmPoolError::PartialFill);
-        }
-        require(amount_out >= min_out, DlmmPoolError::Slippage);
-        move_asset_if_needed(
-            source: trader,
-            destination: VaultAccount,
-            asset: QuoteAsset,
-            amount: amount_used,
-        );
-        move_asset_if_needed(
-            source: VaultAccount,
-            destination: recipient,
-            asset: BaseAsset,
-            amount: amount_out,
-        );
-        return amount_out;
     }
 
     fn swap_exact_in_impl(

@@ -14,7 +14,13 @@ use std::{
     time::Instant,
 };
 
+mod activation;
+mod maintenance;
+mod owned;
+mod progress;
 mod readiness;
+mod renewal;
+use owned::PeerProcesses;
 
 /// Run the long-lived private localnet worker inside the installed Kagami executable.
 ///
@@ -63,43 +69,83 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
         failure: None,
     };
     publish(&directory, &status)?;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let progress = Arc::new(progress::Progress::default());
+    let mut budget = Arc::new(activation::Budget {
+        started,
+        timeout: startup_timeout,
+        utc_ceiling_unix_ms: None,
+        cancelled: Arc::clone(&cancelled),
+        progress: Arc::clone(&progress),
+    });
+    let prepared = retained.prepared.clone();
     let mut processes = PeerProcesses::default();
-    if processes.start(&directory, &retained, &ownership).is_err() {
-        processes.stop()?;
-        status.phase = ManagedPhase::Failed;
-        status.failure = Some("a validator could not start; inspect its retained logs".into());
-        publish(&directory, &status)?;
-        return Err(Error::Invalid(status.failure.unwrap_or_default()));
+    let _cancel_on_exit = CancelOnExit(Arc::clone(&cancelled));
+    let activation::Startup {
+        launch,
+        authorization,
+    } = match activation::prepare(&prepared, &budget) {
+        Ok(startup) => startup,
+        Err(failure) => {
+            return fail_worker(&directory, &mut status, &mut processes, &cancelled, failure);
+        }
+    };
+    if processes
+        .start(&directory, &retained, &ownership, launch)
+        .is_err()
+    {
+        return fail_worker(
+            &directory,
+            &mut status,
+            &mut processes,
+            &cancelled,
+            progress.unconfirmed(),
+        );
     }
     status.running_peers = processes.children.len();
-    if let Err(error) = startup_remaining(started, startup_timeout) {
-        processes.stop()?;
-        status.phase = ManagedPhase::Failed;
-        status.running_peers = 0;
-        status.failure = Some("startup deadline expired before readiness".into());
-        publish(&directory, &status)?;
-        return Err(error);
-    }
-    let cancelled = Arc::new(AtomicBool::new(false));
-    let readiness_cancelled = Arc::clone(&cancelled);
-    let prepared = retained.prepared.clone();
-    let readiness_prepared = prepared.clone();
-    let progress = Arc::new(readiness::Progress::default());
-    let readiness_progress = Arc::clone(&progress);
-    let (sender, receiver) = mpsc::sync_channel(1);
+    let generated = match processes.generated() {
+        Ok(generated) => generated,
+        Err(_) => {
+            return fail_worker(
+                &directory,
+                &mut status,
+                &mut processes,
+                &cancelled,
+                progress.unconfirmed(),
+            );
+        }
+    };
+    let background_prepared = prepared.clone();
+    let background_budget = Arc::clone(&budget);
+    let (sender, mut receiver) = mpsc::sync_channel(1);
     thread::spawn(move || {
-        let result = readiness::prove(
-            &readiness_prepared,
-            started,
-            startup_timeout,
-            &readiness_cancelled,
-            &readiness_progress,
+        let result = activation::initial(
+            &background_prepared,
+            &background_budget,
+            generated,
+            authorization,
         );
         let _ = sender.send(result);
     });
+    let mut service_expiry: Option<maintenance::Observation> = None;
+    let mut refresh: Option<
+        mpsc::Receiver<std::result::Result<maintenance::Observation, progress::Failure>>,
+    > = None;
     let mut attachment: Option<remote::AttachmentWorker> = None;
     let mut attachment_attempted = false;
     loop {
+        if service_expiry
+            .as_ref()
+            .is_some_and(|expiry| !expiry.current().unwrap_or(false))
+        {
+            return fail_worker(
+                &directory,
+                &mut status,
+                &mut processes,
+                &cancelled,
+                progress::Failure::ObservationExpired,
+            );
+        }
         if let Some(mut connection) = listener.accept()? {
             if let Ok(request) = connection.receive()
                 && same_token(&request.token, &worker.token)
@@ -200,19 +246,187 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
         if status.phase == ManagedPhase::Starting {
             // Deadline wins over a proof queued just before the worker observed it. Never
             // publish a transient Ready after the original startup budget was exhausted.
-            let result = observe_readiness(&receiver, &progress, started, startup_timeout);
-            if let Some(Err(failure)) = result {
-                cancelled.store(true, Ordering::Release);
-                processes.stop()?;
-                status.phase = ManagedPhase::Failed;
-                status.running_peers = 0;
-                status.failure = Some(failure.message());
-                publish(&directory, &status)?;
-                return Err(Error::Invalid(status.failure.unwrap_or_default()));
+            let result = match budget.check() {
+                Err(failure) => Some(Err(failure)),
+                Ok(_) => {
+                    observe_readiness(&receiver, &budget.progress, budget.started, budget.timeout)
+                }
+            };
+            match result {
+                Some(Err(failure)) => {
+                    return fail_worker(
+                        &directory,
+                        &mut status,
+                        &mut processes,
+                        &cancelled,
+                        failure,
+                    );
+                }
+                Some(Ok(activation::Outcome::Restart(restart))) => {
+                    let next = (|| {
+                        let (launch, recheck) = restart.into_launch(&prepared, &budget)?;
+                        // Old HTTP guards become inactive before any owned child is signalled.
+                        processes.stop().map_err(|_| progress.unconfirmed())?;
+                        budget.check()?;
+                        processes
+                            .start(&directory, &retained, &ownership, Some(launch))
+                            .map_err(|_| progress.unconfirmed())?;
+                        budget.check()?;
+                        let live = processes.gateways().map_err(|_| progress.unconfirmed())?;
+                        status.running_peers = processes.children.len();
+                        let selected = prepared.clone();
+                        let background_budget = Arc::clone(&budget);
+                        let (sender, receiver) = mpsc::sync_channel(1);
+                        thread::spawn(move || {
+                            let _ =
+                                sender.send(recheck.finish(&selected, live, &background_budget));
+                        });
+                        Ok::<_, progress::Failure>(receiver)
+                    })();
+                    match next {
+                        Ok(next) => receiver = next,
+                        Err(failure) => {
+                            return fail_worker(
+                                &directory,
+                                &mut status,
+                                &mut processes,
+                                &cancelled,
+                                failure,
+                            );
+                        }
+                    }
+                }
+                Some(Ok(activation::Outcome::Complete(expiry))) => {
+                    service_expiry = expiry;
+                    if service_expiry
+                        .as_ref()
+                        .is_some_and(|expiry| !expiry.current().unwrap_or(false))
+                    {
+                        return fail_worker(
+                            &directory,
+                            &mut status,
+                            &mut processes,
+                            &cancelled,
+                            progress::Failure::ObservationExpired,
+                        );
+                    }
+                    // Successful handoffs are checked against the original deadline again above.
+                    status.phase = ManagedPhase::Ready;
+                    publish(&directory, &status)?;
+                }
+                None => {}
             }
-            if let Some(Ok(())) = result {
-                status.phase = ManagedPhase::Ready;
-                publish(&directory, &status)?;
+        }
+        if status.phase == ManagedPhase::Ready
+            && let Some(observation) = service_expiry.as_mut()
+        {
+            let result = refresh
+                .as_ref()
+                .and_then(|receiver| match receiver.try_recv() {
+                    Ok(result) => Some(result),
+                    Err(mpsc::TryRecvError::Empty) => None,
+                    Err(mpsc::TryRecvError::Disconnected) => Some(Err(progress.unconfirmed())),
+                });
+            if let Some(result) = result {
+                refresh = None;
+                // The old observation wins over queued success; a slow refresh cannot bridge
+                // an interval in which the worker had no current authenticated observation.
+                if !observation.current().unwrap_or(false) {
+                    return fail_worker(
+                        &directory,
+                        &mut status,
+                        &mut processes,
+                        &cancelled,
+                        progress::Failure::ObservationExpired,
+                    );
+                }
+                match result {
+                    Ok(next) if next.current().unwrap_or(false) => *observation = next,
+                    _ => {
+                        if observation.retry().is_err() {
+                            return fail_worker(
+                                &directory,
+                                &mut status,
+                                &mut processes,
+                                &cancelled,
+                                progress::Failure::ObservationExpired,
+                            );
+                        }
+                    }
+                }
+            }
+            if refresh.is_none() && observation.due().unwrap_or(true) {
+                let next = (|| -> Result<_> {
+                    let (selection, turn) = observation.begin(Arc::clone(&cancelled))?;
+                    let live = processes.gateway(selection.provider())?;
+                    let selected = prepared.clone();
+                    let (sender, receiver) = mpsc::sync_channel(1);
+                    thread::spawn(move || {
+                        let _ =
+                            sender.send(maintenance::refresh(&selected, selection, live, &turn));
+                    });
+                    Ok(receiver)
+                })();
+                match next {
+                    Ok(receiver) => refresh = Some(receiver),
+                    Err(_) => {
+                        if observation.retry().is_err() {
+                            return fail_worker(
+                                &directory,
+                                &mut status,
+                                &mut processes,
+                                &cancelled,
+                                progress::Failure::ObservationExpired,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        if status.phase == ManagedPhase::Ready && refresh.is_none() {
+            let turn = service_expiry
+                .as_ref()
+                .map(|observation| {
+                    observation.renewal(Arc::clone(&cancelled), Arc::clone(&progress))
+                })
+                .transpose();
+            match turn {
+                Ok(Some(Some(turn))) => {
+                    let live = match processes.gateway(turn.provider()) {
+                        Ok(live) => live,
+                        Err(_) => {
+                            return fail_worker(
+                                &directory,
+                                &mut status,
+                                &mut processes,
+                                &cancelled,
+                                progress.unconfirmed(),
+                            );
+                        }
+                    };
+                    // Withdraw Ready durably before the background owner can mutate custody.
+                    // No stale observation survives across a native enrollment head change.
+                    status.phase = ManagedPhase::Starting;
+                    publish(&directory, &status)?;
+                    service_expiry = None;
+                    budget = Arc::clone(&turn.budget);
+                    let selected = prepared.clone();
+                    let (sender, next) = mpsc::sync_channel(1);
+                    thread::spawn(move || {
+                        let _ = sender.send(renewal::advance(&selected, turn, live));
+                    });
+                    receiver = next;
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    return fail_worker(
+                        &directory,
+                        &mut status,
+                        &mut processes,
+                        &cancelled,
+                        progress::Failure::ObservationExpired,
+                    );
+                }
             }
         }
         if status.phase == ManagedPhase::Ready && !attachment_attempted {
@@ -233,18 +447,18 @@ fn publish(directory: &PrivateDirectory, status: &ManagedStatus) -> Result<()> {
     Ok(())
 }
 
-fn expire_startup_status(status: &mut ManagedStatus, failure: readiness::Failure) {
+fn expire_startup_status(status: &mut ManagedStatus, failure: progress::Failure) {
     status.phase = ManagedPhase::Failed;
     status.running_peers = 0;
     status.failure = Some(failure.message());
 }
 
-fn observe_readiness(
-    receiver: &mpsc::Receiver<std::result::Result<(), readiness::Failure>>,
-    progress: &readiness::Progress,
+fn observe_readiness<T>(
+    receiver: &mpsc::Receiver<std::result::Result<T, progress::Failure>>,
+    progress: &progress::Progress,
     started: Instant,
     timeout: Duration,
-) -> Option<std::result::Result<(), readiness::Failure>> {
+) -> Option<std::result::Result<T, progress::Failure>> {
     let observed = match receiver.try_recv() {
         Ok(result) => Some(result),
         Err(mpsc::TryRecvError::Disconnected) => Some(Err(progress.unconfirmed())),
@@ -265,121 +479,6 @@ fn same_token(left: &str, right: &str) -> bool {
             .zip(right.bytes())
             .fold(0_u8, |difference, (a, b)| difference | (a ^ b))
             == 0
-}
-
-#[derive(Default)]
-struct PeerProcesses {
-    children: Vec<Child>,
-    launch_argv: Vec<Vec<String>>,
-    launch_snapshot: Option<startup_receipt::LaunchSnapshot>,
-}
-
-impl PeerProcesses {
-    fn start(
-        &mut self,
-        directory: &PrivateDirectory,
-        retained: &RetainedLocalnet,
-        ownership: &File,
-    ) -> Result<()> {
-        if matches!(retained.root_kind, RootKind::Private { .. }) {
-            // Select every original before any child can start. A descriptor stays owned until
-            // that child's cleanup; the daemon hashes and parses exactly the selected bytes.
-            self.launch_snapshot = Some(startup_receipt::LaunchSnapshot::retain(
-                directory, retained,
-            )?);
-        }
-        for (index, peer) in retained.prepared.peers.iter().enumerate() {
-            let log = directory.open_append(&peer.log_name)?;
-            let config_digest = self
-                .launch_snapshot
-                .as_ref()
-                .map(|launch| launch.config(index).map(|config| config.blake3.as_str()))
-                .transpose()?;
-            let mut command = daemon_command(
-                &retained.daemon.path,
-                &peer.config_path,
-                &retained.root_kind,
-                config_digest,
-            )?;
-            command
-                .stdin(Stdio::from(ownership.try_clone()?))
-                .stdout(log.try_clone()?)
-                .stderr(log);
-            let child = spawn_with_launch_fence(directory, index, &mut command)?;
-            self.children.push(child);
-            let argv = command_argv(&command)?;
-            self.launch_argv.push(argv);
-            if let Some(launch) = &self.launch_snapshot {
-                launch.config(index)?;
-            }
-        }
-        if let Some(launch) = &self.launch_snapshot {
-            launch.validate()?;
-        }
-        Ok(())
-    }
-
-    fn any_exited(&mut self) -> Result<bool> {
-        for child in &mut self.children {
-            if child.try_wait()?.is_some() {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    fn live_children(&mut self) -> Result<Vec<(u32, Vec<String>)>> {
-        if self.children.len() != 4 || self.launch_argv.len() != 4 || self.any_exited()? {
-            return Err(Error::Invalid(
-                "startup receipt requires four live owned child handles".into(),
-            ));
-        }
-        Ok(self
-            .children
-            .iter()
-            .zip(&self.launch_argv)
-            .map(|(child, argv)| (child.id(), argv.clone()))
-            .collect())
-    }
-
-    fn stop(&mut self) -> Result<()> {
-        // Only this owner's unreaped Child handles are eligible for signalling. No persisted PID
-        // is ever used. Send all graceful requests before sharing a single bounded grace period.
-        for child in &mut self.children {
-            if child.try_wait()?.is_some() {
-                continue;
-            }
-            #[cfg(unix)]
-            if let Some(pid) = rustix::process::Pid::from_raw(child.id() as i32) {
-                let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
-            }
-            #[cfg(not(unix))]
-            child.kill()?;
-        }
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            let mut remaining = false;
-            for child in &mut self.children {
-                if child.try_wait()?.is_none() {
-                    remaining = true;
-                }
-            }
-            if !remaining || Instant::now() >= deadline {
-                break;
-            }
-            thread::sleep(POLL);
-        }
-        for child in &mut self.children {
-            if child.try_wait()?.is_none() {
-                child.kill()?;
-            }
-            child.wait()?;
-        }
-        self.children.clear();
-        self.launch_argv.clear();
-        self.launch_snapshot = None;
-        Ok(())
-    }
 }
 
 pub(super) fn daemon_command(
@@ -429,28 +528,43 @@ pub(super) fn command_argv(command: &Command) -> Result<Vec<String>> {
         .collect()
 }
 
+fn retained_launch_directory(directory: &PrivateDirectory) -> Result<PrivateDirectory> {
+    let generation = directory.open_child(generation::DIRECTORY)?;
+    // Refuse incomplete published custody before any peer can start. The per-peer transition
+    // below rereads through this same original directory authority before changing its fence.
+    for index in 0..4 {
+        read_launch_fence(&generation, index)?;
+    }
+    Ok(generation)
+}
+
+fn read_launch_fence(directory: &PrivateDirectory, index: usize) -> Result<bool> {
+    if index >= 4 {
+        return Err(Error::Invalid("managed peer index is out of bounds".into()));
+    }
+    let marker = format!("peer{index}.launch");
+    match directory.read(&marker, 1) {
+        Ok(bytes) if bytes.as_slice() == b"1" => Ok(false),
+        Ok(bytes) if bytes.as_slice() == b"0" => Ok(true),
+        Ok(_) => Err(Error::Invalid("invalid retained key launch marker".into())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(Error::Invalid(
+            "published generation is missing its retained key launch marker".into(),
+        )),
+        Err(error) => Err(error.into()),
+    }
+}
+
 fn spawn_with_launch_fence(
     directory: &PrivateDirectory,
     index: usize,
     command: &mut Command,
 ) -> Result<Child> {
     let marker = format!("peer{index}.launch");
-    let fresh = match directory.read(&marker, 1) {
-        Ok(bytes) if bytes.as_slice() == b"1" => false,
-        Ok(bytes) if bytes.as_slice() == b"0" => {
-            directory.write_atomic(&marker, b"1", PublishMode::Replace)?;
-            true
-        }
-        Ok(_) => return Err(Error::Invalid("invalid retained key launch marker".into())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            // Persist before exec. A lost controller must never repeat the assertion for keys
-            // that might have signed. Only a definite spawn failure below can undo this fence.
-            directory.write_atomic(&marker, b"1", PublishMode::CreateNew)?;
-            true
-        }
-        Err(error) => return Err(error.into()),
-    };
+    let fresh = read_launch_fence(directory, index)?;
     if fresh {
+        // Persist before exec. A lost controller must never repeat the assertion for keys
+        // that might have signed. Only a definite spawn failure below can undo this fence.
+        directory.write_atomic(&marker, b"1", PublishMode::Replace)?;
         command.arg("--sumeragi-assert-fresh-key");
     }
     match command.spawn() {
@@ -464,10 +578,26 @@ fn spawn_with_launch_fence(
     }
 }
 
-impl Drop for PeerProcesses {
+/// Any early error also cancels background work before owned children are dropped.
+struct CancelOnExit(Arc<AtomicBool>);
+impl Drop for CancelOnExit {
     fn drop(&mut self) {
-        let _ = self.stop();
+        self.0.store(true, Ordering::Release);
     }
+}
+
+fn fail_worker(
+    directory: &PrivateDirectory,
+    status: &mut ManagedStatus,
+    processes: &mut PeerProcesses,
+    cancelled: &AtomicBool,
+    failure: progress::Failure,
+) -> Result<()> {
+    cancelled.store(true, Ordering::Release);
+    processes.stop()?;
+    expire_startup_status(status, failure);
+    publish(directory, status)?;
+    Err(Error::Invalid(failure.message()))
 }
 
 /// Charge every startup phase to the same finite budget, including custody and binary checks.
@@ -558,7 +688,7 @@ mod tests {
 
     #[test]
     fn queued_success_after_original_deadline_is_a_retained_failure() {
-        let progress = readiness::Progress::default();
+        let progress = progress::Progress::default();
         let (sender, receiver) = mpsc::sync_channel(1);
         sender.send(Ok(())).unwrap();
         let failure = observe_readiness(
@@ -594,9 +724,56 @@ mod tests {
     }
 
     #[test]
+    fn handoff_channel_preserves_noncopy_payload_and_discards_it_after_deadline() {
+        struct Handoff(Arc<std::sync::atomic::AtomicUsize>);
+        impl Drop for Handoff {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let progress = progress::Progress::default();
+        progress.enter(progress::Phase::Restart);
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender.send(Ok(Handoff(Arc::clone(&drops)))).ok().unwrap();
+        let success = observe_readiness(
+            &receiver,
+            &progress,
+            Instant::now(),
+            Duration::from_secs(30),
+        );
+        assert!(matches!(success, Some(Ok(_))));
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        drop(success);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        sender.send(Ok(Handoff(Arc::clone(&drops)))).ok().unwrap();
+        let late = observe_readiness(
+            &receiver,
+            &progress,
+            Instant::now() - Duration::from_secs(2),
+            Duration::from_secs(1),
+        );
+        assert!(matches!(late, Some(Err(failure)) if failure == progress.deadline()));
+        assert_eq!(drops.load(Ordering::SeqCst), 2);
+        drop(sender);
+        assert!(
+            matches!(observe_readiness(&receiver, &progress, Instant::now(), Duration::from_secs(30)),
+            Some(Err(failure)) if failure == progress.unconfirmed())
+        );
+    }
+
+    #[test]
+    fn scope_exit_cancels_background_work_without_changing_its_budget() {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        {
+            let _guard = CancelOnExit(Arc::clone(&cancelled));
+        }
+        assert!(cancelled.load(Ordering::Acquire));
+    }
+
+    #[test]
     fn definite_spawn_failure_retains_a_retryable_fresh_key_fence() {
-        let temporary = tempfile::tempdir().unwrap();
-        let directory = PrivateDirectory::open_or_create(temporary.path().join("network")).unwrap();
+        let (temporary, _context, directory) = launch_fence_fixture();
         for _ in 0..2 {
             let mut command = Command::new(temporary.path().join("absent-daemon"));
             assert!(spawn_with_launch_fence(&directory, 0, &mut command).is_err());
@@ -615,6 +792,208 @@ mod tests {
         assert_eq!(command.get_args().len(), 0);
     }
 
+    // These fixture processes exercise only the native launch owner and OS exec boundary;
+    // none is admitted as an Iroha daemon or treated as evidence of consensus readiness.
+    fn launch_fence_fixture() -> (tempfile::TempDir, PrivateDirectory, PrivateDirectory) {
+        let temporary = tempfile::tempdir().unwrap();
+        let context = PrivateDirectory::open_or_create(temporary.path().join("network")).unwrap();
+        let generation = context.create_child(generation::DIRECTORY).unwrap();
+        for index in 0..4 {
+            generation
+                .write_atomic(format!("peer{index}.launch"), b"0", PublishMode::CreateNew)
+                .unwrap();
+        }
+        (temporary, context, generation)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_launch_spends_fence_before_exec_and_restart_never_reasserts() {
+        let (_temporary, context, original) = launch_fence_fixture();
+        let generation = retained_launch_directory(&context).unwrap();
+        assert_eq!(generation.identity().unwrap(), original.identity().unwrap());
+        // No safety-record directory is present. Its absence can never rearm a spent fence.
+        assert!(!generation.path().join("state").exists());
+        for index in 0..4 {
+            let mut first = Command::new("/bin/sh");
+            first
+                .arg("-c")
+                .arg("test \"$0\" = --sumeragi-assert-fresh-key");
+            let mut child = spawn_with_launch_fence(&generation, index, &mut first).unwrap();
+            assert_eq!(
+                generation
+                    .read(format!("peer{index}.launch"), 1)
+                    .unwrap()
+                    .as_slice(),
+                b"1"
+            );
+            assert!(
+                child.wait().unwrap().success(),
+                "actual first exec receives its flag"
+            );
+            assert_eq!(
+                first.get_args().last().unwrap(),
+                "--sumeragi-assert-fresh-key"
+            );
+            context
+                .write_atomic(format!("peer{index}.launch"), b"0", PublishMode::CreateNew)
+                .unwrap();
+            let mut restarted = Command::new("/bin/sh");
+            restarted.arg("-c").arg("test \"$0\" = /bin/sh");
+            let mut child = spawn_with_launch_fence(&generation, index, &mut restarted).unwrap();
+            assert!(
+                child.wait().unwrap().success(),
+                "actual restart has no freshness flag"
+            );
+            assert_eq!(restarted.get_args().len(), 2);
+            assert_eq!(
+                generation
+                    .read(format!("peer{index}.launch"), 1)
+                    .unwrap()
+                    .as_slice(),
+                b"1"
+            );
+            assert_eq!(
+                context
+                    .read(format!("peer{index}.launch"), 1)
+                    .unwrap()
+                    .as_slice(),
+                b"0",
+                "an old outer armed marker cannot reassert an inner spent key"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn child_exec_failure_never_rearms_a_spent_fence() {
+        let (temporary, context, generation) = launch_fence_fixture();
+        let mut failed_child = Command::new("/bin/sh");
+        failed_child.arg("-c").arg("exit 13");
+        let mut child = spawn_with_launch_fence(&generation, 0, &mut failed_child).unwrap();
+        assert_eq!(child.wait().unwrap().code(), Some(13));
+        assert_eq!(generation.read("peer0.launch", 1).unwrap().as_slice(), b"1");
+        let held = retained_launch_directory(&context).unwrap();
+        let mut restarted = Command::new(temporary.path().join("absent-daemon"));
+        assert!(spawn_with_launch_fence(&held, 0, &mut restarted).is_err());
+        assert_eq!(restarted.get_args().len(), 0);
+        assert_eq!(held.read("peer0.launch", 1).unwrap().as_slice(), b"1");
+    }
+
+    #[test]
+    fn lost_fence_refuses_without_adopting_an_old_outer_marker() {
+        let (temporary, context, generation) = launch_fence_fixture();
+        generation
+            .write_atomic("peer3.launch", b"1", PublishMode::Replace)
+            .unwrap();
+        std::fs::remove_file(generation.path().join("peer3.launch")).unwrap();
+        context
+            .write_atomic("peer3.launch", b"0", PublishMode::CreateNew)
+            .unwrap();
+        assert!(matches!(
+            retained_launch_directory(&context),
+            Err(Error::Invalid(_))
+        ));
+        let mut command = Command::new(temporary.path().join("absent-daemon"));
+        assert!(matches!(
+            spawn_with_launch_fence(&generation, 3, &mut command),
+            Err(Error::Invalid(_))
+        ));
+        assert_eq!(command.get_args().len(), 0);
+        assert!(!generation.path().join("peer3.launch").exists());
+        assert_eq!(context.read("peer3.launch", 1).unwrap().as_slice(), b"0");
+    }
+
+    #[test]
+    fn missing_generation_refuses_without_reconstructing_launch_custody() {
+        let (_temporary, context, generation) = launch_fence_fixture();
+        std::fs::rename(
+            generation.path(),
+            context.path().join("displaced-generation"),
+        )
+        .unwrap();
+        for index in 0..4 {
+            context
+                .write_atomic(format!("peer{index}.launch"), b"0", PublishMode::CreateNew)
+                .unwrap();
+        }
+        assert!(retained_launch_directory(&context).is_err());
+        assert!(!context.path().join(generation::DIRECTORY).exists());
+        for index in 0..4 {
+            assert_eq!(
+                context
+                    .read(format!("peer{index}.launch"), 1)
+                    .unwrap()
+                    .as_slice(),
+                b"0"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_or_oversized_fences_and_peer_indices_never_assert_or_spawn() {
+        let (temporary, context, generation) = launch_fence_fixture();
+        for bytes in [b"".as_slice(), b"2".as_slice(), b"00".as_slice()] {
+            generation
+                .write_atomic("peer0.launch", bytes, PublishMode::Replace)
+                .unwrap();
+            assert!(retained_launch_directory(&context).is_err());
+            let mut command = Command::new(temporary.path().join("absent-daemon"));
+            assert!(spawn_with_launch_fence(&generation, 0, &mut command).is_err());
+            assert_eq!(command.get_args().len(), 0);
+            assert_eq!(
+                std::fs::read(generation.path().join("peer0.launch")).unwrap(),
+                bytes
+            );
+        }
+        let mut command = Command::new(temporary.path().join("absent-daemon"));
+        assert!(matches!(
+            spawn_with_launch_fence(&generation, 4, &mut command),
+            Err(Error::Invalid(_))
+        ));
+        assert_eq!(command.get_args().len(), 0);
+        assert!(!generation.path().join("peer4.launch").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linked_fences_and_replaced_generation_ancestors_refuse_before_spawn() {
+        use std::os::unix::fs::symlink;
+        for hard_link in [false, true] {
+            let (temporary, context, generation) = launch_fence_fixture();
+            let fence = generation.path().join("peer0.launch");
+            let original = generation.path().join("foreign-launch");
+            std::fs::rename(&fence, &original).unwrap();
+            if hard_link {
+                std::fs::hard_link(&original, &fence).unwrap();
+            } else {
+                symlink(&original, &fence).unwrap();
+            }
+            assert!(retained_launch_directory(&context).is_err());
+            let mut command = Command::new(temporary.path().join("absent-daemon"));
+            assert!(spawn_with_launch_fence(&generation, 0, &mut command).is_err());
+            assert_eq!(command.get_args().len(), 0);
+            assert_eq!(std::fs::read(&original).unwrap(), b"0");
+        }
+        let (temporary, context, generation) = launch_fence_fixture();
+        std::fs::rename(
+            generation.path(),
+            context.path().join("displaced-generation"),
+        )
+        .unwrap();
+        let replacement = context.create_child(generation::DIRECTORY).unwrap();
+        replacement
+            .write_atomic("peer0.launch", b"0", PublishMode::CreateNew)
+            .unwrap();
+        let mut command = Command::new(temporary.path().join("absent-daemon"));
+        assert!(spawn_with_launch_fence(&generation, 0, &mut command).is_err());
+        assert_eq!(command.get_args().len(), 0);
+        assert_eq!(
+            replacement.read("peer0.launch", 1).unwrap().as_slice(),
+            b"0"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn owned_child_retains_the_runtime_lock_and_stop_leaves_other_children_alive() {
@@ -627,16 +1006,8 @@ mod tests {
             .spawn()
             .unwrap();
         let other = Command::new("/bin/sleep").arg("30").spawn().unwrap();
-        let mut owned = PeerProcesses {
-            children: vec![child],
-            launch_argv: vec![],
-            launch_snapshot: None,
-        };
-        let mut sentinel = PeerProcesses {
-            children: vec![other],
-            launch_argv: vec![],
-            launch_snapshot: None,
-        };
+        let mut owned = PeerProcesses::from_children(vec![child]);
+        let mut sentinel = PeerProcesses::from_children(vec![other]);
         drop(ownership);
         assert!(matches!(
             store::acquire(&directory, "runtime.lock", "fixture"),
@@ -649,5 +1020,34 @@ mod tests {
         );
         store::acquire(&directory, "runtime.lock", "fixture").unwrap();
         sentinel.stop().unwrap();
+    }
+    #[test]
+    fn later_renewal_receivers_use_their_own_finite_budget_and_reject_late_success() {
+        let progress = progress::Progress::default();
+        progress.enter(progress::Phase::CustodyRenewal);
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender.send(Ok(())).unwrap();
+        let original_start = Instant::now() - Duration::from_secs(86_400);
+        assert!(original_start.elapsed() > Duration::from_secs(600));
+        let renewal_start = Instant::now();
+        assert!(matches!(
+            observe_readiness(
+                &receiver,
+                &progress,
+                renewal_start,
+                Duration::from_secs(120)
+            ),
+            Some(Ok(()))
+        ));
+        sender.send(Ok(())).unwrap();
+        assert_eq!(
+            observe_readiness(
+                &receiver,
+                &progress,
+                renewal_start - Duration::from_secs(121),
+                Duration::from_secs(120)
+            ),
+            Some(Err(progress.deadline()))
+        );
     }
 }

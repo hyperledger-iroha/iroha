@@ -8,6 +8,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.hyperledger.iroha.sdk.offline.petal.PetalTestSupport.array
@@ -19,26 +20,33 @@ import org.hyperledger.iroha.sdk.offline.petal.PetalTestSupport.text
  * Decodes the golden camera captures in `fixtures/petal/petal_captures_v1.json`.
  *
  * Every conforming decoder must read the lanes named in `must_decode`, must
- * never report wrong data for any lane, and must reject the negatives. This
- * port mirrors the reference arithmetic, so it must also read exactly the
- * lanes the reference read (`reference_decoded`). Three of the nine captures
+ * never report wrong data for any lane, must report the recorded inferred
+ * corner, must follow each tracking pair from its first frame into its second,
+ * and must reject the negatives. This port mirrors the reference arithmetic,
+ * so it must also read exactly the lanes the reference read
+ * (`reference_decoded`, `reference_tracked`). Three of the eleven captures
  * (`overexposed-540p`, `veiled-720p`, `shadow-band-540p`) only decode in full
- * through the normalised tile read, so they prove that it is implemented
- * faithfully.
+ * through the normalised tile read, and two (`hidden-corner-540p`,
+ * `cut-corner-720p`) only through an inferred corner, so they prove that both
+ * are implemented faithfully.
  */
 class PetalCaptureFixtureTest {
     private val doc: JsonObject = PetalTestSupport.loadFixture("petal_captures_v1.json")
 
-    private fun lumaOf(entry: JsonObject): PetalLuma {
-        val data = PetalTestSupport.inflateBase64(entry.text("luma_zlib_base64"))
+    private fun lumaOf(entry: JsonObject, key: String = "luma_zlib_base64"): PetalLuma {
+        val data = PetalTestSupport.inflateBase64(entry.text(key))
         return assertNotNull(PetalLuma.fromRaw(entry.number("width").toInt(), entry.number("height").toInt(), data))
     }
+
+    /** The recorded `inferred_corner`: a canonical index, or `null`. */
+    private fun inferredCornerOf(entry: JsonObject): Int? =
+        entry.getValue("inferred_corner").jsonPrimitive.intOrNull
 
     @Test
     fun goldenCapturesDecodeAsRecorded() {
         val assembler = PetalStreamAssembler()
         val report = StringBuilder("Petal golden captures (Kotlin/JVM decode times of decodes 1, 2, 3 and the best of 6):\n")
-        assertEquals(9, doc.array("captures").size)
+        assertEquals(11, doc.array("captures").size)
         for (element in doc.array("captures")) {
             val capture = element.jsonObject
             val name = capture.text("name")
@@ -58,6 +66,7 @@ class PetalCaptureFixtureTest {
                 }
             }
             assertEquals(capture.text("reference_decoded"), decoded.lanes, "$name: lanes read by the reference")
+            assertEquals(inferredCornerOf(capture), decoded.inferredCorner, "$name: inferred corner")
             decoded.feed(assembler)
             // timing: the JIT warms up over the first decodes
             val timings = DoubleArray(6)
@@ -80,6 +89,53 @@ class PetalCaptureFixtureTest {
         println(report)
         // captures of different frames of the same stream accumulate in one assembler
         assertTrue(assembler.progress().atomsReceived > 10)
+    }
+
+    @Test
+    fun goldenTracksFollowThePoseIntoTheNextFrame() {
+        val tracks = doc.array("tracks")
+        assertEquals(2, tracks.size)
+        val report = StringBuilder("Petal golden tracks (Kotlin/JVM, second frame: best of 6 full decodes vs best of 6 tracks):\n")
+        for (element in tracks) {
+            val pair = element.jsonObject
+            val name = pair.text("name")
+            val from = lumaOf(pair, "from_luma_zlib_base64")
+            val to = lumaOf(pair, "to_luma_zlib_base64")
+            val first = PetalDecoder.decode(from)
+            val previous = assertNotNull(first.frame, "$name: first frame: ${first.error}")
+            val followed = assertNotNull(PetalDecoder.track(to, previous), "$name: tracking lost the code")
+            val must = pair.text("must_track")
+            for ((lane, key) in listOf(PetalLane.P to "p_data", PetalLane.K to "k_data", PetalLane.D to "d_data")) {
+                val laneResult = followed.lane(lane)
+                if (laneResult != null) {
+                    assertContentEquals(pair.hexBytes(key), laneResult.data, "$name: lane ${lane.letter} data")
+                } else {
+                    assertTrue(lane.letter !in must, "$name: lane ${lane.letter} lost")
+                }
+            }
+            assertEquals(pair.text("reference_tracked"), followed.lanes, "$name: lanes the reference tracked")
+            assertEquals(inferredCornerOf(pair), followed.inferredCorner, "$name: inferred corner")
+            assertEquals(previous.rotation, followed.rotation, "$name: tracking keeps the orientation")
+            assertEquals(previous.mirrored, followed.mirrored, "$name: tracking keeps the mirror flag")
+            // timing: tracking skips the finder search
+            var decodeBest = Double.MAX_VALUE
+            var trackBest = Double.MAX_VALUE
+            repeat(6) {
+                var started = System.nanoTime()
+                PetalDecoder.decode(to)
+                decodeBest = minOf(decodeBest, (System.nanoTime() - started) / 1e6)
+                started = System.nanoTime()
+                assertEquals(followed.lanes, assertNotNull(PetalDecoder.track(to, previous)).lanes, "$name: deterministic")
+                trackBest = minOf(trackBest, (System.nanoTime() - started) / 1e6)
+            }
+            report.append(
+                String.format(
+                    "  %-22s lanes %-3s (reference %-3s) inferred %-4s  decode %6.1f ms  track %6.1f ms%n",
+                    name, followed.lanes, pair.text("reference_tracked"), followed.inferredCorner, decodeBest, trackBest,
+                ),
+            )
+        }
+        println(report)
     }
 
     /**
@@ -176,7 +232,51 @@ class PetalCaptureFixtureTest {
             ),
             0, false, "P:1/0 K:6/0 D:-", "", "PK",
         ),
+        "hidden-corner-540p" to ReferenceReading(
+            listOf(
+                "bfd7b368ab35b25e", "bfbd89663d7e72f4", "40876e7dad3bf4b8",
+                "3fc354e5103467f6", "bfd800dcbf351273", "4078c98696c71fdb",
+                "3f0350f429cd6b17", "3f0a051651715817", "3ff0000000000000",
+            ),
+            2, false, "P:0/0 K:0/0 D:0/0", "PK", "PK",
+        ),
+        "cut-corner-720p" to ReferenceReading(
+            listOf(
+                "3fd6449cd845bfb8", "bfd64567cf7f705c", "4084ccd1d79bc470",
+                "3fd6453dd3fb7a44", "3fd645ddd9587003", "4056835b007c0a43",
+                "be7314208e04d011", "3e5095e3e2321c50", "3ff0000000000000",
+            ),
+            0, false, "P:0/0 K:0/0 D:0/0", "PK", "PK",
+        ),
     )
+
+    /** The tracked frames of the golden tracking pairs, as the Rust reference read them (`track`). */
+    private val referenceTracks = mapOf(
+        "steady-hand-540p" to ReferenceReading(
+            listOf(
+                "3fd3fe39804549ea", "bfc6d6f85122d649", "407ab755660467c6",
+                "3fc8fc4b89815f46", "3fd483207d176319", "401d0986f9303303",
+                "3e5153069e35fd1f", "3f01806a07e11c54", "3ff0000000000000",
+            ),
+            0, false, "P:0/0 K:0/0 D:0/0", "PK", "PK",
+        ),
+        "thumb-arrives-540p" to ReferenceReading(
+            listOf(
+                "3fd4ea016c3325af", "bfc6f6ed2510f32a", "40797727ce3e76be",
+                "3fc935c8a26948bc", "3fd5583843d08de5", "401664f3fc13e710",
+                "3ecbad764b13eb8b", "3f00e52e27ef649a", "3ff0000000000000",
+            ),
+            0, false, "P:0/0 K:0/0 D:0/0", "PK", "PK",
+        ),
+    )
+
+    private fun homographyBits(frame: PetalDecodedFrame): List<String> =
+        frame.homography.toArray().map { String.format("%016x", java.lang.Double.doubleToRawLongBits(it)) }
+
+    private fun laneCounts(frame: PetalDecodedFrame): String =
+        listOf(PetalLane.P, PetalLane.K, PetalLane.D).joinToString(" ") { lane ->
+            "${lane.letter}:" + (frame.lane(lane)?.let { "${it.corrected}/${it.erasures}" } ?: "-")
+        }
 
     @Test
     fun decoderArithmeticMatchesTheReferenceBitForBit() {
@@ -185,14 +285,21 @@ class PetalCaptureFixtureTest {
             val name = capture.text("name")
             val expected = referenceReadings.getValue(name)
             val decoded = assertNotNull(PetalDecoder.decode(lumaOf(capture)).frame, name)
-            val bits = decoded.homography.toArray().map { String.format("%016x", java.lang.Double.doubleToRawLongBits(it)) }
-            assertEquals(expected.homographyBits, bits, "$name: homography")
+            assertEquals(expected.homographyBits, homographyBits(decoded), "$name: homography")
             assertEquals(expected.rotation, decoded.rotation, "$name: rotation")
             assertEquals(expected.mirrored, decoded.mirrored, "$name: mirrored")
-            val lanes = listOf(PetalLane.P, PetalLane.K, PetalLane.D).joinToString(" ") { lane ->
-                "${lane.letter}:" + (decoded.lane(lane)?.let { "${it.corrected}/${it.erasures}" } ?: "-")
-            }
-            assertEquals(expected.lanes, lanes, "$name: corrected/erasures per lane")
+            assertEquals(expected.lanes, laneCounts(decoded), "$name: corrected/erasures per lane")
+        }
+        for (element in doc.array("tracks")) {
+            val pair = element.jsonObject
+            val name = pair.text("name")
+            val expected = referenceTracks.getValue(name)
+            val previous = assertNotNull(PetalDecoder.decode(lumaOf(pair, "from_luma_zlib_base64")).frame, name)
+            val followed = assertNotNull(PetalDecoder.track(lumaOf(pair, "to_luma_zlib_base64"), previous), name)
+            assertEquals(expected.homographyBits, homographyBits(followed), "$name: tracked homography")
+            assertEquals(expected.rotation, followed.rotation, "$name: rotation")
+            assertEquals(expected.mirrored, followed.mirrored, "$name: mirrored")
+            assertEquals(expected.lanes, laneCounts(followed), "$name: corrected/erasures per lane")
         }
     }
 
@@ -215,7 +322,8 @@ class PetalCaptureFixtureTest {
             val image = lumaOf(capture)
             val decoded = assertNotNull(PetalDecoder.decode(image).frame, name)
             val h = decoded.homography.m
-            val reference = assertNotNull(PetalDecoder.referenceLevels(image, h), "$name: reference levels")
+            val inferred = decoded.inferredCorner ?: PetalDecoder.NO_CORNER
+            val reference = assertNotNull(PetalDecoder.referenceLevels(image, h, inferred), "$name: reference levels")
             val workspace = PetalWorkspace()
             PetalDecoder.samplePatches(image, h, workspace)
             val level = tileLanes(PetalDecoder.readTiles(reference, options, workspace))
@@ -262,6 +370,15 @@ class PetalCaptureFixtureTest {
             assertContentEquals(capture.hexBytes("d_data"), data.d())
             val word = PetalLanes.encodeLane(PetalLane.P, capture.hexBytes("p_data"))
             assertContentEquals(capture.hexBytes("p_data"), PetalLanes.decodeLane(PetalLane.P, word))
+        }
+        // the lane data of a tracking pair is that of its second frame
+        for (element in doc.array("tracks")) {
+            val pair = element.jsonObject
+            assertEquals(pair.number("from_frame") + 1, pair.number("to_frame"))
+            val data = encoder.laneData(pair.number("to_frame").toInt())
+            assertContentEquals(pair.hexBytes("p_data"), data.p())
+            assertContentEquals(pair.hexBytes("k_data"), data.k())
+            assertContentEquals(pair.hexBytes("d_data"), data.d())
         }
     }
 }

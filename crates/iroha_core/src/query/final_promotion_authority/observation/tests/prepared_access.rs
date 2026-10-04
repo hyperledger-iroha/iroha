@@ -51,7 +51,10 @@ fn prepared_getters_and_repeated_liveness_checks_cannot_renew_an_expired_round()
         );
     }
     assert_eq!(
-        prepared.bind_signed_transaction(signed).err(),
+        prepared
+            .bind_signed_transaction(signed)
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Expired)
     );
 }

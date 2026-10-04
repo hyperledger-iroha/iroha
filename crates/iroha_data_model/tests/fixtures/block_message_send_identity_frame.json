@@ -1,7 +1,6 @@
 {
   "governance": true,
   "http": true,
-  "ids_projection": false,
   "values": {
     "adapter": {
       "actual_type_name": "iroha_data_model::block::stream::BlockMessageSend",

@@ -6,7 +6,7 @@ use super::*;
 use crate::state::WorldReadOnly as _;
 use crate::sumeragi::{
     commitment::execution_commitment,
-    payload::{self, Assembly},
+    payload,
     schedule::{ChainParamsRecord, ScheduleOutcome, ScheduledConfig, ScheduledSlot},
 };
 use iroha_data_model::{
@@ -187,7 +187,103 @@ fn outcome(
         after_next,
     }
 }
-fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
+/// Build a certificate transcript proposal without claiming native State execution.
+/// Parent participation comes from the existing full pinned-prefix verifier; production
+/// payload assembly continues to require its independently published native execution tip.
+fn transcript_proposal(
+    state: &State,
+    history: &[iroha_data_model::block::SharedSignedBlock],
+    transaction: crate::tx::AcceptedTransaction<'static>,
+    time: Duration,
+) -> SignedBlock {
+    let parent = history.last().unwrap();
+    let height = parent.header().height().get() + 1;
+    let hashes = history.iter().map(|block| block.hash()).collect::<Vec<_>>();
+    let view = state.view();
+    assert_eq!(view.canonical_history().height(), 0);
+    assert!(view.native_execution_tip().is_none());
+    let reader = CertifiedChain::from_frames(view.chain_id(), view.network_id(), &hashes, history)
+        .unwrap()
+        .with_attestation_verifier(&TestAttestations);
+    let certified = reader.certified(height - 1).unwrap();
+    assert_eq!(certified.block_hash(), parent.hash());
+    let effects = (height > 2).then(|| {
+        assert_eq!(certified.verification(), QcVerification::Verified);
+        let original = certified.certificate().unwrap().commit_qc();
+        assert!(!original.is_empty());
+        assert!(original.len() <= iroha_data_model::consensus::PARENT_SERVICE_COMMIT_QC_MAX_BYTES);
+        iroha_data_model::consensus::NposConsensusEffects {
+            parent_service_commit_qc: Some(original.to_vec()),
+            ..Default::default()
+        }
+    });
+    let routing = crate::sumeragi::lanes::routing::RoutingSnapshot::of(&view).unwrap();
+    let route = routing
+        .inputs(view.world())
+        .execution_route(&transaction, height)
+        .unwrap()
+        .unwrap();
+    let context = iroha_data_model::block::BlockExecutionContextBundle::new(vec![
+        iroha_data_model::block::ExternalExecutionContext::new(
+            transaction.hash_as_entrypoint(),
+            route.lane_id,
+            route.dataspace_id,
+        ),
+    ]);
+    let confidential =
+        crate::state::compute_confidential_feature_digest(view.world(), view.zk(), height);
+    let (_, time_source) = iroha_primitives::time::TimeSource::new_mock(time);
+    let proposal =
+        crate::block::BlockBuilder::new_with_time_source(vec![transaction.clone()], time_source)
+            .chain(0, Some(parent))
+            .with_da_proof_policies(Some(crate::da::active_proof_policy_bundle_at_height(
+                &state.nexus_snapshot(),
+                height,
+            )))
+            .with_confidential_features((!confidential.is_empty()).then_some(confidential))
+            .with_execution_context(Some(context))
+            .with_npos_consensus_effects(effects)
+            .with_network_input_time_floor(time)
+            .unwrap()
+            .into_unsigned_proposal();
+    assert_eq!(
+        crate::block::ValidBlock::sumeragi_block_time(
+            &proposal,
+            parent.header().creation_time(),
+            Duration::from_millis(1),
+        )
+        .unwrap(),
+        time,
+    );
+    if height <= 3 {
+        let assembled = payload::assemble(
+            state,
+            payload::Assembly {
+                parent,
+                view: 0,
+                cadence: Duration::from_millis(1),
+            },
+            &[transaction],
+        );
+        if height == 2 {
+            assert_eq!(
+                proposal.encode_wire().unwrap(),
+                assembled.unwrap().encode_wire().unwrap(),
+                "the first transcript proposal preserves every original assembly field"
+            );
+        } else {
+            assert!(
+                matches!(assembled, Err(payload::PayloadError::ParentService(message))
+                    if message.contains("Canonical history height 1")
+                        && message.contains("ending at `0`")),
+                "production assembly must refuse the absent committed parent history"
+            );
+        }
+    }
+    proposal
+}
+
+fn build_history(retain: bool) -> Vec<iroha_data_model::block::SharedSignedBlock> {
     let original_keys = keys(false);
     let genesis_key = KeyPair::from_seed(vec![0xCE; 32], Algorithm::Ed25519);
     let mut policy = SumeragiNposParameters::default();
@@ -214,9 +310,9 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
     assert_eq!(current.authorization.last_height, 6);
     let network = NetworkId::from_genesis_hash(genesis.hash());
     let instance = root_instance(&genesis, "sumeragi-certified-test-chain").unwrap();
-    // This certificate-transcript fixture does not execute NPoS transitions, but the real
-    // payload builder still needs the original signed root-routing metadata. Project only
-    // that exact genesis parameter into its authoring World; absence never implies Global.
+    // This certificate-transcript fixture does not execute NPoS transitions. Its test-only
+    // proposal builder uses the original signed root-routing metadata. Project only that
+    // exact genesis parameter into its routing World; absence never implies Global.
     let metadata = iroha_genesis::signed_genesis_consensus_metadata(&genesis).unwrap();
     let routing_world = World::new();
     {
@@ -263,7 +359,7 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
         result.preimage().unwrap(),
         Vec::new(),
     )));
-    let mut history = vec![Arc::new(genesis)];
+    let mut history = vec![crate::block::reserve_block_for_tests().initialize(genesis)];
     let mut active_keys = original_keys;
     let mut active_beacon = crate::beacon::tests::HistoricalBeaconFixture::new(
         network,
@@ -292,16 +388,7 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
         )
         .unwrap();
         let entry_hash = transaction.hash_as_entrypoint();
-        let mut block = payload::assemble(
-            &world,
-            Assembly {
-                parent: parent.block(),
-                view: 0,
-                cadence: Duration::from_millis(1),
-            },
-            &[transaction],
-        )
-        .unwrap();
+        let mut block = transcript_proposal(&world, &history, transaction, block_time);
         assert_eq!(
             block.execution_context().unwrap().external,
             vec![iroha_data_model::block::ExternalExecutionContext::new(
@@ -309,7 +396,7 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
                 crate::sumeragi::lanes::routing::GLOBAL_LANE,
                 metadata.sumeragi_context.root_scope.dataspace_id(),
             )],
-            "normal payload assembly commits the exact signed-root route",
+            "certificate transcript commits the exact signed-root route",
         );
         let beacon = if height + 1 == current.authorization.last_height {
             Some(active_beacon.pulse(
@@ -475,7 +562,7 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
         block = block.with_commit_certificate(Some(
             commit_certificate(&header, &qc, preimage, availability).unwrap(),
         ));
-        history.push(Arc::new(block));
+        history.push(crate::block::reserve_block_for_tests().initialize(block));
         if let Some((next, keys, beacon)) = successor {
             current = next;
             active_keys = keys;
@@ -486,12 +573,12 @@ fn build_history(retain: bool) -> Vec<Arc<SignedBlock>> {
     }
     history
 }
-fn history() -> Vec<Arc<SignedBlock>> {
-    static HISTORY: OnceLock<Vec<Arc<SignedBlock>>> = OnceLock::new();
+fn history() -> Vec<iroha_data_model::block::SharedSignedBlock> {
+    static HISTORY: OnceLock<Vec<iroha_data_model::block::SharedSignedBlock>> = OnceLock::new();
     HISTORY.get_or_init(|| build_history(false)).clone()
 }
-fn retained_history() -> Vec<Arc<SignedBlock>> {
-    static HISTORY: OnceLock<Vec<Arc<SignedBlock>>> = OnceLock::new();
+fn retained_history() -> Vec<iroha_data_model::block::SharedSignedBlock> {
+    static HISTORY: OnceLock<Vec<iroha_data_model::block::SharedSignedBlock>> = OnceLock::new();
     HISTORY.get_or_init(|| build_history(true)).clone()
 }
 
@@ -613,7 +700,8 @@ fn historical_authority_missing_reordered_or_forged_proofs_fail_closed() {
         ));
     }
     let mut missing = history;
-    missing[5] = Arc::new(missing[5].as_ref().clone().with_commit_certificate(None));
+    missing[5] = crate::block::reserve_block_for_tests()
+        .initialize(missing[5].as_ref().clone().with_commit_certificate(None));
     let state = state_with_history(&missing);
     let view = state.view();
     assert!(matches!(
@@ -731,10 +819,11 @@ fn unsigned_genesis_result_cannot_substitute_the_signed_epoch_root() {
         result.preimage().unwrap(),
         certificate.availability().to_vec(),
     );
-    history[0] = Arc::new(original.clone().with_commit_certificate(Some(certificate)));
+    history[0] = crate::block::reserve_block_for_tests()
+        .initialize(original.clone().with_commit_certificate(Some(certificate)));
     let state = state_with_history(&history);
     let view = state.view();
-    assert!(read_frame(Arc::clone(&history[0]), 1).is_ok());
+    assert!(read_frame(Clone::clone(&history[0]), 1).is_ok());
     assert!(
         committed_block(&view, 1).is_err(),
         "stored frames and a hash index cannot replace original execution provenance"
@@ -806,14 +895,20 @@ fn pinned_restoration_reuses_full_boundary_verification_and_one_authority_cursor
     let history = history();
     let kura = Kura::blank_kura_for_testing();
     for block in &history {
-        kura.store_block(Arc::clone(block)).unwrap();
+        kura.store_block(Clone::clone(block)).unwrap();
     }
     let chain_id = ChainId::from("sumeragi-certified-test-chain");
     let network = NetworkId::from_genesis_hash(history[0].hash());
     let hashes = history.iter().map(|block| block.hash()).collect::<Vec<_>>();
-    let reader = CertifiedChain::from_pinned(&chain_id, &network, &hashes, &kura)
-        .unwrap()
-        .with_attestation_verifier(&TestAttestations);
+    let reader = CertifiedChain::from_pinned(
+        &chain_id,
+        &network,
+        &hashes,
+        &kura,
+        &iroha_allocation::AllocationBudget::new(64 * 1024 * 1024),
+    )
+    .unwrap()
+    .with_attestation_verifier(&TestAttestations);
     for (index, receipt) in reader.walk(1, 14).enumerate() {
         let receipt = receipt.unwrap();
         assert_eq!(receipt.block_hash(), hashes[index]);

@@ -6,9 +6,10 @@
 //! integrate the complete relation and atomic D7/finalized custody before export.
 
 use super::*;
-use iroha_allocation::AllocationBudget;
+use crate::state::fastpq_quantity_archive::FrozenQuantityArchive;
+use iroha_allocation::{AllocationBudget, ChargedShared, ReservedChargedShared};
 use iroha_data_model::fastpq::FastpqSourceStatementContextV1;
-use std::{io, sync::Arc};
+use std::sync::Arc;
 
 /// A failed or interrupted original attempt cannot be replaced with another census.
 #[derive(Default)]
@@ -46,8 +47,16 @@ pub(super) struct QuantitySourceCensus {
     inventory: Arc<FastpqSourceInventoryV1>,
     frozen: Arc<crate::fastpq::FastpqBlockStartSourceContext>,
     creation_time_ms: u64,
+    /// Final execution role/permission/epoch table, not account-role authority.
+    permission: crate::fastpq::permission_context::PermissionContextSeal,
     applied_world_transactions: u64,
     usage: QuantityCandidateUsage,
+    /// Reserved before any capture backing, then consumed by the original finalizer.
+    pending_archive: Option<ReservedChargedShared<FrozenQuantityArchive<QuantityArchivedEntry>>>,
+    /// The exact original immutable tape-map allocation and all nested credits.
+    archive: Option<ChargedShared<FrozenQuantityArchive<QuantityArchivedEntry>>>,
+    /// Same finite execution pool; cloning this handle creates no capacity.
+    pool: AllocationBudget,
 }
 
 fn entry_seal(
@@ -88,10 +97,19 @@ fn entry_seal(
     } else {
         QuantityCandidateUsage::default()
     };
-    let effects_digest = Hash::new_from_writer(|writer| {
-        norito::core::write_canonical_to_writer(wire, writer).map_err(io::Error::other)
-    })
-    .map_err(|_| QuantityCaptureIssue::InvalidFacts)?;
+    // This is the exact complete-effect prover domain, not an untyped frame hash.
+    // Context, effect ordinals and every original quantity/authority fact are bound.
+    let effects_digest = iroha_data_model::fastpq::execution_effects_digest_v1(wire)
+        .map_err(|_| QuantityCaptureIssue::InvalidFacts)?;
+    let original = archive.commitments.original(context)?;
+    if original.count() != effect_count
+        || original
+            .digest()
+            .map_err(|_| QuantityCaptureIssue::InvalidFacts)?
+            != effects_digest
+    {
+        return Err(QuantityCaptureIssue::InvalidFacts);
+    }
     Ok((
         QuantitySourceEntrySeal {
             context,
@@ -129,8 +147,29 @@ impl QuantitySourceCensus {
         {
             return Err(QuantityCaptureIssue::Capacity);
         }
-        // Exact original credit is acquired before the only new backing allocation.
-        let mut entries = ChargedBuffer::new(inventory.entries().len(), budget)
+        let entry_layout =
+            std::alloc::Layout::array::<QuantitySourceEntrySeal>(inventory.entries().len())
+                .map_err(|_| QuantityCaptureIssue::Capacity)?;
+        let permission_layout = crate::fastpq::permission_context::permission_table_backing_layout(
+            block.world.roles.iter(),
+        )
+        .map_err(|_| QuantityCaptureIssue::Capacity)?;
+        let archive_layout =
+            ChargedShared::<FrozenQuantityArchive<QuantityArchivedEntry>>::allocation_layout();
+        let required = entry_layout
+            .size()
+            .checked_add(permission_layout.size())
+            .and_then(|bytes| bytes.checked_add(archive_layout.size()))
+            .ok_or(QuantityCaptureIssue::Capacity)?;
+        // One original admission funds both complete explicit backings before
+        // allocating either. The role scratch is freed after its digest is made.
+        let mut reservation = budget
+            .try_reserve_bytes(required)
+            .map_err(|_| QuantityCaptureIssue::Capacity)?;
+        let mut entries =
+            ChargedBuffer::from_reservation(inventory.entries().len(), &mut reservation)
+                .map_err(|_| QuantityCaptureIssue::Capacity)?;
+        let pending_archive = ChargedShared::reserve_from(&mut reservation)
             .map_err(|_| QuantityCaptureIssue::Capacity)?;
         let mut usage = QuantityCandidateUsage::default();
         for entry in inventory.entries() {
@@ -141,8 +180,29 @@ impl QuantitySourceCensus {
             entries.push_reserved(seal);
         }
         if usage != archive.usage
+            || inventory
+                .entries()
+                .iter()
+                .filter(|entry| archive.commitments.get(&entry.entry_hash).is_some())
+                .count()
+                != archive.commitments.entry_count()
             || usize::try_from(usage.entries).ok() != Some(archive.entries.len())
         {
+            return Err(QuantityCaptureIssue::InvalidFacts);
+        }
+        let permission = crate::fastpq::permission_context::prepaid_permission_table_seal(
+            || block.world.roles.iter(),
+            &mut reservation,
+        )
+        .map_err(|error| match error {
+            crate::fastpq::permission_context::PermissionContextError::Capacity => {
+                QuantityCaptureIssue::Capacity
+            }
+            crate::fastpq::permission_context::PermissionContextError::Encoding => {
+                QuantityCaptureIssue::InvalidFacts
+            }
+        })?;
+        if reservation.remaining_bytes() != 0 {
             return Err(QuantityCaptureIssue::InvalidFacts);
         }
         Ok(Self {
@@ -150,9 +210,39 @@ impl QuantitySourceCensus {
             inventory,
             frozen: Arc::clone(frozen),
             creation_time_ms: block._curr_block.creation_time_ms,
+            permission,
             applied_world_transactions: archive.applied_world_transactions,
             usage,
+            pending_archive: Some(pending_archive),
+            archive: None,
+            pool: budget.clone(),
         })
+    }
+
+    /// Consume the original tape-map backing into its prepaid immutable shell.
+    /// Called only within the same completed producer finalizer after preparation.
+    fn retain_original_archive(
+        &mut self,
+        archive: &mut QuantityCandidateArchive,
+    ) -> Result<(), QuantityCaptureIssue> {
+        if archive.issue.is_some()
+            || self.archive.is_some()
+            || archive.applied_world_transactions != self.applied_world_transactions
+            || archive.usage != self.usage
+            || !archive.entries.belongs_to(&self.pool)
+            || archive
+                .entries
+                .iter()
+                .any(|(_, entry)| !entry.tape.belongs_to(&self.pool))
+        {
+            return Err(QuantityCaptureIssue::InvalidFacts);
+        }
+        let shell = self
+            .pending_archive
+            .take()
+            .ok_or(QuantityCaptureIssue::InvalidFacts)?;
+        self.archive = Some(archive.entries.freeze(shell)?);
+        Ok(())
     }
 
     fn verify_current(&self, block: &StateBlock<'_>) -> Result<(), QuantityCaptureIssue> {
@@ -161,6 +251,12 @@ impl QuantitySourceCensus {
             .verified_fastpq_source_inventory_for_capture()
             .map_err(|_| QuantityCaptureIssue::UnsupportedOwner)?;
         if !Arc::ptr_eq(&self.inventory, &current)
+            || self.pending_archive.is_some()
+            || self
+                .archive
+                .as_ref()
+                .is_none_or(|retained| !archive.entries.retains_frozen(retained))
+            || !archive.entries.belongs_to(&self.pool)
             || block
                 .fastpq_source_context
                 .as_ref()
@@ -169,6 +265,13 @@ impl QuantitySourceCensus {
             || self.applied_world_transactions != archive.applied_world_transactions
             || self.usage != archive.usage
             || self.entries.as_slice().len() != self.inventory.entries().len()
+        {
+            return Err(QuantityCaptureIssue::InvalidFacts);
+        }
+        if !self
+            .permission
+            .matches(block.world.roles.iter())
+            .map_err(|_| QuantityCaptureIssue::InvalidFacts)?
         {
             return Err(QuantityCaptureIssue::InvalidFacts);
         }
@@ -182,16 +285,63 @@ impl QuantitySourceCensus {
                 .checked_add(contribution)
                 .ok_or(QuantityCaptureIssue::Capacity)?;
         }
-        if usage != self.usage || usize::try_from(usage.entries).ok() != Some(archive.entries.len())
+        if usage != self.usage
+            || self
+                .inventory
+                .entries()
+                .iter()
+                .filter(|entry| archive.commitments.get(&entry.entry_hash).is_some())
+                .count()
+                != archive.commitments.entry_count()
+            || usize::try_from(usage.entries).ok() != Some(archive.entries.len())
         {
             return Err(QuantityCaptureIssue::InvalidFacts);
         }
         Ok(())
     }
 
+    /// Retain only the actual sealed optional archive for later original-pool work.
+    pub(super) fn retained_archive_for_work(
+        &self,
+        block: &StateBlock<'_>,
+    ) -> Result<ChargedShared<FrozenQuantityArchive<QuantityArchivedEntry>>, QuantityCaptureIssue>
+    {
+        self.verify_current(block)?;
+        self.archive
+            .as_ref()
+            .cloned()
+            .ok_or(QuantityCaptureIssue::InvalidFacts)
+    }
+
     #[cfg(test)]
     pub(super) fn entries(&self) -> &[QuantitySourceEntrySeal] {
         self.entries.as_slice()
+    }
+
+    #[cfg(test)]
+    pub(super) fn retained_archive(
+        &self,
+    ) -> ChargedShared<FrozenQuantityArchive<QuantityArchivedEntry>> {
+        self.archive
+            .as_ref()
+            .expect("original completed source archive")
+            .clone()
+    }
+
+    #[cfg(test)]
+    pub(super) fn statement_context(
+        &self,
+        entry_index: usize,
+    ) -> Option<iroha_data_model::fastpq::FastpqPublicInputs> {
+        let entry = self.entries.as_slice().get(entry_index)?;
+        Some(iroha_data_model::fastpq::FastpqPublicInputs {
+            dsid: crate::fastpq::dataspace_id_bytes(entry.context.entry.dataspace_id),
+            slot: self.creation_time_ms.saturating_mul(1_000_000),
+            old_root: [0; 32],
+            new_root: [0; 32],
+            perm_root: self.permission.root(),
+            tx_set_hash: self.inventory.tx_set_hash(),
+        })
     }
 }
 
@@ -217,9 +367,14 @@ impl StateBlock<'_> {
             self.pipeline_ivm_prepared_cache.execution_budget(),
         );
         match prepared {
-            Ok(census) => {
-                self.fastpq_quantity_candidate.source_census =
-                    QuantitySourceCensusState::Sealed(census);
+            Ok(mut census) => {
+                match census.retain_original_archive(&mut self.fastpq_quantity_candidate) {
+                    Ok(()) => {
+                        self.fastpq_quantity_candidate.source_census =
+                            QuantitySourceCensusState::Sealed(census)
+                    }
+                    Err(issue) => self.fastpq_quantity_candidate.poison(issue),
+                }
             }
             Err(issue) => self.fastpq_quantity_candidate.poison(issue),
         }

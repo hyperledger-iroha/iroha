@@ -67,7 +67,11 @@ pub mod output_budget;
 pub(crate) mod output_test_support;
 #[doc = "Payload container types shared between block variants."]
 pub mod payload;
+mod prepared_signatures;
 mod proposal;
+mod shared;
+/// Canonical ordered block signatures and original-pool preparation.
+pub mod signatures;
 #[cfg(feature = "transparent_api")]
 use crate::fastpq::TransferTranscript;
 use crate::transaction::signed::{SignedTransaction, TransactionEntrypoint};
@@ -80,6 +84,9 @@ pub use execution_context::{
 };
 pub use header::{BlockHeader as Header, BlockHeader, BlockSignature};
 pub use payload::{BlockPayload as Payload, BlockPayload, BlockResult};
+pub use prepared_signatures::{PreparedSignatureBlockError, PreparedSignedBlockSignaturesDecode};
+pub use shared::{ReservedSharedSignedBlock, SharedBlockAdmissionError, SharedSignedBlock};
+pub use signatures::{BlockSignatureCustodyError, BlockSignatures, PreparedBlockSignatures};
 #[model]
 mod model {
     use super::*;
@@ -97,12 +104,12 @@ mod model {
         crate :: DeriveJsonSerialize,
         crate :: DeriveJsonDeserialize,
     )]
-    #[norito(decode_from_slice)]
+    #[norito(decode_fields, decode_from_slice)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::block::model::SignedBlock")]
     pub struct SignedBlock {
         /// Signatures of validators who approved this block.
-        pub(super) signatures: BTreeSet<BlockSignature>,
+        pub(super) signatures: BlockSignatures,
         /// Block payload to be signed.
         pub(super) payload: BlockPayload,
         /// Secondary block state resulting from execution.
@@ -164,7 +171,7 @@ impl<T: norito::core::SerializePayload> norito::core::SerializePayload for Outpu
 /// No raw source constructor or alternate accepted decoder is exposed.
 #[derive(Encode)]
 struct SignedBlockOutputCandidate<'a> {
-    signatures: OutputFieldRef<'a, BTreeSet<BlockSignature>>,
+    signatures: OutputFieldRef<'a, BlockSignatures>,
     payload: OutputFieldRef<'a, BlockPayload>,
     result: Option<OutputFieldRef<'a, BlockResult>>,
     /// Always `None`: the executed wire never covers a commit certificate.
@@ -203,7 +210,8 @@ impl SignedBlock {
             .map(TransactionEntrypoint::from)
             .collect();
         SignedBlock {
-            signatures: [signature].into_iter().collect(),
+            signatures: BlockSignatures::try_from_iter([signature])
+                .expect("single block signature"),
             payload: BlockPayload {
                 header,
                 external_entrypoints,
@@ -235,7 +243,8 @@ impl SignedBlock {
             .map(TransactionEntrypoint::from)
             .collect();
         SignedBlock {
-            signatures: [signature].into_iter().collect(),
+            signatures: BlockSignatures::try_from_iter([signature])
+                .expect("single block signature"),
             payload: BlockPayload {
                 header,
                 external_entrypoints,
@@ -258,7 +267,7 @@ impl SignedBlock {
         payload.da_commitments = payload.da_commitments.filter(|bundle| !bundle.is_empty());
         payload.da_pin_intents = payload.da_pin_intents.filter(|bundle| !bundle.is_empty());
         SignedBlock {
-            signatures: BTreeSet::new(),
+            signatures: BlockSignatures::default(),
             payload,
             result: None,
             commit_certificate: None,
@@ -273,7 +282,8 @@ impl SignedBlock {
         payload.da_commitments = payload.da_commitments.filter(|bundle| !bundle.is_empty());
         payload.da_pin_intents = payload.da_pin_intents.filter(|bundle| !bundle.is_empty());
         SignedBlock {
-            signatures: [signature].into_iter().collect(),
+            signatures: BlockSignatures::try_from_iter([signature])
+                .expect("single block signature"),
             payload,
             result: None,
             commit_certificate: None,
@@ -361,7 +371,13 @@ impl SignedBlock {
         limits
             .validate_outputs(self.execution_outputs())
             .map_err(SetExecutionOutputsError::InvalidLimits)?;
-        let frame_len = norito::canonical_frame_len(self.without_commit_certificate().as_ref())
+        let candidate = SignedBlockOutputCandidate {
+            signatures: OutputFieldRef(&self.signatures),
+            payload: OutputFieldRef(&self.payload),
+            result: self.result.as_ref().map(OutputFieldRef),
+            commit_certificate: None,
+        };
+        let frame_len = norito::canonical_frame_len(&candidate)
             .map_err(|error| SetExecutionOutputsError::Encoding(error.to_string()))?;
         let actual = u64::try_from(frame_len)
             .ok()
@@ -691,17 +707,6 @@ impl SignedBlock {
         self.commit_certificate = None;
         Ok(self)
     }
-    /// Borrow this block without its commit certificate: `self` when it carries none, otherwise
-    /// an owned copy with the certificate cleared.
-    fn without_commit_certificate(&self) -> Cow<'_, Self> {
-        if self.commit_certificate.is_none() {
-            Cow::Borrowed(self)
-        } else {
-            let mut block = self.clone();
-            block.commit_certificate = None;
-            Cow::Owned(block)
-        }
-    }
     /// Sumeragi finality proof attached to this committed block, if any.
     #[inline]
     #[must_use]
@@ -830,6 +835,16 @@ impl SignedBlock {
     ) -> impl ExactSizeIterator<Item = &BlockSignature> + DoubleEndedIterator {
         self.signatures.iter()
     }
+    /// Whether the canonical ordered signatures retain this exact original finite pool.
+    /// This proves physical collection/leaf custody only, never finality or full graph funding.
+    pub fn signatures_admitted_to(&self, budget: &iroha_allocation::AllocationBudget) -> bool {
+        self.signatures.admitted_to(budget)
+    }
+    /// Whether the two blocks retain one identical prepared signature collection owner.
+    /// This identity establishes no execution, availability or finality authorization.
+    pub fn same_signature_custody(&self, other: &Self) -> bool {
+        BlockSignatures::ptr_eq(&self.signatures, &other.signatures)
+    }
     /// Calculate block hash
     #[inline]
     pub fn hash(&self) -> HashOf<BlockHeader> {
@@ -847,10 +862,10 @@ impl SignedBlock {
         private_key: &iroha_crypto::PrivateKey,
         signatory: usize,
     ) -> Result<(), iroha_crypto::Error> {
-        self.signatures.insert(BlockSignature::new(
+        self.signatures.try_insert(BlockSignature::new(
             signatory as u64,
             SignatureOf::try_from_hash(private_key, self.payload.header.hash())?,
-        ));
+        ))?;
         Ok(())
     }
     /// Add additional signature to this block.
@@ -871,7 +886,7 @@ impl SignedBlock {
                 "Duplicate signature".to_owned(),
             ));
         }
-        self.signatures.insert(signature);
+        self.signatures.try_insert(signature)?;
         Ok(())
     }
     /// Replace signatures without verification
@@ -882,8 +897,8 @@ impl SignedBlock {
     #[cfg(feature = "transparent_api")]
     pub fn replace_signatures(
         &mut self,
-        signatures: BTreeSet<BlockSignature>,
-    ) -> Result<BTreeSet<BlockSignature>, iroha_crypto::Error> {
+        signatures: BlockSignatures,
+    ) -> Result<BlockSignatures, iroha_crypto::Error> {
         if signatures.is_empty() {
             return Err(iroha_crypto::Error::Signing("Signatures empty".to_owned()));
         }
@@ -898,6 +913,11 @@ impl SignedBlock {
                 Ok(acc)
             },
         )?;
+        if !self.signatures.permits_replacement(&signatures) {
+            return Err(iroha_crypto::Error::Signing(
+                "block signature replacement changed original custody".into(),
+            ));
+        }
         Ok(core::mem::replace(&mut self.signatures, signatures))
     }
     /// Creates a canonical resultless genesis proposal signed with the genesis private key.
@@ -1016,7 +1036,8 @@ impl SignedBlock {
             global_beacon_pulse: None,
         };
         Ok(SignedBlock {
-            signatures: [signature].into_iter().collect(),
+            signatures: BlockSignatures::try_from_iter([signature])
+                .map_err(|error| iroha_crypto::Error::Signing(error.to_string()))?,
             payload,
             result: None,
             commit_certificate: None,
@@ -1105,7 +1126,7 @@ impl iroha_version::codec::EncodeVersioned for SignedBlock {
 }
 impl iroha_version::codec::DecodeVersioned for SignedBlock {
     fn decode_all_versioned(input: &[u8]) -> iroha_version::error::Result<Self> {
-        decode_versioned_signed_block_inner(input, input)
+        decode_bare_versioned_signed_block_inner(input, input)
     }
 }
 #[cfg(feature = "http")]
@@ -1118,7 +1139,7 @@ pub mod stream {
         codec::{Decode, Encode},
         core::{Error as NoritoError, SerializePayload},
     };
-    use std::{num::NonZeroU64, sync::Arc};
+    use std::num::NonZeroU64;
     #[model]
     mod model {
         use super::*;
@@ -1162,7 +1183,10 @@ pub mod stream {
     /// without requiring an additional clone of the block data.
     #[derive(Debug, Clone)]
     #[repr(transparent)]
-    pub struct BlockMessageSend(pub Arc<SignedBlock>);
+    pub struct BlockMessageSend(pub SharedSignedBlock);
+
+    #[derive(Encode)]
+    struct BorrowedBlockMessage<'a>(OutputFieldRef<'a, SignedBlock>);
     impl norito::NoritoSchema for BlockMessageSend {
         fn nominal_name() -> String {
             "iroha_data_model::block::stream::BlockMessageSend".to_owned()
@@ -1174,8 +1198,8 @@ pub mod stream {
 
     impl SerializePayload for BlockMessageSend {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
-            // Serialize as a BlockMessage wrapper to keep schema and layout consistent
-            let msg = BlockMessage(self.0.as_ref().clone());
+            // The sole BlockMessage layout, borrowed from the original funded graph.
+            let msg = BorrowedBlockMessage(OutputFieldRef(self.0.as_ref()));
             SerializePayload::serialize(&msg, writer)
         }
     }
@@ -1632,42 +1656,21 @@ where
     let rest = &bytes[8 + field_len..];
     Ok((value, rest))
 }
-/// Decode a versioned [`SignedBlock`] payload produced by the canonical frame
-/// (version byte + Norito header + payload).
+/// Decode the sole canonical framed [`SignedBlock`] wire representation.
+///
+/// Header, version, fixed first-release layout and exact streaming canonical equality are
+/// authenticated by the same owner. Unsupported versions never copy the source frame.
 ///
 /// # Errors
-///
-/// Returns [`iroha_version::error::Error`] if the bytes are malformed, carry an
-/// unsupported version, or fail Norito decoding.
-pub fn decode_versioned_signed_block(
-    bytes: &[u8],
-) -> Result<SignedBlock, iroha_version::error::Error> {
-    use iroha_version::error::Error as VersionError;
-    if bytes.is_empty() {
-        return Err(VersionError::NotVersioned);
-    }
-    let (version, framed_payload) = borrow_framed_signed_block_payload(bytes)
-        .map_err(|err| VersionError::NoritoCodec(err.to_string()))?;
-    decode_framed_versioned_signed_block_inner(version, framed_payload, bytes)
-}
-/// Decode a Norito-framed [`SignedBlock`] payload, validating the header before
-/// delegating to [`decode_versioned_signed_block`].
-///
-/// # Errors
-///
-/// Returns [`iroha_version::error::Error`] when the payload is too short to
-/// carry a version tag, fails Norito header validation, or does not decode into
-/// a valid [`SignedBlock`].
+/// Returns the original captured decoder admission error, distinguishing invalid wire bytes
+/// from a caller resource refusal even after the enclosing decoder scope has retired.
 pub fn decode_framed_signed_block(
     bytes: &[u8],
-) -> Result<SignedBlock, iroha_version::error::Error> {
-    use iroha_version::error::Error as VersionError;
-    if bytes.len() <= 1 {
-        return Err(VersionError::NotVersioned);
-    }
-    let (version, framed_payload) = borrow_framed_signed_block_payload(bytes)
-        .map_err(|err| VersionError::NoritoCodec(err.to_string()))?;
-    decode_framed_versioned_signed_block_inner(version, framed_payload, bytes)
+) -> Result<SignedBlock, norito::core::DecodeAttemptError> {
+    norito::core::classify_decode_attempt(|| {
+        let (version, framed_payload) = borrow_framed_signed_block_payload(bytes)?;
+        decode_framed_versioned_signed_block_inner(version, framed_payload, bytes)
+    })
 }
 fn borrow_framed_signed_block_payload(bytes: &[u8]) -> Result<(u8, &[u8]), NoritoFrameError> {
     let (&version, framed_payload) = bytes
@@ -1680,7 +1683,7 @@ fn encode_signed_block_payload<T: norito::core::SerializePayload>(block: &T) -> 
     norito::core::reset_decode_state();
     norito::codec::encode_adaptive(block)
 }
-fn decode_versioned_signed_block_inner(
+fn decode_bare_versioned_signed_block_inner(
     bare_versioned: &[u8],
     raw_for_error: &[u8],
 ) -> Result<SignedBlock, iroha_version::error::Error> {
@@ -1701,18 +1704,16 @@ fn decode_versioned_signed_block_inner(
 fn decode_framed_versioned_signed_block_inner(
     version: u8,
     framed_payload: &[u8],
-    raw_for_error: &[u8],
-) -> Result<SignedBlock, iroha_version::error::Error> {
-    use iroha_version::{RawVersioned, UnsupportedVersion, error::Error as VersionError};
+    source: &[u8],
+) -> Result<SignedBlock, NoritoFrameError> {
     struct CanonicalSource<'a> {
         remaining: &'a [u8],
+        mismatch: bool,
     }
     impl std::io::Write for CanonicalSource<'_> {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            let Some(prefix) = self.remaining.get(..bytes.len()) else {
-                return Err(std::io::ErrorKind::InvalidData.into());
-            };
-            if prefix != bytes {
+            if self.remaining.get(..bytes.len()) != Some(bytes) {
+                self.mismatch = true;
                 return Err(std::io::ErrorKind::InvalidData.into());
             }
             self.remaining = &self.remaining[bytes.len()..];
@@ -1723,38 +1724,39 @@ fn decode_framed_versioned_signed_block_inner(
         }
     }
     if !SignedBlock::supported_versions().contains(&version) {
-        return Err(VersionError::UnsupportedVersion(Box::new(
-            UnsupportedVersion::new(version, RawVersioned::NoritoBytes(raw_for_error.to_vec())),
-        )));
+        return Err(NoritoFrameError::UnsupportedVersion {
+            found: version,
+            expected: 1,
+        });
     }
-    let view = norito::core::from_bytes_view(framed_payload).map_err(VersionError::from)?;
-    let block = view.decode::<SignedBlock>().map_err(VersionError::from)?;
-    // Count under the canonical writer's flags before allocating its payload
-    // and frame. Malformed alternate-layout input must not expand
-    // beyond the already bounded source frame during canonical authentication.
+    let view = norito::core::from_bytes_view(framed_payload)?;
+    let block = view.decode::<SignedBlock>()?;
+    // Count using the canonical flags; authenticate the source without a second payload or
+    // source-sized frame allocation. Header and decoder limits have already bounded input.
     let canonical_len = {
         let _flags = norito::core::DecodeFlagsGuard::enter(default_encode_flags());
-        norito::core::encoded_payload_len(&block)
-            .map_err(VersionError::from)?
+        norito::core::encoded_payload_len(&block)?
             .checked_add(1 + norito::core::Header::SIZE)
-            .ok_or_else(|| VersionError::from(norito::core::Error::LengthMismatch))?
+            .ok_or(NoritoFrameError::LengthMismatch)?
     };
-    if canonical_len != raw_for_error.len() {
-        return Err(VersionError::from(
-            norito::core::Error::NonCanonicalEncoding,
-        ));
+    if canonical_len != source.len() {
+        return Err(NoritoFrameError::NonCanonicalEncoding);
     }
-    // Authenticate the exact canonical bytes in place. Re-encoding into another payload
-    // and full frame would allocate two unaccounted source-sized buffers during bounded
-    // journal decoding. The canonical writer already counts/checks flags, length and CRC.
     let mut canonical = CanonicalSource {
-        remaining: raw_for_error,
+        remaining: source,
+        mismatch: false,
     };
-    if std::io::Write::write_all(&mut canonical, &[version]).is_err()
-        || norito::core::write_canonical_to_writer(&block, &mut canonical).is_err()
-        || !canonical.remaining.is_empty()
-    {
-        return Err(VersionError::from(NoritoFrameError::NonCanonicalEncoding));
+    if std::io::Write::write_all(&mut canonical, &[version]).is_err() {
+        return Err(NoritoFrameError::NonCanonicalEncoding);
+    }
+    let encoded = norito::core::write_canonical_to_writer(&block, &mut canonical);
+    if canonical.mismatch {
+        return Err(NoritoFrameError::NonCanonicalEncoding);
+    }
+    // A serializer resource error without a byte mismatch is still the original error.
+    encoded?;
+    if !canonical.remaining.is_empty() {
+        return Err(NoritoFrameError::NonCanonicalEncoding);
     }
     Ok(block)
 }

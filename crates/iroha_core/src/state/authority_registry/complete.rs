@@ -1,8 +1,8 @@
 //! Fail-closed admission of the complete State authority inventory.
 //!
 //! The registry describes every physical owner, but a description with a
-//! `Required` schema is not a complete commitment schema. The eventual State
-//! root publisher must call this check before it can expose a finalized root.
+//! `Required` schema is not a complete commitment schema. Admission checks only
+//! schema metadata; it never grants captured-row, publication or finality authority.
 //! Derived dependencies must terminate in canonical values or authenticated
 //! history; an owner container or a node-local cache cannot supply authority.
 //! TODO: fund and consume this check in the State/Kura publication capsule.
@@ -27,6 +27,53 @@ mod governed_registry_source;
 mod native_capture;
 pub(crate) use native_capture::{
     capture_account_alias_table_once, capture_accounts_table_once, capture_domains_table_once,
+};
+
+#[path = "complete/frozen_verifying_keys.rs"]
+pub(in crate::state) mod frozen_verifying_keys;
+
+#[path = "complete/frozen_proofs.rs"]
+pub(in crate::state) mod frozen_proofs;
+
+#[path = "complete/frozen_domain_ownership.rs"]
+pub(in crate::state) mod frozen_domain_ownership;
+
+#[path = "complete/frozen_account_identity.rs"]
+pub(in crate::state) mod frozen_account_identity;
+
+#[path = "complete/frozen_account_aliases.rs"]
+pub(in crate::state) mod frozen_account_aliases;
+
+#[path = "complete/frozen_contract_subjects.rs"]
+pub(in crate::state) mod frozen_contract_subjects;
+
+mod frozen_account_rekeys;
+#[path = "complete/frozen_escrows.rs"]
+pub(in crate::state) mod frozen_escrows;
+#[path = "complete/frozen_nfts_rwas.rs"]
+mod frozen_nfts_rwas;
+mod frozen_repo_agreements;
+
+#[path = "complete/frozen_assets.rs"]
+pub(in crate::state) mod frozen_assets;
+
+#[path = "complete/frozen_asset_definitions.rs"]
+pub(in crate::state) mod frozen_asset_definitions;
+
+#[path = "complete/frozen_contract_aliases.rs"]
+pub(in crate::state) mod frozen_contract_aliases;
+
+#[path = "complete/frozen_validation_fee_proposals.rs"]
+pub(in crate::state) mod frozen_validation_fee_proposals;
+
+#[path = "complete/grouped_capture.rs"]
+mod grouped_capture;
+pub(crate) use grouped_capture::{
+    capture_account_rekey_records_once, capture_asset_definitions_once, capture_assets_once,
+    capture_contract_alias_bindings_once, capture_contract_subject_bindings_once,
+    capture_escrows_once, capture_governance_proposals_once, capture_nfts_once,
+    capture_proofs_once, capture_repo_agreements_once, capture_rwas_once,
+    capture_verifying_keys_once,
 };
 
 /// A field that cannot yet participate in a complete State commitment.
@@ -117,15 +164,18 @@ fn check_history_field(
     }
 }
 
+mod derivation_path;
+use derivation_path::DerivationPath;
+
 fn check_derivation_source(
     fields: &'static [Field],
     source: &'static str,
-    active: &mut Vec<&'static str>,
+    active: &DerivationPath<'_>,
 ) -> Result<(), CompleteInventoryError> {
     if count_identity(fields, source) != 1 {
         return Err(CompleteInventoryError::UnknownSource(source));
     }
-    if active.contains(&source) {
+    if active.contains(source) {
         return Err(CompleteInventoryError::DerivationCycle(source));
     }
     let field = find_identity(fields, source).expect("unique derivation source remains registered");
@@ -139,12 +189,10 @@ fn check_derivation_source(
             Err(CompleteInventoryError::NonAuthoritySource(source))
         }
         Role::Derived { sources, .. } => {
-            active.push(source);
-            let result = sources
+            let next = active.child(source);
+            sources
                 .iter()
-                .try_for_each(|next| check_derivation_source(fields, next, active));
-            active.pop();
-            result
+                .try_for_each(|source| check_derivation_source(fields, source, &next))
         }
     }
 }
@@ -218,10 +266,10 @@ fn check_field(
             }
             match check {
                 DerivationCheck::Rebuild(_) => {
-                    let mut active = vec![field.id];
-                    sources.iter().try_for_each(|source| {
-                        check_derivation_source(fields, source, &mut active)
-                    })?;
+                    let active = DerivationPath::root(field.id);
+                    sources
+                        .iter()
+                        .try_for_each(|source| check_derivation_source(fields, source, &active))?;
                 }
                 // A commitment derives from whole owners: their canonical descendants.
                 DerivationCheck::Commitment(_) => {
@@ -273,13 +321,13 @@ pub(crate) fn require_complete_inventory(
     result
 }
 
-/// Require the actual exhaustively typed State inventory to be complete.
+/// Admit the actual typed inventory's schema metadata, without capturing State authority.
 pub(crate) fn require_complete_state_inventory() -> Result<(), CompleteInventoryError> {
     require_complete_inventory(STATE_FIELDS)
 }
 
 mod composition;
-mod table_capture;
+pub(in crate::state) mod table_capture;
 
 #[cfg(test)]
 #[path = "complete/native_history_tests.rs"]
@@ -344,6 +392,7 @@ mod tests {
         world
             .account_aliases
             .insert(second_alias.clone(), second_owner.clone());
+        world.rebuild_account_alias_index().unwrap();
         let mut state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -448,6 +497,7 @@ mod tests {
             .world
             .account_aliases
             .insert(first_alias.clone(), second_owner);
+        state.world.rebuild_account_alias_index().unwrap();
         let substituted = capture_account_alias_table_once(&state, limits)
             .expect("bounded substituted table")
             .expect("stable generation");
@@ -459,13 +509,18 @@ mod tests {
     }
 
     #[test]
-    fn actual_state_cannot_claim_complete_authority_while_any_projection_is_required() {
-        assert_eq!(
-            require_complete_state_inventory(),
-            Err(CompleteInventoryError::RequiredSchema(
-                "state.kagemusha_v1_runtime_verifier"
-            ))
-        );
+    fn actual_inventory_admits_governed_authority_without_local_runtime_artifacts() {
+        assert_eq!(require_complete_state_inventory(), Ok(()));
+        assert!(matches!(
+            find_identity(STATE_FIELDS, "world.kagemusha_verifier_registry")
+                .unwrap()
+                .role,
+            Role::Canonical(Canonical::Cell(Schema::Norito { .. }))
+        ));
+        let local = find_identity(STATE_FIELDS, "state.kagemusha_v1_runtime_verifier").unwrap();
+        assert!(matches!(local.role, Role::Local(_)));
+        assert_eq!(local.disclosure, Disclosure::NotApplicable);
+        // This checks only static identities and schemas. No State owner was captured.
     }
 
     #[test]
@@ -494,7 +549,7 @@ mod tests {
                         checked += 1;
                         continue;
                     }
-                    check_derivation_source(STATE_FIELDS, source, &mut vec![field.id])
+                    check_derivation_source(STATE_FIELDS, source, &DerivationPath::root(field.id))
                         .unwrap_or_else(|error| {
                             panic!(
                                 "{} has an unauthenticated derivation chain: {error}",

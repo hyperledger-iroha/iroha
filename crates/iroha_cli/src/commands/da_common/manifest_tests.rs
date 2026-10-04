@@ -88,10 +88,6 @@ fn manifest_fetcher_rejects_invalid_base_urls_before_construction() {
     let config = crate::fallback_config();
     for (url, expected) in [
         (
-            "https://node.example/tenant",
-            AuthorityContextError::EndpointPathMissingTrailingSlash,
-        ),
-        (
             "https://node.example/?ticket=wrong",
             AuthorityContextError::EndpointHasQueryOrFragment,
         ),
@@ -107,10 +103,10 @@ fn manifest_fetcher_rejects_invalid_base_urls_before_construction() {
         let error = DaManifestFetcher::new(&config, Some(url))
             .err()
             .expect("invalid base URL must fail");
-        assert_eq!(
-            error.downcast_ref::<Error>(),
-            Some(&Error::Context(expected))
-        );
+        let Some(Error::Context(actual)) = error.downcast_ref::<Error>() else {
+            panic!("expected a typed context error: {error:?}");
+        };
+        assert_eq!(actual, &expected);
         assert_eq!(config.torii_api_url.as_str(), "http://127.0.0.1:8080/");
     }
 }
@@ -140,15 +136,19 @@ fn manifest_fetcher_preserves_http_errors_and_response_ticket_binding() {
             .unwrap())
     });
     let error = fetcher.fetch(TICKET).unwrap_err();
-    assert_eq!(
-        error.downcast_ref::<Error>(),
-        Some(&Error::Http {
-            operation: OPERATION,
-            status: 503,
-            retry_after: Some(Duration::from_secs(3)),
-            body: b"unavailable".to_vec(),
-        })
-    );
+    let Some(Error::Http {
+        operation,
+        status,
+        retry_after,
+        body,
+    }) = error.downcast_ref::<Error>()
+    else {
+        panic!("expected a typed HTTP error: {error:?}");
+    };
+    assert_eq!(*operation, OPERATION);
+    assert_eq!(*status, 503);
+    assert_eq!(*retry_after, Some(Duration::from_secs(3)));
+    assert_eq!(body.as_slice(), b"unavailable");
     let requests = requests.lock().unwrap();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].url.path(), format!("/v1/da/manifests/{TICKET}"));
@@ -176,13 +176,11 @@ fn manifest_fetcher_preserves_http_errors_and_response_ticket_binding() {
             .unwrap())
     });
     let error = fetcher.fetch(TICKET).unwrap_err();
-    assert_eq!(
-        error.downcast_ref::<Error>(),
-        Some(&Error::ResponseBinding {
-            operation: OPERATION,
-            field: "storage_ticket",
-        })
-    );
+    let Some(Error::ResponseBinding { operation, field }) = error.downcast_ref::<Error>() else {
+        panic!("expected a typed response binding error: {error:?}");
+    };
+    assert_eq!(*operation, OPERATION);
+    assert_eq!(*field, "storage_ticket");
     assert_eq!(requests.lock().unwrap().len(), 1);
 }
 

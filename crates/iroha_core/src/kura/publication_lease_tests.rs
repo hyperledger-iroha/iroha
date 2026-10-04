@@ -28,9 +28,25 @@ impl Wake for WakeCount {
     }
 }
 
-fn poll(wait: &mut iroha_allocation::release::ReleaseFuture, count: &Arc<WakeCount>) -> Poll<()> {
+fn poll(
+    wait: &mut iroha_allocation::release::ReleaseFuture<'_>,
+    count: &Arc<WakeCount>,
+) -> Poll<()> {
     let waker = Waker::from(Arc::clone(count));
     Pin::new(wait).poll(&mut Context::from_waker(&waker))
+}
+
+fn reclaim_registration(kura: &Kura, registration: iroha_allocation::release::ReleaseRegistration) {
+    let budget = kura.transaction_history_budget();
+    assert!(registration.belongs_to(&budget));
+    let reserved = budget.reserved_bytes();
+    let bytes = iroha_allocation::release::ReleaseRegistration::allocation_layout().size();
+    assert!(
+        reserved >= bytes,
+        "physical waiter remains charged after cancellation"
+    );
+    drop(registration);
+    assert_eq!(budget.reserved_bytes(), reserved - bytes);
 }
 
 fn busy(kura: &Kura, expected: &str) -> iroha_allocation::release::ReleaseWait {
@@ -70,8 +86,10 @@ fn every_busy_kura_fence_releases_earlier_guards_and_wakes_only_on_its_owner() {
     let kura = Kura::blank_kura_for_testing();
     let other = Kura::blank_kura_for_testing();
     for (blocked, (name, lock)) in fences(&kura).into_iter().enumerate() {
+        let mut registration =
+            crate::unit_test_support::release_registration(&kura.transaction_history_budget());
         let held = lock.lock();
-        let mut wait = busy(&kura, name).wait_for_release();
+        let mut wait = busy(&kura, name).wait_for_release(&mut registration);
         let count = Arc::new(WakeCount::default());
         assert!(poll(&mut wait, &count).is_pending());
         for (index, (_, unlocked)) in fences(&kura).into_iter().enumerate() {
@@ -90,6 +108,8 @@ fn every_busy_kura_fence_releases_earlier_guards_and_wakes_only_on_its_owner() {
         assert_eq!(count.0.load(Ordering::SeqCst), 1);
         assert!(poll(&mut wait, &count).is_ready());
         drop(kura.try_publication_lease().expect("exact owner retry"));
+        drop(wait);
+        reclaim_registration(&kura, registration);
     }
     assert_eq!(kura.exact_durable_blocks_count().unwrap(), 0);
 }
@@ -98,15 +118,21 @@ fn every_busy_kura_fence_releases_earlier_guards_and_wakes_only_on_its_owner() {
 fn joint_kura_lease_holds_every_actual_fence_and_unwind_releases_each() {
     let kura = Kura::blank_kura_for_testing();
     for abort in [false, true] {
+        let mut registrations: Vec<_> = (0..4)
+            .map(|_| {
+                crate::unit_test_support::release_registration(&kura.transaction_history_budget())
+            })
+            .collect();
         let lease = kura.try_publication_lease().expect("all fences acquired");
         let count = Arc::new(WakeCount::default());
         let mut waits: Vec<_> = fences(&kura)
             .into_iter()
-            .map(|(_, lock)| {
+            .zip(registrations.iter_mut())
+            .map(|((_, lock), registration)| {
                 lock.try_lock_or_wait()
                     .err()
                     .expect("lease owns actual fence")
-                    .wait_for_release()
+                    .wait_for_release(registration)
             })
             .collect();
         for wait in &mut waits {
@@ -129,6 +155,10 @@ fn joint_kura_lease_holds_every_actual_fence_and_unwind_releases_each() {
             kura.try_publication_lease()
                 .expect("no poisoning on unwind"),
         );
+        drop(waits);
+        for registration in registrations {
+            reclaim_registration(&kura, registration);
+        }
     }
     assert_eq!(kura.exact_durable_blocks_count().unwrap(), 0);
 }
@@ -136,8 +166,10 @@ fn joint_kura_lease_holds_every_actual_fence_and_unwind_releases_each() {
 #[test]
 fn real_canonical_lease_wakes_the_physical_wait() {
     let kura = Kura::blank_kura_for_testing();
+    let mut registration =
+        crate::unit_test_support::release_registration(&kura.transaction_history_budget());
     let canonical = kura.canonical_publication_lease();
-    let mut wait = busy(&kura, "canonical_chain_lock").wait_for_release();
+    let mut wait = busy(&kura, "canonical_chain_lock").wait_for_release(&mut registration);
     let count = Arc::new(WakeCount::default());
     assert!(poll(&mut wait, &count).is_pending());
     drop(canonical);
@@ -147,23 +179,33 @@ fn real_canonical_lease_wakes_the_physical_wait() {
         kura.try_publication_lease()
             .expect("exact retry after production lease"),
     );
+    drop(wait);
+    reclaim_registration(&kura, registration);
 }
 
 #[test]
 fn release_before_registration_and_successor_contention_remain_distinct() {
     let kura = Kura::blank_kura_for_testing();
     for (name, lock) in fences(&kura) {
+        let mut before_registration =
+            crate::unit_test_support::release_registration(&kura.transaction_history_budget());
+        let mut after_registration =
+            crate::unit_test_support::release_registration(&kura.transaction_history_budget());
         let held = lock.lock();
-        let mut before = busy(&kura, name).wait_for_release();
+        let mut before = busy(&kura, name).wait_for_release(&mut before_registration);
         drop(held);
         let successor = lock.lock();
-        let mut after = busy(&kura, name).wait_for_release();
+        let mut after = busy(&kura, name).wait_for_release(&mut after_registration);
         let count = Arc::new(WakeCount::default());
         assert!(poll(&mut before, &count).is_ready());
         assert!(poll(&mut after, &count).is_pending());
         drop(successor);
         assert!(poll(&mut after, &count).is_ready());
         assert_eq!(count.0.load(Ordering::SeqCst), 1);
+        drop(before);
+        drop(after);
+        reclaim_registration(&kura, before_registration);
+        reclaim_registration(&kura, after_registration);
     }
 }
 
@@ -222,9 +264,13 @@ fn storage_reconstruction_errors_release_all_fences_without_a_busy_retry() {
 fn cancellation_of_one_waiter_does_not_consume_another_waiters_release() {
     let kura = Kura::blank_kura_for_testing();
     for (name, lock) in fences(&kura) {
+        let mut canceled_registration =
+            crate::unit_test_support::release_registration(&kura.transaction_history_budget());
+        let mut retained_registration =
+            crate::unit_test_support::release_registration(&kura.transaction_history_budget());
         let held = lock.lock();
-        let mut canceled = busy(&kura, name).wait_for_release();
-        let mut retained = busy(&kura, name).wait_for_release();
+        let mut canceled = busy(&kura, name).wait_for_release(&mut canceled_registration);
+        let mut retained = busy(&kura, name).wait_for_release(&mut retained_registration);
         let canceled_count = Arc::new(WakeCount::default());
         let retained_count = Arc::new(WakeCount::default());
         assert!(poll(&mut canceled, &canceled_count).is_pending());
@@ -234,6 +280,9 @@ fn cancellation_of_one_waiter_does_not_consume_another_waiters_release() {
         assert_eq!(canceled_count.0.load(Ordering::SeqCst), 0);
         assert_eq!(retained_count.0.load(Ordering::SeqCst), 1);
         assert!(poll(&mut retained, &retained_count).is_ready());
+        drop(retained);
+        reclaim_registration(&kura, canceled_registration);
+        reclaim_registration(&kura, retained_registration);
     }
 }
 
@@ -259,6 +308,11 @@ fn deferred_kura_lease_unlocks_every_original_fence_before_reentrant_callbacks()
     for unwind in [false, true] {
         let kura = Kura::blank_kura_for_testing();
         let outer = Arc::new(PublicationMutex::default());
+        let mut registrations: Vec<_> = (0..4)
+            .map(|_| {
+                crate::unit_test_support::release_registration(&kura.transaction_history_budget())
+            })
+            .collect();
         let guard = outer.lock();
         let lease = kura.try_publication_lease().unwrap();
         let probe = Arc::new(Reenter {
@@ -269,7 +323,13 @@ fn deferred_kura_lease_unlocks_every_original_fence_before_reentrant_callbacks()
         let waker = Waker::from(Arc::clone(&probe));
         let mut waits: Vec<_> = fences(&kura)
             .into_iter()
-            .map(|(_, lock)| lock.try_lock_or_wait().err().unwrap().wait_for_release())
+            .zip(registrations.iter_mut())
+            .map(|((_, lock), registration)| {
+                lock.try_lock_or_wait()
+                    .err()
+                    .unwrap()
+                    .wait_for_release(registration)
+            })
             .collect();
         for wait in &mut waits {
             assert!(
@@ -302,6 +362,10 @@ fn deferred_kura_lease_unlocks_every_original_fence_before_reentrant_callbacks()
             );
         }
         assert_eq!(kura.exact_durable_blocks_count().unwrap(), 0);
+        drop(waits);
+        for registration in registrations {
+            reclaim_registration(&kura, registration);
+        }
     }
 }
 
@@ -325,13 +389,17 @@ impl Wake for ReenterEveryKuraFence {
 fn partial_kura_refusal_releases_every_acquired_fence_before_callbacks() {
     let kura = Kura::blank_kura_for_testing();
     for (blocked, lock) in fences(&kura).into_iter().skip(1) {
+        let mut first_registration =
+            crate::unit_test_support::release_registration(&kura.transaction_history_budget());
+        let mut refused_registration =
+            crate::unit_test_support::release_registration(&kura.transaction_history_budget());
         let first = kura.prune_lock.lock();
         let mut wait = kura
             .prune_lock
             .try_lock_or_wait()
             .err()
             .unwrap()
-            .wait_for_release();
+            .wait_for_release(&mut first_registration);
         let initial = first.release_deferred();
         let callback = Arc::new(ReenterEveryKuraFence {
             kura: Arc::clone(&kura),
@@ -345,7 +413,7 @@ fn partial_kura_refusal_releases_every_acquired_fence_before_callbacks() {
                 .is_pending()
         );
         let held = lock.lock();
-        let mut refused = busy(&kura, blocked).wait_for_release();
+        let mut refused = busy(&kura, blocked).wait_for_release(&mut refused_registration);
         assert_eq!(callback.wakes.load(Ordering::SeqCst), 1);
         assert!(
             Pin::new(&mut wait)
@@ -366,6 +434,9 @@ fn partial_kura_refusal_releases_every_acquired_fence_before_callbacks() {
         drop(wait);
         drop(initial);
         drop(kura.try_publication_lease().unwrap());
+        drop(refused);
+        reclaim_registration(&kura, first_registration);
+        reclaim_registration(&kura, refused_registration);
     }
 }
 
@@ -374,6 +445,13 @@ fn full_and_partial_kura_abandonment_release_jointly_even_on_unwind() {
     let kura = Kura::blank_kura_for_testing();
     for count in 1..=4 {
         for unwind in [false, true] {
+            let mut registrations: Vec<_> = (0..count)
+                .map(|_| {
+                    crate::unit_test_support::release_registration(
+                        &kura.transaction_history_budget(),
+                    )
+                })
+                .collect();
             let mut owner = AcquiredKuraPublicationFences::new();
             owner.prune = Some(kura.prune_lock.lock());
             if count >= 2 {
@@ -394,7 +472,13 @@ fn full_and_partial_kura_abandonment_release_jointly_even_on_unwind() {
             let mut waits: Vec<_> = fences(&kura)
                 .into_iter()
                 .take(count)
-                .map(|(_, lock)| lock.try_lock_or_wait().err().unwrap().wait_for_release())
+                .zip(registrations.iter_mut())
+                .map(|((_, lock), registration)| {
+                    lock.try_lock_or_wait()
+                        .err()
+                        .unwrap()
+                        .wait_for_release(registration)
+                })
                 .collect();
             for wait in &mut waits {
                 assert!(
@@ -416,9 +500,15 @@ fn full_and_partial_kura_abandonment_release_jointly_even_on_unwind() {
                         .is_ready()
                 );
             }
+            drop(waits);
+            for registration in registrations {
+                reclaim_registration(&kura, registration);
+            }
         }
     }
     // The actual successful production wrapper must retain this same owner.
+    let mut registration =
+        crate::unit_test_support::release_registration(&kura.transaction_history_budget());
     let lease = kura.try_publication_lease().unwrap();
     let callback = Arc::new(ReenterEveryKuraFence {
         kura: Arc::clone(&kura),
@@ -431,7 +521,7 @@ fn full_and_partial_kura_abandonment_release_jointly_even_on_unwind() {
         .try_lock_or_wait()
         .err()
         .unwrap()
-        .wait_for_release();
+        .wait_for_release(&mut registration);
     assert!(
         Pin::new(&mut wait)
             .poll(&mut Context::from_waker(&waker))
@@ -444,6 +534,8 @@ fn full_and_partial_kura_abandonment_release_jointly_even_on_unwind() {
             .poll(&mut Context::from_waker(Waker::noop()))
             .is_ready()
     );
+    drop(wait);
+    reclaim_registration(&kura, registration);
 }
 
 #[test]
@@ -458,13 +550,15 @@ fn original_prior_fence_wakes_after_native_success_and_storage_refusal() {
             kura.invalidate_pending_budget_cache();
             kura.invalidate_durable_budget_snapshot();
         }
+        let mut registration =
+            crate::unit_test_support::release_registration(&kura.transaction_history_budget());
         let canonical = kura.canonical_chain_lock.lock();
         let mut wait = kura
             .canonical_chain_lock
             .try_lock_or_wait()
             .err()
             .unwrap()
-            .wait_for_release();
+            .wait_for_release(&mut registration);
         let initial = canonical.release_deferred();
         let callback = Arc::new(ReenterEveryKuraFence {
             kura: Arc::clone(&kura),
@@ -495,6 +589,7 @@ fn original_prior_fence_wakes_after_native_success_and_storage_refusal() {
         );
         drop(wait);
         drop(initial);
+        reclaim_registration(&kura, registration);
     }
 }
 
@@ -502,13 +597,15 @@ fn original_prior_fence_wakes_after_native_success_and_storage_refusal() {
 fn repeated_native_pending_lookups_retain_original_fences_through_unwind() {
     let (_directory, kura, expected) = super::super::tests::pending_native_capacity_fixture();
     let scans_before = kura.pending_budget_raw_scans.load(Ordering::Relaxed);
+    let mut registration =
+        crate::unit_test_support::release_registration(&kura.transaction_history_budget());
     let canonical = kura.canonical_chain_lock.lock();
     let mut wait = kura
         .canonical_chain_lock
         .try_lock_or_wait()
         .err()
         .unwrap()
-        .wait_for_release();
+        .wait_for_release(&mut registration);
     let initial = canonical.release_deferred();
     let callback = Arc::new(ReenterEveryKuraFence {
         kura: Arc::clone(&kura),
@@ -555,4 +652,5 @@ fn repeated_native_pending_lookups_retain_original_fences_through_unwind() {
     );
     drop(wait);
     drop(initial);
+    reclaim_registration(&kura, registration);
 }

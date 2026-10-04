@@ -30,8 +30,8 @@ impl FinalizedRegistrationCheckedStorageBackendV1 {
     }
 }
 
-impl MusubiStorageCoordinationBackendV1 for FinalizedRegistrationCheckedStorageBackendV1 {
-    fn verify_current_registration(
+impl FinalizedRegistrationCheckedStorageBackendV1 {
+    fn verify_archive(
         &self,
         request: &MusubiStorageCoordinationRequestV1,
     ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
@@ -51,7 +51,8 @@ impl MusubiStorageCoordinationBackendV1 for FinalizedRegistrationCheckedStorageB
             .reader
             .read_current_archive(&query)
             .map_err(|error| match error {
-                MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::LocallyAhead => {
+                MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::LocallyAhead
+                | MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Deferred(_) => {
                     MusubiPublicationServiceBackendErrorV1::Retryable
                 }
                 MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Invalid => {
@@ -63,12 +64,27 @@ impl MusubiStorageCoordinationBackendV1 for FinalizedRegistrationCheckedStorageB
         }
         Ok(())
     }
+}
+impl MusubiStorageCoordinationBackendV1 for FinalizedRegistrationCheckedStorageBackendV1 {
+    fn verify_current_registration(
+        &self,
+        request: &MusubiStorageCoordinationRequestV1,
+    ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
+        self.verify_archive(request)?;
+        self.delegate.verify_current_registration(request)
+    }
 
     fn coordinate_storage(
         &mut self,
-        request: &MusubiStorageCoordinationRequestV1,
+        request: &iroha_musubi_service::VerifiedStorageCoordinationRequestV1<'_>,
     ) -> Result<MusubiStorageCoordinationResponseV1, MusubiPublicationServiceBackendErrorV1> {
-        self.verify_current_registration(request)?;
+        if std::time::Instant::now() >= request.deadline() {
+            return Err(MusubiPublicationServiceBackendErrorV1::Retryable);
+        }
+        self.verify_archive(request.request())?;
+        if std::time::Instant::now() >= request.deadline() {
+            return Err(MusubiPublicationServiceBackendErrorV1::Retryable);
+        }
         self.delegate.coordinate_storage(request)
     }
 }

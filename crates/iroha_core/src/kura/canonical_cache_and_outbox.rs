@@ -1,4 +1,7 @@
-type BlockDataEntry = (HashOf<BlockHeader>, Option<Arc<SignedBlock>>);
+type BlockDataEntry = (
+    HashOf<BlockHeader>,
+    Option<iroha_data_model::block::SharedSignedBlock>,
+);
 
 /// Canonical block identities and the bounded body cache.
 ///
@@ -87,9 +90,8 @@ impl BlockData {
         self.get(index).map(|(hash, _)| *hash)
     }
 
-    fn cached_body(&self, index: usize) -> Option<Arc<SignedBlock>> {
-        self.get(index)
-            .and_then(|(_, body)| body.as_ref().map(Arc::clone))
+    fn cached_body(&self, index: usize) -> Option<iroha_data_model::block::SharedSignedBlock> {
+        self.get(index).and_then(|(_, body)| body.clone())
     }
 
     fn cache_hash(&mut self, index: usize, hash: HashOf<BlockHeader>) {
@@ -111,7 +113,7 @@ impl BlockData {
         &mut self,
         index: usize,
         hash: HashOf<BlockHeader>,
-        body: Arc<SignedBlock>,
+        body: iroha_data_model::block::SharedSignedBlock,
     ) -> bool {
         match self {
             Self::Dense(entries) => {

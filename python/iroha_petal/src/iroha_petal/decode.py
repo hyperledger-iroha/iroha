@@ -3,13 +3,18 @@
 
 """From a camera luma plane to lane data.
 
-The decoder locates the four finders, derives a homography for each
-orientation hypothesis, picks the orientation whose ring gates line up (and
-whose lane ``D`` codeword checks out), then reads the tiles and dots. Every
-tile is classified *jointly*: the 8x8 sample patch is compared against the 32
-hypotheses (polarity x glyph) and the best match wins, so the katakana and the
-light/dark bit help each other. Cells the decoder is unsure about become
-Reed-Solomon erasures.
+The decoder locates the corner finders, derives a homography for each
+orientation hypothesis, ranks the hypotheses by their ring gates and the ``天``
+mask, picks the one whose lane ``D`` codeword checks out (or whose tile lanes
+read), then reads the tiles and dots. Every tile is classified *jointly*: the
+8x8 sample patch is compared against the 32 hypotheses (polarity x glyph) and
+the best match wins, so the katakana and the light/dark bit help each other.
+Cells the decoder is unsure about become Reed-Solomon erasures.
+
+When a thumb, a glare or the edge of the frame hides one corner blossom, the
+other three locate the code and the hidden corner is inferred, then moved to
+where the three dotted rings line up best. :func:`track_frame` follows a code
+from the previous frame's pose without searching the whole image.
 
 The tile *level read* judges every patch against the light and dark levels
 measured at the finders. When it leaves lane ``P`` or ``K`` unreadable, the
@@ -26,20 +31,23 @@ from __future__ import annotations
 
 import enum
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import reduce
 from operator import add, mul, sub
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from ._numeric import F64_MAX, NAN, ieee_div, total_key
+from ._numeric import F64_MAX, NAN, f64_max, f64_min, ieee_div, total_key
 from .glyphs import GLYPH_COUNT, TEMPLATE_N, TEMPLATES
 from .image import Homography, Luma
 from .lanes import D_WORD, K_WORD, P_WORD, FrameCells, Lane, decode_lane_counted
 from .layout import (
     FINDER_CENTERS,
     GLYPH_BOX,
+    MASK,
     RING_COUNT,
     TILE_COUNT,
+    TILE_ORIGIN,
+    TILE_PITCH,
     TOTAL_SLOTS,
     data_slots,
     gate_slots,
@@ -48,7 +56,7 @@ from .layout import (
     split_slot,
     tile_center,
 )
-from .locate import Finder, locate
+from .locate import Finder, FinderSet, candidates, follow
 from .rs import RsError
 from .stream import AtomPacket, Beacon, DLane, StreamAssembler, parse_atom_lane, parse_d_lane
 
@@ -60,6 +68,7 @@ __all__ = [
     "DecodeError",
     "decode_frame",
     "decode_frame_at",
+    "track_frame",
     "observed_cells",
     "tile_match_error",
     "INK_ON_LIGHT",
@@ -126,6 +135,10 @@ class DecodedFrame:
     k: Optional[LaneResult]
     #: Lane ``D`` result.
     d: Optional[LaneResult]
+    #: The corner finder that was hidden (by a finger, a glare or the edge of
+    #: the frame) and inferred from the other three, as its canonical index:
+    #: 0 top-left, 1 top-right, 2 bottom-right, 3 bottom-left of the upright code.
+    inferred_corner: Optional[int] = None
 
     @property
     def lanes_ok(self) -> int:
@@ -291,10 +304,19 @@ _FINDER_RING = tuple(
 )
 
 
-def _reference_levels(project: Projector) -> Optional[_Reference]:
-    lit = []
-    dark = []
-    for cx, cy in FINDER_CENTERS:
+def _reference_levels(project: Projector, inferred: Optional[int] = None) -> Optional[_Reference]:
+    """Light and dark levels at the four corners: the solid blossom core, and the black
+    canvas 100 units inward of it.
+
+    An ``inferred`` corner (canonical index) was not seen, so its levels are
+    extrapolated from the other three by the parallelogram rule and kept within their
+    range; they must differ by 12 like a seen corner's.
+    """
+    lit = [0.0] * 4
+    dark = [0.0] * 4
+    for i, (cx, cy) in enumerate(FINDER_CENTERS):
+        if i == inferred:
+            continue
         total = project(cx, cy)
         for ox, oy in _FINDER_RING:
             total += project(cx + ox, cy + oy)
@@ -304,10 +326,30 @@ def _reference_levels(project: Projector) -> Optional[_Reference]:
         a = _dot_samples(project, cx + sx * 100.0, cy, 5.0)
         b = _dot_samples(project, cx, cy + sy * 100.0, 5.0)
         dark_level = 0.5 * (a + b)
-        if lit_level - dark_level < 12.0:
+        contrast = lit_level - dark_level
+        # also refuses NaN levels, which only a non-finite pose can produce
+        if not math.isfinite(contrast) or contrast < 12.0:
             return None
-        lit.append(lit_level)
-        dark.append(dark_level)
+        lit[i] = lit_level
+        dark[i] = dark_level
+    if inferred is not None:
+        m = inferred
+        n1 = (m + 1) % 4
+        opposite = (m + 2) % 4
+        n2 = (m + 3) % 4
+        for levels in (lit, dark):
+            low = min(levels[n1], levels[opposite], levels[n2])
+            high = max(levels[n1], levels[opposite], levels[n2])
+            value = levels[n1] + levels[n2] - levels[opposite]
+            if value < low:
+                value = low
+            elif value > high:
+                value = high
+            levels[m] = value
+        # uneven light can push the estimates past each other; an inferred corner
+        # needs the same contrast as a seen one
+        if lit[m] - dark[m] < 12.0:
+            return None
     return _Reference(tuple(lit), tuple(dark))
 
 
@@ -335,6 +377,125 @@ def _gate_score(project: Projector, reference: _Reference) -> float:
     gates = [_normalised_dot(project, reference, s) for s in _GATES]
     guards = [_normalised_dot(project, reference, s) for s in _GUARDS]
     return _sequential_sum(gates) / len(gates) - _sequential_sum(guards) / len(guards)
+
+
+#: Centres of the lattice cells outside the ``天`` mask (no tile is ever drawn there),
+#: row-major.
+_EMPTY_CELLS = tuple(
+    (TILE_ORIGIN + TILE_PITCH * (col + 0.5), TILE_ORIGIN + TILE_PITCH * (row + 0.5))
+    for row, line in enumerate(MASK)
+    for col, mark in enumerate(line)
+    if mark != "#"
+)
+
+
+def _mask_score(project: Projector, reference: _Reference) -> float:
+    """How well the ``天`` lines up: the mean normalised level over the tiles (each sampled
+    at five points across the tile, so a glyph stroke at the centre does not decide it)
+    minus the mean over the empty lattice cells.
+
+    The mask is symmetric left to right but not top to bottom, so this tells the four
+    quarter turns apart even when the ring gates are damaged.
+    """
+
+    def level_sum(points: Sequence[Tuple[float, float]]) -> float:
+        total = None
+        at = reference.at
+        for x, y in points:
+            lit, dark = at(x, y)
+            samples = project(x + 0.0, y + 0.0)
+            samples += project(x + 8.0, y + 0.0)
+            samples += project(x + -8.0, y + 0.0)
+            samples += project(x + 0.0, y + 8.0)
+            samples += project(x + 0.0, y + -8.0)
+            value = ieee_div(samples / 5.0 - dark, lit - dark)
+            total = value if total is None else total + value
+        return 0.0 if total is None else total
+
+    tiles = level_sum(_TILE_CENTERS) / TILE_COUNT
+    empty = level_sum(_EMPTY_CELLS) / len(_EMPTY_CELLS)
+    return tiles - empty
+
+
+def _canonical_corner(index: int, rotation: int, mirrored: bool) -> int:
+    """Canonical index of the corner at index ``index`` of a finder quad under one
+    orientation hypothesis."""
+    if mirrored:
+        return (rotation + 4 - index) % 4
+    return (index + 4 - rotation) % 4
+
+
+#: The five sample points of every ring slot, in flat slot order (``_dot_samples`` with
+#: spread 3.5, coordinates computed exactly as there).
+_RING_SAMPLES = tuple(
+    (x + 0.0, y + 0.0, x + 3.5, y + 0.0, x + -3.5, y + 0.0, x + 0.0, y + 3.5, x + 0.0, y + -3.5)
+    for x, y in _SLOT_POINTS
+)
+
+
+def _ring_brightness(image: Luma, corners: Sequence[Tuple[float, float]]) -> Optional[float]:
+    """The brightness summed over all ring slots under the pose that maps the canonical
+    corners onto ``corners`` (in quad order).
+
+    The slots form the same set of points under every quarter turn and mirror of the
+    canvas (80, 92 and 104 are multiples of four), so the value does not depend on the
+    orientation.
+    """
+    h = Homography.from_points(_CANONICAL, corners)
+    if h is None:
+        return None
+    project = _projector(image, h)
+    # every sample is at least +0.0 (or NaN), so starting the sum at 0.0, as the
+    # reference's `dot_samples` and slot sum do, adds nothing
+    total = 0.0
+    for ax, ay, bx, by, cx, cy, dx, dy, ex, ey in _RING_SAMPLES:
+        samples = project(ax, ay)
+        samples += project(bx, by)
+        samples += project(cx, cy)
+        samples += project(dx, dy)
+        samples += project(ex, ey)
+        total += samples / 5.0
+    return total
+
+
+def _refine_inferred_corner(
+    image: Luma, corners: Sequence[Finder], inferred: int
+) -> Tuple[Finder, ...]:
+    """Moves an inferred corner to where the three dotted rings line up best.
+
+    A 13 x 13 search in steps of 2 % of the mean leg around the parallelogram estimate,
+    then a 9 x 9 search in steps of 0.5 % around the best point. The rings fix the
+    geometry only; the orientation is decided afterwards by the gates and the ``天``.
+    """
+    points = [(f.x, f.y) for f in corners]
+    sx, sy = points[inferred]
+
+    def distance(other: int) -> float:
+        ex = points[other][0] - sx
+        ey = points[other][1] - sy
+        return math.sqrt(ex * ex + ey * ey)
+
+    leg = 0.5 * (distance((inferred + 1) % 4) + distance((inferred + 3) % 4))
+    best = [-F64_MAX, (sx, sy)]
+
+    def search(centre: Tuple[float, float], step: float, reach: int) -> None:
+        cx, cy = centre
+        for dy in range(-reach, reach + 1):
+            y = cy + dy * step
+            for dx in range(-reach, reach + 1):
+                candidate = (cx + dx * step, y)
+                points[inferred] = candidate
+                brightness = _ring_brightness(image, points)
+                if brightness is not None and brightness > best[0]:
+                    best[0] = brightness
+                    best[1] = candidate
+
+    search((sx, sy), 0.02 * leg, 6)
+    search(best[1], 0.005 * leg, 4)
+    refined = list(corners)
+    bx, by = best[1]
+    refined[inferred] = Finder(bx, by, corners[inferred].size)
+    return tuple(refined)
 
 
 def _read_dots(project: Projector, reference: _Reference) -> Tuple[bytearray, List[float]]:
@@ -490,15 +651,6 @@ def _sample_patches(project: Projector) -> List[List[float]]:
                 patch.append(total / 4.0)
         patches.append(patch)
     return patches
-
-
-def _f64_min(a: float, b: float) -> float:
-    """Rust's ``f64::min``: a NaN operand yields the other operand."""
-    if a != a:
-        return b
-    if b != b:
-        return a
-    return a if a < b else b
 
 
 def _sorted_total(values: Sequence[float]) -> List[float]:
@@ -665,10 +817,10 @@ def _tile_words(reads: Sequence[_TileRead]) -> Tuple[WordConfidence, WordConfide
     for tile, read in enumerate(reads):
         if read.light:
             p[tile >> 3] |= 1 << (7 - (tile & 7))
-        p_conf[tile >> 3] = _f64_min(p_conf[tile >> 3], read.polarity_margin)
+        p_conf[tile >> 3] = f64_min(p_conf[tile >> 3], read.polarity_margin)
         k[tile >> 1] |= read.glyph << 4 if tile % 2 == 0 else read.glyph
-        k_conf[tile >> 1] = _f64_min(
-            k_conf[tile >> 1], _f64_min(read.glyph_margin, read.polarity_margin)
+        k_conf[tile >> 1] = f64_min(
+            k_conf[tile >> 1], f64_min(read.glyph_margin, read.polarity_margin)
         )
     return (p, p_conf), (k, k_conf)
 
@@ -741,34 +893,142 @@ def _finish(
 def _decode(image: Luma, options: DecodeOptions) -> DecodedFrame:
     if not _supported(image, options):
         raise DecodeError(DecodeErrorKind.UNSUPPORTED_IMAGE)
-    finders = locate(image)
-    if finders is None:
-        raise DecodeError(DecodeErrorKind.NO_FINDERS)
+    located = False
+    for finder_set in candidates(image):
+        located = True
+        frame = _decode_candidate(image, options, finder_set)
+        if frame is not None:
+            return frame
+    raise DecodeError(DecodeErrorKind.NO_ORIENTATION if located else DecodeErrorKind.NO_FINDERS)
+
+
+def _decode_candidate(
+    image: Luma, options: DecodeOptions, finder_set: FinderSet
+) -> Optional[DecodedFrame]:
+    """One candidate finder set: orientation hypotheses ranked by gate score + ``天``
+    score; lane ``D`` under the best three whose gate score is at least 0.2, then the tile
+    lanes under the best four."""
+    index = finder_set.inferred
+    corners = finder_set.corners
+    if index is not None:
+        corners = _refine_inferred_corner(image, corners, index)
     scored = []
-    for rotation, mirrored, h in _hypotheses(finders, options.try_mirrored):
+    for rotation, mirrored, h in _hypotheses(corners, options.try_mirrored):
+        inferred = None if index is None else _canonical_corner(index, rotation, mirrored)
         project = _projector(image, h)
-        reference = _reference_levels(project)
+        reference = _reference_levels(project, inferred)
         if reference is None:
             continue
-        score = _gate_score(project, reference)
-        scored.append((score, rotation, mirrored, h, reference, project))
-    # stable sort, highest score first (Rust: `b.0.total_cmp(&a.0)`)
-    scored.sort(key=lambda entry: total_key(entry[0]), reverse=True)
-    # 1. the ring beacon is the cheapest and strongest orientation check
-    for score, rotation, mirrored, h, reference, project in scored[:3]:
-        if score < 0.2:
-            break
+        gate = _gate_score(project, reference)
+        mask = _mask_score(project, reference)
+        scored.append((gate, mask, rotation, mirrored, h, reference, project, inferred))
+    # stable sort, highest score first (Rust: `(b.0 + b.1).total_cmp(&(a.0 + a.1))`)
+    scored.sort(key=lambda entry: total_key(entry[0] + entry[1]), reverse=True)
+    # 1. the ring beacon is the cheapest and strongest orientation check (the order is by
+    #    gate + `天` score, so a weak gate further down does not end the search)
+    for gate, _, rotation, mirrored, h, reference, project, inferred in scored[:3]:
+        if gate < 0.2:
+            continue
         d = _read_lane_d(project, reference)
         if d is not None:
-            return _finish(project, options, rotation, mirrored, h, reference, d)
+            frame = _finish(project, options, rotation, mirrored, h, reference, d)
+            return replace(frame, inferred_corner=inferred)
     # 2. fall back to the tile lanes under the most promising orientations
-    for _, rotation, mirrored, h, reference, project in scored[:4]:
+    for _, _, rotation, mirrored, h, reference, project, inferred in scored[:4]:
         patches = _sample_patches(project)
         p, k = _read_tile_lanes(patches, reference, options.template_sigmas)
         if p is not None or k is not None:
-            d = _read_lane_d(project, reference)
-            return DecodedFrame(homography=h, rotation=rotation, mirrored=mirrored, p=p, k=k, d=d)
-    raise DecodeError(DecodeErrorKind.NO_ORIENTATION)
+            return DecodedFrame(
+                homography=h,
+                rotation=rotation,
+                mirrored=mirrored,
+                p=p,
+                k=k,
+                d=_read_lane_d(project, reference),
+                inferred_corner=inferred,
+            )
+    return None
+
+
+def _track(image: Luma, previous: DecodedFrame, options: DecodeOptions) -> Optional[DecodedFrame]:
+    corner = previous.inferred_corner
+    # a frame built by the caller may name a corner that does not exist
+    if not _supported(image, options) or (corner is not None and not 0 <= corner <= 3):
+        return None
+    h0 = previous.homography
+    apply = h0.apply
+    expected = []
+    for cx, cy in FINDER_CENTERS:
+        x, y = apply(cx, cy)
+        ax, ay = apply(cx - 60.0, cy)
+        bx, by = apply(cx + 60.0, cy)
+        across = math.sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by))
+        ax, ay = apply(cx, cy - 60.0)
+        bx, by = apply(cx, cy + 60.0)
+        down = math.sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by))
+        expected.append(Finder(x, y, f64_max(across, down)))
+    short = float(min(image.width, image.height))
+    isfinite = math.isfinite
+    for f in expected:
+        if not (isfinite(f.x) and isfinite(f.y) and isfinite(f.size)) or f.size > short:
+            return None
+    previously_inferred = previous.inferred_corner
+    found: List[Optional[Finder]] = [
+        None if i == previously_inferred else follow(image, e) for i, e in enumerate(expected)
+    ]
+    # the mean movement of the corners that were followed predicts the others
+    moved = [(f.x - e.x, f.y - e.y) for f, e in zip(found, expected) if f is not None]
+    if len(moved) < 3:
+        return None
+    shift_x = _sequential_sum([m[0] for m in moved]) / len(moved)
+    shift_y = _sequential_sum([m[1] for m in moved]) / len(moved)
+
+    def predicted(i: int) -> Finder:
+        e = expected[i]
+        return Finder(e.x + shift_x, e.y + shift_y, e.size)
+
+    # a corner that was hidden is seen again only when its blossom is found right where the
+    # others say it is (a bright thumb beside it must not count)
+    if previously_inferred is not None:
+        at = predicted(previously_inferred)
+        again = follow(image, at)
+        if again is not None:
+            ex = again.x - at.x
+            ey = again.y - at.y
+            if not math.sqrt(ex * ex + ey * ey) <= 0.25 * at.size:
+                again = None
+        found[previously_inferred] = again
+    lost = [i for i in range(4) if found[i] is None]
+    inferred: Optional[int] = None
+    if len(lost) == 1:
+        inferred = lost[0]
+        found[inferred] = predicted(inferred)
+    elif lost:
+        return None
+    corners: Tuple[Finder, ...] = tuple(f for f in found if f is not None)
+    if inferred is not None:
+        corners = _refine_inferred_corner(image, corners, inferred)
+    h = Homography.from_points(_CANONICAL, [(f.x, f.y) for f in corners])
+    if h is None:
+        return None
+    project = _projector(image, h)
+    reference = _reference_levels(project, inferred)
+    if reference is None:
+        return None
+    d = _read_lane_d(project, reference)
+    patches = _sample_patches(project)
+    p, k = _read_tile_lanes(patches, reference, options.template_sigmas)
+    if p is None and k is None and d is None:
+        return None
+    return DecodedFrame(
+        homography=h,
+        rotation=previous.rotation,
+        mirrored=previous.mirrored,
+        p=p,
+        k=k,
+        d=d,
+        inferred_corner=inferred,
+    )
 
 
 def _scale(h: Homography, factor: int) -> Homography:
@@ -790,6 +1050,13 @@ def decode_frame(
 ) -> DecodedFrame:
     """Decode one camera frame.
 
+    Tries the finder candidates of :func:`iroha_petal.locate.candidates` in order
+    and returns the first that reads. For each, the orientation hypotheses (four
+    quarter turns, optionally mirrored) are ranked by the ring gates plus the
+    ``天``; lane ``D`` is tried under the best three whose gate score is at least
+    0.2, then the tile lanes under the best four. A candidate with a hidden
+    corner blossom reports it in :attr:`DecodedFrame.inferred_corner`.
+
     Raises :class:`DecodeError` with :attr:`DecodeErrorKind.UNSUPPORTED_IMAGE`
     for unusable images, :attr:`DecodeErrorKind.NO_FINDERS` when no code is
     visible and :attr:`DecodeErrorKind.NO_ORIENTATION` when no orientation
@@ -805,14 +1072,30 @@ def decode_frame(
     if factor == 1:
         return _decode(image, options)
     frame = _decode(image.downscaled(factor), options)
-    return DecodedFrame(
-        homography=_scale(frame.homography, factor),
-        rotation=frame.rotation,
-        mirrored=frame.mirrored,
-        p=frame.p,
-        k=frame.k,
-        d=frame.d,
-    )
+    return replace(frame, homography=_scale(frame.homography, factor))
+
+
+def track_frame(
+    image: Luma, previous: DecodedFrame, options: Optional[DecodeOptions] = None
+) -> Optional[DecodedFrame]:
+    """Follow a code from the previous frame that decoded, without searching the whole
+    image for finders (the most expensive part of :func:`decode_frame`).
+
+    Each corner finder seen in the previous frame is re-found near where the previous
+    pose puts it (see :func:`iroha_petal.locate.follow`); the mean movement of those
+    predicts the rest. A corner inferred in the previous frame counts as seen again only
+    when its blossom is re-found within a quarter diameter of that prediction (so a thumb
+    beside it does not count). When exactly one corner is missing it is placed at the
+    prediction and refined against the rings like an inferred corner. The orientation is
+    kept from the previous frame. Returns ``None`` when the image is unusable, the
+    previous pose is broken, two corners are lost or no lane decodes; the caller then
+    runs :func:`decode_frame`.
+
+    ``previous.homography`` must map into the pixel coordinates of ``image``.
+    """
+    if options is None:
+        options = DecodeOptions()
+    return _track(image, previous, options)
 
 
 def decode_frame_at(
@@ -839,13 +1122,17 @@ def decode_frame_at(
 def observed_cells(
     image: Luma, frame: DecodedFrame, options: Optional[DecodeOptions] = None
 ) -> Optional[FrameCells]:
-    """Build the cells a decoder believes it saw, for diagnostics."""
+    """Build the cells a decoder believes it saw, for diagnostics.
+
+    Tiles are taken from the level read (the one that judges against the finder levels),
+    even for a frame whose lanes were rescued by the normalised read.
+    """
     if options is None:
         options = DecodeOptions()
     if not _supported(image, options):
         return None
     project = _projector(image, frame.homography)
-    reference = _reference_levels(project)
+    reference = _reference_levels(project, frame.inferred_corner)
     if reference is None:
         return None
     patches = _sample_patches(project)
@@ -858,13 +1145,17 @@ def observed_cells(
 def tile_match_error(
     image: Luma, frame: DecodedFrame, options: Optional[DecodeOptions] = None
 ) -> Optional[float]:
-    """Mean squared tile-match error, a quick image-quality indicator."""
+    """Mean squared tile-match error of the level read, a quick image-quality indicator.
+
+    It can be large for a frame whose lanes were rescued by the normalised read, which is
+    the point: the finder levels did not describe that picture.
+    """
     if options is None:
         options = DecodeOptions()
     if not _supported(image, options):
         return None
     project = _projector(image, frame.homography)
-    reference = _reference_levels(project)
+    reference = _reference_levels(project, frame.inferred_corner)
     if reference is None:
         return None
     patches = _sample_patches(project)

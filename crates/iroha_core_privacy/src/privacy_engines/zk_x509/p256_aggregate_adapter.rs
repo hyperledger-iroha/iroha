@@ -17,7 +17,10 @@ use super::private_table::ClearingVecV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
     credential_pre_aux::ZkX509CredentialMainPostBaseChallengesV1,
-    p256_air::{ZkX509P256ArithmeticTraceV1, p256_arithmetic_opened_c_limb_bits_v1},
+    p256_air::{
+        ZkX509P256ArithmeticTraceV1, compact_arithmetic::P256CompactArithmeticTraceV1,
+        p256_arithmetic_opened_c_limb_bits_v1,
+    },
     p256_cross_trace_bus::{
         P256CrossTraceRegularAuxRowV1, P256CrossTraceSinkStreamV1,
         P256CrossTraceWriterSourceStreamV1, build_zk_x509_p256_cross_trace_sink_v1,
@@ -1829,12 +1832,78 @@ fn arithmetic_scalar_sources_v1(row: usize, base: &[F; P256_ARITHMETIC_BASE_WIDT
     let bits = p256_arithmetic_opened_c_limb_bits_v1(base);
     core::array::from_fn(|slot| bits[offset + slot])
 }
+/// Borrow either the checked raw oracle or MAIN's lossless compact owner.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[derive(Clone, Debug)]
+enum P256ArithmeticRowsStorageV1<'a> {
+    Raw(&'a ZkX509P256ArithmeticTraceV1),
+    Compact(&'a P256CompactArithmeticTraceV1),
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl P256ArithmeticRowsStorageV1<'_> {
+    fn rows_v1(&self) -> usize {
+        match self {
+            Self::Raw(trace) => trace.rows(),
+            Self::Compact(trace) => trace.rows_v1(),
+        }
+    }
+    fn fill_cells_v1(
+        &self,
+        row: usize,
+        first: usize,
+        output: &mut [F],
+    ) -> Result<(), P256AggregateAdapterErrorV1> {
+        if first
+            .checked_add(output.len())
+            .is_none_or(|end| end > P256_ARITHMETIC_BASE_WIDTH_V1)
+            || output.is_empty()
+            || row >= P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1
+        {
+            return Err(P256AggregateAdapterErrorV1::Topology);
+        }
+        if row >= self.rows_v1() {
+            output.fill(F::ZERO);
+            return Ok(());
+        }
+        match self {
+            Self::Raw(trace) => {
+                output.copy_from_slice(&trace.base[row][first..first + output.len()])
+            }
+            Self::Compact(trace) => trace.fill_cells_v1(row, first, output)?,
+        }
+        Ok(())
+    }
+    fn scalar_sources_v1(&self, row: usize) -> Result<[F; 8], P256AggregateAdapterErrorV1> {
+        if row >= self.rows_v1() {
+            return Ok([F::ZERO; 8]);
+        }
+        Ok(match self {
+            Self::Raw(trace) => arithmetic_scalar_sources_v1(row, &trace.base[row]),
+            Self::Compact(trace) => trace.scalar_sources_v1(row)?,
+        })
+    }
+    fn operand_sources_v1(
+        &self,
+        row: usize,
+        fixed: &P256ArithmeticStarkFixedProviderV1,
+    ) -> Result<[F; 3], P256AggregateAdapterErrorV1> {
+        if row >= self.rows_v1() {
+            return Ok([F::ZERO; 3]);
+        }
+        Ok(match self {
+            Self::Raw(trace) => {
+                p256_arithmetic_opened_operand_limbs_v1(&trace.base[row], &fixed.row_v1(row)?)
+            }
+            Self::Compact(trace) => trace.operand_sources_v1(row)?,
+        })
+    }
+}
 /// Constant-memory base/fixed provider for exact arithmetic plus its attached
 /// scalar-source and value-copy products.
 #[derive(Clone, Debug)]
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256ArithmeticAggregateRowsV1<'a> {
-    trace: &'a ZkX509P256ArithmeticTraceV1,
+    trace: P256ArithmeticRowsStorageV1<'a>,
     fixed: Cow<'a, P256ArithmeticStarkFixedProviderV1>,
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -1861,7 +1930,7 @@ impl<'a> P256ArithmeticAggregateRowsV1<'a> {
             return Err(P256AggregateAdapterErrorV1::Topology);
         }
         Ok(Self {
-            trace,
+            trace: P256ArithmeticRowsStorageV1::Raw(trace),
             fixed: Cow::Owned(P256ArithmeticStarkFixedProviderV1::new_v1(
                 &arithmetic_topology,
                 P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1,
@@ -1869,6 +1938,7 @@ impl<'a> P256ArithmeticAggregateRowsV1<'a> {
         })
     }
     /// Direct committed arithmetic row or canonical zero padding.
+    #[cfg(test)]
     pub(crate) fn base_row_v1(
         &self,
         row: usize,
@@ -1876,13 +1946,11 @@ impl<'a> P256ArithmeticAggregateRowsV1<'a> {
         if row >= P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1 {
             return Err(P256AggregateAdapterErrorV1::Topology);
         }
-        Ok(self
-            .trace
-            .base
-            .get(row)
-            .copied()
-            .unwrap_or([F::ZERO; P256_ARITHMETIC_BASE_WIDTH_V1]))
+        let mut output = [F::ZERO; P256_ARITHMETIC_BASE_WIDTH_V1];
+        self.trace.fill_cells_v1(row, 0, &mut output)?;
+        Ok(output)
     }
+
     /// Borrow contiguous cells from the immutable retained arithmetic rows
     /// into at most eight caller-owned columns. No full private row is copied
     /// to stack: the source remains under its clearing owner throughout.
@@ -1900,7 +1968,7 @@ impl<'a> P256ArithmeticAggregateRowsV1<'a> {
             || outputs
                 .iter()
                 .any(|output| output.len() != P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1)
-            || self.trace.base.len() > P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1
+            || self.trace.rows_v1() > P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1
         {
             return Err(P256AggregateAdapterErrorV1::Topology);
         }
@@ -1909,14 +1977,11 @@ impl<'a> P256ArithmeticAggregateRowsV1<'a> {
             committed: false,
         };
         for row in 0..P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1 {
-            if let Some(values) = self.trace.base.get(row) {
-                for (offset, output) in destination.outputs.iter_mut().enumerate() {
-                    output[row] = values[first + offset];
-                }
-            } else {
-                for output in destination.outputs.iter_mut() {
-                    output[row] = F::ZERO;
-                }
+            let mut cells = P256AggregateAuxRowScratchV1([F::ZERO; 8]);
+            self.trace
+                .fill_cells_v1(row, first, &mut cells.0[..destination.outputs.len()])?;
+            for (offset, output) in destination.outputs.iter_mut().enumerate() {
+                output[row] = cells.0[offset];
             }
         }
         destination.committed = true;
@@ -1929,12 +1994,7 @@ impl<'a> P256ArithmeticAggregateRowsV1<'a> {
         column: usize,
         output: &mut [F],
     ) -> Result<(), P256AggregateAdapterErrorV1> {
-        fill_aggregate_row_column_v1(
-            P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1,
-            column,
-            output,
-            |row| self.base_row_v1(row),
-        )
+        self.fill_base_columns_v1(column, &mut [output])
     }
 }
 /// A bounded column selection derived only from the public registration range.
@@ -2041,12 +2101,11 @@ impl<'a> P256ArithmeticAggregateAuxStreamV1<'a> {
             for coefficient in 0..P256_ARITHMETIC_ROWS_PER_OPERATION_V1 {
                 let row = operation * P256_ARITHMETIC_ROWS_PER_OPERATION_V1 + coefficient;
                 let events = arithmetic_scalar_events_v1(row)?;
-                let base = rows.base_row_v1(row)?;
-                let sources = arithmetic_scalar_sources_v1(row, &base);
+                let sources = P256AggregateAuxRowScratchV1(rows.trace.scalar_sources_v1(row)?);
                 let mut aux = [F::ZERO; P256_SCALAR_ARITHMETIC_SOURCE_AUX_WIDTH_V1];
                 scalar_terminal = build_compact_scalar_aux_row_v1(
                     &events,
-                    &sources,
+                    &sources.0,
                     scalar_terminal,
                     [F::ZERO; P256_SCALAR_BIT_BUS_LANES_V1],
                     scalar_challenges,
@@ -2058,14 +2117,13 @@ impl<'a> P256ArithmeticAggregateAuxStreamV1<'a> {
         for operation in 0..P256_ARITHMETIC_OPERATIONS_V1 {
             for coefficient in 0..16 {
                 let row = operation * P256_ARITHMETIC_ROWS_PER_OPERATION_V1 + coefficient;
-                let events = arithmetic_value_copy_events_v1(row, rows.trace.rows())?;
-                let base = rows.base_row_v1(row)?;
-                let native_fixed = rows.fixed.row_v1(row)?;
-                let sources = p256_arithmetic_opened_operand_limbs_v1(&base, &native_fixed);
+                let events = arithmetic_value_copy_events_v1(row, rows.trace.rows_v1())?;
+                let sources =
+                    P256AggregateAuxRowScratchV1(rows.trace.operand_sources_v1(row, &rows.fixed)?);
                 let mut aux = [F::ZERO; P256_ARITHMETIC_VALUE_COPY_AUX_WIDTH_V1];
                 arithmetic_copy_terminal = build_compact_arithmetic_copy_aux_row_v1(
                     &events,
-                    &sources,
+                    &sources.0,
                     arithmetic_copy_terminal,
                     [F::ZERO; P256_ARITHMETIC_COPY_LANES_V1],
                     arithmetic_copy_challenges,
@@ -2095,24 +2153,28 @@ impl<'a> P256ArithmeticAggregateAuxStreamV1<'a> {
         }
         #[cfg(test)]
         auxiliary_replay_tests::record_arithmetic_row_v1();
-        let base = self.rows.base_row_v1(self.next_row)?;
         let events = arithmetic_scalar_events_v1(self.next_row)?;
-        let sources = arithmetic_scalar_sources_v1(self.next_row, &base);
+        let sources =
+            P256AggregateAuxRowScratchV1(self.rows.trace.scalar_sources_v1(self.next_row)?);
         let mut aux = [F::ZERO; P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1];
         self.scalar_running = build_compact_scalar_aux_row_v1(
             &events,
-            &sources,
+            &sources.0,
             self.scalar_running,
             self.scalar_terminal,
             self.scalar_challenges,
             &mut aux[ARITHMETIC_SCALAR_AUX..ARITHMETIC_VALUE_COPY_AUX],
         )?;
-        let native_fixed = self.rows.fixed.row_v1(self.next_row)?;
-        let copy_events = arithmetic_value_copy_events_v1(self.next_row, self.rows.trace.rows())?;
-        let copy_sources = p256_arithmetic_opened_operand_limbs_v1(&base, &native_fixed);
+        let copy_events =
+            arithmetic_value_copy_events_v1(self.next_row, self.rows.trace.rows_v1())?;
+        let copy_sources = P256AggregateAuxRowScratchV1(
+            self.rows
+                .trace
+                .operand_sources_v1(self.next_row, &self.rows.fixed)?,
+        );
         self.arithmetic_copy_running = build_compact_arithmetic_copy_aux_row_v1(
             &copy_events,
-            &copy_sources,
+            &copy_sources.0,
             self.arithmetic_copy_running,
             self.arithmetic_copy_terminal,
             self.arithmetic_copy_challenges,
@@ -2144,14 +2206,11 @@ impl<'a> P256ArithmeticAggregateAuxStreamV1<'a> {
         if selection.scalar {
             let target = &mut aux.0[ARITHMETIC_SCALAR_AUX..ARITHMETIC_VALUE_COPY_AUX];
             if matches!(row / P256_ARITHMETIC_ROWS_PER_OPERATION_V1, 13 | 14) {
-                let base = self
-                    .rows
-                    .trace
-                    .base
-                    .get(row)
-                    .ok_or(P256AggregateAdapterErrorV1::Source)?;
+                if row >= self.rows.trace.rows_v1() {
+                    return Err(P256AggregateAdapterErrorV1::Source);
+                }
                 let events = arithmetic_scalar_events_v1(row)?;
-                let sources = P256AggregateAuxRowScratchV1(arithmetic_scalar_sources_v1(row, base));
+                let sources = P256AggregateAuxRowScratchV1(self.rows.trace.scalar_sources_v1(row)?);
                 self.scalar_running = build_compact_scalar_aux_row_v1(
                     &events,
                     &sources.0,
@@ -2174,16 +2233,12 @@ impl<'a> P256ArithmeticAggregateAuxStreamV1<'a> {
             let logical_rows =
                 P256_ARITHMETIC_OPERATIONS_V1 * P256_ARITHMETIC_ROWS_PER_OPERATION_V1;
             if row < logical_rows && row % P256_ARITHMETIC_ROWS_PER_OPERATION_V1 < 16 {
-                let base = self
-                    .rows
-                    .trace
-                    .base
-                    .get(row)
-                    .ok_or(P256AggregateAdapterErrorV1::Source)?;
-                let fixed = self.rows.fixed.row_v1(row)?;
+                if row >= self.rows.trace.rows_v1() {
+                    return Err(P256AggregateAdapterErrorV1::Source);
+                }
                 let events = arithmetic_value_copy_events_v1(row, logical_rows)?;
                 let sources = P256AggregateAuxRowScratchV1(
-                    p256_arithmetic_opened_operand_limbs_v1(base, &fixed),
+                    self.rows.trace.operand_sources_v1(row, &self.rows.fixed)?,
                 );
                 self.arithmetic_copy_running = build_compact_arithmetic_copy_aux_row_v1(
                     &events,
@@ -4788,9 +4843,6 @@ impl P256MainArithmeticGuardV1 {
     fn as_ref_v1(&self) -> Result<&ZkX509P256ArithmeticTraceV1, P256AggregateAdapterErrorV1> {
         self.0.as_ref().ok_or(P256AggregateAdapterErrorV1::Source)
     }
-    fn take_v1(&mut self) -> Result<ZkX509P256ArithmeticTraceV1, P256AggregateAdapterErrorV1> {
-        self.0.take().ok_or(P256AggregateAdapterErrorV1::Source)
-    }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainArithmeticGuardV1 {
@@ -4801,37 +4853,72 @@ impl Drop for P256MainArithmeticGuardV1 {
         self.0 = None;
     }
 }
-/// Immutable arithmetic capability established at the owned trace boundary.
-///
-/// The checked row constructor validates all constraints and the exact role
-/// topology once. Both fields remain immutable until drop; borrowed row views
-/// cannot outlive this owner and never reconstruct or revalidate its schedule.
+/// Immutable checked raw capability, consumed after scalar-source construction.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-struct P256MainValidatedArithmeticV1 {
+pub(crate) struct P256MainRawArithmeticV1 {
     role: P256EcdsaRoleV1,
-    trace: ZkX509P256ArithmeticTraceV1,
+    trace: P256MainArithmeticGuardV1,
     fixed: P256ArithmeticStarkFixedProviderV1,
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-impl P256MainValidatedArithmeticV1 {
+impl P256MainRawArithmeticV1 {
     fn new_v1(
         role: P256EcdsaRoleV1,
         trace: ZkX509P256ArithmeticTraceV1,
     ) -> Result<Self, P256AggregateAdapterErrorV1> {
-        // Establish clearing ownership before validation, topology compilation,
-        // or provider allocation can fail or unwind.
-        let mut trace = P256MainArithmeticGuardV1(Some(trace));
+        let trace = P256MainArithmeticGuardV1(Some(trace));
         let fixed = P256ArithmeticAggregateRowsV1::new_v1(role, trace.as_ref_v1()?)?
             .fixed
             .into_owned();
+        Ok(Self { role, trace, fixed })
+    }
+    /// Borrow the trace whose immutable owner established full constraints and role topology.
+    pub(crate) fn validated_trace_v1(&self) -> &ZkX509P256ArithmeticTraceV1 {
+        self.trace
+            .0
+            .as_ref()
+            .expect("checked raw owner retains its trace")
+    }
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+enum P256MainArithmeticStorageV1 {
+    Compact(P256CompactArithmeticTraceV1),
+    // Deliberately malformed allocation fixtures never enter a replay path.
+    #[cfg(test)]
+    AllocationFixture(P256MainArithmeticGuardV1),
+}
+/// Immutable lossless arithmetic capability established at the owned trace boundary.
+///
+/// MAIN retains compact cells and its verifier-fixed schedule. The checked raw
+/// trace clears before the next signature is constructed; no mutable or cloning
+/// API can change the validated operation records.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+struct P256MainValidatedArithmeticV1 {
+    role: P256EcdsaRoleV1,
+    trace: P256MainArithmeticStorageV1,
+    fixed: P256ArithmeticStarkFixedProviderV1,
+}
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+impl P256MainValidatedArithmeticV1 {
+    #[cfg(test)]
+    fn new_v1(
+        role: P256EcdsaRoleV1,
+        trace: ZkX509P256ArithmeticTraceV1,
+    ) -> Result<Self, P256AggregateAdapterErrorV1> {
+        Self::from_raw_v1(P256MainRawArithmeticV1::new_v1(role, trace)?)
+    }
+    fn from_raw_v1(raw: P256MainRawArithmeticV1) -> Result<Self, P256AggregateAdapterErrorV1> {
+        let compact = P256CompactArithmeticTraceV1::from_validated_v1(
+            &raw,
+            P256CompactArithmeticTraceV1::payload_forecast_v1(P256_ARITHMETIC_OPERATIONS_V1)?,
+        )?;
+        let P256MainRawArithmeticV1 { role, trace, fixed } = raw;
+        drop(trace); // clear the one raw construction matrix before retaining another signature
         Ok(Self {
             role,
-            trace: trace.take_v1()?,
+            trace: P256MainArithmeticStorageV1::Compact(compact),
             fixed,
         })
-    }
-    fn trace_v1(&self) -> &ZkX509P256ArithmeticTraceV1 {
-        &self.trace
     }
     fn rows_v1(
         &self,
@@ -4840,24 +4927,35 @@ impl P256MainValidatedArithmeticV1 {
         if self.role != role {
             return Err(P256AggregateAdapterErrorV1::Topology);
         }
+        let trace = match &self.trace {
+            P256MainArithmeticStorageV1::Compact(trace) => {
+                P256ArithmeticRowsStorageV1::Compact(trace)
+            }
+            #[cfg(test)]
+            P256MainArithmeticStorageV1::AllocationFixture(_) => {
+                return Err(P256AggregateAdapterErrorV1::Source);
+            }
+        };
         Ok(P256ArithmeticAggregateRowsV1 {
-            trace: &self.trace,
+            trace,
             fixed: Cow::Borrowed(&self.fixed),
         })
     }
     fn allocated_heap_bytes_v1(&self) -> usize {
-        use super::allocation_payload::{sum_v1, vector_v1};
-        sum_v1([
-            vector_v1(&self.trace.fixed),
-            vector_v1(&self.trace.base),
-            self.fixed.allocated_heap_bytes_v1(),
-        ])
-    }
-}
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-impl Drop for P256MainValidatedArithmeticV1 {
-    fn drop(&mut self) {
-        zeroize_main_arithmetic_trace_v1(&mut self.trace);
+        let trace = match &self.trace {
+            P256MainArithmeticStorageV1::Compact(trace) => trace.allocated_heap_bytes_v1(),
+            #[cfg(test)]
+            P256MainArithmeticStorageV1::AllocationFixture(trace) => {
+                let trace = trace
+                    .as_ref_v1()
+                    .expect("allocation fixture retains its trace");
+                super::allocation_payload::sum_v1([
+                    super::allocation_payload::vector_v1(&trace.fixed),
+                    super::allocation_payload::vector_v1(&trace.base),
+                ])
+            }
+        };
+        super::allocation_payload::sum_v1([trace, self.fixed.allocated_heap_bytes_v1()])
     }
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -4989,7 +5087,7 @@ impl P256MainSignatureBaseV1 {
             )
             .map_err(|_| P256AggregateAdapterErrorV1::Topology)?;
         }
-        let arithmetic = P256MainValidatedArithmeticV1::new_v1(
+        let arithmetic = P256MainRawArithmeticV1::new_v1(
             expected_role,
             material
                 .build_arithmetic_trace_v1()
@@ -5003,8 +5101,10 @@ impl P256MainSignatureBaseV1 {
             window_inputs.push(window.trace.clone());
         }
         let window_inputs = P256MainWindowInputGuardV1(window_inputs);
-        let scalar = P256ScalarBitBusBaseSourceV1::new_v1(&window_inputs.0, arithmetic.trace_v1())
-            .map_err(P256AggregateAdapterErrorV1::from)?;
+        let scalar =
+            P256ScalarBitBusBaseSourceV1::new_v1(&window_inputs.0, arithmetic.validated_trace_v1())
+                .map_err(P256AggregateAdapterErrorV1::from)?;
+        let arithmetic = P256MainValidatedArithmeticV1::from_raw_v1(arithmetic)?;
         let mut window = P256MainWindowBatchGuardV1(Some(
             build_p256_window_batch_stark_trace_v1(&window_inputs.0)
                 .map_err(P256AggregateAdapterErrorV1::from)?,
@@ -5175,13 +5275,19 @@ impl P256MainBaseSourceV1 {
             P256_X5S1_SIGNATURES_V1 * size_of::<P256MainSignatureBoundV1>(),
             fixed.allocated_heap_bytes_v1(),
         ]);
+        // All compact owners may coexist with the one current raw constructor.
+        // Retain this conservative charge through later phases; it is not reusable credit.
+        let raw_rows = P256_ARITHMETIC_OPERATIONS_V1 * P256_ARITHMETIC_ROWS_PER_OPERATION_V1;
+        total = sum_v1([
+            total,
+            raw_rows
+                * (size_of::<[F; P256_ARITHMETIC_BASE_WIDTH_V1]>()
+                    + size_of::<super::p256_air::ZkX509P256ArithmeticFixedRowV1>()),
+        ]);
         for role in signatures {
             let value = p256_value_source_allocation_forecast_v1(role)?;
-            let arithmetic_rows =
-                P256_ARITHMETIC_OPERATIONS_V1 * P256_ARITHMETIC_ROWS_PER_OPERATION_V1;
-            let arithmetic = arithmetic_rows
-                * (size_of::<[F; P256_ARITHMETIC_BASE_WIDTH_V1]>()
-                    + size_of::<super::p256_air::ZkX509P256ArithmeticFixedRowV1>());
+            let arithmetic =
+                P256CompactArithmeticTraceV1::payload_forecast_v1(P256_ARITHMETIC_OPERATIONS_V1)?;
             let window = P256_WINDOW_BATCH_STARK_TRACE_SIZE_V1
                 * (size_of::<[F; P256_WINDOW_BASE_WIDTH_V1]>()
                     + size_of::<[F; P256_WINDOW_STARK_AUX_WIDTH_V1]>());
@@ -6881,7 +6987,9 @@ mod tests {
     ) -> P256MainValidatedArithmeticV1 {
         P256MainValidatedArithmeticV1 {
             role: P256EcdsaRoleV1::CertificateOrCrl,
-            trace,
+            trace: P256MainArithmeticStorageV1::AllocationFixture(P256MainArithmeticGuardV1(Some(
+                trace,
+            ))),
             fixed: P256MainArithmeticFixedSourceV1::new_v1(P256EcdsaRoleV1::CertificateOrCrl)
                 .unwrap()
                 .fixed,
@@ -7198,8 +7306,12 @@ mod tests {
             .map(|signature| {
                 let arithmetic = signature.arithmetic.as_ref().unwrap();
                 let window = signature.window.as_ref().unwrap();
-                vector_v1(&arithmetic.trace.fixed)
-                    + vector_v1(&arithmetic.trace.base)
+                let P256MainArithmeticStorageV1::AllocationFixture(raw) = &arithmetic.trace else {
+                    panic!("explicit allocation fixture");
+                };
+                let raw = raw.as_ref_v1().unwrap();
+                vector_v1(&raw.fixed)
+                    + vector_v1(&raw.base)
                     + arithmetic.fixed.allocated_heap_bytes_v1()
                     + vector_v1(&window.base)
                     + vector_v1(&window.aux)
@@ -7213,9 +7325,13 @@ mod tests {
         let scratch = P256MainBaseSourceV1::replay_scratch_forecast_v1().unwrap();
         assert!(scratch < super::super::allocation_payload::MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1);
         eprintln!("canonical P256 source construction scratch forecast: {scratch}");
-        let mandatory_arithmetic = 5 * 14_828 * 32 * 211 * 8;
-        assert_eq!(mandatory_arithmetic, 4_004_746_240);
-        assert!(forecast > mandatory_arithmetic);
+        let raw_arithmetic_overlap = 14_828 * 32 * 211 * 8;
+        assert_eq!(raw_arithmetic_overlap, 800_949_248);
+        let compact_arithmetic =
+            5 * P256CompactArithmeticTraceV1::payload_forecast_v1(14_828).unwrap();
+        assert_eq!(compact_arithmetic, 40_925_280);
+        assert!(forecast > raw_arithmetic_overlap + compact_arithmetic);
+        assert!(forecast < 5 * raw_arithmetic_overlap);
         assert!(forecast < super::super::allocation_payload::MAIN_NATIVE_SOURCE_ALLOWANCE_BYTES_V1);
         eprintln!("canonical P256 retained source allocation forecast: {forecast}");
         let fixed = P256MainVerifierFixedSourceV1::new_v1().unwrap();

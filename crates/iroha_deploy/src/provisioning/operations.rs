@@ -22,6 +22,7 @@ pub(super) trait ProvisioningOperations {
         &self,
         config: &Config,
         alias: &str,
+        account_alias: &str,
         deadline: Instant,
     ) -> Result<AliasSetupPlanRequestV1>;
     fn reserve(
@@ -69,11 +70,14 @@ impl ProvisioningOperations for NativeOperations {
         &self,
         config: &Config,
         alias: &str,
+        account_alias: &str,
         deadline: Instant,
     ) -> Result<AliasSetupPlanRequestV1> {
-        Ok(prepare_private_dataspace_request(config, alias, deadline)
-            .map_err(|_| ProvisioningError::NamespaceQuote)?
-            .request)
+        Ok(
+            prepare_private_dataspace_request(config, alias, account_alias, deadline)
+                .map_err(|_| ProvisioningError::NamespaceQuote)?
+                .request,
+        )
     }
 
     fn reserve(
@@ -86,7 +90,19 @@ impl ProvisioningOperations for NativeOperations {
         let service = AccountService::new(config.clone())
             .and_then(|service| service.with_deadline(options.deadline))
             .map_err(|_| ProvisioningError::Invalid("cannot construct exact namespace context"))?;
-        if !path_exists(journal)? {
+        let preparation = service
+            .inspect_alias_bounded_preparation(journal, request, options)
+            .map_err(|_| ProvisioningError::NamespaceRecovery)?;
+        let needs_prepare = match preparation.phase() {
+            iroha_wallet::operations::NativePreparationPhase::Missing
+            | iroha_wallet::operations::NativePreparationPhase::RequestOnly
+            | iroha_wallet::operations::NativePreparationPhase::PayloadRetained => true,
+            iroha_wallet::operations::NativePreparationPhase::Signed => false,
+            iroha_wallet::operations::NativePreparationPhase::Retired => {
+                return Err(ProvisioningError::NamespaceRecovery);
+            }
+        };
+        if needs_prepare {
             let report = service
                 .prepare_alias_bounded(request, options, journal)
                 .map_err(|_| ProvisioningError::NamespacePreparation)?;

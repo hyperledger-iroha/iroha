@@ -9,6 +9,7 @@ use iroha_core::{
     },
     state::World,
 };
+use iroha_crypto::ExposedPrivateKey;
 use iroha_data_model::{
     NetworkId,
     isi::{
@@ -21,15 +22,19 @@ use iroha_data_model::{
     sorafs::capacity::ProviderId,
     transaction::FeePaymentIntent,
 };
-use std::{fs, os::unix::fs::PermissionsExt};
+use iroha_fs::{PrivateDirectory, PublishMode};
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
+use zeroize::Zeroizing;
 
 fn config(role: Role, seed: u8) -> (tempfile::TempDir, ConfiguredBinding) {
     let directory = tempfile::Builder::new()
         .prefix(".native-sorafs-credential-")
         .tempdir_in(std::env::current_dir().unwrap())
         .unwrap();
-    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    let path = directory.path().join("credential");
+    let private = PrivateDirectory::open_or_create(directory.path().join("private")).unwrap();
+    let path = private.path().join("credential");
     let key = Fixture::key(seed);
     let encoded = Zeroizing::new(format!(
         "{}\n",
@@ -37,8 +42,9 @@ fn config(role: Role, seed: u8) -> (tempfile::TempDir, ConfiguredBinding) {
             .try_to_multihash_string()
             .unwrap()
     ));
-    fs::write(&path, encoded.as_bytes()).unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    private
+        .write_atomic("credential", encoded.as_bytes(), PublishMode::CreateNew)
+        .unwrap();
     (
         directory,
         ConfiguredBinding {
@@ -131,9 +137,14 @@ fn invalid_envelopes_are_rejected_before_missing_finality_and_valid_payload_requ
         let block = fixture
             .state
             .block_by_height(std::num::NonZeroUsize::new(height).unwrap())
+            .unwrap()
             .unwrap();
-        let block = Arc::new(block.as_ref().clone().with_commit_certificate(None));
-        kura.store_block(Arc::clone(&block)).unwrap();
+        let block = iroha_data_model::block::SharedSignedBlock::try_new(
+            block.as_ref().clone().with_commit_certificate(None),
+            &state.ivm_execution_budget(),
+        )
+        .unwrap();
+        kura.store_block(block.clone()).unwrap();
         Arc::get_mut(&mut state)
             .unwrap()
             .push_block_hash_for_testing(block.hash());
@@ -214,12 +225,17 @@ fn absent_account_and_changed_credential_or_qualification_fail_closed() {
     assert!(NativeSoftwareSigner::load(&config, Role::Repair, Arc::clone(&fixture.state)).is_err());
     config.public_key = Fixture::key(9).public_key().clone();
     config.authority = AccountId::new(config.public_key.clone());
-    fs::set_permissions(
-        config.software_credential.as_ref().unwrap(),
-        fs::Permissions::from_mode(0o644),
-    )
-    .unwrap();
-    assert!(NativeSoftwareSigner::load(&config, Role::Repair, Arc::clone(&fixture.state)).is_err());
+    #[cfg(unix)]
+    {
+        fs::set_permissions(
+            config.software_credential.as_ref().unwrap(),
+            fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        assert!(
+            NativeSoftwareSigner::load(&config, Role::Repair, Arc::clone(&fixture.state)).is_err()
+        );
+    }
 }
 
 #[test]
@@ -279,8 +295,8 @@ fn startup_rejects_validator_key_shared_roles_and_external_adapter_conflicts() {
 
 #[test]
 fn selected_native_preflight_never_opens_credentials_and_rejects_ambiguous_selection() {
-    let (_directory, mut binding) = config(Role::Repair, 2);
-    binding.software_credential = Some("/run/iroha/does-not-exist".into());
+    let (directory, mut binding) = config(Role::Repair, 2);
+    binding.software_credential = Some(directory.path().join("does-not-exist"));
     assert!(
         crate::validate_selected_sorafs_native_signer_presence(
             "repair",
@@ -351,4 +367,76 @@ fn qualified_facade_refuses_another_configured_policy_epoch() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn native_software_signer_refuses_shared_credential_and_recovers_exact_private_source() {
+    let fixture = Fixture::new_at(1_700_000_000_000);
+    let (_directory, binding) = config(Role::Repair, 2);
+    let path = binding.software_credential.as_ref().unwrap();
+    let link = path.with_file_name("shared-credential");
+    fs::hard_link(path, &link).unwrap();
+    assert!(
+        NativeSoftwareSigner::load(&binding, Role::Repair, Arc::clone(&fixture.state)).is_err()
+    );
+    fs::remove_file(link).unwrap();
+    NativeSoftwareSigner::load(&binding, Role::Repair, Arc::clone(&fixture.state)).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_native_signer_refuses_inherited_dacl_reparse_and_competing_writer() {
+    use std::os::windows::fs::symlink_file;
+    let fixture = Fixture::new_at(1_700_000_000_000);
+    let (_directory, binding) = config(Role::Repair, 2);
+    let path = binding.software_credential.as_ref().unwrap();
+    let bytes = iroha_fs::read_private(path, 16 * 1024 + 256).unwrap();
+    // Ordinary creation does not request the protected current-user DACL installed by
+    // PrivateDirectory. Identical secret bytes therefore do not satisfy private custody.
+    let inherited = path.with_file_name("inherited-credential");
+    fs::write(&inherited, bytes.as_slice()).unwrap();
+    let mut other = binding.clone();
+    other.software_credential = Some(inherited.clone());
+    assert!(matches!(
+        crate::runtime_credential::load_bounded_runtime_credential_v1(
+            &inherited,
+            2,
+            16 * 1024 + 256
+        ),
+        Err(crate::runtime_credential::RuntimeCredentialErrorV1::InvalidSource)
+    ));
+    assert!(NativeSoftwareSigner::load(&other, Role::Repair, Arc::clone(&fixture.state)).is_err());
+    fs::remove_file(inherited).unwrap();
+
+    // Native Windows symlink creation requires its usual privilege or Developer Mode. A
+    // fixture creation failure is a test failure, never counted as reparse rejection evidence.
+    let linked = path.with_file_name("reparse-credential");
+    symlink_file(path, &linked).expect("Windows native reparse fixture privilege");
+    other.software_credential = Some(linked.clone());
+    assert!(matches!(
+        crate::runtime_credential::load_bounded_runtime_credential_v1(&linked, 2, 16 * 1024 + 256),
+        Err(crate::runtime_credential::RuntimeCredentialErrorV1::InvalidSource)
+    ));
+    assert!(NativeSoftwareSigner::load(&other, Role::Repair, Arc::clone(&fixture.state)).is_err());
+    fs::remove_file(linked).unwrap();
+
+    // The loader's retained FILE_SHARE_READ handle cannot coexist with a writer, and a
+    // retained source refuses write/delete replacement until its original owner is dropped.
+    let writer = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    assert!(
+        NativeSoftwareSigner::load(&binding, Role::Repair, Arc::clone(&fixture.state)).is_err()
+    );
+    drop(writer);
+    let retained = iroha_fs::RetainedFile::open_private(path).unwrap();
+    let write = fs::OpenOptions::new().write(true).open(path).unwrap_err();
+    assert!(matches!(write.raw_os_error(), Some(5 | 32)), "{write}");
+    let rename = fs::rename(path, path.with_file_name("moved-credential")).unwrap_err();
+    assert!(matches!(rename.raw_os_error(), Some(5 | 32)), "{rename}");
+    retained.revalidate().unwrap();
+    drop(retained);
+    NativeSoftwareSigner::load(&binding, Role::Repair, Arc::clone(&fixture.state)).unwrap();
 }

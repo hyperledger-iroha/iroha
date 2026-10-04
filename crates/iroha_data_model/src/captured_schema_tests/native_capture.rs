@@ -189,7 +189,7 @@ fn current_owner_fixture() -> &'static std::collections::BTreeMap<String, Value>
             include_str!("../../tests/fixtures/native_current_codec_owner_identities.json");
         assert_eq!(
             hex::encode(Sha256::digest(source.as_bytes())),
-            "8ad59d9c2eb062a8a09eca7bdc9e3ad4bbd9b32aa7fe99511d5f278d137be4b3"
+            "43098bfb7815e1c6a0b8705d8e41169f25c4e5e0bc6fe0ec851ebee2ae50196d"
         );
         let document: Value = json::from_str(source).expect("paired native owner inventory");
         assert_eq!(
@@ -203,7 +203,7 @@ fn current_owner_fixture() -> &'static std::collections::BTreeMap<String, Value>
         );
         assert_eq!(document.get("schema").and_then(Value::as_u64), Some(1));
         let owners = document.get("owners").and_then(Value::as_array).unwrap();
-        assert_eq!(owners.len(), 105, "complete current compiler owner census");
+        assert_eq!(owners.len(), 106, "complete current compiler owner census");
         let mut result = BTreeMap::new();
         let mut roots = BTreeMap::new();
         let mut directions = BTreeMap::new();
@@ -259,7 +259,7 @@ fn current_owner_fixture() -> &'static std::collections::BTreeMap<String, Value>
                 "duplicate captured owner"
             );
         }
-        assert_eq!(roots.len(), 1_555, "complete current nominal inventory");
+        assert_eq!(roots.len(), 1_559, "complete current nominal inventory");
         result
     })
 }
@@ -281,7 +281,7 @@ pub fn assert_current_owner(cases: &[Case], owner: &str) {
 
 #[test]
 fn current_native_fixture_has_complete_owner_inventory() {
-    assert_eq!(current_owner_fixture().len(), 105);
+    assert_eq!(current_owner_fixture().len(), 106);
 }
 
 // These are the only row-level feature conditions in the captured printer inventories.

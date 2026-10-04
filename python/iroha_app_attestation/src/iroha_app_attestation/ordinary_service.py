@@ -11,7 +11,7 @@ import hashlib
 import json
 from typing import Callable
 
-from .attestation import AttestationRejected, require
+from .attestation import AttestationRejected, VerificationUnavailable, require
 from .ordinary_issuance import DurableOrdinaryCredentialIssuer
 from .ordinary_provider import OrdinaryCredentialRequest, OrdinaryRawAttestationRequest
 from .service import _decode_base64, _decode_hex32, _unique_object
@@ -121,6 +121,10 @@ class OrdinaryCredentialService:
         try:
             certificate = (self._issuer.accept_raw(request) if path == RAW_PATH
                            else self._issuer.issue(request))
+        except VerificationUnavailable:
+            # Revocation status or Play Integrity decoding did not answer:
+            # not a rejected credential; retry.
+            return 503, b'{"error":"issuer_unavailable"}'
         except AttestationRejected:
             return 409, b'{"error":"credential_rejected"}'
         except Exception:

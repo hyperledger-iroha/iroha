@@ -34,7 +34,6 @@ transparent_api = ["iroha_data_model_derive/transparent_api", "iroha_model_base/
 fault_injection = []
 trybuild-tests = ["dep:trybuild"]
 bench = []
-ids_projection = []
 # Authenticate governed registries against complete Parliament proposal preimages.
 governance = []
 pqc = ["iroha_crypto/pqc", "sorafs_manifest/pqc"]
@@ -179,6 +178,10 @@ name = "musubi_text_validation_allocations"
 path = "tests/musubi_text_validation_allocations.rs"
 
 [[test]]
+name = "contract_subject_derivation"
+path = "tests/contract_subject_derivation.rs"
+
+[[test]]
 name = "json_object_key_contract"
 path = "tests/json_object_key_contract.rs"
 
@@ -198,3 +201,8 @@ path = "tests/manual_frame_identity.rs"
 [[test]]
 name = "validator_staking_sdk_fixtures"
 path = "tests/validator_staking_sdk_fixtures.rs"
+
+# Standalone allocator observer for the canonical fixed-limb quantity kernel.
+[[test]]
+name = "fastpq_quantity_units_allocations"
+path = "tests/fastpq_quantity_units_allocations.rs"

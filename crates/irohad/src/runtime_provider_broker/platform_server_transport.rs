@@ -304,6 +304,7 @@ fn serve_client(
     source_stream_permits: Arc<tokio::sync::Semaphore>,
     inbound_operation_budget: Arc<tokio::sync::Semaphore>,
     lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
+    observer_operation_timeout: Duration,
 ) -> Result<(), BrokerError> {
     if lifecycle.shutdown_requested() {
         return Err(BrokerError::Unavailable);
@@ -406,6 +407,24 @@ fn serve_client(
         let Some(_operation_permit) = lifecycle.try_begin_operation() else {
             return Ok(());
         };
+        if request.operation == OPERATION_STREAM_TOKEN_OBSERVE_V1 {
+            // One original admitted-operation bound, created before any provider
+            // qualification/dispatch. Handshake and wire ingress remain separate.
+            let deadline = BrokerDeadlineV1::new(observer_operation_timeout)?;
+            let terminate = server_observation::serve(server_observation::Output {
+                state,
+                request: &request,
+                stream: &mut stream,
+                request_frame: &request_frame,
+                admission: &decode_admission,
+                operation_permit: &_operation_permit,
+                deadline,
+            })?;
+            if terminate {
+                return Ok(());
+            }
+            continue;
+        }
         if request.binding.slot
             == IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource.wire_id()
             && request.operation == OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1
@@ -986,6 +1005,7 @@ where
             let session_source_stream_permits = Arc::clone(&source_stream_permits);
             let session_inbound_operation_budget = Arc::clone(&inbound_operation_budget);
             let session_lifecycle = Arc::clone(&lifecycle);
+            let observer_operation_timeout = policy.observer_operation_timeout;
             let _session_registration = sessions.spawn_blocking(move || {
                 // A peer protocol error, timeout, disconnect, or
                 // backend rejection terminates only this authenticated
@@ -997,6 +1017,7 @@ where
                     session_source_stream_permits,
                     session_inbound_operation_budget,
                     session_lifecycle,
+                    observer_operation_timeout,
                 );
                 (session_token, result)
             });
@@ -1489,6 +1510,31 @@ impl BrokerSession {
         mutating: bool,
         deadline: BrokerDeadlineV1,
     ) -> Result<(ScrubbedBytes, [u8; 32]), BrokerError> {
+        self.exchange_before_with_result(
+            OutboundExchangeV1 {
+                binding,
+                metadata_digest,
+                operation,
+                payload,
+                mutating,
+                deadline,
+            },
+            |received| received.regular(),
+        )
+    }
+    fn exchange_before_with_result<T>(
+        &self,
+        outbound: OutboundExchangeV1<'_>,
+        receive: impl FnOnce(ReceivedExchangeV1<'_>) -> Result<T, BrokerError>,
+    ) -> Result<(T, [u8; 32]), BrokerError> {
+        let OutboundExchangeV1 {
+            binding,
+            metadata_digest,
+            operation,
+            payload,
+            mutating,
+            deadline,
+        } = outbound;
         deadline.remaining()?;
         let frame_limit = operation_frame_limit(operation);
         let mut connection = deadline.lock(&self.connection)?;
@@ -1579,83 +1625,20 @@ impl BrokerSession {
                 return Err(error);
             }
         };
-        let Ok(mut response) = decode_operation_frame::<OperationResponseV1>(
-            &response_frame,
-            FRAME_KIND_OPERATION_RESPONSE_V1,
-            operation,
-        ) else {
-            let error = if mutating {
-                BrokerError::Ambiguous
-            } else {
-                BrokerError::Protocol
-            };
-            connection.poison_reason = Some(BrokerConnectionFailure::Permanent(error));
-            return Err(error);
-        };
-        if let Err(error) =
-            validate_operation_response_for_client(&request, &response, &self.network_id)
-        {
-            let error = if mutating {
-                BrokerError::Ambiguous
-            } else {
-                error
-            };
-            connection.poison_reason = Some(BrokerConnectionFailure::Permanent(error));
-            return Err(error);
-        }
-        if deadline.remaining().is_err() {
-            let error = if mutating {
-                BrokerError::Ambiguous
-            } else {
-                BrokerError::Unavailable
-            };
-            connection.poison_reason = Some(transport_failure);
-            return Err(error);
-        }
-        match response.status {
-            STATUS_OK_V1 => {
-                let result = std::mem::take(&mut response.result);
-                drop(decode_scope);
-                Ok((
-                    ScrubbedBytes::with_decode_admission(result, decode_admission),
-                    connection.session_id,
-                ))
-            }
-            STATUS_REJECTED_V1 => Err(BrokerError::Rejected),
-            STATUS_CONFLICT_V1 => Err(BrokerError::Conflict),
-            STATUS_STALE_OR_REVOKED_V1 => {
-                connection.poison_reason = Some(BrokerConnectionFailure::Permanent(
-                    BrokerError::StaleOrRevoked,
-                ));
-                Err(BrokerError::StaleOrRevoked)
-            }
-            STATUS_AMBIGUOUS_V1 => {
-                connection.poison_reason = Some(if mutating {
-                    transport_failure
-                } else {
-                    BrokerConnectionFailure::Permanent(BrokerError::Ambiguous)
-                });
-                Err(BrokerError::Ambiguous)
-            }
-            STATUS_UNAVAILABLE_V1 => {
-                connection.poison_reason = Some(if mutating {
-                    BrokerConnectionFailure::Unavailable
-                } else {
-                    transport_failure
-                });
-                Err(BrokerError::Unavailable)
-            }
-            _ => {
-                let error = if mutating {
-                    BrokerError::Ambiguous
-                } else {
-                    BrokerError::Protocol
-                };
-                connection.poison_reason = Some(BrokerConnectionFailure::Permanent(error));
-                Err(error)
-            }
-        }
+        let result = receive(ReceivedExchangeV1 {
+            request: &request,
+            response_frame,
+            decode_admission,
+            connection: &mut connection,
+            deadline,
+            network_id: &self.network_id,
+            mutating,
+            transport_failure,
+        })?;
+        drop(decode_scope);
+        Ok((result, connection.session_id))
     }
+
     fn call_sensitive(
         &self,
         binding: &ProviderBindingWireV1,
@@ -1911,7 +1894,7 @@ mod scoped_readback_recovery_tests {
             Some(BrokerConnectionFailure::Ambiguous(pending))
         );
         assert_eq!(session.connection.lock().unwrap().next_request_id, 2);
-        assert_eq!(session.decode_pool.used_bytes.load(Ordering::Acquire), 0);
+        assert_eq!(session.decode_pool.allocation.reserved_bytes(), 0);
         assert_eq!(session.reconnect(), Err(BrokerError::Ambiguous));
     }
 

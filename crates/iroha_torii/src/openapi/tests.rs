@@ -17,6 +17,68 @@ use iroha_torii_shared::{
 use sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+#[cfg(feature = "app_api")]
+#[test]
+fn explorer_feeds_share_list_query_and_page_contract() {
+    let spec = compiled_spec();
+    for feed in [
+        "accounts",
+        "domains",
+        "asset-definitions",
+        "assets",
+        "nfts",
+        "rwas",
+        "blocks",
+        "transactions",
+        "transactions/latest",
+        "instructions",
+        "instructions/latest",
+    ] {
+        let path = format!("/v1/explorer/{feed}");
+        let get = &spec["paths"][path.as_str()]["get"];
+        let query_path = format!("{path}/query");
+        let post = &spec["paths"][query_path.as_str()]["post"];
+        let parameters = get["parameters"].as_array().expect("GET controls");
+        assert_eq!(
+            parameters
+                .iter()
+                .map(|value| value["name"].as_str().unwrap())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["filter", "select", "limit", "cursor"])
+        );
+        assert_eq!(
+            post["requestBody"]["content"]["application/json"]["schema"]["$ref"].as_str(),
+            Some("#/components/schemas/ExplorerListQuery")
+        );
+        let reference = get["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
+            .as_str()
+            .expect("page schema");
+        let page = &spec["components"]["schemas"]
+            [reference.strip_prefix("#/components/schemas/").unwrap()];
+        assert_eq!(
+            page["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|value| value.as_str().unwrap())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["items", "next_cursor"])
+        );
+        assert!(page["properties"].get("pagination").is_none());
+        assert_eq!(post["x-iroha-tool-effect"].as_str(), Some("read"));
+    }
+    assert!(
+        spec["components"]["schemas"]
+            .get("ExplorerCursorMeta")
+            .is_none()
+    );
+    assert!(
+        spec["components"]["schemas"]
+            .get("ExplorerHistoryCursorMeta")
+            .is_none()
+    );
+}
+
 #[test]
 fn canonical_output_contract_has_one_details_owner_and_header_without_result_root() {
     let schemas = openapi_schemas();
@@ -394,6 +456,7 @@ fn expected_operation_effect(method: &str, path: &str) -> &'static str {
         && matches!(
             path,
             "/v1/sorafs/provider/source"
+                | "/v1/sorafs/provider/attestation"
                 | "/v1/sorafs/publish/prepare"
                 | "/v1/sorafs/publish/proof"
                 | "/v1/sorafs/repair/source"
@@ -452,6 +515,34 @@ fn expected_read_operation(method: &str, path: &str) -> bool {
             && matches!(
                 path,
                 "/v1/accounts/query"
+                    | "/v1/accounts/{account_id}/assets/query"
+                    | "/v1/assets/{definition_id}/holders/query"
+                    | "/v1/transactions/query"
+                    | "/v1/accounts/{account_id}/transactions/query"
+                    | "/v1/repo/agreements/query"
+                    | "/v1/accounts/{account_id}/permissions/query"
+                    | "/v1/subscriptions/plans/query"
+                    | "/v1/subscriptions/query"
+                    | "/v1/space-directory/uaids/{uaid}/manifests/query"
+                    | "/v1/accounts/{account_id}/history/query"
+                    | "/v1/contracts/activity/query"
+                    | "/v1/contracts/events/query"
+                    | "/v1/kagemusha/ordinary/current-wallet"
+                    | "/v1/kagemusha/ordinary/mint-issuer-purpose"
+                    | "/v1/kagemusha/ordinary/top-up/credit"
+                    | "/v1/kagemusha/ordinary/top-up/finality"
+                    | "/v1/ledger/authority-originals"
+                    | "/v1/explorer/accounts/query"
+                    | "/v1/explorer/asset-definitions/query"
+                    | "/v1/explorer/assets/query"
+                    | "/v1/explorer/blocks/query"
+                    | "/v1/explorer/domains/query"
+                    | "/v1/explorer/instructions/latest/query"
+                    | "/v1/explorer/instructions/query"
+                    | "/v1/explorer/nfts/query"
+                    | "/v1/explorer/rwas/query"
+                    | "/v1/explorer/transactions/latest/query"
+                    | "/v1/explorer/transactions/query"
                     | "/v1/accounts/faucet/prepare"
                     | "/v1/accounts/onboard/plan"
                     | "/v1/accounts/onboard/prepare"
@@ -466,6 +557,8 @@ fn expected_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/retail/recipients/route"
                     | "/v1/fee-sponsor-programs/by-id"
                     | "/v1/fees/quote"
+                    | "/v1/validation-fee/accounts/{account_id}/statement"
+                    | "/v1/validation-fee/quote"
                     | "/v1/assets/aliases/resolve"
                     | "/v1/assets/definitions/query"
                     | "/v1/assets/holders/query"
@@ -1935,6 +2028,108 @@ fn checked_openapi_assets_match_package_authority() {
         "release/package authority drift"
     );
 }
+#[test]
+fn public_lane_reward_claim_schema_requires_exact_fee_consent() {
+    use iroha_data_model::{
+        asset::AssetId,
+        nexus::{
+            PublicLaneFeeRewardClaimV1, PublicLaneMonetaryScopeV1, PublicLaneRewardClaimPlanV1,
+        },
+        parameter::system::SumeragiNposParameters,
+    };
+    use iroha_test_samples::{ALICE_ID, BOB_ID};
+
+    let schemas = openapi_schemas();
+    let plan_fields = [
+        "network_scope",
+        "valid_until_height",
+        "expected_state",
+        "records",
+        "sources",
+        "fee_claim",
+    ];
+    let claim_fields = [
+        "lifecycle_seal",
+        "beneficiary_id",
+        "beneficiary_revision",
+        "source_asset",
+        "destination_asset",
+        "amount",
+        "expected_claim_sequence",
+    ];
+    assert_strict_object_schema(&schemas, "PublicLaneRewardClaimPlanV1", &plan_fields, &[]);
+    assert_strict_object_schema(&schemas, "PublicLaneFeeRewardClaimV1", &claim_fields, &[]);
+    assert_eq!(
+        schemas["PublicLaneRewardClaimPlanV1"]["properties"]["fee_claim"]["anyOf"],
+        norito::json!([
+            {"$ref": "#/components/schemas/PublicLaneFeeRewardClaimV1"},
+            {"type": "null"}
+        ])
+    );
+    assert_eq!(
+        schemas["PublicLaneFeeRewardClaimV1"]["properties"]["lifecycle_seal"],
+        norito::json!({
+            "type": "string", "minLength": 64, "maxLength": 64,
+            "pattern": "^[0-9A-Fa-f]{64}$"
+        })
+    );
+    let xor = SumeragiNposParameters::default().xor_asset_definition_id;
+    let claim = PublicLaneFeeRewardClaimV1 {
+        lifecycle_seal: [0xA5; 32],
+        beneficiary_id: ALICE_ID.clone(),
+        beneficiary_revision: u64::MAX,
+        source_asset: AssetId::new(xor.clone(), BOB_ID.clone()),
+        destination_asset: AssetId::new(xor, ALICE_ID.clone()),
+        amount: "0.000000001".parse().unwrap(),
+        expected_claim_sequence: u64::MAX,
+    };
+    assert!(claim.has_canonical_shape(&ALICE_ID));
+    for fee_claim in [None, Some(claim)] {
+        let plan = PublicLaneRewardClaimPlanV1 {
+            network_scope: PublicLaneMonetaryScopeV1::Genesis,
+            valid_until_height: 1,
+            expected_state: None,
+            records: Vec::new(),
+            sources: Vec::new(),
+            fee_claim,
+        };
+        let encoded = norito::json::to_value(&plan).unwrap();
+        assert_eq!(
+            encoded
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(plan_fields)
+        );
+        if plan.fee_claim.is_some() {
+            assert_eq!(
+                encoded["fee_claim"]
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from(claim_fields)
+            );
+            assert_eq!(
+                encoded["fee_claim"]["lifecycle_seal"],
+                Value::String("A5".repeat(32))
+            );
+        } else {
+            assert_eq!(encoded["fee_claim"], Value::Null);
+        }
+        assert_eq!(
+            norito::json::from_value::<PublicLaneRewardClaimPlanV1>(encoded.clone()).unwrap(),
+            plan
+        );
+        let mut omitted = encoded;
+        omitted.as_object_mut().unwrap().remove("fee_claim");
+        assert!(norito::json::from_value::<PublicLaneRewardClaimPlanV1>(omitted).is_err());
+    }
+}
+
 #[test]
 fn public_lane_staking_schema_closes_status_variants_and_unbond_cutoff() {
     let document = canonical_document();

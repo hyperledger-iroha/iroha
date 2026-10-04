@@ -1,9 +1,20 @@
 import Foundation
 import CryptoKit
+#if IROHASWIFT_LOCAL_UNIT_ARTIFACT
+#if !os(macOS)
+#error("A local-unit NoritoBridge artifact is restricted to macOS Swift tests.")
+#endif
+#if !IROHASWIFT_LOCAL_UNIT_DEBUG
+#error("A local-unit NoritoBridge artifact cannot enter a Release build.")
+#endif
+#endif
 #if canImport(Darwin)
 import Darwin
 #if IROHASWIFT_BRIDGE_PRESENT
 import NoritoBridge
+#endif
+#if SWIFT_PACKAGE
+import NoritoBridgeRetention
 #endif
 
 enum BridgePolicyHint {
@@ -89,9 +100,9 @@ enum NoritoBridgeLoader {
         expectedBridgeAbiVersion(for: currentIdentifier())
     }
     private static let expectedHashes: [String: String] = [
-        "macos-arm64_x86_64": "449ef16a9f9c6cbaa5e94ec28fa0f434f63c9b74ebd408fcb932a6888bdd53bc",
-        "ios-arm64": "86178c81932bf9776b20d53abba839da65a2181fa2748cafd11b2953f658aa85",
-        "ios-arm64_x86_64-simulator": "487946bcfb37e67fbd65308f364670e71a3fd491121b72bb6d30d6793bf000eb"
+        "macos-arm64_x86_64": "4018b7967ed842dd096ee26d71b20a2e601e80f4c5b609ce72b1e15f3d9e4f54",
+        "ios-arm64": "fe36df91b0a1d2d2e26650f84da8d744634933a872443fe02343f2791a3dcff9",
+        "ios-arm64_x86_64-simulator": "c4b4a7deeb226643a54b11954aa7d6b0df1a5614ffb14fb9330d3eaefe3ff3a8"
     ]
     static let parliamentTimedOvnWalletRequiredSymbols = [
         "connect_norito_parliament_timed_ovn_verify_casting_proof_page_v1",
@@ -198,6 +209,11 @@ enum NoritoBridgeLoader {
     }
 
     static func openHandle() -> (UnsafeMutableRawPointer?, ValidationStatus) {
+        #if SWIFT_PACKAGE
+        // The direct C call roots every dynamically resolved native export;
+        // the loader still authenticates the exact symbols and ABI below.
+        _ = iroha_norito_bridge_retain_exports()
+        #endif
         // Xcode 26 debug-dylib: app code lives in <name>.debug.dylib, not the main executable.
         // dlopen(nil) returns a handle to the 57 KB launcher image. It may re-export a few symbols
         // (e.g. connect_norito_free) so the dlsym probe succeeds, but calling heavier functions

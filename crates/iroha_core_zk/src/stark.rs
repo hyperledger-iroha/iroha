@@ -111,11 +111,7 @@ fn stark_air_circuit_id_targets_zk_ace(circuit_id: &str) -> bool {
     )
 }
 fn stark_air_circuit_id_targets_ivm_execution(circuit_id: &str) -> bool {
-    circuit_id
-        .trim()
-        .rsplit([':', '/'])
-        .next()
-        .is_some_and(|relation| relation.starts_with("ivm-"))
+    crate::ivm_proof_identity::circuit_id_uses_reserved_ivm_namespace(circuit_id)
 }
 fn stark_air_circuit_id_targets_governance_vote_relation(circuit_id: &str) -> bool {
     [

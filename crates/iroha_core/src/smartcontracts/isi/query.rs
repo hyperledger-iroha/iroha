@@ -46,7 +46,7 @@ use iroha_data_model::{
     query::{
         CommittedTransaction, QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple,
         QueryRequest, QueryResponse, SingularQueryBox, SingularQueryOutputBox,
-        dsl::{CompoundPredicate, EvaluateSelector, HasProjection, SelectorMarker},
+        dsl::{CompoundPredicate, HasProjection, SelectorMarker},
         error::{FindError, QueryExecutionFail as Error},
         parameters::{DEFAULT_FETCH_SIZE, QueryParams, SortOrder},
     },
@@ -60,7 +60,8 @@ pub use ordinary_memory::{
     ORDINARY_ABI_VERSION_SOURCE_BYTES, ORDINARY_NAME_ID_SOURCE_BYTES,
     ORDINARY_QUERY_FIXED_CONTAINER_OVERHEAD_BYTES, ORDINARY_QUERY_RETAINED_ITEM_OVERHEAD_BYTES,
     OrdinaryQueryExecutionLimitError, OrdinaryQueryExecutionLimits, OrdinaryQueryMemoryLease,
-    OrdinaryQueryMemoryReservation,
+    OrdinaryQueryMemoryReservation, SIGNED_QUERY_SHAPE_NOT_ADMITTED, TORII_COLLECTION_ENDPOINTS,
+    signed_query_shape_not_admitted,
 };
 pub(crate) use ordinary_memory::{
     OrdinaryQueryCursorBinding, OrdinaryQueryCursorMemory, OrdinaryQueryCursorPolicy,
@@ -75,6 +76,7 @@ pub(crate) use singular_memory::{
     SingularQueryRetainedVec, SingularQueryVecBuilder, own_singular_query_serialized_source,
     own_singular_query_struct, own_singular_query_value, own_singular_query_values,
     singular_query_decode_limits, singular_query_frame_limit, singular_query_limits_active,
+    with_retained_singular_query_limits,
 };
 use std::{
     cell::Cell,
@@ -1083,7 +1085,6 @@ pub fn apply_query_postprocessing<I>(
 where
     I: Iterator<Item: SortableQueryOutput>,
     I::Item: HasProjection<SelectorMarker, AtomType = ()> + NoritoSerialize + Send + Sync + 'static,
-    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
     let (output, _processed_items) =
@@ -1234,6 +1235,7 @@ fn scan_unsorted_transaction_page(
         filter,
         anchor,
         history_cursor,
+        scan_byte_limit,
         |projection_work, source_bytes| {
             let next_items = processed_items
                 .get()
@@ -1384,6 +1386,7 @@ fn collect_sorted_transaction_prefix(
         filter,
         anchor,
         None,
+        scan_byte_limit,
         |projection_work, source_bytes| {
             let next_items = processed_items
                 .get()
@@ -1964,7 +1967,6 @@ fn prepare_ordinary_stored_sorted_start<I>(
 where
     I: Iterator<Item: SortableQueryOutput>,
     I::Item: HasProjection<SelectorMarker, AtomType = ()> + NoritoSerialize + Send + Sync + 'static,
-    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
     let key = params
@@ -2091,7 +2093,6 @@ fn prepare_stored_sorted_start<I>(
 where
     I: Iterator<Item: SortableQueryOutput>,
     I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
-    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
     let StoredSortedFastStartParams {
@@ -2203,7 +2204,6 @@ fn prepare_stored_unsorted_bounded_start<I>(
 where
     I: Iterator<Item: SortableQueryOutput>,
     I::Item: HasProjection<SelectorMarker, AtomType = ()> + NoritoSerialize + Send + Sync + 'static,
-    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
     let fetch_size = params
@@ -2339,7 +2339,6 @@ fn collect_unsorted_bounded_page<I>(
 where
     I: Iterator<Item: SortableQueryOutput>,
     I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
-    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
     let fetch_size = params
@@ -2391,7 +2390,6 @@ fn prepare_stored_unsorted_bounded_replay_start<I, Q, E>(
 where
     I: Iterator<Item: SortableQueryOutput>,
     I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
-    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
     Q: ValidQuery<E, Item = I::Item> + Clone + Send + Sync + 'static,
     E: Into<QueryAttemptError>,
@@ -2443,7 +2441,6 @@ fn handle_iter_start_stored<I>(
 where
     I: Iterator<Item: SortableQueryOutput>,
     I::Item: HasProjection<SelectorMarker, AtomType = ()> + NoritoSerialize + Send + Sync + 'static,
-    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
     if params.sorting.sort_by_metadata_key.is_some() {
@@ -2486,13 +2483,11 @@ fn handle_iter_start_stored_replayable<I>(
 where
     I: Iterator<Item: SortableQueryOutput>,
     I::Item: HasProjection<SelectorMarker, AtomType = ()> + NoritoSerialize + Send + Sync + 'static,
-    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
     if let Some(ordinary) = limits.ordinary_execution_limits {
         return ordinary_stored::handle(
             iter,
-            selector,
             params,
             limits,
             ordinary,
@@ -2623,7 +2618,6 @@ fn apply_query_postprocessing_ephemeral_with_budget<I>(
 where
     I: Iterator<Item: SortableQueryOutput>,
     I::Item: HasProjection<SelectorMarker, AtomType = ()> + NoritoSerialize + Send + Sync + 'static,
-    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
     apply_query_postprocessing_ephemeral_with_budget_from_stats(
@@ -2646,7 +2640,6 @@ fn apply_query_postprocessing_ephemeral_with_budget_from_stats<I>(
 where
     I: Iterator<Item: SortableQueryOutput>,
     I::Item: HasProjection<SelectorMarker, AtomType = ()> + NoritoSerialize + Send + Sync + 'static,
-    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
     let initial_processed_items = stats.processed_items();
@@ -2669,12 +2662,12 @@ where
         let offset = params.pagination.offset_value();
         let limit = params.pagination.limit_value().map(|limit| limit.get());
         if let Some(ordinary) = limits.ordinary_execution_limits {
-            if offset != 0 || selector.iter().next().is_some() {
-                // TODO: Add bounded selector-specific projections and an
-                // offset-aware source adapter before admitting these shapes.
-                return Err(Error::Conversion(
-                    "ordinary iterable pagination/projection adapter is not yet complete"
-                        .to_owned(),
+            if offset != 0 {
+                // Admission refuses non-zero offsets before execution; this is
+                // the fail-closed backstop for the bounded ordinary adapters.
+                return Err(ordinary_memory::signed_query_shape_not_admitted(
+                    "the iterable start",
+                    "admits only a zero offset",
                 ));
             }
             let (source_len, exact_len) = iter.size_hint();
@@ -2889,7 +2882,6 @@ fn apply_query_postprocessing_with_budget<I>(
 where
     I: Iterator<Item: SortableQueryOutput>,
     I::Item: HasProjection<SelectorMarker, AtomType = ()> + NoritoSerialize + Send + Sync + 'static,
-    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
     // Validate and pick the fetch (aka batch) size from params
@@ -3217,6 +3209,7 @@ pub fn validate_fresh_query_for_client_world_parts(
     world_ro: &impl WorldReadOnly,
     latest_block: Option<BlockHeader>,
     limits: QueryLimits,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<(), ValidationFail> {
     if matches!(request, QueryRequest::Continue(_)) {
         return Err(ValidationFail::NotPermitted(
@@ -3229,6 +3222,7 @@ pub fn validate_fresh_query_for_client_world_parts(
         world_ro,
         latest_block,
         limits,
+        budget,
     )
     .map(drop)
 }
@@ -3697,6 +3691,7 @@ mod tests {
             &world_view,
             None,
             QueryLimits::default(),
+            &iroha_allocation::AllocationBudget::new(0),
         )
         .expect_err("a bare continuation must never enter reusable raw validation");
         assert!(
@@ -6166,7 +6161,7 @@ mod tests {
         assert_eq!(v_acc.len(), 2);
         // AssetDefinitions: default params
         let payload_ad = norito::codec::Encode::encode(
-            &iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
+            &iroha_data_model::query::asset::prelude::FindAssetDefinitions,
         );
         let qbox_ad: iroha_data_model::query::QueryBox<_> = Box::new(
             iroha_data_model::query::ErasedIterQuery::<AssetDefinition>::new(
@@ -6398,7 +6393,7 @@ mod tests {
         run_asset_definition_rank_sort_case,
         AssetDefinition,
         ranked_asset_definition_fixture,
-        iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
+        iroha_data_model::query::asset::prelude::FindAssetDefinitions,
         AssetDefinition
     );
 
@@ -6770,7 +6765,10 @@ mod tests {
             &ALICE_ID,
         );
         let state = State::new(world, kura.clone(), LiveQueryStore::start_test());
-        let parent_block = state.view().latest_block();
+        let parent_block = state
+            .view()
+            .latest_block()
+            .expect("completed original State read");
         let unverified_block =
             BlockBuilder::new(vec![dummy_accepted_transaction(state.network_id)])
                 .chain(0, parent_block.as_deref())
@@ -7208,7 +7206,8 @@ mod tests {
         let genesis_rows = state
             .view()
             .kura()
-            .get_block(nonzero!(1_usize))
+            .get_block(nonzero!(1_usize), &state.ivm_execution_budget())
+            .expect("completed original State read")
             .unwrap()
             .network_input_hashes()
             .len();
@@ -7805,10 +7804,12 @@ mod tests {
             .expect("original wire is nonempty") ^= 1;
         let codec_error = iroha_data_model::block::decode_framed_signed_block(&corrupted_wire)
             .expect_err("altered source must fail its canonical frame checksum");
-        assert!(
-            matches!(&codec_error, iroha_version::error::Error::NoritoCodec(message)
-            if message == "checksum mismatch")
+        assert_eq!(
+            codec_error.kind(),
+            norito::core::DecodeAttemptErrorKind::Invalid
         );
+        let codec_error = codec_error.into_error();
+        assert!(matches!(codec_error, norito::Error::ChecksumMismatch));
         let expected_error = Error::Conversion(codec_error.to_string());
         fixture.store.corrupt_body(target_height);
         loop {
@@ -7884,10 +7885,12 @@ mod tests {
             .expect("original wire is nonempty") ^= 1;
         let codec_error = iroha_data_model::block::decode_framed_signed_block(&corrupted_wire)
             .expect_err("altered old source must fail its canonical frame checksum");
-        assert!(matches!(
-            &codec_error,
-            iroha_version::error::Error::NoritoCodec(message) if message == "checksum mismatch"
-        ));
+        assert_eq!(
+            codec_error.kind(),
+            norito::core::DecodeAttemptErrorKind::Invalid
+        );
+        let codec_error = codec_error.into_error();
+        assert!(matches!(codec_error, norito::Error::ChecksumMismatch));
         let expected_error = Error::Conversion(codec_error.to_string());
         fixture.store.corrupt_body(fixture.unrelated_height);
         let state_view = fixture.state.view();
@@ -7966,7 +7969,8 @@ mod tests {
         let state_view = state.view();
         let block = state_view
             .kura()
-            .get_block(nonzero!(4_usize))
+            .get_block(nonzero!(4_usize), &state_view.execution_budget())
+            .expect("completed original State read")
             .expect("block available");
         let block_hash = block.hash();
         let txs = crate::smartcontracts::isi::tx::execute_transactions_fixture(
@@ -8003,7 +8007,8 @@ mod tests {
         let state_view = state.view();
         let block = state_view
             .kura()
-            .get_block(nonzero!(4_usize))
+            .get_block(nonzero!(4_usize), &state_view.execution_budget())
+            .expect("completed original State read")
             .expect("block available");
         let entrypoint_hash = block
             .network_input_hashes()
@@ -8367,356 +8372,6 @@ mod tests {
         .collect::<Vec<_>>();
         assert!(contradictory_backend.is_empty());
         Ok(())
-    }
-    #[cfg(feature = "ids_projection")]
-    #[tokio::test]
-    async fn iter_dispatch_domains_ids_only_projection() {
-        use iroha_data_model::query::{
-            self, QueryItemKind, QueryWithParams,
-            dsl::{CompoundPredicate, SelectorTuple},
-        };
-        // Build world with two domains and ALICE account
-        let d1: Domain =
-            Domain::new(DomainId::try_new("w1", "universal").unwrap()).build(&ALICE_ID);
-        let d2: Domain =
-            Domain::new(DomainId::try_new("w2", "universal").unwrap()).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let world = World::with([d1.clone(), d2.clone()], [account], []);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle.clone());
-        let state_view = state.view();
-        let qwp = QueryWithParams {
-            query: (),
-            query_payload: norito::codec::Encode::encode(
-                &iroha_data_model::query::domain::prelude::FindDomains,
-            ),
-            item: QueryItemKind::Domain,
-            predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Domain>::PASS),
-            selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Domain>::ids_only()),
-            params: query::parameters::QueryParams::default(),
-        };
-        let req = ValidQueryRequest::validate_for_client_parts(
-            QueryRequest::Start(qwp),
-            &ALICE_ID,
-            &state_view,
-            QueryLimits::default(),
-        )
-        .unwrap();
-        let QueryResponse::Iterable(first) =
-            req.execute(&query_handle, &state_view, &ALICE_ID).unwrap()
-        else {
-            panic!("expected iterable")
-        };
-        let (batch, _rem, _cur) = first.into_parts();
-        let ids = match batch.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::DomainId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids.len(), 2);
-        assert!(ids.iter().any(|id| id == d1.id()));
-        assert!(ids.iter().any(|id| id == d2.id()));
-    }
-    #[cfg(feature = "ids_projection")]
-    #[tokio::test]
-    async fn iter_dispatch_accounts_ids_only_projection() {
-        use iroha_data_model::query::{
-            self, QueryItemKind, QueryWithParams,
-            dsl::{CompoundPredicate, SelectorTuple},
-        };
-        let w: Domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
-        let (a_id, _) = iroha_test_samples::gen_account_in("w");
-        let (b_id, _) = iroha_test_samples::gen_account_in("w");
-        let a = Account::new(a_id.clone()).build(&a_id);
-        let b = Account::new(b_id.clone()).build(&b_id);
-        let world = with_global_reader(World::with([w], [a.clone(), b.clone()], []), &a_id);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle.clone());
-        let state_view = state.view();
-        let qwp = QueryWithParams {
-            query: (),
-            query_payload: norito::codec::Encode::encode(
-                &iroha_data_model::query::account::prelude::FindAccounts,
-            ),
-            item: QueryItemKind::Account,
-            predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Account>::PASS),
-            selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Account>::ids_only()),
-            params: query::parameters::QueryParams::default(),
-        };
-        let req = ValidQueryRequest::validate_for_client_parts(
-            QueryRequest::Start(qwp),
-            &a_id,
-            &state_view,
-            QueryLimits::default(),
-        )
-        .unwrap();
-        let QueryResponse::Iterable(first) =
-            req.execute(&query_handle, &state_view, &a_id).unwrap()
-        else {
-            panic!("expected iterable")
-        };
-        let (batch, _rem, _cur) = first.into_parts();
-        let ids = match batch.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::AccountId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids.len(), 2);
-        assert!(ids.iter().any(|id| id == &a_id));
-        assert!(ids.iter().any(|id| id == &b_id));
-    }
-    #[cfg(feature = "ids_projection")]
-    #[tokio::test]
-    async fn iter_dispatch_asset_definitions_ids_only_projection() {
-        use iroha_data_model::query::{
-            self, QueryItemKind, QueryWithParams,
-            dsl::{CompoundPredicate, SelectorTuple},
-        };
-        let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let ad1 = AssetDefinition::numeric(
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("w", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            ),
-            "rose".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .build(&ALICE_ID);
-        let ad2 = AssetDefinition::numeric(
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("w", "universal").unwrap(),
-                "tulip".parse().unwrap(),
-            ),
-            "tulip".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .build(&ALICE_ID);
-        let world = World::with([domain], [account], [ad1.clone(), ad2.clone()]);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle.clone());
-        let state_view = state.view();
-        let qwp = QueryWithParams {
-            query: (),
-            query_payload: norito::codec::Encode::encode(
-                &iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
-            ),
-            item: QueryItemKind::AssetDefinition,
-            predicate_bytes: norito::codec::Encode::encode(
-                &CompoundPredicate::<AssetDefinition>::PASS,
-            ),
-            selector_bytes: norito::codec::Encode::encode(
-                &SelectorTuple::<AssetDefinition>::ids_only(),
-            ),
-            params: query::parameters::QueryParams::default(),
-        };
-        let req = ValidQueryRequest::validate_for_client_parts(
-            QueryRequest::Start(qwp),
-            &ALICE_ID,
-            &state_view,
-            QueryLimits::default(),
-        )
-        .unwrap();
-        let QueryResponse::Iterable(first) =
-            req.execute(&query_handle, &state_view, &ALICE_ID).unwrap()
-        else {
-            panic!("expected iterable")
-        };
-        let (batch, _rem, _cur) = first.into_parts();
-        let ids = match batch.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::AssetDefinitionId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids.len(), 2);
-        assert!(ids.iter().any(|id| id == ad1.id()));
-        assert!(ids.iter().any(|id| id == ad2.id()));
-    }
-    #[cfg(feature = "ids_projection")]
-    #[tokio::test]
-    async fn iter_dispatch_nfts_ids_only_projection() {
-        use iroha_data_model::query::{
-            self, QueryBox, QueryWithFilter, QueryWithParams,
-            dsl::{CompoundPredicate, SelectorTuple},
-        };
-        let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let nft1 =
-            Nft::new("n1$w.universal".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
-        let nft2 =
-            Nft::new("n2$w.universal".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
-        let world = World::with_assets([domain], [account], [], [], [nft1.clone(), nft2.clone()]);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new(
-            with_global_reader(world, &ALICE_ID),
-            kura,
-            query_handle.clone(),
-        );
-        let state_view = state.view();
-        let qwf: QueryWithFilter<_> = QueryWithFilter::new(
-            (),
-            CompoundPredicate::PASS,
-            SelectorTuple::<Nft>::ids_only(),
-        );
-        let qbox: QueryBox<query::QueryOutputBatchBox> = qwf.into();
-        let qwp = QueryWithParams::new(&qbox, query::parameters::QueryParams::default())
-            .expect("test query type has a canonical mapping");
-        let req = ValidQueryRequest::validate_for_client_parts(
-            QueryRequest::Start(qwp),
-            &ALICE_ID,
-            &state_view,
-            QueryLimits::default(),
-        )
-        .unwrap();
-        let QueryResponse::Iterable(first) =
-            req.execute(&query_handle, &state_view, &ALICE_ID).unwrap()
-        else {
-            panic!("expected iterable")
-        };
-        let (batch, _rem, _cur) = first.into_parts();
-        let ids = match batch.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::NftId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids.len(), 2);
-        assert!(ids.iter().any(|id| id == nft1.id()));
-        assert!(ids.iter().any(|id| id == nft2.id()));
-    }
-    #[cfg(feature = "ids_projection")]
-    #[tokio::test]
-    async fn iter_dispatch_roles_ids_only_projection() {
-        use iroha_data_model::query::{
-            self, QueryBox, QueryWithFilter, QueryWithParams,
-            dsl::{CompoundPredicate, SelectorTuple},
-        };
-        // Create a role and store it in world
-        let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
-        let role1 = Role::new("r1".parse().unwrap(), ALICE_ID.clone()).build(&ALICE_ID);
-        let role2 = Role::new("r2".parse().unwrap(), ALICE_ID.clone()).build(&ALICE_ID);
-        let world = {
-            let mut w = World::with(
-                [domain],
-                [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
-                [],
-            );
-            let mut block = w.block();
-            // Insert roles via the world roles map (simulate registration)
-            block.roles.insert(role1.id().clone(), role1.clone());
-            block.roles.insert(role2.id().clone(), role2.clone());
-            block.commit();
-            w
-        };
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new(
-            with_global_reader(world, &ALICE_ID),
-            kura,
-            query_handle.clone(),
-        );
-        let state_view = state.view();
-        let qwf: QueryWithFilter<_> = QueryWithFilter::new(
-            (),
-            CompoundPredicate::PASS,
-            SelectorTuple::<Role>::ids_only(),
-        );
-        let qbox: QueryBox<query::QueryOutputBatchBox> = qwf.into();
-        let qwp = QueryWithParams::new(&qbox, query::parameters::QueryParams::default())
-            .expect("test query type has a canonical mapping");
-        let req = ValidQueryRequest::validate_for_client_parts(
-            QueryRequest::Start(qwp),
-            &ALICE_ID,
-            &state_view,
-            QueryLimits::default(),
-        )
-        .unwrap();
-        let QueryResponse::Iterable(first) =
-            req.execute(&query_handle, &state_view, &ALICE_ID).unwrap()
-        else {
-            panic!("expected iterable")
-        };
-        let (batch, _rem, _cur) = first.into_parts();
-        let ids = match batch.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::RoleId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids.len(), 2);
-        assert!(ids.iter().any(|id| id == role1.id()));
-        assert!(ids.iter().any(|id| id == role2.id()));
-    }
-    #[cfg(feature = "ids_projection")]
-    #[tokio::test]
-    async fn iter_dispatch_triggers_ids_only_projection() {
-        use iroha_data_model::{
-            events::time::{ExecutionTime, TimeEventFilter},
-            query::{
-                self, QueryBox, QueryWithFilter, QueryWithParams,
-                dsl::{CompoundPredicate, SelectorTuple},
-            },
-        };
-        let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let mut world = World::with([domain], [account], []);
-        // Add 2 time triggers
-        {
-            let mut block = world.triggers.block();
-            let mut tx = block.transaction();
-            let action = Action::new(
-                [Log::new(iroha_logger::Level::INFO, "x".into())],
-                Repeats::Indefinitely,
-                ALICE_ID.clone(),
-                TimeEventFilter::new(ExecutionTime::PreCommit),
-            )
-            .expect("trigger action fixture satisfies validation invariants");
-            let t1 = Trigger::new("t1".parse().unwrap(), action.clone())
-                .try_into()
-                .unwrap();
-            let t2 = Trigger::new("t2".parse().unwrap(), action)
-                .try_into()
-                .unwrap();
-            tx.add_time_trigger(t1).unwrap();
-            tx.add_time_trigger(t2).unwrap();
-            tx.apply();
-            block.commit();
-        }
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new(
-            with_global_reader(world, &ALICE_ID),
-            kura,
-            query_handle.clone(),
-        );
-        let state_view = state.view();
-        let qwf: QueryWithFilter<_> = QueryWithFilter::new(
-            (),
-            CompoundPredicate::PASS,
-            SelectorTuple::<Trigger>::ids_only(),
-        );
-        let qbox: QueryBox<query::QueryOutputBatchBox> = qwf.into();
-        let qwp = QueryWithParams::new(&qbox, query::parameters::QueryParams::default())
-            .expect("test query type has a canonical mapping");
-        let req = ValidQueryRequest::validate_for_client_parts(
-            QueryRequest::Start(qwp),
-            &ALICE_ID,
-            &state_view,
-            QueryLimits::default(),
-        )
-        .unwrap();
-        let QueryResponse::Iterable(first) =
-            req.execute(&query_handle, &state_view, &ALICE_ID).unwrap()
-        else {
-            panic!("expected iterable")
-        };
-        let (batch, _rem, _cur) = first.into_parts();
-        let ids = match batch.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::TriggerId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids.len(), 2);
-        assert!(ids.iter().any(|id| id == &"t1".parse().unwrap()));
-        assert!(ids.iter().any(|id| id == &"t2".parse().unwrap()));
     }
     iter_dispatch_rank_sort_test!(
         iter_dispatch_asset_definitions_sort_asc,

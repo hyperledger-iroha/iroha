@@ -152,28 +152,23 @@ const torii = new ToriiClient(config?.torii?.address ?? "http://localhost:8080",
 console.log(clientConfig.retryProfiles.pipeline.maxRetries); // 5 by default
 ```
 
-### NFT and account-asset iterators
+### NFT and account-asset reads
 
-Use `requirePermissions` to ensure credentialed access before hitting Torii. NFT filters only allow
-`id` equality/exists predicates; account-asset queries support quantity comparisons.
+NFT filters compare `id`, `owned_by` and `metadata.*`; account-asset filters
+compare `asset`, `scope` and exact decimal `quantity` values.
 
 ```js
 const torii = new ToriiClient("https://torii.example", { authToken: process.env.TORII_AUTH_TOKEN });
 
-const nftPage = await torii.listNfts({
-  requirePermissions: true,
-  limit: 2,
-  sort: [{ key: "id", order: "asc" }],
-});
+const nftPage = await torii.nfts.list({ limit: 2, sort: "id" });
 console.log("nfts:", nftPage.items.map((it) => it.id));
 
-for await (const holding of torii.iterateAccountAssetsQuery("<i105-account-id>", {
-  requirePermissions: true,
-  pageSize: 2,
-  filter: { Gte: ["quantity", 1] },
-  sort: [{ key: "quantity", order: "desc" }],
+for await (const holding of torii.accountAssets("<i105-account-id>").iterate({
+  filter: "quantity >= 1",
+  sort: "-quantity",
+  limit: 2,
 })) {
-  console.log(`${holding.asset_id} => ${holding.quantity}`);
+  console.log(`${holding.asset} => ${holding.quantity}`);
 }
 ```
 
@@ -262,7 +257,7 @@ const torii = new ToriiClient("https://torii.nexus.example", {
 });
 
 try {
-  const { items } = await torii.listDomains({ limit: 1 });
+  const { items } = await torii.domains.list({ limit: 1 });
   console.log("first domain", items[0]?.id);
 } catch (error) {
   console.error("Torii request failed", error);
@@ -293,126 +288,93 @@ const torii = new ToriiClient("https://torii.nexus.example", {
 });
 const { privateKey } = generateKeyPair({ seed: Buffer.alloc(32, 7) });
 
-const { items } = await torii.listAccountAssets("<i105-account-id>", {
-  limit: 10,
-  canonicalAuth: { accountId: "<i105-account-id>", privateKey },
-});
+const { items } = await torii.accountAssets("<i105-account-id>").list(
+  { limit: 10 },
+  { canonicalAuth: { accountId: "<i105-account-id>", privateKey } },
+);
 ```
 
 When constructing ad-hoc HTTP calls, reuse `buildCanonicalRequestHeaders` to
 render the four headers from a method/path/query/body tuple. The helper also
 includes freshness metadata to prevent replay.
 
-## Iterable Lists & Pagination
+## Collection Queries
 
-Use the new helpers to mirror the Python SDK’s ergonomics for `/v1/accounts`,
-`/v1/domains`, `/v1/assets/definitions`, NFTs, account balances, asset holders,
-and account transaction history. Each method accepts the same filter/sort
-envelope as the Torii JSON API and returns `{ items, total }`. When you want to
-exhaust a dataset, the corresponding `iterate*` method advances the offset
-automatically.
+Every Torii collection — `domains`, `accounts`, `assetDefinitions`, `nfts`,
+`rwas`, `repoAgreements`, `transactions`, plus `accountAssets(id)`,
+`assetHolders(definitionId)` and `accountTransactions(id)` — takes the same
+[collection query](../../torii/collection_queries.md): `filter` (text,
+`Filter` builder or JSON form), `sort` (`"-quantity,id"`), `select`, `limit`,
+`cursor` and `includeTotal`, plus `aggregate` on `list`. `list` returns one page
+`{ items, nextCursor, total? }`; `pages` and `iterate` follow `nextCursor`.
 
 ```js
-const { items, total } = await torii.listDomains({
-  limit: 25,
-  sort: [{ key: "id", order: "asc" }],
-});
-console.log(`first page out of ${total}`, items);
+import { field } from "@iroha/iroha-js";
 
-for await (const account of torii.iterateAccounts({ pageSize: 50, maxItems: 200 })) {
+const page = await torii.domains.list({ limit: 25, sort: "-id", includeTotal: true });
+console.log(`first page out of ${page.total}`, page.items);
+
+for await (const account of torii.accounts.iterate({ limit: 50 })) {
   console.log(account.id);
 }
 
-const defs = await torii.queryAssetDefinitions({
-  filter: { Eq: ["metadata.display_name", "Ticket"] },
-  sort: [{ key: "metadata.display_name", order: "desc" }],
-  fetchSize: 64,
+const defs = await torii.assetDefinitions.list({
+  filter: field("metadata.display_name").eq("Ticket"),
+  sort: "-metadata.display_name",
 });
 console.log("filtered definitions", defs.items);
+
+const holders = await torii.assetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM").list({
+  filter: "quantity > 0",
+  sort: "-quantity",
+  limit: 5,
+});
+console.log("top holders", holders.items.map((entry) => entry.account_id));
+
+// Transaction history is newest first; pages may be short, so follow cursors.
+for await (const tx of torii.accountTransactions("<i105-account-id>").iterate({
+  filter: 'asset_definition_ids = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"',
+  limit: 3,
+})) {
+  console.log("recent hash", tx.entrypoint_hash);
+}
 
 const perms = await torii.listAccountPermissions("<i105-account-id>", {
   limit: 10,
 });
 console.log("direct permissions", perms.items);
-for await (const perm of torii.iterateAccountPermissions("<i105-account-id>", {
-  pageSize: 5,
-})) {
-  console.log("iterated permission", perm.name);
-}
-const holdings = await torii.listAccountAssets("<i105-account-id>", {
-  limit: 5,
-  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-});
-console.log("asset holdings", holdings.items);
-const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
-  limit: 5,
-  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-});
-console.log("top holders", holders.items.map((entry) => entry.account_id));
-const txs = await torii.listAccountTransactions("<i105-account-id>", {
-  limit: 3,
-  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-});
-console.log("recent hashes", txs.items.map((tx) => tx.entrypoint_hash));
-
-for await (const nft of torii.iterateNfts({
-  pageSize: 10,
-  filter: { Eq: ["id.definition_id", "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o"] },
-  sort: [{ key: "id", order: "asc" }],
-})) {
-  console.log("nft:", nft.id);
-}
-
-for await (const holding of torii.iterateAccountAssetsQuery("<i105-account-id>", {
-  pageSize: 8,
-  filter: { Eq: ["asset_id.definition_id", "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"] },
-  select: [{ Fields: ["asset_id", "quantity"] }],
-})) {
-  console.log("compressed holding", holding.asset_id, "->", holding.quantity);
-}
 ```
 
-### NFT and account-asset iterators
+Rejected queries throw `ToriiHttpError` with Torii's `code` (`invalid_filter`,
+`invalid_sort`, …) and `details` (`field`, `expected`, `hint`); queries that
+fail local validation throw `ListQueryError` before any request is sent.
 
-`iterateNfts` and `iterateAccountAssets` wrap the same Norito filter/sort
-envelopes as the POST query endpoints while handling pagination for you. Pass
-`pageSize`/`maxItems` to bound the iteration. Responses use canonical I105 account identifiers. Torii returns permission errors as
-`ToriiHttpError` (status/`code`/`message`); catch them to surface deny reasons
-in UI flows.
+### NFT and account-asset reads
+
+NFT filters compare `id`, `owned_by` and `metadata.*`; account-asset filters
+compare `asset`, `scope` and exact decimal `quantity` values.
 
 ```js
-const assets = [];
-for await (const holding of torii.iterateAccountAssets("<i105-account-id>", {
-  pageSize: 2,
-  maxItems: 10,
-  sort: [{ key: "quantity", order: "desc" }],
-})) {
-  assets.push({ id: holding.asset_id, qty: holding.quantity });
-}
-console.log("top holdings", assets);
+const torii = new ToriiClient("https://torii.example", { authToken: process.env.TORII_AUTH_TOKEN });
 
-const nftIds = [];
-for await (const nft of torii.iterateNftsQuery({
-  pageSize: 3,
-  maxItems: 6,
-  filter: { Contains: ["id", "ticket#"] },
+const nftPage = await torii.nfts.list({ limit: 2, sort: "id" });
+console.log("nfts:", nftPage.items.map((it) => it.id));
+
+for await (const holding of torii.accountAssets("<i105-account-id>").iterate({
+  filter: "quantity >= 1",
+  sort: "-quantity",
+  limit: 2,
 })) {
-  nftIds.push(nft.id);
+  console.log(`${holding.asset} => ${holding.quantity}`);
 }
-console.log("matching NFTs", nftIds);
+const ownedNfts = await torii.nfts.list({
+  filter: field("owned_by").eq("<i105-account-id>"),
+  limit: 5,
+});
+console.log("owned NFTs", ownedNfts.items.map((entry) => entry.id));
 
 try {
-  await torii.listNfts({ limit: 1 });
-} catch (error) {
-  if (error instanceof ToriiHttpError && error.code === "permission_denied") {
-    console.warn("missing NFT read permission", error.errorMessage);
-  } else {
-    throw error;
-  }
-}
-
-try {
-  await torii.listAccountAssets("<i105-account-id>", { limit: 1 });
+  await torii.accountAssets("<i105-account-id>").list({ limit: 1 });
 } catch (error) {
   if (error instanceof ToriiHttpError && error.code === "permission_denied") {
     console.warn("missing asset read permission", error.errorMessage);
@@ -420,22 +382,8 @@ try {
     throw error;
   }
 }
-
-const ownedNfts = await torii.listAccountNfts("<i105-account-id>", {
-  domainId: "wonderland",
-  limit: 5,
-});
-console.log("alice NFTs", ownedNfts.items.map((entry) => entry.id));
-
-for await (const nft of torii.iterateAccountNfts("<i105-account-id>", {
-  domainId: "wonderland",
-  pageSize: 10,
-  maxItems: 20,
-})) {
-  console.log("owned nft", nft.id, nft.metadata);
-}
-// The runnable recipe `recipes/assets_iterators.mjs` wraps the same helpers with
-// env-driven pagination/filters so you can smoke-test permissions against a live Torii.
+// The runnable recipe `recipes/assets_iterators.mjs` exercises the same calls
+// against a live Torii.
 ```
 
 ## KAGEMUSHA V1

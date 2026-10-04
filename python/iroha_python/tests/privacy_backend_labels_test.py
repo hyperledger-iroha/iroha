@@ -61,10 +61,6 @@ def _registry_literals(path: str, marker: str, end: str) -> frozenset[str]:
             "const PRODUCTION_VERIFY_BACKEND_LABELS_V1 =", "]);", "all",
         ),
         (
-            "javascript/iroha_js/src/toriiClient.js",
-            "const PRODUCTION_VERIFY_BACKEND_LABELS_V1 =", "]);", "all",
-        ),
-        (
             "javascript/iroha_js/index.d.ts",
             "export type ToriiVerifierBackendLabelV1 =", ";", "all",
         ),

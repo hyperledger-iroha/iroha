@@ -386,7 +386,7 @@ fn multiroute_genesis_authenticates_all_configured_lane_policies() {
         .0
         .da_proof_policies()
         .expect("config-derived DA policies");
-    assert_eq!(policies.policies.len(), 3);
+    assert_eq!(policies.policies().len(), 3);
     assert_eq!(
         genesis.0.header().da_proof_policies_hash(),
         Some(iroha_crypto::HashOf::new(policies))

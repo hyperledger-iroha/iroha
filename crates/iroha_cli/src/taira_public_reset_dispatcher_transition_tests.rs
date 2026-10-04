@@ -54,7 +54,7 @@ fn fixture() -> Fixture {
         b"sealed predecessor remains unchanged",
         0o400,
     );
-    let pins = (0..5)
+    let pins = (0..SLUGS.len())
         .map(|i| {
             file(
                 &dir.join(format!("guards/{i}/guard.json")),
@@ -63,16 +63,43 @@ fn fixture() -> Fixture {
             )
         })
         .collect();
+    let hosts = super::super::super::host_pair::fixture_pair();
+    let revision = super::super::super::sample_inventory_fixture().revision;
+    let native_edge_candidate = super::super::super::host_pair::fixture_native_edge_candidate(
+        &hosts,
+        &revision,
+        dir.join("native/iroha").to_string_lossy().into_owned(),
+    );
+    let native_edge_capture = super::super::super::host_pair::fixture_native_edge_capture(
+        &hosts,
+        super::super::super::EdgeAdmittedReleaseV1 {
+            commit: "4".repeat(40),
+            release_root: format!(
+                "{}/.local/share/iroha/taira/edge/releases/{}",
+                hosts.native_edge.owner_home,
+                "4".repeat(40)
+            ),
+            cli_sha256: "a".repeat(64),
+            config_sha256: "b".repeat(64),
+        },
+        &"f".repeat(64),
+        &"1".repeat(64),
+        &"2".repeat(32),
+        &super::super::super::sample_inventory_fixture().next_genesis_hash,
+    );
     let plan = Plan {
         schema: SCHEMA.into(),
         operation_id: "a".repeat(32),
         host_identity_sha256: "b".repeat(64),
+        hosts,
         trusted_public_key: evidence.clone(),
         candidate: Candidate {
             commit: "c".repeat(40),
             tree: "d".repeat(40),
             signer_fingerprint: "E".repeat(40),
+            revision,
             executable: candidate,
+            native_edge_candidate,
             preparation: evidence.clone(),
             request: evidence.clone(),
             checks: evidence.clone(),
@@ -86,6 +113,7 @@ fn fixture() -> Fixture {
             inventory_sha256: "f".repeat(64),
             authorization_sha256: "1".repeat(64),
             authorization_nonce: "2".repeat(32),
+            native_edge_capture,
             rolled_back: false,
             completed_next_step: 15,
             sealed_forward_ordinal: 62,
@@ -99,7 +127,7 @@ fn fixture() -> Fixture {
     };
     let bytes = json::to_vec(&plan).unwrap();
     let root = dir.join("operations/one");
-    let guards = (0..5)
+    let guards = (0..SLUGS.len())
         .map(|i| format!("candidate guard {i}").into_bytes())
         .collect();
     Fixture {
@@ -123,7 +151,7 @@ fn assert_live(f: &Fixture, new: bool) {
             b"old native dispatcher".as_slice()
         }
     );
-    for i in 0..5 {
+    for i in 0..SLUGS.len() {
         assert_eq!(
             fs::read(&f.plan.predecessor.guards[i].path).unwrap(),
             if new {
@@ -350,7 +378,7 @@ fn dispatcher_transition_refuses_unowned_missing_guard() {
         calls.set(n);
         need(n != 3, "crash behind barrier")
     });
-    fs::remove_file(&f.plan.predecessor.guards[4].path).unwrap();
+    fs::remove_file(&f.plan.predecessor.guards[3].path).unwrap();
     assert!(run(&f, Action::Apply).is_err());
     assert!(!Path::new(&f.plan.predecessor.dispatcher.path).exists());
 }
@@ -1019,6 +1047,14 @@ fn dispatcher_transition_prepare_cli_requires_pinned_native_inputs() {
         "/import",
         "--expected-result-sha256",
         "a",
+        "--native-edge-candidate",
+        "/native-candidate.json",
+        "--expected-native-edge-candidate-sha256",
+        "e",
+        "--native-edge-cli",
+        "/native/iroha",
+        "--source-manifest",
+        "/source-manifest.json",
         "--retained-inventory",
         "/inventory.json",
         "--expected-retained-inventory-sha256",

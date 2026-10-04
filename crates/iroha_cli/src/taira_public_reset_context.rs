@@ -50,6 +50,7 @@ pub(in super::super) struct ResetTopologyIntentV1 {
     pub(in super::super) previous_genesis_hash: String,
     pub(in super::super) authorization_nonce: String,
     pub(in super::super) revision: ResetRevisionIntentV1,
+    pub(in super::super) hosts: host_pair::ResetHostPairV1,
     pub(in super::super) validators: Vec<ResetValidatorIntentV1>,
     pub(in super::super) validator_clients: Vec<ValidatorClientV1>,
     pub(in super::super) edge: ResetEdgeIntentV1,
@@ -78,7 +79,7 @@ pub(in super::super) struct ResetContextInputs {
     #[arg(long, value_name = "PATH", num_args = 4)]
     pub(in super::super) validator_unit: Vec<PathBuf>,
     #[arg(long, value_name = "PATH")]
-    pub(in super::super) edge_unit: PathBuf,
+    pub(in super::super) native_edge_capability: PathBuf,
     #[arg(long, value_name = "PATH")]
     pub(in super::super) known_hosts: PathBuf,
 }
@@ -176,6 +177,7 @@ impl DerivedResetContext {
             next_genesis_hash: self.public_inputs.genesis_hash.clone(),
             authorization_nonce: self.intent.authorization_nonce.clone(),
             revision: self.revision.clone(),
+            hosts: self.intent.hosts.clone(),
             validators: self.validators.clone(),
             validator_clients: self.validator_clients.clone(),
             operator_public_key: self.operator_public_key.clone(),
@@ -438,7 +440,7 @@ impl From<&LocalInputs> for ResetContextInputs {
             validator_operator_key: input.validator_operator_key.clone(),
             inrou_stage_dir: input.inrou_stage_dir.clone(),
             validator_unit: input.validator_unit.clone(),
-            edge_unit: input.edge_unit.clone(),
+            native_edge_capability: input.native_edge_capability.clone(),
             known_hosts: input.known_hosts.clone(),
         }
     }
@@ -460,6 +462,7 @@ impl<Beacon> From<&InventoryRecordV1<Beacon>> for ResetTopologyIntentV1 {
                 source_root: value.revision.source_root.clone(),
                 source_manifest_path: value.revision.source_manifest_path.clone(),
             },
+            hosts: value.hosts.clone(),
             validators: value
                 .validators
                 .iter()

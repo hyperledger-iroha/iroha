@@ -120,9 +120,9 @@ fn attestation_journal_overlay(extra: &str) -> String {
         r#"{}
 [sorafs.storage.provider_ingest_runtime.provider_attestation_journal]
 enabled = true
-clock_seal_handle = "sealed://sorafs/provider-attestation/clock-primary"
-clock_seal_revision = 11
-clock_seal_policy_digest_hex = "{}"
+clock_handle = "sealed://sorafs/provider-attestation/clock-primary"
+clock_revision = 11
+clock_policy_digest_hex = "{}"
 approval_signer_handle = "provider://sorafs/provider-attestation/approval-primary"
 approval_signer_revision = 12
 approval_signer_policy_digest_hex = "{}"
@@ -185,11 +185,11 @@ fn attestation_journal_projects_exact_public_bindings_and_bounds() {
         .as_ref()
         .expect("enabled attestation journal");
     assert_eq!(
-        journal.clock_seal.handle,
+        journal.clock.handle,
         "sealed://sorafs/provider-attestation/clock-primary"
     );
-    assert_eq!(journal.clock_seal.revision, 11);
-    assert_eq!(journal.clock_seal.policy_digest, [0xC1; 32]);
+    assert_eq!(journal.clock.revision, 11);
+    assert_eq!(journal.clock.policy_digest, [0xC1; 32]);
     assert_eq!(
         journal.approval_signer.handle,
         "provider://sorafs/provider-attestation/approval-primary"

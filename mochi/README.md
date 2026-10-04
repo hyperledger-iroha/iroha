@@ -17,6 +17,9 @@ source build, PATH discovery or project-local secret export is involved.
 - `iroha_fs` owns private filesystem custody on native Unix and Windows.
 
 The UI provides aggregate Start, Stop and explicit stopped-network Reset actions.
+New localnet creates another named environment without resetting the current one;
+the new environment is selected when ready. Failed startup retains the previous
+selection and exposes the prepared name for recovery from the environment menu.
 Its Private dataspace action selects a network from the installed profile artifact
 and delegates the operation, with a sixty-second foreground deadline, to the same
 managed worker as Kagami. The desktop performs no parent HTTP requests or
@@ -38,9 +41,20 @@ Individual validator selection changes the observer endpoint only. It provides
 no per-peer lifecycle or alternate generation path. The desktop preserves state
 pagination, canonical block/event streams, bounded logs, balance/block summaries,
 structured and JSON transaction drafts, signed previews and deployment receipts.
+Exact deployment and fee review appears over every desktop view. Switching views
+during preparation cannot hide the review, and only its explicit confirmation
+approves dispatch; cancellation or closing Mochi leaves approval withheld.
 Deployment results identify the original localnet or private dataspace on which
 the contract applied. Parent receipts appear separately as historical evidence;
 an unavailable parent observation does not undo a verified local deployment.
+
+The Packages view exposes explicit Publish, Resume publication and Recover package files
+actions through `DeveloperWorkspace::publish_package` and the shared Musubi engine.
+Publish can start the default environment; recovery requires its existing selected context
+and original operation ID. Original namespace custody and generation-bound operation/cache
+paths are shared with Kagami. The view retains canonical exit status, output and diagnostics
+even when the subsequent workspace observation fails. These source paths still require
+combined native three-provider publication and cold-package qualification.
 
 The generated client signer is also the ledger-stream authority. Node HTTP
 operator signing uses a distinct generated key validated against all four node

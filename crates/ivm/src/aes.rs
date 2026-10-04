@@ -1,5 +1,7 @@
 //! Deterministic AES rounds, key expansion, and caller-owned batch execution.
 
+pub(crate) mod cpu;
+
 /// AES substitution table.
 pub const SBOX: [u8; 256] = [
     0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
@@ -126,24 +128,8 @@ fn add_round_key(state: &mut [u8; 16], rk: &[u8; 16]) {
 }
 /// Apply one AES encryption round using a qualified CPU implementation.
 pub fn aesenc(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
-    // One round is cheaper on the CPU than a GPU upload and launch.
-    // AArch64 AES acceleration (detected at runtime)
-    #[cfg(target_arch = "aarch64")]
-    {
-        if crate::vector::simd_policy_enabled() && is_aarch64_aes_available() {
-            // SAFETY: guarded by runtime feature detection for `aes`.
-            return unsafe { aesenc_armv8(state, rk) };
-        }
-    }
-    // x86/x86_64 AES-NI acceleration (detected at runtime)
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    {
-        if crate::vector::simd_policy_enabled() && is_x86_aes_available() {
-            // SAFETY: guarded by runtime feature detection for `aes`.
-            return unsafe { aesenc_aesni(state, rk) };
-        }
-    }
-    aesenc_impl(state, rk)
+    // One round avoids GPU transfer and launch overhead.
+    cpu::round(cpu::Direction::Encrypt, state, rk)
 }
 /// Apply one AES encryption round using the canonical scalar operations.
 pub fn aesenc_impl(mut state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
@@ -155,24 +141,8 @@ pub fn aesenc_impl(mut state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
 }
 /// Invert one AES encryption round using a qualified CPU implementation.
 pub fn aesdec(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
-    // One round is cheaper on the CPU than a GPU upload and launch.
-    // AArch64 AES acceleration (detected at runtime)
-    #[cfg(target_arch = "aarch64")]
-    {
-        if crate::vector::simd_policy_enabled() && is_aarch64_aes_available() {
-            // SAFETY: guarded by runtime feature detection for `aes`.
-            return unsafe { aesdec_armv8(state, rk) };
-        }
-    }
-    // x86/x86_64 AES-NI acceleration (detected at runtime)
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    {
-        if crate::vector::simd_policy_enabled() && is_x86_aes_available() {
-            // SAFETY: guarded by runtime feature detection for `aes`.
-            return unsafe { aesdec_aesni(state, rk) };
-        }
-    }
-    aesdec_impl(state, rk)
+    // One round avoids GPU transfer and launch overhead.
+    cpu::round(cpu::Direction::Decrypt, state, rk)
 }
 /// Invert one AES encryption round using the canonical scalar operations.
 pub fn aesdec_impl(mut state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
@@ -188,6 +158,8 @@ pub fn sbox(byte: u8) -> u8 {
 }
 #[path = "aes/batch.rs"]
 mod batch;
+#[cfg(all(target_os = "macos", feature = "metal"))]
+pub(crate) use batch::rounds_cpu_in_place;
 pub use batch::{
     aes128_decrypt_many_into, aes128_encrypt_many_into, aesdec_n_rounds_many_into,
     aesenc_n_rounds_many_into,
@@ -301,130 +273,6 @@ mod key_schedule_tests {
         );
     }
 }
-// --- CPU acceleration helpers (x86 AES-NI) ---
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#[inline(always)]
-fn is_x86_aes_available() -> bool {
-    #[cfg(target_arch = "x86")]
-    {
-        std::is_x86_feature_detected!("aes")
-    }
-    #[cfg(target_arch = "x86_64")]
-    {
-        std::is_x86_feature_detected!("aes")
-    }
-}
-// --- CPU acceleration helpers (AArch64 AES) ---
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-fn is_aarch64_aes_available() -> bool {
-    use core::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::OnceLock;
-    static FORCED_DISABLED: AtomicBool = AtomicBool::new(false);
-    static SELFTEST_OK: OnceLock<bool> = OnceLock::new();
-    if FORCED_DISABLED.load(Ordering::SeqCst) {
-        return false;
-    }
-    *SELFTEST_OK.get_or_init(|| {
-        if !std::arch::is_aarch64_feature_detected!("aes") {
-            return false;
-        }
-        // Minimal parity self-test to ensure instruction semantics match our
-        // scalar reference on this platform.
-        let s1 = [
-            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
-            0xee, 0xff,
-        ];
-        let k1 = [
-            0x0f, 0x47, 0x0c, 0xaf, 0x15, 0xd9, 0xb7, 0x7f, 0x71, 0xe8, 0xad, 0x67, 0xc9, 0x59,
-            0xd6, 0x98,
-        ];
-        let enc_ref = aesenc_impl(s1, k1);
-        let enc_hw = unsafe { aesenc_armv8(s1, k1) };
-        if enc_ref != enc_hw {
-            FORCED_DISABLED.store(true, Ordering::SeqCst);
-            return false;
-        }
-        let d1 = enc_ref; // use the encrypted block as an input to dec round test
-        let dec_ref = aesdec_impl(d1, k1);
-        let dec_hw = unsafe { aesdec_armv8(d1, k1) };
-        if dec_ref != dec_hw {
-            FORCED_DISABLED.store(true, Ordering::SeqCst);
-            return false;
-        }
-        true
-    })
-}
-#[cfg(target_arch = "aarch64")]
-#[target_feature(enable = "aes")]
-unsafe fn aesenc_armv8(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
-    use core::arch::aarch64::*;
-    let s = unsafe { vld1q_u8(state.as_ptr()) };
-    let k = unsafe { vld1q_u8(rk.as_ptr()) };
-    // AESE consumes its round key before SubBytes/ShiftRows, whereas our
-    // AESENC contract adds the key after MixColumns. Keep the order exact.
-    let r = vaeseq_u8(s, vdupq_n_u8(0));
-    let r = vaesmcq_u8(r);
-    let r = veorq_u8(r, k);
-    let mut out = [0u8; 16];
-    unsafe { vst1q_u8(out.as_mut_ptr(), r) };
-    out
-}
-#[cfg(target_arch = "aarch64")]
-#[target_feature(enable = "aes")]
-unsafe fn aesdec_armv8(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
-    use core::arch::aarch64::*;
-    let s = unsafe { vld1q_u8(state.as_ptr()) };
-    let k = unsafe { vld1q_u8(rk.as_ptr()) };
-    // `aesdec` takes the raw round key and must match:
-    // AddRoundKey -> InvMixColumns -> InvShiftRows -> InvSubBytes.
-    // ARM's AESD round does not accept that contract directly, so we apply the
-    // XOR and InvMixColumns first, then finish with an inverse "last" round.
-    let r = veorq_u8(s, k);
-    let r = vaesimcq_u8(r);
-    let r = vaesdq_u8(r, vdupq_n_u8(0));
-    let mut out = [0u8; 16];
-    unsafe { vst1q_u8(out.as_mut_ptr(), r) };
-    out
-}
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#[target_feature(enable = "aes")]
-unsafe fn aesenc_aesni(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
-    #[cfg(target_arch = "x86")]
-    use core::arch::x86::*;
-    #[cfg(target_arch = "x86_64")]
-    use core::arch::x86_64::*;
-    unsafe {
-        let s = _mm_loadu_si128(state.as_ptr() as *const __m128i);
-        let k = _mm_loadu_si128(rk.as_ptr() as *const __m128i);
-        let r = _mm_aesenc_si128(s, k);
-        let mut out = core::mem::MaybeUninit::<[u8; 16]>::uninit();
-        _mm_storeu_si128(out.as_mut_ptr() as *mut __m128i, r);
-        out.assume_init()
-    }
-}
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#[target_feature(enable = "aes")]
-unsafe fn aesdec_aesni(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
-    #[cfg(target_arch = "x86")]
-    use core::arch::x86::*;
-    #[cfg(target_arch = "x86_64")]
-    use core::arch::x86_64::*;
-    unsafe {
-        let s = _mm_loadu_si128(state.as_ptr() as *const __m128i);
-        let k = _mm_loadu_si128(rk.as_ptr() as *const __m128i);
-        // `_mm_aesdec_si128` expects the equivalent-inverse-cipher key
-        // schedule, but the public `aesdec` API takes the raw round key. Match
-        // the scalar inverse round by applying AddRoundKey and InvMixColumns
-        // explicitly, then finish with an inverse "last" round.
-        let r = _mm_xor_si128(s, k);
-        let r = _mm_aesimc_si128(r);
-        let r = _mm_aesdeclast_si128(r, _mm_setzero_si128());
-        let mut out = core::mem::MaybeUninit::<[u8; 16]>::uninit();
-        _mm_storeu_si128(out.as_mut_ptr() as *mut __m128i, r);
-        out.assume_init()
-    }
-}
 #[cfg(test)]
 mod tests_accel {
     use super::*;
@@ -460,22 +308,6 @@ mod tests_accel {
             assert_eq!(output, expected_rounds(aesenc_impl));
             assert!(aesdec_n_rounds_many_into(subset, &keys, &mut output));
             assert_eq!(output, expected_rounds(aesdec_impl));
-        }
-    }
-    #[cfg(target_arch = "aarch64")]
-    #[test]
-    fn arm_aes_rounds_match_scalar_across_keys_and_inputs() {
-        if !std::arch::is_aarch64_feature_detected!("aes") {
-            return;
-        }
-        assert!(is_aarch64_aes_available(), "ARM AES self-test must qualify");
-        for index in 0u8..=255 {
-            let state = std::array::from_fn(|lane| index.wrapping_add(lane as u8 * 13));
-            let key = std::array::from_fn(|lane| index.wrapping_mul(7).wrapping_add(lane as u8));
-            // SAFETY: this test only enters after runtime AES feature detection.
-            assert_eq!(unsafe { aesenc_armv8(state, key) }, aesenc_impl(state, key));
-            // SAFETY: this test only enters after runtime AES feature detection.
-            assert_eq!(unsafe { aesdec_armv8(state, key) }, aesdec_impl(state, key));
         }
     }
     #[test]

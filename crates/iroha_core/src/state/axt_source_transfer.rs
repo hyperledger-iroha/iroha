@@ -42,9 +42,12 @@ pub(crate) struct FinalizedAxtSourceTransferFactV1 {
 }
 
 /// Failure to confirm a claimed physical transfer against finalized execution.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
 #[allow(dead_code)]
 pub(crate) enum FinalizedAxtSourceTransferErrorV1 {
+    /// The original finalized-history read is unfinished because its local resources are occupied.
+    #[error("AXT finalized source history deferred: {0}")]
+    Deferred(crate::execution_attempt::ExecutionDeferred),
     /// The claim is structurally malformed or its height cannot be indexed.
     #[error("AXT source transfer claim has invalid coordinates or digests")]
     InvalidClaim,
@@ -106,7 +109,14 @@ impl State {
             .ok_or(FinalizedAxtSourceTransferErrorV1::InvalidClaim)?;
         let carrier = self
             .read_finalized_execution_carrier(height, max_work, max_bytes)
-            .map_err(|_| FinalizedAxtSourceTransferErrorV1::FinalizedCarrier)?;
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                    FinalizedAxtSourceTransferErrorV1::Deferred(original)
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(_) => {
+                    FinalizedAxtSourceTransferErrorV1::FinalizedCarrier
+                }
+            })?;
         let block = carrier.block();
         let source = block
             .network_entrypoint_at(claimed.source_tx_index as usize)

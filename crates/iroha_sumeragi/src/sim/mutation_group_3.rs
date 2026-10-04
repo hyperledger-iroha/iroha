@@ -18,7 +18,8 @@ use super::{
     run,
     scenario::{Fault, Scenario},
     scenarios,
-    world::{World, seeds},
+    sweep::{Failures, fold_seeds},
+    world::{World, seed_iter},
 };
 use crate::{
     message::Qc,
@@ -261,14 +262,15 @@ pub fn f32_strong(seed: u64) -> Scenario {
 /// release); panic with the first failure report.
 fn sweep(name: &str, builder: fn(u64) -> Scenario) {
     let default = if cfg!(debug_assertions) { 5 } else { 20 };
-    let failures: Vec<(u64, String)> = seeds(default)
-        .into_iter()
-        .filter_map(|seed| run(builder(seed)).err().map(|report| (seed, report)))
-        .collect();
-    if let Some((seed, report)) = failures.first() {
-        let list: Vec<u64> = failures.iter().map(|(s, _)| *s).collect();
-        panic!("{name}: failing seeds {list:?}; first (seed {seed}):\n{report}");
-    }
+    let mut failures = Failures::default();
+    fold_seeds(
+        seed_iter(default),
+        |seed| run(builder(seed)).map(drop),
+        |seed, result| {
+            failures.observe(seed, result);
+        },
+    );
+    failures.finish(name);
 }
 
 #[test]

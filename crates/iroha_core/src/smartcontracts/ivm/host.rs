@@ -2524,6 +2524,7 @@ impl HostExecutionArtifacts {
             .into());
         }
         for (path, authorization) in durable_state_authorizations {
+            validate_reserve_durable_state_path(path)?;
             if Self::durable_path_requires_authorization(path) && authorization.is_none() {
                 return Err(ValidationFail::NotPermitted(format!(
                     "scoped durable state path `{path}` is missing its contract authorization snapshot"
@@ -2697,6 +2698,11 @@ impl HostExecutionArtifacts {
             &tx.world,
             &self.durable_state_overlay,
             &self.durable_state_authorizations,
+        )
+        .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
+        crate::deferred_authority::reject_opaque_instruction_authority(
+            self.queued.iter().map(|queued| &queued.instruction),
+            tx,
         )
         .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
         // The actual consumed group must fit before its first call-hash,
@@ -7040,8 +7046,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn handle_call_contract_quantity2(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
         let amount_in = Self::decode_quantity(vm, vm.register(12))?;
         let min_out = Self::decode_quantity(vm, vm.register(13))?;
-        let amount_in_envelope = ivm::numeric_tlv::encode_quantity(&amount_in)?;
-        let min_out_envelope = ivm::numeric_tlv::encode_quantity(&min_out)?;
+        let amount_in_envelope = ivm_abi::numeric_tlv::encode_quantity(&amount_in)?;
+        let min_out_envelope = ivm_abi::numeric_tlv::encode_quantity(&min_out)?;
         let schema = Self::quantity2_argument_schema();
         let schema_bytes = Self::encode_norito_payload(&schema)?;
         let record = EntrypointArgumentRecordV1 {
@@ -8488,7 +8494,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             ),
             CoreQueryEntityTagV1::AssetDefinition => request_for!(
                 AssetDefinition,
-                iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
+                iroha_data_model::query::asset::prelude::FindAssetDefinitions,
                 AssetDefinition
             ),
             CoreQueryEntityTagV1::Domain => request_for!(
@@ -9599,9 +9605,12 @@ impl<QS> CoreHostImpl<QS> {
         })? {
             return Err(ivm::VMError::PermissionDenied);
         }
-        let now_ms = state.latest_block().map_or(0, |block| {
-            u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
-        });
+        let now_ms = state
+            .latest_block()
+            .map_err(|error| error.into_vm_error(|_| ivm::VMError::DecodeError))?
+            .map_or(0, |block| {
+                u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+            });
         if let Some(account_id) = crate::sns::resolve_active_account_alias(
             state.world(),
             &state.nexus().dataspace_catalog,
@@ -11323,6 +11332,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     let key = self
                         .scoped_durable_state_path(&path)?
                         .unwrap_or_else(|| path.clone());
+                    validate_reserve_durable_state_path(&key)
+                        .map_err(|_| ivm::VMError::PermissionDenied)?;
                     if crate::validation_fee::is_consensus_fee_state_key(&key) {
                         return Err(ivm::VMError::PermissionDenied);
                     }
@@ -11346,6 +11357,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     let scoped_path = self.scoped_durable_state_path(&path)?;
                     let key = scoped_path.unwrap_or_else(|| path.clone());
                     let effective_path = &key;
+                    validate_reserve_durable_state_path(effective_path)
+                        .map_err(|_| ivm::VMError::PermissionDenied)?;
                     if crate::validation_fee::is_consensus_fee_state_key(effective_path) {
                         return Err(ivm::VMError::PermissionDenied);
                     }
@@ -11654,7 +11667,7 @@ mod pointer_abi_tests {
         .build_with_signature(0, signer.private_key());
         state
             .kura()
-            .store_block(Arc::new(block.clone()))
+            .store_block(crate::block::reserve_block_for_tests().initialize(block.clone()))
             .expect("store authenticated ledger-time fixture block");
         state.append_committed_block_header_for_tests(block.header().clone());
         assert_eq!(
@@ -12471,7 +12484,7 @@ seiyaku PrivilegedBinding {
         // Prepare VM with ABI v1 (baseline)
         let meta = ivm::ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: 0,
             vector_length: 0,
             max_cycles: 1,
@@ -15034,7 +15047,7 @@ seiyaku PrivilegedBinding {
 fn build_program(code: &[u8], vector_length: u8) -> Vec<u8> {
     let mut program = ivm::ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length,
         max_cycles: 1_000_000,
@@ -15585,7 +15598,7 @@ seiyaku StaleRuntimeBinding {
             .find(|descriptor| descriptor.name == entrypoint)
             .expect("installed contract entrypoint");
         descriptor.argument_schema.as_ref().map(|schema| {
-            ivm::encode_argument_record_from_json(schema, payload)
+            ivm_abi::arguments::encode_argument_record_from_json(schema, payload)
                 .expect("encode test contract arguments")
         })
     }
@@ -17226,8 +17239,9 @@ seiyaku BurnWithMemo {
             r#"{{"amount":"1","memo":"{memo_hex}","sender":"{authority_literal}","settlement_asset":"{settlement_asset_literal}"}}"#,
         ))
         .expect("memo payload JSON");
-        let canonical = ivm::encode_argument_record_from_json(argument_schema, &args)
-            .expect("encode canonical burn_with_memo arguments");
+        let canonical =
+            ivm_abi::arguments::encode_argument_record_from_json(argument_schema, &args)
+                .expect("encode canonical burn_with_memo arguments");
         let prepared = ivm::prepare_argument_record_with_gas_limit(
             argument_schema,
             Arc::from(canonical),
@@ -18916,7 +18930,7 @@ seiyaku Callee {
         else {
             panic!("exact Int return must contain one canonical pointer atom");
         };
-        let expected_envelope = ivm::numeric_tlv::encode_int(&BigInt::from_i128(42))
+        let expected_envelope = ivm_abi::numeric_tlv::encode_int(&BigInt::from_i128(42))
             .expect("encode canonical V1 int atom");
         assert_eq!(
             envelope, &expected_envelope,
@@ -19095,7 +19109,7 @@ seiyaku Callee {
             &norito::to_bytes(&int_schema).expect("encode Int schema"),
         );
         let int_envelope =
-            ivm::numeric_tlv::encode_int(&BigInt::from_i128(1)).expect("encode Int TLV");
+            ivm_abi::numeric_tlv::encode_int(&BigInt::from_i128(1)).expect("encode Int TLV");
         let malformed = [
             (
                 "wrong schema",
@@ -19602,7 +19616,9 @@ seiyaku Callee {
             }
         );
         assert_eq!(
-            crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, &error),
+            crate::execution_attempt::expect_completed_rejection(
+                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, error),
+            ),
             iroha_data_model::ValidationFail::ContractRejected(
                 iroha_data_model::executor::ContractRejection {
                     contract: "Callee".into(),
@@ -20418,7 +20434,7 @@ seiyaku Callee {
         );
     }
     #[test]
-    fn call_contract_syscall_rolls_back_when_return_encoding_fails() {
+    fn call_contract_syscall_rolls_back_when_typed_return_validation_fails() {
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -20455,43 +20471,41 @@ seiyaku Callee {
                     .iter_mut()
                     .find(|entrypoint| entrypoint.name == "write_then_return")
                     .expect("callee entrypoint descriptor");
-                // Bytes and String share the exact public Blob call role. A genuine
-                // compiler-produced invalid UTF-8 Blob completes its protected return,
-                // then fails String encoding after the child wrote counter = 9.
+                // The bytecode produces invalid UTF-8 after writing counter = 9.
+                // Bind both metadata surfaces to String so admission succeeds and
+                // the complete callable type rejects that value at protected return.
+                let original = exact_return_type(
+                    iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Blob,
+                );
                 assert_eq!(
                     descriptor.return_schema,
-                    Some(exact_return_type(
-                        iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Blob,
-                    )),
+                    Some(original.clone()),
                     "the unmodified compiler artifact declares its actual Bytes result"
                 );
-                descriptor.return_type = Some("string".to_owned());
-                descriptor.return_schema = Some(exact_return_type(
+                let claimed = exact_return_type(
                     iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::String,
-                ));
-                let entry_pc = descriptor.entry_pc;
-                let result_roles = descriptor
-                    .return_schema
-                    .as_ref()
-                    .unwrap()
-                    .word_kinds()
-                    .unwrap()
-                    .into_iter()
-                    .map(ivm::call::CallWordV1::from_entrypoint_word)
-                    .collect::<Vec<_>>();
-                assert_eq!(
-                    result_roles,
-                    vec![ivm::call::CallWordV1::Pointer(PointerType::Blob as u16)]
                 );
+                descriptor.return_type = Some("string".to_owned());
+                descriptor.return_schema = Some(claimed.clone());
+                let entry_pc = descriptor.entry_pc;
+                let callable = interface
+                    .callables
+                    .iter_mut()
+                    .find(|callable| callable.entry_pc == entry_pc)
+                    .expect("the compiled entrypoint has its authenticated callable");
                 assert_eq!(
-                    interface
-                        .callables
-                        .iter()
-                        .find(|callable| callable.entry_pc == entry_pc)
-                        .expect("the compiled entrypoint has its authenticated callable")
-                        .result_words,
-                    result_roles,
-                    "the post-child schema error must not be an artifact or call-role error"
+                    callable.results,
+                    ivm::call::CallSchemaV1::from_entrypoint_type(&original).unwrap(),
+                    "the compiled callable preserves the complete Bytes type"
+                );
+                callable.results = ivm::call::CallSchemaV1::from_entrypoint_type(&claimed).unwrap();
+                assert!(
+                    callable.results.matches_entrypoint_type(&claimed),
+                    "entrypoint and callable must agree on the complete String type"
+                );
+                assert!(
+                    !callable.results.matches_entrypoint_type(&original),
+                    "String and Bytes remain distinct despite sharing a Blob envelope"
                 );
             },
         );
@@ -20539,10 +20553,10 @@ seiyaku Callee {
         vm.set_register(12, 0);
         let err = host
             .syscall(ivm_sys::SYSCALL_CALL_CONTRACT, &mut vm)
-            .expect_err("mismatched return schema must fail");
+            .expect_err("invalid UTF-8 must fail typed return validation");
         assert!(
-            matches!(err.as_unmetered(), ivm::VMError::DecodeError),
-            "a signed return-schema/type mismatch must be reported as a decode error: {err:?}",
+            matches!(err.as_unmetered(), ivm::VMError::NoritoInvalid),
+            "invalid String payload must be rejected by protected return validation: {err:?}",
         );
         assert_eq!(
             host.authority, authority,
@@ -23116,7 +23130,7 @@ seiyaku DurableOwner {
             })
             .expect("compiler-emitted bytes record")
             .clone();
-        let key = ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(1))
+        let key = ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(1))
             .expect("encode canonical map key");
         let wrong_path: StatePath = format!("IntMap/{}", hex::encode(key))
             .parse()
@@ -23169,7 +23183,7 @@ seiyaku DurableOwner {
         };
         let base: iroha_model_base::name::Name = "ValidationFeeConversion".parse().expect("base");
         let encoded_key =
-            ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(0))
+            ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(0))
                 .expect("integer key");
         let relative_key =
             ivm::host::canonical_state_map_path(&base, &encoded_key).expect("canonical map path");
@@ -23193,8 +23207,10 @@ seiyaku DurableOwner {
         .build_with_signature(0, ALICE_KEYPAIR.private_key());
         // State authenticates the lane's physical storage before history is retained.
         let state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
-        kura.store_block(Arc::new(authenticated_block.clone()))
-            .expect("store authenticated ledger-time fixture block");
+        kura.store_block(
+            crate::block::reserve_block_for_tests().initialize(authenticated_block.clone()),
+        )
+        .expect("store authenticated ledger-time fixture block");
         state.append_committed_block_header_for_tests(authenticated_block.header());
         let source = r#"
             seiyaku ValidationFeeConversionReader {
@@ -23281,7 +23297,7 @@ seiyaku DurableOwner {
         let mut host = CoreHost::new(authority);
         let mut vm = IVM::new(10_000);
         let value = BigInt::from_i128(42);
-        let envelope = ivm::numeric_tlv::encode_int(&value).expect("canonical Int envelope");
+        let envelope = ivm_abi::numeric_tlv::encode_int(&value).expect("canonical Int envelope");
         let source = vm.alloc_input_tlv(&envelope).expect("allocate Int");
         vm.set_register(10, source);
         let encode_gas = host

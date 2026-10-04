@@ -21,6 +21,7 @@ use iroha_data_model::{
     account::AccountId,
     asset::{Asset, AssetId},
     isi::{Transfer, error::InstructionExecutionError as Error},
+    nexus::PublicLaneFeeRewardClaimV1,
     oracle::Observation,
     validation_fee::{ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1},
     validation_fee_rewards::{
@@ -67,8 +68,14 @@ fn read_attempt<T: NoritoSerialize + for<'de> NoritoDeserialize<'de>>(
     stx: &StateTransaction<'_, '_>,
     key: &StatePath,
 ) -> Result<Option<T>, ExecutionAttemptError<Error>> {
-    stx.world
-        .smart_contract_state
+    read_from_world(&stx.world, key)
+}
+fn read_from_world<T: NoritoSerialize + for<'de> NoritoDeserialize<'de>>(
+    world: &impl WorldReadOnly,
+    key: &StatePath,
+) -> Result<Option<T>, ExecutionAttemptError<Error>> {
+    world
+        .smart_contract_state()
         .get(key)
         .map(|bytes| {
             norito::decode_from_bytes(bytes).map_err(|error| {
@@ -91,17 +98,6 @@ fn string_attempt_instruction_error(
 ) -> Error {
     stx.world
         .attempt_error_to_instruction_error(error.map_rejection(fail))
-}
-fn string_attempt_transaction_error(
-    stx: &StateTransaction<'_, '_>,
-    error: ExecutionAttemptError<String>,
-) -> TransactionRejectionReason {
-    match error {
-        ExecutionAttemptError::Rejected(error) => rejection(fail(error)),
-        ExecutionAttemptError::Deferred(reason) => {
-            TransactionRejectionReason::Validation(stx.world.defer_execution(reason))
-        }
-    }
 }
 fn error_attempt_transaction_error(
     stx: &StateTransaction<'_, '_>,
@@ -390,8 +386,9 @@ fn pending_fee_evidence_records(
             _ => None,
         })
         .collect::<BTreeSet<_>>();
-    for binding in crate::validation_fee::active_payout_binding_at_height(stx, stx.block_height())
-        .map_err(|error| error.map_rejection(|error| error.to_string()))?
+    if let Some(binding) =
+        crate::validation_fee::active_payout_binding_at_height(stx, stx.block_height())
+            .map_err(|error| error.map_rejection(|error| error.to_string()))?
     {
         for period in &allocated_periods {
             records.push(FeeEvidenceRecordV1 {
@@ -621,8 +618,9 @@ fn reference_minimum(
 pub(crate) fn conversion_offer(
     stx: &StateTransaction<'_, '_>,
     binding: &ValidationFeeTreasuryPayoutBindingV1,
-    xor_scale: u32,
 ) -> Result<Option<ConversionOffer>, Error> {
+    crate::state::validate_network_xor_asset(&stx.world, &binding.xor_asset_id)
+        .map_err(|error| stx.world.attempt_error_to_instruction_error(error))?;
     if let Some(reason) = binding.invariant_error() {
         return Err(fail(reason));
     }
@@ -678,14 +676,8 @@ pub(crate) fn conversion_offer(
             records.push(record);
         }
     }
-    let Some(min_xor_minor) = reference_minimum(
-        binding,
-        &records,
-        now,
-        stx.block_height(),
-        amount,
-        xor_scale,
-    )?
+    let Some(min_xor_minor) =
+        reference_minimum(binding, &records, now, stx.block_height(), amount, 9)?
     else {
         return Ok(None);
     };
@@ -712,6 +704,23 @@ pub(crate) fn reserve_conversion(
     offer: &ConversionOffer,
     xor_minor: u128,
 ) -> Result<(), Error> {
+    crate::state::validate_network_xor_asset(&stx.world, &binding.xor_asset_id)
+        .map_err(|error| stx.world.attempt_error_to_instruction_error(error))?;
+    let reward_asset = AssetId::new(
+        binding.xor_asset_id.clone(),
+        binding.reward_pool_account_id.clone(),
+    );
+    let before = stx
+        .world
+        .assets
+        .get(&reward_asset)
+        .map_or_else(Quantity::zero, |value| value.as_ref().clone());
+    crate::smartcontracts::isi::staking::ensure_public_lane_reserves_after_debit(
+        &stx.world,
+        &reward_asset,
+        &before,
+    )
+    .map_err(|error| stx.world.attempt_error_to_instruction_error(error))?;
     let mut state = read_state(stx, binding)?;
     if state.next_allocation != offer.sequence || xor_minor < offer.min_xor_minor {
         return Err(fail(
@@ -806,137 +815,252 @@ pub(crate) fn quantity(amount: u128, scale: u32) -> Result<Quantity, Error> {
     )
     .map_err(|e| fail(e.to_string()))
 }
-/// Preserve pending SBD receipts and reserved XOR before every debit, including direct Torii and IVM effects.
+/// Read one exact global custody obligation from the immutable authenticated registry.
+/// Every lifecycle retains the same state key, so this counts the ledger once.
+pub(crate) fn reserved_fee_custody(
+    world: &impl WorldReadOnly,
+    asset: &AssetId,
+) -> Result<Quantity, ExecutionAttemptError<Error>> {
+    let Some(binding) = crate::validation_fee::retained_payout_custody_binding(world)
+        .map_err(|error| error.map_rejection(fail))?
+    else {
+        return Ok(Quantity::zero());
+    };
+    let reward = asset
+        == &AssetId::new(
+            binding.xor_asset_id.clone(),
+            binding.reward_pool_account_id.clone(),
+        );
+    let treasury = asset
+        == &AssetId::new(
+            binding.ds_asset_id.clone(),
+            binding.treasury_account_id.clone(),
+        );
+    if !reward && !treasury {
+        return Ok(Quantity::zero());
+    }
+    let state =
+        read_from_world::<ValidationFeeRewardsState>(world, &state_key(&binding, "State")?)?
+            .unwrap_or_default();
+    let reserved = if reward {
+        state.reserved_xor
+    } else {
+        state.pending_sbd_total
+    };
+    if reserved == 0 {
+        return Ok(Quantity::zero());
+    }
+    let scale = world
+        .asset_definition(asset.definition())
+        .map_err(Error::from)?
+        .spec()
+        .scale()
+        .ok_or_else(|| fail("fee custody asset has no fixed scale"))?;
+    quantity(reserved, scale).map_err(Into::into)
+}
+
+/// Check fee-only and shared custody during current/predecessor restoration.
+pub(crate) fn validate_fee_custody_backing(
+    world: &impl WorldReadOnly,
+) -> Result<(), ExecutionAttemptError<Error>> {
+    let Some(binding) = crate::validation_fee::retained_payout_custody_binding(world)
+        .map_err(|error| error.map_rejection(fail))?
+    else {
+        return Ok(());
+    };
+    for asset in [
+        AssetId::new(binding.xor_asset_id, binding.reward_pool_account_id),
+        AssetId::new(binding.ds_asset_id, binding.treasury_account_id),
+    ] {
+        let balance = world
+            .assets()
+            .get(&asset)
+            .map_or_else(Quantity::zero, |value| value.as_ref().clone());
+        crate::smartcontracts::isi::staking::ensure_public_lane_reserves_after_debit(
+            world, &asset, &balance,
+        )?;
+    }
+    Ok(())
+}
+
+/// Preserve the sum of fee proceeds, fee rewards, public rewards and stake before any debit.
 pub(crate) fn ensure_reward_custody_debit(
     stx: &StateTransaction<'_, '_>,
     asset: &AssetId,
     amount: &Quantity,
 ) -> Result<(), Error> {
-    let mut reserved = 0u128;
-    for binding in active_bindings(stx)? {
-        let state = if (&binding.reward_pool_account_id == asset.account()
-            && &binding.xor_asset_id == asset.definition())
-            || (&binding.treasury_account_id == asset.account()
-                && &binding.ds_asset_id == asset.definition())
-        {
-            read_state(stx, &binding)?
-        } else {
-            continue;
-        };
-        let protected = if &binding.reward_pool_account_id == asset.account()
-            && &binding.xor_asset_id == asset.definition()
-        {
-            state.reserved_xor
-        } else {
-            state.pending_sbd_total
-        };
-        reserved = reserved
-            .checked_add(protected)
-            .ok_or_else(|| fail("reserved fee fund sum overflow"))?;
-    }
-    if reserved == 0 {
-        return Ok(());
-    }
-    let scale = stx
-        .world
-        .asset_definition(asset.definition())?
-        .spec()
-        .scale()
-        .ok_or_else(|| fail("reward asset has no fixed scale"))?;
     let balance = stx
         .world
         .assets
         .get(asset)
-        .map(|a| minor_units(a.as_ref(), scale))
-        .transpose()?
-        .unwrap_or(0);
-    if minor_units(amount, scale)?
-        .checked_add(reserved)
-        .is_none_or(|needed| needed > balance)
-    {
-        return Err(fail(
-            "debit would spend protected fee proceeds or reserved validator XOR",
-        ));
-    }
-    Ok(())
+        .map_or_else(Quantity::zero, |value| value.as_ref().clone());
+    let after = balance
+        .checked_sub(amount)
+        .map_err(|_| fail("insufficient fee custody balance"))?;
+    crate::smartcontracts::isi::staking::ensure_public_lane_reserves_after_debit(
+        &stx.world, asset, &after,
+    )
+    .map_err(|error| stx.world.attempt_error_to_instruction_error(error))
 }
-/// Claim already-funded fee rewards through the native validator claim instruction.
-/// Small balances remain accrued and never advance a destructive dust cursor.
-pub(crate) fn claim_fee_rewards(
-    stx: &mut StateTransaction<'_, '_>,
+/// One exact fee payment preflighted before any reward claim mutation.
+pub(crate) struct PreparedFeeRewardClaim {
+    binding: ValidationFeeTreasuryPayoutBindingV1,
+    plan: PublicLaneFeeRewardClaimV1,
+    credit_key: StatePath,
+    receipt_key: StatePath,
+    state_after: ValidationFeeRewardsState,
+    amount_minor: u128,
+}
+
+/// Resolve a single eligible fee credit from the same committed view as other claim inputs.
+pub(crate) fn fee_reward_claim_plan(
+    world: &impl WorldReadOnly,
+    height: u64,
     account: &AccountId,
     lane: LaneId,
-) -> Result<(), Error> {
-    for binding in active_bindings(stx)?
-        .iter()
-        .filter(|b| b.validator_lane_id == lane)
-    {
-        let mut state = read_state(stx, binding)?;
-        let original = beneficiary::root(stx, binding, account)?;
-        let credit_key = claimable_key(binding, &original)?;
-        let amount = read::<u128>(stx, &credit_key)?.unwrap_or(0);
-        if amount < u128::from(binding.min_reward_claim_xor_minor) {
-            continue;
-        }
-        let owner = beneficiary::owner(stx, binding, &original)?
-            .ok_or_else(|| fail("reserved claim has no authenticated beneficiary owner"))?;
-        if owner.account_id != *account {
-            return Err(fail(
-                "claimant is not the current recovered reward beneficiary",
-            ));
-        }
-        let asset = AssetId::new(
-            binding.xor_asset_id.clone(),
-            binding.reward_pool_account_id.clone(),
-        );
-        let scale = stx
-            .world
-            .asset_definition(&binding.xor_asset_id)?
-            .spec()
-            .scale()
-            .ok_or_else(|| fail("reward asset has no fixed scale"))?;
-        let balance = stx
-            .world
-            .assets
-            .get(&asset)
-            .map(|a| minor_units(a.as_ref(), scale))
-            .transpose()?
-            .unwrap_or(0);
-        if balance < state.reserved_xor {
-            return Err(fail("validator rewards custody is underfunded"));
-        }
-        state.reserved_xor = state
-            .reserved_xor
-            .checked_sub(amount)
-            .ok_or_else(|| fail("reward claim exceeds reservation"))?;
-        stx.world.smart_contract_state.remove(credit_key);
-        let receipt = ValidationFeeRewardClaim {
-            beneficiary_id: original,
-            beneficiary_revision: owner.revision,
-            sequence: state.next_claim,
-            account_id: account.clone(),
-            xor_minor: amount,
-            claimed_at_height: stx.block_height(),
-            claimed_at_ms: stx.block_unix_timestamp_ms(),
-            lifecycle_seal: binding.lifecycle_seal().map_err(|e| fail(e.to_string()))?,
-        };
-        let receipt_key = state_key(binding, &format!("Claim/{}", receipt.sequence))?;
-        if stx.world.smart_contract_state.get(&receipt_key).is_some() {
-            return Err(fail("duplicate reward claim receipt"));
-        }
-        state.next_claim = state
-            .next_claim
-            .checked_add(1)
-            .ok_or_else(|| fail("claim sequence exhausted"))?;
-        write(stx, receipt_key, &receipt)?;
-        save_state(stx, binding, &state)?;
-        Transfer::<Asset, Quantity, iroha_data_model::account::Account>::asset_quantity(
-            asset,
-            quantity(amount, scale)?,
-            account.clone(),
-        )
-        .execute(&binding.reward_pool_account_id, stx)?;
+) -> Result<Option<PublicLaneFeeRewardClaimV1>, ExecutionAttemptError<Error>> {
+    observed_fee_reward_claim(world, height, account, lane)
+        .map(|claim| claim.map(|claim| claim.plan))
+}
+
+fn observed_fee_reward_claim(
+    world: &impl WorldReadOnly,
+    height: u64,
+    account: &AccountId,
+    lane: LaneId,
+) -> Result<Option<PreparedFeeRewardClaim>, ExecutionAttemptError<Error>> {
+    let Some(binding) =
+        crate::validation_fee::active_payout_binding_in_world_at_height(world, height)
+            .map_err(|error| error.map_rejection(|error| fail(error.to_string())))?
+            .filter(|binding| binding.validator_lane_id == lane)
+    else {
+        return Ok(None);
+    };
+    let original = beneficiary::root_in_world(world, &binding, account)?;
+    let credit_key = claimable_key(&binding, &original)?;
+    let amount_minor = read_from_world::<u128>(world, &credit_key)?.unwrap_or(0);
+    if amount_minor == 0 || amount_minor < u128::from(binding.min_reward_claim_xor_minor) {
+        return Ok(None);
     }
+    crate::state::validate_network_xor_asset(world, &binding.xor_asset_id)?;
+    let owner = beneficiary::owner_in_world(world, &binding, &original)?
+        .ok_or_else(|| fail("reserved claim has no authenticated beneficiary owner"))?;
+    if owner.account_id != *account {
+        return Err(fail("claimant is not the current recovered reward beneficiary").into());
+    }
+    let source_asset = AssetId::new(
+        binding.xor_asset_id.clone(),
+        binding.reward_pool_account_id.clone(),
+    );
+    let rewards_state_key = state_key(&binding, "State")?;
+    let mut state_after = read_from_world::<ValidationFeeRewardsState>(world, &rewards_state_key)?
+        .unwrap_or_default();
+    let balance = world
+        .assets()
+        .get(&source_asset)
+        .map(|value| minor_units(value.as_ref(), 9))
+        .transpose()?
+        .unwrap_or(0);
+    if balance < state_after.reserved_xor {
+        return Err(fail("validator rewards custody is underfunded").into());
+    }
+    crate::smartcontracts::isi::staking::ensure_public_lane_reserves_after_debit(
+        world,
+        &source_asset,
+        &quantity(balance, 9)?,
+    )?;
+    let plan = PublicLaneFeeRewardClaimV1 {
+        lifecycle_seal: binding
+            .lifecycle_seal()
+            .map_err(|error| fail(error.to_string()))?,
+        beneficiary_id: original,
+        beneficiary_revision: owner.revision,
+        source_asset,
+        destination_asset: AssetId::new(binding.xor_asset_id.clone(), account.clone()),
+        amount: quantity(amount_minor, 9)?,
+        expected_claim_sequence: state_after.next_claim,
+    };
+    if !plan.has_canonical_shape(account) {
+        return Err(fail("fee reward claim does not name canonical custody assets").into());
+    }
+    let receipt_key = state_key(&binding, &format!("Claim/{}", state_after.next_claim))?;
+    if world.smart_contract_state().get(&receipt_key).is_some() {
+        return Err(fail("duplicate reward claim receipt").into());
+    }
+    state_after.reserved_xor = state_after
+        .reserved_xor
+        .checked_sub(amount_minor)
+        .ok_or_else(|| fail("reward claim exceeds reservation"))?;
+    state_after.next_claim = state_after
+        .next_claim
+        .checked_add(1)
+        .ok_or_else(|| fail("claim sequence exhausted"))?;
+    Ok(Some(PreparedFeeRewardClaim {
+        binding,
+        plan,
+        credit_key,
+        receipt_key,
+        state_after,
+        amount_minor,
+    }))
+}
+
+/// Authenticate every signed fee claim field before changing any reward or reserve state.
+/// An explicit absence does not inspect or mutate fee reward state.
+pub(crate) fn prepare_fee_reward_claim(
+    stx: &StateTransaction<'_, '_>,
+    account: &AccountId,
+    lane: LaneId,
+    signed: Option<&PublicLaneFeeRewardClaimV1>,
+) -> Result<Option<PreparedFeeRewardClaim>, Error> {
+    let Some(signed) = signed else {
+        return Ok(None);
+    };
+    let claim = observed_fee_reward_claim(&stx.world, stx.block_height(), account, lane)
+        .map_err(|error| stx.world.attempt_error_to_instruction_error(error))?
+        .ok_or_else(|| fail("signed fee reward claim has no eligible reserved credit"))?;
+    if !cfg!(all(test, sumeragi_core_mutation = "HC55")) && signed != &claim.plan {
+        return Err(fail(
+            "fee reward claim differs from its exact current signed monetary plan",
+        ));
+    }
+    Ok(Some(claim))
+}
+
+/// Apply only the independently verified exact fee reward claim in the caller's transaction.
+pub(crate) fn claim_fee_rewards(
+    stx: &mut StateTransaction<'_, '_>,
+    claim: PreparedFeeRewardClaim,
+) -> Result<(), Error> {
+    let PreparedFeeRewardClaim {
+        binding,
+        plan,
+        credit_key,
+        receipt_key,
+        state_after,
+        amount_minor,
+    } = claim;
+    let receipt = ValidationFeeRewardClaim {
+        beneficiary_id: plan.beneficiary_id,
+        beneficiary_revision: plan.beneficiary_revision,
+        sequence: plan.expected_claim_sequence,
+        account_id: plan.destination_asset.account().clone(),
+        xor_minor: amount_minor,
+        claimed_at_height: stx.block_height(),
+        claimed_at_ms: stx.block_unix_timestamp_ms(),
+        lifecycle_seal: plan.lifecycle_seal,
+    };
+    // All credit, sequence, custody and owner checks completed before the public
+    // claim's first mutation. Failure here rejects the whole enclosing transaction.
+    write(stx, receipt_key, &receipt)?;
+    stx.world.smart_contract_state.remove(credit_key);
+    save_state(stx, &binding, &state_after)?;
+    Transfer::<Asset, Quantity, iroha_data_model::account::Account>::asset_quantity(
+        plan.source_asset,
+        plan.amount,
+        plan.destination_asset.account().clone(),
+    )
+    .execute(&binding.reward_pool_account_id, stx)?;
     validate_pending_fee_evidence_budget(stx)
         .map_err(|error| string_attempt_instruction_error(stx, error))?;
     Ok(())
@@ -1072,13 +1196,8 @@ pub(crate) fn publish_conversion_offers(
     let mut stx = block.try_transaction()?;
     let result = (|| -> Result<(), Error> {
         for binding in active_bindings(&stx)? {
-            let scale = stx
-                .world
-                .asset_definition(&binding.xor_asset_id)?
-                .spec()
-                .scale()
-                .ok_or_else(|| fail("reward asset has no fixed scale"))?;
-            let offer = conversion_offer(&stx, &binding, scale)?;
+            let scale = 9;
+            let offer = conversion_offer(&stx, &binding)?;
             if let Some(offer) = &offer {
                 let key = state_key(&binding, &format!("Attempt/{}", stx.block_height()))?;
                 if stx.world.smart_contract_state.get(&key).is_some() {
@@ -1107,7 +1226,7 @@ pub(crate) fn publish_conversion_offers(
                 let base = "ValidationFeeConversion"
                     .parse()
                     .map_err(|e| fail(format!("invalid conversion base: {e}")))?;
-                let encoded_key = ivm::numeric_tlv::encode_int(
+                let encoded_key = ivm_abi::numeric_tlv::encode_int(
                     &iroha_primitives::bigint::BigInt::from_i128(index),
                 )
                 .map_err(|e| fail(e.to_string()))?;
@@ -1143,13 +1262,20 @@ fn finish_reward_maintenance(
             "validation fee reward maintenance failed: {error}"
         ))
     })?;
-    stx.apply();
+    // Both maintenance callers write only protected smart-contract state. The
+    // original local touch journal excludes writes from earlier applied siblings;
+    // an empty maintenance attempt must not invent an execution fragment.
+    if stx.world.smart_contract_state.touched_entries().len() != 0 {
+        stx.apply();
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("validation_fee_rewards/signed_claim_tests.rs");
+    include!("validation_fee_rewards/credit_refusal_tests.rs");
     use iroha_crypto::{Algorithm, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
         asset::AssetDefinitionId,
@@ -1186,7 +1312,8 @@ mod tests {
                 .expect("entrypoint"),
             treasury_account_id: address(1).subject_id(),
             ds_asset_id: asset("sbd"),
-            xor_asset_id: asset("xor"),
+            xor_asset_id: iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                .xor_asset_definition_id,
             pool_contract_address: address(2),
             pool_code_hash: [2; 32],
             pool_vault_account_id: address(2).subject_id(),
@@ -1304,7 +1431,7 @@ mod tests {
         let now = 1_790_773_200_000_u64;
         let period = earning_month(now - 1).expect("earning month");
         let state = crate::state::State::new_for_testing(
-            crate::state::World::with([], [], []),
+            crate::validation_fee::tests::validation_fee_payout_world(&account(1)),
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
         );
@@ -1341,20 +1468,20 @@ mod tests {
             write(&mut stx, state_key(&b, &leaf).expect("key"), &record)
                 .expect("native observation fixture");
         }
-        let offer = conversion_offer(&stx, &b, 2)
+        let offer = conversion_offer(&stx, &b)
             .expect("offer")
             .expect("eligible");
         assert_eq!(offer.earning_period_start_ms, period);
         assert_eq!(offer.sbd_minor, 1000);
-        assert_eq!(offer.min_xor_minor, 1980);
-        reserve_conversion(&mut stx, &b, &offer, 2001).expect("reserve actual output");
+        assert_eq!(offer.min_xor_minor, 19_800_000_000);
+        reserve_conversion(&mut stx, &b, &offer, 20_010_000_000).expect("reserve actual output");
         let after = read_state(&stx, &b).expect("state");
         assert_eq!(after.pending_sbd_total, 1000);
         assert_eq!(
             read::<u64>(&stx, &pending_key(&b, period).unwrap()).unwrap(),
             Some(1000)
         );
-        assert_eq!(after.reserved_xor, 2001);
+        assert_eq!(after.reserved_xor, 20_010_000_000);
         assert_eq!(
             [account(1), account(2)]
                 .iter()
@@ -1364,29 +1491,25 @@ mod tests {
                         .unwrap_or(0)
                 )
                 .sum::<u128>(),
-            2001
+            20_010_000_000
         );
         assert_eq!(after.next_allocation, 1);
         assert!(
-            reserve_conversion(&mut stx, &b, &offer, 2001).is_err(),
+            reserve_conversion(&mut stx, &b, &offer, 20_010_000_000).is_err(),
             "allocation cannot replay"
         );
-        assert!(
-            conversion_offer(&stx, &b, 2)
-                .expect("rate limited")
-                .is_none()
-        );
+        assert!(conversion_offer(&stx, &b).expect("rate limited").is_none());
         let mut daily = initial;
         daily.conversion_day = (now + HONIARA_OFFSET_MS) / DAY_MS;
         daily.converted_today_sbd = b.max_sbd_per_day_minor - 7;
         save_state(&mut stx, &b, &daily).expect("daily limit fixture");
-        let tail = conversion_offer(&stx, &b, 2)
+        let tail = conversion_offer(&stx, &b)
             .expect("tail")
             .expect("seven cents remain");
         assert_eq!(tail.sbd_minor, 7);
         daily.converted_today_sbd = b.max_sbd_per_day_minor;
         save_state(&mut stx, &b, &daily).expect("full daily limit");
-        assert!(conversion_offer(&stx, &b, 2).expect("limit").is_none());
+        assert!(conversion_offer(&stx, &b).expect("limit").is_none());
     }
     #[test]
     fn policy_revisions_preserve_credit_scope_but_change_allocation_authority() {
@@ -1442,7 +1565,7 @@ mod tests {
             let b = active_bindings(stx).unwrap().remove(0);
             let reserve = ValidationFeeRewardsState {
                 pending_sbd_total: 1000,
-                reserved_xor: 1500,
+                reserved_xor: 15_000_000_000,
                 ..Default::default()
             };
             save_state(stx, &b, &reserve).expect("native reserve fixture");
@@ -1725,7 +1848,7 @@ mod tests {
             revised.pool_contract_address =
                 iroha_data_model::smart_contract::ContractAddress::derive(
                     &stx.network_id,
-                    &owner,
+                    &account(55),
                     991,
                     iroha_model_base::topology::DataSpaceId::UNIVERSAL,
                 )
@@ -1745,6 +1868,52 @@ mod tests {
                 active_bindings(stx).unwrap(),
                 vec![original.clone()],
                 "unfinalized enactment cannot change this block"
+            );
+            assert!(
+                crate::smartcontracts::code::fetch_bound_contract_record_by_subject(
+                    stx,
+                    &revised.pool_vault_account_id,
+                )
+                .expect("resolve the original authenticated contract scope")
+                .is_none(),
+                "an address alone cannot supply an activated payout pool"
+            );
+            let artifact = iroha_data_model::smart_contract::ContractArtifactId::for_address(
+                &original.pool_contract_address,
+                Hash::prehashed(original.pool_code_hash),
+            )
+            .unwrap();
+            let code = stx.world.contract_code.get(&artifact).unwrap();
+            assert_eq!(
+                <[u8; 32]>::from(ivm::contract_code_hash(code)),
+                revised.pool_code_hash
+            );
+            let replacement_deployer = account(55);
+            stx.world.bind_inactive_contract_subject_for_testing(
+                revised.pool_contract_address.clone(),
+                replacement_deployer.clone(),
+            );
+            // A pool replacement does not create a second autonomous payout
+            // trigger; the enacted lifecycle retains its original sole trigger.
+            crate::smartcontracts::code::activate_instance(
+                &replacement_deployer,
+                revised.pool_contract_address.clone(),
+                1,
+                Hash::prehashed(original.pool_code_hash),
+                stx,
+            )
+            .expect("activate the exact replacement pool artifact");
+            let pool = crate::smartcontracts::code::fetch_bound_contract_record_by_subject(
+                stx,
+                &revised.pool_vault_account_id,
+            )
+            .expect("resolve the activated authenticated pool")
+            .expect("the deployed replacement is active");
+            assert_eq!(pool.contract_address, revised.pool_contract_address);
+            assert_eq!(pool.contract_subject, revised.pool_vault_account_id);
+            assert_eq!(
+                <[u8; 32]>::from(ivm::contract_code_hash(&pool.code_bytes)),
+                revised.pool_code_hash
             );
             assert_eq!(
                 active_bindings_at_height(stx, enactment + 1).unwrap(),
@@ -1778,7 +1947,8 @@ mod tests {
                 crate::validation_fee::enacted_validation_fee_payout_runtime_permission_owner(
                     stx,
                     &permission
-                ),
+                )
+                .unwrap(),
                 Some(revised.pool_vault_account_id.clone()),
                 "permission ownership switches atomically at enactment; historical order cannot restore an old pool",
             );
@@ -1816,7 +1986,7 @@ mod tests {
         use iroha_data_model::IntoKeyValue;
         use iroha_data_model::fee_evidence::FeeEvidencePayloadV1;
         crate::retail_fee_tests::fixture(1_793_451_600_000, |stx, policy| {
-            let mut binding = active_bindings(stx).unwrap().remove(0);
+            let (policy, mut binding) = network_xor_claim_fixture(stx, policy);
             binding.min_reward_claim_xor_minor = 10;
             let registry =
                 crate::validation_fee::tests::policy_registry(&[policy], &[binding.clone()]);
@@ -1849,7 +2019,7 @@ mod tests {
             // Native wrapper tests independently enforce all three atomic transfers.
             let pool_id = AssetId::new(b.xor_asset_id.clone(), b.reward_pool_account_id.clone());
             let (_, balance) =
-                Asset::new(pool_id.clone(), quantity(101, 2).unwrap()).into_key_value();
+                Asset::new(pool_id.clone(), quantity(101, 9).unwrap()).into_key_value();
             stx.world.assets.insert(pool_id.clone(), balance);
             let corpus = pending_fee_evidence_records(stx).unwrap();
             let source = corpus
@@ -1865,7 +2035,7 @@ mod tests {
                 .tx_call_hash
                 .expect("retained component execution identity");
             let transcript_count = stx.retail_fee_transcripts_for_test().len();
-            claim_fee_rewards(stx, &claimant, b.validator_lane_id).unwrap();
+            claim_current_fee_credit(stx, &claimant, b.validator_lane_id).unwrap();
             let claim_transcripts = &stx.retail_fee_transcripts_for_test()[transcript_count..];
             assert_eq!(claim_transcripts.len(), 1);
             let transcript = &claim_transcripts[0];
@@ -1888,11 +2058,11 @@ mod tests {
             assert_eq!(delta.from_account, b.reward_pool_account_id);
             assert_eq!(delta.to_account, claimant);
             assert_eq!(delta.asset_definition, b.xor_asset_id);
-            assert_eq!(delta.amount, quantity(100, 2).unwrap());
-            assert_eq!(delta.from_balance_before, quantity(101, 2).unwrap());
-            assert_eq!(delta.from_balance_after, quantity(1, 2).unwrap());
+            assert_eq!(delta.amount, quantity(100, 9).unwrap());
+            assert_eq!(delta.from_balance_before, quantity(101, 9).unwrap());
+            assert_eq!(delta.from_balance_after, quantity(1, 9).unwrap());
             assert_eq!(delta.to_balance_before, Quantity::zero());
-            assert_eq!(delta.to_balance_after, quantity(100, 2).unwrap());
+            assert_eq!(delta.to_balance_after, quantity(100, 9).unwrap());
             assert_eq!(read_state(stx, b).unwrap().reserved_xor, 1);
             assert_eq!(
                 read::<u128>(stx, &claimable_key(b, &dust_owner).unwrap()).unwrap(),
@@ -1904,11 +2074,11 @@ mod tests {
             );
             let paid_id = AssetId::new(b.xor_asset_id.clone(), claimant.clone());
             assert_eq!(
-                minor_units(stx.world.assets.get(&paid_id).unwrap().as_ref(), 2).unwrap(),
+                minor_units(stx.world.assets.get(&paid_id).unwrap().as_ref(), 9).unwrap(),
                 100
             );
-            claim_fee_rewards(stx, &claimant, b.validator_lane_id).unwrap();
-            claim_fee_rewards(stx, &dust_owner, b.validator_lane_id).unwrap();
+            claim_current_fee_credit(stx, &claimant, b.validator_lane_id).unwrap();
+            claim_current_fee_credit(stx, &dust_owner, b.validator_lane_id).unwrap();
             assert_eq!(
                 stx.retail_fee_transcripts_for_test().len(),
                 transcript_count + 1,
@@ -1917,7 +2087,7 @@ mod tests {
             assert_eq!(read_state(stx, b).unwrap().next_claim, 1);
             assert_eq!(read_state(stx, b).unwrap().reserved_xor, 1);
             assert_eq!(
-                minor_units(stx.world.assets.get(&pool_id).unwrap().as_ref(), 2).unwrap(),
+                minor_units(stx.world.assets.get(&pool_id).unwrap().as_ref(), 9).unwrap(),
                 1
             );
             assert_eq!(
@@ -1935,6 +2105,77 @@ mod tests {
 #[cfg(test)]
 mod protected_original_retry_controls {
     use super::*;
+
+    #[test]
+    fn empty_conversion_maintenance_cannot_publish_an_inherited_dirty_sibling() {
+        let state = crate::state::State::new_for_testing(
+            crate::state::World::default(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::MIN,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let fragments = block.committed_fragment_count();
+        publish_conversion_offers(&mut block).unwrap();
+        assert_eq!(block.committed_fragment_count(), fragments);
+        let key: StatePath = "protected_maintenance_original_TESTDATA".parse().unwrap();
+        {
+            let mut stx = block.transaction();
+            stx.world.smart_contract_state.insert(key.clone(), vec![23]);
+            finish_reward_maintenance(stx, Ok(())).unwrap();
+        }
+        assert_eq!(block.committed_fragment_count(), fragments + 1);
+        assert_eq!(block.world.smart_contract_state.touched_entries().len(), 1);
+        {
+            let stx = block.transaction();
+            assert_eq!(stx.world.smart_contract_state.touched_entries().len(), 0);
+            finish_reward_maintenance(stx, Ok(())).unwrap();
+        }
+        publish_conversion_offers(&mut block).unwrap();
+        assert_eq!(block.committed_fragment_count(), fragments + 1);
+        assert_eq!(block.world.smart_contract_state.get(&key), Some(&vec![23]));
+    }
+
+    #[test]
+    fn empty_conversion_journal_still_returns_original_decoder_refusal() {
+        use crate::state::ExecutionOutputAttemptError;
+        let state = crate::state::State::new_for_testing(
+            crate::state::World::default(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::MIN,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let key: StatePath = "empty_maintenance_original_TESTDATA".parse().unwrap();
+        let original = norito::to_bytes(&vec![7_u64, 11, 13]).unwrap();
+        block
+            .world
+            .smart_contract_state
+            .insert(key.clone(), original.clone());
+        let fragments = block.committed_fragment_count();
+        let stx = block.transaction();
+        let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, 0, usize::MAX, usize::MAX);
+        let result =
+            norito::with_decode_limits_scope(limits, || read::<Vec<u64>>(&stx, &key).map(|_| ()));
+        let original_refusal = stx.execution_deferral().expect("genuine decoder refusal");
+        assert_eq!(stx.world.smart_contract_state.touched_entries().len(), 0);
+        assert_eq!(
+            finish_reward_maintenance(stx, result),
+            Err(ExecutionOutputAttemptError::Deferred(original_refusal))
+        );
+        assert_eq!(block.committed_fragment_count(), fragments);
+        assert_eq!(block.world.smart_contract_state.get(&key), Some(&original));
+    }
 
     #[test]
     fn incomplete_conversion_preparation_returns_original_owner_and_keeps_prior_projection() {

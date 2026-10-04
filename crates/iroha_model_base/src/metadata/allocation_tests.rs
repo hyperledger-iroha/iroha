@@ -75,9 +75,28 @@ mod allocation_tests {
     }
 
     #[test]
+    fn validated_metadata_clone_owns_exact_graph_without_parser_scratch() {
+        let mut source = Metadata::default();
+        source.insert("long_validated_metadata_name".parse().unwrap(), Json::new("original canonical value"));
+        let (copy, usage) = with_decode_limits_measured(limits(GENEROUS_ALLOCATION), || source.try_clone_for_admission());
+        let copy = copy.unwrap();
+        assert_eq!(copy, source);
+        let exact = usage.total_allocated_bytes();
+        assert!(exact > ncore::owned_btree_allocation_bytes::<Name, Json>(1).unwrap());
+        assert_eq!(with_decode_limits_measured(limits(exact), || source.try_clone_for_admission()).0.unwrap(), source);
+        let (refused, usage) = with_decode_limits_measured(limits(exact - 1), || source.try_clone_for_admission());
+        assert!(refused.unwrap_err().is_decode_resource_limit());
+        assert!(usage.total_allocated_bytes() < exact);
+        drop(source);
+        assert_eq!(copy.iter().next().unwrap().0.as_ref(), "long_validated_metadata_name");
+        assert_eq!(copy.iter().next().unwrap().1, &Json::new("original canonical value"));
+        assert!(Metadata::default().try_clone_for_admission().unwrap().is_empty());
+    }
+
+    #[test]
     fn metadata_tree_allocation_fallible_exact_boundary() {
-        // Six entries already increase the conservative node bound; sixty-four also require
-        // multiple actual nodes. The oracle is the shared owner, not private std node layout.
+        // Six entries still occupy one leaf; twelve cross the split boundary and sixty-four
+        // require multiple actual nodes. Physical node requests have a separate allocator census.
         for count in [0, 1, 6, 12, 64] {
             let entries = entries(count);
             let expected = Metadata(entries.iter().cloned().collect());

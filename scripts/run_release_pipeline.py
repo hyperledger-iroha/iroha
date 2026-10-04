@@ -42,13 +42,13 @@ from urllib import request as urllib_request
 _SCRIPT_DIRECTORY = Path(os.path.abspath(__file__)).parent
 _MAX_BOOTSTRAP_MODULE_BYTES = 2 * 1024 * 1024
 _BOOTSTRAP_RELEASE_MODULE_SHA256 = {
-    "release_artifact_contract": "030c6398c853a9953c48a37bb7b55a0b7cc8b93d59f31f60adbeff8d638ec571",
+    "release_artifact_contract": "66945051159d644f9507c5e6c4c264e2ece83cbcd4a4c8c1d21ef4115d380a0e",
     "release_manifest_signing": "4966d0b408f7d67d154b578875a1b0cb77584de77b4b1561e8704043b99b60fd",
     "publish_plan": "a9d15abb6eaea794f4c8fa27283667b5d75165fee60cd081a1373dab00257d70",
     # This source owns the reviewed surface seal. Its one literal digest is
     # normalized before hashing so resealing does not create a hash cycle with
     # this pipeline's bootstrap trust anchor.
-    "check_release_feature_graph": "adc386f1affd7d08a1ea38cce699e0747f8b8c3bcc1498eec23ace7c39572aea",
+    "check_release_feature_graph": "6cba6ed0c91b5f2a65558027c007ed1b04cce946dea0ec30ac0602b0aa6c727a",
 }
 
 
@@ -231,6 +231,7 @@ from release_artifact_contract import (
     parse_source_date_epoch,
     scan_inventory_paths,
     stable_hash_relative,
+    require_release_cuda_source_inputs,
 )
 from release_manifest_signing import (
     ReleaseManifestSignatureError,
@@ -847,10 +848,6 @@ def main() -> int:
     parser.add_argument("--skip-bundles", action="store_true", help="Skip building tar.zst bundles.")
     parser.add_argument("--skip-images", action="store_true", help="Skip building Docker images.")
     parser.add_argument(
-        "--trusted-cuda-key-sha256",
-        help="Independently reviewed public fingerprint for mandatory CUDA release targets.",
-    )
-    parser.add_argument(
         "--bundle-prebuilt-bin-dir",
         action="append",
         help=(
@@ -1139,10 +1136,6 @@ def main() -> int:
             "bundle/evidence lanes require absolute --zstd and "
             "--trusted-zstd-sha256 as 64 lowercase hex"
         )
-    if (not isinstance(args.trusted_cuda_key_sha256, str)
-        or re.fullmatch(r"[0-9a-f]{64}", args.trusted_cuda_key_sha256) is None
-        or args.trusted_cuda_key_sha256 == "0" * 64):
-        raise PipelineError("release matrix requires independently reviewed --trusted-cuda-key-sha256")
     bundle_prebuilt_dirs: Dict[str, Tuple[str, str]] = {}
     if not args.skip_bundles:
         bundle_prebuilt_dirs = parse_bundle_prebuilt_dirs(
@@ -1313,6 +1306,9 @@ def main() -> int:
     if not args.dry_run:
         validate_release_source(commit, "Release source preflight failed")
 
+    for target in RELEASE_TARGETS:
+        require_release_cuda_source_inputs(REPO_ROOT, target)
+
     release_root = (
         Path(os.path.abspath(Path(args.output_dir).expanduser()))
         / provided_version
@@ -1430,8 +1426,6 @@ def main() -> int:
                     "--trusted-prebuilt-provenance-sha256",
                     bundle_prebuilt_dirs[target_triple][1],
                 ]
-                if "-linux-" in target_triple or "-windows-" in target_triple:
-                    bundle_cmd.extend(("--trusted-cuda-key-sha256", args.trusted_cuda_key_sha256))
                 if args.dry_run:
                     print(
                         f"[release-pipeline] (dry-run) "
@@ -1520,7 +1514,6 @@ def main() -> int:
                     "--trusted-prebuilt-provenance-sha256",
                     image_prebuilt_dirs[image_platform][1],
                 ]
-                image_cmd.extend(("--trusted-cuda-key-sha256", args.trusted_cuda_key_sha256))
                 if args.dry_run:
                     print(
                         f"[release-pipeline] (dry-run) "

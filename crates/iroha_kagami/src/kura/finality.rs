@@ -1,19 +1,22 @@
 //! Bounded current-consensus inspection rooted in the store's signed genesis.
 
 use super::*;
-use iroha_core::sumeragi::certified_chain::CertifiedPrefix;
+use iroha_core::{state::AllocationBudget, sumeragi::certified_chain::CertifiedPrefix};
 use iroha_data_model::{
     NetworkId,
-    block::SignedBlock,
+    block::SharedSignedBlock,
     sumeragi_finality::{FinalityValidator, SumeragiFinalityProof, genesis_epoch},
 };
 use iroha_model_base::chain::ChainId;
-use std::sync::Arc;
 
 const MAX_PREFIX_HEIGHT: u64 = 4_096;
 const MAX_OUTPUT_BYTES: usize = 32 * 1024 * 1024;
 
-fn read_block(store: &mut BlockStore, height: u64) -> color_eyre::Result<Arc<SignedBlock>> {
+fn read_block(
+    store: &mut BlockStore,
+    height: u64,
+    budget: &AllocationBudget,
+) -> color_eyre::Result<SharedSignedBlock> {
     let mut index = [BlockIndex {
         start: 0,
         length: 0,
@@ -33,11 +36,13 @@ fn read_block(store: &mut BlockStore, height: u64) -> color_eyre::Result<Arc<Sig
     wire.resize(length, 0);
     store.read_block_data(index.start, &mut wire)?;
     let block = decode_framed_signed_block(&wire)
-        .map_err(|error| eyre!("invalid canonical block at {height}: {error}"))?;
+        .wrap_err_with(|| format!("failed to decode canonical block at {height}"))?;
     if block.header().height().get() != height {
         return Err(eyre!("canonical block height differs from index {height}"));
     }
-    Ok(Arc::new(block))
+    SharedSignedBlock::try_new(block, budget)
+        .map_err(|(_, error)| error)
+        .wrap_err("admit finality inspection block owner")
 }
 
 pub(super) fn inspect(
@@ -57,17 +62,20 @@ pub(super) fn inspect(
             "requested finality height exceeds the retained journal"
         ));
     }
-    let genesis = read_block(&mut store, 1)?;
+    // One bounded offline inspection owns all retained block controls. This does not
+    // authorize execution or claim that decoded nested allocations are already charged.
+    let budget = AllocationBudget::new(MAX_OUTPUT_BYTES);
+    let genesis = read_block(&mut store, 1, &budget)?;
     let network = NetworkId::from_genesis_hash(genesis.hash());
     let epoch = genesis_epoch(&genesis).map_err(|error| eyre!(error))?;
     let mut committee = epoch.committee;
-    let mut prefix = CertifiedPrefix::new(chain_id, network, Arc::clone(&genesis))
+    let mut prefix = CertifiedPrefix::new(chain_id, network, genesis.clone())
         .wrap_err("authenticate the local signed genesis")?;
     let mut selected = genesis;
     for current in 2..=height {
-        let block = read_block(&mut store, current)?;
+        let block = read_block(&mut store, current, &budget)?;
         let (verified, _) = prefix
-            .push(Arc::clone(&block))
+            .push(block.clone())
             .wrap_err_with(|| format!("invalid native finality successor at {current}"))?
             .into_parts();
         committee.clone_from(&verified.committed().commitment().schedule.current.committee);
@@ -147,8 +155,49 @@ mod tests {
         let mut index = 0_u64.to_le_bytes().to_vec();
         index.extend_from_slice(&(MAX_EXECUTED_BLOCK_WIRE_BYTES + 1).to_le_bytes());
         fs::write(directory.path().join("blocks.index"), index).unwrap();
-        let error = read_block(&mut store, 1).expect_err("oversized frame is inadmissible");
+        let error = read_block(&mut store, 1, &AllocationBudget::new(0))
+            .expect_err("oversized frame is inadmissible");
         assert!(error.to_string().contains("invalid wire length"));
+    }
+
+    #[test]
+    fn block_read_retains_original_inspection_pool_until_last_reader_releases() {
+        use iroha_core::{
+            state::World,
+            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+        use iroha_data_model::block::SharedBlockAdmissionError;
+
+        let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000))
+            .expect("execute signed inspection fixture genesis");
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = BlockStore::new(directory.path());
+        store.create_files_if_they_do_not_exist().unwrap();
+        store
+            .append_block_to_chain(chain.committed(1).block())
+            .unwrap();
+        let bytes = SharedSignedBlock::allocation_layout().size();
+        let budget = AllocationBudget::new(bytes);
+        let block = read_block(&mut store, 1, &budget).unwrap();
+        let retained = block.clone();
+        assert!(block.belongs_to(&budget));
+        assert!(SharedSignedBlock::ptr_eq(&block, &retained));
+        drop(block);
+        let error = read_block(&mut store, 1, &budget)
+            .expect_err("the original retained reader still owns the only control allocation");
+        assert!(matches!(
+            error.downcast_ref::<SharedBlockAdmissionError>(),
+            Some(SharedBlockAdmissionError::Admission(_))
+        ));
+        assert_eq!(budget.reserved_bytes(), bytes);
+        assert_eq!(
+            retained.encode_wire().unwrap(),
+            chain.genesis().encode_wire().unwrap()
+        );
+        drop(retained);
+        assert_eq!(budget.reserved_bytes(), 0);
+        let retry = read_block(&mut store, 1, &budget).expect("released capacity permits retry");
+        assert_eq!(retry.hash(), chain.genesis().hash());
     }
 }
 

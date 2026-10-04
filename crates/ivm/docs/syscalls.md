@@ -400,7 +400,7 @@ Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010023 SYSVAR_AUTHORITY — Args: none → `ptr (&AccountId)` — Gas: G_get_auth + bytes
 - 0x010024 SYSVAR_CONTRACT_ADDRESS — Args: none → `ptr (&NoritoBytes(ContractAddress))` or `0` — Gas: G_sysvar + bytes
 - 0x010025 SYSVAR_ENTRYPOINT — Args: none → `ptr (&Blob(entrypoint))` or `0` — Gas: G_sysvar + bytes
-- 0x010026 DECODE_ARGUMENT_RECORD — Args: `r10=&NoritoBytes(EntrypointArgumentRecordV1)`, `r11=&NoritoBytes(EntrypointArgumentSchemaV1)` → `r10=aligned owned-HEAP table base (0 if empty)`, `r11=exact word count` — Gas: G_argument_decode + record + schema + complete materialization. Raw syscall quoting uses only bounded record/schema envelope lengths and reserves the full HEAP before schema and record authentication. The decoder validates the schema hash, canonical flat atoms, inactive sum payloads, and every embedded typed pointer. It preflights all aligned pointer TLV allocations and raw aggregate/table storage together. Pointer TLVs prefer INPUT and spill into owned HEAP; aggregate storage and argument tables always use owned HEAP. The record limit is inclusive at 1 MiB. Public invocation preparation is mandatory before guest execution and consumes a host-owned prepared record directly; it does not expose a guest binding or invoke this syscall. JSON-to-record conversion occurs only at Torii/CLI tooling boundaries.
+- 0x010026 DECODE_ARGUMENT_RECORD — Args: `r10=&NoritoBytes(EntrypointArgumentRecordV1)`, `r11=&NoritoBytes(EntrypointArgumentSchemaV1)` → `r10=aligned owned-HEAP table base (0 if empty)`, `r11=exact word count` — Gas: G_argument_decode + record + schema + complete materialization. Raw syscall quoting uses only bounded record/schema envelope lengths and reserves the full HEAP before schema and record authentication. The decoder validates the schema hash, canonical flat atoms, inactive sum payloads, and every embedded typed pointer. It preflights all aligned pointer TLV allocations and raw aggregate/table storage together. Pointer TLVs prefer INPUT and spill into owned HEAP; aggregate storage and argument tables always use owned HEAP. The record limit is inclusive at 1 MiB. Public invocation preparation is mandatory before guest execution and consumes a host-owned prepared record directly; it does not expose a guest binding or invoke this syscall. JSON-to-record conversion occurs only at Torii/CLI tooling boundaries, through the shared state-free `ivm_abi::arguments` codec.
 - 0x010027 SYSVAR_CONTRACT_SUBJECT — Args: none → `ptr (&AccountId(contract subject))` — Gas: G_sysvar + bytes. Calls outside a deployed-contract scope fail closed.
 - 0x010028 NORMALIZE_NORITO_BYTES — Args: `r10=&Blob or &NoritoBytes` in validated public memory → `ptr (&NoritoBytes(same payload))` — Gas: G_pointer + bytes
   - Compiler transport helper for strict Norito-consuming syscalls. It rejects null, malformed, disallowed, and non-bytes pointers, then allocates a fresh canonical V1 `NoritoBytes` envelope with an identical payload and recomputed hash. It performs no serialization and does not weaken the receiving syscall's exact pointer-type checks.
@@ -597,6 +597,13 @@ node enforces that policy unconditionally.
 - ABI goldens (syscall list, ABI hash, pointer type IDs) are pinned to the current
   v1 surface and must be updated in the same change whenever the first-release
   surface intentionally changes.
+- Callable metadata carries complete flat `CallSchemaV1` argument/result trees.
+  It preserves Option/Result payloads, exact List capacities and element types,
+  nominal products/errors, privacy, and `StateCursor(EntrypointValueKindV1)` keys.
+  Table counts derive from the trees; active nested values use the same checks as
+  direct words. Canonical cursor frames with a different key kind are rejected;
+  `Json` is not a supported cursor key kind. Private schemas retain the compiler's
+  250,000-node/depth-256 bounds; public record limits remain unchanged.
 - Pointer provenance tests pin INPUT, allocated HEAP, and exact indexed literals as the only
   accepted V1 object stores. Asset mutation fixtures pin canonical `QuantityValueV1` frames;
   scalar and legacy `NoritoBytes(Numeric)` amount arguments remain invalid.

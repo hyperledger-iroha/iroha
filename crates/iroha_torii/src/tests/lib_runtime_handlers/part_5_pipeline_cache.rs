@@ -162,9 +162,25 @@ fn pipeline_status_cache_prunes_stale_entries() {
 fn pipeline_status_cache_eviction_respects_capacity() {
     let cache = PipelineStatusCache::with_limits(1, Duration::from_secs(60));
     let (block_a, _) = make_signed_block(1, None);
-    let (block_b, _) = make_signed_block(2, None);
     let hash_a = block_a.external_transactions().next().expect("tx").hash();
-    let hash_b = block_b.external_transactions().next().expect("tx").hash();
+    let hash_b = checked_torii_test_transaction(
+        TransactionBuilder::new(
+            signed_query_test_network_id(),
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "distinct cache eviction input".to_owned(),
+        )]),
+        &iroha_test_samples::ALICE_KEYPAIR,
+        "sign the independent cache eviction input",
+    )
+    .hash();
+    assert_ne!(
+        hash_a, hash_b,
+        "capacity eviction requires distinct original inputs"
+    );
     let now = Instant::now();
     let stale = now
         .checked_sub(Duration::from_secs(5))
@@ -187,7 +203,24 @@ fn pipeline_status_cache_live_counts_track_entries_and_pending_blocks() {
     let (block_a, _) = make_signed_block(1, None);
     let (block_b, _) = make_signed_block(2, None);
     let hash_a = block_a.external_transactions().next().expect("tx").hash();
-    let hash_b = block_b.external_transactions().next().expect("tx").hash();
+    let hash_b = checked_torii_test_transaction(
+        TransactionBuilder::new(
+            signed_query_test_network_id(),
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "distinct live-count cache input".to_owned(),
+        )]),
+        &iroha_test_samples::ALICE_KEYPAIR,
+        "sign independent live-count cache input",
+    )
+    .hash();
+    assert_ne!(
+        hash_a, hash_b,
+        "live counts require two distinct original inputs"
+    );
     let height_a = NonZeroU64::new(1).expect("height");
     let now = Instant::now();
     cache.record_entry(
@@ -222,6 +255,7 @@ fn pipeline_status_cache_live_counts_track_entries_and_pending_blocks() {
             kind: PipelineStatusKind::Committed,
             block_hash: block_a.header().hash(),
             observed_at: now,
+            deferred: None,
         },
     );
     cache.record_pending_block(
@@ -230,6 +264,7 @@ fn pipeline_status_cache_live_counts_track_entries_and_pending_blocks() {
             kind: PipelineStatusKind::Applied,
             block_hash: block_b.header().hash(),
             observed_at: now + Duration::from_secs(1),
+            deferred: None,
         },
     );
     assert_eq!(cache.pending_count.load(Ordering::Relaxed), 1);
@@ -275,6 +310,7 @@ fn pipeline_status_cache_pending_blocks_prune_by_ttl_and_capacity() {
             kind: PipelineStatusKind::Committed,
             block_hash: block_a.header().hash(),
             observed_at: stale,
+            deferred: None,
         },
     );
     cache.record_pending_block(
@@ -283,9 +319,130 @@ fn pipeline_status_cache_pending_blocks_prune_by_ttl_and_capacity() {
             kind: PipelineStatusKind::Applied,
             block_hash: block_b.header().hash(),
             observed_at: now,
+            deferred: None,
         },
     );
     cache.prune(now);
     assert!(cache.pending_blocks.get(&height_a).is_none());
     assert!(cache.pending_blocks.get(&height_b).is_some());
+}
+
+#[tokio::test]
+async fn original_history_pool_refusal_preserves_pending_status_and_refuses_visibility_and_health()
+{
+    use iroha_core::execution_attempt::ExecutionAttemptError;
+    let (app, tx_hash, chain) = canonical_outcome_test_fixture(false);
+    let block = chain.committed(2).block().clone();
+    let header = block.header();
+    let height = NonZeroUsize::new(2).unwrap();
+    app.kura.forget_cached_block_for_testing(height).unwrap();
+    let pool = app.state.ivm_execution_budget();
+    let occupied = pool
+        .try_reserve_bytes(pool.limit_bytes() - pool.reserved_bytes())
+        .unwrap();
+    let expected = pool.try_reserve_bytes(1).unwrap_err();
+    let iroha_allocation::AllocationRefusal::Capacity {
+        release: expected_release,
+        ..
+    } = &expected
+    else {
+        panic!("original finite pool is temporarily occupied");
+    };
+    let event = TransactionEvent {
+        hash: tx_hash,
+        block_height: NonZeroU64::new(2),
+        lane_id: LaneId::new(0),
+        dataspace_id: DataSpaceId::new(0),
+        status: TransactionStatus::Approved,
+    };
+    let Err(ExecutionAttemptError::Deferred(reason)) =
+        ToriiDataspaceReadContext::transaction_event_scope(&app.kura, &event, &pool)
+    else {
+        panic!("occupied history cannot become global-reader fallback or absent scope");
+    };
+    let Some(iroha_allocation::AllocationRefusal::Capacity { release, .. }) =
+        reason.allocation_refusal()
+    else {
+        panic!("read must retain the original allocation release source");
+    };
+    assert_eq!(release, expected_release);
+    assert_eq!(
+        app.kura.get_block_hash(height),
+        Some(block.hash()),
+        "refusal cannot poison or delete original history"
+    );
+
+    let cache = PipelineStatusCache::new();
+    cache.record_block_event(
+        &BlockEvent {
+            header,
+            status: BlockStatus::Applied,
+        },
+        &app.state,
+    );
+    assert!(cache.lookup(&tx_hash).is_none());
+    let pending = cache
+        .pending_blocks
+        .get(&NonZeroU64::new(2).unwrap())
+        .unwrap();
+    assert!(
+        pending.deferred.is_some(),
+        "local capacity remains distinct from missing history"
+    );
+    assert_eq!(pending.block_hash, block.hash());
+    drop(pending);
+    let error = routing::handle_v1_explorer_health(
+        app.state.clone(),
+        app.kura.clone(),
+        routing::MaybeTelemetry::disabled(),
+    )
+    .await
+    .expect_err("health may not replace resource refusal with a null timestamp");
+    assert_eq!(
+        error.into_response().status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        routing::handle_version(app.state.clone()).await.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "latest-version read cannot report missing genesis under capacity pressure"
+    );
+    let detail = routing::handle_v1_explorer_block_detail(
+        app.state.clone(),
+        routing::MaybeTelemetry::disabled(),
+        routing::DataspaceReadVisibility::all_for_tests(),
+        "2".to_owned(),
+    )
+    .await
+    .expect_err("capacity cannot authorize hash-only Explorer fallback");
+    assert_eq!(
+        detail.into_response().status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    let outcome = canonical_transaction_outcome(&app.state, &tx_hash)
+        .expect_err("terminal status waits for history capacity");
+    assert_eq!(
+        outcome.into_response().status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+
+    drop(occupied);
+    cache.refresh_pending_blocks(&app.state);
+    assert!(cache.pending_blocks.is_empty());
+    assert_eq!(
+        cache.lookup(&tx_hash).unwrap().kind,
+        PipelineStatusKind::Applied
+    );
+    assert!(ToriiDataspaceReadContext::transaction_event_scope(&app.kura, &event, &pool).is_ok());
+    assert_eq!(
+        routing::handle_v1_explorer_health(
+            app.state.clone(),
+            app.kura.clone(),
+            routing::MaybeTelemetry::disabled()
+        )
+        .await
+        .unwrap()
+        .status(),
+        StatusCode::OK
+    );
 }

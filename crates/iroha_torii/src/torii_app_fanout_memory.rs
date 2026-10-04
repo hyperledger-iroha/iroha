@@ -293,17 +293,6 @@ struct ToriiAppFanoutMemoryBudget {
     retained_bytes: usize,
 }
 impl ToriiAppFanoutMemoryBudget {
-    /// Start a request ledger only while owning the process-wide shared fanout
-    /// reservation used by signed and generic fanout paths.
-    ///
-    /// The reservation is intentionally borrowed: routed local legs must pass the same token
-    /// through instead of recursively acquiring the one-slot default pool.
-    fn from_shared_query_fanout_reservation(
-        _reservation: &QueryFanoutMemoryReservation,
-        capacity_bytes: usize,
-    ) -> Result<Self, ToriiAppFanoutMemoryError> {
-        Self::new_inner(capacity_bytes)
-    }
     #[cfg(test)]
     fn new(capacity_bytes: usize) -> Result<Self, ToriiAppFanoutMemoryError> {
         Self::new_inner(capacity_bytes)

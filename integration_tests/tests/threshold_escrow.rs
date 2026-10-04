@@ -198,7 +198,7 @@ fn threshold_contract_call_intent(
         (None, None) if descriptor.params.is_empty() => None,
         (Some(schema), Some(payload)) => Some(
             ContractArgumentRecord::try_new(
-                ivm::encode_argument_record_from_json(schema, payload)
+                ivm_abi::arguments::encode_argument_record_from_json(schema, payload)
                     .map_err(|error| eyre!("encode trusted threshold escrow arguments: {error}"))?,
             )
             .map_err(|error| eyre!("bound trusted argument record: {error}"))?,
@@ -420,7 +420,7 @@ async fn asset_definition_exists(
     read_on_dedicated_thread(move || {
         let found = client
             .client()
-            .query(FindAssetsDefinitions)
+            .query(FindAssetDefinitions)
             .filter_with(|item| {
                 item.equals("id", asset_definition_id.clone())
                     .into_predicate()

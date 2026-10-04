@@ -384,7 +384,8 @@ fn current_native_fifo_survives_unrelated_global_application_on_consensus_stack(
         state
             .view()
             .latest_block()
-            .unwrap()
+            .expect("committed history read completes")
+            .expect("committed successor is retained")
             .network_entrypoint_count(),
         1
     );

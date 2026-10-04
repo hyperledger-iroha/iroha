@@ -23,6 +23,7 @@ use crate::sorafs::{
         ReserveProviderTermsV1,
     },
 };
+use iroha_crypto::HashOf;
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use sorafs_manifest::{capacity::ReplicationAssignmentV1, deal::XorQuantity};
@@ -424,8 +425,13 @@ isi! {
     /// already exist. Submitted `bonded + slashed` must exactly equal the
     /// locked reserve balance net of treasury-funded principal, and an upsert
     /// cannot reset slash history or create bonded collateral.
+    #[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::sorafs::UpsertProviderCredit")]
     pub struct UpsertProviderCredit {
+        /// Exact current native record hash, or explicit absence for initial creation.
+        /// This field is required in JSON; omission never authorizes an unguarded upsert.
+        #[norito(required)]
+        pub expected_current: Option<HashOf<ProviderCreditRecord>>,
         /// Credit record snapshot used to seed or update governance accounting.
         pub record: ProviderCreditRecord,
     }
@@ -1386,8 +1392,14 @@ impl SetPricingSchedule {
 impl UpsertProviderCredit {
     /// Create a new `UpsertProviderCredit` instruction.
     #[must_use]
-    pub fn new(record: ProviderCreditRecord) -> Self {
-        Self { record }
+    pub fn new(
+        expected_current: Option<HashOf<ProviderCreditRecord>>,
+        record: ProviderCreditRecord,
+    ) -> Self {
+        Self {
+            expected_current,
+            record,
+        }
     }
 }
 impl SetSorafsPopIssuerPolicy {
@@ -2023,6 +2035,7 @@ impl_sorafs_decode_from_slice!(SetPricingSchedule {
     schedule: PricingScheduleRecord,
 });
 impl_sorafs_decode_from_slice!(UpsertProviderCredit {
+    expected_current: Option<HashOf<ProviderCreditRecord>>,
     record: ProviderCreditRecord,
 });
 impl_sorafs_decode_from_slice!(SetSorafsPopIssuerPolicy {
@@ -2221,6 +2234,7 @@ impl_sorafs_decode_from_slice!(FinalizeSorafsModerationCase {
 });
 #[cfg(test)]
 mod tests {
+    include!("sorafs/provider_credit_cas_tests.rs");
     use super::*;
     use crate::isi::test_support::{
         assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
@@ -2382,6 +2396,7 @@ mod tests {
     }
     fn provider_ingest_completion_authority() -> ProviderIngestCompletionAuthorityV1 {
         ProviderIngestCompletionAuthorityV1::new(
+            owner().clone(),
             owner(),
             crate::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
                 policy_id: [0x91; 32],
@@ -2834,7 +2849,11 @@ mod tests {
         assert_slice_roundtrip(SetPricingSchedule::new(
             PricingScheduleRecord::launch_default(),
         ));
-        assert_slice_roundtrip(UpsertProviderCredit::new(provider_credit()));
+        assert_slice_roundtrip(UpsertProviderCredit::new(None, provider_credit()));
+        assert_slice_roundtrip(UpsertProviderCredit::new(
+            Some(HashOf::new(&provider_credit())),
+            provider_credit(),
+        ));
         assert_slice_roundtrip(SetSorafsOrderbookPolicy::new(orderbook_policy()));
         assert_slice_roundtrip(SubmitSorafsOrderbookOrder::new(
             vec![0x01, 0x02],

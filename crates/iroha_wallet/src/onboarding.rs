@@ -1,9 +1,6 @@
 //! Shared trusted onboarding and faucet preparation, submission and exact recovery.
 use crate::faucet_pow::solve_account_faucet_claim;
-use crate::{
-    operation_journal::Journal,
-    operations::{OperationReport, OperationStatus, current_unix_ms, validate_config},
-};
+use crate::operations::{OperationReport, OperationStatus, current_unix_ms, validate_config};
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
     client::{
@@ -26,6 +23,7 @@ use iroha::{
         transaction::FeePaymentIntent,
     },
 };
+use iroha_operation_journal::Journal;
 use iroha_primitives::numeric::Quantity;
 use norito::json::{self, JsonDeserialize, JsonSerialize, Value};
 use std::{

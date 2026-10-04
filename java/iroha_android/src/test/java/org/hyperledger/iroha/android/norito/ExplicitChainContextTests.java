@@ -39,6 +39,9 @@ import org.junit.Test;
 
 /** Adversarial coverage for the caller-owned I105 chain context. */
 public final class ExplicitChainContextTests {
+  private static final Class<?> KOTLIN_NATIVE_SIGNER =
+      org.hyperledger.iroha.sdk.crypto.NativeSignerBridge.class;
+
 
   private static final int TAIRA = TairaTestnetProfile.I105_DISCRIMINANT;
   private static final int OTHER = AccountAddress.DEFAULT_I105_DISCRIMINANT;
@@ -207,13 +210,15 @@ public final class ExplicitChainContextTests {
         "encodeRegisterZkAssetSignedTransaction",
         1,
         NetworkId.class);
+    // The bridge exports JNI only for the Kotlin owner; the Java class delegates to it.
     assertMethodHasParameter(
-        NativeSignerBridge.class,
+        KOTLIN_NATIVE_SIGNER,
         "nativeEncodeRegisterZkAssetSignedTransaction",
         1,
         byte[].class);
     assertMethodHasParameterCount(
-        NativeSignerBridge.class, "nativeEncodeRegisterZkAssetSignedTransaction", 12);
+        KOTLIN_NATIVE_SIGNER, "nativeEncodeRegisterZkAssetSignedTransaction", 12);
+    assertNativeMethod(KOTLIN_NATIVE_SIGNER, "nativeEncodeRegisterZkAssetSignedTransaction");
     assertEquals(NetworkId.BYTE_LENGTH, TestNetworkIds.canonical().bytes().length);
   }
 
@@ -222,7 +227,7 @@ public final class ExplicitChainContextTests {
     assertAllMethodOverloadsHaveIntParameter(
         NativeSignerBridge.class, "encodeRegisterZkAssetSignedTransaction", 2);
     assertMethodHasIntParameter(
-        NativeSignerBridge.class, "nativeEncodeRegisterZkAssetSignedTransaction", 2);
+        KOTLIN_NATIVE_SIGNER, "nativeEncodeRegisterZkAssetSignedTransaction", 2);
 
   }
 
@@ -386,6 +391,17 @@ public final class ExplicitChainContextTests {
             .orElseThrow(() -> new AssertionError("missing method " + type.getName() + "." + name));
     assertTrue(method.getParameterCount() > parameterIndex);
     assertEquals(parameterType, method.getParameterTypes()[parameterIndex]);
+  }
+
+  private static void assertNativeMethod(final Class<?> type, final String name) {
+    assertTrue(
+        type.getName() + "." + name + " must be the JNI declaration",
+        Arrays.stream(type.getDeclaredMethods())
+            .anyMatch(
+                candidate ->
+                    candidate.getName().equals(name)
+                        && Modifier.isNative(candidate.getModifiers())
+                        && Modifier.isStatic(candidate.getModifiers())));
   }
 
   private static void assertMethodHasParameterCount(

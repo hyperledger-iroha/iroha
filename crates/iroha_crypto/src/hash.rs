@@ -59,8 +59,9 @@ impl Hash {
         let bytes = <[u8; Self::LENGTH] as norito::core::DeserializePayload>::try_deserialize(
             archived.cast(),
         )?;
-        Self::from_marked_bytes(bytes)
-            .ok_or_else(|| norito::core::Error::Message("invalid hash lsb".into()))
+        Self::from_marked_bytes(bytes).ok_or_else(|| norito::core::Error::InvalidValue {
+            context: "hash lsb",
+        })
     }
 }
 /// Compute raw SHA-256 bytes without Iroha hash marker semantics.
@@ -330,7 +331,9 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Hash {
         b.copy_from_slice(&bytes[..Self::LENGTH]);
         Self::from_marked_bytes(b)
             .map(|hash| (hash, Self::LENGTH))
-            .ok_or_else(|| norito::core::Error::Message("invalid hash lsb".into()))
+            .ok_or_else(|| norito::core::Error::InvalidValue {
+                context: "hash lsb",
+            })
     }
 }
 impl FromStr for Hash {
@@ -462,9 +465,19 @@ impl<T: norito::codec::Encode> HashOf<T> {
     /// Construct typed hash
     #[must_use]
     pub fn new(value: &T) -> Self {
+        Self::try_new(value).expect("typed hash encoding should not fail")
+    }
+    /// Construct the same typed hash while preserving the original serialization failure.
+    ///
+    /// The fixed V1 serializer streams directly into the existing hash owner; no encoded
+    /// frame or alternate hash domain is constructed.
+    ///
+    /// # Errors
+    /// Returns the serializer's codec or local resource refusal without a partial hash.
+    pub fn try_new(value: &T) -> Result<Self, norito::Error> {
         let mut writer = HashWriter::new();
-        norito::codec::Encode::encode_to(value, &mut writer);
-        Self(writer.finalize(), PhantomData)
+        norito::codec::encode_adaptive_into(value, &mut writer)?;
+        Ok(Self(writer.finalize(), PhantomData))
     }
 }
 impl<T> FromStr for HashOf<T> {
@@ -738,6 +751,46 @@ mod tests {
         let encoded = norito::codec::Encode::encode(&value);
         let expected = HashOf::<Vec<u64>>::from_untyped_unchecked(Hash::new(encoded));
         assert_eq!(HashOf::new(&value), expected);
+        assert_eq!(HashOf::try_new(&value).unwrap(), expected);
+    }
+    #[test]
+    fn fallible_typed_hash_retains_serializer_resource_failure_after_partial_write() {
+        struct Refused;
+        impl norito::core::SerializePayload for Refused {
+            fn serialize(
+                &self,
+                writer: &mut norito::core::Encoder<'_>,
+            ) -> Result<(), norito::Error> {
+                norito::core::SerializePayload::serialize(&7_u64, writer)?;
+                Err(norito::Error::AllocationFailed { bytes: 17 })
+            }
+        }
+        assert!(matches!(
+            HashOf::try_new(&Refused),
+            Err(norito::Error::AllocationFailed { bytes: 17 })
+        ));
+    }
+    #[test]
+    fn fallible_typed_hash_preserves_inherited_allocation_scope() {
+        struct Charged;
+        impl norito::core::SerializePayload for Charged {
+            fn serialize(
+                &self,
+                writer: &mut norito::core::Encoder<'_>,
+            ) -> Result<(), norito::Error> {
+                norito::core::reserve_decode_allocation(8)?;
+                norito::core::SerializePayload::serialize(&7_u64, writer)
+            }
+        }
+        let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 8, 64);
+        norito::with_decode_limits_scope(limits, || {
+            assert!(HashOf::try_new(&Charged).is_ok());
+            assert!(matches!(
+                HashOf::try_new(&Charged),
+                Err(norito::Error::TotalAllocationExceeded { .. })
+            ));
+        });
+        assert!(HashOf::try_new(&Charged).is_ok());
     }
     #[test]
     fn hash_of_decode_rejects_invalid_lsb() {
@@ -779,9 +832,94 @@ mod tests {
             let archived = norito::from_bytes::<Hash>(&framed).expect("archive");
             let err = <Hash as norito::core::DeserializePayload>::try_deserialize(archived)
                 .expect_err("invalid lsb");
-            assert!(matches!(err, norito::core::Error::Message(_)));
+            assert!(matches!(
+                err,
+                norito::core::Error::InvalidValue {
+                    context: "hash lsb"
+                }
+            ));
         }
     }
+    #[test]
+    fn hash_marker_entry_points_reject_without_allocating_and_preserve_exact_bytes() {
+        for final_byte in u8::MIN..=u8::MAX {
+            let mut bytes = [0xa5; Hash::LENGTH];
+            bytes[Hash::LENGTH - 1] = final_byte;
+            let framed = norito::core::frame_bare_with_header_flags::<Hash>(&bytes, 0).unwrap();
+            let archived = norito::from_bytes::<Hash>(&framed).unwrap();
+            let (slice, archived) = crate::test_allocations::without_allocations(|| {
+                (
+                    <Hash as norito::core::DecodeFromSlice>::decode_from_slice(&bytes),
+                    <Hash as norito::core::DeserializePayload>::try_deserialize(archived),
+                )
+            });
+            if final_byte & 1 == 1 {
+                let (from_slice, used) = slice.unwrap();
+                assert_eq!(used, bytes.len());
+                assert_eq!(from_slice.as_ref(), &bytes);
+                assert_eq!(archived.unwrap(), from_slice);
+            } else {
+                assert!(matches!(
+                    slice,
+                    Err(norito::Error::InvalidValue {
+                        context: "hash lsb"
+                    })
+                ));
+                assert!(matches!(
+                    archived,
+                    Err(norito::Error::InvalidValue {
+                        context: "hash lsb"
+                    })
+                ));
+            }
+        }
+        for length in 0..Hash::LENGTH {
+            let short = [0x75; Hash::LENGTH];
+            assert!(matches!(
+                crate::test_allocations::without_allocations(|| {
+                    <Hash as norito::core::DecodeFromSlice>::decode_from_slice(&short[..length])
+                }),
+                Err(norito::Error::LengthMismatch),
+            ));
+        }
+    }
+
+    #[test]
+    fn typed_hash_marker_entry_points_preserve_static_error_and_zero_allocation() {
+        for final_byte in u8::MIN..=u8::MAX {
+            let mut bytes = [0x5a; Hash::LENGTH];
+            bytes[Hash::LENGTH - 1] = final_byte;
+            let framed =
+                norito::core::frame_bare_with_header_flags::<HashOf<()>>(&bytes, 0).unwrap();
+            let archived = norito::from_bytes::<HashOf<()>>(&framed).unwrap();
+            let (slice, archived) = crate::test_allocations::without_allocations(|| {
+                (
+                    <HashOf<()> as norito::core::DecodeFromSlice>::decode_from_slice(&bytes),
+                    <HashOf<()> as norito::core::DeserializePayload>::try_deserialize(archived),
+                )
+            });
+            if final_byte & 1 == 1 {
+                let (from_slice, used) = slice.unwrap();
+                assert_eq!(used, bytes.len());
+                assert_eq!(from_slice.as_ref(), &bytes);
+                assert_eq!(archived.unwrap(), from_slice);
+            } else {
+                assert!(matches!(
+                    slice,
+                    Err(norito::Error::InvalidValue {
+                        context: "hash lsb"
+                    })
+                ));
+                assert!(matches!(
+                    archived,
+                    Err(norito::Error::InvalidValue {
+                        context: "hash lsb"
+                    })
+                ));
+            }
+        }
+    }
+
     #[test]
     fn hash_archived_decode_checks_every_final_byte_safely() {
         for final_byte in u8::MIN..=u8::MAX {
@@ -832,7 +970,12 @@ mod tests {
             let archived = norito::from_bytes::<HashOf<()>>(&framed).expect("archive");
             let err = <HashOf<()> as norito::core::DeserializePayload>::try_deserialize(archived)
                 .expect_err("invalid lsb");
-            assert!(matches!(err, norito::core::Error::Message(_)));
+            assert!(matches!(
+                err,
+                norito::core::Error::InvalidValue {
+                    context: "hash lsb"
+                }
+            ));
         }
     }
 }

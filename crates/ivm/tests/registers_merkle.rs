@@ -1,4 +1,6 @@
-use ivm::{MerkleTree, Registers};
+//! Fixed register authentication paths and canonical root parity.
+
+use ivm::{MerkleTree, REGISTER_MERKLE_PATH_DEPTH, Registers};
 use sha2::{Digest, Sha256};
 fn reg_leaf(value: u64, tag: bool) -> [u8; 32] {
     let mut bytes = [0u8; 9];
@@ -33,7 +35,7 @@ fn registers_root_and_path_combined_matches_separate() {
     regs.set(77, 0xA5A5);
     regs.set_tag(77, false);
     for &idx in &[0usize, 5, 17, 77, 255] {
-        let path_s = regs.merkle_path(idx).unwrap();
+        let path_s: [[u8; 32]; REGISTER_MERKLE_PATH_DEPTH] = regs.merkle_path(idx).unwrap();
         let root_s = regs.merkle_root();
         let (root_c, path_c) = regs.merkle_root_and_path(idx).unwrap();
         assert_eq!(root_s, root_c, "root mismatch at idx={idx}");

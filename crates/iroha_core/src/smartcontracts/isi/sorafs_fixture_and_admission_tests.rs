@@ -529,7 +529,11 @@ fn completion_signer_policy(revision: u64) -> ProviderIngestCompletionSignerPoli
     }
 }
 fn completion_authority(owner: &AccountId, revision: u64) -> ProviderIngestCompletionAuthorityV1 {
-    ProviderIngestCompletionAuthorityV1::new(owner.clone(), completion_signer_policy(revision))
+    ProviderIngestCompletionAuthorityV1::new(
+        owner.clone(),
+        owner.clone(),
+        completion_signer_policy(revision),
+    )
 }
 fn completion_instruction(
     order_id: ReplicationOrderId,
@@ -641,6 +645,14 @@ fn seed_provider_owners(
 ) {
     for provider in providers {
         stx.world.provider_owners.insert(*provider, owner.clone());
+        stx.world.add_account_permission(
+            owner,
+            iroha_data_model::permission::Permission::from(
+                iroha_executor_data_model::permission::sorafs::CanCompleteSorafsReplicationOrder {
+                    provider_id: *provider,
+                },
+            ),
+        );
         stx.world
             .provider_ingest_completion_authorities
             .insert(*provider, completion_authority(owner, 1));
@@ -699,7 +711,16 @@ fn upsert_provider_credit_with_reserve_fixture(
         capacity_gib,
         record.bonded.clone(),
     )?;
-    UpsertProviderCredit { record }.execute(authority, stx)
+    let expected_current = stx
+        .world
+        .provider_credit_ledger
+        .get(&provider)
+        .map(iroha_crypto::HashOf::new);
+    UpsertProviderCredit {
+        expected_current,
+        record,
+    }
+    .execute(authority, stx)
 }
 fn register_governed_capacity_declaration(
     stx: &mut crate::state::StateTransaction<'_, '_>,
@@ -724,7 +745,6 @@ fn seed_sorafs_permissions(state: &mut State, authority: &AccountId) {
         "CanRecordSorafsReputationJournal",
         "CanResolveSorafsCapacityDispute",
         "CanIssueSorafsReplicationOrder",
-        "CanCompleteSorafsReplicationOrder",
         "CanSetSorafsPricing",
         "CanUpsertSorafsProviderCredit",
     ] {
@@ -1267,7 +1287,11 @@ fn pin_expiry_uses_consensus_time_and_releases_live_content_atomically() {
             .commit_world_overlay_for_testing()
             .expect("commit registered pin fixture");
     }
-    let previous = state.view().latest_block().map(|block| block.hash());
+    let previous = state
+        .view()
+        .latest_block()
+        .expect("canonical history read completes")
+        .map(|block| block.hash());
     {
         let header = iroha_data_model::block::BlockHeader::new(
             nonzero!(2_u64),
@@ -1358,7 +1382,11 @@ fn pin_expiry_rejects_malformed_index_without_partial_retirement() {
             .commit_world_overlay_for_testing()
             .expect("commit registered pin fixture");
     }
-    let previous = state.view().latest_block().map(|block| block.hash());
+    let previous = state
+        .view()
+        .latest_block()
+        .expect("canonical history read completes")
+        .map(|block| block.hash());
     let header = iroha_data_model::block::BlockHeader::new(
         nonzero!(2_u64),
         previous,

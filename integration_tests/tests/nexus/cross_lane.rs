@@ -1,24 +1,18 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Cross-lane manifest and relay proof tests (NX-11).
-use eyre::{Result, WrapErr};
+use eyre::Result;
 use iroha_config::parameters::actual::{GovernanceCatalog, GovernanceModule, LaneRegistry};
 use iroha_core::governance::manifest::{GovernanceGuardReason, LaneManifestRegistry};
-use iroha_crypto::{Hash, HashOf, LaneCommitmentId, MerkleProof};
+use iroha_crypto::LaneCommitmentId;
 use iroha_data_model::{
     nexus::{LaneCatalog, LaneConfig, LanePrivacyProof, LaneStorageProfile},
     proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
 };
 use iroha_model_base::peer::PeerId;
-use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+use iroha_model_base::topology::LaneId;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use norito::{core as norito_core, json};
-use std::{
-    collections::BTreeMap,
-    fs,
-    num::{NonZeroU32, NonZeroU64},
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{collections::BTreeMap, fs, num::NonZeroU32, path::Path, time::Duration};
 use tempfile::tempdir;
 #[test]
 fn commitment_only_lane_without_privacy_commitments_is_gated() -> Result<()> {

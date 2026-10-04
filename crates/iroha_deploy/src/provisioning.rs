@@ -134,6 +134,7 @@ struct Binding {
     parent_profile: u16,
     parent_torii_root: String,
     alias: String,
+    account_alias: String,
     owner: AccountId,
     registration: PrivateDataspaceRegistration,
     faucet: ReleaseFaucet,
@@ -162,7 +163,7 @@ pub struct RemoteProvisioning {
 }
 
 impl RemoteProvisioning {
-    /// Bind the actual retained signed private genesis to an independently authenticated parent.
+    /// Bind the signed private genesis and exact owner alias to an authenticated parent.
     /// Only its owner key is imported into the separate parent wallet; listener credentials stay
     /// in the child context. Reopening never replaces funding terms, journals or a reset child.
     ///
@@ -173,6 +174,7 @@ impl RemoteProvisioning {
         path: &Path,
         bootstrap: &AuthenticatedBootstrap,
         prepared: &PreparedLocalnet,
+        account_alias: &str,
     ) -> Result<Self> {
         let registration = prepared.load_private_registration().map_err(|_| {
             ProvisioningError::Invalid("cannot authenticate retained private genesis")
@@ -186,6 +188,7 @@ impl RemoteProvisioning {
             bootstrap,
             child,
             prepared.context.dataspace_alias.clone(),
+            account_alias.into(),
             registration,
         )
     }
@@ -203,6 +206,7 @@ impl RemoteProvisioning {
         path: &Path,
         bootstrap: &AuthenticatedBootstrap,
         prepared: &PreparedLocalnet,
+        account_alias: &str,
     ) -> Result<Config> {
         let registration = prepared.load_private_registration().map_err(|_| {
             ProvisioningError::Invalid("cannot authenticate retained private genesis")
@@ -216,6 +220,7 @@ impl RemoteProvisioning {
             bootstrap,
             &child,
             &prepared.context.dataspace_alias,
+            account_alias,
             &registration,
         )
     }
@@ -225,6 +230,7 @@ impl RemoteProvisioning {
         bootstrap: &AuthenticatedBootstrap,
         child: &Config,
         alias: &str,
+        account_alias: &str,
         registration: &PrivateDataspaceRegistration,
     ) -> Result<Config> {
         let directory = PrivateDirectory::open(path)?;
@@ -232,8 +238,15 @@ impl RemoteProvisioning {
         let record = decode_record(&directory.read("provisioning.nrt", MAX_RECORD_BYTES)?)?;
         record.validate()?;
         record.binding.validate_parent(bootstrap)?;
-        let expected = Binding::new(bootstrap, child, alias.into(), registration.clone())?;
+        let expected = Binding::new(
+            bootstrap,
+            child,
+            alias.into(),
+            account_alias.into(),
+            registration.clone(),
+        )?;
         if record.binding.alias != expected.alias
+            || record.binding.account_alias != expected.account_alias
             || record.binding.owner != expected.owner
             || record.binding.registration != expected.registration
         {
@@ -259,9 +272,10 @@ impl RemoteProvisioning {
         bootstrap: &AuthenticatedBootstrap,
         child: Config,
         alias: String,
+        account_alias: String,
         registration: PrivateDataspaceRegistration,
     ) -> Result<Self> {
-        let binding = Binding::new(bootstrap, &child, alias, registration)?;
+        let binding = Binding::new(bootstrap, &child, alias, account_alias, registration)?;
         let parent = OwnerDirectory::open_or_create(
             path.parent()
                 .ok_or(ProvisioningError::Invalid("provisioning path"))?,
@@ -293,6 +307,7 @@ impl RemoteProvisioning {
         let record = decode_record(&directory.read("provisioning.nrt", MAX_RECORD_BYTES)?)?;
         record.binding.validate_parent(bootstrap)?;
         if record.binding.alias != binding.alias
+            || record.binding.account_alias != binding.account_alias
             || record.binding.owner != binding.owner
             || record.binding.registration != binding.registration
         {
@@ -426,11 +441,21 @@ impl RemoteProvisioning {
             self.publish(record)?;
         }
         let journal = operations.path().join("namespace");
-        if !path_exists(&journal)? {
-            // No signed envelope exists yet. Refreshing an unsigned rent quote is safe within
-            // the original installed allowance; after journal creation the request is immutable.
-            let request =
-                backend.namespace_request(&self.parent, &self.record.binding.alias, deadline)?;
+        if self.record.namespace.is_none() {
+            if path_exists(&journal)? {
+                return Err(ProvisioningError::Invalid(
+                    "namespace journal has no retained request",
+                ));
+            }
+            // Publish the exact two-lease quote once, before preparation can become ambiguous.
+            // Every retry retains its original rent guards and fee allowance, even if no
+            // transaction journal was installed before the previous attempt failed.
+            let request = backend.namespace_request(
+                &self.parent,
+                &self.record.binding.alias,
+                &self.record.binding.account_alias,
+                deadline,
+            )?;
             self.record.binding.validate_namespace(&request)?;
             let mut record = self.record.clone();
             record.namespace = Some(request);

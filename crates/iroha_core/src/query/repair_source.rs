@@ -119,14 +119,7 @@ pub fn authorize_repair_lease_v1(
         .map_err(|_| rejected)?;
     // A lagging local clock cannot revive a lease or pin that has already expired
     // at the authenticated consensus head. Keep the local lower-bound check too.
-    let finalized_unix_ms = u64::try_from(
-        view.latest_block()
-            .ok_or(rejected)?
-            .header()
-            .creation_time()
-            .as_millis(),
-    )
-    .map_err(|_| rejected)?;
+    let finalized_unix_ms = view.authenticated_query_ledger_time_ms().ok_or(rejected)?;
     let latest_unix_ms = now_unix_ms.max(finalized_unix_ms);
     let task = FindSorafsRepairTask::new(request.ticket_id.to_owned(), None)
         .execute(view)

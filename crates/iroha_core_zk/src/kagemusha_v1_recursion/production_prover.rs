@@ -16,7 +16,6 @@ mod production_incoming;
 mod production_ordinary_auxiliaries;
 #[path = "production_ordinary_cash_terminal.rs"]
 mod production_ordinary_cash_terminal;
-pub(crate) use production_ordinary_cash_terminal::GeneratedOrdinaryCashCommitOriginalsV1;
 #[path = "production_ordinary_preparation_reservation.rs"]
 mod production_ordinary_preparation_reservation;
 pub(crate) use production_ordinary_preparation_reservation::GeneratedOrdinaryCashReservationOriginalsV1;
@@ -26,16 +25,12 @@ mod production_ordinary_guard;
 mod production_ordinary_incoming_auxiliaries;
 #[path = "production_ordinary_incoming_state.rs"]
 mod production_ordinary_incoming_state;
-pub(crate) use production_ordinary_incoming_auxiliaries::KagemushaRetainedOrdinaryIncomingAuxiliariesV1;
 #[path = "production_ordinary_outgoing_auxiliaries.rs"]
 mod production_ordinary_outgoing_auxiliaries;
 #[path = "production_ordinary_outgoing_state.rs"]
 mod production_ordinary_outgoing_state;
-pub(crate) use production_ordinary_outgoing_auxiliaries::KagemushaRetainedOrdinaryOutgoingAuxiliariesV1;
 pub(crate) use production_ordinary_outgoing_state::{
-    GeneratedOrdinaryOutgoingCandidateOriginalsV1, KagemushaOrdinaryOutgoingAuxiliaryConsumerV1,
-    KagemushaOrdinaryOutgoingAuxiliaryProofSourceV1, generate_ordinary_outgoing_candidate_v1,
-    readmit_retained_ordinary_outgoing_candidate_v1,
+    generate_ordinary_outgoing_candidate_v1, readmit_retained_ordinary_outgoing_candidate_v1,
 };
 #[path = "production_ordinary_mint.rs"]
 mod production_ordinary_mint;
@@ -44,10 +39,7 @@ mod production_ordinary_padding;
 #[path = "production_ordinary_state.rs"]
 mod production_ordinary_state;
 pub use production_ordinary_auxiliaries::KagemushaRetainedOrdinaryBootstrapAuxiliariesV1;
-pub(crate) use production_ordinary_incoming_state::{
-    GeneratedOrdinaryIncomingCandidateOriginalsV1, KagemushaOrdinaryIncomingAuxiliaryConsumerV1,
-    KagemushaOrdinaryIncomingAuxiliaryProofSourceV1, generate_ordinary_incoming_candidate_v1,
-};
+pub(crate) use production_ordinary_incoming_state::generate_ordinary_incoming_candidate_v1;
 pub use production_ordinary_state::{
     KagemushaOrdinaryBootstrapAuxiliaryConsumerV1, KagemushaOrdinaryBootstrapAuxiliaryProofSourceV1,
 };

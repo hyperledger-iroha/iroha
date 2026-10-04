@@ -44,6 +44,7 @@ pub mod node;
 /// Nonempty block payloads and the leader's proposal builder.
 pub mod payload;
 pub(crate) mod penalties;
+mod private_counters;
 pub mod private_dataspace;
 /// Body-free owner-private root registration and native certificate exports.
 pub mod private_dataspace_export;

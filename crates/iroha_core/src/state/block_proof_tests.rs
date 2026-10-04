@@ -15,7 +15,7 @@ use norito::codec::DecodeAll as _;
 #[derive(norito::NoritoSchema, norito::codec::Decode, norito::codec::Encode)]
 #[norito_schema(name = "iroha_core::state::block_proof_tests::MutableSignedBlockWire")]
 struct MutableSignedBlockWire {
-    signatures: BTreeSet<BlockSignature>,
+    signatures: iroha_data_model::block::BlockSignatures,
     payload: BlockPayload,
     result: Option<BlockResult>,
     commit_certificate: Option<iroha_data_model::block::CommitCertificate>,
@@ -84,7 +84,9 @@ fn proof_chain(sealed: bool) -> crate::sumeragi::test_chain::CertifiedTestChain 
         .into(),
     ];
     let mut chain = CertifiedTestChain::start(config).unwrap();
-    assert!(chain.state().view().genesis_timestamp().unwrap() < Duration::from_millis(1001));
+    assert!(
+        chain.state().view().genesis_timestamp().unwrap().unwrap() < Duration::from_millis(1001)
+    );
     let successful = chain.sign(
         &signer,
         [Log::new(Level::INFO, "network proof".into()).into()],
@@ -139,6 +141,7 @@ fn proof_fixture_runs_both_internal_phases_after_original_genesis_time() {
         .state
         .view()
         .block_by_height(nonzero!(1_usize))
+        .expect("completed original State read")
         .unwrap();
     assert!(parent.header().creation_time() < Duration::from_millis(1001));
     assert!(block.header().creation_time() > Duration::from_millis(1001));
@@ -274,6 +277,7 @@ fn block_proofs_reject_kura_body_not_committed_by_wsv() {
             chain_id: view.chain_id(),
             network: *view.network_id(),
             hashes: view.block_hashes(),
+            budget: &view.execution_budget(),
         },
         nonzero!(2_u64),
         expected,
@@ -397,6 +401,7 @@ fn block_proofs_reject_requested_slot_header_height_mismatch() {
             chain_id: view.chain_id(),
             network: *view.network_id(),
             hashes: view.block_hashes(),
+            budget: &view.execution_budget(),
         },
         nonzero!(1_u64),
         target.hash(),
@@ -629,7 +634,8 @@ fn executed_block_wire_returns_exact_finalized_bytes_and_enforces_admission() {
                     ..proof_limits()
                 }
             )
-            .unwrap(),
+            .unwrap()
+            .as_slice(),
         expected
     );
     assert_eq!(

@@ -10,7 +10,7 @@ const EVENT_MESSAGE_FIXTURE: &[u8] = include_bytes!("fixtures/canonical_event_me
 #[test]
 fn canonical_block_fixture_roundtrips_via_wire_helpers() {
     let block =
-        block::decode_versioned_signed_block(BLOCK_WIRE_FIXTURE).expect("decode canonical block");
+        block::decode_framed_signed_block(BLOCK_WIRE_FIXTURE).expect("decode canonical block");
     let canonical_wire = block
         .canonical_wire()
         .expect("emit canonical wire representation");

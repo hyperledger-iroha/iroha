@@ -377,8 +377,9 @@ test("listSumeragiEvidence rejects malformed exact evidence shapes", async () =>
     [{ ...equivocation, consensus_admitted_height: null }, /consensus_admitted_height/],
     [{ ...equivocation, penalty_status: { status: "pending", details: {} } }, /details must be null/],
     [{ ...equivocation, penalty_status: { status: "applied", details: null } }, /must be an object/],
-    [{ ...equivocation, penalty_status: { status: "cancelled", details: { height: 8, note: "x" } } }, /unexpected note/],
-    [{ ...equivocation, penalty_status: { status: "retired", details: null } }, /must be pending, applied, or cancelled/],
+    [{ ...equivocation, penalty_status: { status: "applied", details: { height: 8, note: "x" } } }, /unexpected note/],
+    [{ ...equivocation, penalty_status: { status: "cancelled", details: { height: 8 } } }, /must be pending or applied/],
+    [{ ...equivocation, penalty_status: { status: "retired", details: null } }, /must be pending or applied/],
     [{ ...equivocation, penalty_applied: false }, /unexpected penalty_applied/],
   ];
   await Promise.all(

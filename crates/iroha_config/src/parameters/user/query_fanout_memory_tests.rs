@@ -22,6 +22,132 @@ fn query_fanout_pool_may_be_smaller_than_the_general_body_cap() {
         root.torii.query_fanout_max_retained_bytes.get() < root.torii.max_content_len.get(),
         "the query pool derives a smaller phase-bounded body limit instead of rejecting the general listener cap"
     );
+    let aggregate = root.torii.query_fanout_max_retained_bytes.get();
+    let ceiling = root.torii.query_fanout_max_working_set_bytes.get();
+    assert_eq!(ceiling, 48_000_000);
+    let working_set = defaults::torii::query_fanout_working_set_bytes(
+        aggregate,
+        ceiling,
+        root.torii.max_content_len.get(),
+    )
+    .expect("the smaller aggregate still admits a complete working set");
+    assert_eq!(working_set, 15_000_000);
+    assert!(working_set < ceiling);
+    assert_eq!(
+        defaults::torii::query_ingress_body_phase_bytes(
+            aggregate,
+            ceiling,
+            root.torii.max_content_len.get(),
+        ),
+        Some(25_526),
+        "all four independent ingress slots remain larger than the native read chunk"
+    );
+    assert_eq!(
+        aggregate / defaults::torii::QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1 + working_set,
+        aggregate,
+        "one complete fanout and all ingress slots fit the smaller configured aggregate"
+    );
+}
+#[test]
+fn query_fanout_aggregate_capacity_does_not_expand_per_query_phase() {
+    for (aggregate, expected_slots) in [(64_000_000, 1), (512_000_000, 8), (1_024_000_000, 16)] {
+        let mut table = base_table();
+        table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .expect("torii table")
+            .insert(
+                "query_fanout_max_retained_bytes".into(),
+                Value::Integer(aggregate),
+            );
+        let torii = load_root(table).torii;
+        let aggregate = torii.query_fanout_max_retained_bytes.get();
+        let ceiling = torii.query_fanout_max_working_set_bytes.get();
+        let working_set = defaults::torii::query_fanout_working_set_bytes(
+            aggregate,
+            ceiling,
+            torii.max_content_len.get(),
+        )
+        .expect("parsed configuration admits a complete working set");
+        assert_eq!(working_set, 48_000_000);
+        assert_eq!(
+            defaults::torii::app_api_routed_read_route_body_phase_bytes(
+                aggregate,
+                ceiling,
+                torii.max_content_len.get(),
+            ),
+            Some(2_562_487),
+            "aggregate capacity changes concurrency, not one query's phase limit"
+        );
+        let ingress_pool = aggregate / defaults::torii::QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1;
+        let fanout_pool = aggregate - ingress_pool;
+        assert_eq!(fanout_pool / working_set, expected_slots);
+        assert!(ingress_pool + expected_slots * working_set <= aggregate);
+    }
+}
+#[test]
+fn query_fanout_working_set_ceiling_accepts_exact_transport_geometry() {
+    let minimum = defaults::torii::QUERY_FANOUT_FIXED_OVERHEAD_BYTES_V1
+        + defaults::torii::QUERY_FANOUT_PREBODY_UNITS_V1
+            * defaults::torii::HTTP_READ_CHUNK_BYTES_V1;
+    let mut table = base_table();
+    let torii = table
+        .get_mut("torii")
+        .and_then(Value::as_table_mut)
+        .expect("torii table");
+    torii.insert(
+        "query_fanout_max_working_set_bytes".into(),
+        Value::Integer(i64::try_from(minimum).expect("working-set bound fits TOML integer")),
+    );
+    let root = load_root(table.clone());
+    assert_eq!(root.torii.query_fanout_max_working_set_bytes.get(), minimum);
+    for phase in [
+        defaults::torii::app_api_routed_read_route_body_phase_bytes(
+            root.torii.query_fanout_max_retained_bytes.get(),
+            minimum,
+            root.torii.max_content_len.get(),
+        ),
+        defaults::torii::query_ingress_body_phase_bytes(
+            root.torii.query_fanout_max_retained_bytes.get(),
+            minimum,
+            root.torii.max_content_len.get(),
+        ),
+    ] {
+        assert_eq!(phase, Some(defaults::torii::HTTP_READ_CHUNK_BYTES_V1));
+    }
+    table
+        .get_mut("torii")
+        .and_then(Value::as_table_mut)
+        .expect("torii table")
+        .insert(
+            "query_fanout_max_working_set_bytes".into(),
+            Value::Integer(
+                i64::try_from(minimum - 1).expect("working-set bound fits TOML integer"),
+            ),
+        );
+    let error = actual::Root::from_toml_source(TomlSource::inline(table))
+        .expect_err("a ceiling one byte below complete transport geometry must fail closed");
+    assert!(format!("{error:?}").contains(
+        "Torii's fixed HTTP read chunk exceeds the App API routed-read transport-frame phase"
+    ));
+}
+#[test]
+fn query_fanout_working_set_ceiling_rejects_zero_or_non_byte_values() {
+    for invalid in [
+        Value::Integer(0),
+        Value::Integer(-1),
+        Value::Float(f64::INFINITY),
+    ] {
+        let mut table = base_table();
+        table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .expect("torii table")
+            .insert("query_fanout_max_working_set_bytes".into(), invalid);
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("working-set ceiling must be a finite positive byte count");
+        assert!(format!("{error:?}").contains("query_fanout_max_working_set_bytes"));
+    }
 }
 #[test]
 fn query_fanout_retention_budget_rejects_below_protocol_pool() {

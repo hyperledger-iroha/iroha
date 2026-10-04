@@ -896,7 +896,16 @@ pub mod json {
         /// An active decode scope rejected allocation or structural work.
         #[error("JSON decode resource limit exceeded")]
         DecodeResourceLimit,
-        /// A fallible allocation needed by the JSON decoder failed.
+        /// Original resource refusal retained across a canonical binary/JSON boundary.
+        #[error(transparent)]
+        ScopedDecodeResource(crate::core::ScopedDecodeResourceError),
+        /// An original binary decoder allocation failed with its recorded request size.
+        #[error("JSON decode allocation of {bytes} bytes failed")]
+        DecodeAllocationFailed {
+            /// Exact requested allocation size from the binary decoder.
+            bytes: u64,
+        },
+        /// A fallible allocation needed by the JSON decoder failed without a recorded size.
         #[error("JSON decode allocation failed")]
         AllocationFailed,
         #[error("invalid utf8")]
@@ -930,6 +939,8 @@ pub mod json {
             matches!(
                 self,
                 Self::DecodeResourceLimit
+                    | Self::ScopedDecodeResource(_)
+                    | Self::DecodeAllocationFailed { .. }
                     | Self::AllocationFailed
                     | Self::NestingDepthExceeded { .. }
             )
@@ -937,10 +948,33 @@ pub mod json {
         /// Convert a core decode-budget failure without copying its diagnostics.
         #[doc(hidden)]
         pub fn from_decode_resource(error: crate::core::Error) -> Self {
+            if let crate::core::Error::ScopedDecodeResource(origin) = error {
+                return Self::ScopedDecodeResource(origin);
+            }
+            if let crate::core::Error::AllocationFailed { bytes } = error {
+                return Self::DecodeAllocationFailed { bytes };
+            }
             if error.is_decode_resource_limit() {
                 Self::DecodeResourceLimit
             } else {
                 Self::AllocationFailed
+            }
+        }
+        /// Preserve an original scoped refusal when returning to binary decoding.
+        ///
+        /// Other JSON errors retain their JSON category. A native allocation failure has no
+        /// recorded byte count; zero reports that unavailable size without inventing a scope.
+        #[doc(hidden)]
+        pub fn into_core_error(self) -> crate::core::Error {
+            match self {
+                Self::ScopedDecodeResource(origin) => {
+                    crate::core::Error::ScopedDecodeResource(origin)
+                }
+                Self::DecodeAllocationFailed { bytes } => {
+                    crate::core::Error::AllocationFailed { bytes }
+                }
+                Self::AllocationFailed => crate::core::Error::AllocationFailed { bytes: 0 },
+                error => crate::core::Error::Json(error),
             }
         }
     }
@@ -2832,6 +2866,22 @@ pub mod json {
             assert_eq!(rendered, format!("\"{sample}\""));
         }
         #[test]
+        fn string_writer_escapes_identically_on_every_path() {
+            // Short strings take the scalar path; long ASCII strings take the
+            // SIMD paths where the build enables them. All must agree.
+            for padding in [0usize, 7, 15, 16, 31, 32, 63, 64] {
+                let pad = "x".repeat(padding);
+                let input = format!("{pad}a\u{08}b\u{0C}c\u{0B}\"\\\n{pad}\u{08}\u{0C}");
+                let expected = format!("\"{pad}a\\bb\\fc\\u000b\\\"\\\\\\n{pad}\\b\\f\"");
+                let mut rendered = String::new();
+                write_json_string(&input, &mut rendered);
+                assert_eq!(rendered, expected, "padding {padding}");
+                let mut charwise = String::new();
+                write_json_string_charwise(&input, &mut charwise);
+                assert_eq!(charwise, expected, "charwise padding {padding}");
+            }
+        }
+        #[test]
         fn string_writer_uses_lowercase_hex_for_control_escapes() {
             let mut rendered = String::new();
             write_json_string("a\u{000b}b", &mut rendered);
@@ -3028,6 +3078,8 @@ pub mod json {
                             b'\n' => out.push_str("\\n"),
                             b'\r' => out.push_str("\\r"),
                             b'\t' => out.push_str("\\t"),
+                            0x08 => out.push_str("\\b"),
+                            0x0C => out.push_str("\\f"),
                             c if c < 0x20 => {
                                 out.push_str("\\u00");
                                 const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -3089,6 +3141,8 @@ pub mod json {
                             b'\n' => out.push_str("\\n"),
                             b'\r' => out.push_str("\\r"),
                             b'\t' => out.push_str("\\t"),
+                            0x08 => out.push_str("\\b"),
+                            0x0C => out.push_str("\\f"),
                             c if c < 0x20 => {
                                 out.push_str("\\u00");
                                 const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -3156,6 +3210,8 @@ pub mod json {
                                 b'\n' => out.push_str("\\n"),
                                 b'\r' => out.push_str("\\r"),
                                 b'\t' => out.push_str("\\t"),
+                                0x08 => out.push_str("\\b"),
+                                0x0C => out.push_str("\\f"),
                                 c if c < 0x20 => {
                                     out.push_str("\\u00");
                                     const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -8845,6 +8901,14 @@ where
     T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
+    let payload = checked_uncompressed_payload::<T>(bytes, &header)?;
+    let _flags = core::DecodeFlagsGuard::enter(header.flags);
+    decode_payload_exact(payload)
+}
+fn checked_uncompressed_payload<'a, T: NoritoSerialize>(
+    bytes: &'a [u8],
+    header: &core::Header,
+) -> Result<&'a [u8], Error> {
     core::prepare_header_decode(header.flags, false)?;
     if header.compression != Compression::None {
         return Err(Error::unsupported_compression_with(
@@ -8864,8 +8928,7 @@ where
     if core::hardware_crc64(payload) != header.checksum {
         return Err(Error::ChecksumMismatch);
     }
-    let _flags = core::DecodeFlagsGuard::enter(header.flags);
-    decode_payload_exact(payload)
+    Ok(payload)
 }
 
 /// Decode one complete bare payload under the already-selected layout flags.
@@ -9047,6 +9110,37 @@ where
     Ok(())
 }
 
+/// Decode one exact canonical V1 frame while retaining the original admission refusal.
+///
+/// The complete synchronous decode and canonical byte comparison use the same implementation as
+/// [`decode_canonical_with_limits`]. Default and schema ceilings remain protocol errors. An actual
+/// refusal from an enclosing decode budget is identified by its original scope, including cumulative
+/// limits; matching numeric ceilings alone cannot establish that origin. This does not alter the
+/// wire encoding or provide an allocation-pool release owner.
+///
+/// # Errors
+/// Returns the original decoder error with an opaque classification established before its scopes
+/// unwind. Reconstructed resource errors without current-attempt provenance are invalid input.
+pub fn decode_canonical_for_admission<T>(
+    bytes: &[u8],
+    limits: DecodeLimits,
+) -> Result<T, core::DecodeAttemptError>
+where
+    T: NoritoSerialize,
+    for<'de> T: NoritoDeserialize<'de>,
+{
+    core::classify_decode_attempt(|| decode_canonical_with_limits(bytes, limits))
+}
+
+fn checked_canonical_header(bytes: &[u8]) -> Result<core::Header, Error> {
+    let header = core::Header::read(std::io::Cursor::new(bytes))?;
+    if header.compression != Compression::None || core::validate_header_flags(header.flags).is_err()
+    {
+        return Err(Error::NonCanonicalEncoding);
+    }
+    Ok(header)
+}
+
 /// Decode one exact canonical V1 frame under default and schema-specific limits.
 ///
 /// Nested Norito limit scopes compose by taking the stricter value in every dimension, so the
@@ -9056,17 +9150,7 @@ where
     T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
-    use std::io::Cursor;
-    // Canonical frames are always uncompressed. Header flags are
-    // value-dependent because the encoder removes dynamic layout flags that
-    // the concrete value did not use, so validate the advertised combination
-    // here and let the exact re-encode comparison below enforce the canonical
-    // value-specific flag set.
-    let header = core::Header::read(Cursor::new(bytes))?;
-    if header.compression != Compression::None || core::validate_header_flags(header.flags).is_err()
-    {
-        return Err(Error::NonCanonicalEncoding);
-    }
+    checked_canonical_header(bytes)?;
     let defaults = canonical_decode_limits(bytes.len());
     with_decode_limits(defaults, || {
         let _canonical_flags = core::DecodeFlagsGuard::enter(core::default_encode_flags());
@@ -9825,8 +9909,7 @@ where
         limits: DecodeLimits,
     ) -> Result<Self, Error> {
         let context = core::DecodeBudgetContext::new(limits);
-        let _limits = core::DecodeLimitsGuard::enter_context(&context);
-        let mut iterator = Self::new(reader)?;
+        let mut iterator = context.with(|| Self::new(reader))?;
         iterator.decode_budget = Some(context);
         Ok(iterator)
     }
@@ -9846,90 +9929,90 @@ where
     type Item = Result<T, Error>;
     fn next(&mut self) -> Option<Self::Item> {
         let decode_budget = self.decode_budget.clone();
-        let _limits = decode_budget
-            .as_ref()
-            .map(core::DecodeLimitsGuard::enter_context);
-        let _ = &self.flags_guard;
-        let reader = self.reader.as_mut()?;
-        if self.remaining == 0 {
-            let mut reader = self.reader.take().unwrap();
-            let tail = match self
-                .payload_len
-                .checked_sub(reader.consumed())
-                .ok_or(Error::LengthMismatch)
-                .and_then(|remaining| self.len_decoder.finish(&mut reader, remaining))
-            {
-                Ok(()) => reader,
-                Err(err) => return Some(Err(err)),
-            };
-            if let Err(e) = Self::finalize(tail, self.payload_len, self.checksum) {
-                return Some(Err(e));
-            }
-            return None;
-        }
-        match self.len_decoder.next_len(reader) {
-            Ok(Some(len)) => {
-                match self.payload_len.checked_sub(reader.consumed()) {
-                    Some(available) if len <= available => {}
-                    _ => return Some(Err(Error::LengthMismatch)),
-                }
-                let _depth = match core::DecodeDepthGuard::enter() {
-                    Ok(guard) => guard,
-                    Err(error) => return Some(Err(error)),
+        core::with_optional_decode_budget(decode_budget.as_ref(), || {
+            let _ = &self.flags_guard;
+            let reader = self.reader.as_mut()?;
+            if self.remaining == 0 {
+                let mut reader = self.reader.take().unwrap();
+                let tail = match self
+                    .payload_len
+                    .checked_sub(reader.consumed())
+                    .ok_or(Error::LengthMismatch)
+                    .and_then(|remaining| self.len_decoder.finish(&mut reader, remaining))
+                {
+                    Ok(()) => reader,
+                    Err(err) => return Some(Err(err)),
                 };
-                let value = if len == 0 {
-                    if core::archived_payload_size::<T>() != 0 {
-                        Err(Error::LengthMismatch)
-                    } else {
-                        let _pg = core::PayloadCtxGuard::enter(&[]);
-                        let archived = core::empty_archived_marker::<T>();
-                        guarded_try_deserialize(|| T::try_deserialize(archived))
-                    }
-                } else {
-                    unsafe {
-                        let ptr = match self.scratch.ensure(len, self.archived_align) {
-                            Ok(ptr) => ptr,
-                            Err(e) => return Some(Err(e)),
-                        };
-                        let tmp_slice_mut = std::slice::from_raw_parts_mut(ptr, len);
-                        if let Err(e) = reader.read_exact_into(tmp_slice_mut) {
-                            return Some(Err(e.into()));
-                        }
-                        let tmp_slice = std::slice::from_raw_parts(ptr as *const u8, len);
-                        let _pg = core::PayloadCtxGuard::enter(tmp_slice);
-                        let archived = &*(ptr as *const core::Archived<T>);
-                        guarded_try_deserialize(|| T::try_deserialize(archived))
-                    }
-                };
-                self.remaining -= 1;
-                if self.remaining == 0 {
-                    let mut reader = self.reader.take().unwrap();
-                    match self
-                        .payload_len
-                        .checked_sub(reader.consumed())
-                        .ok_or(Error::LengthMismatch)
-                        .and_then(|remaining| self.len_decoder.finish(&mut reader, remaining))
-                    {
-                        Ok(()) => {
-                            if let Err(e) = Self::finalize(reader, self.payload_len, self.checksum)
-                            {
-                                return Some(Err(e));
-                            }
-                        }
-                        Err(err) => return Some(Err(err)),
-                    }
-                }
-                Some(value)
-            }
-            Ok(None) => {
-                let reader = self.reader.take().unwrap();
-                if let Err(e) = Self::finalize(reader, self.payload_len, self.checksum) {
+                if let Err(e) = Self::finalize(tail, self.payload_len, self.checksum) {
                     return Some(Err(e));
                 }
-                Some(Err(Error::LengthMismatch))
+                return None;
             }
-            Err(e) => Some(Err(e)),
-        }
+            match self.len_decoder.next_len(reader) {
+                Ok(Some(len)) => {
+                    match self.payload_len.checked_sub(reader.consumed()) {
+                        Some(available) if len <= available => {}
+                        _ => return Some(Err(Error::LengthMismatch)),
+                    }
+                    let _depth = match core::DecodeDepthGuard::enter() {
+                        Ok(guard) => guard,
+                        Err(error) => return Some(Err(error)),
+                    };
+                    let value = if len == 0 {
+                        if core::archived_payload_size::<T>() != 0 {
+                            Err(Error::LengthMismatch)
+                        } else {
+                            let _pg = core::PayloadCtxGuard::enter(&[]);
+                            let archived = core::empty_archived_marker::<T>();
+                            guarded_try_deserialize(|| T::try_deserialize(archived))
+                        }
+                    } else {
+                        unsafe {
+                            let ptr = match self.scratch.ensure(len, self.archived_align) {
+                                Ok(ptr) => ptr,
+                                Err(e) => return Some(Err(e)),
+                            };
+                            let tmp_slice_mut = std::slice::from_raw_parts_mut(ptr, len);
+                            if let Err(e) = reader.read_exact_into(tmp_slice_mut) {
+                                return Some(Err(e.into()));
+                            }
+                            let tmp_slice = std::slice::from_raw_parts(ptr as *const u8, len);
+                            let _pg = core::PayloadCtxGuard::enter(tmp_slice);
+                            let archived = &*(ptr as *const core::Archived<T>);
+                            guarded_try_deserialize(|| T::try_deserialize(archived))
+                        }
+                    };
+                    self.remaining -= 1;
+                    if self.remaining == 0 {
+                        let mut reader = self.reader.take().unwrap();
+                        match self
+                            .payload_len
+                            .checked_sub(reader.consumed())
+                            .ok_or(Error::LengthMismatch)
+                            .and_then(|remaining| self.len_decoder.finish(&mut reader, remaining))
+                        {
+                            Ok(()) => {
+                                if let Err(e) =
+                                    Self::finalize(reader, self.payload_len, self.checksum)
+                                {
+                                    return Some(Err(e));
+                                }
+                            }
+                            Err(err) => return Some(Err(err)),
+                        }
+                    }
+                    Some(value)
+                }
+                Ok(None) => {
+                    let reader = self.reader.take().unwrap();
+                    if let Err(e) = Self::finalize(reader, self.payload_len, self.checksum) {
+                        return Some(Err(e));
+                    }
+                    Some(Err(Error::LengthMismatch))
+                }
+                Err(e) => Some(Err(e)),
+            }
+        })
     }
 }
 impl<T> StreamSeqIter<T>
@@ -9944,40 +10027,39 @@ where
     /// checksum verification fails, or the iterator's decode budget is exceeded.
     pub fn finish(mut self) -> Result<(), Error> {
         let decode_budget = self.decode_budget.clone();
-        let _limits = decode_budget
-            .as_ref()
-            .map(core::DecodeLimitsGuard::enter_context);
-        let _ = &self.flags_guard;
-        if let Some(mut reader) = self.reader.take() {
-            while self.remaining > 0 {
-                let len = match self.len_decoder.next_len(&mut reader)? {
-                    Some(len) => len,
-                    None => return Err(Error::LengthMismatch),
-                };
-                if len > 0 {
-                    let available = self
-                        .payload_len
-                        .checked_sub(reader.consumed())
-                        .ok_or(Error::LengthMismatch)?;
-                    if len > available {
-                        return Err(Error::LengthMismatch);
+        core::with_optional_decode_budget(decode_budget.as_ref(), || {
+            let _ = &self.flags_guard;
+            if let Some(mut reader) = self.reader.take() {
+                while self.remaining > 0 {
+                    let len = match self.len_decoder.next_len(&mut reader)? {
+                        Some(len) => len,
+                        None => return Err(Error::LengthMismatch),
+                    };
+                    if len > 0 {
+                        let available = self
+                            .payload_len
+                            .checked_sub(reader.consumed())
+                            .ok_or(Error::LengthMismatch)?;
+                        if len > available {
+                            return Err(Error::LengthMismatch);
+                        }
+                        unsafe {
+                            let ptr = self.scratch.ensure(len, self.archived_align)?;
+                            let tmp = std::slice::from_raw_parts_mut(ptr, len);
+                            reader.read_exact_into(tmp)?;
+                        }
                     }
-                    unsafe {
-                        let ptr = self.scratch.ensure(len, self.archived_align)?;
-                        let tmp = std::slice::from_raw_parts_mut(ptr, len);
-                        reader.read_exact_into(tmp)?;
-                    }
+                    self.remaining -= 1;
                 }
-                self.remaining -= 1;
+                let remaining = self
+                    .payload_len
+                    .checked_sub(reader.consumed())
+                    .ok_or(Error::LengthMismatch)?;
+                self.len_decoder.finish(&mut reader, remaining)?;
+                Self::finalize(reader, self.payload_len, self.checksum)?;
             }
-            let remaining = self
-                .payload_len
-                .checked_sub(reader.consumed())
-                .ok_or(Error::LengthMismatch)?;
-            self.len_decoder.finish(&mut reader, remaining)?;
-            Self::finalize(reader, self.payload_len, self.checksum)?;
-        }
-        Ok(())
+            Ok(())
+        })
     }
 }
 /// Streaming iterator over a top-level `HashMap<K,V>`/`BTreeMap<K,V>` payload.
@@ -10229,8 +10311,7 @@ where
         K: Eq + std::hash::Hash + Ord,
     {
         let context = core::DecodeBudgetContext::new(limits);
-        let _limits = core::DecodeLimitsGuard::enter_context(&context);
-        let mut iterator = Self::new_hash(reader)?;
+        let mut iterator = context.with(|| Self::new_hash(reader))?;
         iterator.decode_budget = Some(context);
         Ok(iterator)
     }
@@ -10258,8 +10339,7 @@ where
         K: Ord,
     {
         let context = core::DecodeBudgetContext::new(limits);
-        let _limits = core::DecodeLimitsGuard::enter_context(&context);
-        let mut iterator = Self::new_btree(reader)?;
+        let mut iterator = context.with(|| Self::new_btree(reader))?;
         iterator.decode_budget = Some(context);
         Ok(iterator)
     }
@@ -10271,34 +10351,33 @@ where
     /// checksum verification fails, or the iterator's decode budget is exceeded.
     pub fn finish(mut self) -> Result<(), Error> {
         let decode_budget = self.decode_budget.clone();
-        let _limits = decode_budget
-            .as_ref()
-            .map(core::DecodeLimitsGuard::enter_context);
-        let _ = &self.flags_guard;
-        while self.idx < self.entries {
-            // read and skip key
-            let klen = self.read_len()?;
-            if klen > self.payload_remaining {
+        core::with_optional_decode_budget(decode_budget.as_ref(), || {
+            let _ = &self.flags_guard;
+            while self.idx < self.entries {
+                // read and skip key
+                let klen = self.read_len()?;
+                if klen > self.payload_remaining {
+                    return Err(Error::LengthMismatch);
+                }
+                try_resize_decode_buffer(&mut self.kbuf, klen)?;
+                self.read_exact_update_kbuf()?;
+                // read and skip value
+                let vlen = self.read_len()?;
+                if vlen > self.payload_remaining {
+                    return Err(Error::LengthMismatch);
+                }
+                try_resize_decode_buffer(&mut self.vbuf, vlen)?;
+                self.read_exact_update_vbuf()?;
+                self.idx += 1;
+            }
+            if self.payload_remaining != 0 {
                 return Err(Error::LengthMismatch);
             }
-            try_resize_decode_buffer(&mut self.kbuf, klen)?;
-            self.read_exact_update_kbuf()?;
-            // read and skip value
-            let vlen = self.read_len()?;
-            if vlen > self.payload_remaining {
-                return Err(Error::LengthMismatch);
+            if self.digest.sum64() != self.checksum {
+                return Err(Error::ChecksumMismatch);
             }
-            try_resize_decode_buffer(&mut self.vbuf, vlen)?;
-            self.read_exact_update_vbuf()?;
-            self.idx += 1;
-        }
-        if self.payload_remaining != 0 {
-            return Err(Error::LengthMismatch);
-        }
-        if self.digest.sum64() != self.checksum {
-            return Err(Error::ChecksumMismatch);
-        }
-        Ok(())
+            Ok(())
+        })
     }
 }
 include!("stream_map_iterator.rs");

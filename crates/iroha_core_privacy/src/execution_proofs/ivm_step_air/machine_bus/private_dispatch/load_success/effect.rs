@@ -1,4 +1,4 @@
-//! Original bounded region, selected privacy bytes and ordered register effects.
+//! Original bounded region, selected privacy bytes and atomic register effect.
 
 use super::*;
 const ADDRESS_WORD: usize = 0;
@@ -22,7 +22,7 @@ const FULL_INVERSE: usize = ZERO_INVERSE + 1;
 const LOG: usize = FULL_INVERSE + 1;
 pub(super) const WIDTH: usize = LOG + 4;
 /// Exact fixed-bank census, asserted on every construction and residue evaluation.
-pub(super) const CONSTRAINTS: usize = 1939;
+pub(super) const CONSTRAINTS: usize = 1879;
 
 fn pack(bits: &[F]) -> F {
     bits.iter()
@@ -154,7 +154,7 @@ pub(super) fn append_residues(out: &mut Vec<F>, schedule: Schedule, row: &[F; su
         Space::Memory,
         F::ZERO,
         cell,
-        33,
+        32,
         selected,
         F::ZERO,
     );
@@ -191,50 +191,34 @@ pub(super) fn append_residues(out: &mut Vec<F>, schedule: Schedule, row: &[F; su
     );
     let private = full.mul(row[STACK]);
     out.push(selected.sub(selected.mul(zero)).sub(private));
-    for slot in 1..3 {
-        let write = port(row, slot);
-        header(
-            out,
-            write,
-            schedule,
-            Space::Register,
-            F::ZERO,
-            destination,
-            33 + slot,
-            enabled,
-            enabled,
-        );
-        for i in 4..8 {
-            out.push(write[BEFORE + i]);
-        }
-        for i in 0..8 {
-            let value = if i >= 4 {
-                F::ZERO
-            } else if slot == 1 {
-                selected
-                    .sub(half)
-                    .mul(memory[BEFORE + i])
-                    .add(half.mul(memory[BEFORE + 4 + i]))
-            } else {
-                write[BEFORE + i]
-            };
-            out.push(write[AFTER + i].sub(enabled.mul(value)));
-        }
-        out.push(bit(write[BEFORE_TAG]));
-        let tag = if slot == 1 {
-            write[BEFORE_TAG]
-        } else {
-            private
-        };
-        out.push(write[AFTER_TAG].sub(enabled.mul(tag)));
-    }
-    // The tag event consumes exactly the preceding value event, including its old tag.
-    link(
+    let write = port(row, 1);
+    header(
         out,
-        &port(row, 2)[BEFORE..BEFORE + 8],
-        &port(row, 1)[AFTER..AFTER + 8],
+        write,
+        schedule,
+        Space::Register,
+        F::ZERO,
+        destination,
+        33,
+        enabled,
+        enabled,
     );
-    out.push(port(row, 2)[BEFORE_TAG].sub(port(row, 1)[AFTER_TAG]));
+    for i in 4..8 {
+        out.push(write[BEFORE + i]);
+    }
+    for i in 0..8 {
+        let value = if i >= 4 {
+            F::ZERO
+        } else {
+            selected
+                .sub(half)
+                .mul(memory[BEFORE + i])
+                .add(half.mul(memory[BEFORE + 4 + i]))
+        };
+        out.push(write[AFTER + i].sub(enabled.mul(value)));
+    }
+    out.push(bit(write[BEFORE_TAG]));
+    out.push(write[AFTER_TAG].sub(enabled.mul(private)));
     for (actual, expected) in row[LOG..LOG + 4].iter().zip([
         pack(&word(row, ADDRESS_WORD)[..32]),
         pack(&word(row, ADDRESS_WORD)[32..]),

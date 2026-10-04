@@ -17,6 +17,34 @@ class PetalFinder(
     override fun toString(): String = "PetalFinder(x=$x, y=$y, size=$size)"
 }
 
+/** One plausible set of corner finders for a frame. Immutable. */
+class PetalFinderSet internal constructor(
+    quad: Array<PetalFinder>,
+    /**
+     * Index into [corners] of a corner that was not seen but inferred from the
+     * other three (hidden by a finger, a glare or the edge of the frame), or `null`.
+     */
+    val inferred: Int?,
+) {
+    /** The four corners, clockwise from the one nearest the top-left of the image (an immutable copy). */
+    internal val quad: Array<PetalFinder> = quad.copyOf()
+
+    init {
+        require(this.quad.size == 4) { "a finder set has four corners" }
+        require(inferred == null || inferred in 0 until 4) { "the inferred corner is an index into the four corners" }
+    }
+
+    /** The four corners, clockwise from the one nearest the top-left of the image. */
+    val corners: List<PetalFinder> get() = quad.toList()
+
+    override fun equals(other: Any?): Boolean =
+        other is PetalFinderSet && inferred == other.inferred && quad.contentEquals(other.quad)
+
+    override fun hashCode(): Int = 31 * quad.contentHashCode() + (inferred ?: -1)
+
+    override fun toString(): String = "PetalFinderSet(corners=${quad.toList()}, inferred=$inferred)"
+}
+
 /** A 4-connected component of a binarised image. */
 class PetalComponent internal constructor(
     /** Pixel count. */
@@ -59,11 +87,19 @@ class PetalComponent internal constructor(
  * selection of the four finders that form a plausible, similarly sized
  * quadrilateral → intensity-weighted centre refinement. Solid blossoms survive
  * defocus that would fill in the gaps of a ring-shaped marker.
+ *
+ * When a finger, a glare or the edge of the frame hides one blossom, three
+ * large blossoms that form a corner still identify the code: the fourth corner
+ * is inferred (and later refined by the decoder).
  */
 object PetalLocator {
+    /**
+     * Binarisation thresholds, from the most to the least permissive: a higher
+     * sensitivity separates blurred blossoms from their surroundings.
+     */
     private val SENSITIVITIES = doubleArrayOf(0.12, 0.22, 0.34)
 
-    /** Finder candidates combined into quadrilaterals, largest first. */
+    /** Finder candidates combined into quadrilaterals and corners, largest first. */
     private const val MAX_COMBINED = 10
 
     /**
@@ -128,80 +164,147 @@ object PetalLocator {
      * the corner finders are always the biggest isolated round blobs in view.
      */
     @JvmStatic
-    fun selectQuad(finders: List<PetalFinder>): List<PetalFinder>? = selectQuadArray(finders)?.toList()
+    fun selectQuad(finders: List<PetalFinder>): List<PetalFinder>? =
+        (selectQuadFrom(strongFinders(finders)) ?: selectQuadFrom(finders))?.toList()
 
-    /** Sharpens a finder centre with an intensity-weighted centroid. */
+    /**
+     * Chooses three finders that look like three corners of one code (an `L`:
+     * similar sizes, two similar legs at a roughly right angle) and completes the
+     * fourth corner as a parallelogram. Returns the clockwise quad with
+     * [PetalFinderSet.inferred] naming the completed corner, or `null`.
+     */
     @JvmStatic
-    fun refineCenter(image: PetalLuma, finder: PetalFinder): PetalFinder {
-        val radius = Math.ceil(finder.size * 0.5).toInt()
-        val cx = Math.floor(finder.x).toInt()
-        val cy = Math.floor(finder.y).toInt()
-        val reach = finder.size * 0.5
-        val width = image.width
-        val height = image.height
-        val pixels = image.pixels
-        var floor = Double.MAX_VALUE
-        var peak = 0.0
-        for (dy in -radius..radius) {
-            val y = cy + dy
-            if (y < 0 || y >= height) continue
-            for (dx in -radius..radius) {
-                val x = cx + dx
-                if (x < 0 || x >= width) continue
-                val ex = x + 0.5 - finder.x
-                val ey = y + 0.5 - finder.y
-                if (Math.sqrt(ex * ex + ey * ey) <= reach) {
-                    val value = (pixels[y * width + x].toInt() and 0xFF).toDouble()
-                    floor = PetalNumerics.min(floor, value)
-                    peak = PetalNumerics.max(peak, value)
-                }
-            }
+    fun selectTriple(finders: List<PetalFinder>): PetalFinderSet? = selectTripleFrom(finders)
+
+    /** Sharpens a finder centre with an intensity-weighted centroid (the finder itself when nothing bright is there). */
+    @JvmStatic
+    fun refineCenter(image: PetalLuma, finder: PetalFinder): PetalFinder = centroid(image, finder) ?: finder
+
+    /**
+     * Re-finds a finder near where it is [expected] (from the previous frame's pose).
+     *
+     * A first centroid over a disc twice the finder's diameter catches a blossom
+     * that moved up to about one diameter (nothing else bright is that close to a
+     * corner finder); centroids over the finder's own disc then repeat, at most
+     * five times, until the centre moves less than a quarter pixel. `null` when
+     * nothing bright is there or the result is more than 0.75 diameters from the
+     * expected centre, which means the code moved too far for tracking.
+     */
+    @JvmStatic
+    fun follow(image: PetalLuma, expected: PetalFinder): PetalFinder? {
+        val wide = centroid(image, PetalFinder(expected.x, expected.y, 2.0 * expected.size)) ?: return null
+        var current = PetalFinder(wide.x, wide.y, expected.size)
+        for (step in 0 until 5) {
+            val next = centroid(image, current) ?: return null
+            val dx = next.x - current.x
+            val dy = next.y - current.y
+            val moved = Math.sqrt(dx * dx + dy * dy)
+            current = next
+            if (moved < 0.25) break
         }
-        if (peak - floor < 20.0) return finder
-        val threshold = floor + 0.5 * (peak - floor)
-        var sw = 0.0
-        var sx = 0.0
-        var sy = 0.0
-        for (dy in -radius..radius) {
-            val y = cy + dy
-            if (y < 0 || y >= height) continue
-            for (dx in -radius..radius) {
-                val x = cx + dx
-                if (x < 0 || x >= width) continue
-                val px = x + 0.5
-                val py = y + 0.5
-                val ex = px - finder.x
-                val ey = py - finder.y
-                if (Math.sqrt(ex * ex + ey * ey) <= reach) {
-                    val value = (pixels[y * width + x].toInt() and 0xFF).toDouble()
-                    val weight = PetalNumerics.max(value - threshold, 0.0)
-                    sw += weight
-                    sx += weight * px
-                    sy += weight * py
-                }
-            }
-        }
-        return if (sw <= 0.0) finder else PetalFinder(sx / sw, sy / sw, finder.size)
+        val dx = current.x - expected.x
+        val dy = current.y - expected.y
+        return if (Math.sqrt(dx * dx + dy * dy) <= 0.75 * expected.size) current else null
     }
 
     /**
-     * Locates the four finders of a code, trying progressively stricter
-     * thresholds so blurred rings still separate from their cores. Returns the
-     * refined finders clockwise from the top-left, or `null`.
+     * Locates four seen finders of a code: the first of [candidates] without an
+     * inferred corner. Returns the refined finders clockwise from the top-left,
+     * or `null`.
      */
     @JvmStatic
-    fun locate(image: PetalLuma): List<PetalFinder>? = locate(image, PetalWorkspace())?.toList()
-
-    internal fun locate(image: PetalLuma, workspace: PetalWorkspace): Array<PetalFinder>? {
-        if (image.width == 0 || image.height == 0) return null
-        val levels = prepare(image, workspace)
-        for (sensitivity in SENSITIVITIES) {
-            threshold(image, workspace, levels, sensitivity)
-            val count = label(workspace.mask, image.width, image.height, workspace)
-            val quad = selectQuadArray(blossoms(workspace, count)) ?: continue
-            return Array(4) { refineCenter(image, quad[it]) }
+    fun locate(image: PetalLuma): List<PetalFinder>? {
+        val candidates = Candidates(image, PetalWorkspace())
+        while (candidates.hasNext()) {
+            val set = candidates.next()
+            if (set.inferred == null) return set.corners
         }
         return null
+    }
+
+    /** All candidate finder sets for one frame, in the order of [candidates]. */
+    @JvmStatic
+    fun locateCandidates(image: PetalLuma): List<PetalFinderSet> {
+        val out = ArrayList<PetalFinderSet>()
+        Candidates(image, PetalWorkspace()).forEach { out += it }
+        return out
+    }
+
+    /**
+     * Candidate finder sets for one frame, produced lazily in the order a decoder
+     * should try them, so that a clean frame costs one binarisation.
+     *
+     * For each binarisation threshold in turn (sensitivities 0.12, 0.22, 0.34):
+     * four finders of the largest size class that form a quad. Then, from the
+     * first threshold that had them, three large finders forming a corner —
+     * completed by the nearest smaller blob within 0.3 legs of where the fourth
+     * corner belongs (steep tilt makes the far finder small) — then the first
+     * quad that smaller blobs form, and last the same three finders with the
+     * fourth corner inferred (the nearby blob may have been merged ring dots, a
+     * quad may have been clutter).
+     */
+    @JvmStatic
+    fun candidates(image: PetalLuma): Iterator<PetalFinderSet> = Candidates(image, PetalWorkspace())
+
+    /** The lazy iterator of [candidates]; binarisation buffers live in [workspace]. */
+    internal class Candidates(private val image: PetalLuma, private val workspace: PetalWorkspace) :
+        Iterator<PetalFinderSet> {
+        private var stage = if (image.width == 0 || image.height == 0) SENSITIVITIES.size + 1 else 0
+        private var levels: Levels? = null
+        private var completed: Array<PetalFinder>? = null
+        private var smaller: Array<PetalFinder>? = null
+        private var inferred: Array<PetalFinder>? = null
+        private var missing = -1
+        private val tail = ArrayList<PetalFinderSet>(3)
+        private var pending: PetalFinderSet? = null
+
+        override fun hasNext(): Boolean {
+            if (pending == null) pending = advance()
+            return pending != null
+        }
+
+        override fun next(): PetalFinderSet {
+            if (!hasNext()) throw NoSuchElementException()
+            val next = pending!!
+            pending = null
+            return next
+        }
+
+        private fun refined(quad: Array<PetalFinder>): Array<PetalFinder> = Array(4) { refineCenter(image, quad[it]) }
+
+        private fun advance(): PetalFinderSet? {
+            while (stage < SENSITIVITIES.size) {
+                val sensitivity = SENSITIVITIES[stage]
+                stage += 1
+                val prepared = levels ?: prepare(image, workspace).also { levels = it }
+                threshold(image, workspace, prepared, sensitivity)
+                val count = label(workspace.mask, image.width, image.height, workspace)
+                val finders = blossoms(workspace, count)
+                val strong = strongFinders(finders)
+                if (inferred == null) {
+                    val triple = selectTripleFrom(strong)
+                    if (triple != null) {
+                        val m = triple.inferred!!
+                        completed = completeTriple(finders, triple.quad, m)?.let(::refined)
+                        inferred = Array(4) { if (it == m) triple.quad[it] else refineCenter(image, triple.quad[it]) }
+                        missing = m
+                    }
+                }
+                if (smaller == null) smaller = selectQuadFrom(finders)?.let(::refined)
+                val quad = selectQuadFrom(strong)
+                if (quad != null) return PetalFinderSet(refined(quad), null)
+            }
+            if (stage == SENSITIVITIES.size) {
+                stage += 1
+                completed?.let { tail += PetalFinderSet(it, null) }
+                smaller?.let { tail += PetalFinderSet(it, null) }
+                inferred?.let { tail += PetalFinderSet(it, missing) }
+                completed = null
+                smaller = null
+                inferred = null
+            }
+            return if (tail.isEmpty()) null else tail.removeAt(0)
+        }
     }
 
     /** Ratio of the smaller to the larger principal axis of a blob's second moments. */
@@ -451,17 +554,85 @@ object PetalLocator {
         return found
     }
 
-    private fun selectQuadArray(finders: List<PetalFinder>): Array<PetalFinder>? {
-        var largest = 0.0
-        for (finder in finders) largest = PetalNumerics.max(largest, finder.size)
-        val strong = finders.filter { it.size >= 0.55 * largest }
-        return selectQuadFrom(strong) ?: selectQuadFrom(finders)
+    /**
+     * The intensity-weighted centroid of the bright part of the disc of diameter
+     * `finder.size` around [finder], or `null` when that disc has less than 20
+     * levels of contrast (nothing bright is there).
+     */
+    private fun centroid(image: PetalLuma, finder: PetalFinder): PetalFinder? {
+        val reach = finder.size * 0.5
+        // Pixels outside the image are skipped, so only the rows and columns inside it are
+        // visited (in the reference order); clamping first keeps the index arithmetic exact.
+        val radius = Math.ceil(reach).toLong().coerceIn(-LOOP_LIMIT, LOOP_LIMIT)
+        val cx = Math.floor(finder.x).toLong().coerceIn(-LOOP_LIMIT, LOOP_LIMIT)
+        val cy = Math.floor(finder.y).toLong().coerceIn(-LOOP_LIMIT, LOOP_LIMIT)
+        val width = image.width
+        val height = image.height
+        val pixels = image.pixels
+        val top = maxOf(cy - radius, 0L)
+        val bottom = minOf(cy + radius, height - 1L)
+        val left = maxOf(cx - radius, 0L)
+        val right = minOf(cx + radius, width - 1L)
+        // no pixel of the disc is inside the image: no contrast
+        if (top > bottom || left > right) return null
+        val y0 = top.toInt()
+        val y1 = bottom.toInt()
+        val x0 = left.toInt()
+        val x1 = right.toInt()
+        var floor = Double.MAX_VALUE
+        var peak = 0.0
+        for (y in y0..y1) {
+            for (x in x0..x1) {
+                val ex = x + 0.5 - finder.x
+                val ey = y + 0.5 - finder.y
+                if (Math.sqrt(ex * ex + ey * ey) <= reach) {
+                    val value = (pixels[y * width + x].toInt() and 0xFF).toDouble()
+                    floor = PetalNumerics.min(floor, value)
+                    peak = PetalNumerics.max(peak, value)
+                }
+            }
+        }
+        if (peak - floor < 20.0) return null
+        val threshold = floor + 0.5 * (peak - floor)
+        var sw = 0.0
+        var sx = 0.0
+        var sy = 0.0
+        for (y in y0..y1) {
+            for (x in x0..x1) {
+                val px = x + 0.5
+                val py = y + 0.5
+                val ex = px - finder.x
+                val ey = py - finder.y
+                if (Math.sqrt(ex * ex + ey * ey) <= reach) {
+                    val value = (pixels[y * width + x].toInt() and 0xFF).toDouble()
+                    val weight = PetalNumerics.max(value - threshold, 0.0)
+                    sw += weight
+                    sx += weight * px
+                    sy += weight * py
+                }
+            }
+        }
+        return if (sw > 0.0) PetalFinder(sx / sw, sy / sw, finder.size) else null
     }
 
-    private fun selectQuadFrom(finders: List<PetalFinder>): Array<PetalFinder>? {
-        if (finders.size < 4) return null
-        // Largest first (ties keep discovery order) so that clutter in a busy scene
-        // cannot push the real finders out of the ten candidates that are combined.
+    /** Pixel coordinates beyond this are far outside any decodable image. */
+    private const val LOOP_LIMIT = 1L shl 31
+
+    /**
+     * The finders of the largest size class: lit tiles and merged dots form blob
+     * candidates too, but the corner finders are the biggest isolated round blobs in view.
+     */
+    internal fun strongFinders(finders: List<PetalFinder>): List<PetalFinder> {
+        var largest = 0.0
+        for (finder in finders) largest = PetalNumerics.max(largest, finder.size)
+        return finders.filter { it.size >= 0.55 * largest }
+    }
+
+    /**
+     * The ten largest candidates, largest first (ties keep discovery order), so that
+     * clutter in a busy scene cannot push the real finders out of the set that is combined.
+     */
+    private fun ranked(finders: List<PetalFinder>): Array<PetalFinder> {
         val ranked = arrayOfNulls<PetalFinder>(minOf(finders.size, MAX_COMBINED))
         var n = 0
         for (candidate in finders) {
@@ -472,6 +643,113 @@ object PetalLocator {
             ranked[at] = candidate
             if (n < ranked.size) n += 1
         }
+        return Array(n) { ranked[it]!! }
+    }
+
+    private fun selectTripleFrom(finders: List<PetalFinder>): PetalFinderSet? {
+        val ranked = ranked(finders)
+        val n = ranked.size
+        var bestScore = 0.0
+        var best: Array<PetalFinder>? = null
+        var bestInferred = -1
+        val set = arrayOfNulls<PetalFinder>(3)
+        val corner4 = arrayOfNulls<PetalFinder>(4)
+        for (a in 0 until n) {
+            for (b in a + 1 until n) {
+                for (c in b + 1 until n) {
+                    set[0] = ranked[a]
+                    set[1] = ranked[b]
+                    set[2] = ranked[c]
+                    var smin = Double.MAX_VALUE
+                    var smax = 0.0
+                    var sizeSum = -0.0
+                    for (finder in set) {
+                        smin = PetalNumerics.min(smin, finder!!.size)
+                        smax = PetalNumerics.max(smax, finder.size)
+                        sizeSum += finder.size
+                    }
+                    if (smax / smin > 1.9) continue
+                    val meanSize = sizeSum / 3.0
+                    for (corner in 0 until 3) {
+                        val k = set[corner]!!
+                        val p = set[(corner + 1) % 3]!!
+                        val q = set[(corner + 2) % 3]!!
+                        val ux = p.x - k.x
+                        val uy = p.y - k.y
+                        val vx = q.x - k.x
+                        val vy = q.y - k.y
+                        val lu = Math.sqrt(ux * ux + uy * uy)
+                        val lv = Math.sqrt(vx * vx + vy * vy)
+                        if (lu <= 0.0 || lv <= 0.0) continue
+                        val legs = PetalNumerics.max(lu, lv) / PetalNumerics.min(lu, lv)
+                        val cos = (ux * vx + uy * vy) / (lu * lv)
+                        // canvas geometry: side / finder diameter = 880 / 120
+                        val ratio = 0.5 * (lu + lv) / meanSize
+                        if (legs > 2.0 || Math.abs(cos) > 0.5 || !(ratio >= 4.8 && ratio <= 10.5)) continue
+                        val fourth = PetalFinder(p.x + q.x - k.x, p.y + q.y - k.y, meanSize)
+                        corner4[0] = k
+                        corner4[1] = p
+                        corner4[2] = q
+                        corner4[3] = fourth
+                        val quad = orderClockwise(corner4) ?: continue
+                        var inferred = -1
+                        for (i in 0 until 4) {
+                            if (sameBits(quad[i].x, fourth.x) && sameBits(quad[i].y, fourth.y)) {
+                                inferred = i
+                                break
+                            }
+                        }
+                        if (inferred < 0) continue
+                        val score = (smax / smin - 1.0) + (legs - 1.0) + Math.abs(cos) + Math.abs((ratio - 7.33) / 7.33)
+                        if (best == null || score < bestScore) {
+                            bestScore = score
+                            best = quad
+                            bestInferred = inferred
+                        }
+                    }
+                }
+            }
+        }
+        return best?.let { PetalFinderSet(it, bestInferred) }
+    }
+
+    private fun sameBits(a: Double, b: Double): Boolean =
+        java.lang.Double.doubleToRawLongBits(a) == java.lang.Double.doubleToRawLongBits(b)
+
+    /**
+     * A blob of at least 0.3 × the finder size within 0.3 legs of the [missing]
+     * corner of [quad] completes it into a seen quad; `null` when there is none
+     * or the result is not convex.
+     */
+    internal fun completeTriple(finders: List<PetalFinder>, quad: Array<PetalFinder>, missing: Int): Array<PetalFinder>? {
+        val d = quad[missing]
+        fun distance(f: PetalFinder): Double {
+            val dx = f.x - d.x
+            val dy = f.y - d.y
+            return Math.sqrt(dx * dx + dy * dy)
+        }
+        val leg = 0.5 * (distance(quad[(missing + 1) % 4]) + distance(quad[(missing + 3) % 4]))
+        var fourth: PetalFinder? = null
+        var nearest = 0.0
+        for (finder in finders) {
+            if (!(finder.size >= 0.3 * d.size && distance(finder) <= 0.3 * leg)) continue
+            val gap = distance(finder)
+            // the first of equally near blobs wins (`min_by`)
+            if (fourth == null || PetalNumerics.totalCompare(gap, nearest) < 0) {
+                fourth = finder
+                nearest = gap
+            }
+        }
+        if (fourth == null) return null
+        val full = arrayOfNulls<PetalFinder>(4)
+        for (i in 0 until 4) full[i] = if (i == missing) fourth else quad[i]
+        return orderClockwise(full)
+    }
+
+    private fun selectQuadFrom(finders: List<PetalFinder>): Array<PetalFinder>? {
+        if (finders.size < 4) return null
+        val ranked = ranked(finders)
+        val n = ranked.size
         var bestScore = 0.0
         var best: Array<PetalFinder>? = null
         val set = arrayOfNulls<PetalFinder>(4)

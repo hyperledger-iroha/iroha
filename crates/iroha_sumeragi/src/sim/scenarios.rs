@@ -854,7 +854,7 @@ pub fn f21(seed: u64) -> Scenario {
 }
 
 /// F22: an idle chain remains at its tip for `intervals` payload retry intervals.
-pub fn f22_heights(seed: u64, intervals: u64) -> Scenario {
+pub fn f22_intervals(seed: u64, intervals: u64) -> Scenario {
     let n = pick(seed, &[4, 7, 5]);
     let mut sc = Scenario::base("F22", seed, n);
     sc.workload = None;
@@ -864,9 +864,9 @@ pub fn f22_heights(seed: u64, intervals: u64) -> Scenario {
     sc
 }
 
-/// F22 with the default number of heights (100 in debug, 1 000 in release).
+/// F22 with the default number of retry intervals (100 in debug, 1 000 in release).
 pub fn f22(seed: u64) -> Scenario {
-    f22_heights(seed, if cfg!(debug_assertions) { 100 } else { 1_000 })
+    f22_intervals(seed, if cfg!(debug_assertions) { 100 } else { 1_000 })
 }
 
 /// F23: `n ∉ {3f + 1}` (5, 6, 8) with `f` Byzantine members and partitions.

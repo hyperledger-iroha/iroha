@@ -36,6 +36,20 @@ hostname/SPKI policy digest. Startup probes that identity twice and rejects an
 injected transport alongside this native selection. Other feed handles and ACME
 require their exact deployment-owned injected instances before Torii startup.
 
+An explicitly empty feed inventory selects the same qualified production transport with no
+permitted external hosts. Resolution and fetching reject an unconfigured hostname before DNS
+or connection. Empty catalogs still require the configured catalog signatures, finite validity,
+durable staging, gateway acknowledgements and promotion; an empty inventory never creates a
+serving catalog or bypasses those transitions.
+
+A gateway may refresh its retained acknowledgement with a new signature over the same catalog
+and vote at a strictly later observation time. The controller rechecks current trust, revocation
+and freshness, retains one vote per gateway, and commits the replacement durably. Exact original
+request replays return their original result without downgrading a newer observation. Promotion
+still requires fresh quorum and the original catalog validity; refresh cannot change an accepted
+or rejected vote, its rejection code, or catalog expiry. The gateway owner must observe a real
+reload before signing; controller acceptance alone does not prove that reload occurred.
+
 Torii now exposes six canonical, account-signed, governed-operator routes:
 authenticated feed fetch and durable status reads plus canonical-Norito-JSON
 stage, acknowledgement, promotion, and rollback mutations. Live SoraFS content
@@ -62,9 +76,10 @@ evidence and cannot mark gateway compliance ready.
 - The promoted catalog evaluator supports provider, manifest digest, CID, URL,
   account id, account alias, and perceptual-family rules with TTL pruning,
   policy tiers, and governance provenance.
-- `GatewayComplianceController` provides canonical Norito feed/catalog,
-  signature, acknowledgement, rollback, and checkpoint contracts; deterministic
-  normalization and merging; strict Ed25519 threshold/revocation checks;
+- `sorafs_manifest::gateway_compliance` owns canonical Norito feed/catalog,
+  signature, acknowledgement and rollback contracts, deterministic normalization,
+  and strict Ed25519 threshold/revocation validation. Torii's
+  `GatewayComplianceController` owns checkpoint contracts, deterministic merging,
   predecessor/sequence enforcement; durable idempotent staging; two-gateway
   acknowledgement quorum; atomic promotion; last-known-good rollback without
   rewriting the predecessor-chain head; bounded history; and

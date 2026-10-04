@@ -2,7 +2,7 @@
 fn minimal_contract_bytes() -> (iroha_crypto::Hash, Vec<u8>) {
     let mut program = ivm::ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length: 0,
         max_cycles: 1,
@@ -161,7 +161,7 @@ fn accepted_ivm_tx_by(
 fn minimal_ivm_program_with_max_cycles(abi_version: u8, max_cycles: u64) -> Vec<u8> {
     let mut program = ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length: 0,
         max_cycles,

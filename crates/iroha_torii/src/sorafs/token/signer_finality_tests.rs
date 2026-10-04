@@ -145,7 +145,7 @@ fn signed_control_fixture() -> (
 ) {
     let fixture = SignedFixture::new(1, TestSignerMode::Sign);
     let pins = fixture.pins.clone();
-    let attempt = SignerStreamTokenObservationExpectedV1::current(
+    let mut attempt = SignerStreamTokenObservationExpectedV1::current(
         pins.binding(),
         SignerStreamTokenObservationPhaseV1::BeforeAdmission,
         [0x93; 32],
@@ -164,7 +164,7 @@ fn signed_control_fixture() -> (
         pins.binding(),
         pins.custody_trust(),
         pins.observer_trust(),
-        attempt,
+        &mut attempt,
         NOW_MS,
     )
     .expect("independent custody and challenged observer signatures are valid");

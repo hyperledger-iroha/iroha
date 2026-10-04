@@ -44,6 +44,7 @@ pub(crate) struct OrdinaryIncomingPreviewV1 {
     /// Same full normalized context retained by Native for reconstruction/recovery.
     pub(crate) guard_context: KagemushaGuardContextV1,
     /// Exact local transport semantic digest of the same financial edge.
+    #[cfg(test)]
     pub(crate) transport_semantic_digest: DigestV1,
 }
 
@@ -411,7 +412,7 @@ fn derive_math_preview(
         KagemushaNormalizedGuardStatementV1::derive_from_transition(&statement, context)
             .map_err(material)?;
     let normalized_digest = normalized.canonical_digest().map_err(material)?;
-    let transport_semantic_digest = local_transition_transport_digest(
+    let _transport_semantic_digest = local_transition_transport_digest(
         facts.kind,
         before.release_id,
         before.liability_pool_id,
@@ -426,7 +427,8 @@ fn derive_math_preview(
         preparation,
         normalized,
         guard_context: context,
-        transport_semantic_digest,
+        #[cfg(test)]
+        transport_semantic_digest: _transport_semantic_digest,
     })
 }
 /// Recreate the existing Receive lifecycle transcript from the same whole transition fields.

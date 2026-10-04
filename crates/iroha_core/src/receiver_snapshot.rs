@@ -830,113 +830,115 @@ mod tests {
 
     #[test]
     fn captured_block_synthetic_write_families_share_one_authenticated_root() {
-        use crate::{
-            exec_witness as recorder,
-            kura::Kura,
-            query::store::LiveQueryStore,
-            state::{State, World},
-        };
-        use iroha_data_model::{
-            asset::AssetId,
-            block::{BlockHeader, builder::BlockBuilder},
-        };
-        use iroha_primitives::numeric::Quantity;
-
+        use crate::exec_witness as recorder;
         let receipts = [sample_receipt([0x61; 32]), sample_receipt([0x62; 32])];
         for include_receipts in [false, true] {
-            let state = State::new(
-                World::default(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
+            crate::state::native_capture_fixture::with_native_capture_source(
+                true,
+                |state, mut state_block, _recording, mut source, _| {
+                    let header = source.header();
+                    if include_receipts {
+                        // Reverse insertion order also exercises the canonical operation-id order.
+                        for receipt in receipts.iter().rev() {
+                            recorder::record_write_kagemusha_reserve_receipt_v1(receipt)
+                                .expect("record canonical receipt");
+                        }
+                    }
+                    let tx_set_hash: [u8; 32] =
+                        iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
+                            source.external_entrypoints_slice().iter(),
+                        )
+                        .unwrap()
+                        .into();
+                    crate::state::native_capture_fixture::seal_native_source(
+                        &mut state_block,
+                        &mut source,
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        state_block
+                            .fastpq_source_inventory()
+                            .unwrap()
+                            .unwrap()
+                            .tx_set_hash(),
+                        tx_set_hash
+                    );
+                    state_block.capture_exec_witness().unwrap();
+                    let witness = state_block
+                        .take_exec_witness()
+                        .expect("actual captured witness");
+                    let encoded = norito::encode_canonical(witness.wire()).expect("encode witness");
+                    let decoded: ExecWitness =
+                        norito::decode_canonical(&encoded).expect("decode witness");
+                    assert_eq!(&decoded, witness.wire());
+                    assert_eq!(witness.writes.len(), if include_receipts { 8 } else { 6 });
+                    // All four fixed native contexts and the ordinary source manifest
+                    // remain authenticated alongside this genuine transfer's writes.
+                    for key in [
+                        iroha_data_model::execution_witness::VALIDATION_FEE_POLICY_WITNESS_KEY_V1,
+                        iroha_data_model::execution_witness::PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1,
+                        iroha_data_model::sumeragi_finality::SUMERAGI_LANE_STATE_WITNESS_KEY,
+                        iroha_data_model::execution_witness::FEE_EVIDENCE_WITNESS_KEY_V1,
+                    ] {
+                        assert_eq!(
+                            witness.writes.iter().filter(|write| write.key == key).count(),
+                            1,
+                            "the complete native context appears exactly once",
+                        );
+                    }
+                    assert_eq!(witness.writes.iter().filter(|write| write.key.as_slice() ==
+                iroha_data_model::execution_witness::FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1).count(), 1);
+                    let native_lanes =
+                        iroha_data_model::sumeragi_finality::NativeLaneStateProof::from_witness(
+                            &decoded,
+                            &iroha_allocation::AllocationBudget::new(64 * 1024),
+                        )
+                        .expect("actual complete native lane state proof");
+                    let (fee, fee_root) =
+                        validation_fee_policy_witness_proof_v1(&decoded).expect("actual fee proof");
+                    let (casting, casting_root) =
+                        parliament_timed_ovn_casting_witness_proof_v1(&decoded)
+                            .expect("actual casting proof");
+                    let (proofs, receipt_root) = kagemusha_reserve_receipt_witnesses_v1(&decoded)
+                        .expect("casting writes must not be decoded as receipts");
+                    let (fee_evidence, fee_evidence_root) = fee_evidence_block_proof_v1(&decoded)
+                        .expect("complete captured fee evidence");
+                    assert_eq!(fee_root, casting_root);
+                    assert_eq!(fee_root, receipt_root);
+                    assert_eq!(fee_root, fee_evidence_root);
+                    assert!(fee_evidence.verify(fee_root));
+                    assert!(fee_evidence.records.is_empty());
+                    let fee_snapshot = fee_evidence.snapshot_witness.commitment().unwrap();
+                    assert_eq!(fee_snapshot.evaluated_height, header.height().get());
+                    assert_eq!(fee_snapshot.count, 0);
+                    let mut omitted_fee = decoded.clone();
+                    omitted_fee.writes.retain(|write| {
+                        write.key
+                            != iroha_data_model::execution_witness::FEE_EVIDENCE_WITNESS_KEY_V1
+                    });
+                    assert!(fee_evidence_block_proof_v1(&omitted_fee).is_err());
+                    assert!(native_lanes.verify(
+                        *state.network_id_ref(),
+                        header.height().get(),
+                        fee_root
+                    ));
+                    assert!(fee.verify(fee_root));
+                    assert!(casting.verify(fee_root));
+                    assert_eq!(proofs.len(), if include_receipts { 2 } else { 0 });
+                    for (proof, receipt) in proofs.iter().zip(&receipts) {
+                        assert_eq!(&proof.receipt, receipt);
+                        assert!(proof.verify(fee_root));
+                        let encoded =
+                            norito::encode_canonical(proof).expect("encode receipt proof");
+                        let decoded: KagemushaReserveReceiptWitnessV1 =
+                            norito::decode_canonical(&encoded).expect("decode receipt proof");
+                        assert_eq!(&decoded, proof);
+                        let mut wrong_namespace = decoded;
+                        wrong_namespace.key[0] = 0xD5;
+                        assert!(!wrong_namespace.verify(fee_root));
+                    }
+                },
             );
-            let header = BlockHeader::new(
-                std::num::NonZeroU64::new(1).expect("height"),
-                None,
-                None,
-                0,
-                0,
-            );
-            let carrier = BlockBuilder::new(header).build_with_signature(
-                0,
-                iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
-            );
-            let (mut state_block, _recording) = state
-                .block_with_recorded_pristine_carrier_stage(
-                    &carrier,
-                    |_| Ok::<(), String>(()),
-                    |error| error,
-                )
-                .expect("original recorder owned before block effects");
-            recorder::record_write_asset(
-                &AssetId::new(
-                    receipts[0].asset.clone(),
-                    iroha_test_samples::ALICE_ID.clone(),
-                ),
-                &Quantity::from(42_u32),
-            );
-            if include_receipts {
-                // Reverse insertion order also exercises the canonical operation-id order.
-                for receipt in receipts.iter().rev() {
-                    recorder::record_write_kagemusha_reserve_receipt_v1(receipt)
-                        .expect("record canonical receipt");
-                }
-            }
-            // Direct fixture execution has no external or time entrypoint wires.
-            let tx_set_hash: [u8; 32] =
-                iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(std::iter::empty::<
-                    &iroha_data_model::transaction::TransactionEntrypoint,
-                >())
-                .unwrap()
-                .into();
-            state_block.set_fastpq_tx_set_hash(tx_set_hash);
-            state_block
-                .finalize_fastpq_source_inventory(&[], &[], &[])
-                .unwrap();
-            assert_eq!(
-                state_block
-                    .fastpq_source_inventory()
-                    .unwrap()
-                    .unwrap()
-                    .tx_set_hash(),
-                tx_set_hash
-            );
-            state_block.capture_exec_witness().unwrap();
-            let witness = state_block
-                .take_exec_witness()
-                .expect("actual captured witness");
-            let encoded = norito::encode_canonical(&witness).expect("encode witness");
-            let decoded: ExecWitness = norito::decode_canonical(&encoded).expect("decode witness");
-            assert_eq!(decoded, witness);
-            assert_eq!(witness.writes.len(), if include_receipts { 6 } else { 4 });
-            let native_lanes =
-                iroha_data_model::sumeragi_finality::NativeLaneStateProof::from_witness(
-                    &decoded,
-                    &iroha_allocation::AllocationBudget::new(64 * 1024),
-                )
-                .expect("actual complete native lane state proof");
-            let (fee, fee_root) =
-                validation_fee_policy_witness_proof_v1(&decoded).expect("actual fee proof");
-            let (casting, casting_root) = parliament_timed_ovn_casting_witness_proof_v1(&decoded)
-                .expect("actual casting proof");
-            let (proofs, receipt_root) = kagemusha_reserve_receipt_witnesses_v1(&decoded)
-                .expect("casting writes must not be decoded as receipts");
-            assert_eq!(fee_root, casting_root);
-            assert_eq!(fee_root, receipt_root);
-            assert!(native_lanes.verify(*state.network_id_ref(), header.height().get(), fee_root));
-            assert!(fee.verify(fee_root));
-            assert!(casting.verify(fee_root));
-            assert_eq!(proofs.len(), if include_receipts { 2 } else { 0 });
-            for (proof, receipt) in proofs.iter().zip(&receipts) {
-                assert_eq!(&proof.receipt, receipt);
-                assert!(proof.verify(fee_root));
-                let encoded = norito::encode_canonical(proof).expect("encode receipt proof");
-                let decoded: KagemushaReserveReceiptWitnessV1 =
-                    norito::decode_canonical(&encoded).expect("decode receipt proof");
-                assert_eq!(&decoded, proof);
-                let mut wrong_namespace = decoded;
-                wrong_namespace.key[0] = 0xD5;
-                assert!(!wrong_namespace.verify(fee_root));
-            }
         }
     }
 

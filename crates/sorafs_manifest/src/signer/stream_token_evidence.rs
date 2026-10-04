@@ -42,10 +42,14 @@ const RECEIPT_DOMAIN: &[u8] = b"iroha.sorafs.signer.stream-token.receipt.v1";
 include!("stream_token_evidence/wire.rs");
 include!("stream_token_evidence/request.rs");
 
-/// Payload-free evidence admission failures.
+#[path = "stream_token_evidence/admission.rs"]
+mod admission;
+pub use admission::SignerStreamTokenEvidenceAdmissionErrorV1;
+
+/// Payload-free completed evidence rejections.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SignerStreamTokenEvidenceErrorV1 {
-    /// A bounded canonical document is malformed or exceeds its resource budget.
+    /// A canonical document is malformed or exceeds its protocol bounds.
     InvalidDocument,
     /// A candidate differs from the independently retained phase, query, body or binding.
     SourceMismatch,
@@ -131,22 +135,45 @@ impl fmt::Debug for VerifiedStreamTokenSignerCompletedObservationV1 {
     }
 }
 
-/// Consume one current-only attempt and authenticate its independently signed observation.
+/// Authenticate one current-only observation while retaining its private attempt in place.
 ///
 /// # Errors
 /// Rejects any candidate-selected phase/query/trust, stale/revoked/forked state or invalid custody.
-/// The caller retires its pending attempt on every result; rebuilding an old challenge is forbidden.
+/// Only original local admission leaves the same attempt ready for the original reply. Success,
+/// rejection and unwind retire it; rebuilding a challenge or repeating observer I/O is forbidden.
 pub fn verify_stream_token_signer_current_evidence_v1(
     custody_record: &[u8],
     observation_bytes: &[u8],
     binding: &SignerCustodyBindingV1,
     custody_trust: &SignerCustodyTrustV1,
     observer_trust: &SignerStateObserverTrustV1,
-    attempt: SignerStreamTokenObservationExpectedV1,
+    attempt: &mut SignerStreamTokenObservationExpectedV1,
     now_unix_ms: u64,
-) -> Result<VerifiedStreamTokenSignerQualificationV1, SignerStreamTokenEvidenceErrorV1> {
+) -> Result<VerifiedStreamTokenSignerQualificationV1, SignerStreamTokenEvidenceAdmissionErrorV1> {
+    attempt.verify(|attempt| {
+        verify_current(
+            custody_record,
+            observation_bytes,
+            binding,
+            custody_trust,
+            observer_trust,
+            attempt,
+            now_unix_ms,
+        )
+    })
+}
+
+fn verify_current(
+    custody_record: &[u8],
+    observation_bytes: &[u8],
+    binding: &SignerCustodyBindingV1,
+    custody_trust: &SignerCustodyTrustV1,
+    observer_trust: &SignerStateObserverTrustV1,
+    attempt: &SignerStreamTokenObservationExpectedV1,
+    now_unix_ms: u64,
+) -> Result<VerifiedStreamTokenSignerQualificationV1, SignerStreamTokenEvidenceAdmissionErrorV1> {
     if custody_record.is_empty() || custody_record.len() > SIGNER_CUSTODY_MAX_BYTES_V1 {
-        return Err(SignerStreamTokenEvidenceErrorV1::InvalidDocument);
+        return Err(SignerStreamTokenEvidenceErrorV1::InvalidDocument.into());
     }
     let binding_digest = stream_token_binding_digest_v1(binding)
         .map_err(SignerStreamTokenEvidenceErrorV1::Receipt)?;
@@ -154,11 +181,11 @@ pub fn verify_stream_token_signer_current_evidence_v1(
         || attempt.request.subject
             != (SignerStreamTokenObservationRequestSubjectV1::CurrentCustody { binding_digest })
     {
-        return Err(SignerStreamTokenEvidenceErrorV1::SourceMismatch);
+        return Err(SignerStreamTokenEvidenceErrorV1::SourceMismatch.into());
     }
     let observation = authenticate_observation(
         observation_bytes,
-        &attempt,
+        attempt,
         binding,
         custody_trust,
         observer_trust,
@@ -167,7 +194,7 @@ pub fn verify_stream_token_signer_current_evidence_v1(
     if observation.body.subject
         != (SignerStreamTokenStateSubjectV1::CurrentCustody { binding_digest })
     {
-        return Err(SignerStreamTokenEvidenceErrorV1::SourceMismatch);
+        return Err(SignerStreamTokenEvidenceErrorV1::SourceMismatch.into());
     }
     let current = observation.body.current(now_unix_ms);
     let custody = verify_signer_custody_use_v1(custody_record, binding, custody_trust, &current)
@@ -177,7 +204,7 @@ pub fn verify_stream_token_signer_current_evidence_v1(
             ))
         })?;
     if custody.statement().issued_at_unix_ms > observation.body.observed_at_unix_ms {
-        return Err(SignerStreamTokenEvidenceErrorV1::InvalidState);
+        return Err(SignerStreamTokenEvidenceErrorV1::InvalidState.into());
     }
     Ok(VerifiedStreamTokenSignerQualificationV1 {
         custody,
@@ -191,6 +218,8 @@ pub fn verify_stream_token_signer_current_evidence_v1(
 /// # Errors
 /// Rejects other phases and every query/state/custody/receipt mismatch. A later fresh BeforeRelease
 /// challenge is mandatory; this marker has no token, signature or final-result conversion.
+/// Success, rejection and unwind retire the attempt in place. Only the original retryable
+/// admission error leaves it ready for verification of the same returned reply.
 #[expect(
     clippy::too_many_arguments,
     reason = "independent inputs are deliberately distinct from candidate documents"
@@ -203,31 +232,38 @@ pub fn verify_stream_token_signer_completed_observation_v1(
     binding: &SignerCustodyBindingV1,
     custody_trust: &SignerCustodyTrustV1,
     observer_trust: &SignerStateObserverTrustV1,
-    attempt: SignerStreamTokenObservationExpectedV1,
+    attempt: &mut SignerStreamTokenObservationExpectedV1,
     now_unix_ms: u64,
-) -> Result<VerifiedStreamTokenSignerCompletedObservationV1, SignerStreamTokenEvidenceErrorV1> {
-    if attempt.request.phase != SignerStreamTokenObservationPhaseV1::AfterCommit {
-        return Err(SignerStreamTokenEvidenceErrorV1::SourceMismatch);
-    }
-    verify_completed(
-        receipt_bytes,
-        observation_bytes,
-        token,
-        prepared,
-        binding,
-        custody_trust,
-        observer_trust,
-        attempt,
-        now_unix_ms,
-    )
-    .map(|receipt| VerifiedStreamTokenSignerCompletedObservationV1 { receipt })
+) -> Result<
+    VerifiedStreamTokenSignerCompletedObservationV1,
+    SignerStreamTokenEvidenceAdmissionErrorV1,
+> {
+    attempt.verify(|attempt| {
+        if attempt.request.phase != SignerStreamTokenObservationPhaseV1::AfterCommit {
+            return Err(SignerStreamTokenEvidenceErrorV1::SourceMismatch.into());
+        }
+        verify_completed(
+            receipt_bytes,
+            observation_bytes,
+            token,
+            prepared,
+            binding,
+            custody_trust,
+            observer_trust,
+            attempt,
+            now_unix_ms,
+        )
+        .map(|receipt| VerifiedStreamTokenSignerCompletedObservationV1 { receipt })
+    })
 }
 
 /// Sole public final receipt release path, requiring a fresh exact BeforeRelease observation.
 ///
 /// # Errors
 /// Rejects other phases, substituted pending attempts, unauthorized observer/current state and
-/// any exact original receipt failure. The consumed attempt cannot be used again after failure.
+/// any exact original receipt failure. Only the original retryable admission error restores
+/// readiness for the same reply. Success, completed rejection and unwind retire the attempt in
+/// place and cannot authorize a replacement observation.
 #[expect(
     clippy::too_many_arguments,
     reason = "independent inputs are deliberately distinct from candidate documents"
@@ -240,23 +276,25 @@ pub fn verify_stream_token_signer_evidence_v1(
     binding: &SignerCustodyBindingV1,
     custody_trust: &SignerCustodyTrustV1,
     observer_trust: &SignerStateObserverTrustV1,
-    attempt: SignerStreamTokenObservationExpectedV1,
+    attempt: &mut SignerStreamTokenObservationExpectedV1,
     now_unix_ms: u64,
-) -> Result<VerifiedStreamTokenSignerReceiptV1, SignerStreamTokenEvidenceErrorV1> {
-    if attempt.request.phase != SignerStreamTokenObservationPhaseV1::BeforeRelease {
-        return Err(SignerStreamTokenEvidenceErrorV1::SourceMismatch);
-    }
-    verify_completed(
-        receipt_bytes,
-        observation_bytes,
-        token,
-        prepared,
-        binding,
-        custody_trust,
-        observer_trust,
-        attempt,
-        now_unix_ms,
-    )
+) -> Result<VerifiedStreamTokenSignerReceiptV1, SignerStreamTokenEvidenceAdmissionErrorV1> {
+    attempt.verify(|attempt| {
+        if attempt.request.phase != SignerStreamTokenObservationPhaseV1::BeforeRelease {
+            return Err(SignerStreamTokenEvidenceErrorV1::SourceMismatch.into());
+        }
+        verify_completed(
+            receipt_bytes,
+            observation_bytes,
+            token,
+            prepared,
+            binding,
+            custody_trust,
+            observer_trust,
+            attempt,
+            now_unix_ms,
+        )
+    })
 }
 
 #[expect(
@@ -271,16 +309,16 @@ fn verify_completed(
     binding: &SignerCustodyBindingV1,
     custody_trust: &SignerCustodyTrustV1,
     observer_trust: &SignerStateObserverTrustV1,
-    attempt: SignerStreamTokenObservationExpectedV1,
+    attempt: &SignerStreamTokenObservationExpectedV1,
     now_unix_ms: u64,
-) -> Result<VerifiedStreamTokenSignerReceiptV1, SignerStreamTokenEvidenceErrorV1> {
+) -> Result<VerifiedStreamTokenSignerReceiptV1, SignerStreamTokenEvidenceAdmissionErrorV1> {
     let exact_subject = completed_request_subject(receipt_bytes, token, prepared, binding)?;
     if attempt.request.subject != exact_subject || attempt.request.phase.is_current() {
-        return Err(SignerStreamTokenEvidenceErrorV1::SourceMismatch);
+        return Err(SignerStreamTokenEvidenceErrorV1::SourceMismatch.into());
     }
     let observation = authenticate_observation(
         observation_bytes,
-        &attempt,
+        attempt,
         binding,
         custody_trust,
         observer_trust,
@@ -291,7 +329,7 @@ fn verify_completed(
         ..
     } = &observation.body.subject
     else {
-        return Err(SignerStreamTokenEvidenceErrorV1::SourceMismatch);
+        return Err(SignerStreamTokenEvidenceErrorV1::SourceMismatch.into());
     };
     let current = observation.body.current(now_unix_ms);
     verify_stream_token_signer_receipt_v1(
@@ -303,7 +341,7 @@ fn verify_completed(
         &current,
         completed_operation,
     )
-    .map_err(SignerStreamTokenEvidenceErrorV1::Receipt)
+    .map_err(|error| SignerStreamTokenEvidenceErrorV1::Receipt(error).into())
 }
 
 fn authenticate_observation(
@@ -313,14 +351,14 @@ fn authenticate_observation(
     custody: &SignerCustodyTrustV1,
     trust: &SignerStateObserverTrustV1,
     now: u64,
-) -> Result<SignerStreamTokenStateObservationV1, SignerStreamTokenEvidenceErrorV1> {
+) -> Result<SignerStreamTokenStateObservationV1, SignerStreamTokenEvidenceAdmissionErrorV1> {
     let observation = SignerStreamTokenStateObservationV1::decode_canonical(bytes)?;
     let body = &observation.body;
     if body.request_digest != attempt.request.digest()?
         || body.phase != attempt.request.phase
         || !body.subject.matches_request(&attempt.request.subject)
     {
-        return Err(SignerStreamTokenEvidenceErrorV1::SourceMismatch);
+        return Err(SignerStreamTokenEvidenceErrorV1::SourceMismatch.into());
     }
     trust
         .validate(binding, custody, now)
@@ -339,7 +377,7 @@ fn authenticate_observation(
         || now < attempt.request.not_before_unix_ms
         || body.observed_at_unix_ms < attempt.request.not_before_unix_ms
     {
-        return Err(SignerStreamTokenEvidenceErrorV1::InvalidState);
+        return Err(SignerStreamTokenEvidenceErrorV1::InvalidState.into());
     }
     state
         .validate_freshness(trust, now)
@@ -350,7 +388,7 @@ fn authenticate_observation(
     } = &body.subject
         && completed_operation.completed_at_unix_ms > body.observed_at_unix_ms
     {
-        return Err(SignerStreamTokenEvidenceErrorV1::InvalidState);
+        return Err(SignerStreamTokenEvidenceErrorV1::InvalidState.into());
     }
     state
         .validate_finality(trust, &attempt.request.minimum_anchor)
@@ -368,26 +406,22 @@ fn valid_anchor(anchor: SignerCustodyAnchorV1) -> bool {
 fn encode_document<T: norito::NoritoSerialize>(
     value: &T,
     limit: usize,
-) -> Result<Vec<u8>, SignerStreamTokenEvidenceErrorV1> {
-    let length = norito::canonical_frame_len(value)
-        .map_err(|_| SignerStreamTokenEvidenceErrorV1::InvalidDocument)?;
-    if length > limit {
-        return Err(SignerStreamTokenEvidenceErrorV1::InvalidDocument);
-    }
-    let bytes = norito::encode_canonical(value)
-        .map_err(|_| SignerStreamTokenEvidenceErrorV1::InvalidDocument)?;
-    if bytes.len() != length {
-        return Err(SignerStreamTokenEvidenceErrorV1::InvalidDocument);
-    }
-    Ok(bytes)
+) -> Result<Vec<u8>, SignerStreamTokenEvidenceAdmissionErrorV1> {
+    // One real counting pass and a fallible fixed-capacity destination; no decode
+    // budget is invented to relabel encoding refusal.
+    // TODO: fund this output and all nested serializer scratch from the original
+    // operation owner; fallible allocation alone does not establish that custody.
+    let _canonical = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    norito::core::to_bytes_bounded(value, limit)
+        .map_err(SignerStreamTokenEvidenceAdmissionErrorV1::Encoding)
 }
 
 fn decode_document<T: for<'de> norito::NoritoDeserialize<'de> + norito::NoritoSerialize>(
     bytes: &[u8],
     limit: usize,
-) -> Result<T, SignerStreamTokenEvidenceErrorV1> {
+) -> Result<T, SignerStreamTokenEvidenceAdmissionErrorV1> {
     if bytes.is_empty() || bytes.len() > limit {
-        return Err(SignerStreamTokenEvidenceErrorV1::InvalidDocument);
+        return Err(SignerStreamTokenEvidenceErrorV1::InvalidDocument.into());
     }
     let allocation = bytes
         .len()
@@ -395,11 +429,11 @@ fn decode_document<T: for<'de> norito::NoritoDeserialize<'de> + norito::NoritoSe
         .and_then(|n| n.checked_add(64 * 1024))
         .map(|n| n.min(512 * 1024))
         .ok_or(SignerStreamTokenEvidenceErrorV1::InvalidDocument)?;
-    norito::decode_canonical_with_limits(
+    norito::decode_canonical_for_admission(
         bytes,
         norito::DecodeLimits::new(4096, bytes.len(), 8192, allocation, 24),
     )
-    .map_err(|_| SignerStreamTokenEvidenceErrorV1::InvalidDocument)
+    .map_err(SignerStreamTokenEvidenceAdmissionErrorV1::Codec)
 }
 
 #[cfg(test)]

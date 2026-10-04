@@ -204,6 +204,11 @@ fn poisoned_publication_is_a_local_failure_instead_of_endless_busy_retry() {
 
 #[test]
 fn busy_identity_wait_is_signaled_after_the_actual_metadata_guard_releases() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+
     use std::{
         future::Future,
         pin::Pin,
@@ -220,7 +225,7 @@ fn busy_identity_wait_is_signaled_after_the_actual_metadata_guard_releases() {
     let PublicationPreparationError::Busy(wait) = error else {
         panic!("metadata wait");
     };
-    let mut wait = wait.wait_for_release();
+    let mut wait = wait.wait_for_release(&mut release_registration_1);
     let mut context = Context::from_waker(Waker::noop());
     assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
     drop(identity);
@@ -263,7 +268,10 @@ fn funded_identity_refund_observes_unlocked_publication_even_on_release_unwind()
     for unwind in [false, true] {
         let initial = super::Publication::allocation_demand().unwrap().bytes();
         let successor = super::NextPublication::allocation_demand().unwrap().bytes();
-        let budget = AllocationBudget::new(initial + successor);
+        let registration_bytes =
+            iroha_allocation::release::ReleaseRegistration::allocation_layout().size();
+        let budget = AllocationBudget::new(initial + successor + registration_bytes);
+        let mut registration = crate::release_test_support::registration(&budget);
         let owner = Arc::new(super::Publication::from_admission(
             budget.try_reserve_bytes(initial).unwrap(),
         ));
@@ -279,8 +287,12 @@ fn funded_identity_refund_observes_unlocked_publication_even_on_release_unwind()
         else {
             panic!("original identity pool must be full");
         };
-        let mut wait = std::pin::pin!(release.wait_for_release());
-        assert!(wait.as_mut().poll(&mut context).is_pending());
+        let mut wait = release.wait_for_release(&mut registration);
+        assert!(
+            std::pin::Pin::new(&mut wait)
+                .poll(&mut context)
+                .is_pending()
+        );
         let outcome = catch_unwind(AssertUnwindSafe(|| {
             owner.publish_retaining(
                 next,
@@ -293,15 +305,24 @@ fn funded_identity_refund_observes_unlocked_publication_even_on_release_unwind()
         }));
         assert_eq!(outcome.is_err(), unwind);
         assert_eq!(probe.wakes.load(SeqCst), 1);
-        assert!(wait.as_mut().poll(&mut context).is_ready());
-        assert_eq!(budget.reserved_bytes(), initial);
+        assert!(std::pin::Pin::new(&mut wait).poll(&mut context).is_ready());
+        assert_eq!(budget.reserved_bytes(), initial + registration_bytes);
+        drop(wait);
         drop((waker, probe, owner));
+        drop(registration);
         assert_eq!(budget.reserved_bytes(), 0);
     }
 }
 
 #[test]
 fn cell_refusal_retains_original_notifications_and_admission_through_enclosing_fence() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        3 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_2 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_3 = crate::release_test_support::registration(&release_budget);
+
     use std::{
         future::Future,
         pin::Pin,
@@ -375,11 +396,20 @@ fn cell_refusal_retains_original_notifications_and_admission_through_enclosing_f
         let waker = Waker::from(Arc::clone(&callbacks));
         let mut cx = Context::from_waker(&waker);
         let mut waits = [
-            target.publication.released.observe(),
-            target.blocks_released.observe(),
-            target.revert_released.observe(),
+            (
+                target.publication.released.observe(),
+                &mut release_registration_1,
+            ),
+            (
+                target.blocks_released.observe(),
+                &mut release_registration_2,
+            ),
+            (
+                target.revert_released.observe(),
+                &mut release_registration_3,
+            ),
         ]
-        .map(|wait| wait.wait_for_release());
+        .map(|(wait, registration)| wait.wait_for_release(registration));
         for wait in &mut waits {
             assert!(Pin::new(wait).poll(&mut cx).is_pending());
         }
@@ -434,6 +464,15 @@ fn cell_refusal_retains_original_notifications_and_admission_through_enclosing_f
 
 #[test]
 fn storage_refusal_retains_original_notifications_and_admission_through_enclosing_fence() {
+    let release_budget = iroha_allocation::AllocationBudget::new(
+        5 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+    );
+    let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_2 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_3 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_4 = crate::release_test_support::registration(&release_budget);
+    let mut release_registration_5 = crate::release_test_support::registration(&release_budget);
+
     use std::{
         future::Future,
         pin::Pin,
@@ -512,13 +551,28 @@ fn storage_refusal_retains_original_notifications_and_admission_through_enclosin
         let waker = Waker::from(Arc::clone(&callbacks));
         let mut cx = Context::from_waker(&waker);
         let mut waits = [
-            target.publication.released.observe(),
-            target.blocks_released.observe(),
-            target.revert_released.observe(),
-            target.blocks.observe_reader_release(),
-            target.revert.observe_reader_release(),
+            (
+                target.publication.released.observe(),
+                &mut release_registration_1,
+            ),
+            (
+                target.blocks_released.observe(),
+                &mut release_registration_2,
+            ),
+            (
+                target.revert_released.observe(),
+                &mut release_registration_3,
+            ),
+            (
+                target.blocks.observe_reader_release(),
+                &mut release_registration_4,
+            ),
+            (
+                target.revert.observe_reader_release(),
+                &mut release_registration_5,
+            ),
         ]
-        .map(|wait| wait.wait_for_release());
+        .map(|(wait, registration)| wait.wait_for_release(registration));
         for wait in &mut waits {
             assert!(Pin::new(wait).poll(&mut cx).is_pending());
         }

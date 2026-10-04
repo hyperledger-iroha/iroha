@@ -3,7 +3,7 @@
 use integration_tests::sandbox;
 use iroha_data_model::{
     block::{
-        decode_versioned_signed_block, deframe_versioned_signed_block_bytes,
+        decode_framed_signed_block, deframe_versioned_signed_block_bytes,
         frame_versioned_signed_block_bytes,
     },
     transaction::Executable,
@@ -28,7 +28,7 @@ fn genesis_roundtrip_inspection() {
     sanity_versioned.extend_from_slice(&encoded);
     let sanity_framed =
         frame_versioned_signed_block_bytes(&sanity_versioned).expect("frame sanity genesis");
-    decode_versioned_signed_block(&sanity_framed).expect("sanity decode");
+    decode_framed_signed_block(&sanity_framed).expect("sanity decode");
     for (tx_idx, tx) in genesis.0.external_transactions().enumerate() {
         if let Executable::Instructions(step) = tx.instructions() {
             eprintln!("tx#{tx_idx} instruction_count={}", step.len());
@@ -62,5 +62,5 @@ fn genesis_roundtrip_inspection() {
     versioned_2.push(1);
     versioned_2.extend_from_slice(&payload_2);
     assert_eq!(bare, versioned_2, "bare payload mismatch");
-    decode_versioned_signed_block(&framed).expect("decode versioned genesis");
+    decode_framed_signed_block(&framed).expect("decode versioned genesis");
 }

@@ -534,8 +534,8 @@ mod tests {
             vec!["--operator-private-key-fd", "998"],
             vec!["--verbose"],
             vec!["--metadata", "/must-not-read"],
-            vec!["--input"],
-            vec!["--output"],
+            vec!["--stdin-instructions"],
+            vec!["--emit-instructions"],
         ] {
             let mut argv = vec!["iroha".to_owned()];
             argv.extend(globals.into_iter().map(str::to_owned));

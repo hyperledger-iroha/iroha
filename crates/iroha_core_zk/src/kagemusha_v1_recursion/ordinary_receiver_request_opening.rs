@@ -23,7 +23,6 @@ use crate::{
     kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, digest_limbs},
     pasta_sha256::{PastaSha256ByteV1, PastaSha256JobsV1},
 };
-use ff::Field as _;
 use halo2_base::{
     AssignedValue, Context, QuantumCell,
     gates::{
@@ -71,7 +70,6 @@ pub(super) struct OrdinaryReceiverRequestOpeningV1<F: KagemushaPoseidonFieldV1> 
     pub(super) credential_digest: Bytes<F>,
     pub(super) encryption_key: Bytes<F>,
     pub(super) recipient_lane: Bytes<F>,
-    pub(super) request_id: Bytes<F>,
 }
 fn equal<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
@@ -412,12 +410,17 @@ pub(super) fn constrain_ordinary_receiver_request_opening_v1<F: KagemushaPoseido
             .try_into()
             .map_err(|_| "receiver digest width".into())
     };
+    let encryption_key = select(ctx, &range, enabled, as_digest("recipient_encryption_key")?);
+    let recipient_lane = select(ctx, &range, enabled, as_digest("recipient_lane_id")?);
+    // Preserve this existing selected projection's exact constraint construction
+    // and position in the fixed graph. The complete signed request digest already
+    // binds request_id; no consumer needs another exported copy of its cells.
+    select(ctx, &range, enabled, as_digest("request_id")?);
     Ok(OrdinaryReceiverRequestOpeningV1 {
         request_digest,
         credential_digest,
-        encryption_key: select(ctx, &range, enabled, as_digest("recipient_encryption_key")?),
-        recipient_lane: select(ctx, &range, enabled, as_digest("recipient_lane_id")?),
-        request_id: select(ctx, &range, enabled, as_digest("request_id")?),
+        encryption_key,
+        recipient_lane,
     })
 }
 

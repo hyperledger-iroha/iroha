@@ -55,12 +55,15 @@ fn canonical_source_shape_forecasts_fit_the_preconstruction_allowances() {
     let p256_scratch = P256MainBaseSourceV1::replay_scratch_forecast_v1().unwrap();
     let sha_fixed = ZkX509ShaBatchFixedProviderV1::allocation_forecast_v1(sha_shape).unwrap();
     let sha_scratch = ZkX509ShaBatchFixedProviderV1::replay_scratch_forecast_v1(sha_shape).unwrap();
-    let retained = small + p256 + sha_fixed;
+    let rfc_coefficients = main_retained_rfc::MainRetainedRfcV1::forecast_all_v1(&layout).unwrap();
+    let sha_aux = ZkX509ShaBatchSegmentAuxSourceV1::native_aux_cache_forecast_all_v1().unwrap();
+    assert!(sha_aux > 1_308_622_848); // Four full 524288 x 78 field matrices plus terminals.
+    let retained = small + p256 + sha_fixed + rfc_coefficients + sha_aux;
     assert!(retained <= main_resources::MAIN_NATIVE_SOURCE_ALLOWANCE_BYTES_V1);
     let serial_scratch = small_scratch.max(sha_scratch).max(p256_scratch);
     assert!(serial_scratch <= main_resources::MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1);
     eprintln!(
-        "MAIN source shape forecasts: retained={retained}, small={small}, p256={p256}, sha_fixed={sha_fixed}, serial_scratch={}",
+        "MAIN source shape forecasts: retained={retained}, small={small}, p256={p256}, sha_fixed={sha_fixed}, sha_aux={sha_aux}, retained_rfc={rfc_coefficients}, serial_scratch={}",
         serial_scratch
     );
     // These construction bounds do not materialize or qualify the separately
@@ -73,7 +76,9 @@ fn source_payload_admission_includes_scratch_reserve_and_capacity_overflow() {
     let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
     let reserve = main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1;
     let scratch = 13_579;
-    let available = plan.remaining_source_and_runtime_envelope - reserve - scratch;
+    let powers = main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1;
+    assert_eq!(powers, 4_194_384);
+    let available = plan.remaining_source_and_runtime_envelope - reserve - scratch - powers;
     let first = available / 3;
     let second = available - first;
     assert_eq!(
@@ -93,7 +98,7 @@ fn source_payload_admission_includes_scratch_reserve_and_capacity_overflow() {
     assert!(plan.check_source_payloads_v1(&[0], usize::MAX).is_err());
     assert_eq!(
         plan.check_source_payloads_v1(&[], 0).unwrap(),
-        plan.maximum_live_buffers + reserve
+        plan.maximum_live_buffers + reserve + powers
     );
 }
 
@@ -104,8 +109,11 @@ fn native_source_budget_is_reserved_before_construction_and_rechecked_after_bind
     let source_limit = main_resources::MAIN_NATIVE_SOURCE_ALLOWANCE_BYTES_V1;
     let scratch = main_resources::MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1;
     let reserve = main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1;
-    let assembly_limit =
-        plan.remaining_source_and_runtime_envelope - source_limit - scratch - reserve;
+    let assembly_limit = plan.remaining_source_and_runtime_envelope
+        - source_limit
+        - scratch
+        - reserve
+        - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1;
     assert_eq!(
         plan.check_before_sources_v1(assembly_limit).unwrap() as u64,
         super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1
@@ -124,6 +132,16 @@ fn native_source_budget_is_reserved_before_construction_and_rechecked_after_bind
         Err(ZkX509StarkErrorV1::ProofTooLarge)
     ));
     assert!(plan.check_native_sources_v1(0, &[usize::MAX, 1]).is_err());
+    let sha_aux = ZkX509ShaBatchSegmentAuxSourceV1::native_aux_cache_forecast_all_v1().unwrap();
+    assert_eq!(
+        plan.check_native_sources_v1(assembly_limit, &[source_limit - sha_aux, sha_aux])
+            .unwrap(),
+        plan.check_before_sources_v1(assembly_limit).unwrap()
+    );
+    assert!(matches!(
+        plan.check_native_sources_v1(0, &[source_limit - sha_aux + 1, sha_aux]),
+        Err(ZkX509StarkErrorV1::ProofTooLarge)
+    ));
     // The source transition reuses the same retained assembly charge, rather
     // than treating a borrowed assembly as already freed after base commitment.
     assert!(matches!(
@@ -233,6 +251,14 @@ fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope
             - main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1,
         596_974_144 - core::mem::size_of::<E>(),
     );
+    assert_eq!(
+        plan.remaining_source_and_runtime_envelope
+            - main_resources::MAIN_NATIVE_SOURCE_ALLOWANCE_BYTES_V1
+            - main_resources::MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1
+            - main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1
+            - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1,
+        592_779_760 - core::mem::size_of::<E>()
+    );
     // This remainder must also cover borrowed sources and process overhead;
     // passing this buffer check is not whole-prover or RSS qualification.
     eprintln!("MAIN replay transform buffer plan: {plan:?}");
@@ -313,11 +339,17 @@ fn maximum_profile_assembly_payload_fits_source_admission_before_masks() {
     let allowance = plan.remaining_source_and_runtime_envelope
         - main_resources::MAIN_NATIVE_SOURCE_ALLOWANCE_BYTES_V1
         - main_resources::MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1
-        - main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1;
+        - main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1
+        - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1;
     eprintln!(
         "maximum complete MAIN assembly payload={payload}, allowance={allowance}; capacity accounting only, no RSS or full-proof qualification"
     );
-    assert_eq!(allowance, 596_974_144 - core::mem::size_of::<E>());
+    assert_eq!(
+        allowance,
+        596_974_144
+            - core::mem::size_of::<E>()
+            - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1
+    );
     assert!(payload <= allowance);
     plan.check_source_shapes_v1(&layout, &assembly)
         .expect("all native source forecasts admitted before masking");
@@ -386,7 +418,8 @@ fn maximum_profile_assembly_payload_and_source_admission_diagnostic() {
         .checked_sub(
             main_resources::MAIN_NATIVE_SOURCE_ALLOWANCE_BYTES_V1
                 + main_resources::MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1
-                + main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1,
+                + main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1
+                + main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1,
         )
         .unwrap();
     let total_columns = layout
@@ -665,15 +698,15 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
             2_803_630_080,
             95_420_416,
             3_732_930_560,
-            4_070_572_032,
+            4_498_391_040, // RFC: 2,145 local residues across 2^21 quotient rows.
             9_462_349_824,
             4_771_020_800,
         ]
         .into_iter()
         .sum::<u64>(),
-        25_357_426_688
+        25_785_245_696
     );
-    assert_eq!(residues, 25_357_426_688);
+    assert_eq!(residues, 25_785_245_696);
     // The public prefix cache does not enlarge the admitted arithmetic envelope.
     assert_eq!(
         buffers.maximum_live_buffers,

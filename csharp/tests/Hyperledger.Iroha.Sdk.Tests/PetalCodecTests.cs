@@ -245,6 +245,9 @@ public sealed class PetalCodecTests
     public void SlotCentersFollowTheSinglePrecisionReference()
     {
         Assert.Equal(new PetalPoint(872.0, 512.0), PetalLayout.SlotCenter(0, 0));
+        // the slot angles use the single-precision TAU of the reference (`f32::consts::TAU`),
+        // not twice a rounded single-precision pi, which is one ulp lower
+        Assert.Equal(0x40C9_0FDB, BitConverter.SingleToInt32Bits(MathF.Tau));
         Assert.Equal((2, 0), PetalLayout.SplitSlot(PetalLayout.RingOffset(2)));
         Assert.Equal((1, 91), PetalLayout.SplitSlot(PetalLayout.RingOffset(2) - 1));
         for (var ring = 0; ring < PetalLayout.RingCount; ring++)

@@ -1051,6 +1051,22 @@ authorization headers in this repository.
   proxy `/status` or `/v1`. Both Torii CORS and the public-edge CORS map admit
   the exact `https://taira-explorer.sora.org` browser origin.
 
+The edge renderer's `--validator-listeners-only` scope emits only the four peer
+upstreams and TLS listeners. It requires explicit `--validator-listen-address`
+IP literals and existing `--tls-certificate` / `--tls-certificate-key` paths;
+it does not infer TLS options or change the separately managed public routes.
+Verify assigned interfaces, each forwarding socket's validator binding and the
+complete candidate with the serving host's native nginx before activation.
+This scope preserves the signed request URI and does not install or reload nginx.
+
+For an edge on a separate native host, `--private-backend-listeners-only` emits
+four unchanged-URI HTTP listeners at the explicit RFC1918
+`--backend-listen-address` and consecutive `--backend-port-base` ports. It
+requires `--backend-trusted-edge-address`, admits only that source, and retains
+the caller headers sanitized by the TLS edge. The roster must select four exact
+loopback Torii upstreams. Verify both hosts' interface/socket identities and
+native nginx admission before activating either scope.
+
 The edge installer validates with the fixed production executable
 `/usr/sbin/nginx`. Dry runs may run unprivileged; installation and reload must
 run as root into a root-owned include directory. Installed configuration is

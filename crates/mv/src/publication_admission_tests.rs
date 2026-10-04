@@ -100,16 +100,23 @@ fn pending_publication_waiter_keeps_original_control_until_cancelled() {
 
     let required = Publication::allocation_demand().unwrap().bytes();
     let notification = ReleaseNotification::allocation_layout::<AllocationCharge>().size();
-    let budget = AllocationBudget::new(required);
+    let registration_bytes =
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size();
+    let budget = AllocationBudget::new(required + registration_bytes);
+    let mut registration = crate::release_test_support::registration(&budget);
     let publication = Publication::from_admission(budget.try_reserve_bytes(required).unwrap());
-    let mut future = publication.released.observe().wait_for_release();
+    let mut future = publication
+        .released
+        .observe()
+        .wait_for_release(&mut registration);
     let mut context = Context::from_waker(Waker::noop());
     assert!(Pin::new(&mut future).poll(&mut context).is_pending());
-    // Registration backing is a separate, still-unfunded obligation. This
-    // assertion covers only the exact charged original notification control.
+    // Both controls remain charged until their respective owners are released.
     drop(publication);
-    assert_eq!(budget.reserved_bytes(), notification);
+    assert_eq!(budget.reserved_bytes(), notification + registration_bytes);
     drop(future);
+    assert_eq!(budget.reserved_bytes(), registration_bytes);
+    drop(registration);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 

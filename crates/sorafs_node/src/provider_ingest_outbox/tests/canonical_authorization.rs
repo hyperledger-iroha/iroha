@@ -289,7 +289,7 @@ fn canonical_authorization_seal_and_signing_frames_keep_exact_budgets_in_every_l
             expected_token
         );
         assert!(completion_account_id_fits_canonical_bound(
-            &context.provider_owner
+            &context.expected_authority.provider_owner
         ));
         let mut exact = policy();
         exact.max_signed_transaction_bytes = payload_len;

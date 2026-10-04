@@ -2654,7 +2654,6 @@ pub(crate) mod tests {
         CanResolveSorafsCapacityDispute,
     };
     use iroha_model_base::metadata::Metadata;
-    use std::sync::Arc;
     const TEST_NOW_MS: u64 = 1_700_000_000_000;
     fn keypair(seed: u8) -> KeyPair {
         let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])
@@ -2986,7 +2985,7 @@ pub(crate) mod tests {
         let committed_header = signed_block.header().clone();
         state
             .kura()
-            .store_block(Arc::new(signed_block))
+            .store_block(crate::block::reserve_block_for_tests().initialize(signed_block))
             .expect("store reputation Kura fixture block");
         state.push_block_hash_for_testing(block_hash);
         state.update_latest_block_header_cache_for_tests(committed_header);
@@ -3328,7 +3327,10 @@ pub(crate) mod tests {
         )
         .expect("commit later empty Kura block");
         let view = state.view();
-        let latest_block = view.latest_block().expect("latest Kura block");
+        let latest_block = view
+            .latest_block()
+            .expect("completed original State read")
+            .expect("latest Kura block");
         let cursor = finalized_cursor(&view).expect("resolve finalized cursor");
         assert_eq!(
             cursor.finalized_at_unix_ms,

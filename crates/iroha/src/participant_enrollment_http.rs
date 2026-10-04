@@ -181,7 +181,7 @@ fn canonical_account(raw: &str) -> Result<AccountId> {
 }
 
 /// Decode exact, flattened HTTP header values and verify the real original Ed signature.
-/// Pass every value from the actual HeaderMap. Duplicate identical values are rejected;
+/// Pass every value from the actual `HeaderMap`. Duplicate identical values are rejected;
 /// this must run before a generic `.get()` helper could hide duplicate Authorization.
 /// Unknown names in the purpose prefix are rejected. Other HTTP headers select no owner.
 /// # Errors

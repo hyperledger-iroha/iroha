@@ -6,6 +6,10 @@
 //!
 //! The metadata header encodes the VM version, the ABI-v1 `ZK` and `VECTOR`
 //! mode flags, an optional logical vector length, and a cycle limit.
+mod literal_table;
+mod section_decode;
+pub use literal_table::{LiteralDirectory, ValidatedLiteral};
+
 use crate::error::VMError;
 use iroha_data_model::smart_contract::manifest::{
     AccessSetHints, ContractErrorMessage, ContractErrorTypeDescriptor, EntryPointKind,
@@ -1420,6 +1424,9 @@ pub struct ProgramMetadata {
     /// ABI version for syscall table and pointer-ABI schema.
     pub abi_version: u8,
 }
+mod program_header;
+pub use program_header::ParsedProgramHeader;
+
 /// Result of parsing metadata and locating the code segment inside a program artifact.
 #[derive(Clone, Debug)]
 pub struct ParsedProgramMetadata {
@@ -1458,140 +1465,17 @@ impl ParsedProgramMetadata {
     }
 }
 impl ProgramMetadata {
+    /// Validate the fixed header while borrowing the unchanged original artifact.
+    ///
+    /// This does not decode or validate CNTR/DBG1 payloads or executable code. Callers may use
+    /// the fixed-position marker only to select the canonical admission owner, not as approval.
+    /// Header policy and error precedence are identical to [`Self::parse`].
+    pub fn parse_header(bytes: &[u8]) -> Result<ParsedProgramHeader<'_>, VMError> {
+        program_header::parse(bytes)
+    }
+
     pub fn parse(bytes: &[u8]) -> Result<ParsedProgramMetadata, VMError> {
-        if bytes.len() < HEADER_SIZE {
-            return Err(VMError::InvalidMetadata);
-        }
-        let magic = &bytes[0..4];
-        let version_major = bytes[4];
-        if magic != MAGIC {
-            return Err(VMError::InvalidMetadata);
-        }
-        let abi_version = bytes[16];
-        let abi_hash: [u8; 32] = bytes[17..49]
-            .try_into()
-            .map_err(|_| VMError::InvalidMetadata)?;
-        let header_len = HEADER_SIZE;
-        let version_minor = bytes[5];
-        let mode = bytes[6];
-        let vector_length = bytes[7];
-        let max_cycles_bytes: [u8; 8] = bytes[8..16]
-            .try_into()
-            .map_err(|_| VMError::InvalidMetadata)?;
-        let max_cycles = u64::from_le_bytes(max_cycles_bytes);
-        // Validate consensus-visible header policy in stable precedence order:
-        // version, unknown feature bits, ABI version, vector length, ABI hash.
-        // Structural length and magic failures necessarily precede these.
-        //
-        // Validate header fields according to the current implementation policy.
-        // - Accept generic version 1.0 and 1.1 headers.
-        // - Self-describing contract artifacts remain a 1.1-only concept and are
-        //   validated by higher-level artifact verification.
-        // - Mode must not contain unknown bits (only ZK and VECTOR).
-        // - `vector_length` is either 0 (use runtime default) or 1..=64.
-        // - ABI V1 is the only first-release ABI.
-        const KNOWN_MODE_BITS: u8 = mode::ZK | mode::VECTOR;
-        if version_major != 1 || !matches!(version_minor, 0 | 1) {
-            return Err(VMError::UnsupportedProgramVersion {
-                major: version_major,
-                minor: version_minor,
-            });
-        }
-        let unsupported_feature_bits = mode & !KNOWN_MODE_BITS;
-        if unsupported_feature_bits != 0 {
-            return Err(VMError::UnsupportedProgramFeatureBits {
-                bits: unsupported_feature_bits,
-            });
-        }
-        if abi_version != 1 {
-            return Err(VMError::UnsupportedProgramAbiVersion {
-                version: abi_version,
-            });
-        }
-        if vector_length > VECTOR_LENGTH_MAX {
-            return Err(VMError::ProgramVectorLengthTooLarge {
-                vector_length,
-                max_allowed: VECTOR_LENGTH_MAX,
-            });
-        }
-        let expected = crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1);
-        if abi_hash != expected {
-            return Err(VMError::ArtifactAbiHashMismatch {
-                expected,
-                actual: abi_hash,
-            });
-        }
-        let image_len = bytes
-            .len()
-            .checked_sub(HEADER_SIZE)
-            .ok_or(VMError::InvalidMetadata)?;
-        if image_len > MAX_PROGRAM_IMAGE_BYTES_V1 {
-            return Err(VMError::InvalidMetadata);
-        }
-        // Note: vector_length may be non-zero even if VECTOR flag is off; the
-        // host/runtime may ignore it depending on policy.
-        let mut code_offset = header_len;
-        let mut contract_interface = None;
-        let mut contract_debug = None;
-        let mut literal_section = None;
-        if bytes.len() >= code_offset + 4
-            && bytes[code_offset..code_offset + 4] == CONTRACT_INTERFACE_SECTION_MAGIC
-        {
-            let (decoded_interface, next_offset) =
-                parse_contract_interface_section(bytes, header_len)?;
-            contract_interface = Some(decoded_interface);
-            code_offset = next_offset;
-        }
-        if bytes.len() >= code_offset + 4
-            && bytes[code_offset..code_offset + 4] == CONTRACT_DEBUG_SECTION_MAGIC
-        {
-            let (decoded_debug, next_offset) = parse_contract_debug_section(bytes, code_offset)?;
-            contract_debug = Some(decoded_debug);
-            code_offset = next_offset;
-        }
-        // Optional literal section begins immediately after the header for
-        // generic 1.1 artifacts, or after the ordered `CNTR`/`DBG1` sections
-        // present in self-describing contract artifacts.
-        if bytes.len() >= code_offset + 4
-            && bytes[code_offset..code_offset + 4] == LITERAL_SECTION_MAGIC
-        {
-            let parsed = parse_literal_section(bytes, code_offset, header_len)?;
-            code_offset = parsed.code_offset;
-            literal_section = Some(parsed);
-        } else if bytes.len() >= header_len + 4 {
-            // Reject prefixed layouts that insert zero padding before the literal table marker.
-            let max_scan = header_len + 32;
-            let limit = bytes.len().saturating_sub(4);
-            let end = max_scan.min(limit);
-            let mut idx = header_len;
-            while idx <= end {
-                if bytes[idx..idx + 4] == LITERAL_SECTION_MAGIC {
-                    let pad = &bytes[header_len..idx];
-                    if pad.iter().all(|b| *b == 0) {
-                        return Err(VMError::InvalidMetadata);
-                    }
-                    break;
-                } else if bytes[idx] != 0 {
-                    break;
-                }
-                idx += 1;
-            }
-        }
-        Ok(ParsedProgramMetadata {
-            metadata: Self {
-                version_major,
-                version_minor,
-                mode,
-                vector_length,
-                max_cycles,
-                abi_version,
-            },
-            header_len,
-            code_offset,
-            contract_interface,
-            contract_debug,
-            literal_section,
-        })
+        Self::parse_header(bytes)?.parse_sections()
     }
     pub fn encode(&self) -> Vec<u8> {
         let mut v = Vec::new();
@@ -1622,6 +1506,69 @@ impl ProgramMetadata {
         }
     }
 }
+fn parse_program_sections(
+    bytes: &[u8],
+    metadata: ProgramMetadata,
+) -> Result<ParsedProgramMetadata, VMError> {
+    let header_len = HEADER_SIZE;
+    // Note: vector_length may be non-zero even if VECTOR flag is off; the
+    // host/runtime may ignore it depending on policy.
+    let mut code_offset = header_len;
+    let mut contract_interface = None;
+    let mut contract_debug = None;
+    let mut literal_section = None;
+    if bytes.len() >= code_offset + 4
+        && bytes[code_offset..code_offset + 4] == CONTRACT_INTERFACE_SECTION_MAGIC
+    {
+        let (decoded_interface, next_offset) = parse_contract_interface_section(bytes, header_len)?;
+        contract_interface = Some(decoded_interface);
+        code_offset = next_offset;
+    }
+    if bytes.len() >= code_offset + 4
+        && bytes[code_offset..code_offset + 4] == CONTRACT_DEBUG_SECTION_MAGIC
+    {
+        let (decoded_debug, next_offset) = parse_contract_debug_section(bytes, code_offset)?;
+        contract_debug = Some(decoded_debug);
+        code_offset = next_offset;
+    }
+    // Optional literal section begins immediately after the header for
+    // generic 1.1 artifacts, or after the ordered `CNTR`/`DBG1` sections
+    // present in self-describing contract artifacts.
+    if bytes.len() >= code_offset + 4
+        && bytes[code_offset..code_offset + 4] == LITERAL_SECTION_MAGIC
+    {
+        let parsed = parse_literal_section(bytes, code_offset, header_len)?;
+        code_offset = parsed.code_offset;
+        literal_section = Some(parsed);
+    } else if bytes.len() >= header_len + 4 {
+        // Reject prefixed layouts that insert zero padding before the literal table marker.
+        let max_scan = header_len + 32;
+        let limit = bytes.len().saturating_sub(4);
+        let end = max_scan.min(limit);
+        let mut idx = header_len;
+        while idx <= end {
+            if bytes[idx..idx + 4] == LITERAL_SECTION_MAGIC {
+                let pad = &bytes[header_len..idx];
+                if pad.iter().all(|b| *b == 0) {
+                    return Err(VMError::InvalidMetadata);
+                }
+                break;
+            } else if bytes[idx] != 0 {
+                break;
+            }
+            idx += 1;
+        }
+    }
+    Ok(ParsedProgramMetadata {
+        metadata,
+        header_len,
+        code_offset,
+        contract_interface,
+        contract_debug,
+        literal_section,
+    })
+}
+
 impl Default for ProgramMetadata {
     fn default() -> Self {
         Self {
@@ -1655,11 +1602,10 @@ fn parse_contract_interface_section(
     if payload_end > bytes.len() {
         return Err(VMError::InvalidMetadata);
     }
-    let decoded = norito::decode_canonical_with_limits::<EmbeddedContractInterfaceV1>(
+    let decoded = section_decode::decode::<EmbeddedContractInterfaceV1>(
         &bytes[payload_start..payload_end],
         CONTRACT_INTERFACE_DECODE_LIMITS_V1,
-    )
-    .map_err(|_| VMError::InvalidMetadata)?;
+    )?;
     Ok((decoded, payload_end))
 }
 fn parse_contract_debug_section(
@@ -1683,11 +1629,10 @@ fn parse_contract_debug_section(
     if payload_end > bytes.len() {
         return Err(VMError::InvalidMetadata);
     }
-    let decoded = norito::decode_canonical_with_limits::<EmbeddedContractDebugInfoV1>(
+    let decoded = section_decode::decode::<EmbeddedContractDebugInfoV1>(
         &bytes[payload_start..payload_end],
         CONTRACT_DEBUG_DECODE_LIMITS_V1,
-    )
-    .map_err(|_| VMError::InvalidMetadata)?;
+    )?;
     Ok((decoded, payload_end))
 }
 fn parse_literal_section(

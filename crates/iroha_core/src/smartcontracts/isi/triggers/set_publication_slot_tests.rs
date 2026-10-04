@@ -59,6 +59,10 @@ impl Wake for SetSlotProbe {
 #[test]
 fn trigger_publication_slot_retains_late_refusal_cleanup_and_exact_retry_in_both_modes() {
     for replacement in [false, true] {
+        let waiter_budget = iroha_allocation::AllocationBudget::new(
+            iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        );
+        let mut registration = crate::unit_test_support::release_registration(&waiter_budget);
         let target = seeded_set();
         let before = images(&target);
         let block = || {
@@ -108,7 +112,7 @@ fn trigger_publication_slot_retains_late_refusal_cleanup_and_exact_retry_in_both
             busy: AtomicUsize::new(0),
             other: AtomicUsize::new(0),
         });
-        let mut wait = observation.wait_for_release();
+        let mut wait = observation.wait_for_release(&mut registration);
         let waker = Waker::from(Arc::clone(&callback));
         assert!(
             Pin::new(&mut wait)

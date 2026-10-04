@@ -1,5 +1,5 @@
-//! CLI for generating Iroha sample configuration, genesis, cryptographic key pairs and other. To be
-//! used with all compliant Iroha installations.
+//! Managed developer networks and contract deployment over shared Iroha services.
+//! Native operator tools also generate genesis, keys, configuration and schema references.
 #![allow(
     clippy::doc_markdown,
     clippy::uninlined_format_args,
@@ -26,6 +26,7 @@ mod kagemusha;
 mod kura;
 /// Helpers for generating a multi-peer localnet (configs, scripts, genesis).
 pub mod localnet;
+mod network_bootstrap;
 mod privacy_bootstrap;
 mod schema;
 use iroha_deploy::secret_toml;
@@ -48,7 +49,9 @@ const BUILD_SOURCE_ID: Option<&str> = option_env!("IROHA_GIT_COMMIT_HASH");
 const TOP_LEVEL_HELP: &str = concat!(
     "Common tasks:\n",
     "  kagami localnet up\n",
+    "  kagami dataspace up acme --network taira\n",
     "  kagami contract deploy hello.ko\n",
+    "  kagami package publish .\n",
     "  kagami context list\n",
     "  kagami wizard\n",
     "  kagami localnet generate --out-dir ./localnet\n",
@@ -61,6 +64,9 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
+            if let Some(status) = error.downcast_ref::<developer::PublicationExit>() {
+                return ExitCode::from(status.0);
+            }
             eprintln!("{error:?}");
             ExitCode::FAILURE
         }
@@ -88,7 +94,7 @@ trait RunArgs<T: Write> {
     name = "kagami",
     version,
     author,
-    about = "Task-first Iroha operator tooling for guided setup, local devnets, genesis work, and diagnostics.",
+    about = "Start local networks, attach private dataspaces, and deploy Iroha contracts.",
     after_help = TOP_LEVEL_HELP
 )]
 struct Cli {
@@ -97,8 +103,7 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 }
-/// Kagami is a task-first Iroha operator toolbox with guided flows for node setup and local
-/// devnets, plus advanced low-level helpers.
+/// Managed developer workflows and native operator tools for Iroha.
 #[derive(Subcommand)]
 enum Command {
     /// Guided onboarding flow for staging a Sora Nexus observer configuration
@@ -115,6 +120,9 @@ enum Command {
     /// Build and deploy native IVM contracts in one invocation
     #[command(subcommand)]
     Contract(developer::ContractCommand),
+    /// Publish native Musubi packages through an exact generated local environment
+    #[command(subcommand)]
+    Package(developer::PackageCommand),
     /// Internal native process-owner entry point
     #[command(name = "_managed-worker", hide = true)]
     ManagedWorker(developer::WorkerArgs),
@@ -137,6 +145,9 @@ enum Command {
 }
 #[derive(Subcommand)]
 enum AdvancedCommand {
+    /// Prepare signed remote-network bootstrap and native installation authorities offline
+    #[command(subcommand)]
+    NetworkBootstrap(network_bootstrap::Command),
     /// Generate per-client CLI configs from a base client.toml
     #[command(name = "client-configs")]
     ClientConfigs(client_configs::Args),
@@ -152,6 +163,7 @@ enum AdvancedCommand {
 impl<T: Write> RunArgs<T> for AdvancedCommand {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         match self {
+            Self::NetworkBootstrap(args) => args.run(writer),
             Self::ClientConfigs(args) => args.run(writer),
             Self::Codec(args) => args.run(writer),
             Self::Kura(args) => args.run(writer),
@@ -169,6 +181,7 @@ impl<T: Write> RunArgs<T> for Command {
             Dataspace(args) => args.run(writer),
             Context(args) => args.run(writer),
             Contract(args) => args.run(writer),
+            Package(args) => args.run(writer),
             ManagedWorker(args) => args.run(writer),
             Docker(args) => args.run(writer),
             Keys(args) => args.run(writer),

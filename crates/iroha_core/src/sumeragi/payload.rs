@@ -59,6 +59,9 @@ pub enum PayloadError {
     /// The payload bytes are not a canonical block proposal.
     #[error("payload is not a canonical block proposal: {0}")]
     NotCanonical(String),
+    /// Original source/control custody failed independently of authenticated payload bytes.
+    #[error("payload signature custody invariant failed: {0}")]
+    SignatureCustodyInvariant(String),
 }
 
 fn staking_preparation_error(error: eyre::Report) -> PayloadError {
@@ -68,6 +71,27 @@ fn staking_preparation_error(error: eyre::Report) -> PayloadError {
         }
         if let Some(refusal) = error.downcast_ref::<crate::state::StateAdmissionError>() {
             return PayloadError::StakingAdmission(refusal.clone());
+        }
+        if let Some(refusal) = error.downcast_ref::<crate::state::MergeLedgerCommitError>() {
+            use crate::state::{MergeLedgerCommitError, StateAdmissionError};
+            let admission = match refusal {
+                MergeLedgerCommitError::StateStorageAdmission(original) => {
+                    Some(StateAdmissionError::Storage(original.clone()))
+                }
+                MergeLedgerCommitError::BlockHashAdmission(original) => {
+                    Some(StateAdmissionError::History(original.clone()))
+                }
+                MergeLedgerCommitError::MembershipAdmission(original) => {
+                    Some(StateAdmissionError::Membership(original.clone()))
+                }
+                MergeLedgerCommitError::ExecutionDeferred(original) => {
+                    return PayloadError::RoutingDeferred(original.clone());
+                }
+                _ => None,
+            };
+            if let Some(original) = admission {
+                return PayloadError::StakingAdmission(original);
+            }
         }
     }
     if let Some(crate::execution_attempt::ExecutionAttemptError::Deferred(reason)) =
@@ -289,24 +313,79 @@ pub fn encode(block: &SignedBlock) -> Result<Vec<u8>, PayloadError> {
 }
 
 /// Decode a non-empty payload: the canonical wire of an unsigned, resultless proposal without
-/// a certificate (re-encoding must reproduce the bytes exactly).
+/// a certificate. The canonical decoder streams its encoding against the original bytes.
 ///
 /// # Errors
 /// The bytes do not decode, are not canonical, carry a result, a certificate or a signature,
-/// or the decoded block has no transactions. Local decoder resource refusal remains
+/// or the decoded block has no consensus work. Local decoder resource refusal remains
 /// [`PayloadError::DecodeResource`], rather than a deterministic property of the bytes.
 pub fn decode(payload: &[u8]) -> Result<SignedBlock, PayloadError> {
-    let block =
-        iroha_data_model::block::decode_versioned_signed_block(payload).map_err(|error| {
-            match crate::execution_attempt::versioned_decode_attempt_error(error, |error| {
-                PayloadError::NotCanonical(error.to_string())
-            }) {
-                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
-                    PayloadError::DecodeResource(reason)
+    let block = iroha_data_model::block::decode_framed_signed_block(payload).map_err(|error| {
+        match crate::execution_attempt::canonical_decode_attempt_error(error, |error| {
+            PayloadError::NotCanonical(error.to_string())
+        }) {
+            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                PayloadError::DecodeResource(reason)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+        }
+    })?;
+    require_proposal(block)
+}
+
+/// Decode the original funded payload using the canonical walk and retained signature/certificate owners.
+/// Other transaction/result children remain an explicit preparation obligation.
+pub(crate) fn decode_prepared(
+    payload: &iroha_allocation::ChargedBuffer<u8>,
+    decoder: &mut iroha_data_model::block::PreparedSignedBlockSignaturesDecode,
+) -> Result<SignedBlock, PayloadError> {
+    use iroha_data_model::block::{
+        BlockSignatureCustodyError, PreparedSignatureBlockError,
+        commit_certificate::CertificateCustodyError,
+    };
+    use iroha_data_model::da::commitment::DaProofPolicyCustodyError;
+    use norito::core::{PreparedDecodeError, SequenceSpan};
+    let block = decoder
+        .decode(
+            payload,
+            SequenceSpan {
+                start: 0,
+                end: payload.as_slice().len(),
+            },
+            norito::canonical_decode_limits(payload.as_slice().len()),
+        )
+        .map_err(|error| {
+            // Only actual canonical byte failures can become deterministic proposal rejection.
+            let canonical = matches!(
+                &error,
+                PreparedSignatureBlockError::Frame(_)
+                    | PreparedSignatureBlockError::Certificate(CertificateCustodyError::Decode(_))
+                    | PreparedSignatureBlockError::Policy(DaProofPolicyCustodyError::Decode(_))
+                    | PreparedSignatureBlockError::Decode(PreparedDecodeError::Codec(_))
+                    | PreparedSignatureBlockError::Decode(PreparedDecodeError::Destination(
+                        BlockSignatureCustodyError::Decode(_)
+                    ))
+            );
+            match crate::execution_attempt::prepared_signature_block_attempt_error(
+                error,
+                |reason| {
+                    if canonical {
+                        PayloadError::NotCanonical(reason)
+                    } else {
+                        PayloadError::SignatureCustodyInvariant(reason)
+                    }
+                },
+            ) {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                    PayloadError::DecodeResource(original)
                 }
                 crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
             }
         })?;
+    require_proposal(block)
+}
+
+fn require_proposal(block: SignedBlock) -> Result<SignedBlock, PayloadError> {
     if !has_work(&block) {
         return Err(PayloadError::EmptyBlock);
     }
@@ -320,12 +399,9 @@ pub fn decode(payload: &[u8]) -> Result<SignedBlock, PayloadError> {
             "carries a block signature".into(),
         ));
     }
-    let reencoded = block
-        .encode_wire()
-        .map_err(|error| PayloadError::NotCanonical(error.to_string()))?;
-    if reencoded != payload {
-        return Err(PayloadError::NotCanonical("non-canonical encoding".into()));
-    }
+    // The framed decoder already authenticated every canonical byte in place.
+    // Re-encoding here would allocate another unfunded full payload and frame.
+    // TODO: fund all remaining transaction/result children from the original State pool.
     Ok(block)
 }
 
@@ -367,10 +443,7 @@ pub fn select(
     // the rescue is the committed load that closes it.
     let rescue_before_ms = routing.policy().map_or(0, |policy| {
         let cadence = view.world().parameters().sumeragi().block_cadence_ms.get();
-        let parent_ms = view
-            .latest_block()
-            .and_then(|block| u64::try_from(block.header().creation_time().as_millis()).ok())
-            .unwrap_or(0);
+        let parent_ms = view.authenticated_query_ledger_time_ms().unwrap_or(0);
         parent_ms.saturating_sub(
             policy
                 .anchor_freshness
@@ -407,7 +480,7 @@ pub fn select(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{collections::BTreeSet, num::NonZeroU64};
+    use std::num::NonZeroU64;
 
     use iroha_data_model::{
         block::{BlockHeader, builder::BlockBuilder as WireBlockBuilder},
@@ -499,7 +572,7 @@ mod tests {
         let mut builder = WireBlockBuilder::new(source.header());
         builder.push_transaction(input);
         builder.set_execution_context(Some(context));
-        let malformed = builder.build(BTreeSet::new());
+        let malformed = builder.build(iroha_data_model::block::BlockSignatures::default());
         assert!(matches!(encode(&malformed), Err(PayloadError::Encode(_))));
     }
 
@@ -521,7 +594,7 @@ mod tests {
             1,
             0,
         ))
-        .build(BTreeSet::new());
+        .build(iroha_data_model::block::BlockSignatures::default());
         let bytes = block.encode_wire().expect("canonical empty proposal");
         assert!(
             !bytes.is_empty(),
@@ -545,7 +618,7 @@ mod tests {
             1,
             0,
         ))
-        .build(BTreeSet::new());
+        .build(iroha_data_model::block::BlockSignatures::default());
         assert!(matches!(
             assemble(
                 &state,
@@ -582,12 +655,28 @@ mod tests {
         .with_instructions([Log::new(Level::INFO, "payload transaction".to_owned())])
         .sign(ALICE_KEYPAIR.private_key());
         builder.push_transaction(transaction);
-        let block = builder.build(BTreeSet::new());
+        let block = builder.build(iroha_data_model::block::BlockSignatures::default());
         let bytes = encode(&block).expect("nonempty proposal");
         assert_eq!(bytes, block.encode_wire().unwrap());
         let decoded = decode(&bytes).expect("canonical nonempty proposal");
         assert_eq!(decoded.network_entrypoint_count(), 1);
         assert_eq!(decoded.encode_wire().unwrap(), bytes);
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(matches!(
+            decode(&trailing),
+            Err(PayloadError::NotCanonical(_))
+        ));
+        let mut truncated = bytes.clone();
+        truncated.pop();
+        assert!(matches!(
+            decode(&truncated),
+            Err(PayloadError::NotCanonical(_))
+        ));
+        assert!(matches!(
+            decode(&bytes[1..]),
+            Err(PayloadError::NotCanonical(_))
+        ));
     }
     #[test]
     fn signed_native_lane_policy_drives_direct_global_context_without_queue_override() {
@@ -653,7 +742,10 @@ mod tests {
                 .unwrap()
                 .admits_anchor(3)
         );
-        let parent = view.latest_block().unwrap();
+        let parent = view
+            .latest_block()
+            .expect("completed original State read")
+            .unwrap();
         let mut builder = TransactionBuilder::new(
             chain.network_id(),
             account,

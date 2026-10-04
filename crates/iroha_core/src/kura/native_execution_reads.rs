@@ -1,4 +1,67 @@
 // Exact native frame admission and reads; metadata alone never authenticates execution.
+
+/// Immutable original native frame bytes, physically prepaid from the reader's pool.
+///
+/// Moving or lending this owner retains the same backing and charge. There is no
+/// clone, growth, mutable public slice or extraction of an uncharged vector.
+pub struct NativeFrameBytes(iroha_allocation::ChargedBuffer<u8>);
+
+impl NativeFrameBytes {
+    /// Borrow the exact initialized source, without separating its physical charge.
+    pub fn as_slice(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+
+    /// Verify the original operation pool without acquiring new capacity.
+    pub fn belongs_to(&self, budget: &iroha_allocation::AllocationBudget) -> bool {
+        self.0.belongs_to(budget)
+    }
+}
+impl AsRef<[u8]> for NativeFrameBytes {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+impl core::ops::Deref for NativeFrameBytes {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+impl core::fmt::Debug for NativeFrameBytes {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("NativeFrameBytes")
+            .field("length", &self.as_slice().len())
+            .finish_non_exhaustive()
+    }
+}
+
+// Only the sole storage read can mutate this initialized fixed destination.
+struct NativeFrameDestination(iroha_allocation::ChargedBuffer<u8>);
+impl NativeFrameDestination {
+    fn new(length: usize, budget: &iroha_allocation::AllocationBudget) -> Result<Self> {
+        let mut bytes = iroha_allocation::ChargedBuffer::new(length, budget)
+            .map_err(Error::NativeFrameAllocation)?;
+        let zeros = [0_u8; 8192];
+        while bytes.as_slice().len() < length {
+            let remaining = length - bytes.as_slice().len();
+            bytes
+                .append(&zeros[..remaining.min(zeros.len())])
+                .expect("zero fill stays within exact admitted backing");
+        }
+        Ok(Self(bytes))
+    }
+}
+impl AsRef<[u8]> for NativeFrameDestination {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+}
+impl AsMut<[u8]> for NativeFrameDestination {
+    fn as_mut(&mut self) -> &mut [u8] {
+        self.0.as_mut_slice()
+    }
+}
 /// One descriptor-owner-bound durable slot, still untrusted until native verification.
 /// Capturing this receipt reads only bounded index/hash metadata, never the frame body.
 pub(crate) struct NativeFrameRead<'kura> {
@@ -15,59 +78,74 @@ impl NativeFrameRead<'_> {
 
     /// Load only this admitted slot, rechecking all durable metadata under storage guards.
     /// The returned bytes are untrusted and cannot authorize outputs by themselves.
-    pub(crate) fn read(self, admitted_wire_len: u64) -> Result<Option<Vec<u8>>> {
-        let Self {
-            kura,
-            height,
-            hash,
-            wire_len,
-        } = self;
-        if admitted_wire_len != wire_len {
-            return Err(Error::CanonicalBlockWireMismatch { height });
-        }
-        let position = height - 1;
-        let _prune = kura.prune_lock.lock();
-        kura.ensure_prune_recovery_not_required()?;
-        let _canonical = kura.canonical_chain_lock.lock();
-        kura.ensure_canonical_storage_not_poisoned()?;
-        let mut store = kura.block_store.lock();
-        let count = store.read_exact_durable_index_count()?;
-        if height > count {
-            return Ok(None);
-        }
-        if Kura::read_durable_hash_at_height(&mut store, height)? != Some(hash) {
-            return Err(Error::CanonicalBlockWireMismatch { height });
-        }
-        let slot = store.read_block_index(position)?;
-        if slot.length != wire_len {
-            return Err(Error::CanonicalBlockWireMismatch { height });
-        }
-        let bytes = if slot.is_evicted() {
-            let Some(bytes) = Kura::read_regular_sidecar_bytes_for(
-                &store.path_to_blockchain,
-                &store.da_block_path(height),
-                &store.da_blocks_dir,
-                usize::try_from(wire_len)?,
-            )?
-            else {
+    pub(crate) fn read(
+        self,
+        admitted_wire_len: u64,
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<Option<NativeFrameBytes>> {
+        // Failed backing and partial reads can refund this pool. Every storage guard
+        // must retire before a synchronous refund waker may reenter the same source.
+        budget.with_deferred_refund_notifications(|_| {
+            let Self {
+                kura,
+                height,
+                hash,
+                wire_len,
+            } = self;
+            if admitted_wire_len != wire_len {
+                return Err(Error::CanonicalBlockWireMismatch { height });
+            }
+            let position = height - 1;
+            let _prune = kura.prune_lock.lock();
+            kura.ensure_prune_recovery_not_required()?;
+            let _canonical = kura.canonical_chain_lock.lock();
+            kura.ensure_canonical_storage_not_poisoned()?;
+            let mut store = kura.block_store.lock();
+            let count = store.read_exact_durable_index_count()?;
+            if height > count {
                 return Ok(None);
+            }
+            if Kura::read_durable_hash_at_height(&mut store, height)? != Some(hash) {
+                return Err(Error::CanonicalBlockWireMismatch { height });
+            }
+            let slot = store.read_block_index(position)?;
+            if slot.length != wire_len {
+                return Err(Error::CanonicalBlockWireMismatch { height });
+            }
+            let length = usize::try_from(wire_len)?;
+            let bytes = if slot.is_evicted() {
+                // The same stable sidecar walk fills the original charged backing once.
+                let Some(snapshot) = Kura::read_regular_sidecar_snapshot_into(
+                    &store.path_to_blockchain,
+                    &store.da_block_path(height),
+                    &store.da_blocks_dir,
+                    length,
+                    || {},
+                    |length| NativeFrameDestination::new(length, budget),
+                )?
+                else {
+                    return Ok(None);
+                };
+                snapshot.bytes
+            } else {
+                // Inline storage owns its buffer here; subsequent native decoding retains
+                // this inherited cumulative scope and accounts for its separate graph.
+                norito::core::reserve_decode_allocation(length).map_err(Error::NoritoFrame)?;
+                let mut bytes = NativeFrameDestination::new(length, budget)?;
+                store.read_block_data(slot.start, bytes.as_mut())?;
+                bytes
             };
-            bytes
-        } else {
-            let mut bytes = vec![0; usize::try_from(wire_len)?];
-            store.read_block_data(slot.start, &mut bytes)?;
-            bytes
-        };
-        let confirmed = store.read_block_index(position)?;
-        if u64::try_from(bytes.len())? != wire_len
-            || store.read_exact_durable_index_count()? != count
-            || confirmed.start != slot.start
-            || confirmed.length != slot.length
-            || Kura::read_durable_hash_at_height(&mut store, height)? != Some(hash)
-        {
-            return Err(Error::CanonicalBlockWireMismatch { height });
-        }
-        Ok(Some(bytes))
+            let confirmed = store.read_block_index(position)?;
+            if u64::try_from(bytes.as_ref().len())? != wire_len
+                || store.read_exact_durable_index_count()? != count
+                || confirmed.start != slot.start
+                || confirmed.length != slot.length
+                || Kura::read_durable_hash_at_height(&mut store, height)? != Some(hash)
+            {
+                return Err(Error::CanonicalBlockWireMismatch { height });
+            }
+            Ok(Some(NativeFrameBytes(bytes.0)))
+        })
     }
 }
 impl Kura {
@@ -113,7 +191,8 @@ impl Kura {
         &self,
         authority: &crate::sumeragi::certified_chain::AuthenticatedExecutionBlock,
         admitted_wire_len: u64,
-    ) -> Result<Option<(Arc<SignedBlock>, Vec<u8>)>> {
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<Option<(iroha_data_model::block::SharedSignedBlock, NativeFrameBytes)>> {
         let expected = authority.block();
         let height = expected.header().height().get();
         let (wire_len, wire_hash) = expected.canonical_wire_identity()?;
@@ -124,13 +203,13 @@ impl Kura {
         let Some(source) = self.native_frame_read(height, expected.hash())? else {
             return Ok(None);
         };
-        let Some(bytes) = source.read(admitted_wire_len)? else {
+        let Some(bytes) = source.read(admitted_wire_len, budget)? else {
             return Ok(None);
         };
         if Hash::new(&bytes) != wire_hash {
             return Err(Error::CanonicalBlockWireMismatch { height });
         }
-        Ok(Some((Arc::clone(expected), bytes)))
+        Ok(Some((expected.clone(), bytes)))
     }
 }
 
@@ -146,6 +225,265 @@ mod native_execution_read_tests {
     };
 
     #[test]
+    fn native_original_frame_admission_preserves_cumulative_allocation_on_both_stores() {
+        for evicted in [false, true] {
+            let mut chain =
+                CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+            chain.commit(Vec::new());
+            let original = chain.committed(2);
+            let wire = original.block().encode_wire().unwrap();
+            let length = wire.len();
+            if evicted {
+                let mut store = chain.kura().block_store.lock();
+                store.write_da_block_bytes(2, &wire).unwrap();
+                store
+                    .write_block_index(1, EVICTED_BLOCK_START, length as u64)
+                    .unwrap();
+                store.publish_commit_marker(2).unwrap();
+            }
+            let budget = chain.state().ivm_execution_budget();
+            let read = |admitted| -> Result<Option<NativeFrameBytes>> {
+                chain
+                    .kura()
+                    .native_frame_read(2, original.block_hash())?
+                    .ok_or(Error::CanonicalBlockWireMismatch { height: 2 })?
+                    .read(admitted, &budget)
+            };
+            let unspent = chain
+                .kura()
+                .native_frame_read(2, original.block_hash())
+                .unwrap()
+                .unwrap();
+            let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 1, 64);
+            norito::with_decode_limits_scope(limits, || {
+                assert!(matches!(
+                    unspent.read(length as u64 - 1, &budget),
+                    Err(Error::CanonicalBlockWireMismatch { height: 2 })
+                ));
+                norito::core::reserve_decode_allocation(1).unwrap();
+            });
+            // Include the real repeated durable-marker decodes; source metadata is not free.
+            // Probe cumulative consumption without guessing those current codec allocations.
+            const PROBE_LIMIT: usize = 16 * 1024 * 1024;
+            let limits =
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, PROBE_LIMIT, 64);
+            let exact = norito::with_decode_limits_scope(limits, || {
+                assert_eq!(read(length as u64).unwrap().unwrap().as_slice(), wire);
+                let error = norito::core::reserve_decode_allocation(PROBE_LIMIT).unwrap_err();
+                let norito::Error::TotalAllocationExceeded { attempted, limit } = error else {
+                    panic!("original quota refusal")
+                };
+                usize::try_from(attempted - limit).unwrap()
+            });
+            assert!(
+                exact >= length,
+                "the original frame buffer must be charged before reading"
+            );
+            let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, exact, 64);
+            norito::with_decode_limits_scope(limits, || {
+                assert_eq!(read(length as u64).unwrap().unwrap().as_slice(), wire);
+                assert!(matches!(
+                    read(length as u64),
+                    Err(Error::NoritoFrame(
+                        norito::Error::TotalAllocationExceeded { .. }
+                    ))
+                ));
+            });
+            let limits =
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, exact - 1, 64);
+            norito::with_decode_limits_scope(limits, || {
+                assert!(matches!(
+                    read(length as u64),
+                    Err(Error::NoritoFrame(
+                        norito::Error::TotalAllocationExceeded { .. }
+                    ))
+                ));
+            });
+            assert_eq!(read(length as u64).unwrap().unwrap().as_slice(), wire);
+        }
+    }
+
+    #[test]
+    fn native_frame_failed_read_refunds_after_every_original_storage_guard_retires() {
+        use iroha_allocation::{AllocationRefusal, release::ReleaseRegistration};
+        use std::{
+            future::Future as _,
+            sync::{Arc, atomic::AtomicUsize},
+            task::{Context, Wake, Waker},
+        };
+
+        struct Probe {
+            kura: Arc<Kura>,
+            budget: iroha_allocation::AllocationBudget,
+            hash: HashOf<BlockHeader>,
+            expected_length: u64,
+            waiter_bytes: usize,
+            calls: AtomicUsize,
+            blocked: AtomicUsize,
+            reentered: AtomicUsize,
+            premature: AtomicUsize,
+        }
+        impl Wake for Probe {
+            fn wake(self: Arc<Self>) {
+                self.wake_by_ref();
+            }
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                let prune_free = self.kura.prune_lock.try_lock().is_some();
+                let canonical_free = self.kura.canonical_chain_lock.try_lock().is_some();
+                let store_free = self.kura.block_store.try_lock().is_some();
+                if self.budget.reserved_bytes() != self.waiter_bytes {
+                    self.premature.fetch_add(1, Ordering::SeqCst);
+                }
+                if !(prune_free && canonical_free && store_free) {
+                    self.blocked.fetch_add(1, Ordering::SeqCst);
+                } else if self
+                    .kura
+                    .native_frame_read(2, self.hash)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|source| source.wire_len() == self.expected_length)
+                {
+                    self.reentered.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        }
+
+        for evicted in [false, true] {
+            let mut chain =
+                CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+            chain.commit(Vec::new());
+            let original = chain.committed(2);
+            let wire = original.block().encode_wire().unwrap();
+            let admitted_length = if evicted { wire.len() } else { wire.len() + 1 };
+            {
+                let mut store = chain.kura().block_store.lock();
+                let start = if evicted {
+                    // A shorter stable sidecar is read, then refused against its exact slot.
+                    store
+                        .write_da_block_bytes(2, &wire[..wire.len() - 1])
+                        .unwrap();
+                    EVICTED_BLOCK_START
+                } else {
+                    let slot = store.read_block_index(1).unwrap();
+                    assert_eq!(
+                        slot.start + wire.len() as u64,
+                        store.data_file_len().unwrap()
+                    );
+                    slot.start
+                };
+                store
+                    .write_block_index(1, start, admitted_length as u64)
+                    .unwrap();
+                store.publish_commit_marker(2).unwrap();
+            }
+            let (body_path, original_slot) = {
+                let mut store = chain.kura().block_store.lock();
+                let slot = store.read_block_index(1).unwrap();
+                let body_path = if evicted {
+                    store.da_block_path(2)
+                } else {
+                    store.path_to_blockchain.join(DATA_FILE_NAME)
+                };
+                (body_path, (slot.start, slot.length))
+            };
+            let physical_source = std::fs::read(&body_path).unwrap();
+            let waiter_bytes = ReleaseRegistration::allocation_layout().size();
+            let budget = iroha_allocation::AllocationBudget::new(admitted_length + waiter_bytes);
+            let mut registration = crate::unit_test_support::release_registration(&budget);
+            let AllocationRefusal::Capacity { release, .. } =
+                budget.try_reserve_bytes(admitted_length + 1).unwrap_err()
+            else {
+                panic!("the original pool's free frame extent must retain its release source");
+            };
+            let probe = Arc::new(Probe {
+                kura: Arc::clone(chain.kura()),
+                budget: budget.clone(),
+                hash: original.block_hash(),
+                expected_length: admitted_length as u64,
+                waiter_bytes,
+                calls: AtomicUsize::new(0),
+                blocked: AtomicUsize::new(0),
+                reentered: AtomicUsize::new(0),
+                premature: AtomicUsize::new(0),
+            });
+            let waker = Waker::from(Arc::clone(&probe));
+            let mut context = Context::from_waker(&waker);
+            let mut wait = std::pin::pin!(release.wait_for_release(&mut registration));
+            assert!(wait.as_mut().poll(&mut context).is_pending());
+            let source = chain
+                .kura()
+                .native_frame_read(2, original.block_hash())
+                .unwrap()
+                .unwrap();
+            assert_eq!(source.wire_len(), admitted_length as u64);
+            assert!(source.read(admitted_length as u64, &budget).is_err());
+            assert_eq!(budget.reserved_bytes(), waiter_bytes);
+            assert!(budget.peak_reserved_bytes() > waiter_bytes);
+            assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+            assert_eq!(probe.blocked.load(Ordering::SeqCst), 0);
+            assert_eq!(probe.reentered.load(Ordering::SeqCst), 1);
+            assert_eq!(probe.premature.load(Ordering::SeqCst), 0);
+            assert!(wait.as_mut().poll(&mut context).is_ready());
+            assert_eq!(std::fs::read(body_path).unwrap(), physical_source);
+            let mut store = chain.kura().block_store.lock();
+            let slot = store.read_block_index(1).unwrap();
+            assert_eq!((slot.start, slot.length), original_slot);
+        }
+    }
+
+    #[test]
+    fn native_frame_backing_is_prepaid_once_and_retained_until_physical_drop() {
+        for evicted in [false, true] {
+            let mut chain =
+                CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+            chain.commit(Vec::new());
+            let original = chain.committed(2);
+            let wire = original.block().encode_wire().unwrap();
+            let length = wire.len();
+            if evicted {
+                let mut store = chain.kura().block_store.lock();
+                store.write_da_block_bytes(2, &wire).unwrap();
+                store
+                    .write_block_index(1, EVICTED_BLOCK_START, length as u64)
+                    .unwrap();
+                store.publish_commit_marker(2).unwrap();
+            }
+            let budget = iroha_allocation::AllocationBudget::new(length);
+            let occupied = iroha_allocation::ChargedBuffer::<u8>::new(1, &budget).unwrap();
+            let before = chain.kura().canonical_body_bytes_read_for_test();
+            let read = || {
+                chain
+                    .kura()
+                    .native_frame_read(2, original.block_hash())
+                    .unwrap()
+                    .unwrap()
+                    .read(length as u64, &budget)
+            };
+            assert!(matches!(
+                read(),
+                Err(Error::NativeFrameAllocation(
+                    iroha_allocation::ChargedBufferError::Admission(_)
+                ))
+            ));
+            assert_eq!(chain.kura().canonical_body_bytes_read_for_test(), before);
+            assert_eq!(budget.reserved_bytes(), 1);
+            drop(occupied);
+            let bytes = read().unwrap().unwrap();
+            assert_eq!(bytes.as_slice(), wire);
+            assert!(bytes.belongs_to(&budget));
+            assert!(!bytes.belongs_to(&iroha_allocation::AllocationBudget::new(length)));
+            assert_eq!(budget.reserved_bytes(), length);
+            let pointer = bytes.as_slice().as_ptr();
+            let moved = (original.block().clone(), bytes);
+            assert_eq!(moved.1.as_slice().as_ptr(), pointer);
+            assert_eq!(budget.reserved_bytes(), length);
+            drop(moved);
+            assert_eq!(budget.reserved_bytes(), 0);
+        }
+    }
+
+    #[test]
     fn native_read_requires_exact_prepaid_length_and_retains_original_graph() {
         let mut chain =
             CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
@@ -155,22 +493,32 @@ mod native_execution_read_tests {
         for height in 1..=2 {
             let receipt = source.authenticated_execution(height).unwrap();
             let (length, _) = receipt.block().canonical_wire_identity().unwrap();
-            let pointer = Arc::as_ptr(receipt.block());
+            let pointer = receipt.block().clone();
             for wrong in [0, length - 1, length + 1] {
                 assert!(
                     chain
                         .kura()
-                        .read_authenticated_execution_wire(&receipt, wrong)
+                        .read_authenticated_execution_wire(
+                            &receipt,
+                            wrong,
+                            &chain.state().ivm_execution_budget()
+                        )
                         .is_err()
                 );
             }
             let (original, bytes) = chain
                 .kura()
-                .read_authenticated_execution_wire(&receipt, length)
+                .read_authenticated_execution_wire(
+                    &receipt,
+                    length,
+                    &chain.state().ivm_execution_budget(),
+                )
                 .unwrap()
                 .unwrap();
-            assert_eq!(Arc::as_ptr(&original), pointer);
-            assert_eq!(bytes, original.encode_wire().unwrap());
+            assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+                &original, &pointer
+            ));
+            assert_eq!(bytes.as_slice(), original.encode_wire().unwrap());
             assert!(!chain.kura().store_root().join("v2_finality").exists());
         }
     }
@@ -197,9 +545,11 @@ mod native_execution_read_tests {
             slot.start
         };
         assert!(matches!(
-            chain
-                .kura()
-                .read_authenticated_execution_wire(&receipt, length),
+            chain.kura().read_authenticated_execution_wire(
+                &receipt,
+                length,
+                &chain.state().ivm_execution_budget()
+            ),
             Err(Error::CanonicalBlockWireMismatch { height: 2 })
         ));
         let mut store = chain.kura().block_store.lock();
@@ -213,10 +563,17 @@ mod native_execution_read_tests {
         drop(store);
         let (original, _) = chain
             .kura()
-            .read_authenticated_execution_wire(&receipt, length)
+            .read_authenticated_execution_wire(
+                &receipt,
+                length,
+                &chain.state().ivm_execution_budget(),
+            )
             .unwrap()
             .unwrap();
-        assert!(Arc::ptr_eq(&original, receipt.block()));
+        assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+            &original,
+            receipt.block()
+        ));
     }
     #[test]
     fn native_metadata_is_untrusted_and_cannot_expand_an_admitted_read() {
@@ -230,14 +587,21 @@ mod native_execution_read_tests {
             .unwrap()
             .unwrap();
         let wire_len = source.wire_len();
-        assert!(source.read(wire_len - 1).is_err());
+        assert!(
+            source
+                .read(wire_len - 1, &chain.state().ivm_execution_budget())
+                .is_err()
+        );
         let source = chain
             .kura()
             .native_frame_read(2, original.block_hash())
             .unwrap()
             .unwrap();
-        let wire = source.read(wire_len).unwrap().unwrap();
-        assert_eq!(wire, original.block().encode_wire().unwrap());
+        let wire = source
+            .read(wire_len, &chain.state().ivm_execution_budget())
+            .unwrap()
+            .unwrap();
+        assert_eq!(wire.as_slice(), original.block().encode_wire().unwrap());
         assert!(
             chain
                 .kura()

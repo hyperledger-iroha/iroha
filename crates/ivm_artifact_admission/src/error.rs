@@ -79,6 +79,22 @@ impl ContractArtifactError {
         Self { kind }
     }
 
+    /// Borrow a local failure as a VM error while retaining the original retry owner.
+    ///
+    /// Deterministic admission diagnostics return `None` and are not copied.
+    #[must_use]
+    pub fn local_vm_error(&self) -> Option<VMError> {
+        match &self.kind {
+            ArtifactFailure::ExecutionDeferred { reason, .. } => {
+                Some(VMError::ExecutionDeferred(*reason))
+            }
+            ArtifactFailure::AllocationDeferred { refusal, .. } => {
+                Some(VMError::AllocationDeferred(refusal.clone()))
+            }
+            ArtifactFailure::Invalid(_) | ArtifactFailure::AbiHashMismatch { .. } => None,
+        }
+    }
+
     /// Convert a failure into the VM error surface without losing local custody.
     #[must_use]
     pub fn into_vm_error(self) -> VMError {
@@ -152,6 +168,10 @@ mod tests {
                 source: Box::new(VMError::ExecutionDeferred(reason)),
             };
             let error = ContractArtifactError::preparation("decoded instructions", source);
+            assert_eq!(
+                error.local_vm_error(),
+                Some(VMError::ExecutionDeferred(reason))
+            );
             assert!(
                 error
                     .to_string()
@@ -171,6 +191,7 @@ mod tests {
             VMError::InvalidMetadata,
         ] {
             let error = ContractArtifactError::preparation("native index", source);
+            assert_eq!(error.local_vm_error(), None);
             assert!(error.to_string().starts_with("invalid contract artifact:"));
             assert_eq!(error.into_vm_error(), VMError::InvalidMetadata);
         }

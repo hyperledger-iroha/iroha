@@ -5,11 +5,10 @@ use iroha_data_model::block::BlockHeader;
 
 use super::*;
 use crate::beacon::{
-    GlobalThresholdBeaconChainAnchorV1, GlobalThresholdBeaconError,
-    GlobalThresholdBeaconPartialSignerV1 as _, GlobalThresholdBeaconPulseAggregatorV1,
-    GlobalThresholdBeaconSessionBindingV1,
+    FinalizedGlobalThresholdBeaconKeySessionRecordV1, GlobalThresholdBeaconChainAnchorV1,
+    GlobalThresholdBeaconError, GlobalThresholdBeaconPartialSignerV1 as _,
+    GlobalThresholdBeaconPulseAggregatorV1,
     credential::decode_global_beacon_partial_signer_credential_v1,
-    validate_global_threshold_beacon_session_v1,
 };
 
 const REVISION: u64 = 3;
@@ -58,21 +57,18 @@ fn plan(keys: &[KeyPair], network_marker: u8) -> GlobalBeaconCeremonyPlanV1 {
 }
 
 fn deal(plan: &GlobalBeaconCeremonyPlanV1, keys: &[KeyPair]) -> DealtGlobalBeaconV1 {
-    deal_global_beacon_at_logical_clock_v1(plan, &keys.iter().collect::<Vec<_>>())
-        .expect("logical-clock deal")
+    deal_global_beacon_at_logical_clock_v1(
+        plan,
+        &keys.iter().collect::<Vec<_>>(),
+        &crate::beacon::fixtures::fixture_budget(),
+    )
+    .expect("logical-clock deal")
 }
 
 fn validated(
-    record: &FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+    record: &RetainedFinalizedGlobalThresholdBeaconSessionV1,
 ) -> crate::beacon::ValidatedGlobalThresholdBeaconSessionV1 {
-    let binding = GlobalThresholdBeaconSessionBindingV1 {
-        network_id: record.session.network_id,
-        session_id: record.session.session_id,
-        roster_hash: record.session.roster_hash,
-        transcript_hash: record.session.transcript_hash,
-    };
-    validate_global_threshold_beacon_session_v1(record.session.clone(), &binding)
-        .expect("public session validates")
+    record.session.clone()
 }
 
 fn custody(
@@ -85,6 +81,7 @@ fn custody(
         &seat.binding.handle,
         seat.binding.revision,
         seat.binding.policy_digest,
+        &crate::beacon::fixtures::fixture_budget(),
     )
     .expect("seat credential imports")
 }
@@ -143,7 +140,7 @@ fn deal_roundtrips_credentials_and_inventory_digests_for_four_seven_and_ten_seat
                 seat.binding.policy_digest,
                 global_beacon_partial_signer_public_inventory_digest_v1(
                     record.session.network_id,
-                    &[(record.session.clone(), signer_index)],
+                    &[(&record.session, signer_index)],
                 )
                 .expect("public inventory digest")
             );
@@ -163,10 +160,10 @@ fn deal_roundtrips_credentials_and_inventory_digests_for_four_seven_and_ten_seat
         }
         let mut tampered = bindings.clone();
         tampered.swap(0, 1);
-        assert_eq!(
+        assert!(matches!(
             plan.verify_seat_bindings(record, &tampered),
             Err(GlobalBeaconCeremonyErrorV1::InvalidPlan)
-        );
+        ));
         let mut tampered = bindings.clone();
         tampered[0].policy_digest = tampered[1].policy_digest;
         assert!(plan.verify_seat_bindings(record, &tampered).is_err());
@@ -266,6 +263,7 @@ fn genesis_deals_share_the_canonical_identity_but_never_a_transcript() {
 
 #[test]
 fn deals_require_one_owning_signer_per_seat() {
+    let budget = crate::beacon::fixtures::fixture_budget();
     let keys = roster_keys(4, 0x43);
     let plan = plan(&keys, 0x54);
     let mut reordered = keys.iter().collect::<Vec<_>>();
@@ -279,43 +277,71 @@ fn deals_require_one_owning_signer_per_seat() {
         reordered,
         foreign,
     ] {
-        assert_eq!(
-            deal_global_beacon_at_logical_clock_v1(&plan, &signers).err(),
+        assert!(matches!(
+            deal_global_beacon_at_logical_clock_v1(
+                &plan,
+                &signers,
+                &crate::beacon::fixtures::fixture_budget()
+            )
+            .err(),
             Some(GlobalBeaconCeremonyErrorV1::SeatSigner)
-        );
+        ));
     }
     // A seat credential binds the plan's own session and an existing seat.
-    let dealt = deal(&plan, &keys);
-    let other = deal(&self::plan(&keys, 0x55), &keys);
+    let dealt =
+        deal_global_beacon_at_logical_clock_v1(&plan, &keys.iter().collect::<Vec<_>>(), &budget)
+            .expect("original-pool dealt session");
+    let other = deal_global_beacon_at_logical_clock_v1(
+        &self::plan(&keys, 0x55),
+        &keys.iter().collect::<Vec<_>>(),
+        &budget,
+    )
+    .expect("other original-pool dealt session");
     for (public, signer_index) in [
-        (other.record.session.clone(), 1),
-        (dealt.record.session.clone(), 0),
-        (dealt.record.session.clone(), 5),
+        (validated(&other.record), 1),
+        (validated(&dealt.record), 0),
+        (validated(&dealt.record), 5),
     ] {
-        assert_eq!(
-            plan.seat_credential(public, signer_index, Zeroizing::new([[0x11; 32]; 3]))
-                .err(),
+        assert!(matches!(
+            plan.seat_credential(
+                public,
+                signer_index,
+                Zeroizing::new([[0x11; 32]; 3]),
+                &budget
+            )
+            .err(),
             Some(GlobalBeaconCeremonyErrorV1::InvalidPlan)
-        );
+        ));
     }
     // A share that is not the seat's own is never encoded.
     assert!(matches!(
         plan.seat_credential(
-            dealt.record.session.clone(),
+            validated(&dealt.record),
             1,
-            Zeroizing::new([[0x11; 32]; 3])
+            Zeroizing::new([[0x11; 32]; 3]),
+            &budget
         ),
-        Err(GlobalBeaconCeremonyErrorV1::Credential(_))
+        Err(GlobalBeaconCeremonyErrorV1::CredentialOutput(
+            crate::beacon::credential::GlobalBeaconCredentialEncodeErrorV1::Share(_)
+        ))
     ));
     // The seat owner itself refuses a transcript it did not help finalize.
-    let mut seat =
-        LocalGlobalThresholdBeaconDkgSeatV1::new(*plan.dkg_session(), plan.roster(), 1, &keys[0])
-            .expect("fresh seat");
-    assert_eq!(
-        seat.finalize_private_share(dealt.record.session.clone())
-            .err(),
-        Some(GlobalThresholdBeaconError::DkgTerminal)
-    );
+    let seat = PreparedLocalGlobalThresholdBeaconDkgSeatV1::new(
+        *plan.dkg_session(),
+        plan.roster(),
+        1,
+        &keys[0],
+        &super::super::fixtures::fixture_budget(),
+    )
+    .expect("prepared seat")
+    .generate(&keys[0])
+    .expect("fresh seat");
+    assert!(matches!(
+        seat.aggregate_private_share(&validated(&dealt.record)),
+        Err(super::super::LocalGlobalThresholdBeaconDkgErrorV1::Invalid(
+            GlobalThresholdBeaconError::DkgTerminal
+        ))
+    ));
 }
 
 #[test]
@@ -334,10 +360,10 @@ fn plans_require_exact_three_f_plus_one_sessions_and_production_handles() {
     let mut duplicate = roster.clone();
     duplicate[1] = duplicate[0].clone();
     for invalid in [&roster[..5], &roster[..1], &duplicate[..]] {
-        assert_eq!(
+        assert!(matches!(
             global_beacon_genesis_dkg_session_v1(network, invalid),
             Err(GlobalBeaconCeremonyErrorV1::InvalidPlan)
-        );
+        ));
     }
     GlobalBeaconCeremonyPlanV1::new(session, roster.clone(), handles(7), REVISION)
         .expect("valid plan");
@@ -360,10 +386,10 @@ fn plans_require_exact_three_f_plus_one_sessions_and_production_handles() {
         (session, roster.clone(), test_handle, REVISION),
         (session, roster.clone(), handles(7), 0),
     ] {
-        assert_eq!(
+        assert!(matches!(
             GlobalBeaconCeremonyPlanV1::new(session, roster, handles, revision),
             Err(GlobalBeaconCeremonyErrorV1::InvalidPlan)
-        );
+        ));
     }
 }
 
@@ -433,19 +459,21 @@ fn install_range_certificates_verify_only_at_their_effective_height() {
                     &certificate.public_state,
                 )
                 .expect("canonical public state");
-            assert_eq!(record, dealt.record);
+            assert_eq!(&record.session, dealt.record.session.record());
+            assert_eq!(record.activated_at_height, dealt.record.activated_at_height);
+            assert_eq!(record.retired_at_height, dealt.record.retired_at_height);
         }
         // Heights outside every host's signed range cannot be assembled.
         for height in [tip, tip + 17] {
-            assert_eq!(
+            assert!(matches!(
                 context.assemble_from_ranges(height, &ranges).err(),
                 Some(GlobalBeaconCeremonyErrorV1::InvalidRange)
-            );
+            ));
         }
-        assert_eq!(
+        assert!(matches!(
             context.draft_certificate(tip).err(),
             Some(GlobalBeaconCeremonyErrorV1::Height)
-        );
+        ));
     }
 }
 
@@ -464,38 +492,38 @@ fn install_assembly_enforces_exactly_two_f_plus_one_distinct_signers() {
         .iter()
         .map(|key| context.sign_range(key, height, 2).expect("host range"))
         .collect::<Vec<_>>();
-    assert_eq!(
+    assert!(matches!(
         context
             .assemble_from_ranges(height, &ranges[..quorum - 1])
             .err(),
         Some(GlobalBeaconCeremonyErrorV1::Quorum)
-    );
-    assert_eq!(
+    ));
+    assert!(matches!(
         context
             .assemble_from_ranges(height, &ranges[..quorum + 1])
             .err(),
         Some(GlobalBeaconCeremonyErrorV1::Quorum)
-    );
+    ));
     let mut duplicate = ranges[..quorum].to_vec();
     duplicate[1] = duplicate[0].clone();
-    assert_eq!(
+    assert!(matches!(
         context.assemble_from_ranges(height, &duplicate).err(),
         Some(GlobalBeaconCeremonyErrorV1::Quorum)
-    );
+    ));
     let mut foreign = ranges[..quorum].to_vec();
     foreign[0].session_id = [0xEE; 32];
-    assert_eq!(
+    assert!(matches!(
         context.assemble_from_ranges(height, &foreign).err(),
         Some(GlobalBeaconCeremonyErrorV1::InvalidRange)
-    );
+    ));
     let mut corrupted = ranges[..quorum].to_vec();
     corrupted[0].signatures.swap(0, 1);
-    assert_eq!(
+    assert!(matches!(
         context.assemble_from_ranges(height, &corrupted).err(),
         Some(GlobalBeaconCeremonyErrorV1::Certificate(
             ThresholdKeyLifecycleCertificateErrorV1::InvalidQuorum
         ))
-    );
+    ));
     // Verbatim assembly keeps the caller's certificate order and exact count.
     let signatures = keys
         .iter()
@@ -517,30 +545,30 @@ fn install_assembly_enforces_exactly_two_f_plus_one_distinct_signers() {
         ));
     }
     let outsider = KeyPair::from_seed(vec![0x99; 32], Algorithm::BlsNormal);
-    assert_eq!(
+    assert!(matches!(
         context.sign_range(&outsider, height, 1).err(),
         Some(GlobalBeaconCeremonyErrorV1::NotAuthorized)
-    );
+    ));
     for count in [0, GLOBAL_BEACON_INSTALL_RANGE_MAX_HEIGHTS_V1 + 1] {
-        assert_eq!(
+        assert!(matches!(
             context.sign_range(&keys[0], height, count).err(),
             Some(GlobalBeaconCeremonyErrorV1::InvalidRange)
-        );
+        ));
     }
-    assert_eq!(
+    assert!(matches!(
         context.sign_range(&keys[0], u64::MAX, 2).err(),
         Some(GlobalBeaconCeremonyErrorV1::InvalidRange)
-    );
+    ));
     let mut active = dealt.record.clone();
     active.activate(height + 1).expect("activate fixture");
-    assert_eq!(
+    assert!(matches!(
         GlobalBeaconInstallContextV1::new(active, roster.clone()).err(),
         Some(GlobalBeaconCeremonyErrorV1::InvalidPlan)
-    );
-    assert_eq!(
+    ));
+    assert!(matches!(
         GlobalBeaconInstallContextV1::new(dealt.record.clone(), roster[..6].to_vec()).err(),
         Some(GlobalBeaconCeremonyErrorV1::InvalidPlan)
-    );
+    ));
 }
 
 #[test]
@@ -568,7 +596,7 @@ fn seat_bindings_and_install_ranges_roundtrip_norito_and_json() {
         )
         .expect("range");
     assert_eq!(range.signer_index, 1);
-    assert_eq!(context.signer_index(keys[1].public_key()), Ok(1));
+    assert_eq!(context.signer_index(keys[1].public_key()).unwrap(), 1);
     let encoded = norito::encode_canonical(&range).expect("encode range");
     assert_eq!(
         norito::decode_canonical::<GlobalBeaconInstallRangeSignaturesV1>(&encoded)
@@ -587,4 +615,64 @@ fn seat_bindings_and_install_ranges_roundtrip_norito_and_json() {
         .expect("range object")
         .insert("extra".to_owned(), norito::json::Value::from(1_u64));
     assert!(norito::json::from_value::<GlobalBeaconInstallRangeSignaturesV1>(value).is_err());
+}
+
+#[test]
+fn maximum_deal_and_install_keep_one_original_graph_within_sixty_four_mebibytes() {
+    let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
+    let keys = roster_keys(31, 0x49);
+    let plan = plan(&keys, 0x59);
+    let dealt =
+        deal_global_beacon_at_logical_clock_v1(&plan, &keys.iter().collect::<Vec<_>>(), &budget)
+            .expect("all 31 real DKG seats within the unchanged original pool");
+    assert_eq!(dealt.seats.len(), 31);
+    assert!(
+        dealt
+            .seats
+            .iter()
+            .all(|seat| seat.credential.belongs_to(&budget))
+    );
+    assert!(dealt.record.session.belongs_to(&budget));
+    let retained = dealt.record.session.clone();
+    let original_recipients = retained.adaptive_dkg.recipient_keys.as_ptr();
+    let original_edges = retained.adaptive_dkg.encrypted_shares.as_ptr();
+    let context = GlobalBeaconInstallContextV1::new(dealt.record.clone(), roster(&keys))
+        .expect("install context shares the original validated graph");
+    assert!(context.record().session.ptr_eq(&retained));
+    assert_eq!(
+        context
+            .record()
+            .session
+            .adaptive_dkg
+            .recipient_keys
+            .as_ptr(),
+        original_recipients
+    );
+    assert_eq!(
+        context
+            .record()
+            .session
+            .adaptive_dkg
+            .encrypted_shares
+            .as_ptr(),
+        original_edges
+    );
+    assert_eq!(context.quorum(), 21);
+    let bindings = dealt
+        .seats
+        .iter()
+        .map(|seat| seat.binding.clone())
+        .collect::<Vec<_>>();
+    plan.verify_seat_bindings(&dealt.record, &bindings)
+        .expect("every original target seat");
+    drop(dealt);
+    assert!(context.record().session.ptr_eq(&retained));
+    drop(context);
+    assert_eq!(
+        budget.reserved_bytes(),
+        retained.retained_allocation_bytes()
+    );
+    drop(retained);
+    assert_eq!(budget.reserved_bytes(), 0);
+    assert!(budget.peak_reserved_bytes() <= 64 * 1024 * 1024);
 }

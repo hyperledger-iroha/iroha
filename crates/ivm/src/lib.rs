@@ -23,6 +23,8 @@
 //! generated `instruction` module provides detailed
 //! commentary on every opcode constant and is summarised in
 //! [`docs/opcodes.md`](../docs/opcodes.md).
+#[cfg(any(feature = "cuda", test))]
+mod acceleration_cost;
 mod aes;
 pub mod analysis;
 mod argument_record;
@@ -31,20 +33,28 @@ pub mod bn254_vec;
 mod byte_merkle_tree;
 pub mod cache_memory;
 mod call_frame;
-mod call_gas;
+pub mod call_gas;
 pub mod contract_artifact;
 mod contract_return_stack;
 mod core_host;
 mod cuda;
+#[cfg(any(feature = "cuda", test))]
+#[path = "cuda_dispatch/cost.rs"]
+mod cuda_cost;
 #[cfg(feature = "cuda")]
 mod cuda_dispatch;
 // Exercise the production admission state machine without requiring PTX artifacts.
 #[cfg(all(test, not(feature = "cuda")))]
 #[path = "cuda_dispatch/admission.rs"]
 mod cuda_admission_tests;
+#[cfg(feature = "cuda")]
+mod cuda_artifact;
+#[cfg(any(feature = "cuda", test))]
+mod cuda_build_policy;
 #[cfg(test)]
-#[path = "cuda_provenance.rs"]
-mod cuda_provenance_tests;
+mod cuda_bundle_files;
+#[cfg(any(feature = "cuda", test))]
+mod cuda_provenance;
 mod decoder;
 mod dev_env;
 pub mod encoding;
@@ -54,6 +64,8 @@ pub mod execution_diagnostics;
 pub mod execution_memory;
 /// Bounded local memory-transfer diagnostics, separate from proof admission.
 pub mod execution_memory_recorder;
+/// Sealed original native packets for a bounded root invocation component.
+pub mod execution_packets;
 /// Local, prepaid interpreter snapshots for diagnostic AIR development only.
 pub mod execution_step_recorder;
 mod execution_summary;
@@ -126,8 +138,7 @@ pub use crate::field_dispatch::{clear_field_impl_for_tests, set_field_impl_for_t
 pub use crate::stack_policy::IvmStackPolicy;
 // Publicly expose gas schedule helper for tests and tooling.
 pub use crate::argument_record::{
-    PreparedArgumentRecord, argument_record_decode_count, argument_record_from_json,
-    encode_argument_record_from_json, prepare_argument_record_with_gas_limit,
+    PreparedArgumentRecord, argument_record_decode_count, prepare_argument_record_with_gas_limit,
     reset_argument_record_decode_count, validate_argument_record,
 };
 pub use crate::gas::{cost_of, cost_of_with_vector_len};
@@ -136,7 +147,8 @@ pub use crate::metadata::mode as ivm_mode;
 // Re-export the canonical Merkle tree from iroha_crypto for general use.
 pub use crate::contract_artifact::{
     ContractArtifactError, KotoTestHarnessContract, VerifiedContractArtifact, prepare_contract,
-    prepare_koto_test_contract, verify_contract_artifact,
+    prepare_contract_with_memory_budget, prepare_koto_test_contract, verify_contract_artifact,
+    verify_contract_artifact_with_memory_budget,
 };
 pub use crate::metadata::{
     CONTRACT_DEBUG_SECTION_MAGIC, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK,
@@ -155,10 +167,11 @@ pub use crate::{
     },
     byte_merkle_tree::ByteMerkleTree,
     cuda::{
-        aesdec_batch_cuda_into, aesdec_cuda, aesdec_rounds_batch_cuda_into, aesenc_batch_cuda_into,
-        aesenc_cuda, aesenc_rounds_batch_cuda_into, bitonic_sort_pairs, bn254_add_batch_cuda_into,
+        CudaCompletionError, CudaCompletionSnapshot, CudaKernel, aesdec_batch_cuda_into,
+        aesdec_cuda, aesdec_rounds_batch_cuda_into, aesenc_batch_cuda_into, aesenc_cuda,
+        aesenc_rounds_batch_cuda_into, bitonic_sort_pairs, bn254_add_batch_cuda_into,
         bn254_add_cuda, bn254_mul_batch_cuda_into, bn254_mul_cuda, bn254_sub_batch_cuda_into,
-        bn254_sub_cuda, cuda_available, cuda_completed_dispatches, cuda_disabled,
+        bn254_sub_cuda, cuda_available, cuda_completion_snapshot, cuda_disabled,
         cuda_last_error_message, ed25519_verify_batch_cuda_into, ed25519_verify_cuda,
         keccak_f1600_cuda, poseidon2_cuda, poseidon2_cuda_many_into, poseidon6_cuda,
         poseidon6_cuda_many_into, reset_cuda_backend_for_tests, sha256_compress_cuda,
@@ -196,7 +209,7 @@ pub use crate::{
 };
 pub use crate::{
     mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
-    registers::Registers,
+    registers::{REGISTER_MERKLE_PATH_DEPTH, Registers},
     signature::{SignatureScheme, verify_signature},
     state_overlay::{DurableStateOverlay, DurableStateSnapshot},
     vector::{
@@ -230,8 +243,6 @@ pub use ivm_abi::error_types;
 pub use ivm_abi::state_cursor;
 /// Canonical schemas and records used for durable Kotodama V1 state values.
 pub use ivm_abi::state_value;
-#[cfg(test)]
-mod ptx_tests;
 /// Public Norito-typed request envelopes for VRF syscalls.
 pub mod vrf;
 /// Optional acceleration policy applied at runtime by hosts.
@@ -249,13 +260,15 @@ pub struct AccelerationConfig {
     pub enable_cuda: bool,
     /// Maximum number of GPUs to initialize (None = auto/no cap).
     pub max_gpus: Option<usize>,
-    /// Minimum number of leaves to use GPU for Merkle leaf hashing (None = use default).
+    /// Minimum leaves for a Merkle GPU attempt (None = default, Some(0) = no floor).
     pub merkle_min_leaves_gpu: Option<usize>,
-    /// Backend-specific thresholds (None = inherit generic GPU threshold).
+    /// Metal Merkle floor (None = inherit generic, Some(0) = no floor).
     pub merkle_min_leaves_metal: Option<usize>,
+    /// CUDA Merkle floor (None = inherit generic, Some(0) = no floor).
     pub merkle_min_leaves_cuda: Option<usize>,
-    /// Prefer CPU SHA2 for trees up to this many leaves (per-arch). If None, use defaults.
+    /// Prefer available AArch64 CPU SHA2 through this leaf count; None restores the default.
     pub prefer_cpu_sha2_max_leaves_aarch64: Option<usize>,
+    /// Prefer available x86 CPU SHA2 through this leaf count; None restores the default.
     pub prefer_cpu_sha2_max_leaves_x86: Option<usize>,
     /// Shared physical-owner ceilings; no omitted field means unlimited.
     pub resource_limits: iroha_accel::RegistryLimits,
@@ -295,7 +308,8 @@ fn write_acceleration_config(cfg: AccelerationConfig) {
 /// Apply acceleration configuration. Optional; when not called the VM
 /// automatically uses all available hardware, subject to golden self-tests.
 /// Metal discovery, qualification and calibration run when acceleration is requested,
-/// rather than while applying policy.
+/// rather than while applying policy. Each call replaces the complete policy;
+/// omitted Merkle thresholds resolve to their defaults or generic inheritance.
 pub fn set_acceleration_config(cfg: AccelerationConfig) {
     write_acceleration_config(cfg);
     iroha_accel::ProcessResources::install(cfg.resource_limits);
@@ -309,26 +323,10 @@ pub fn set_acceleration_config(cfg: AccelerationConfig) {
     // CUDA policy
     #[cfg(feature = "cuda")]
     {
-        let installed = iroha_accel::cuda::CudaProcess::install(cfg.resource_limits).is_ok();
+        let installed = crate::cuda_artifact::eligible()
+            && iroha_accel::cuda::CudaProcess::install(cfg.resource_limits).is_ok();
         crate::cuda_dispatch::configure(cfg.enable_cuda && installed, cfg.max_gpus);
         crate::cuda::set_cuda_enabled(cfg.enable_cuda);
-    }
-    if let Some(min) = cfg.merkle_min_leaves_gpu {
-        crate::byte_merkle_tree::set_merkle_gpu_min_leaves(min);
-    }
-    if let Some(min) = cfg.merkle_min_leaves_metal {
-        crate::byte_merkle_tree::set_merkle_metal_min_leaves(min);
-    }
-    if let Some(min) = cfg.merkle_min_leaves_cuda {
-        crate::byte_merkle_tree::set_merkle_cuda_min_leaves(min);
-    }
-    #[cfg(target_arch = "aarch64")]
-    if let Some(v) = cfg.prefer_cpu_sha2_max_leaves_aarch64 {
-        crate::byte_merkle_tree::set_prefer_cpu_sha2_max_leaves_aarch64(v);
-    }
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    if let Some(v) = cfg.prefer_cpu_sha2_max_leaves_x86 {
-        crate::byte_merkle_tree::set_prefer_cpu_sha2_max_leaves_x86(v);
     }
 }
 /// Return the most recently applied [`AccelerationConfig`]. When

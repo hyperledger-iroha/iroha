@@ -50,13 +50,23 @@ struct ToriiRoutedReadMemoryBudget {
 }
 impl ToriiRoutedReadMemoryBudget {
     fn new(working_set_bytes: usize, configured_body_limit_bytes: usize) -> Result<Self, Response> {
-        Ok(Self {
-            envelope: QueryFanoutMemoryEnvelope::for_body_admission(working_set_bytes)?,
+        Ok(Self::from_envelope(
+            QueryFanoutMemoryEnvelope::for_body_admission(working_set_bytes)?,
+            configured_body_limit_bytes,
+        ))
+    }
+    /// Derive the corridor from the geometry retained by its actual owner.
+    fn from_envelope(
+        envelope: QueryFanoutMemoryEnvelope,
+        configured_body_limit_bytes: usize,
+    ) -> Self {
+        Self {
+            envelope,
             configured_body_limit_bytes,
             retained_decoded_bytes: 0,
             retained_canonical_bytes: 0,
             merge_allocated_bytes: 0,
-        })
+        }
     }
     /// Bound the complete routed request retained across transport retries.
     fn admit_request_bytes(&self, bytes: usize) -> Result<(), Response> {
@@ -474,8 +484,9 @@ fn torii_routed_read_exact_vec<T>(
 /// Heap bytes reachable from a native JSON `Value` after parsing.
 ///
 /// Strings and arrays use the parser's exact-reserve requests. The lexical profile sums Norito
-/// core's checked node-count bound separately for every object, so empty and differently sized
-/// objects cannot inflate one another's topology charge. The parser separately charges any
+/// core's original parser allocation charge separately for every object, including the leaf/split
+/// boundary, so empty and differently sized objects cannot inflate one another's topology charge.
+/// The parser separately charges any
 /// allocator capacity returned above an exact-reserve request.
 fn torii_routed_read_json_value_graph_bytes(
     profile: norito::json::JsonPreflightProfile,
@@ -484,12 +495,7 @@ fn torii_routed_read_json_value_graph_bytes(
         .array_entries()
         .checked_mul(core::mem::size_of::<Value>())
         .ok_or_else(torii_routed_read_accounting_response)?;
-    let object_nodes = profile.object_btree_node_upper_bound();
-    let object_bytes = norito::core::owned_btree_maps_allocation_bytes::<String, Value>(
-        object_nodes,
-        object_nodes,
-    )
-    .map_err(|_| torii_routed_read_accounting_response())?;
+    let object_bytes = profile.object_btree_allocation_bytes();
     profile
         .string_capacity_bytes()
         .checked_add(array_bytes)

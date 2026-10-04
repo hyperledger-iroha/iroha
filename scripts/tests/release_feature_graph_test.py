@@ -6,6 +6,7 @@ import importlib.util
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -71,10 +72,10 @@ def initialize_tracked_release_surface(destination: Path) -> None:
         "cliff.toml": '[changelog]\nbody = "reviewed"\n',
         "flake.lock": '{"nodes":{},"root":"root","version":7}\n',
         "flake.nix": "{ outputs = _: {}; }\n",
-        "IrohaSwift/IrohaSwift.podspec": "Pod::Spec.new do |spec|\nend\n",
+        "IrohaSwift/VERSION": "0.1.0\n",
         "IrohaSwift/Package.swift": "// swift-tools-version: 6.0\n",
         "IrohaSwift/Tests/IrohaSwiftTests/ArtifactTests.swift": "// reviewed\n",
-        "crates/connect_norito_bridge/NoritoBridge.podspec.template": "Pod::Spec.new do |spec|\nend\n",
+        "scripts/validate_norito_bridge_archive.py": "# reviewed SwiftPM archive owner\n",
         "crates/demo/Cargo.toml": '[package]\nname = "demo"\nversion = "0.1.0"\n',
         "crates/demo/build.rs": 'fn main() { println!("cargo:rerun-if-changed=build_input.txt"); }\n',
         "crates/demo/build_input.txt": "reviewed build input\n",
@@ -140,6 +141,140 @@ def test_trusted_release_surface_matches_reviewed_seal() -> None:
         checker.trusted_release_surface_digest(REPO)
         == checker.TRUSTED_RELEASE_SURFACE_SHA256
     )
+
+
+def load_native_pin_reference():
+    """Load the reviewed native pin grammar for regression comparison only."""
+
+    path = REPO / "scripts/norito_bridge_source_seal.py"
+    spec = importlib.util.spec_from_file_location("native_pin_reference", path)
+    assert spec is not None and spec.loader is not None
+    owner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = owner
+    spec.loader.exec_module(owner)
+    return owner
+
+
+def initialize_native_pin_surface(destination: Path) -> tuple[Path, bytes]:
+    """Add the real loader and a non-executable candidate helper to the fixture."""
+
+    initialize_tracked_release_surface(destination)
+    relative = Path("IrohaSwift/Sources/IrohaSwift/NativeBridge.swift")
+    original = (REPO / relative).read_bytes()
+    loader = destination / relative
+    loader.parent.mkdir(parents=True, exist_ok=True)
+    loader.write_bytes(original)
+    # The release guard must use its own pure grammar, never execute this
+    # candidate-controlled helper before deciding whether the source is trusted.
+    (destination / "scripts/norito_bridge_source_seal.py").write_text(
+        'raise AssertionError("candidate native pin helper executed before admission")\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "."], cwd=destination, check=True)
+    return loader, original
+
+
+def test_generated_native_pin_projection_preserves_reviewed_release_surface(
+    tmp_path: Path,
+) -> None:
+    checker = load_checker()
+    native = load_native_pin_reference()
+    loader, original = initialize_native_pin_surface(tmp_path)
+    projected = native.rewrite_swift_native_bridge_hash_pins(
+        original,
+        {
+            "macos-arm64_x86_64": "1" * 64,
+            "ios-arm64": "2" * 64,
+            "ios-arm64_x86_64-simulator": "3" * 64,
+        },
+    )
+    assert projected != original
+    relative = loader.relative_to(tmp_path)
+    normalized = native.normalize_swift_native_bridge_hash_pins(original)
+    assert checker._release_surface_contents(relative, original) == normalized
+    assert checker._release_surface_contents(relative, projected) == normalized
+    baseline = checker.trusted_release_surface_digest(tmp_path)
+    loader.write_bytes(projected)
+    checker.validate_trusted_release_surface(tmp_path, baseline)
+    assert checker.trusted_release_surface_digest(tmp_path) == baseline
+
+    # Changing a real hash-verification branch remains source drift, even when
+    # the generated pin values themselves are a valid mechanical projection.
+    changed = projected.replace(
+        b"if actualHash != expectedHash {", b"if actualHash == expectedHash {", 1
+    )
+    assert changed != projected
+    loader.write_bytes(changed)
+    assert_seal_rejects(checker, tmp_path, baseline)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "missing-block", "duplicate-block", "wrong-key", "duplicate-key",
+        "uppercase-digest", "short-digest", "extra-entry", "trailing-comma",
+        "malformed-duplicate-block", "reordered-keys", "digest-outside-block",
+    ),
+)
+def test_native_pin_normalization_refuses_every_non_pin_loader_change(
+    tmp_path: Path, mutation: str,
+) -> None:
+    checker = load_checker()
+    native = load_native_pin_reference()
+    loader, original = initialize_native_pin_surface(tmp_path)
+    block, matches = native._swift_native_bridge_hash_block(original)
+    body = block.group("body")
+    block_bytes = block.group(0)
+    first_digest = matches[0].group("digest")
+    baseline = checker.trusted_release_surface_digest(tmp_path)
+    if mutation == "missing-block":
+        changed = original.replace(block_bytes, b"", 1)
+    elif mutation == "duplicate-block":
+        changed = original + b"\n" + block_bytes + b"\n"
+    elif mutation == "wrong-key":
+        changed = original.replace(b'"ios-arm64":', b'"ios-armv7":', 1)
+    elif mutation == "duplicate-key":
+        changed = original.replace(b'"ios-arm64":', b'"macos-arm64_x86_64":', 1)
+    elif mutation == "uppercase-digest":
+        changed = original.replace(first_digest, b"A" * 64, 1)
+    elif mutation == "short-digest":
+        changed = original.replace(first_digest, first_digest[:-1], 1)
+    elif mutation == "extra-entry":
+        extra = b'        "other-slice": "' + (b"4" * 64) + b'",\n'
+        changed = original.replace(body, extra + body, 1)
+    elif mutation == "trailing-comma":
+        changed = original.replace(body, body[:-1] + b",\n", 1)
+    elif mutation == "malformed-duplicate-block":
+        changed = original + b"\n" + block_bytes.replace(b'"ios-arm64":', b'"other":') + b"\n"
+    elif mutation == "reordered-keys":
+        lines = body.splitlines(keepends=True)
+        changed = original.replace(body, lines[1] + lines[0] + lines[2], 1)
+    elif mutation == "digest-outside-block":
+        changed = original + b'\n// "ios-arm64": "' + (b"4" * 64) + b'"\n'
+    else:  # pragma: no cover - the parameter inventory above is closed.
+        raise AssertionError(mutation)
+    assert changed != original
+    loader.write_bytes(changed)
+    assert_seal_rejects(checker, tmp_path, baseline)
+
+
+def test_native_pin_normalization_is_confined_to_the_exact_loader_path(
+    tmp_path: Path,
+) -> None:
+    checker = load_checker()
+    native = load_native_pin_reference()
+    _loader, original = initialize_native_pin_surface(tmp_path)
+    other = tmp_path / "IrohaSwift/Sources/OtherSDK/NativeBridge.swift"
+    other.parent.mkdir(parents=True)
+    other.write_bytes(original)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    baseline = checker.trusted_release_surface_digest(tmp_path)
+    projected = native.rewrite_swift_native_bridge_hash_pins(
+        original, {key: "5" * 64 for key in native.SWIFT_NATIVE_BRIDGE_HASH_KEYS}
+    )
+    assert checker._release_surface_contents(other.relative_to(tmp_path), projected) == projected
+    other.write_bytes(projected)
+    assert_seal_rejects(checker, tmp_path, baseline)
 
 
 @pytest.mark.parametrize("entrypoint", ["shipping_profiles", "declared_shipping_targets"])
@@ -495,28 +630,17 @@ def test_trusted_release_surface_seal_rejects_drift_addition_and_removal(
     assert_seal_rejects(checker, tmp_path, baseline)
     swift_test.write_bytes(swift_test_original)
 
-    source_podspec = tmp_path / "IrohaSwift" / "IrohaSwift.podspec"
-    source_podspec_original = source_podspec.read_bytes()
-    source_podspec.write_bytes(
-        source_podspec_original
-        + b"spec.prepare_command = 'cp /tmp/fixture artifact'\n"
-    )
+    swift_version = tmp_path / "IrohaSwift" / "VERSION"
+    swift_version_original = swift_version.read_bytes()
+    swift_version.write_bytes(b"0.1.1\n")
     assert_seal_rejects(checker, tmp_path, baseline)
-    source_podspec.write_bytes(source_podspec_original)
+    swift_version.write_bytes(swift_version_original)
 
-    binary_podspec_template = (
-        tmp_path
-        / "crates"
-        / "connect_norito_bridge"
-        / "NoritoBridge.podspec.template"
-    )
-    binary_podspec_template_original = binary_podspec_template.read_bytes()
-    binary_podspec_template.write_bytes(
-        binary_podspec_template_original
-        + b"spec.prepare_command = 'cp /tmp/fixture artifact'\n"
-    )
+    archive_owner = tmp_path / "scripts" / "validate_norito_bridge_archive.py"
+    archive_owner_original = archive_owner.read_bytes()
+    archive_owner.write_bytes(archive_owner_original + b"# bypass archive source authentication\n")
     assert_seal_rejects(checker, tmp_path, baseline)
-    binary_podspec_template.write_bytes(binary_podspec_template_original)
+    archive_owner.write_bytes(archive_owner_original)
 
     csharp_project = (
         tmp_path
@@ -688,10 +812,10 @@ def test_trusted_release_surface_covers_all_tracked_release_support() -> None:
         Path("cliff.toml"),
         Path("dashboards/alerts/fastpq_acceleration_rules.yml"),
         Path("dashboards/alerts/tests/fastpq_acceleration_rules.test.yml"),
-        Path("IrohaSwift/IrohaSwift.podspec"),
+        Path("IrohaSwift/VERSION"),
         Path("IrohaSwift/Package.swift"),
         Path("IrohaSwift/Package.resolved"),
-        Path("crates/connect_norito_bridge/NoritoBridge.podspec.template"),
+        Path("scripts/validate_norito_bridge_archive.py"),
         Path("crates/build-support/script.rs"),
         Path("crates/build-support/src/lib.rs"),
         Path("crates/sorafs_manifest/include/sorafs_reference.h"),
@@ -790,13 +914,13 @@ def test_trusted_release_surface_rejects_changed_or_removed_nextest_selection(
 def _nix_test_catalog(checker):
     return checker.WorkspaceCatalog(
         package_features={
-            "irohad": frozenset({"safe", "ivm-cuda"}),
+            "irohad": frozenset({"safe", "ordinary"}),
             "iroha_cli": frozenset(),
             "iroha_kagami": frozenset(),
             "iroha_data_model": frozenset({"test-fixtures"}),
         },
         binaries={
-            "iroha3d": (checker.CargoBinary("irohad", "iroha3d", ("ivm-cuda",)),),
+            "iroha3d": (checker.CargoBinary("irohad", "iroha3d", ("ordinary",)),),
             "iroha": (checker.CargoBinary("iroha_cli", "iroha", ()),),
             "kagami": (checker.CargoBinary("iroha_kagami", "kagami", ()),),
         },
@@ -815,7 +939,7 @@ def test_nix_named_outputs_are_bounded_shipping_profiles(tmp_path: Path) -> None
         if target.source.endswith(":packages.iroha3")
     }
     assert iroha3_targets == {
-        ("irohad", "iroha3d", ("ivm-cuda",)),
+        ("irohad", "iroha3d", ("ordinary",)),
         ("iroha_cli", "iroha", ()),
         ("iroha_kagami", "kagami", ()),
     }
@@ -823,7 +947,7 @@ def test_nix_named_outputs_are_bounded_shipping_profiles(tmp_path: Path) -> None
         (target.package, target.binary, target.features)
         for target in targets
         if target.source.endswith(":packages.targets")
-    } == {("irohad", "iroha3d", ("ivm-cuda",))}
+    } == {("irohad", "iroha3d", ("ordinary",))}
 
     source = (REPO / checker.NIX_RELEASE_OWNER).read_text(encoding="utf-8")
     helper = tmp_path / checker.NIX_APPIMAGE_OWNER_ROOT / "flake.nix"
@@ -843,7 +967,7 @@ def test_nix_named_outputs_are_bounded_shipping_profiles(tmp_path: Path) -> None
     assert any(
         target.source.endswith(":packages.iroha3")
         and target.package == "irohad"
-        and target.features == ("ivm-cuda", "safe")
+        and target.features == ("ordinary", "safe")
         for target in safe_targets
     )
     assert all(
@@ -1106,7 +1230,7 @@ def test_published_docker_variants_and_feature_overrides_are_derived() -> None:
         "Dockerfile.cross",
     }
     profiling = [
-        invocation for invocation in invocations if invocation.features == ("irohad/ivm-cuda", "profiling")
+        invocation for invocation in invocations if invocation.features == ("profiling",)
     ]
     assert {invocation.dockerfile for invocation in profiling} == {
         "Dockerfile",
@@ -1581,7 +1705,7 @@ export PYTHONNOUSERSITE=1
 release_python=(python3 -I -S "$repo_root/scripts/run_isolated_release_tool.py")
 from release_artifact_contract import release_acceleration_features
 release_acceleration_features(sys.argv[2], filter(None, sys.argv[3].split(",")))
-cuda_provenance_args=(--trusted-cuda-key-sha256 "$trusted_cuda_key_sha256")
+require_release_cuda_source_inputs(Path(sys.argv[1]).parent, sys.argv[2])
 validate_release_source
 validate_release_source
 """
@@ -2042,7 +2166,7 @@ irohad feature "test-network-parliament-signers"
 def test_production_acceleration_roots_are_admitted_with_existing_shipping_features() -> None:
     checker = load_checker()
     profiles = (
-        checker.ShippingProfile("irohad", ("daemon", "ivm-cuda", "external-software-signer-bin")),
+        checker.ShippingProfile("irohad", ("daemon", "external-software-signer-bin")),
         checker.ShippingProfile("ivm", ("default", "metal")),
         checker.ShippingProfile("ivm", ("cuda", "default", "metal")),
         checker.ShippingProfile("connect_norito_bridge", ("cuda", "privacy-production-enabled")),
@@ -2124,11 +2248,10 @@ def test_release_publishers_depend_on_feature_graph_guard() -> None:
 @pytest.mark.parametrize("marker", (
     'includesDaemon = builtins.any (binary: binary.package == "irohad") binaries;',
     'needsCuda = includesDaemon && (lib.hasInfix "-linux-" targetTriple || lib.hasInfix "-windows-" targetTriple);',
-    'releaseFeatures = lib.unique (features ++ lib.optional needsCuda "irohad/ivm-cuda");',
-    'IVM_CUDA_PTX_MODE = "bundled";',
-    'IVM_CUDA_TRUSTED_KEY_SHA256 = checkedCudaKey;',
-    'builtins.match "[0-9a-f]{64}" cudaTrustedKeySha256 != null',
-    'cudaTrustedKeySha256 != "0000000000000000000000000000000000000000000000000000000000000000"',
+    'releaseFeatures = lib.unique features;',
+    "preBuild = lib.optionalString needsCuda ''",
+    "test ! -L \"crates/ivm/cuda/''${input}\"",
+    'for input in aes.ptx',
 ))
 def test_nix_shipping_cannot_omit_target_backend_or_trust_input(marker: str) -> None:
     checker = load_checker()
@@ -2142,12 +2265,12 @@ def test_nix_shipping_cannot_omit_target_backend_or_trust_input(marker: str) -> 
 def test_qualified_cargo_release_feature_stays_bound_to_its_package() -> None:
     checker = load_checker()
     catalog = checker.WorkspaceCatalog(
-        package_features={"irohad": frozenset({"ivm-cuda"}), "unrelated": frozenset({"ivm-cuda"})},
+        package_features={"irohad": frozenset({"ordinary"}), "unrelated": frozenset({"ordinary"})},
         binaries={}, native_libraries={}, workspace_docker_bins=(),
     )
-    assert checker.declared_feature_owners("irohad/ivm-cuda", catalog) == (("irohad", "ivm-cuda"),)
-    assert set(checker.declared_feature_owners("ivm-cuda", catalog)) == {("irohad", "ivm-cuda"), ("unrelated", "ivm-cuda")}
-    for value in ("missing/ivm-cuda", "irohad/cuda-hardware-tests", "irohad/ivm-cuda/extra", "unknown"):
+    assert checker.declared_feature_owners("irohad/ordinary", catalog) == (("irohad", "ordinary"),)
+    assert set(checker.declared_feature_owners("ordinary", catalog)) == {("irohad", "ordinary"), ("unrelated", "ordinary")}
+    for value in ("missing/ordinary", "irohad/cuda-hardware-tests", "irohad/ordinary/extra", "unknown"):
         with pytest.raises(RuntimeError, match="no workspace package declares"):
             checker.declared_feature_owners(value, catalog)
 
@@ -2157,18 +2280,17 @@ def test_every_linux_docker_producer_resolves_mandatory_backend(dockerfile: str,
     checker = load_checker()
     names = ("iroha3d", "iroha3d_taira", "sorafs_governance_dag", "iroha", "kagami", "attachment_sanitizer", "sorafs_external_software_signer")
     catalog = checker.WorkspaceCatalog(
-        package_features={"irohad": frozenset({"ivm-cuda", "external-software-signer-bin", "profiling"})},
+        package_features={"irohad": frozenset({"safe", "external-software-signer-bin", "profiling"})},
         binaries={name: (checker.CargoBinary("irohad", name, ()),) for name in names},
         native_libraries={}, workspace_docker_bins=names,
     )
     rows = checker.docker_shipping_targets(REPO, catalog, Path(dockerfile))
-    assert rows and all("ivm-cuda" in row.features for row in rows)
-    with pytest.raises(RuntimeError, match="omits mandatory CUDA"):
-        checker.docker_shipping_targets(REPO, catalog, Path(dockerfile), features=("profiling",))
+    assert rows and all("safe" not in row.features for row in rows)
+    assert checker.docker_shipping_targets(REPO, catalog, Path(dockerfile), features=("profiling",))
     source = (REPO / dockerfile).read_text()
-    for marker in ('ENV IVM_CUDA_PTX_MODE=bundled', 'test "${#IVM_CUDA_TRUSTED_KEY_SHA256}" -eq 64'):
+    for marker in ('for input in aes.ptx', 'test ! -L "crates/ivm/cuda/${input}"'):
         (tmp_path / dockerfile).write_text(source.replace(marker, ""))
-        with pytest.raises(RuntimeError, match="signed CUDA build-input"):
+        with pytest.raises(RuntimeError, match="fixed CUDA inventory"):
             checker.docker_shipping_targets(tmp_path, catalog, Path(dockerfile))
 
 
@@ -2180,10 +2302,182 @@ def test_release_workflow_overrides_keep_cuda_and_forward_public_review_input() 
     assert {invocation.dockerfile for invocation in invocations} == {"Dockerfile", "Dockerfile.cross", "Dockerfile.musl"}
     for invocation in invocations:
         if invocation.features is not None:
-            assert "irohad/ivm-cuda" in invocation.features
+            assert "irohad/ivm-cuda" not in invocation.features
 
 
 def test_compose_candidate_build_forwards_the_same_public_trust_input() -> None:
     source = (REPO / ".github/workflows/pr_docker_compose.yml").read_text()
     assert source.count("docker/build-push-action@") == 1
-    assert source.count("IVM_CUDA_TRUSTED_KEY_SHA256=${{ vars.IVM_CUDA_TRUSTED_KEY_SHA256 }}") == 1
+    assert "IVM_CUDA_TRUSTED_KEY_SHA256" not in source
+
+
+def prepare_android_cargo_envelope_repo(tmp_path: Path, checker):
+    """Copy the real finite Android command owners for parser mutations."""
+    catalog = checker.WorkspaceCatalog(
+        package_features={
+            "connect_norito_bridge": frozenset({"privacy-production-enabled"})
+        },
+        binaries={},
+        native_libraries={"connect_norito_bridge": ("cdylib", "staticlib")},
+        workspace_docker_bins=(),
+    )
+    for relative in (
+        Path(".github/workflows/mobile_sdk_artifacts.yml"),
+        checker.ANDROID_NATIVE_BUILD_OWNER,
+        checker.ANDROID_HERMETIC_RUNNER,
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((REPO / relative).read_bytes())
+    return catalog
+
+
+def test_android_cargo_uses_canonical_root_manifest_and_lock_custody(tmp_path: Path):
+    checker = load_checker()
+    catalog = prepare_android_cargo_envelope_repo(tmp_path, checker)
+    targets = checker.android_native_artifact_targets(tmp_path, catalog)
+    assert targets == (
+        checker.ShippingTarget(
+            package="connect_norito_bridge",
+            binary="<native-library>",
+            features=("privacy-production-enabled",),
+            default_features=True,
+            source=str(checker.ANDROID_NATIVE_BUILD_OWNER),
+        ),
+    )
+    source = (tmp_path / checker.ANDROID_NATIVE_BUILD_OWNER).read_text()
+    start = source.index("val command = buildList {")
+    command = source[start:source.index("execOperations.exec {", start)]
+    assert '"--lockfile-path"' not in command
+    # The explicit lock selector is still required by the source-seal owner.
+    assert source.count('"--lockfile-path"') == 2
+    assert source.count('tools.cargoLock.toString()') == 2
+
+
+@pytest.mark.parametrize(("original", "replacement"), (
+    ('"build",', '"check",'),
+    ('"--locked",', '"--frozen",'),
+    ('"--offline",', '"--online",'),
+    ('"--jobs",', '"-j",'),
+    ('"--jobs",\n                        "1",', '"--jobs",\n                        "2",'),
+    ('"--jobs",\n                        "1",', '"--jobs=1",'),
+    ('"--manifest-path",', '"--manifest-path=Cargo.toml",'),
+    ('irohaRoot.resolve("Cargo.toml").absolutePath', 'irohaRoot.resolve("other/Cargo.toml").absolutePath'),
+    ('"--locked",\n                        "--offline",', '"--offline",\n                        "--locked",'),
+    ('"--release",', '"--release", "--locked",'),
+    ('"--release",', '"--release", "--offline",'),
+    ('"--release",', '"--release", "--jobs", "1",'),
+    ('"--release",', '"--release", "--manifest-path", "foreign/Cargo.toml",'),
+    ('"--release",', '"--release", "--lockfile-path", tools.cargoLock.toString(),'),
+    ('"--release",', '"--release", "--lockfile-path=foreign/Cargo.lock",'),
+    ('"--release",', '"--release", "--config", "foreign.toml",'),
+    ('"--release",', '"--release", "-Zunstable-options",'),
+    ('val cargoLock = canonicalIrohaRoot.resolve("Cargo.lock")', 'val cargoLock = canonicalIrohaRoot.resolve("other/Cargo.lock")'),
+    ('Files.isRegularFile(cargoLock, LinkOption.NOFOLLOW_LINKS)', 'Files.exists(cargoLock)'),
+    ('!Files.isSymbolicLink(cargoLock)', 'true'),
+    ('cargoLock.toRealPath(LinkOption.NOFOLLOW_LINKS) == cargoLock', 'true'),
+))
+def test_android_cargo_canonical_envelope_and_root_lock_mutations_reject(
+    tmp_path: Path, original: str, replacement: str,
+):
+    checker = load_checker()
+    catalog = prepare_android_cargo_envelope_repo(tmp_path, checker)
+    owner = tmp_path / checker.ANDROID_NATIVE_BUILD_OWNER
+    source = owner.read_text()
+    assert original in source
+    owner.write_text(source.replace(original, replacement, 1))
+    with pytest.raises(RuntimeError, match="Android (Cargo envelope|root Cargo.lock custody)"):
+        checker.android_native_artifact_targets(tmp_path, catalog)
+
+
+@pytest.mark.parametrize(("original", "replacement"), (
+    ('authenticated_files["Android root Cargo.lock"] = authenticate_android_cargo_arguments(',
+     'untracked_root_lock = authenticate_android_cargo_arguments('),
+    ('canonical_workspace / "Cargo.lock",', 'canonical_workspace / "other/Cargo.lock",'),
+    ('manifest_position = exact_pair("--manifest-path", str(canonical_workspace / "Cargo.toml"))',
+     'manifest_position = exact_pair("--manifest-path", str(canonical_workspace / "other/Cargo.toml"))'),
+    ('value == "--lockfile-path"', 'False'),
+    ('for name, (path, expected_identity) in authenticated_files.items():',
+     'for name, (path, expected_identity) in {}.items():'),
+    ('_, current_identity = authenticate_regular_file(name, path)',
+     '_, current_identity = (path, expected_identity)'),
+))
+def test_android_cargo_hermetic_root_lock_authentication_and_recheck_reject(
+    tmp_path: Path, original: str, replacement: str,
+):
+    checker = load_checker()
+    catalog = prepare_android_cargo_envelope_repo(tmp_path, checker)
+    owner = tmp_path / checker.ANDROID_HERMETIC_RUNNER
+    source = owner.read_text()
+    assert source.count(original) == 1
+    owner.write_text(source.replace(original, replacement, 1))
+    with pytest.raises(RuntimeError, match="Android Cargo authentication changed"):
+        checker.android_native_artifact_targets(tmp_path, catalog)
+
+
+@pytest.mark.parametrize("mutation", ("remove", "optional", "weak", "wrong-platform", "extra-feature", "alias", "binary-alias"))
+def test_release_graph_requires_exact_platform_dependency_before_cargo(tmp_path: Path, mutation: str) -> None:
+    checker = load_checker()
+    runtime = tmp_path / "crates/irohad/Cargo.toml"
+    binary = tmp_path / "crates/irohad/bins/Cargo.toml"
+    binary.parent.mkdir(parents=True)
+    source = (REPO / "crates/irohad/Cargo.toml").read_text()
+    binary_source = (REPO / "crates/irohad/bins/Cargo.toml").read_text()
+    runtime.write_text(source)
+    binary.write_text(binary_source)
+    checker.validate_daemon_cuda_target_dependency(tmp_path)
+    scope = 'cfg(any(target_os = "linux", target_os = "windows"))'
+    row = 'ivm = { workspace = true, features = ["cuda"] }'
+    if mutation == "remove":
+        source = source.replace(row, "")
+    elif mutation == "optional":
+        source = source.replace(row, 'ivm = { workspace = true, optional = true, features = ["cuda"] }')
+    elif mutation == "weak":
+        source = source.replace(row, 'ivm = { workspace = true, features = ["cuda?"] }')
+    elif mutation == "wrong-platform":
+        source = source.replace(scope, 'cfg(target_os = "macos")')
+    elif mutation == "extra-feature":
+        source = source.replace(row, 'ivm = { workspace = true, features = ["cuda", "cuda-hardware-tests"] }')
+    else:
+        if mutation == "binary-alias":
+            binary_source = binary_source.replace('[features]', '[features]\nivm-cuda = ["irohad_lib/ivm-cuda"]')
+        else:
+            source = source.replace('[features]', '[features]\nivm-cuda = ["ivm/cuda"]')
+    runtime.write_text(source)
+    binary.write_text(binary_source)
+    with pytest.raises(RuntimeError, match="exact mandatory Linux/Windows"):
+        checker.validate_daemon_cuda_target_dependency(tmp_path)
+
+
+def test_retired_daemon_forward_is_never_a_shipping_root() -> None:
+    checker = load_checker()
+    for package in ("irohad", "irohad_lib"):
+        with pytest.raises(RuntimeError, match="shipping feature policy violations"):
+            checker.validate_shipping_profile_policy((checker.ShippingProfile(package, ("ivm-cuda",)),))
+
+
+@pytest.mark.parametrize("mutation_enabled", (False, True))
+def test_shipping_graph_refuses_transitive_daemon_mutation_testing(
+    monkeypatch, capsys, mutation_enabled: bool
+) -> None:
+    checker = load_checker()
+    profile = checker.ShippingProfile("connect_norito_bridge")
+    marker = 'irohad_lib feature "mutation-testing"'
+    graph = "\n".join(checker.REQUIRED_FEATURES.get(profile.package, ()))
+    if mutation_enabled:
+        graph += "\n" + marker
+    assert checker.forbidden_features_in_graph(graph) == (
+        (marker,) if mutation_enabled else ()
+    )
+    assert "mutation-testing" not in checker.SHIPPING_ROOT_FEATURE_ALLOWLIST["irohad"]
+    assert "irohad_lib" not in checker.SHIPPING_ROOT_FEATURE_ALLOWLIST
+    monkeypatch.setattr(checker.sys, "argv", [str(SCRIPT)])
+    monkeypatch.setattr(checker, "shipping_profiles", lambda _repo: (profile,))
+    monkeypatch.setattr(checker, "feature_graph", lambda *_args: graph)
+    assert checker.main() == int(mutation_enabled)
+    result = capsys.readouterr()
+    if mutation_enabled:
+        assert f"enabled {marker}" in result.err
+    else:
+        assert result.err == ""
+        assert "exclude test fixtures" in result.out

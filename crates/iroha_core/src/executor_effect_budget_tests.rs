@@ -460,7 +460,7 @@ seiyaku ActualEffectGroups {
                 .iter()
                 .find(|callable| callable.entry_pc == entry.entry_pc)
                 .unwrap();
-            assert_eq!(callable.result_words, [ivm::call::CallWordV1::Unit]);
+            assert_eq!(callable.results, ivm::call::CallSchemaV1::unit());
             let mut host = crate::smartcontracts::ivm::host::CoreHost::new(ALICE_ID.clone());
             if limited {
                 let (cycles, gas, trace): (u64, u64, Vec<u64>) = completed.take().unwrap();
@@ -484,9 +484,8 @@ seiyaku ActualEffectGroups {
                 let refused_gas = gas - (GAS - vm.remaining_gas());
                 assert_eq!(
                     refused_gas,
-                    ivm::gas::cost_of(refused).unwrap()
-                        + u64::try_from(ivm::call::CALL_WORD_BYTES_V1).unwrap(),
-                    "return dispatch includes validation of its single Unit result word"
+                    ivm::gas::cost_of(refused).unwrap() + ivm::call_gas::NODE + ivm::call_gas::WORD,
+                    "return dispatch validates the Unit schema node and its result word"
                 );
                 return (cycles, gas, refused_gas);
             }

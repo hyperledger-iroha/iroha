@@ -17,7 +17,7 @@ import re
 import secrets
 import time
 import unicodedata
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
@@ -74,11 +74,8 @@ from iroha_torii_client.client import (
     SorafsOrderbookSubmissionReceiptPayload,
     SubscriptionActionResult,
     SubscriptionCreateResult,
-    SubscriptionListItem,
-    SubscriptionListPage,
+    SubscriptionGetResponse,
     SubscriptionPlanCreateResult,
-    SubscriptionPlanListItem,
-    SubscriptionPlanListPage,
     ToriiCanonicalRequestAuth,
     VpnProfile,
     VpnQuote,
@@ -108,6 +105,13 @@ from iroha_torii_client.client_status_models import (
     TransportConfig,
     TransportNoritoRpcConfig,
     parse_sumeragi_json_object,
+)
+from iroha_torii_client.collection import Account, AccountsCollection, Collection, Domain, HistoryCollection
+from iroha_torii_client.list_query import (
+    F,
+    Filter,
+    FilterLike,
+    filter_text,
 )
 from iroha_torii_client.governance_proposals import (
     GovernanceCanonicalObject,
@@ -146,6 +150,7 @@ from iroha_torii_client.governance_proposals import (
     GovernanceSorafsProviderActionKind,
     GovernanceValidationFeeChargingMode,
     GovernanceValidationFeePayoutBinding,
+    GovernanceValidationFeeRewardCustody,
     GovernanceValidationFeePolicy,
 )
 
@@ -186,18 +191,9 @@ from .dataspaces import (
 from .dataspaces import (
     write_dataspace_plan as _write_dataspace_plan,
 )
-from .event_filter import DataEventFilter, ensure_event_filter
 from .nexus_app import _strict_nexus_lane_config as _strict_nexus_lane_config_impl
 from .numeric_v1 import NumericV1Codec
-from .query import (
-    AggregateSpec,
-    account_query_envelope,
-    asset_definitions_query_envelope,
-    asset_holders_query_envelope,
-    domain_query_envelope,
-    rwa_query_envelope,
-)
-from .repo import RepoAgreementListPage
+from .repo import RepoAgreementRecord
 from .sorafs import (
     SorafsAliasError,
     SorafsAliasEvaluation,
@@ -211,7 +207,13 @@ from .sorafs_hedging_billing import (
     encode_sorafs_billing_acknowledgement_proof_v1,
 )
 from .sorafs_por import normalize_cursor as _normalize_sorafs_por_cursor
-from .stream_events import EventCursor, SseEvent, SseStreamError, WebSocketEvent
+from .stream_events import (
+    EventCursor,
+    SseEvent,
+    SseStreamError,
+    WebSocketEvent,
+    decode_event,
+)
 from .torii_client_config_normalization import (
     _coerce_duration_seconds,
     _coerce_float,
@@ -220,11 +222,6 @@ from .torii_client_config_normalization import (
     _normalize_headers,
     _parse_retry_methods,
     _parse_retry_statuses,
-)
-from .torii_client_expensive_query_auth import ToriiClientExpensiveQueryAuthMixin
-from .torii_client_explorer_pagination import (
-    _normalize_explorer_cursor,
-    _normalize_explorer_limit,
 )
 from .torii_client_governance_ballots import (
     bind_governance_ballot_network_id,
@@ -265,6 +262,7 @@ from .torii_client_runtime_auth import (
 )
 from .torii_client_space_directory import create_torii_client_space_directory_mixin
 from .torii_client_streaming_query import create_torii_client_streaming_query_mixin
+from .private_transaction_counters import ToriiClientPrivateTransactionCountersMixin
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .connect import _ConnectControlBase as ConnectControlBase  # noqa: F401
     from .crypto import (  # noqa: F401
@@ -295,24 +293,6 @@ def _json_safe_value(value: Any) -> Any:
     if isinstance(value, tuple):
         return [_json_safe_value(item) for item in value]
     return value
-
-
-def _encode_filter_arg(filter_value: Optional[Any]) -> Optional[str]:
-    if filter_value is None:
-        return None
-    if isinstance(filter_value, str):
-        return filter_value
-    return json.dumps(filter_value)
-
-
-def _encode_sort_arg(sort_value: Optional[Any]) -> Optional[str]:
-    if sort_value is None:
-        return None
-    if isinstance(sort_value, str):
-        return sort_value
-    if isinstance(sort_value, Sequence):
-        return ",".join(str(entry).strip() for entry in sort_value if entry is not None)
-    return str(sort_value)
 
 
 DEFAULT_I105_DISCRIMINANT = 0x02F1
@@ -1726,111 +1706,6 @@ def _normalize_optional_string(value: Any, context: str) -> Optional[str]:
     return _require_non_empty_string(value, context)
 
 
-def _extract_page_items(payload: Any) -> List[Mapping[str, Any]]:
-    raw_items = payload.get("items") if isinstance(payload, Mapping) else payload
-    if raw_items is None:
-        return []
-    if not isinstance(raw_items, list):
-        raise RuntimeError("Torii list response `items` must be a list")
-    return [item for item in raw_items if isinstance(item, Mapping)]
-
-
-def _page_total(payload: Any) -> Optional[int]:
-    if not isinstance(payload, Mapping):
-        return None
-    total = payload.get("total")
-    if isinstance(total, int):
-        return total
-    try:
-        return int(total) if total is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _page_metadata(payload: Mapping[str, Any], item_count: int, context: str) -> Dict[str, Any]:
-    total: Optional[int]
-    has_total = payload.get("total") is not None
-    if has_total:
-        try:
-            parsed_total = int(payload["total"])
-        except (TypeError, ValueError) as exc:
-            raise TypeError(f"{context} `total` must be numeric") from exc
-        if parsed_total < 0:
-            raise TypeError(f"{context} `total` must be non-negative")
-        total = parsed_total
-    elif "has_more" in payload or "count_mode" in payload:
-        total = None
-    else:
-        total = item_count
-
-    has_more_raw = payload.get("has_more", False)
-    if not isinstance(has_more_raw, bool):
-        raise TypeError(f"{context} `has_more` must be a boolean")
-
-    count_mode_raw = payload.get("count_mode")
-    if count_mode_raw is None:
-        count_mode = "exact" if total is not None else "bounded"
-    elif isinstance(count_mode_raw, str) and count_mode_raw in {"bounded", "exact"}:
-        count_mode = count_mode_raw
-    else:
-        raise TypeError(f"{context} `count_mode` must be 'bounded' or 'exact'")
-
-    indexed_height_raw = payload.get("indexed_height")
-    if indexed_height_raw is None:
-        indexed_height: Optional[int] = None
-    else:
-        try:
-            indexed_height = int(indexed_height_raw)
-        except (TypeError, ValueError) as exc:
-            raise TypeError(f"{context} `indexed_height` must be numeric") from exc
-        if indexed_height < 0:
-            raise TypeError(f"{context} `indexed_height` must be non-negative")
-
-    indexed_block_hash = payload.get("indexed_block_hash")
-    if indexed_block_hash is not None and not isinstance(indexed_block_hash, str):
-        raise TypeError(f"{context} `indexed_block_hash` must be a string or null")
-    query_source = payload.get("query_source")
-    if query_source is not None and not isinstance(query_source, str):
-        raise TypeError(f"{context} `query_source` must be a string")
-
-    return {
-        "total": total,
-        "has_more": has_more_raw,
-        "count_mode": count_mode,
-        "indexed_height": indexed_height,
-        "indexed_block_hash": indexed_block_hash,
-        "query_source": query_source,
-    }
-
-
-def _normalize_count_mode_arg(count_mode: Optional[str]) -> Optional[str]:
-    if count_mode is None:
-        return None
-    value = str(count_mode).strip().lower()
-    if value not in {"bounded", "exact"}:
-        raise ValueError("count_mode must be 'bounded' or 'exact'")
-    return value
-
-
-def _asset_entry_matches_definition(
-    item: Mapping[str, Any],
-    asset_definition_id: str,
-    account_id: str,
-) -> bool:
-    asset_id = str(item.get("asset_id") or item.get("asset") or "").strip()
-    asset_alias = str(item.get("asset_alias") or "").strip()
-    candidates = {
-        asset_definition_id,
-        f"{asset_definition_id}#{account_id}",
-        f"{asset_definition_id}##{account_id}",
-    }
-    return (
-        asset_alias == asset_definition_id
-        or asset_id in candidates
-        or asset_id.startswith(f"{asset_definition_id}#")
-    )
-
-
 def _canonical_quantity_text(value: Any, context: str) -> str:
     if type(value) is not str:
         raise TypeError(f"{context} must be a canonical JSON string")
@@ -1881,10 +1756,6 @@ def _require_prepared_faucet_policy_v1(
         )
     if actual_amount != expected_amount:
         raise ValueError(f"{context}.amount differs from the independent faucet policy")
-
-
-def _quantity_decimal(value: Any) -> Decimal:
-    return Decimal(_canonical_quantity_text(value, "asset quantity"))
 
 
 def _leading_zero_bits(payload: bytes) -> int:
@@ -4512,45 +4383,6 @@ class ExplorerAccountQrSnapshot:
 
 
 @dataclass(frozen=True)
-class ExplorerCursorMeta:
-    """Strict seek-cursor metadata returned by world-backed Explorer lists."""
-
-    limit: int
-    next_cursor: Optional[str]
-    has_more: bool
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ExplorerCursorMeta":
-        if not isinstance(payload, Mapping):
-            raise TypeError("explorer cursor pagination payload must be an object")
-        expected = {"limit", "next_cursor", "has_more"}
-        actual = set(payload)
-        if actual != expected:
-            unknown = sorted(str(key) for key in actual - expected)
-            missing = sorted(expected - actual)
-            raise TypeError(
-                "explorer cursor pagination fields must be exactly "
-                f"{sorted(expected)}; missing={missing}, unknown={unknown}"
-            )
-        limit = _normalize_explorer_limit(
-            payload["limit"],
-            "explorer_cursor_pagination.limit",
-        )
-        if limit is None:
-            raise TypeError("explorer_cursor_pagination.limit must be an integer")
-        next_cursor = _normalize_explorer_cursor(
-            payload["next_cursor"],
-            "explorer_cursor_pagination.next_cursor",
-        )
-        has_more = payload["has_more"]
-        if not isinstance(has_more, bool):
-            raise TypeError("explorer_cursor_pagination.has_more must be a boolean")
-        if has_more != (next_cursor is not None):
-            raise ValueError("explorer_cursor_pagination.has_more must match next_cursor presence")
-        return cls(limit=limit, next_cursor=next_cursor, has_more=has_more)
-
-
-@dataclass(frozen=True)
 class ExplorerRwaRecord:
     """Explorer RWA lot projection returned by `/v1/explorer/rwas`."""
 
@@ -4620,42 +4452,6 @@ class ExplorerRwaRecord:
             is_frozen=is_frozen,
             metadata=metadata,
             raw=dict(payload),
-        )
-
-
-@dataclass(frozen=True)
-class ExplorerRwasPage:
-    """Bounded cursor page returned by `/v1/explorer/rwas`."""
-
-    pagination: ExplorerCursorMeta
-    items: List[ExplorerRwaRecord]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ExplorerRwasPage":
-        if not isinstance(payload, Mapping):
-            raise TypeError("explorer RWA page payload must be an object")
-        expected = {"pagination", "items"}
-        actual = set(payload)
-        if actual != expected:
-            unknown = sorted(str(key) for key in actual - expected)
-            missing = sorted(expected - actual)
-            raise TypeError(
-                "explorer RWA page fields must be exactly "
-                f"{sorted(expected)}; missing={missing}, unknown={unknown}"
-            )
-        pagination_payload = payload.get("pagination")
-        if not isinstance(pagination_payload, Mapping):
-            raise TypeError("explorer RWA page missing object `pagination` field")
-        pagination = ExplorerCursorMeta.from_payload(pagination_payload)
-        items_payload = payload.get("items")
-        if not isinstance(items_payload, list):
-            raise TypeError("explorer RWA page `items` must be a list")
-        if len(items_payload) > pagination.limit:
-            raise ValueError("explorer RWA page contains more items than its limit")
-        items = [ExplorerRwaRecord.from_payload(entry) for entry in items_payload]
-        return cls(
-            pagination=pagination,
-            items=items,
         )
 
 
@@ -8367,91 +8163,6 @@ class PipelineRecoverySidecar:
 
 
 @dataclass(frozen=True)
-class AccountAsset:
-    """Account asset entry returned by account asset listings."""
-
-    asset_id: str
-    quantity: str
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "AccountAsset":
-        if not isinstance(payload, Mapping):
-            raise TypeError("account asset entry must be an object")
-        asset_id = payload.get("asset_id") or payload.get("asset")
-        quantity = payload.get("quantity")
-        if not isinstance(asset_id, str):
-            raise TypeError("account asset entry missing string `asset_id` field")
-        return cls(
-            asset_id=asset_id,
-            quantity=_canonical_quantity_text(quantity, "account asset quantity"),
-        )
-
-
-@dataclass(frozen=True)
-class AccountAssetsPage:
-    """Paginated account asset list."""
-
-    items: List[AccountAsset]
-    total: Optional[int]
-    has_more: bool = False
-    count_mode: str = "exact"
-    indexed_height: Optional[int] = None
-    indexed_block_hash: Optional[str] = None
-    query_source: Optional[str] = None
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "AccountAssetsPage":
-        if not isinstance(payload, Mapping):
-            raise TypeError("account assets response must be an object")
-        items_raw = payload.get("items", [])
-        if not isinstance(items_raw, list):
-            raise TypeError("account assets response `items` must be a list")
-        items = [AccountAsset.from_payload(entry) for entry in items_raw]
-        return cls(
-            items=items,
-            **_page_metadata(payload, len(items), "account assets response"),
-        )
-
-
-@dataclass(frozen=True)
-class AccountTransaction:
-    """Projection of a transaction returned by account transaction listings."""
-
-    entrypoint_hash: str
-    result_ok: bool
-    authority: Optional[str]
-    timestamp_ms: Optional[int]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "AccountTransaction":
-        if not isinstance(payload, Mapping):
-            raise TypeError("account transaction entry must be an object")
-        entrypoint_hash = payload.get("entrypoint_hash")
-        if not isinstance(entrypoint_hash, str):
-            raise TypeError("account transaction entry missing string `entrypoint_hash` field")
-        result_ok = payload.get("result_ok")
-        if not isinstance(result_ok, bool):
-            raise TypeError("account transaction entry missing bool `result_ok` field")
-        authority = payload.get("authority")
-        if authority is not None and not isinstance(authority, str):
-            raise TypeError("account transaction `authority` must be a string when provided")
-        timestamp_value = payload.get("timestamp_ms")
-        if timestamp_value is None:
-            timestamp_ms: Optional[int] = None
-        else:
-            try:
-                timestamp_ms = int(timestamp_value)
-            except (TypeError, ValueError) as exc:
-                raise TypeError("account transaction `timestamp_ms` must be numeric") from exc
-        return cls(
-            entrypoint_hash=entrypoint_hash,
-            result_ok=result_ok,
-            authority=authority,
-            timestamp_ms=timestamp_ms,
-        )
-
-
-@dataclass(frozen=True)
 class VerifiedCommittedTransaction:
     """A selected full output authenticated by a rooted consensus finality chain.
 
@@ -8795,323 +8506,6 @@ class VerifiedCommittedTransaction:
 
 
 @dataclass(frozen=True)
-class AccountTransactionsPage:
-    """Paginated account transaction list."""
-
-    items: List[AccountTransaction]
-    total: Optional[int]
-    has_more: bool = False
-    count_mode: str = "exact"
-    indexed_height: Optional[int] = None
-    indexed_block_hash: Optional[str] = None
-    query_source: Optional[str] = None
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "AccountTransactionsPage":
-        if not isinstance(payload, Mapping):
-            raise TypeError("account transactions response must be an object")
-        items_raw = payload.get("items", [])
-        if not isinstance(items_raw, list):
-            raise TypeError("account transactions response `items` must be a list")
-        items = [AccountTransaction.from_payload(entry) for entry in items_raw]
-        return cls(
-            items=items,
-            **_page_metadata(payload, len(items), "account transactions response"),
-        )
-
-
-@dataclass(frozen=True)
-class AccountRecord:
-    """Account entry returned by account queries."""
-
-    id: str
-    signatories: List[str]
-    metadata: Dict[str, Any]
-    raw: Dict[str, Any]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "AccountRecord":
-        if not isinstance(payload, Mapping):
-            raise TypeError("account record must be an object")
-        account_id = payload.get("id")
-        if not isinstance(account_id, str):
-            raise TypeError("account record missing string `id` field")
-        signatories_payload = payload.get("signatories", [])
-        if signatories_payload is None:
-            signatories_list: List[str] = []
-        elif isinstance(signatories_payload, list):
-            if not all(isinstance(item, str) for item in signatories_payload):
-                raise TypeError("account record `signatories` must be a list of strings")
-            signatories_list = list(signatories_payload)
-        else:
-            raise TypeError("account record `signatories` must be a list")
-        metadata_payload = payload.get("metadata", {})
-        if metadata_payload is None:
-            metadata_dict: Dict[str, Any] = {}
-        elif isinstance(metadata_payload, Mapping):
-            metadata_dict = dict(metadata_payload)
-        else:
-            raise TypeError("account record `metadata` must be an object when present")
-        return cls(
-            id=account_id,
-            signatories=signatories_list,
-            metadata=metadata_dict,
-            raw=dict(payload),
-        )
-
-
-@dataclass(frozen=True)
-class AccountListPage:
-    """Paginated account query result."""
-
-    items: List[AccountRecord]
-    total: Optional[int]
-    has_more: bool = False
-    count_mode: str = "exact"
-    indexed_height: Optional[int] = None
-    indexed_block_hash: Optional[str] = None
-    query_source: Optional[str] = None
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "AccountListPage":
-        if not isinstance(payload, Mapping):
-            raise TypeError("account query payload must be an object")
-        items_payload = payload.get("items", [])
-        if items_payload is None:
-            items_payload = []
-        if not isinstance(items_payload, list):
-            raise TypeError("account query `items` must be a list")
-        items = [AccountRecord.from_payload(entry) for entry in items_payload]
-        return cls(items=items, **_page_metadata(payload, len(items), "account query"))
-
-
-@dataclass(frozen=True)
-class DomainRecord:
-    """Domain projection returned by domain listings and queries."""
-
-    id: str
-    owned_by: Optional[str]
-    metadata: Dict[str, Any]
-    raw: Dict[str, Any]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "DomainRecord":
-        if not isinstance(payload, Mapping):
-            raise TypeError("domain record must be an object")
-        domain_id = payload.get("id")
-        if not isinstance(domain_id, str):
-            raise TypeError("domain record missing string `id` field")
-        owned_by = payload.get("owned_by")
-        if owned_by is not None and not isinstance(owned_by, str):
-            raise TypeError("domain record `owned_by` must be a string when provided")
-        metadata_payload = payload.get("metadata", {})
-        if metadata_payload is None:
-            metadata: Dict[str, Any] = {}
-        elif isinstance(metadata_payload, Mapping):
-            metadata = dict(metadata_payload)
-        else:
-            raise TypeError("domain record `metadata` must be an object when present")
-        return cls(id=domain_id, owned_by=owned_by, metadata=metadata, raw=dict(payload))
-
-
-@dataclass(frozen=True)
-class DomainListPage:
-    """Paginated domain query result."""
-
-    items: List[DomainRecord]
-    total: Optional[int]
-    has_more: bool = False
-    count_mode: str = "exact"
-    indexed_height: Optional[int] = None
-    indexed_block_hash: Optional[str] = None
-    query_source: Optional[str] = None
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "DomainListPage":
-        if not isinstance(payload, Mapping):
-            raise TypeError("domain query payload must be an object")
-        items_payload = payload.get("items", [])
-        if items_payload is None:
-            items_payload = []
-        if not isinstance(items_payload, list):
-            raise TypeError("domain query `items` must be a list")
-        items = [DomainRecord.from_payload(entry) for entry in items_payload]
-        return cls(items=items, **_page_metadata(payload, len(items), "domain query"))
-
-
-@dataclass(frozen=True)
-class AssetDefinitionRecord:
-    """Asset definition projection returned by asset definition queries."""
-
-    id: str
-    metadata: Dict[str, Any]
-    owned_by: Optional[str]
-    raw: Dict[str, Any]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "AssetDefinitionRecord":
-        if not isinstance(payload, Mapping):
-            raise TypeError("asset definition record must be an object")
-        definition_id = payload.get("id")
-        if not isinstance(definition_id, str):
-            raise TypeError("asset definition record missing string `id` field")
-        metadata_payload = payload.get("metadata", {})
-        if metadata_payload is None:
-            metadata: Dict[str, Any] = {}
-        elif isinstance(metadata_payload, Mapping):
-            metadata = dict(metadata_payload)
-        else:
-            raise TypeError("asset definition record `metadata` must be an object when present")
-        owned_by = payload.get("owned_by")
-        if owned_by is not None and not isinstance(owned_by, str):
-            raise TypeError("asset definition record `owned_by` must be a string when provided")
-        return cls(id=definition_id, metadata=metadata, owned_by=owned_by, raw=dict(payload))
-
-
-@dataclass(frozen=True)
-class AssetDefinitionListPage:
-    """Paginated asset definition query result."""
-
-    items: List[AssetDefinitionRecord]
-    total: Optional[int]
-    has_more: bool = False
-    count_mode: str = "exact"
-    indexed_height: Optional[int] = None
-    indexed_block_hash: Optional[str] = None
-    query_source: Optional[str] = None
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "AssetDefinitionListPage":
-        if not isinstance(payload, Mapping):
-            raise TypeError("asset definition query payload must be an object")
-        items_payload = payload.get("items", [])
-        if items_payload is None:
-            items_payload = []
-        if not isinstance(items_payload, list):
-            raise TypeError("asset definition query `items` must be a list")
-        items = [AssetDefinitionRecord.from_payload(entry) for entry in items_payload]
-        return cls(
-            items=items,
-            **_page_metadata(payload, len(items), "asset definition query"),
-        )
-
-
-@dataclass(frozen=True)
-class AssetHolderRecord:
-    """Asset holder projection returned by asset holder queries."""
-
-    account_id: str
-    quantity: str
-    raw: Dict[str, Any]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "AssetHolderRecord":
-        if not isinstance(payload, Mapping):
-            raise TypeError("asset holder record must be an object")
-        account_id = payload.get("account_id")
-        quantity = payload.get("quantity")
-        if not isinstance(account_id, str):
-            raise TypeError("asset holder record missing string `account_id` field")
-        canonical_quantity = _canonical_quantity_text(
-            quantity,
-            "asset holder quantity",
-        )
-        raw = dict(payload)
-        raw["quantity"] = canonical_quantity
-        return cls(account_id=account_id, quantity=canonical_quantity, raw=raw)
-
-
-@dataclass(frozen=True)
-class AssetHolderListPage:
-    """Paginated asset holder query result."""
-
-    items: List[AssetHolderRecord]
-    total: Optional[int]
-    has_more: bool = False
-    count_mode: str = "exact"
-    indexed_height: Optional[int] = None
-    indexed_block_hash: Optional[str] = None
-    query_source: Optional[str] = None
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "AssetHolderListPage":
-        if not isinstance(payload, Mapping):
-            raise TypeError("asset holder query payload must be an object")
-        items_payload = payload.get("items", [])
-        if items_payload is None:
-            items_payload = []
-        if not isinstance(items_payload, list):
-            raise TypeError("asset holder query `items` must be a list")
-        items = [AssetHolderRecord.from_payload(entry) for entry in items_payload]
-        return cls(items=items, **_page_metadata(payload, len(items), "asset holder query"))
-
-
-@dataclass(frozen=True)
-class RwaListItem:
-    """Chain-state RWA lot entry returned by `/v1/rwas` and `/v1/rwas/query`."""
-
-    id: str
-    raw: Dict[str, Any]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "RwaListItem":
-        if not isinstance(payload, Mapping):
-            raise TypeError("RWA list item must be an object")
-        identifier = payload.get("id")
-        if not isinstance(identifier, str) or not identifier.strip():
-            raise TypeError("RWA list item missing string `id` field")
-        raw = dict(payload)
-        for quantity_field in ("quantity", "held_quantity"):
-            if quantity_field in raw:
-                raw[quantity_field] = _canonical_quantity_text(
-                    raw[quantity_field],
-                    f"RWA list item {quantity_field}",
-                )
-        parents = raw.get("parents")
-        if parents is not None:
-            if not isinstance(parents, list):
-                raise TypeError("RWA list item parents must be a list")
-            canonical_parents: List[Any] = []
-            for index, parent in enumerate(parents):
-                if not isinstance(parent, Mapping):
-                    raise TypeError(f"RWA list item parents[{index}] must be an object")
-                canonical_parent = dict(parent)
-                if "quantity" in canonical_parent:
-                    canonical_parent["quantity"] = _canonical_quantity_text(
-                        canonical_parent["quantity"],
-                        f"RWA list item parents[{index}].quantity",
-                    )
-                canonical_parents.append(canonical_parent)
-            raw["parents"] = canonical_parents
-        return cls(id=identifier.strip(), raw=raw)
-
-
-@dataclass(frozen=True)
-class RwaListPage:
-    """Paginated chain-state RWA lot list returned by `/v1/rwas` and `/v1/rwas/query`."""
-
-    items: List[RwaListItem]
-    total: Optional[int]
-    has_more: bool = False
-    count_mode: str = "exact"
-    indexed_height: Optional[int] = None
-    indexed_block_hash: Optional[str] = None
-    query_source: Optional[str] = None
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "RwaListPage":
-        if not isinstance(payload, Mapping):
-            raise TypeError("RWA list payload must be an object")
-        items_payload = payload.get("items", [])
-        if items_payload is None:
-            items_payload = []
-        if not isinstance(items_payload, list):
-            raise TypeError("RWA list `items` must be a list")
-        items = [RwaListItem.from_payload(entry) for entry in items_payload]
-        return cls(items=items, **_page_metadata(payload, len(items), "RWA list"))
-
-
-@dataclass(frozen=True)
 class AccountPermissionRecord:
     """Account permission entry returned by `GET /v1/accounts/{account_id}/permissions`."""
 
@@ -9128,30 +8522,6 @@ class AccountPermissionRecord:
             raise TypeError("account permission record missing string `name` field")
         permission_payload = _json_safe_value(payload.get("payload"))
         return cls(name=name, payload=permission_payload, raw=dict(payload))
-
-
-@dataclass(frozen=True)
-class AccountPermissionListPage:
-    """Paginated account permission result."""
-
-    items: List[AccountPermissionRecord]
-    total: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "AccountPermissionListPage":
-        if not isinstance(payload, Mapping):
-            raise TypeError("account permission payload must be an object")
-        items_payload = payload.get("items", [])
-        if items_payload is None:
-            items_payload = []
-        if not isinstance(items_payload, list):
-            raise TypeError("account permission `items` must be a list")
-        try:
-            total = int(payload.get("total", len(items_payload)))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("account permission `total` must be numeric") from exc
-        items = [AccountPermissionRecord.from_payload(entry) for entry in items_payload]
-        return cls(items=items, total=total)
 
 
 # ---------------------------------------------------------------------------
@@ -9508,53 +8878,6 @@ class SpaceDirectoryManifestRecord:
 
 
 @dataclass(frozen=True)
-class SpaceDirectoryManifestList:
-    uaid: str
-    total: int
-    has_more: bool
-    count_mode: str
-    manifests: List[SpaceDirectoryManifestRecord]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SpaceDirectoryManifestList":
-        if not isinstance(payload, Mapping):
-            raise TypeError("manifest list payload must be an object")
-        _require_wire_fields(
-            payload,
-            required={"uaid", "total", "has_more", "count_mode", "manifests"},
-            context="manifest list payload",
-        )
-        uaid = _normalize_uaid_literal(
-            payload["uaid"],
-            context="manifest list payload.uaid",
-        )
-        total = _require_u64(payload["total"], "manifest list payload.total")
-        has_more = payload["has_more"]
-        if not isinstance(has_more, bool):
-            raise TypeError("manifest list payload.has_more must be a boolean")
-        count_mode = _require_exact_non_empty_string(
-            payload["count_mode"],
-            "manifest list payload.count_mode",
-        )
-        if count_mode not in {"bounded", "exact"}:
-            raise ValueError("manifest list payload.count_mode must be bounded or exact")
-        manifests_payload = payload["manifests"]
-        if not isinstance(manifests_payload, list):
-            raise TypeError("manifest list `manifests` must be a list")
-        manifests = [SpaceDirectoryManifestRecord.from_payload(item) for item in manifests_payload]
-        for record in manifests:
-            if record.manifest["uaid"] != uaid:
-                raise ValueError("manifest list UAID differs from a record manifest")
-        return cls(
-            uaid=uaid,
-            total=total,
-            has_more=has_more,
-            count_mode=count_mode,
-            manifests=manifests,
-        )
-
-
-@dataclass(frozen=True)
 class TriggerRecord:
     """Trigger definition returned by trigger listing/query endpoints."""
 
@@ -9809,7 +9132,7 @@ class TriggerCompletionList:
 
 @dataclass(frozen=True)
 class SumeragiEvidencePenaltyDetails:
-    """Committed block height for an applied or cancelled penalty."""
+    """Canonical block height that applied the consensus penalty."""
 
     height: int
 
@@ -9830,18 +9153,9 @@ class SumeragiEvidenceAppliedPenaltyStatus:
     details: SumeragiEvidencePenaltyDetails
 
 
-@dataclass(frozen=True)
-class SumeragiEvidenceCancelledPenaltyStatus:
-    """Penalty lifecycle state for evidence cancelled in a committed block."""
-
-    status: Literal["cancelled"]
-    details: SumeragiEvidencePenaltyDetails
-
-
 SumeragiEvidencePenaltyStatus = Union[
     SumeragiEvidencePendingPenaltyStatus,
     SumeragiEvidenceAppliedPenaltyStatus,
-    SumeragiEvidenceCancelledPenaltyStatus,
 ]
 
 
@@ -9863,8 +9177,8 @@ def _parse_sumeragi_evidence_penalty_status(
         if payload["details"] is not None:
             raise TypeError(f"{context}.details must be null when status is pending")
         return SumeragiEvidencePendingPenaltyStatus(status="pending", details=None)
-    if status not in {"applied", "cancelled"}:
-        raise ValueError(f"{context}.status must be pending, applied, or cancelled")
+    if status != "applied":
+        raise ValueError(f"{context}.status must be pending or applied")
     details = payload["details"]
     if not isinstance(details, Mapping):
         raise TypeError(f"{context}.details must be an object")
@@ -9876,13 +9190,8 @@ def _parse_sumeragi_evidence_penalty_status(
     typed_details = SumeragiEvidencePenaltyDetails(
         height=_require_u64(details["height"], f"{context}.details.height")
     )
-    if status == "applied":
-        return SumeragiEvidenceAppliedPenaltyStatus(
-            status="applied",
-            details=typed_details,
-        )
-    return SumeragiEvidenceCancelledPenaltyStatus(
-        status="cancelled",
+    return SumeragiEvidenceAppliedPenaltyStatus(
+        status="applied",
         details=typed_details,
     )
 
@@ -11952,32 +11261,15 @@ __all__ = [
     "IsoSubmissionRecord",
     "IsoStatusHistoryRecord",
     "IsoMessageTimeoutError",
-    "AccountAsset",
-    "AccountAssetsPage",
-    "AccountTransaction",
-    "AccountTransactionsPage",
     "VerifiedCommittedTransaction",
-    "AccountRecord",
-    "AccountListPage",
-    "DomainRecord",
-    "DomainListPage",
-    "AssetDefinitionRecord",
-    "AssetDefinitionListPage",
-    "AssetHolderRecord",
-    "AssetHolderListPage",
     "AccountPermissionRecord",
-    "AccountPermissionListPage",
     "SubscriptionPlanCreateResult",
-    "SubscriptionPlanListItem",
-    "SubscriptionPlanListPage",
     "SubscriptionCreateResult",
-    "SubscriptionListItem",
-    "SubscriptionListPage",
+    "SubscriptionGetResponse",
     "SubscriptionActionResult",
     "SumeragiEvidencePenaltyDetails",
     "SumeragiEvidencePendingPenaltyStatus",
     "SumeragiEvidenceAppliedPenaltyStatus",
-    "SumeragiEvidenceCancelledPenaltyStatus",
     "SumeragiEvidencePenaltyStatus",
     "SumeragiEvidenceRecord",
     "SumeragiEvidenceListPage",
@@ -12047,6 +11339,7 @@ __all__ = [
     "GovernanceSorafsProviderActionKind",
     "GovernanceValidationFeeChargingMode",
     "GovernanceValidationFeePayoutBinding",
+    "GovernanceValidationFeeRewardCustody",
     "GovernanceValidationFeePolicy",
     "ToriiCanonicalRequestAuth",
     "canonical_query_string",
@@ -12241,8 +11534,6 @@ class DataModelMismatchError(RuntimeError):
 _ToriiClientStreamingQueryMixin: type[Any] = create_torii_client_streaming_query_mixin(
     require_crypto=_require_crypto,
     expect_sorafs_reputation_status=expect_status_without_body,
-    normalize_count_mode_arg=_normalize_count_mode_arg,
-    normalize_optional_string=_normalize_optional_string,
 )
 
 _ToriiClientGovernanceBallotMixin: type[Any] = create_torii_client_governance_ballot_mixin(
@@ -12314,9 +11605,22 @@ def _fetch_authenticated_privacy_capabilities_archive_v1(
         response.close()
 
 
+class _AccountCollections(AccountsCollection):
+    """Facade account scope with its configured identity and strict permission decoder."""
+
+    def permissions(self, account_id: str) -> Collection[Dict[str, Any]]:
+        canonical = self._transport._normalize_canonical_account_id(account_id, "account_id")
+        return Collection(
+            self._transport,
+            f"/v1/accounts/{quote(canonical, safe='')}/permissions",
+            lambda payload: AccountPermissionRecord.from_payload(payload).raw,
+            "account permissions",
+        )
+
+
 class ToriiClient(
+    ToriiClientPrivateTransactionCountersMixin,
     _ToriiClientSpaceDirectoryMixin,
-    ToriiClientExpensiveQueryAuthMixin,
     ToriiClientIsoOperatorContextMixin,
     _ToriiClientRuntimeAuthMixin,
     _ToriiClientGovernanceBallotMixin,
@@ -12423,26 +11727,21 @@ class ToriiClient(
             sorafs_alias_policy
         )
 
-        self._owns_session = session is None
-        effective_session = session if session is not None else requests.Session()
-        if self._owns_session:
-            effective_session.trust_env = False
+        super().__init__(
+            normalized_base_url,
+            session=session,
+            local_signing_context=base_local_signing_context,
+            canonical_request_auth=canonical_request_auth,
+            timeout=normalized_timeout,
+        )
         try:
-            super().__init__(
-                normalized_base_url,
-                session=effective_session,
-                local_signing_context=base_local_signing_context,
-            )
             _reject_session_route_secrets(self._session)
         except BaseException:
-            if self._owns_session:
-                effective_session.close()
+            self.close()
             raise
         self.__local_signing_context = local_signing_context
         self._install_operator_signing_context(operator_signing_context)
-        self._canonical_request_auth = canonical_request_auth
         self._chain_discriminant = normalized_chain_discriminant
-        self._timeout = normalized_timeout
         self._max_retries = normalized_max_retries
         self._retry_statuses = normalized_retry_statuses
         self._retry_methods = normalized_retry_methods
@@ -12467,20 +11766,30 @@ class ToriiClient(
         self._data_model_validation = "unknown"
         self._data_model_actual: Optional[int] = None
 
-    def close(self) -> None:
-        """Close the internally created HTTP session.
+    @property
+    def accounts(self) -> AccountsCollection:
+        """Accounts and their scoped collections, with configured account identity validation."""
 
-        A caller-supplied session remains owned by the caller and is not closed.
-        """
+        return _AccountCollections(self, "/v1/accounts", Account.from_json, "accounts")
 
-        if self._owns_session:
-            self._session.close()
+    @property
+    def explorer_rwas(self) -> HistoryCollection[ExplorerRwaRecord]:
+        """Bounded Explorer RWA rows with shared queries and strict quantity decoding."""
 
-    def __enter__(self) -> "ToriiClient":
-        return self
+        return HistoryCollection(
+            self, "/v1/explorer/rwas", ExplorerRwaRecord.from_payload, "Explorer RWAs", "explorer_rwas"
+        )
 
-    def __exit__(self, _exc_type: Any, _exc: Any, _traceback: Any) -> None:
-        self.close()
+    @property
+    def repo_agreements(self) -> Collection[RepoAgreementRecord]:
+        """``/v1/repo/agreements``, decoded as :class:`~iroha_python.repo.RepoAgreementRecord`."""
+
+        return Collection(
+            self,
+            "/v1/repo/agreements",
+            RepoAgreementRecord.from_payload,
+            "repo agreements",
+        )
 
     @property
     def local_signing_context(self) -> Optional[LocalSigningContext]:
@@ -12787,7 +12096,7 @@ class ToriiClient(
         )
         transaction_response = self._request(
             "POST",
-            "/query",
+            "/v1/query",
             data=transaction_request,
             headers={
                 "Content-Type": "application/x-norito",
@@ -12839,7 +12148,7 @@ class ToriiClient(
         )
         response = self._request(
             "POST",
-            "/query",
+            "/v1/query",
             data=request,
             headers={
                 "Content-Type": "application/x-norito",
@@ -12957,7 +12266,7 @@ class ToriiClient(
 
         response = self._request(
             "POST",
-            "/query",
+            "/v1/query",
             data=request,
             headers={
                 "Content-Type": "application/x-norito",
@@ -13425,60 +12734,6 @@ class ToriiClient(
         payload = self.get_explorer_account_qr(account_id)
         return ExplorerAccountQrSnapshot.from_payload(payload)
 
-    def list_explorer_rwas(
-        self,
-        *,
-        cursor: Optional[str] = None,
-        limit: Optional[int] = None,
-        owned_by: Optional[str] = None,
-        domain: Optional[str] = None,
-    ) -> Mapping[str, Any]:
-        """Fetch one bounded seek page from `GET /v1/explorer/rwas`."""
-
-        params: Dict[str, Any] = {}
-        cursor_value = _normalize_explorer_cursor(cursor, "list_explorer_rwas.cursor")
-        if cursor_value is not None:
-            params["cursor"] = cursor_value
-        limit_value = _normalize_explorer_limit(limit, "list_explorer_rwas.limit")
-        if limit_value is not None:
-            params["limit"] = limit_value
-        owned_by_value = _normalize_optional_string(owned_by, "list_explorer_rwas.owned_by")
-        if owned_by_value is not None:
-            params["owned_by"] = owned_by_value
-        domain_value = _normalize_optional_string(domain, "list_explorer_rwas.domain")
-        if domain_value is not None:
-            params["domain"] = domain_value
-        response = self._get_explorer_response(
-            "/v1/explorer/rwas",
-            params=params or None,
-        )
-        self._expect_status(response, (200,))
-        payload = self._maybe_json(response)
-        if payload is None:
-            raise RuntimeError("explorer RWA endpoint returned no payload")
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("explorer RWA endpoint returned malformed payload")
-        ExplorerRwasPage.from_payload(payload)
-        return payload
-
-    def list_explorer_rwas_typed(
-        self,
-        *,
-        cursor: Optional[str] = None,
-        limit: Optional[int] = None,
-        owned_by: Optional[str] = None,
-        domain: Optional[str] = None,
-    ) -> ExplorerRwasPage:
-        """Typed wrapper for :meth:`list_explorer_rwas`."""
-
-        payload = self.list_explorer_rwas(
-            cursor=cursor,
-            limit=limit,
-            owned_by=owned_by,
-            domain=domain,
-        )
-        return ExplorerRwasPage.from_payload(payload)
-
     def get_explorer_rwa_detail(self, rwa_id: str) -> Mapping[str, Any]:
         """Fetch a single explorer RWA detail via `GET /v1/explorer/rwas/{rwa_id}`."""
 
@@ -13704,38 +12959,6 @@ class ToriiClient(
     # ------------------------------------------------------------------
     # Repo agreements
     # ------------------------------------------------------------------
-
-    def list_repo_agreements(self, **params: Any) -> RepoAgreementListPage:
-        """List repo agreements (`GET /v1/repo/agreements`)."""
-
-        cleaned_params = self._clean_params(params)
-        if "count_mode" in cleaned_params:
-            cleaned_params["count_mode"] = _normalize_count_mode_arg(cleaned_params["count_mode"])
-        response = self._request(
-            "GET",
-            "/v1/repo/agreements",
-            params=cleaned_params,
-        )
-        self._expect_status(response, (200,))
-        payload = type(self)._maybe_json(response)
-        if payload is None:
-            raise RuntimeError("repo agreements endpoint returned no payload")
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("repo agreements endpoint returned malformed payload")
-        return RepoAgreementListPage.from_payload(payload)
-
-    def query_repo_agreements(self, envelope: Mapping[str, Any]) -> RepoAgreementListPage:
-        """Query repo agreements (`POST /v1/repo/agreements/query`)."""
-
-        body = dict(envelope)
-        if body.get("count_mode") is not None:
-            body["count_mode"] = _normalize_count_mode_arg(body["count_mode"])
-        payload = self._expensive_query_json(
-            "/v1/repo/agreements/query",
-            body,
-            context="repo agreements query",
-        )
-        return RepoAgreementListPage.from_payload(payload)
 
     def get_sorafs_pin_manifest(
         self,
@@ -15112,18 +14335,6 @@ class ToriiClient(
             raise RuntimeError("por ingestion endpoint returned an invalid payload")
         return SorafsPorIngestionStatus.from_payload(payload)
 
-    @staticmethod
-    def _pagination_params(
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        params: Dict[str, Any] = {}
-        if limit is not None:
-            params["limit"] = int(limit)
-        if offset is not None:
-            params["offset"] = int(offset)
-        return params
-
     def get_status(self) -> Optional[Any]:
         """Return Torii node status from the canonical ``GET /status`` route."""
 
@@ -15715,21 +14926,6 @@ class ToriiClient(
 
         return self.request_json("GET", f"/v1/blocks/{height}", expected_status=(200, 404))
 
-    def list_blocks(
-        self,
-        *,
-        offset_height: Optional[int] = None,
-        limit: Optional[int] = None,
-    ) -> Optional[Any]:
-        """List blocks via `GET /v1/blocks` with optional pagination."""
-
-        params: Dict[str, Any] = {}
-        if offset_height is not None:
-            params["offset_height"] = int(offset_height)
-        if limit is not None:
-            params["limit"] = int(limit)
-        return self.request_json("GET", "/v1/blocks", params=params or None, expected_status=(200,))
-
     def get_pipeline_recovery(self, height: int) -> Optional[Any]:
         """Fetch an operator-authenticated pipeline recovery sidecar for `height`."""
 
@@ -15980,321 +15176,6 @@ class ToriiClient(
         payload = self.cancel_runtime_upgrade(upgrade_id_hex)
         return RuntimeUpgradeActionResponse.from_payload(payload)
 
-    def list_account_assets(
-        self,
-        account_id: str,
-        *,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        asset_id: Optional[str] = None,
-        count_mode: Optional[str] = None,
-    ) -> Optional[Any]:
-        """List exact account assets; ``asset_id`` selects native ``asset``."""
-
-        canonical_account_id = self._normalize_canonical_account_id(account_id, "account_id")
-        params = self._pagination_params(limit=limit, offset=offset)
-        if count_mode is not None:
-            params["count_mode"] = _normalize_count_mode_arg(count_mode)
-        asset_id_value = _normalize_optional_string(asset_id, "list_account_assets.asset_id")
-        if asset_id_value is not None:
-            params["asset"] = asset_id_value
-        response = self._get_dataspace_visible_response(
-            f"/v1/accounts/{quote(canonical_account_id, safe='')}/assets",
-            params=params or None,
-        )
-        self._expect_status(response, (200,))
-        return self._maybe_json(response)
-
-    def list_account_assets_typed(
-        self,
-        account_id: str,
-        *,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        asset_id: Optional[str] = None,
-        count_mode: Optional[str] = None,
-    ) -> AccountAssetsPage:
-        """Typed wrapper for :meth:`list_account_assets`."""
-
-        payload = self.list_account_assets(
-            account_id,
-            limit=limit,
-            offset=offset,
-            asset_id=asset_id,
-            count_mode=count_mode,
-        )
-        if payload is None:
-            raise RuntimeError("account assets endpoint returned no payload")
-        if not isinstance(payload, Mapping):
-            raise TypeError("account assets response must be a JSON object")
-        return AccountAssetsPage.from_payload(payload)
-
-    def list_account_transactions(
-        self,
-        account_id: str,
-        *,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        asset_id: Optional[str] = None,
-        count_mode: Optional[str] = None,
-    ) -> Optional[Any]:
-        """List account transactions via `GET /v1/accounts/{account_id}/transactions` (optional `asset_id`)."""
-
-        canonical_account_id = self._normalize_canonical_account_id(account_id, "account_id")
-        params = self._pagination_params(limit=limit, offset=offset)
-        asset_id_value = _normalize_optional_string(
-            asset_id,
-            "list_account_transactions.asset_id",
-        )
-        if asset_id_value is not None:
-            params["asset_id"] = asset_id_value
-        response = self._get_dataspace_visible_response(
-            f"/v1/accounts/{quote(canonical_account_id, safe='')}/transactions",
-            params=params or None,
-        )
-        self._expect_status(response, (200,))
-        return self._maybe_json(response)
-
-    def list_account_transactions_typed(
-        self,
-        account_id: str,
-        *,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        asset_id: Optional[str] = None,
-    ) -> AccountTransactionsPage:
-        """Typed wrapper for :meth:`list_account_transactions`."""
-
-        payload = self.list_account_transactions(
-            account_id,
-            limit=limit,
-            offset=offset,
-            asset_id=asset_id,
-        )
-        if payload is None:
-            raise RuntimeError("account transactions endpoint returned no payload")
-        if not isinstance(payload, Mapping):
-            raise TypeError("account transactions response must be a JSON object")
-        return AccountTransactionsPage.from_payload(payload)
-
-    def query_account_assets(
-        self,
-        account_id: str,
-        *,
-        filter: Optional[Mapping[str, Any]] = None,
-        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        fetch_size: Optional[int] = None,
-        count_mode: Optional[str] = None,
-        query_name: Optional[str] = None,
-        aggregate: Optional[Union[AggregateSpec, Mapping[str, Any]]] = None,
-        envelope: Optional[Mapping[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """POST `/v1/accounts/{account_id}/assets/query` with a Norito-style envelope."""
-
-        canonical_account_id = self._normalize_canonical_account_id(account_id, "account_id")
-        if envelope is not None:
-            self._ensure_no_query_args(
-                envelope=envelope,
-                filter=filter,
-                select=select,
-                sort=sort,
-                limit=limit,
-                offset=offset,
-                fetch_size=fetch_size,
-                count_mode=count_mode,
-                query_name=query_name,
-                aggregate=aggregate,
-            )
-            body = dict(envelope)
-        else:
-            body = self._build_query_envelope(
-                filter=filter,
-                select=select,
-                sort=sort,
-                limit=limit,
-                offset=offset,
-                fetch_size=fetch_size,
-                count_mode=count_mode,
-                query_name=query_name,
-                aggregate=aggregate,
-            )
-        payload = self._expensive_query_json(
-            f"/v1/accounts/{quote(canonical_account_id, safe='')}/assets/query",
-            body,
-            context="account assets query",
-        )
-        if not isinstance(payload, dict):
-            raise RuntimeError("unexpected account assets query response")
-        return payload
-
-    def query_account_assets_typed(
-        self,
-        account_id: str,
-        *,
-        filter: Optional[Mapping[str, Any]] = None,
-        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        fetch_size: Optional[int] = None,
-        count_mode: Optional[str] = None,
-        query_name: Optional[str] = None,
-        envelope: Optional[Mapping[str, Any]] = None,
-    ) -> AccountAssetsPage:
-        """Typed wrapper for :meth:`query_account_assets`."""
-
-        payload = self.query_account_assets(
-            account_id,
-            filter=filter,
-            select=select,
-            sort=sort,
-            limit=limit,
-            offset=offset,
-            fetch_size=fetch_size,
-            query_name=query_name,
-            envelope=envelope,
-            count_mode=count_mode,
-        )
-        return AccountAssetsPage.from_payload(payload)
-
-    def query_account_transactions(
-        self,
-        account_id: str,
-        *,
-        filter: Optional[Mapping[str, Any]] = None,
-        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        fetch_size: Optional[int] = None,
-        count_mode: Optional[str] = None,
-        query_name: Optional[str] = None,
-        aggregate: Optional[Union[AggregateSpec, Mapping[str, Any]]] = None,
-        envelope: Optional[Mapping[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """POST `/v1/accounts/{account_id}/transactions/query` with a Norito-style envelope."""
-
-        canonical_account_id = self._normalize_canonical_account_id(account_id, "account_id")
-        if envelope is not None:
-            self._ensure_no_query_args(
-                envelope=envelope,
-                filter=filter,
-                select=select,
-                sort=sort,
-                limit=limit,
-                offset=offset,
-                fetch_size=fetch_size,
-                count_mode=count_mode,
-                query_name=query_name,
-                aggregate=aggregate,
-            )
-            body = dict(envelope)
-        else:
-            body = self._build_query_envelope(
-                filter=filter,
-                select=select,
-                sort=sort,
-                limit=limit,
-                offset=offset,
-                fetch_size=fetch_size,
-                count_mode=count_mode,
-                query_name=query_name,
-                aggregate=aggregate,
-            )
-        payload = self._expensive_query_json(
-            f"/v1/accounts/{quote(canonical_account_id, safe='')}/transactions/query",
-            body,
-            context="account transactions query",
-        )
-        if not isinstance(payload, dict):
-            raise RuntimeError("unexpected account transactions query response")
-        return payload
-
-    def query_account_transactions_typed(
-        self,
-        account_id: str,
-        *,
-        filter: Optional[Mapping[str, Any]] = None,
-        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        fetch_size: Optional[int] = None,
-        count_mode: Optional[str] = None,
-        query_name: Optional[str] = None,
-        envelope: Optional[Mapping[str, Any]] = None,
-    ) -> AccountTransactionsPage:
-        """Typed wrapper for :meth:`query_account_transactions`."""
-
-        payload = self.query_account_transactions(
-            account_id,
-            filter=filter,
-            select=select,
-            sort=sort,
-            limit=limit,
-            offset=offset,
-            fetch_size=fetch_size,
-            count_mode=count_mode,
-            query_name=query_name,
-            envelope=envelope,
-        )
-        return AccountTransactionsPage.from_payload(payload)
-
-    def query_transactions(
-        self,
-        *,
-        filter: Optional[Mapping[str, Any]] = None,
-        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        fetch_size: Optional[int] = None,
-        count_mode: Optional[str] = None,
-        query_name: Optional[str] = None,
-        aggregate: Optional[Union[AggregateSpec, Mapping[str, Any]]] = None,
-        envelope: Optional[Mapping[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """Query committed transactions within the selected dataspace visibility scope."""
-
-        if envelope is not None:
-            self._ensure_no_query_args(
-                envelope=envelope,
-                filter=filter,
-                select=select,
-                sort=sort,
-                limit=limit,
-                offset=offset,
-                fetch_size=fetch_size,
-                count_mode=count_mode,
-                query_name=query_name,
-                aggregate=aggregate,
-            )
-            body = dict(envelope)
-        else:
-            body = self._build_query_envelope(
-                filter=filter,
-                select=select,
-                sort=sort,
-                limit=limit,
-                offset=offset,
-                fetch_size=fetch_size,
-                count_mode=count_mode,
-                query_name=query_name,
-                aggregate=aggregate,
-            )
-        path = "/v1/transactions/query"
-        payload = self._expensive_query_json(
-            path,
-            body,
-            context="transactions query",
-        )
-        if not isinstance(payload, dict):
-            raise RuntimeError("unexpected transactions query response")
-        return payload
-
     # ------------------------------------------------------------------
     # UAID portfolio & Space Directory surfaces
     # ------------------------------------------------------------------
@@ -16370,83 +15251,23 @@ class ToriiClient(
         payload = self.get_uaid_bindings(uaid)
         return UaidBindingsSnapshot.from_payload(payload)
 
-    def list_space_directory_manifests(
-        self,
-        uaid: str,
-        *,
-        dataspace: Optional[int] = None,
-        status: Optional[str] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        count_mode: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """List Space Directory manifests bound to a UAID (`GET /v1/space-directory/uaids/{uaid}/manifests`)."""
+    def uaid_manifests(self, uaid: str) -> Collection[SpaceDirectoryManifestRecord]:
+        """Manifest records for one UAID, with shared filters and cursor pages."""
 
-        literal = _normalize_uaid_literal(uaid)
-        params: Dict[str, Any] = {}
-        if dataspace is not None:
-            params["dataspace"] = _require_u64(
-                dataspace,
-                "list_space_directory_manifests.dataspace",
-            )
-        if status is not None:
-            exact_status = _require_exact_non_empty_string(
-                status,
-                "list_space_directory_manifests.status",
-            )
-            if exact_status not in {"active", "inactive", "all"}:
-                raise ValueError("status must be one of {'active', 'inactive', 'all'}")
-            params["status"] = exact_status
-        if limit is not None:
-            checked_limit = _require_u64(limit, "list_space_directory_manifests.limit")
-            if checked_limit == 0:
-                raise ValueError("list_space_directory_manifests.limit must be positive")
-            params["limit"] = checked_limit
-        if offset is not None:
-            params["offset"] = _require_u64(
-                offset,
-                "list_space_directory_manifests.offset",
-            )
-        if count_mode is not None:
-            exact_count_mode = _require_exact_non_empty_string(
-                count_mode,
-                "list_space_directory_manifests.count_mode",
-            )
-            if exact_count_mode not in {"bounded", "exact"}:
-                raise ValueError("count_mode must be 'bounded' or 'exact'")
-            params["count_mode"] = exact_count_mode
-        response = self._request(
-            "GET",
-            f"/v1/space-directory/uaids/{literal}/manifests",
-            params=params or None,
+        canonical = _normalize_uaid_literal(uaid)
+
+        def parse(row: Any) -> SpaceDirectoryManifestRecord:
+            record = SpaceDirectoryManifestRecord.from_payload(row)
+            if record.manifest["uaid"] != canonical:
+                raise ValueError("manifest record UAID differs from the requested UAID")
+            return record
+
+        return Collection(
+            self,
+            f"/v1/space-directory/uaids/{quote(canonical, safe='')}/manifests",
+            parse,
+            "uaid manifests",
         )
-        self._expect_status(response, {200})
-        payload = self._maybe_json(response)
-        if not isinstance(payload, dict):
-            raise RuntimeError("unexpected Space Directory manifests response")
-        return payload
-
-    def list_space_directory_manifests_typed(
-        self,
-        uaid: str,
-        *,
-        dataspace: Optional[int] = None,
-        status: Optional[str] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        count_mode: Optional[str] = None,
-    ) -> SpaceDirectoryManifestList:
-        """Typed wrapper for :meth:`list_space_directory_manifests`."""
-
-        payload = self.list_space_directory_manifests(
-            uaid,
-            dataspace=dataspace,
-            status=status,
-            limit=limit,
-            offset=offset,
-            count_mode=count_mode,
-        )
-        return SpaceDirectoryManifestList.from_payload(payload)
 
     def _handle_sorafs_alias_warning(self, warning: SorafsAliasWarning) -> None:
         """Internal hook for alias-proof warnings."""
@@ -16496,7 +15317,19 @@ class ToriiClient(
         allow_redirects: bool = False,
         stream: bool = False,
         _headers_are_final: bool = False,
+        _operation_deadline_ns: Optional[int] = None,
+        _maximum_body_bytes: Optional[int] = None,
+        _response_media_type: Optional[str] = None,
     ) -> requests.Response:
+        bounded = any(value is not None for value in (
+            _operation_deadline_ns, _maximum_body_bytes, _response_media_type,
+        ))
+        if bounded:
+            from .requests_deadline import check_bounded_client, check_bounded_request
+            bounded_client = check_bounded_client(self)
+            headers = check_bounded_request(method, path, headers, data, json_body, params, timeout,
+                (_headers_are_final, stream, allow_retry, allow_redirects),
+                _operation_deadline_ns, _maximum_body_bytes, _response_media_type)
         if _headers_are_final and (not stream or headers is None):
             raise ValueError("final SSE headers require a streaming request with headers")
         if json_body is not None and data is not None:
@@ -16511,7 +15344,9 @@ class ToriiClient(
         normalized_path = _normalize_request_path(path)
 
         final_headers: Dict[str, str] = (
-            {} if _headers_are_final else dict(self._default_headers)
+            {} if _headers_are_final else dict(
+                bounded_client["headers"] if bounded else self._default_headers
+            )
         )
         if headers is not None:
             for name, value in _copy_http_headers(headers, "headers").items():
@@ -16530,7 +15365,7 @@ class ToriiClient(
 
         method_upper = _normalize_http_method(method)
         request_timeout = (
-            self._timeout
+            (bounded_client["timeout"] if bounded else self._timeout)
             if timeout is None
             else _require_positive_finite_float(timeout, "timeout")
         )
@@ -16544,6 +15379,40 @@ class ToriiClient(
             signed_headers = _OperatorRequestHeaderPlan(final_headers, headers.context)
         else:
             signed_headers = final_headers
+        if bounded:
+            if (type(_operation_deadline_ns) is not int
+                    or type(_maximum_body_bytes) is not int
+                    or type(_response_media_type) is not str
+                    or params is not None or not stream or allow_retry or allow_redirects
+                    or isinstance(signed_headers, (_CanonicalRequestHeaderPlan, _OperatorRequestHeaderPlan))):
+                raise ValueError("bounded observation requires one unsigned, nonredirecting dispatch")
+            from .requests_deadline import check_alias_state, send_bounded_request
+            if type(self) is not ToriiClient:
+                raise TypeError("bounded staking preparation requires the canonical ToriiClient")
+            check_alias_state(self._sorafs_alias_metrics, self._last_sorafs_alias_evaluation)
+            response = send_bounded_request(
+                session=self._session, method=method_upper,
+                url=f"{bounded_client['base_url']}{normalized_path}", headers=signed_headers,
+                body=payload, timeout=request_timeout, deadline_ns=_operation_deadline_ns,
+                max_body=_maximum_body_bytes, media_type=_response_media_type,
+                alias_policy=self._sorafs_alias_policy,
+                alias_warning_hook=self._sorafs_alias_warning_hook,
+                alias_logger=self._sorafs_alias_logger,
+            )
+            # The worker already ran the canonical proof policy and emitted each
+            # admitted warning once. Only closed in-memory data is touched here.
+            check_alias_state(self._sorafs_alias_metrics, self._last_sorafs_alias_evaluation)
+            evaluation = response._iroha_alias_evaluation
+            self._last_sorafs_alias_evaluation = evaluation
+            if evaluation is not None:
+                metrics = self._sorafs_alias_metrics
+                metrics["total"] = metrics.get("total", 0) + 1
+                label = evaluation.status_label or evaluation.state
+                metrics[label] = metrics.get(label, 0) + 1
+                if evaluation.state == "refresh_window" or evaluation.rotation_due:
+                    metrics["warnings"] = metrics.get("warnings", 0) + 1
+            return response
+
         if isinstance(
             signed_headers,
             (_CanonicalRequestHeaderPlan, _OperatorRequestHeaderPlan),
@@ -16600,6 +15469,55 @@ class ToriiClient(
             return response
 
         raise RuntimeError("exhausted retries without receiving a response")
+
+    def prepare_public_lane_plan(self, request, xor_asset_definition_id: str):
+        """Read exact staking signing inputs under immutable network and explicit XOR pins.
+
+        No transaction is signed or submitted. The observation carries no state
+        proof; execution rechecks every effect and expiry. Transport dispatches
+        once, rejects redirects, byte-bounds success/error streams, and closes
+        after completion or failure. A private Requests worker owns blocking
+        I/O under the original absolute deadline on POSIX. Unsupported custom
+        Sessions/adapters are rejected before dispatch; there is no fallback.
+        """
+        started_ns = time.monotonic_ns()
+        from .requests_deadline import _remaining, check_preparation_inputs
+        original_timeout, network, request = check_preparation_inputs(self, request, xor_asset_definition_id)
+        if original_timeout > (((1 << 64) - 1 - started_ns) // 1_000_000_000):
+            raise ValueError("staking preparation timeout exceeds the absolute deadline range")
+        deadline_ns = started_ns + int(original_timeout * 1_000_000_000)
+        from .validator_staking import (
+            StakingPreparationRequestV1, StakingPreparationV1,
+            encode_staking_preparation_frame_v1, decode_staking_preparation_frame_v1,
+            validate_staking_preparation_v1,
+        )
+        from .address import asset_definition_id_to_bytes
+        asset_definition_id_to_bytes(xor_asset_definition_id)
+        if type(request) is not StakingPreparationRequestV1:
+            raise TypeError("staking preparation requires an exact typed request")
+        body = encode_staking_preparation_frame_v1(request)
+        response = ToriiClient._request(self, "POST", "/v1/nexus/staking/prepare",
+            headers={"Content-Type": "application/x-norito", "Accept": "application/x-norito"},
+            data=body, stream=True, allow_retry=False, allow_redirects=False,
+            _operation_deadline_ns=deadline_ns, _maximum_body_bytes=256 * 1024,
+            _response_media_type="application/x-norito")
+        try:
+            if response.status_code == 200 and response.headers.get("Content-Type", "").strip().lower() != "application/x-norito":
+                raise ValueError("staking preparation requires application/x-norito")
+            raw = _read_bounded_response_body(response, 256 * 1024, "staking preparation")
+            length = response.headers.get("Content-Length")
+            if length is not None and int(length) != len(raw):
+                raise ValueError("staking preparation response length mismatch")
+            if response.status_code != 200:
+                error = requests.HTTPError(f"staking preparation HTTP {response.status_code}", response=response)
+                error.staking_preparation_body = raw
+                raise error
+            prepared = decode_staking_preparation_frame_v1(StakingPreparationV1, raw)
+            validated = validate_staking_preparation_v1(prepared, request, network, xor_asset_definition_id)
+            _remaining(deadline_ns)
+            return validated
+        finally:
+            response.close()
 
     def _apply_backoff(self, current_delay: float) -> float:
         delay = current_delay
@@ -18147,85 +17065,38 @@ class ToriiClient(
 
         return self.find_account(account_id) is not None
 
-    def find_account_assets(
-        self,
-        account_id: str,
-        *,
-        asset_id: Optional[str] = None,
-    ) -> Optional[List[Mapping[str, Any]]]:
-        """Return raw account asset entries, or ``None`` when the account is absent."""
-
-        result = self._find_account_assets(
-            account_id,
-            asset_id=asset_id,
-        )
-        if result is None:
-            return None
-        _resolved_account_id, items = result
-        return items
-
-    def _find_account_assets(
-        self,
-        account_id: str,
-        *,
-        asset_id: Optional[str] = None,
-    ) -> Optional[Tuple[str, List[Mapping[str, Any]]]]:
-        literal = _require_non_empty_string(account_id, "account_id")
-        params: Dict[str, Any] = {}
-        asset_id_value = _normalize_optional_string(asset_id, "find_account_assets.asset_id")
-        if asset_id_value is not None:
-            params["asset"] = asset_id_value
-        response = self._get_dataspace_visible_response(
-            f"/v1/accounts/{quote(literal, safe='')}/assets",
-            params=params or None,
-        )
-        if response.status_code == 404:
-            return None
-        if response.status_code == 200:
-            return literal, _extract_page_items(self._maybe_json(response))
-        self._expect_status(response, {200, 404})
-        return None
-
-    def find_account_asset_items(
-        self,
-        account_id: str,
-        asset_definition_id: str,
-    ) -> List[Mapping[str, Any]]:
-        """Return raw asset entries matching an asset definition for an account."""
-
-        definition = _require_non_empty_string(
-            asset_definition_id,
-            "asset_definition_id",
-        )
-        result = self._find_account_assets(account_id, asset_id=definition)
-        if result is None:
-            return []
-        resolved_account_id, items = result
-        return [
-            item
-            for item in items
-            if _asset_entry_matches_definition(item, definition, resolved_account_id)
-        ]
-
     def asset_balance(
         self,
         account_id: str,
         asset_definition_id: str,
+        *,
+        scope: Optional[str] = None,
     ) -> Decimal:
-        """Return an exact canonical quantity parsed from account asset listings."""
+        """Exact balance of one asset definition held by ``account_id``.
+
+        ``asset_definition_id`` is a Base58 definition id or an on-chain alias
+        (``name#domain.dataspace``; aliases always contain ``#``, Base58 ids never
+        do). The quantities of every balance bucket (global and per-dataspace
+        scopes) are summed across all pages; pass ``scope`` (``"global"`` or
+        ``"dataspace:<id>"``) to read a single bucket. An account holding none
+        returns ``Decimal(0)``; an unknown account raises ``ToriiNotFoundError``.
+        """
 
         definition = _require_non_empty_string(
             asset_definition_id,
             "asset_definition_id",
         )
-        result = self._find_account_assets(account_id)
-        if result is None:
-            raise RuntimeError(f"account {account_id} not found via Torii REST")
-        resolved_account_id, items = result
-        for item in items:
-            if _asset_entry_matches_definition(item, definition, resolved_account_id):
-                return _quantity_decimal(item.get("quantity"))
-        return Decimal("0")
+        by_alias = "#" in definition
+        condition: Filter = F["asset_alias" if by_alias else "asset"] == definition
+        if scope is not None:
+            scope = _require_non_empty_string(scope, "scope")
+            condition = condition & (F.scope == scope)
+        total = Decimal(0)
+        for bucket in self.accounts.assets(account_id).iter(filter=condition):
+            selector = bucket.asset_alias if by_alias else bucket.asset
+            if selector == definition and (scope is None or bucket.scope == scope):
+                total += bucket.quantity
+        return total
 
     def get_asset_definition(
         self,
@@ -19118,37 +17989,12 @@ class ToriiClient(
         )
         return response
 
-    def find_domain(self, domain_id: str, *, limit: int = 200) -> Optional[Mapping[str, Any]]:
-        """Fetch a domain by id, falling back to paginated listing on route gaps."""
+    def find_domain(self, domain_id: str) -> Optional[Domain]:
+        """The domain with exactly this id, or ``None`` (one ``domains`` query)."""
 
         resolved_domain_id = _require_non_empty_string(domain_id, "domain_id")
-        response = self._request(
-            "GET",
-            f"/v1/domains/{quote(resolved_domain_id, safe='')}",
-        )
-        if response.status_code == 200:
-            payload = self._maybe_json(response)
-            if not isinstance(payload, Mapping):
-                raise RuntimeError("domain endpoint returned non-object payload")
-            return payload
-        if response.status_code not in {404, 502, 503, 504}:
-            self._expect_status(response, {200, 404})
-
-        offset = 0
-        while True:
-            payload = self.list_domains(limit=limit, offset=offset)
-            items = _extract_page_items(payload)
-            for item in items:
-                candidate = str(item.get("id") or item.get("domain_id") or "")
-                if candidate == resolved_domain_id:
-                    return item
-            batch_size = len(items)
-            total = _page_total(payload)
-            if batch_size == 0:
-                return None
-            offset += batch_size
-            if total is not None and offset >= total:
-                return None
+        page = self.domains.list(filter=F.id == resolved_domain_id, limit=1)
+        return page.items[0] if page.items else None
 
     def domain_exists(self, domain_id: str) -> bool:
         """Return whether Torii can resolve a domain."""
@@ -19313,13 +18159,14 @@ class ToriiClient(
         *,
         expected_payload: Optional[Mapping[str, Any]] = None,
     ) -> bool:
-        """Return whether an account has a direct permission token."""
+        """Find an effective direct or role-granted permission, following every page."""
 
         expected_payload_value = (
             _json_safe_value(dict(expected_payload)) if expected_payload is not None else None
         )
-        permissions = self.list_account_permissions_typed(account_id)
-        for permission in permissions.items:
+        permissions = self.accounts.permissions(account_id).iter(filter=F.name == permission_name)
+        for row in permissions:
+            permission = AccountPermissionRecord.from_payload(row)
             if permission.name != permission_name:
                 continue
             if expected_payload is None or permission.payload == expected_payload_value:
@@ -19327,600 +18174,9 @@ class ToriiClient(
         return False
 
     # ------------------------------------------------------------------
-    # RWA queries
+    # Asset transfer controls and account permissions
+    # (collection reads live on ``client.<collection>``; see collection.py)
     # ------------------------------------------------------------------
-
-    def query_rwas(
-        self,
-        *,
-        filter: Optional[Dict[str, Any]] = None,
-        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: int = 0,
-        fetch_size: Optional[int] = None,
-        count_mode: Optional[str] = None,
-        query_name: Optional[str] = None,
-        aggregate: Optional[Union[AggregateSpec, Mapping[str, Any]]] = None,
-    ) -> Dict[str, Any]:
-        """Execute POST `/v1/rwas/query` with a structured envelope."""
-
-        body = rwa_query_envelope(
-            filter=filter,
-            select=select,
-            sort=sort,
-            limit=limit,
-            offset=offset,
-            fetch_size=fetch_size,
-            count_mode=count_mode,
-            query_name=query_name,
-            aggregate=aggregate,
-        )
-        payload = self._expensive_query_json(
-            "/v1/rwas/query",
-            body,
-            context="RWA query",
-        )
-        if not isinstance(payload, dict):
-            raise RuntimeError("unexpected RWA query response")
-        return payload
-
-    def query_rwas_typed(
-        self,
-        *,
-        filter: Optional[Dict[str, Any]] = None,
-        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: int = 0,
-        fetch_size: Optional[int] = None,
-        count_mode: Optional[str] = None,
-        query_name: Optional[str] = None,
-    ) -> RwaListPage:
-        """Typed wrapper for :meth:`query_rwas`."""
-
-        payload = self.query_rwas(
-            filter=filter,
-            select=select,
-            sort=sort,
-            limit=limit,
-            offset=offset,
-            fetch_size=fetch_size,
-            count_mode=count_mode,
-            query_name=query_name,
-        )
-        return RwaListPage.from_payload(payload)
-
-    def list_rwas(
-        self,
-        *,
-        filter: Optional[Any] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        count_mode: Optional[str] = None,
-    ) -> Optional[Any]:
-        """List chain-state RWAs via `GET /v1/rwas`."""
-
-        params: Dict[str, Any] = {}
-        if limit is not None:
-            params["limit"] = int(limit)
-        if offset is not None:
-            params["offset"] = int(offset)
-        if count_mode is not None:
-            params["count_mode"] = _normalize_count_mode_arg(count_mode)
-        filter_arg = _encode_filter_arg(filter)
-        if filter_arg is not None:
-            params["filter"] = filter_arg
-        sort_arg = _encode_sort_arg(sort)
-        if sort_arg is not None:
-            params["sort"] = sort_arg
-        return self.request_json(
-            "GET",
-            "/v1/rwas",
-            params=params or None,
-            expected_status=(200,),
-        )
-
-    def list_rwas_typed(
-        self,
-        *,
-        filter: Optional[Any] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        count_mode: Optional[str] = None,
-    ) -> RwaListPage:
-        """Typed wrapper for :meth:`list_rwas`."""
-
-        payload = self.list_rwas(
-            filter=filter,
-            sort=sort,
-            limit=limit,
-            offset=offset,
-            count_mode=count_mode,
-        )
-        if payload is None:
-            return RwaListPage(items=[], total=0)
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("RWA list endpoint returned non-object payload")
-        return RwaListPage.from_payload(payload)
-
-    # ------------------------------------------------------------------
-    # Account queries
-    # ------------------------------------------------------------------
-    def query_accounts(
-        self,
-        *,
-        filter: Optional[Dict[str, Any]] = None,
-        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: int = 0,
-        fetch_size: Optional[int] = None,
-        count_mode: Optional[str] = None,
-        query_name: Optional[str] = None,
-        aggregate: Optional[Union[AggregateSpec, Mapping[str, Any]]] = None,
-    ) -> Dict[str, Any]:
-        """Execute POST `/v1/accounts/query` with a structured envelope."""
-
-        body = account_query_envelope(
-            filter=filter,
-            select=select,
-            sort=sort,
-            limit=limit,
-            offset=offset,
-            fetch_size=fetch_size,
-            count_mode=count_mode,
-            query_name=query_name,
-            aggregate=aggregate,
-        )
-        payload = self._expensive_query_json(
-            "/v1/accounts/query",
-            body,
-            context="accounts query",
-        )
-        if not isinstance(payload, dict):
-            raise RuntimeError("unexpected accounts query response")
-        return payload
-
-    def query_accounts_typed(
-        self,
-        *,
-        filter: Optional[Dict[str, Any]] = None,
-        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: int = 0,
-        fetch_size: Optional[int] = None,
-        count_mode: Optional[str] = None,
-        query_name: Optional[str] = None,
-    ) -> AccountListPage:
-        """Typed wrapper for :meth:`query_accounts`."""
-
-        payload = self.query_accounts(
-            filter=filter,
-            select=select,
-            sort=sort,
-            limit=limit,
-            offset=offset,
-            fetch_size=fetch_size,
-            count_mode=count_mode,
-            query_name=query_name,
-        )
-        return AccountListPage.from_payload(payload)
-
-    def list_accounts(
-        self,
-        *,
-        filter: Optional[Any] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        count_mode: Optional[str] = None,
-    ) -> Optional[Any]:
-        """List accounts via `GET /v1/accounts`."""
-
-        params: Dict[str, Any] = {}
-        if limit is not None:
-            params["limit"] = int(limit)
-        if offset is not None:
-            params["offset"] = int(offset)
-        if count_mode is not None:
-            params["count_mode"] = _normalize_count_mode_arg(count_mode)
-        filter_arg = _encode_filter_arg(filter)
-        if filter_arg is not None:
-            params["filter"] = filter_arg
-        sort_arg = _encode_sort_arg(sort)
-        if sort_arg is not None:
-            params["sort"] = sort_arg
-        return self.request_json(
-            "GET",
-            "/v1/accounts",
-            params=params or None,
-            expected_status=(200,),
-        )
-
-    def list_accounts_typed(
-        self,
-        *,
-        filter: Optional[Any] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        count_mode: Optional[str] = None,
-    ) -> AccountListPage:
-        """Typed wrapper for :meth:`list_accounts`."""
-
-        payload = self.list_accounts(
-            filter=filter,
-            sort=sort,
-            limit=limit,
-            offset=offset,
-            count_mode=count_mode,
-        )
-        if payload is None:
-            return AccountListPage(items=[], total=0)
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("accounts endpoint returned non-object payload")
-        return AccountListPage.from_payload(payload)
-
-    def list_domains(
-        self,
-        *,
-        filter: Optional[Any] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        count_mode: Optional[str] = None,
-    ) -> Optional[Any]:
-        """List domains via `GET /v1/domains`."""
-
-        params: Dict[str, Any] = {}
-        if limit is not None:
-            params["limit"] = int(limit)
-        if offset is not None:
-            params["offset"] = int(offset)
-        if count_mode is not None:
-            params["count_mode"] = _normalize_count_mode_arg(count_mode)
-        filter_arg = _encode_filter_arg(filter)
-        if filter_arg is not None:
-            params["filter"] = filter_arg
-        sort_arg = _encode_sort_arg(sort)
-        if sort_arg is not None:
-            params["sort"] = sort_arg
-        return self.request_json(
-            "GET",
-            "/v1/domains",
-            params=params or None,
-            expected_status=(200,),
-        )
-
-    def list_domains_typed(
-        self,
-        *,
-        filter: Optional[Any] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        count_mode: Optional[str] = None,
-    ) -> DomainListPage:
-        """Typed wrapper for :meth:`list_domains`."""
-
-        payload = self.list_domains(
-            filter=filter,
-            sort=sort,
-            limit=limit,
-            offset=offset,
-            count_mode=count_mode,
-        )
-        if payload is None:
-            return DomainListPage(items=[], total=0)
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("domains endpoint returned non-object payload")
-        return DomainListPage.from_payload(payload)
-
-    def query_asset_definitions(
-        self,
-        *,
-        filter: Optional[Dict[str, Any]] = None,
-        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: int = 0,
-        fetch_size: Optional[int] = None,
-        count_mode: Optional[str] = None,
-        query_name: Optional[str] = None,
-        aggregate: Optional[Union[AggregateSpec, Mapping[str, Any]]] = None,
-    ) -> Dict[str, Any]:
-        """POST `/v1/assets/definitions/query` with a structured envelope."""
-
-        body = asset_definitions_query_envelope(
-            filter=filter,
-            select=select,
-            sort=sort,
-            limit=limit,
-            offset=offset,
-            fetch_size=fetch_size,
-            count_mode=count_mode,
-            query_name=query_name,
-            aggregate=aggregate,
-        )
-        payload = self._expensive_query_json(
-            "/v1/assets/definitions/query",
-            body,
-            context="asset definitions query",
-        )
-        if not isinstance(payload, dict):
-            raise RuntimeError("unexpected assets definitions query response")
-        return payload
-
-    def query_asset_definitions_typed(
-        self,
-        *,
-        filter: Optional[Dict[str, Any]] = None,
-        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: int = 0,
-        fetch_size: Optional[int] = None,
-        count_mode: Optional[str] = None,
-        query_name: Optional[str] = None,
-    ) -> AssetDefinitionListPage:
-        """Typed wrapper for :meth:`query_asset_definitions`."""
-
-        payload = self.query_asset_definitions(
-            filter=filter,
-            select=select,
-            sort=sort,
-            limit=limit,
-            offset=offset,
-            fetch_size=fetch_size,
-            count_mode=count_mode,
-            query_name=query_name,
-        )
-        return AssetDefinitionListPage.from_payload(payload)
-
-    def list_asset_definitions(
-        self,
-        *,
-        filter: Optional[Any] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        count_mode: Optional[str] = None,
-    ) -> Optional[Any]:
-        """List asset definitions via `GET /v1/assets/definitions`."""
-
-        params: Dict[str, Any] = {}
-        if limit is not None:
-            params["limit"] = int(limit)
-        if offset is not None:
-            params["offset"] = int(offset)
-        if count_mode is not None:
-            params["count_mode"] = _normalize_count_mode_arg(count_mode)
-        filter_arg = _encode_filter_arg(filter)
-        if filter_arg is not None:
-            params["filter"] = filter_arg
-        sort_arg = _encode_sort_arg(sort)
-        if sort_arg is not None:
-            params["sort"] = sort_arg
-        return self.request_json(
-            "GET",
-            "/v1/assets/definitions",
-            params=params or None,
-            expected_status=(200,),
-        )
-
-    def list_asset_definitions_typed(
-        self,
-        *,
-        filter: Optional[Any] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        count_mode: Optional[str] = None,
-    ) -> AssetDefinitionListPage:
-        """Typed wrapper for :meth:`list_asset_definitions`."""
-
-        payload = self.list_asset_definitions(
-            filter=filter,
-            sort=sort,
-            limit=limit,
-            offset=offset,
-            count_mode=count_mode,
-        )
-        if payload is None:
-            return AssetDefinitionListPage(items=[], total=0)
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("asset definitions endpoint returned non-object payload")
-        return AssetDefinitionListPage.from_payload(payload)
-
-    def query_domains(
-        self,
-        *,
-        filter: Optional[Dict[str, Any]] = None,
-        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: int = 0,
-        fetch_size: Optional[int] = None,
-        count_mode: Optional[str] = None,
-        query_name: Optional[str] = None,
-        aggregate: Optional[Union[AggregateSpec, Mapping[str, Any]]] = None,
-    ) -> Dict[str, Any]:
-        """POST `/v1/domains/query` with a structured envelope."""
-
-        body = domain_query_envelope(
-            filter=filter,
-            select=select,
-            sort=sort,
-            limit=limit,
-            offset=offset,
-            fetch_size=fetch_size,
-            count_mode=count_mode,
-            query_name=query_name,
-            aggregate=aggregate,
-        )
-        payload = self._expensive_query_json(
-            "/v1/domains/query",
-            body,
-            context="domains query",
-        )
-        if not isinstance(payload, dict):
-            raise RuntimeError("unexpected domains query response")
-        return payload
-
-    def query_domains_typed(
-        self,
-        *,
-        filter: Optional[Dict[str, Any]] = None,
-        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: int = 0,
-        fetch_size: Optional[int] = None,
-        count_mode: Optional[str] = None,
-        query_name: Optional[str] = None,
-    ) -> DomainListPage:
-        """Typed wrapper for :meth:`query_domains`."""
-
-        payload = self.query_domains(
-            filter=filter,
-            select=select,
-            sort=sort,
-            limit=limit,
-            offset=offset,
-            fetch_size=fetch_size,
-            count_mode=count_mode,
-            query_name=query_name,
-        )
-        return DomainListPage.from_payload(payload)
-
-    def query_asset_holders(
-        self,
-        asset_definition_id: str,
-        *,
-        filter: Optional[Dict[str, Any]] = None,
-        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: int = 0,
-        fetch_size: Optional[int] = None,
-        count_mode: Optional[str] = None,
-        query_name: Optional[str] = None,
-        aggregate: Optional[Union[AggregateSpec, Mapping[str, Any]]] = None,
-    ) -> Dict[str, Any]:
-        """POST `/v1/assets/{definition}/holders/query` with a structured envelope."""
-
-        definition = _require_exact_token_string(asset_definition_id, "asset_definition_id")
-        body = asset_holders_query_envelope(
-            filter=filter,
-            select=select,
-            sort=sort,
-            limit=limit,
-            offset=offset,
-            fetch_size=fetch_size,
-            count_mode=count_mode,
-            query_name=query_name,
-            aggregate=aggregate,
-        )
-        payload = self._expensive_query_json(
-            f"/v1/assets/{quote(definition, safe='')}/holders/query",
-            body,
-            context="asset holders query",
-        )
-        if not isinstance(payload, dict):
-            raise RuntimeError("unexpected asset holders query response")
-        return payload
-
-    def query_asset_holders_typed(
-        self,
-        asset_definition_id: str,
-        *,
-        filter: Optional[Dict[str, Any]] = None,
-        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: int = 0,
-        fetch_size: Optional[int] = None,
-        count_mode: Optional[str] = None,
-        query_name: Optional[str] = None,
-    ) -> AssetHolderListPage:
-        """Typed wrapper for :meth:`query_asset_holders`."""
-
-        payload = self.query_asset_holders(
-            asset_definition_id,
-            filter=filter,
-            select=select,
-            sort=sort,
-            limit=limit,
-            offset=offset,
-            fetch_size=fetch_size,
-            count_mode=count_mode,
-            query_name=query_name,
-        )
-        return AssetHolderListPage.from_payload(payload)
-
-    def list_asset_holders(
-        self,
-        asset_definition_id: str,
-        *,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        asset_id: Optional[str] = None,
-        count_mode: Optional[str] = None,
-    ) -> Optional[Any]:
-        """List asset holders via `GET /v1/assets/{definition}/holders` (optional `asset_id`)."""
-
-        definition = _require_non_empty_string(
-            asset_definition_id, "asset_definition_id"
-        )
-        params: Dict[str, Any] = {}
-        if limit is not None:
-            params["limit"] = int(limit)
-        if offset is not None:
-            params["offset"] = int(offset)
-        if count_mode is not None:
-            params["count_mode"] = _normalize_count_mode_arg(count_mode)
-        asset_id_value = _normalize_optional_string(
-            asset_id,
-            "list_asset_holders.asset_id",
-        )
-        if asset_id_value is not None:
-            params["asset_id"] = asset_id_value
-        definition = _require_exact_token_string(asset_definition_id, "asset_definition_id")
-        return self.request_json(
-            "GET",
-            f"/v1/assets/{quote(definition, safe='')}/holders",
-            params=params or None,
-            expected_status=(200,),
-        )
-
-    def list_asset_holders_typed(
-        self,
-        asset_definition_id: str,
-        *,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        asset_id: Optional[str] = None,
-        count_mode: Optional[str] = None,
-    ) -> AssetHolderListPage:
-        """Typed wrapper for :meth:`list_asset_holders`."""
-
-        payload = self.list_asset_holders(
-            asset_definition_id,
-            limit=limit,
-            offset=offset,
-            asset_id=asset_id,
-            count_mode=count_mode,
-        )
-        if payload is None:
-            return AssetHolderListPage(items=[], total=0)
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("asset holders endpoint returned non-object payload")
-        return AssetHolderListPage.from_payload(payload)
-
     def get_asset_transfer_control(
         self,
         account_id: str,
@@ -19949,40 +18205,6 @@ class ToriiClient(
         if not isinstance(payload, dict):
             raise RuntimeError("unexpected asset transfer control response")
         return payload
-
-    def list_account_permissions(
-        self,
-        account_id: str,
-        *,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-    ) -> Optional[Any]:
-        """List account permissions via `GET /v1/accounts/{account_id}/permissions`."""
-
-        canonical_account_id = self._normalize_canonical_account_id(account_id, "account_id")
-        params = self._pagination_params(limit=limit, offset=offset)
-        response = self._get_dataspace_visible_response(
-            f"/v1/accounts/{quote(canonical_account_id, safe='')}/permissions",
-            params=params or None,
-        )
-        self._expect_status(response, (200,))
-        return self._maybe_json(response)
-
-    def list_account_permissions_typed(
-        self,
-        account_id: str,
-        *,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-    ) -> AccountPermissionListPage:
-        """Typed wrapper for :meth:`list_account_permissions`."""
-
-        payload = self.list_account_permissions(account_id, limit=limit, offset=offset)
-        if payload is None:
-            return AccountPermissionListPage(items=[], total=0)
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("account permissions endpoint returned non-object payload")
-        return AccountPermissionListPage.from_payload(payload)
 
     # ------------------------------------------------------------------
     # Contracts API
@@ -21254,35 +19476,48 @@ class ToriiClient(
     def stream_events(
         self,
         *,
-        filter: Optional[Any] = None,
+        filter: Optional[FilterLike] = None,
         timeout: Optional[float] = None,
         max_retries: int = 3,
         backoff_base: float = 0.5,
         on_event: Optional[Callable[..., None]] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
-    ):
-        """Stream live JSON events from `/v1/events/sse`.
+    ) -> Iterator[Any]:
+        """Stream live ledger events from ``/v1/events/sse`` as typed records.
 
-        The `filter` parameter accepts a JSON string, mapping, or an
-        :class:`iroha_python.event_filter.EventFilter` instance.
+        Each event decodes to a :data:`~iroha_python.stream_events.ToriiEvent`:
+        :class:`TransactionEvent`, :class:`BlockEvent`,
+        :class:`PipelineWarningEvent`, :class:`WitnessEvent`, the proof events,
+        or :class:`GenericEvent` for every other kind (data events such as
+        ``Asset``, the ``Other`` category and kinds newer than this SDK, which
+        therefore never break the stream). A payload that is not such a JSON
+        object raises :class:`ValueError`. ``with_metadata=True`` yields
+        :class:`SseEvent` frames whose ``data`` is the typed event;
+        ``decode_json=False`` yields the raw ``data`` text instead.
+
+        ``filter`` uses the collection-query text grammar, restricted to what
+        event subscriptions can match: ``=`` and ``in [...]`` over
+        ``tx_status``, ``tx_hash``, ``tx_block_height``, ``tx_lane_id``,
+        ``tx_dataspace_id``, ``block_status``, ``block_height``,
+        ``proof_backend``, ``proof_call_hash`` and ``proof_envelope_hash``,
+        combined with ``and``/``or``; ``not`` only over ``tx_status = ...`` or
+        ``block_status = ...``; and ``tx_block_height is null``::
+
+            client.stream_events(filter=(F.tx_hash == tx_hash) & F.tx_status.in_("Approved", "Rejected"))
+
+        A :class:`~iroha_torii_client.list_query.Filter` is sent in canonical
+        text form (object and array literals raise ``FilterError`` before any
+        request); a text filter is sent unchanged. Torii rejects any other
+        filter with ``invalid_filter``, raised as ``ToriiQueryError`` when the
+        stream opens.
 
         Torii does not retain a replay log for this route. A reconnect starts a
         new live subscription and can have a gap; use the committed block
         stream when complete ledger history is required.
         """
 
-        filter_payload = ensure_event_filter(filter)
-        params = {"filter": filter_payload} if filter_payload else None
-
-        def _handle(event: SseEvent) -> None:
-            if on_event is None:
-                return
-            if with_metadata:
-                on_event(event)
-            else:
-                on_event(event.data, event.id)
-
+        params = None if filter is None else {"filter": filter_text(filter)}
         path = "/v1/events/sse"
         event_headers = self._canonical_request_headers(
             "GET",
@@ -21292,19 +19527,35 @@ class ToriiClient(
             headers={"Accept": "text/event-stream"},
             has_body=False,
         )
-        iterator = self._stream_sse(
+        frames = self._stream_sse(
             path,
             params=params,
             headers=event_headers,
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,
-            decode_json=decode_json,
-            on_event=_handle if on_event is not None else None,
+            decode_json=False,
         )
-        if with_metadata:
-            return iterator
-        return (event.data for event in iterator)
+
+        def events() -> Iterator[Any]:
+            try:
+                for frame in frames:
+                    if frame.data is None:
+                        continue  # SSE dispatches no event without data lines
+                    if decode_json:
+                        frame = replace(frame, data=decode_event(frame.data))
+                    if on_event is not None:
+                        if with_metadata:
+                            on_event(frame)
+                        else:
+                            on_event(frame.data, frame.id)
+                    yield frame if with_metadata else frame.data
+            finally:
+                close = getattr(frames, "close", None)
+                if close is not None:
+                    close()  # closing this iterator releases the HTTP stream
+
+        return events()
 
     def stream_sumeragi_status(
         self,
@@ -21358,220 +19609,6 @@ class ToriiClient(
         if with_metadata:
             return iterator
         return (event.data for event in iterator)
-
-    def stream_verifying_key_events(
-        self,
-        *,
-        backend: Optional[str] = None,
-        name: Optional[str] = None,
-        registered: bool = True,
-        updated: bool = True,
-        timeout: Optional[float] = None,
-        max_retries: int = 3,
-        backoff_base: float = 0.5,
-        on_event: Optional[Callable[..., None]] = None,
-        with_metadata: bool = False,
-        decode_json: bool = True,
-    ):
-        """Stream verifying-key lifecycle events via `/v1/events/sse`."""
-
-        filter_obj = DataEventFilter.verifying_key(
-            backend=backend,
-            name=name,
-            registered=registered,
-            updated=updated,
-        )
-        return self.stream_events(
-            filter=filter_obj,
-            timeout=timeout,
-            max_retries=max_retries,
-            backoff_base=backoff_base,
-            on_event=on_event,
-            with_metadata=with_metadata,
-            decode_json=decode_json,
-        )
-
-    def stream_proof_events(
-        self,
-        *,
-        backend: Optional[str] = None,
-        proof_hash_hex: Optional[str] = None,
-        verified: bool = True,
-        rejected: bool = True,
-        timeout: Optional[float] = None,
-        max_retries: int = 3,
-        backoff_base: float = 0.5,
-        on_event: Optional[Callable[..., None]] = None,
-        with_metadata: bool = False,
-        decode_json: bool = True,
-    ):
-        """Stream proof verification events via `/v1/events/sse`."""
-
-        filter_obj = DataEventFilter.proof(
-            backend=backend,
-            proof_hash_hex=proof_hash_hex,
-            verified=verified,
-            rejected=rejected,
-        )
-        return self.stream_events(
-            filter=filter_obj,
-            timeout=timeout,
-            max_retries=max_retries,
-            backoff_base=backoff_base,
-            on_event=on_event,
-            with_metadata=with_metadata,
-            decode_json=decode_json,
-        )
-
-    def stream_trigger_events(
-        self,
-        *,
-        trigger_id: Optional[str] = None,
-        created: bool = True,
-        deleted: bool = True,
-        extended: bool = True,
-        shortened: bool = True,
-        metadata_inserted: bool = True,
-        metadata_removed: bool = True,
-        timeout: Optional[float] = None,
-        max_retries: int = 3,
-        backoff_base: float = 0.5,
-        on_event: Optional[Callable[..., None]] = None,
-        with_metadata: bool = False,
-        decode_json: bool = True,
-    ):
-        """Stream trigger lifecycle events via `/v1/events/sse`."""
-
-        filter_obj = DataEventFilter.trigger(
-            trigger_id=trigger_id,
-            created=created,
-            deleted=deleted,
-            extended=extended,
-            shortened=shortened,
-            metadata_inserted=metadata_inserted,
-            metadata_removed=metadata_removed,
-        )
-        return self.stream_events(
-            filter=filter_obj,
-            timeout=timeout,
-            max_retries=max_retries,
-            backoff_base=backoff_base,
-            on_event=on_event,
-            with_metadata=with_metadata,
-            decode_json=decode_json,
-        )
-
-    def stream_pipeline_transactions(
-        self,
-        *,
-        hash_hex: Optional[str] = None,
-        block_height: Optional[int] = None,
-        status: Optional[str] = None,
-        timeout: Optional[float] = None,
-        max_retries: int = 3,
-        backoff_base: float = 0.5,
-        on_event: Optional[Callable[..., None]] = None,
-        with_metadata: bool = False,
-        decode_json: bool = True,
-    ):
-        """Stream pipeline transaction events via `/v1/events/sse`."""
-
-        filter_obj = DataEventFilter.pipeline_transaction(
-            hash_hex=hash_hex,
-            block_height=block_height,
-            status=status,
-        )
-        return self.stream_events(
-            filter=filter_obj,
-            timeout=timeout,
-            max_retries=max_retries,
-            backoff_base=backoff_base,
-            on_event=on_event,
-            with_metadata=with_metadata,
-            decode_json=decode_json,
-        )
-
-    def stream_pipeline_blocks(
-        self,
-        *,
-        height: Optional[int] = None,
-        status: Optional[str] = None,
-        timeout: Optional[float] = None,
-        max_retries: int = 3,
-        backoff_base: float = 0.5,
-        on_event: Optional[Callable[..., None]] = None,
-        with_metadata: bool = False,
-        decode_json: bool = True,
-    ):
-        """Stream pipeline block events via `/v1/events/sse`."""
-
-        filter_obj = DataEventFilter.pipeline_block(
-            height=height,
-            status=status,
-        )
-        return self.stream_events(
-            filter=filter_obj,
-            timeout=timeout,
-            max_retries=max_retries,
-            backoff_base=backoff_base,
-            on_event=on_event,
-            with_metadata=with_metadata,
-            decode_json=decode_json,
-        )
-
-    def stream_pipeline_witnesses(
-        self,
-        *,
-        block_hash_hex: Optional[str] = None,
-        height: Optional[int] = None,
-        view: Optional[int] = None,
-        timeout: Optional[float] = None,
-        max_retries: int = 3,
-        backoff_base: float = 0.5,
-        on_event: Optional[Callable[..., None]] = None,
-        with_metadata: bool = False,
-        decode_json: bool = True,
-    ):
-        """Stream execution witness events via `/v1/events/sse`."""
-
-        filter_obj = DataEventFilter.pipeline_witness(
-            block_hash_hex=block_hash_hex,
-            height=height,
-            view=view,
-        )
-        return self.stream_events(
-            filter=filter_obj,
-            timeout=timeout,
-            max_retries=max_retries,
-            backoff_base=backoff_base,
-            on_event=on_event,
-            with_metadata=with_metadata,
-            decode_json=decode_json,
-        )
-
-    def stream_pipeline_merges(
-        self,
-        *,
-        epoch_id: Optional[int] = None,
-        timeout: Optional[float] = None,
-        max_retries: int = 3,
-        backoff_base: float = 0.5,
-        on_event: Optional[Callable[..., None]] = None,
-        with_metadata: bool = False,
-        decode_json: bool = True,
-    ):
-        """Stream merge-ledger events via `/v1/events/sse`."""
-
-        filter_obj = DataEventFilter.pipeline_merge(epoch_id=epoch_id)
-        return self.stream_events(
-            filter=filter_obj,
-            timeout=timeout,
-            max_retries=max_retries,
-            backoff_base=backoff_base,
-            on_event=on_event,
-            with_metadata=with_metadata,
-            decode_json=decode_json,
-        )
 
     # ------------------------------------------------------------------
     # Triggers API
@@ -21753,79 +19790,6 @@ class ToriiClient(
         if not isinstance(payload, Mapping):
             raise RuntimeError("trigger deletion returned malformed payload")
         return TriggerMutationResponse.from_payload(payload)
-
-    def query_triggers(
-        self,
-        *,
-        filter: Optional[Mapping[str, Any]] = None,
-        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        fetch_size: Optional[int] = None,
-        count_mode: Optional[str] = None,
-        query_name: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """POST `/v1/triggers/query` with a structured envelope."""
-
-        if filter is not None:
-            if not isinstance(filter, Mapping):
-                raise TypeError("query_triggers.filter must be a mapping")
-        body = self._build_query_envelope(
-            filter=filter,
-            select=select,
-            sort=sort,
-            limit=_coerce_int(limit, "query_triggers.limit") if limit is not None else None,
-            offset=(
-                _coerce_int(offset, "query_triggers.offset", allow_zero=True)
-                if offset is not None
-                else None
-            ),
-            fetch_size=(
-                _coerce_int(fetch_size, "query_triggers.fetch_size")
-                if fetch_size is not None
-                else None
-            ),
-            count_mode=count_mode,
-            query_name=query_name,
-        )
-        response = self._request(
-            "POST",
-            "/v1/triggers/query",
-            data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-        )
-        self._expect_status(response, {200})
-        payload = self._maybe_json(response)
-        if not isinstance(payload, dict):
-            raise RuntimeError("unexpected triggers query response")
-        return payload
-
-    def query_triggers_typed(
-        self,
-        *,
-        filter: Optional[Mapping[str, Any]] = None,
-        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        fetch_size: Optional[int] = None,
-        count_mode: Optional[str] = None,
-        query_name: Optional[str] = None,
-    ) -> TriggerListPage:
-        """Typed wrapper for :meth:`query_triggers`."""
-
-        payload = self.query_triggers(
-            filter=filter,
-            select=select,
-            sort=sort,
-            limit=limit,
-            offset=offset,
-            fetch_size=fetch_size,
-            count_mode=count_mode,
-            query_name=query_name,
-        )
-        return TriggerListPage.from_payload(payload)
 
 def create_torii_client(
     base_url: str,

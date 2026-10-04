@@ -85,6 +85,22 @@ impl ProcessResources {
         OWNER.get_or_init(|| Self::new(limits))
     }
 
+    /// Reserve a foreign host allocation from this original process envelope.
+    ///
+    /// The consumer must reserve its checked allocation layout before allocating
+    /// and keep this move-only credit until the physical backing has been dropped.
+    /// This creates no dummy backing and gives no device or command admission.
+    ///
+    /// # Errors
+    /// Returns [`crate::HostOutputError::Capacity`] when the original host pool
+    /// cannot fund the layout. Policy reload never replaces this pool.
+    pub fn try_host_reservation(
+        &self,
+        layout: Layout,
+    ) -> Result<iroha_allocation::AllocationReservation, crate::HostOutputError> {
+        self.resources.try_reserve_host(layout.size())
+    }
+
     /// Reserve and initialize an escaping host result from the original process
     /// envelope, without needing a native driver or an in-flight device attempt.
     /// CPU fallback and foreign-runtime copying retain this same allocation owner.
@@ -248,6 +264,41 @@ mod tests {
             0,
             "partial stream refusal returns in-flight credit"
         );
+    }
+
+    #[test]
+    fn foreign_host_credit_shares_the_original_pool_and_survives_unwind_and_shrink() {
+        let mut limits = RegistryLimits::STANDARD;
+        limits.work.host_bytes = 40;
+        let owner = ProcessResources::new(limits);
+        let original = owner.try_host_output::<u64>(1).unwrap();
+        let layout = Layout::array::<u64>(4).unwrap();
+        let credit = owner.try_host_reservation(layout).unwrap();
+        assert_eq!(owner.usage().host_bytes[0], 40);
+        assert!(matches!(
+            owner.try_host_reservation(layout),
+            Err(crate::HostOutputError::Capacity)
+        ));
+        limits.work.host_bytes = 0;
+        owner.configure(limits);
+        assert_eq!(owner.usage().host_bytes[0], 40);
+        drop(credit);
+        assert_eq!(owner.usage().host_bytes[0], 8);
+        drop(original);
+        assert_eq!(owner.usage().host_bytes[0], 0);
+        limits.work.host_bytes = 32;
+        owner.configure(limits);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _credit = owner.try_host_reservation(layout).unwrap();
+                assert_eq!(owner.usage().host_bytes[0], 32);
+                panic!("foreign allocation attempt unwound");
+            }))
+            .is_err()
+        );
+        assert_eq!(owner.usage().host_bytes[0], 0);
+        assert_eq!(owner.usage().device_bytes[0], 0);
+        assert_eq!(owner.usage().in_flight[0], 0);
     }
 
     #[test]

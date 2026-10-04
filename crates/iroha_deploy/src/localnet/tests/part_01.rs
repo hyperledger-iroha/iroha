@@ -109,6 +109,7 @@ fn asset_extension_preserves_global_prefix_and_scoped_home_owners() {
         Some(seed),
         0,
         std::slice::from_ref(&asset),
+        TairaParentCatalog::WithIs,
     )
     .unwrap();
     assert_eq!(
@@ -221,7 +222,8 @@ fn asset_extension_preserves_global_prefix_and_scoped_home_owners() {
             &genesis_account_id,
             Some(seed),
             0,
-            std::slice::from_ref(&asset)
+            std::slice::from_ref(&asset),
+            TairaParentCatalog::WithIs
         )
         .unwrap_err()
         .to_string()
@@ -243,10 +245,17 @@ fn asset_extension_preserves_global_prefix_and_scoped_home_owners() {
         .build_raw()
         .unwrap();
     assert!(
-        extend_genesis(structured, &genesis_account_id, Some(seed), 0, &[asset])
-            .unwrap_err()
-            .to_string()
-            .contains("not instruction-only")
+        extend_genesis(
+            structured,
+            &genesis_account_id,
+            Some(seed),
+            0,
+            &[asset],
+            TairaParentCatalog::WithIs
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("not instruction-only")
     );
 }
 
@@ -300,8 +309,14 @@ fn canonical_taira_generation_binds_four_runtime_signers_to_validator_peers() {
         consensus_mode: SumeragiConsensusMode::Npos,
     };
     let mut output = BufWriter::new(Vec::new());
-    generate_localnet_with_chain(&opts, &mut output, Some(PUBLIC_TAIRA_CHAIN_ID), None)
-        .expect("generate canonical Taira localnet");
+    generate_localnet_with_chain(
+        &opts,
+        &mut output,
+        Some(PUBLIC_TAIRA_CHAIN_ID),
+        None,
+        TairaParentCatalog::WithIs,
+    )
+    .expect("generate canonical Taira localnet");
     let peers = build_peers(
         TAIRA_TESTNET_PEERS,
         opts.seed.as_deref().map(str::as_bytes),
@@ -1021,6 +1036,7 @@ fn localnet_genesis_for_opts_and_client(
             seed_bytes,
             opts.extra_accounts,
             &assets,
+            TairaParentCatalog::WithIs,
         )
         .expect("extend genesis");
     }
@@ -1593,8 +1609,14 @@ fn generated_localnet_needs_no_kagemusha_feature_switch() {
         consensus_mode: SumeragiConsensusMode::Npos,
     };
     let mut command_output = BufWriter::new(Vec::new());
-    generate_localnet_with_chain(&opts, &mut command_output, None, None)
-        .expect("generate fresh-custody localnet files");
+    generate_localnet_with_chain(
+        &opts,
+        &mut command_output,
+        None,
+        None,
+        TairaParentCatalog::WithIs,
+    )
+    .expect("generate fresh-custody localnet files");
     let command_output = String::from_utf8(
         command_output
             .into_inner()

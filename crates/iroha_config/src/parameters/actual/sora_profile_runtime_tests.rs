@@ -10,7 +10,6 @@ fn apply_sora_profile_enables_discovery_with_parsed_admission() {
         .as_ref()
         .expect("profile must preserve parsed admission policy");
     assert!(root.torii.sorafs_discovery.discovery_enabled);
-
 }
 #[test]
 fn apply_sora_profile_sets_catalogs_on_defaults() {
@@ -386,4 +385,73 @@ fn soranet_vpn_defaults_construct_with_canonical_operator_account() {
         config.operator_account_id,
         defaults::governance::bond_escrow_account_id()
     );
+}
+
+#[test]
+fn sora_service_defaults_preserve_every_geometry_projection() {
+    let mut root = minimal_root();
+    let before = root.nexus.clone();
+    root.apply_sora_service_defaults();
+    assert_eq!(root.nexus.lane_catalog, before.lane_catalog);
+    assert_eq!(
+        root.nexus.configured_lane_catalog,
+        before.configured_lane_catalog
+    );
+    assert_eq!(root.nexus.lane_config, before.lane_config);
+    assert_eq!(root.nexus.dataspace_catalog, before.dataspace_catalog);
+    assert_eq!(
+        root.nexus.configured_dataspace_catalog,
+        before.configured_dataspace_catalog
+    );
+    assert_eq!(root.nexus.routing_policy, before.routing_policy);
+    assert_eq!(
+        root.nexus.dataspace_fee_sponsor_program_ids,
+        before.dataspace_fee_sponsor_program_ids
+    );
+    assert_eq!(
+        root.tiered_state.da_store_root,
+        Some(PathBuf::from(defaults::tiered_state::DEFAULT_DA_STORE_ROOT))
+    );
+    assert!(!root.torii.sorafs_storage.enabled);
+    assert!(!root.torii.sorafs_discovery.discovery_enabled);
+}
+
+#[test]
+fn source_selected_sora_defaults_preserve_explicit_default_geometry_and_services() {
+    let mut root = minimal_root_with_sorafs_admission();
+    let before = root.nexus.clone();
+    let explicit: Table = "[nexus]\nlane_count = 1\n[sorafs.discovery]\ndiscovery_enabled = false"
+        .parse()
+        .expect("explicit defaults");
+    let custom_da = PathBuf::from("operator-da");
+    root.tiered_state.da_store_root = Some(custom_da.clone());
+    root.torii.sorafs_storage.enabled = true;
+    crate::sora_profile::SoraProfileSelection::from_table(&explicit).apply(&mut root);
+    assert_eq!(root.nexus.lane_catalog, before.lane_catalog);
+    assert_eq!(
+        root.nexus.configured_lane_catalog,
+        before.configured_lane_catalog
+    );
+    assert_eq!(root.nexus.lane_config, before.lane_config);
+    assert_eq!(root.nexus.dataspace_catalog, before.dataspace_catalog);
+    assert_eq!(
+        root.nexus.configured_dataspace_catalog,
+        before.configured_dataspace_catalog
+    );
+    assert_eq!(root.nexus.routing_policy, before.routing_policy);
+    assert!(root.torii.sorafs_storage.enabled);
+    assert!(!root.torii.sorafs_discovery.discovery_enabled);
+    assert!(root.torii.sorafs_discovery.admission.is_some());
+    assert_eq!(root.tiered_state.da_store_root, Some(custom_da));
+}
+
+#[test]
+fn source_selected_sora_profile_applies_bundled_geometry_when_omitted() {
+    let mut root = minimal_root_with_sorafs_admission();
+    crate::sora_profile::SoraProfileSelection::from_table(&Table::new()).apply(&mut root);
+    assert_eq!(root.nexus.lane_catalog, sora_lane_catalog());
+    assert_eq!(root.nexus.dataspace_catalog, sora_dataspace_catalog());
+    assert_eq!(root.nexus.routing_policy, sora_routing_policy());
+    assert!(root.torii.sorafs_discovery.discovery_enabled);
+    assert!(!root.torii.sorafs_storage.enabled);
 }

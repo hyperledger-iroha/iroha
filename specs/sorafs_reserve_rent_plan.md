@@ -27,6 +27,13 @@ The canonical implementation consists of:
   finalized ledger view, signs through an injected external software-signer boundary, and
   submits only through strict Torii transaction ingress.
 
+Native reserve transitions exclusively own physical state keys beginning with
+`sorafs_reserve_`. Contract `STATE_SET`/`STATE_DEL` and retained host or pipeline
+durable artifacts cannot mutate that namespace, including proved-artifact replay.
+These checks preserve existing reads and contract-scoped user state. Initial policy
+activation separately requires the entire physical namespace to be empty;
+an independently authenticated absent policy singleton does not prove that condition.
+
 Pre-release reserve state encoded without the V1 settlement anchor is not
 compatible. Development deployments must discard and reseed that state; there
 is no legacy decoder or state migration.

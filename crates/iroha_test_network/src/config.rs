@@ -1385,13 +1385,13 @@ fn resolve_preexec_nexus_config(
     let has_authoritative_nexus = nexus_config.is_some();
     let mut nexus = nexus_config.cloned().unwrap_or_default();
     if let Some(policies) = block_policies
-        && !policies.policies.is_empty()
+        && !policies.policies().is_empty()
         && !has_authoritative_nexus
     {
-        let mut lanes = Vec::with_capacity(policies.policies.len());
+        let mut lanes = Vec::with_capacity(policies.policies().len());
         let mut dataspace_ids = BTreeSet::new();
         let mut max_lane = 0u32;
-        for policy in &policies.policies {
+        for policy in policies.policies() {
             max_lane = max_lane.max(policy.lane_id.as_u32());
             dataspace_ids.insert(policy.dataspace_id);
             lanes.push(iroha_data_model::nexus::LaneConfig {
@@ -1507,7 +1507,10 @@ fn resign_genesis(
             .expect("sign exact genesis proposal header"),
     );
     signed
-        .replace_signatures(BTreeSet::from([signature]))
+        .replace_signatures(
+            iroha_data_model::block::BlockSignatures::try_from_iter([signature])
+                .expect("at most 31 block signatures"),
+        )
         .expect("replace genesis with its one canonical signature");
     signed
 }
@@ -1611,7 +1614,7 @@ mod tests {
     #[derive(norito::NoritoSchema, norito::codec::Decode, norito::codec::Encode)]
     #[norito_schema(name = "iroha_test_network::config::tests::MutableGenesisWire")]
     struct MutableGenesisWire {
-        signatures: BTreeSet<iroha_data_model::block::BlockSignature>,
+        signatures: iroha_data_model::block::BlockSignatures,
         payload: iroha_data_model::block::BlockPayload,
         result: Option<iroha_data_model::block::BlockResult>,
         commit_certificate: Option<iroha_data_model::block::CommitCertificate>,
@@ -2143,7 +2146,10 @@ mod tests {
         );
         block
             .0
-            .replace_signatures(BTreeSet::from([wrong_signature]))
+            .replace_signatures(
+                iroha_data_model::block::BlockSignatures::try_from_iter([wrong_signature])
+                    .expect("at most 31 block signatures"),
+            )
             .unwrap();
         assert!(!super::genesis_signature_is_canonical(
             &block.0,
@@ -2239,8 +2245,8 @@ mod tests {
             .0
             .da_proof_policies()
             .expect("genesis carries the active DA policies")
-            .policies
-            .clone();
+            .policies()
+            .to_vec();
         changed_policies[0].alias = "reexecuted-default".to_owned();
         let changed_policies = DaProofPolicyBundle::new(changed_policies);
         assert_ne!(

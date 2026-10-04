@@ -1009,6 +1009,156 @@ mod tests {
     }
 
     #[test]
+    fn admitted_prepared_fetch_preserves_every_physical_alignment_and_refuses_false_bytes() {
+        use crate::execution_diagnostics::DiagnosticExecutionRecorders;
+        let interface = crate::metadata::EmbeddedContractInterfaceV1 {
+            callables: vec![ivm_abi::call::EmbeddedCallableV1 {
+                entry_pc: 0,
+                frame_bytes: 512,
+                arguments: ivm_abi::call::CallSchemaV1::empty(),
+                results: ivm_abi::call::CallSchemaV1::unit(),
+            }],
+            seiyaku_name: "DiagnosticAlignment".to_owned(),
+            compiler_fingerprint: "memory-diagnostics-test".to_owned(),
+            abi_hash: crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1),
+            features_bitmap: crate::CONTRACT_FEATURE_BIT_ZK,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![crate::metadata::EmbeddedEntrypointDescriptor {
+                name: "main".to_owned(),
+                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
+                params: Vec::new(),
+                argument_schema: None,
+                return_type: Some("()".to_owned()),
+                return_schema: Some(ivm_abi::entrypoint::EntrypointValueTypeV1 {
+                    nodes: vec![ivm_abi::entrypoint::EntrypointValueTypeNodeV1::Unit],
+                }),
+                permission: Some("Execute".to_owned()),
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                access_hints_complete: Some(true),
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+                entry_pc: 0,
+            }],
+            error_messages: Vec::new(),
+            error_types: Vec::new(),
+            states: Vec::new(),
+        };
+        let instructions = [
+            wide::encode_store(instruction::wide::memory::STORE64, 12, 0, 0),
+            wide::encode_ri(instruction::wide::arithmetic::ADDI, 10, 12, 0),
+            wide::encode_ri(instruction::wide::arithmetic::ADDI, 11, 0, 1),
+            wide::encode_rr(instruction::wide::control::JALR, 0, 1, 0),
+        ];
+        for alignment in 0..4 {
+            let prefix = (1..=32)
+                .map(|length| {
+                    let mut interface = interface.clone();
+                    interface.compiler_fingerprint = "x".repeat(length);
+                    interface.encode_section()
+                })
+                .find(|prefix| prefix.len() % 4 == alignment)
+                .expect("canonical contract prefix covers all physical alignments");
+            let mut bytes = ProgramMetadata {
+                mode: crate::metadata::mode::ZK,
+                max_cycles: 64,
+                ..ProgramMetadata::default()
+            }
+            .encode();
+            bytes.extend_from_slice(&prefix);
+            bytes.extend(instructions.into_iter().flat_map(u32::to_le_bytes));
+            let contract = crate::prepare_contract(Arc::<[u8]>::from(bytes)).unwrap();
+            let first_pc = contract.instruction_entry_pc();
+            assert_eq!(first_pc % 4, alignment as u64);
+            assert!(contract.is_instruction_boundary(0));
+            let first_word = u32::from_le_bytes(
+                contract.artifact()[contract.code_offset()..contract.code_offset() + 4]
+                    .try_into()
+                    .unwrap(),
+            );
+            let mut vm = IVM::new(10_000);
+            vm.load_prepared(&contract).unwrap();
+            vm.memory.clear_tracking();
+            let budget = budget_for_rows(4);
+            let accesses = DiagnosticMemoryAccessRecorder::try_new(4, &budget).unwrap();
+            accesses.begin_run(true).unwrap();
+            vm.memory
+                .install_diagnostic_access_recorder(accesses.shared())
+                .unwrap();
+            for (pc, word) in [
+                (first_pc, first_word ^ 1),
+                (vm.memory.code_len() - 3, first_word),
+                (u64::MAX - 2, first_word),
+            ] {
+                assert_eq!(
+                    vm.memory.diagnostic_record_prepared_fetch(pc, word),
+                    Err(VMError::DecodeError)
+                );
+                assert!(accesses.is_empty());
+                assert!(vm.memory.try_read_log_snapshot().unwrap().is_empty());
+            }
+            vm.memory
+                .diagnostic_record_prepared_fetch(first_pc, first_word)
+                .unwrap();
+            accesses.with_records(|rows| {
+                assert_eq!(rows.len(), 4);
+                for (byte, row) in rows.iter().enumerate() {
+                    assert_eq!(row.address, first_pc + byte as u64);
+                    assert_eq!(row.byte_offset, byte as u32);
+                    assert_eq!(
+                        (row.before, row.after),
+                        (
+                            first_word.to_le_bytes()[byte],
+                            first_word.to_le_bytes()[byte]
+                        )
+                    );
+                    assert_eq!(row.kind, DiagnosticMemoryAccessKind::InstructionFetch);
+                    assert_eq!(row.privacy_tag, DiagnosticMemoryPrivacyTag::Public);
+                }
+            });
+            assert!(vm.memory.try_read_log_snapshot().unwrap().is_empty());
+            vm.memory.clear_diagnostic_access_recorder();
+
+            let plan = DiagnosticExecutionRecorders::allocation_plan(32, 512, None).unwrap();
+            let budget = AllocationBudget::new(plan.requested_bytes());
+            let mut recorders =
+                DiagnosticExecutionRecorders::try_new(32, 512, None, &budget).unwrap();
+            vm.run_with_host_diagnostic_steps_and_memory(
+                &mut DefaultHost::default(),
+                &mut recorders.steps,
+                &recorders.memory_accesses,
+            )
+            .unwrap();
+            assert_eq!(vm.public_call_result_word(0), Ok(0));
+            assert_eq!(recorders.steps.records()[0].before.pc, first_pc);
+            recorders.memory_accesses.with_records(|rows| {
+                let fetched = rows
+                    .iter()
+                    .filter(|row| row.kind == DiagnosticMemoryAccessKind::InstructionFetch)
+                    .collect::<Vec<_>>();
+                assert_eq!(fetched.len(), recorders.steps.records().len() * 4);
+                for (step, bytes) in recorders
+                    .steps
+                    .records()
+                    .iter()
+                    .zip(fetched.chunks_exact(4))
+                {
+                    assert!(contract.is_instruction_boundary(step.before.pc - first_pc));
+                    let instruction = step.instruction.unwrap().to_le_bytes();
+                    for (byte, row) in bytes.iter().enumerate() {
+                        assert_eq!(row.address, step.before.pc + byte as u64);
+                        assert_eq!(
+                            (row.before, row.after),
+                            (instruction[byte], instruction[byte])
+                        );
+                    }
+                }
+            });
+        }
+    }
+
+    #[test]
     fn unprepared_decoder_keeps_read_set_and_labels_fetch() {
         let mut memory = Memory::new();
         let word = wide::encode_halt();

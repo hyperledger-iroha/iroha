@@ -226,7 +226,8 @@ pub(crate) fn prepare_private_root_at(
     }
     let mut prepared = prepare_fresh(name, directory, ports, spec, publication_root)
         .map_err(|error| Error::Invalid(format!("private-root preparation failed: {error:#}")))?;
-    verify_retained(&directory.canonicalize()?, &prepared, spec)?;
+    // Fresh preparation authenticated its physical stage before rendering final paths.
+    // The managed publisher separately reopens and verifies the complete final generation.
     if let Some(root) = publication_root {
         prepared.context.client_config = root.join("client.toml");
         for (index, peer) in prepared.peers.iter_mut().enumerate() {
@@ -517,6 +518,7 @@ fn prepare_fresh(
                 mcp_enabled: false,
                 npos_bootstrap: false,
                 taira: false,
+                taira_parent_catalog: TairaParentCatalog::WithIs,
                 operator_account: &owner_literal,
                 operator_public_key: &operator.public_key,
                 onboarding_account: &owner_literal,
@@ -543,6 +545,7 @@ fn prepare_fresh(
     )?;
     let config = parse_private_peer_config(&bootstrap, Some(&root.join("peer0.toml")))?;
     let expected = write_genesis(GenesisWriteContext {
+        creation_time_ms: None,
         manifest: &genesis,
         public_key: &genesis_public,
         private_key: genesis_private,
@@ -579,13 +582,9 @@ fn prepare_fresh(
             parsed.genesis.expected_hash == expected,
             "private-root genesis binding changed"
         );
-        let rendered = match publication_root {
-            Some(root) => render(root, index, LocalnetGenesisIdentitySource::PublishedFile)?,
-            None => rendered,
-        };
         custody::write(&path, rendered.as_bytes())?;
     }
-    write_client_config(&root, ports.base_api, &hosts, &chain, None, &owner)?;
+    write_client_config(&root, ports.base_api, &hosts, &chain, None, &owner, None)?;
     let client_path = root.join("client.toml");
     let client = iroha_fs::read_private(&client_path, 1024 * 1024)?;
     let mut table = crate::secret_toml::Table::new(crate::secret_toml::parse_table(
@@ -597,26 +596,18 @@ fn prepare_fresh(
         "api_token".into(),
         toml::Value::String(api_token.as_str().into()),
     );
-    table
-        .get_mut("account")
-        .and_then(toml::Value::as_table_mut)
-        .ok_or_else(|| eyre!("private-root client account is absent"))?
-        .insert(
-            "domain".into(),
-            toml::Value::String(format!("app.{}", spec.dataspace_alias)),
-        );
     custody::replace(
         &client_path,
         Zeroizing::new(toml::to_string(&*table)?).as_bytes(),
     )?;
     custody::validate_private_tree(&root, &[])?;
-    Ok(PreparedLocalnet {
+    let prepared = PreparedLocalnet {
         service_profile: crate::localnet::LocalnetServiceProfile::Standard,
         context: ManagedContext {
             name: name.into(),
-            chain_id: chain,
+            chain_id: chain.clone(),
             network_id: NetworkId::from_genesis_hash(expected).to_string(),
-            account_id: owner_literal,
+            account_id: owner_literal.clone(),
             dataspace_id: spec.dataspace_id.as_u64(),
             dataspace_alias: spec.dataspace_alias.clone(),
             torii_url: urls[0].clone(),
@@ -629,14 +620,35 @@ fn prepare_fresh(
                 log_name: format!("peer{index}.log"),
             })
             .collect(),
-    })
+    };
+    // Native manifest/genesis/config/owner/credential checks must read the real,
+    // unpublished stage. Admit its absolute genesis/runtime paths before rendering
+    // the future publication paths; expected_hash_file remains config-relative.
+    verify_retained(&root, &prepared, spec)
+        .map_err(|_| eyre!("fresh private-root native artifact binding is invalid"))?;
+    if let Some(published) = publication_root {
+        for index in 0..4 {
+            let rendered = render(
+                published,
+                index,
+                LocalnetGenesisIdentitySource::PublishedFile,
+            )?;
+            custody::replace(&root.join(format!("peer{index}.toml")), rendered.as_bytes())?;
+        }
+        custody::validate_private_tree(&root, &[])?;
+    }
+    Ok(prepared)
 }
 
 fn parse_private_peer_config(rendered: &str, path: Option<&Path>) -> Result<actual::Root> {
     let mut config = parse_localnet_peer_config(rendered, path)?;
     // Match the native worker's required `--sora` launch profile before deriving any signed
     // execution-policy commitment. Explicit private geometry is preserved by this owner.
-    config.apply_sora_profile();
+    let table = crate::secret_toml::Table::new(crate::secret_toml::parse_table(
+        rendered,
+        "private-root validator",
+    )?);
+    iroha_config::sora_profile::SoraProfileSelection::from_table(&table).apply(&mut config);
     Ok(config)
 }
 
@@ -715,7 +727,7 @@ fn private_peer_config(
     Ok(Zeroizing::new(toml::to_string(&*root)?))
 }
 
-fn private_fee_policy(spec: &PrivateRootSpec) -> Result<PrivateRootFeePolicy> {
+pub(crate) fn private_fee_policy(spec: &PrivateRootSpec) -> Result<PrivateRootFeePolicy> {
     let policy = PrivateRootFeePolicy {
         asset_definition_id: AssetDefinitionId::derive_from_components(
             DomainId::parse_fully_qualified(&format!("app.{}", spec.dataspace_alias))?,
@@ -1122,6 +1134,14 @@ mod tests {
         let spec = spec();
         let prepared = prepare_private_root("private", &directory, &ports, &spec).unwrap();
         assert_eq!(prepared.context.dataspace_id, spec.dataspace_id.as_u64());
+        assert_eq!(
+            prepared.build_cache_root(),
+            directory
+                .canonicalize()
+                .unwrap()
+                .join("runtime/build-cache")
+        );
+        assert!(!prepared.build_cache_root().exists());
         assert_eq!(prepared.peers.len(), 4);
         verify_retained(&directory.canonicalize().unwrap(), &prepared, &spec).unwrap();
         let registration = prepared.load_private_registration().unwrap();
@@ -1297,6 +1317,8 @@ mod tests {
         }
         let repeated = prepare_private_root("private", &directory, &ports, &spec).unwrap();
         assert_eq!(repeated, prepared);
+        assert_eq!(repeated.build_cache_root(), prepared.build_cache_root());
+        assert!(!repeated.build_cache_root().exists());
         assert_eq!(repeated.load_private_registration().unwrap(), registration);
         let original_manifest = iroha_fs::read_private(
             &directory.join("genesis.json"),

@@ -1,5 +1,9 @@
 //! Small ordinary workloads use the qualified CPU path without GPU launches.
 
+/// Shared exact-owner CUDA completion controls.
+#[path = "support/cuda_completions.rs"]
+pub mod cuda_completions;
+
 use ed25519_dalek::{Signer as _, SigningKey};
 use ivm::{Ed25519BatchItem, MetalKernel, bn254_vec};
 
@@ -16,7 +20,7 @@ fn tiny_crypto_workloads_preserve_results_without_gpu_dispatch() {
         MetalKernel::Ed25519,
     ];
     let metal_before = kernels.map(ivm::metal_completed_dispatches);
-    let cuda_before = ivm::cuda_completed_dispatches();
+    let cuda_before = cuda_completions::capture();
 
     let mut keccak = [0u64; 25];
     ivm::keccak_f1600(&mut keccak);
@@ -118,5 +122,5 @@ fn tiny_crypto_workloads_preserve_results_without_gpu_dispatch() {
     );
 
     assert_eq!(kernels.map(ivm::metal_completed_dispatches), metal_before);
-    assert_eq!(ivm::cuda_completed_dispatches(), cuda_before);
+    assert!(cuda_completions::unchanged(&cuda_before));
 }

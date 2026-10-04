@@ -7,8 +7,8 @@ summary: Landing page for installing IrohaSwift, running the quickstart, and und
 
 The Swift SDK (IrohaSwift) targets iOS and macOS clients that require deterministic
 Norito encoding, `/v1/pipeline` submission, and the Connect/WebSocket surfaces used in
-Sora Nexus. It ships as a Swift Package (`IrohaSwift/Package.swift`) and can also be
-embedded via CocoaPods or XCFramework ZIPs.
+Sora Nexus. SwiftPM (`IrohaSwift/Package.swift`) is its sole supported packaging
+path and requires the authenticated NoritoBridge XCFramework.
 
 ## Installing IrohaSwift
 
@@ -19,8 +19,9 @@ moving branch.
 These remote coordinates are release targets, not evidence that the tags are
 already public. Keep public installation instructions behind the release gate
 until the canonical signed monorepo `v0.1.0` tag, immutable NoritoBridge release
-asset, both CocoaPods specs, and package canary are verified. The separate
-`hyperledger/iroha-swift` SwiftPM repository and its `0.1.0` tag are an additional
+asset, reviewed package source, and ordinary Release package consumer are
+verified. The separate `hyperledger/iroha-swift` SwiftPM repository and its
+`0.1.0` tag are an additional
 external publication target; the monorepo tag does not publish them. Local
 development uses the relative package path.
 
@@ -46,25 +47,20 @@ development uses the relative package path.
   ]
   ```
 
-- **CocoaPods:** `pod 'IrohaSwift', '0.1.0'` after `NoritoBridge 0.1.0` and
-  `IrohaSwift 0.1.0` are published to the selected spec repository. Do not use a
-  raw podspec URL: the registry spec preserves the reviewed source and exact
-  checksum-pinned binary dependency.
-
 When developing from a checked-out workspace you can keep using the relative path variant
 (`.package(name: "IrohaSwift", path: "../../IrohaSwift")`) to avoid fetching over the
 network.
 
 ### Bridge delivery and platform minimums
 - Toolchain/platform: SwiftPM supports iOS 15+ and macOS 12+ with Swift 5.9+.
-  The current CocoaPods specs and lint lane support iOS 15+ only.
-- Bridge: local SwiftPM development uses `dist/NoritoBridge.xcframework` and its
-  manifest. CocoaPods instead resolves the same authenticated ZIP through the
-  checksum-pinned `NoritoBridge` binary pod. `ci/check_swift_pod_bridge.sh`
-  validates the packaged inventory and builds both the binary and source pods
-  through a package-local `file://` source. CocoaPods may still consult configured
-  spec sources, and public registry installation remains a
-  release-time evidence step.
+- Bridge: authenticate the XCFramework ZIP and materialize it with its embedded
+  manifest under ignored `dist/` or the canonical external directory selected
+  by `MOBILE_SDK_APPLE_ARTIFACT_DIR` before resolution. Reviewed external builds
+  require `MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1`. `IrohaSwift/VERSION`
+  owns the package, tag and archive SemVer. Validate the archive consumer and an
+  ordinary public `IrohaSwift` dependency in Release with native execution and
+  no unsafe linker flags. Public installation and signed publication evidence
+  remain release requirements; host/simulator checks do not qualify a device.
 - Policy: the bridge is mandatory. Package resolution fails when `dist/NoritoBridge.xcframework` is absent or incomplete; runtime `bridgeUnavailable`/`nativeBridgeUnavailable` errors identify a broken or unloaded required artifact rather than selecting a Swift-only codec fallback.
 
 ## Quickstart
@@ -90,8 +86,8 @@ let transfer = TransferRequest(
 
 if #available(iOS 15.0, macOS 12.0, *) {
     Task {
-        let balances = try await torii.getAssets(accountId: accountId)
-        print("balances", balances)
+        let balances = try await torii.accountAssets(of: accountId).page(ToriiListQuery())
+        print("balances", balances.items)
 
         let status = try await sdk.submitAndWait(transfer: transfer, keypair: keypair)
         print("pipeline status", status.content.status.kind)
@@ -650,13 +646,12 @@ For higher-level walkthroughs, see:
   `accountTransferHistoryPublisher`.
 
   Asset-definition helpers now target canonical unprefixed Base58 IDs and dotted aliases (`name#domain.dataspace` / `name#dataspace`). Asset-definition list/get/query responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`; alias selectors resolve against latest committed block time and stop resolving after grace, while direct reads can still report `expired_pending_cleanup` until sweep.
-- **Domains & registries:** `listDomains(options:)` wraps `/v1/domains` with typed
-  pagination/filtering via `ToriiListOptions`/`ToriiListFilter`/`ToriiListSort`, while
-  `iterateDomains(pageSize:maxItems:)` (iOS 15/macOS 12+) emits an
-  `AsyncThrowingStream<ToriiDomainRecord>` that walks the full dataset behind the same
-  options. Use `.json(.object([...]))` for Norito-format filters or `.fields(["name",
-  "-created_at"])` to render standard `sort` clauses—the helpers take care of encoding and
-  offset bookkeeping.
+- **Collections:** `torii.domains`, `accounts`, `assetDefinitions`, `nfts`, `rwas`,
+  `repoAgreements`, `transactions`, `accountAssets(of:)`, `assetHolders(of:)` and
+  `accountTransactions(of:)` read every Torii collection with one
+  [query language](../../torii/collection_queries.md): build a `ToriiListQuery` from a
+  `ToriiFilter` (or filter text), sort keys, `select`, `limit` and `cursor`, then call
+  `page(_:)` for one page or iterate `pages(_:)`/`items(_:)`, which follow `next_cursor`.
 - **Contracts:** register/deploy/fetch manifest/code bytes.
 - **Pipeline:** `submitTransaction` (exact V1 Norito envelopes, HTTP `202` only, returns the submission receipt payload, and
   enforces `data_model_version` from `/v1/node/capabilities` with

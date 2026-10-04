@@ -11,8 +11,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  IVM_CUDA_PTX_MODE: generate
-  IVM_CUDA_GENCODE: arch=compute_86,code=sm_86
   GPUZSTD_CUDA_ARCH: -arch=sm_86
   JSONSTAGE1_CUDA_ARCH: -arch=sm_86
   GPUZSTD_CUDA_REQUIRE: "1"
@@ -78,8 +76,6 @@ jobs:
             echo "# CUDA Nightly Hardware"
             echo
             echo "- Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            echo "- IVM_CUDA_PTX_MODE: ${IVM_CUDA_PTX_MODE}"
-            echo "- IVM_CUDA_GENCODE: ${IVM_CUDA_GENCODE}"
             echo "- GPUZSTD_CUDA_ARCH: ${GPUZSTD_CUDA_ARCH}"
             echo "- JSONSTAGE1_CUDA_ARCH: ${JSONSTAGE1_CUDA_ARCH}"
             echo "- NORITO_CRC64_CUDA_REQUIRE: ${NORITO_CRC64_CUDA_REQUIRE}"
@@ -91,11 +87,11 @@ jobs:
             nvcc --version || true
           } | tee dist/cuda-nightly/hardware.md
           cat dist/cuda-nightly/hardware.md >> "$GITHUB_STEP_SUMMARY"
-      - name: IVM required CUDA hardware qualification (generated diagnostic candidate)
+      - name: IVM required source-owned CUDA hardware qualification
         run: |
           set -o pipefail
           cargo test --locked -p ivm --test cuda_hardware --features cuda-hardware-tests -- --nocapture \
-            2>&1 | tee dist/cuda-nightly/ivm-generated-hardware.log
+            2>&1 | tee dist/cuda-nightly/ivm-source-owned-hardware.log
           cargo test --locked -p ivm --lib cuda_ --features cuda -- --nocapture
           cargo test --locked -p ivm --test ivm_group_02 cuda --features cuda -- --nocapture
           cargo test --locked -p ivm --test ivm_group_07 poseidon_cuda --features cuda -- --nocapture
@@ -125,17 +121,68 @@ jobs:
           cd kotlin
           ./gradlew :core-jvm:cudaHardwareTest --console=plain
       - name: IVM checked-in PTX identity and bundled hardware qualification
+        env:
+          CUDA_APPROVED_IMAGE: ${{ vars.IVM_CUDA_QUALIFICATION_IMAGE }}
+          CUDA_REVIEWED_IMAGE_SHA256: ${{ vars.IVM_CUDA_IMAGE_SHA256 }}
+          CUDA_PINNED_NVCC: ${{ vars.IVM_CUDA_REPRODUCTION_NVCC_PATH }}
+          CUDA_PINNED_OPENSSL: ${{ vars.IVM_CUDA_REPRODUCTION_OPENSSL_PATH }}
+          CUDA_SIGNING_KEY: ${{ vars.IVM_CUDA_REPRODUCTION_SIGNING_KEY_PATH }}
         run: |
           set -o pipefail
-          # Missing artifacts fail this release gate explicitly. Generated-candidate
-          # receipts above remain diagnostics, never evidence for bundled binaries.
-          IVM_CUDA_PTX_MODE=check cargo build --locked -p ivm --features cuda \
-            2>&1 | tee dist/cuda-nightly/ivm-ptx-identity.log
-          sha256sum crates/ivm/cuda/*.cu crates/ivm/cuda/*.ptx \
-            > dist/cuda-nightly/ivm-ptx.sha256
-          IVM_CUDA_PTX_MODE=bundled cargo test --locked -p ivm --test cuda_hardware \
-            --features cuda-hardware-tests -- --nocapture \
-            2>&1 | tee dist/cuda-nightly/ivm-bundled-hardware.log
+          # None and missing authentic inputs fail; no producer receipt supplies approval.
+          # The sole offline producer uses explicit pinned tools and a runtime-only
+          # external key. Its candidate is compared, never installed or self-approved.
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from scripts.check_ivm_cuda_release_image import configured_image
+          from scripts.release_artifact_contract import require_release_cuda_source_inputs
+          require_release_cuda_source_inputs(Path.cwd(), 'x86_64-unknown-linux-gnu')
+          configured_image(os.environ['CUDA_APPROVED_IMAGE'], os.environ['CUDA_REVIEWED_IMAGE_SHA256'])
+          PY
+          docker pull "$CUDA_APPROVED_IMAGE"
+          docker image inspect --format '{{json .}}' "$CUDA_APPROVED_IMAGE" \
+            > dist/cuda-nightly/image-inspection.json
+          python3 scripts/check_ivm_cuda_release_image.py \
+            --image-reference "$CUDA_APPROVED_IMAGE" \
+            --image-sha256 "$CUDA_REVIEWED_IMAGE_SHA256" \
+            --inspection dist/cuda-nightly/image-inspection.json \
+            --bundle-dir crates/ivm/cuda \
+            --output dist/cuda-nightly/image-binding.json
+          image_id="$(python3 -c 'import json; print(json.load(open("dist/cuda-nightly/image-binding.json"))["image_config_digest"])')"
+          docker run --rm --gpus all --entrypoint /bin/bash \
+            --mount "type=bind,source=${GITHUB_WORKSPACE},target=/workspace" \
+            --workdir /workspace \
+            --mount "type=bind,source=${CUDA_SIGNING_KEY},target=/run/ivm-cuda-reproduction/key.pem,readonly" \
+            --env "CUDA_PINNED_NVCC=${CUDA_PINNED_NVCC}" \
+            --env "CUDA_PINNED_OPENSSL=${CUDA_PINNED_OPENSSL}" \
+            --env "CUDA_REVIEWED_IMAGE_SHA256=${CUDA_REVIEWED_IMAGE_SHA256}" \
+            --env CARGO_TARGET_DIR=target/cuda-bundled-release \
+            --env CARGO_TERM_COLOR=always --env RUST_TEST_THREADS=1 \
+            "$image_id" -euc '
+              set -o pipefail
+              python3 scripts/build_ivm_cuda_bundle.py \
+                --nvcc "$CUDA_PINNED_NVCC" --openssl "$CUDA_PINNED_OPENSSL" \
+                --signing-key /run/ivm-cuda-reproduction/key.pem \
+                --cuda-image-sha256 "$CUDA_REVIEWED_IMAGE_SHA256" \
+                --output-dir /workspace/target/ivm-cuda-reproduction
+              for input in crates/ivm/cuda/*.ptx crates/ivm/cuda/provenance.v1; do
+                cmp "$input" "target/ivm-cuda-reproduction/$(basename "$input")"
+              done
+              cargo build --locked -p ivm --features cuda \
+                2>&1 | tee dist/cuda-nightly/ivm-ptx-identity.log
+              sha256sum crates/ivm/cuda/*.cu crates/ivm/cuda/*.ptx \
+                > dist/cuda-nightly/ivm-ptx.sha256
+              cargo test --locked -p ivm --test cuda_hardware \
+                --features cuda-hardware-tests -- --nocapture \
+                2>&1 | tee dist/cuda-nightly/ivm-bundled-hardware.log
+            '
+          python3 - <<'PY'
+          import hashlib, json, pathlib
+          receipt = json.loads(pathlib.Path('dist/cuda-nightly/image-binding.json').read_bytes())
+          actual = hashlib.sha256(pathlib.Path('crates/ivm/cuda/provenance.v1').read_bytes()).hexdigest()
+          assert actual == receipt['source_manifest_sha256'], 'CUDA source manifest changed during qualification'
+          PY
       - name: Upload CUDA inventory
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

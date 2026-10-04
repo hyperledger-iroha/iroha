@@ -519,13 +519,36 @@ fn verified_fee_sponsor_registration_fixture(
     };
     let limits = PublicTransferLimits::default();
     let public = public_claims_from_transcripts(&transcripts, limits).expect("exact funding claim");
-    let materialized = materialize_quantity_public_transfers(
-        &public,
-        batch.public_inputs,
-        fastpq_prover::ProofSemantics::AxtTransferClaim,
-        limits,
-        TransferSmtBuildLimits::for_update_limit(2).expect("two exact account updates"),
-    )
+    let materialized = {
+        // This test fixture owns its finite tree pool; production supplies its original owner.
+        let tree_claims = &public;
+        let tree_limits =
+            TransferSmtBuildLimits::for_update_limit(2).expect("two exact account updates");
+        let tree_updates = tree_claims
+            .iter()
+            .try_fold(0_usize, |count, claim| {
+                count.checked_add(claim.deltas.len())
+            })
+            .expect("fixture effect count fits")
+            .checked_mul(2)
+            .expect("fixture row count fits");
+        let tree_bytes = tree_limits
+            .allocation_bytes(tree_updates, tree_updates)
+            .expect("fixture tree allocation demand fits");
+        let tree_budget = iroha_allocation::AllocationBudget::new(tree_bytes);
+        let mut tree_reservation = tree_budget
+            .try_reserve_bytes(tree_bytes)
+            .expect("fixture owns complete tree credit");
+        materialize_quantity_public_transfers(
+            tree_claims,
+            batch.public_inputs,
+            fastpq_prover::ProofSemantics::AxtTransferClaim,
+            limits,
+            tree_limits,
+            &tree_budget,
+            &mut tree_reservation,
+        )
+    }
     .expect("canonical funding SMT roots and quantity rows");
     let (rows, inputs, _, private) = materialized.into_parts();
     let witnesses = private.pairs();
@@ -876,9 +899,10 @@ fn initial_genesis_authority_can_bootstrap_fee_sponsor_lifecycle() {
     assert!(valid.as_ref().output_results().all(|result| result.is_ok()));
     // Signed-genesis validation already captured the execution witness and
     // drained its staging map. Inspect that retained source-owned evidence.
-    let witness = original
+    let captured = original
         .take_exec_witness()
         .expect("authenticated genesis retains its captured funding witness");
+    let witness = captured.wire();
     let original_transfer_count = witness
         .fastpq_transcripts
         .iter()
@@ -2060,7 +2084,7 @@ fn fee_sponsor_rejects_restricted_assets_at_every_write_boundary() {
 struct RetainedValidationFeeUnregisterFixture {
     policy_treasury: AccountId,
     payout_binding: iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1,
-    embedded_policy_proposal_id: [u8; 32],
+    custody_policy_proposal_id: [u8; 32],
     policy_proposal_id: [u8; 32],
     lifecycle_proposal_id: [u8; 32],
     unrelated_account: AccountId,
@@ -2192,7 +2216,7 @@ fn install_retained_validation_fee_unregister_fixture(
         )
         .expect("retain enacted validation-fee payout lifecycle fixture");
 
-    let embedded_policy = ValidationFeePolicyV1 {
+    let custody_policy = ValidationFeePolicyV1 {
         retail_schedule: iroha_data_model::validation_fee::RetailFeeScheduleV1::default(),
         effective_from_ms: 1793451600000,
         notice_published_at_ms: 1790859600000,
@@ -2210,32 +2234,32 @@ fn install_retained_validation_fee_unregister_fixture(
         reward_custody: payout_binding.custody(),
     };
     assert_eq!(
-        embedded_policy.policy_invariant_error(),
+        custody_policy.policy_invariant_error(),
         None,
-        "the embedded payout policy fixture must satisfy every first-release invariant",
+        "the immutable reward custody policy fixture must satisfy every first-release invariant",
     );
-    let embedded_policy_kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+    let custody_policy_kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
         proposal_operator: ALICE_ID.clone(),
-        policy: embedded_policy,
+        policy: custody_policy,
     });
-    let embedded_policy_proposal_id = embedded_policy_kind.fingerprint();
+    let custody_policy_proposal_id = custody_policy_kind.fingerprint();
     state_transaction
         .world
         .put_governance_proposal(
-            embedded_policy_proposal_id,
+            custody_policy_proposal_id,
             crate::state::GovernanceProposalRecord {
                 proposer: ALICE_ID.clone(),
-                kind: embedded_policy_kind,
+                kind: custody_policy_kind,
                 created_height: 3,
                 status: crate::state::GovernanceProposalStatus::Proposed,
             },
         )
-        .expect("retain validation-fee policy with embedded payout fixture");
+        .expect("retain validation-fee policy with immutable reward custody fixture");
 
     RetainedValidationFeeUnregisterFixture {
         policy_treasury,
         payout_binding,
-        embedded_policy_proposal_id,
+        custody_policy_proposal_id,
         policy_proposal_id,
         lifecycle_proposal_id,
         unrelated_account: validation_fee_unregister_account(0xDF),
@@ -2263,10 +2287,10 @@ fn register_validation_fee_fixture_asset(
 }
 
 #[test]
-fn enacted_policy_embedded_payout_references_are_pinned_without_lifecycle_projection() {
+fn enacted_policy_reward_custody_references_are_pinned_without_conversion_lifecycle() {
     blank_test_state_transaction!(state, block, stx);
     bootstrap_alice_account(&mut stx);
-    let fixture_domain = DomainId::try_new("vfembedded", "universal").expect("fixture domain");
+    let fixture_domain = DomainId::try_new("vfcustody", "universal").expect("fixture domain");
     let policy_ds = AssetDefinitionId::derive_from_components(
         fixture_domain.clone(),
         "policy_ds".parse().expect("policy DS name"),
@@ -2282,39 +2306,128 @@ fn enacted_policy_embedded_payout_references_are_pinned_without_lifecycle_projec
     let fixture = install_retained_validation_fee_unregister_fixture(
         &mut stx,
         policy_ds,
-        payout_ds,
+        payout_ds.clone(),
         payout_xor.clone(),
     );
     {
         let mut proposals = stx.world.governance_proposals_mut();
+        for proposal_id in [fixture.policy_proposal_id, fixture.lifecycle_proposal_id] {
+            proposals
+                .get_mut(&proposal_id)
+                .expect("other retained proposal")
+                .status = crate::state::GovernanceProposalStatus::Proposed;
+        }
         proposals
-            .get_mut(&fixture.lifecycle_proposal_id)
-            .expect("retained lifecycle proposal")
-            .status = crate::state::GovernanceProposalStatus::Proposed;
-        proposals
-            .get_mut(&fixture.embedded_policy_proposal_id)
-            .expect("retained embedded policy proposal")
+            .get_mut(&fixture.custody_policy_proposal_id)
+            .expect("retained reward custody policy proposal")
             .status = crate::state::GovernanceProposalStatus::Enacted;
     }
 
-    let pool_vault = fixture.payout_binding.pool_vault_account_id.clone();
-    Register::account(Account::new(pool_vault.clone()))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register embedded payout pool vault");
-    register_validation_fee_fixture_asset(&mut stx, payout_xor.clone(), None);
+    let protected_accounts = [
+        (
+            "policy treasury",
+            fixture.payout_binding.treasury_account_id.clone(),
+        ),
+        (
+            "validator reward custody",
+            fixture.payout_binding.reward_pool_account_id.clone(),
+        ),
+    ];
+    let conversion_accounts: Vec<_> = std::iter::once((
+        "payout pool vault",
+        fixture.payout_binding.pool_vault_account_id.clone(),
+    ))
+    .chain(
+        fixture
+            .payout_binding
+            .reference_provider_accounts
+            .iter()
+            .cloned()
+            .map(|account| ("reference provider", account)),
+    )
+    .collect();
+    for (_, account_id) in protected_accounts.iter().chain(&conversion_accounts) {
+        Register::account(Account::new(account_id.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register retained-reference fixture account");
+    }
+    let protected_assets = [
+        ("policy DS asset definition", payout_ds),
+        ("payout XOR asset definition", payout_xor),
+    ];
+    let asset_ids: Vec<_> = protected_assets
+        .iter()
+        .map(|(_, definition_id)| {
+            register_validation_fee_fixture_asset(&mut stx, definition_id.clone(), None)
+        })
+        .collect();
+    let accounts_before: BTreeSet<_> = stx
+        .world
+        .accounts
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect();
+    let custody_proposal = hex::encode(fixture.custody_policy_proposal_id);
+    for (reference_kind, account_id) in &protected_accounts {
+        let error = Unregister::account(account_id.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("the enacted pricing policy independently pins immutable custody");
+        assert!(error.to_string().contains(reference_kind), "{error}");
+        assert!(error.to_string().contains(&custody_proposal), "{error}");
+        assert_eq!(
+            stx.world
+                .accounts
+                .iter()
+                .map(|(id, _)| id.clone())
+                .collect::<BTreeSet<_>>(),
+            accounts_before,
+            "rejected custody deletion must preserve every account",
+        );
+    }
+    for ((reference_kind, definition_id), asset_id) in protected_assets.iter().zip(&asset_ids) {
+        let balance_before = stx.world.asset(asset_id).unwrap().as_ref().clone();
+        let error = Unregister::asset_definition(definition_id.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("the enacted pricing policy independently pins each custody asset");
+        assert!(error.to_string().contains(reference_kind), "{error}");
+        assert!(error.to_string().contains(&custody_proposal), "{error}");
+        assert!(stx.world.asset_definition(definition_id).is_ok());
+        assert_eq!(stx.world.asset(asset_id).unwrap().as_ref(), &balance_before);
+    }
 
-    let account_error = Unregister::account(pool_vault)
-        .execute(&ALICE_ID, &mut stx)
-        .expect_err("the enacted policy must independently pin its embedded payout pool vault");
-    assert!(account_error.to_string().contains("payout pool vault"));
-    let asset_error = Unregister::asset_definition(payout_xor)
-        .execute(&ALICE_ID, &mut stx)
-        .expect_err("the enacted policy must independently pin its embedded payout XOR asset");
-    assert!(
-        asset_error
-            .to_string()
-            .contains("payout XOR asset definition")
-    );
+    // Pricing retains immutable reward custody, not the separately governed
+    // pool and oracle configuration. A proposed lifecycle has no pinning power.
+    for (_, account_id) in &conversion_accounts {
+        Unregister::account(account_id.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect("conversion-only references require an enacted lifecycle");
+        assert!(stx.world.account(account_id).is_err());
+        Register::account(Account::new(account_id.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("restore conversion account for enacted-lifecycle control");
+    }
+    stx.world
+        .governance_proposals_mut()
+        .get_mut(&fixture.lifecycle_proposal_id)
+        .expect("retained lifecycle proposal")
+        .status = crate::state::GovernanceProposalStatus::Enacted;
+    let lifecycle_proposal = hex::encode(fixture.lifecycle_proposal_id);
+    for (reference_kind, account_id) in &conversion_accounts {
+        let error = Unregister::account(account_id.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("the enacted lifecycle pins every conversion-only account");
+        assert!(error.to_string().contains(reference_kind), "{error}");
+        assert!(error.to_string().contains(&lifecycle_proposal), "{error}");
+        assert_eq!(
+            stx.world
+                .accounts
+                .iter()
+                .map(|(id, _)| id.clone())
+                .collect::<BTreeSet<_>>(),
+            accounts_before,
+            "rejected lifecycle deletion must preserve every account",
+        );
+    }
 }
 
 #[test]
@@ -2357,8 +2470,8 @@ fn non_enacted_validation_fee_proposal_statuses_do_not_pin_payout_references() {
                 .expect("retained lifecycle proposal")
                 .status = status;
             proposals
-                .get_mut(&fixture.embedded_policy_proposal_id)
-                .expect("retained embedded policy proposal")
+                .get_mut(&fixture.custody_policy_proposal_id)
+                .expect("retained reward custody policy proposal")
                 .status = status;
         }
 
@@ -2678,11 +2791,60 @@ fn signed_payout_scope_refusal_cannot_publish_a_parliament_terminal_outcome() {
         )
         .expect("the original active runtime is a vacant lifecycle head");
         assert!(matches!(expected, GovernanceExpectedHeadV1::Absent(_)));
-        let refused = norito::with_decode_limits_scope(
-            norito::DecodeLimits::new(96, usize::MAX, usize::MAX, 0, 32),
+        super::validate_validation_fee_payout_lifecycle_runtime_before_effect_install(
+            &binding,
+            transaction,
+        )
+        .expect("the original exact runtime is ready before the due effect");
+        // Measure the real currency-read prefix, then permit exactly that much
+        // decoding. The contract read, rather than an earlier NPoS read, must
+        // produce the refusal observed by the due-effect runtime validator.
+        let prefix = || {
+            crate::state::validate_network_xor_asset(
+                &transaction.world,
+                &binding.xor_asset_id,
+            )
+            .expect("the complete committed NPoS currency read succeeds");
+        };
+        const CEILING: usize = 1 << 20;
+        let prefix_bytes = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, CEILING, 32),
             || {
-                super::parliament_validation_fee_payout_observed_head_v1(
-                    subject_id,
+                prefix();
+                let norito::Error::TotalAllocationExceeded { attempted, limit } =
+                    norito::core::reserve_decode_allocation(CEILING + 1).unwrap_err()
+                else {
+                    panic!("original currency-read allocation observation changed");
+                };
+                assert_eq!(limit, CEILING as u64);
+                usize::try_from(attempted).unwrap() - CEILING - 1
+            },
+        );
+        assert!(prefix_bytes > 0);
+        let limits = norito::DecodeLimits::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            prefix_bytes,
+            32,
+        );
+        norito::with_decode_limits_scope(limits, || prefix());
+        let producer_refusal = norito::with_decode_limits_scope(limits, || {
+            prefix();
+            crate::smartcontracts::code::fetch_bound_contract_record(
+                transaction,
+                &binding.contract_address,
+            )
+        });
+        assert!(
+            matches!(producer_refusal, Err(ExecutionAttemptError::Deferred(ref reason))
+            if reason.reason() == ivm::error::ExecutionDeferral::ActiveMemoryCapacity),
+            "the bound-contract read must retain the original local refusal after the currency prefix"
+        );
+        let refused = norito::with_decode_limits_scope(
+            limits,
+            || {
+                super::validate_validation_fee_payout_lifecycle_runtime_before_effect_install(
                     &binding,
                     transaction,
                 )

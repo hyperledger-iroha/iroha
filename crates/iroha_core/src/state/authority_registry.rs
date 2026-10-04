@@ -19,6 +19,17 @@
 
 use norito::{NoritoSchema, codec::Encode};
 
+// Borrow concrete original current/undo owners without admitting arbitrary row suppliers.
+pub(super) mod original_images;
+
+mod account_alias_ownership;
+
+mod account_identity_ownership;
+
+pub(in crate::state) mod borrowed_controller_work;
+
+mod grouped_ownership;
+
 /// Fixed bare payload layout for a canonical V1 State leaf.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CanonicalLayout {
@@ -154,6 +165,26 @@ impl Field {
 // The actual field pattern and typed references are generated from exactly the
 // same entries as the descriptors. There is deliberately no fallback arm.
 macro_rules! classified_owner {
+    ($owner:ident, $check:ident, $registry:ident, readers = $readers:ident, {
+        $( $(#[$attribute:meta])* $field:ident : $ty:ty => ($id:literal, $role:expr); )+
+    }) => {
+        classified_owner!($owner, $check, $registry, {
+            $( $(#[$attribute])* $field : $ty => ($id, $role); )+
+        });
+        /// Exhaustive original reader releases, retained beyond enclosing fences.
+        pub(crate) struct $readers {
+            $( $(#[$attribute])* pub(crate) $field:
+                <$ty as crate::state::view_acquisition::StateFieldReader>::Releases, )+
+        }
+        impl $readers {
+            pub(crate) fn new(owner: &$owner) -> Self {
+                Self {
+                    $( $(#[$attribute])* $field:
+                        crate::state::view_acquisition::StateFieldReader::reader_releases(&owner.$field), )+
+                }
+            }
+        }
+    };
     ($owner:ident, $check:ident, $registry:ident, {
         $( $(#[$attribute:meta])* $field:ident : $ty:ty => ($id:literal, $role:expr); )+
     }) => {
@@ -201,6 +232,7 @@ mod content_policy;
     )
 )]
 mod crypto_policy;
+mod domain_ownership;
 #[cfg_attr(
     not(test),
     expect(
@@ -217,14 +249,6 @@ mod fraud_policy;
     )
 )]
 mod governance_policy;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "TODO: compare Kagemusha runtime authority with governed release State before complete-root publication"
-    )
-)]
-mod kagemusha_policy;
 #[cfg_attr(
     not(test),
     expect(

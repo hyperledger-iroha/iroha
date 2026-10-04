@@ -1,26 +1,38 @@
 //! Bare public mathematical originals. No release, FI, phone or Native owner is admitted.
 
-use super::*;
 use crate::kagemusha_v1_poseidon::{
     KAGEMUSHA_STATE_DOMAIN_V1, KagemushaPoseidonFieldV1, digest_limbs, empty_replay_root, encode,
     from_u128, hash, paired_commitment,
 };
-use crate::kagemusha_v1_state::{BootstrapStatementV1, DigestV1};
+use crate::kagemusha_v1_recursion::KagemushaGuardBundleRelationWitnessV1;
+use crate::kagemusha_v1_state::{BootstrapStatementV1, DigestV1, KagemushaStateV1};
+use halo2_proofs::halo2curves::pasta::{Fp, Fq};
 use iroha_crypto::{Algorithm, KeyPair, Signature as EdSignature};
-use iroha_data_model::kagemusha::*;
+use iroha_data_model::kagemusha::{
+    KagemushaAppKeySecurityLevelV1, KagemushaAppOperationApprovalChallengeV1,
+    KagemushaAppOperationApprovalEvidenceV1, KagemushaAppOperationApprovalPurposeV1,
+    KagemushaAppOperationApprovalV1, KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1,
+    KagemushaHardwarePlatformClassV1, KagemushaHardwareTransitionSelectionV1,
+    KagemushaOperationKindV1, KagemushaOrdinaryAppCredentialSubjectV1,
+    KagemushaOrdinaryAppCredentialV1, KagemushaOrdinaryIssuerCircuitAdmissionV1,
+    KagemushaPastaStateCommitmentV1, kagemusha_device_key_reference_v1,
+    kagemusha_ordinary_app_account_binding_v1, kagemusha_ordinary_financial_epoch_id_v1,
+};
 use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
+use sha2::{Digest as _, Sha256};
 
-pub(super) struct Fixture {
-    pub(super) state: KagemushaStateV1,
-    pub(super) statement: BootstrapStatementV1,
-    pub(super) relation: KagemushaGuardBundleRelationWitnessV1,
-    pub(super) credential: KagemushaOrdinaryAppCredentialV1,
-    pub(super) approval: KagemushaAppOperationApprovalV1,
-    pub(super) issuer_table: super::super::super::ordinary_issuer_config::OrdinaryIssuerTableV1,
-    pub(super) previous_counter: Option<u32>,
+pub(in super::super) struct Fixture {
+    pub(in super::super) state: KagemushaStateV1,
+    pub(in super::super) statement: BootstrapStatementV1,
+    pub(in super::super) relation: KagemushaGuardBundleRelationWitnessV1,
+    pub(in super::super) credential: KagemushaOrdinaryAppCredentialV1,
+    pub(in super::super) approval: KagemushaAppOperationApprovalV1,
+    pub(in super::super) issuer_table:
+        crate::kagemusha_v1_recursion::ordinary_issuer_config::OrdinaryIssuerTableV1,
+    pub(in super::super) previous_counter: Option<u32>,
 }
 
-pub(super) fn resign_credential(c: &mut KagemushaOrdinaryAppCredentialV1) {
+pub(in super::super) fn resign_credential(c: &mut KagemushaOrdinaryAppCredentialV1) {
     // Known public fixture keys re-sign a foreign complete original. This ensures
     // substitution reaches the real relation rather than failing a data-only codec.
     let ed = KeyPair::from_seed(vec![5; 32], Algorithm::Ed25519);
@@ -103,7 +115,7 @@ fn seal_state(s: &mut KagemushaStateV1) {
         .expect("actual complete Native zero-State commitments");
 }
 
-pub(super) fn sign_approval(
+pub(in super::super) fn sign_approval(
     c: &KagemushaAppOperationApprovalChallengeV1,
     apple: bool,
 ) -> KagemushaAppOperationApprovalEvidenceV1 {
@@ -137,7 +149,7 @@ pub(super) fn sign_approval(
     KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest { raw_assertion: raw }
 }
 
-pub(super) fn fixture(
+pub(in super::super) fn fixture(
     apple: bool,
     release_id: DigestV1,
     suite_id: DigestV1,
@@ -148,7 +160,7 @@ pub(super) fn fixture(
 
 /// Same bare mathematical credential/State fixture with the sole account binding formula.
 /// This supplies no release, enrollment, FI, source finality or Native owner capability.
-pub(super) fn fixture_for_account(
+pub(in super::super) fn fixture_for_account(
     apple: bool,
     release_id: DigestV1,
     suite_id: DigestV1,
@@ -171,7 +183,7 @@ fn fixture_with_account_binding(
     vk_digest: DigestV1,
     account_binding: DigestV1,
 ) -> Fixture {
-    use super::super::super::ordinary_issuer_config::{
+    use crate::kagemusha_v1_recursion::ordinary_issuer_config::{
         OrdinaryIssuerProfileV1, OrdinaryIssuerTableV1,
     };
     let mut state = crate::kagemusha_v1_recursion::tests::state_verification_fixture()
@@ -214,7 +226,9 @@ fn fixture_with_account_binding(
         attested_key_id: Sha256::digest(app_public_key.as_sec1_bytes()).into(),
         app_key_reference: kagemusha_device_key_reference_v1(&app_public_key),
         financial_authority_commitment:
-            super::super::super::guard_bundle::device_authority_commitment_v1(financial_secret),
+            crate::kagemusha_v1_recursion::guard_bundle::device_authority_commitment_v1(
+                financial_secret,
+            ),
         platform_evidence_digest: [18; 32],
         enrollment_challenge_digest: [19; 32],
         app_public_key,
@@ -292,9 +306,9 @@ fn fixture_with_account_binding(
     };
     let empty = [11; 32];
     let normalized =
-        super::super::super::KagemushaNormalizedGuardStatementV1::from_bootstrap_state(
+        crate::kagemusha_v1_recursion::KagemushaNormalizedGuardStatementV1::from_bootstrap_state(
             &statement,
-            super::super::super::KagemushaGuardContextV1 {
+            crate::kagemusha_v1_recursion::KagemushaGuardContextV1 {
                 release_id,
                 liability_pool_id: state.liability_pool_id,
                 lifecycle_binding_digest: [24; 32],
@@ -311,34 +325,35 @@ fn fixture_with_account_binding(
             },
         )
         .unwrap();
-    let platform = super::super::super::guard_bundle::KagemushaPlatformCredentialStatementV1 {
-        version: 1,
-        protocol_version: 1,
-        suite_id,
-        release_id,
-        network_id: c.network_id,
-        asset_id: state.lane.normalized_asset_id().unwrap(),
-        asset_incarnation: state.asset_incarnation,
-        asset_scale: state.lane.scale,
-        liability_pool_id: state.liability_pool_id,
-        lane_id: c.lane_id,
-        hardware_epoch_generation: 1,
-        hardware_epoch_id: state.hardware_epoch.epoch_id,
-        key_reference: c.app_key_reference,
-        device_public_key: c.app_public_key,
-        hardware_policy_id: state.device_policy_binding.hardware_policy_id,
-        device_authority_commitment: c.financial_authority_commitment,
-        hardware_profile_id: c.hardware_profile_id,
-        policy_epoch: c.policy_epoch,
-        platform_class: if apple { 4 } else { 5 },
-        capability_mask: c.platform_class.required_guarantees(),
-        provider_authority_commitment: [28; 32],
-        platform_attestation_digest: c.platform_evidence_digest,
-        app_policy_binding_digest: static_binding,
-        credential_issuance_digest: credential_digest,
-        canonical_empty_effect_digest: empty,
-        provider_profile_index: 0,
-    };
+    let platform =
+        crate::kagemusha_v1_recursion::guard_bundle::KagemushaPlatformCredentialStatementV1 {
+            version: 1,
+            protocol_version: 1,
+            suite_id,
+            release_id,
+            network_id: c.network_id,
+            asset_id: state.lane.normalized_asset_id().unwrap(),
+            asset_incarnation: state.asset_incarnation,
+            asset_scale: state.lane.scale,
+            liability_pool_id: state.liability_pool_id,
+            lane_id: c.lane_id,
+            hardware_epoch_generation: 1,
+            hardware_epoch_id: state.hardware_epoch.epoch_id,
+            key_reference: c.app_key_reference,
+            device_public_key: c.app_public_key,
+            hardware_policy_id: state.device_policy_binding.hardware_policy_id,
+            device_authority_commitment: c.financial_authority_commitment,
+            hardware_profile_id: c.hardware_profile_id,
+            policy_epoch: c.policy_epoch,
+            platform_class: if apple { 4 } else { 5 },
+            capability_mask: c.platform_class.required_guarantees(),
+            provider_authority_commitment: [28; 32],
+            platform_attestation_digest: c.platform_evidence_digest,
+            app_policy_binding_digest: static_binding,
+            credential_issuance_digest: credential_digest,
+            canonical_empty_effect_digest: empty,
+            provider_profile_index: 0,
+        };
     let relation = KagemushaGuardBundleRelationWitnessV1 {
         statement: normalized,
         canonical_empty_effect_digest: empty,
@@ -404,5 +419,47 @@ fn fixture_with_account_binding(
         approval,
         issuer_table,
         previous_counter: apple.then_some(5),
+    }
+}
+
+#[test]
+fn shared_bootstrap_original_binds_statement_state_and_approval_for_both_platforms() {
+    for apple in [false, true] {
+        let account = super::super::ordinary_qualification_wallet_account_v1(62);
+        let f = fixture_for_account(apple, [41; 32], [40; 32], [42; 32], &account);
+        f.state.validate().unwrap();
+        f.relation.validate().unwrap();
+        assert_eq!(f.statement.state_commitment, f.state.state_commitment);
+        assert_eq!(f.statement.lane, f.state.lane);
+        assert_eq!(f.statement.hardware_epoch, f.state.hardware_epoch);
+        assert_eq!(
+            f.statement.device_policy_binding,
+            f.state.device_policy_binding
+        );
+        assert_eq!(
+            f.statement.state_nonce_commitment,
+            f.state.state_nonce_commitment
+        );
+        assert_eq!(
+            f.statement.proof_statement_digest().unwrap(),
+            f.approval.challenge.subject.transition_statement_digest
+        );
+        assert_eq!(
+            f.relation.statement_digest(),
+            f.approval.challenge.normalized_guard_digest
+        );
+        assert_eq!(f.previous_counter, apple.then_some(5));
+        let mut changed = f.statement.clone();
+        changed.state_commitment[0] ^= 1;
+        assert_ne!(
+            changed.proof_statement_digest().unwrap(),
+            f.approval.challenge.subject.transition_statement_digest
+        );
+        changed = f.statement.clone();
+        changed.device_policy_binding.device_key_reference[0] ^= 1;
+        assert_ne!(
+            changed.proof_statement_digest().unwrap(),
+            f.approval.challenge.subject.transition_statement_digest
+        );
     }
 }

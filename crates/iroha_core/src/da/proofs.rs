@@ -806,8 +806,12 @@ mod tests {
     fn verify_rejects_malformed_committed_policy_sidecar() {
         let bundle = DaCommitmentBundle::new(vec![sample_record(1, 1)]);
         let proof = build_da_commitment_proof(&bundle, 3, 0).expect("proof");
-        let mut malformed = policy_bundle();
-        malformed.policy_hash = Hash::new(b"invalid-internal-policy-hash");
+        let original = policy_bundle();
+        let malformed = DaProofPolicyBundle::from_untrusted_parts(
+            original.version(),
+            Hash::new(b"invalid-internal-policy-hash"),
+            original.policies().to_vec(),
+        );
         let mut header = header_with_hash(3, bundle.merkle_commitment().expect("commitment"));
         header.set_da_proof_policies_hash(Some(HashOf::new(&malformed)));
         assert!(matches!(
@@ -821,7 +825,7 @@ mod tests {
     fn verify_rejects_duplicate_committed_lane_policy() {
         let bundle = DaCommitmentBundle::new(vec![sample_record(1, 1)]);
         let proof = build_da_commitment_proof(&bundle, 3, 0).expect("proof");
-        let policy = policy_bundle().policies[0].clone();
+        let policy = policy_bundle().policies()[0].clone();
         let duplicate = DaProofPolicyBundle::new(vec![policy.clone(), policy]);
         let mut header = header_with_hash(3, bundle.merkle_commitment().expect("commitment"));
         header.set_da_proof_policies_hash(Some(HashOf::new(&duplicate)));

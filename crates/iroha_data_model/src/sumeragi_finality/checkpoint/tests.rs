@@ -15,7 +15,7 @@ use crate::{
     },
 };
 use iroha_crypto::KeyPair;
-use std::{collections::BTreeSet, num::NonZeroU64};
+use std::num::NonZeroU64;
 
 const CHAIN: &str = "portable-finality-test";
 
@@ -35,7 +35,7 @@ fn extend(
         0,
     ));
     builder.push_transaction(tx);
-    let mut block = builder.build(BTreeSet::new());
+    let mut block = builder.build(crate::block::BlockSignatures::default());
     let output = if succeeds {
         Ok(Vec::default())
     } else {
@@ -398,7 +398,7 @@ fn retained_decision_verifier_uses_selected_checkpoint_commitments() {
     let empty = fixture.verifier();
     assert!(empty.verify_retained_decision(&fixture.first).is_err());
     let mut forged = fixture.second.clone();
-    let mut block = decode_versioned_signed_block(&forged.block_wire).unwrap();
+    let mut block = decode_framed_signed_block(&forged.block_wire).unwrap();
     let cert = block.commit_certificate().unwrap();
     let header = cert.consensus_header().to_vec();
     let availability = cert.availability().to_vec();
@@ -427,13 +427,18 @@ fn original_checkpoint_binary_refusal_preserves_exact_fields_and_retries() {
     let producer = norito::with_decode_limits_scope(limits, || {
         norito::with_decode_limits_scope(
             norito::canonical_decode_limits(selected.genesis_wire.len()),
-            || decode_versioned_signed_block(&selected.genesis_wire),
+            || decode_framed_signed_block(&selected.genesis_wire),
         )
     })
     .unwrap_err();
-    let iroha_version::error::Error::NoritoResourceLimit(expected) = producer else {
-        panic!("original binary decoder must retain its resource fields: {producer:?}");
-    };
+    assert_eq!(
+        producer.kind(),
+        norito::core::DecodeAttemptErrorKind::EnclosingLimit
+    );
+    let expected = producer
+        .into_error()
+        .decode_resource_error()
+        .expect("original resource fields");
     assert!(
         matches!(expected, norito::core::DecodeResourceError::TotalAllocationExceeded { attempted, limit: 0 } if attempted > 0)
     );
@@ -441,10 +446,14 @@ fn original_checkpoint_binary_refusal_preserves_exact_fields_and_retries() {
         SumeragiFinalityVerifier::from_trusted_checkpoint(&selected, &fixture.network, CHAIN)
     })
     .unwrap_err();
-    assert!(
-        matches!(error, super::super::FinalityReadError::DecodeResource(actual) if actual == expected),
-        "{error:?}"
+    let super::super::FinalityReadError::DecodeResource(actual) = error else {
+        panic!("{error:?}");
+    };
+    assert_eq!(
+        actual.kind(),
+        norito::core::DecodeAttemptErrorKind::EnclosingLimit
     );
+    assert_eq!(actual.into_error().decode_resource_error(), Some(expected));
     assert_eq!(selected.encode_canonical().unwrap(), original);
     let retried =
         SumeragiFinalityVerifier::from_trusted_checkpoint(&selected, &fixture.network, CHAIN)

@@ -471,7 +471,6 @@ fn exact_preparation_survives_detach_and_abort_but_recreated_owner_cannot_take_a
 #[cfg(all(unix, not(target_os = "espidf")))]
 fn real_kura_range_and_charged_append_remain_original_through_capacity_and_sync() {
     use std::{
-        future::Future,
         sync::atomic::{AtomicUsize, Ordering},
         task::{Context, Poll, Wake, Waker},
     };
@@ -490,6 +489,9 @@ fn real_kura_range_and_charged_append_remain_original_through_capacity_and_sync(
     }
     for unwind in [false, true] {
         let kura = crate::kura::Kura::blank_kura_for_testing();
+        let mut registrations: [_; 2] = std::array::from_fn(|_| {
+            crate::unit_test_support::release_registration(&kura.membership_memory_budget())
+        });
         let storage = Arc::new(TransactionsStorage::new());
         let probe = Arc::new(Probe {
             storage: Arc::clone(&storage),
@@ -498,10 +500,9 @@ fn real_kura_range_and_charged_append_remain_original_through_capacity_and_sync(
         });
         let waker = Waker::from(Arc::clone(&probe));
         let (waits, probe_cleanup) = kura.membership_fence_waits_for_tests();
-        let mut pending = waits.map(|wait| Box::pin(wait.wait_for_release()));
-        for wait in &mut pending {
+        for (wait, registration) in waits.iter().zip(&mut registrations) {
             assert_eq!(
-                wait.as_mut().poll(&mut Context::from_waker(&waker)),
+                registration.poll_wait(wait, &mut Context::from_waker(&waker)),
                 Poll::Pending
             );
         }
@@ -579,9 +580,9 @@ fn real_kura_range_and_charged_append_remain_original_through_capacity_and_sync(
             assert_eq!(ended.is_err(), unwind);
             assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
             assert_eq!(probe.busy.load(Ordering::SeqCst), 0);
-            for wait in &mut pending {
+            for (wait, registration) in waits.iter().zip(&mut registrations) {
                 assert_eq!(
-                    wait.as_mut().poll(&mut Context::from_waker(&waker)),
+                    registration.poll_wait(wait, &mut Context::from_waker(&waker)),
                     Poll::Ready(())
                 );
             }
@@ -590,6 +591,9 @@ fn real_kura_range_and_charged_append_remain_original_through_capacity_and_sync(
             drop(later);
         });
         drop(probe_cleanup);
+        for registration in &mut registrations {
+            registration.cancel();
+        }
     }
 }
 

@@ -43,8 +43,9 @@ pub enum MembershipRestoreError {
 }
 /// Multi-version membership for canonical carriers and sealed-reveal execution aliases.
 /// The original configured pool funds historical generations, publication
-/// identities, prior-tip preparation, and the latest block's immutable keys and
-/// shared shell. Old readers retain their exact historical generation and tip.
+/// identities, distinct logical/physical release controls, prior-tip preparation,
+/// and the latest block's immutable keys and shared shell. Old readers retain
+/// their exact historical generation and tip.
 ///
 /// TODO: prepay the upstream ordinary carrier Vec and merge-carrier HashSet
 /// before their construction, and admit snapshot decoding/comparison scratch
@@ -63,7 +64,11 @@ pub struct TransactionsStorage {
     pub(in crate::state) budget: iroha_allocation::AllocationBudget,
     pending: Mutex<Option<history::Pending>>,
     publication_sequence: AtomicU64,
+    // Original-pool control for logical membership and outstanding preparation loans.
     released: iroha_allocation::release::ReleaseNotification,
+    // Original-pool control for the distinct physical history writer. Logical
+    // observation/abort cleanup must never wake this source while it is held.
+    history_released: iroha_allocation::release::ReleaseNotification,
 }
 type Tip = Shared<BlockInfo, AllocationCharge>;
 
@@ -346,6 +351,15 @@ fn admit_tip_from_sources<I: ExactSizeIterator<Item = Key>>(
     }))
 }
 impl TransactionsStorage {
+    /// Observe the original physical history writer, independently of logical
+    /// membership observation or cleanup. Readiness only permits a fresh probe.
+    fn history_release_wait(&self) -> iroha_allocation::release::ReleaseWait {
+        #[cfg(all(test, sumeragi_core_mutation = "HC73"))]
+        return self.released.observe();
+        #[cfg(not(all(test, sumeragi_core_mutation = "HC73")))]
+        self.history_released.observe()
+    }
+
     /// Construct a finite-pool fixture; production supplies its original Kura pool.
     #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     pub fn new() -> Self {
@@ -365,49 +379,73 @@ impl TransactionsStorage {
             .map(|guard| self.released.guard(guard))
             .is_some()
     }
+    /// Probe both original writer mutexes independently; poison is a separate result.
+    #[cfg(test)]
+    pub(in crate::state) fn replay_writer_probe_for_tests(&self) -> (bool, bool, bool) {
+        let logical = self.write_lock.try_lock();
+        let physical = self.blocks.try_acquire_writer();
+        let result = (
+            logical.is_some(),
+            physical.is_some(),
+            self.blocks.is_poisoned(),
+        );
+        drop((logical, physical));
+        result
+    }
     /// Retain the actual reader-lock source outside an enclosing physical owner.
     pub(crate) fn reader_release_batch(&self) -> iroha_allocation::release::DeferredReleaseBatch {
         self.blocks.reader_release_batch()
     }
-    /// Pin a committed generation while retaining every actual reader unlock.
-    /// The original batch spans all retries; a foreign source is refused before locking.
+    /// Pin one complete original membership generation without waiting.
+    /// Actual reader unlocks remain in the caller's source-bound release owner.
+    pub(crate) fn try_view_retaining(
+        &self,
+        releases: &mut iroha_allocation::release::DeferredReleaseBatch,
+    ) -> Result<TransactionsView<'_>, super::StateViewError> {
+        let publication = self.released.observe();
+        let before = self.publication_sequence.load(Ordering::Acquire);
+        if before & 1 != 0 {
+            return Err(super::StateViewError::Busy(publication));
+        }
+        let latest_block = self.latest_block.load_full();
+        let reader = self.blocks.observe_reader_release();
+        let blocks = self
+            .blocks
+            .try_read_retaining(releases)
+            .map_err(|error| match error {
+                concread::bptree::OwnedWriteError::Busy => super::StateViewError::Busy(reader),
+                concread::bptree::OwnedWriteError::Poisoned => super::StateViewError::Poisoned,
+                concread::bptree::OwnedWriteError::Changed => super::StateViewError::Changed,
+            })?;
+        if before != self.publication_sequence.load(Ordering::Acquire) {
+            return Err(super::StateViewError::Busy(publication));
+        }
+        Ok(TransactionsView {
+            latest_block,
+            blocks,
+        })
+    }
+    /// Synchronously retry the same reader kernel, retaining notices outside the caller.
     pub(crate) fn view_retaining(
         &self,
         releases: &mut iroha_allocation::release::DeferredReleaseBatch,
     ) -> Result<TransactionsView<'_>, concread::bptree::OwnedWriteError> {
         loop {
-            let before = self.publication_sequence.load(Ordering::Acquire);
-            if before & 1 != 0 {
-                std::thread::yield_now();
-                continue;
-            }
-            let latest_block = self.latest_block.load_full();
-            let blocks = self.blocks.read_retaining(releases)?;
-            if before == self.publication_sequence.load(Ordering::Acquire) {
-                return Ok(TransactionsView {
-                    latest_block,
-                    blocks,
-                });
+            match self.try_view_retaining(releases) {
+                Ok(view) => return Ok(view),
+                Err(super::StateViewError::Busy(_)) => std::thread::yield_now(),
+                Err(super::StateViewError::Poisoned) => {
+                    return Err(concread::bptree::OwnedWriteError::Poisoned);
+                }
+                Err(_) => return Err(concread::bptree::OwnedWriteError::Changed),
             }
         }
     }
-    /// Pin one exact committed generation, retrying only concurrent publication.
+    /// Pin one exact committed generation through the same original reader kernel.
     pub fn view(&self) -> TransactionsView<'_> {
-        loop {
-            let before = self.publication_sequence.load(Ordering::Acquire);
-            if before & 1 != 0 {
-                std::thread::yield_now();
-                continue;
-            }
-            let latest_block = self.latest_block.load_full();
-            let blocks = self.blocks.read();
-            if before == self.publication_sequence.load(Ordering::Acquire) {
-                return TransactionsView {
-                    latest_block,
-                    blocks,
-                };
-            }
-        }
+        let mut releases = self.reader_release_batch();
+        self.view_retaining(&mut releases)
+            .expect("original membership reader source must be healthy")
     }
     /// Return the latest committed block height recorded by entrypoint storage.
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -1855,14 +1893,15 @@ mod serialization {
             };
             budget.with_deferred_refund_notifications(|_| {
                 let owner = Self::try_new(budget.clone())?;
+                let mut physical_releases = owner.history_released.deferred_batch();
                 let latest = latest
                     .as_ref()
                     .map(|input| admit_tip(&budget, &input.transactions, input.height))
                     .transpose()?;
-                let mut writer = owner
-                    .blocks
-                    .try_write_admitted(|d| history::admit(&budget, d))
-                    .map_err(|e| history::edit_error(e, owner.released.observe()))?;
+                let mut writer =
+                    owner.try_history_writer(&mut physical_releases, |_, demand| {
+                        history::admit(&budget, demand).map_err(MembershipAdmissionError::Capacity)
+                    })?;
                 for (key_str, value) in entries {
                     let key = Key::decode_json_key(&key_str).map_err(|e| {
                         json::Error::Message(format!("invalid transaction hash `{key_str}`: {e}"))
@@ -1871,11 +1910,21 @@ mod serialization {
                     if latest.as_ref().is_some_and(|tip| value < tip.height) {
                         writer
                             .try_insert_admitted(key, value, |d| history::admit(&budget, d))
-                            .map_err(|(_, e)| history::edit_error(e, owner.released.observe()))?;
+                            .map_err(|(_, e)| {
+                                history::edit_error(e, owner.history_release_wait())
+                            })?;
                     }
                 }
-                drop(writer.prepare_commit().publish().release());
+                let retired = writer
+                    .try_release_into_observed(
+                        &mut physical_releases,
+                        |writer| writer.prepare_commit().publish().release(),
+                        || owner.blocks.is_poisoned(),
+                    )
+                    .unwrap_or_else(|_| unreachable!("original restored history release family"));
                 owner.latest_block.store(latest);
+                drop(retired);
+                drop(physical_releases);
                 Ok(owner)
             })
         }
@@ -2290,11 +2339,15 @@ mod tests {
         assert_eq!(io.kind(), std::io::ErrorKind::PermissionDenied);
         assert_eq!(io.to_string(), "original journal owner");
         assert_eq!(actual_path, &path);
-        let drain = TransactionsBlockError::from(LaneLifecycleError::DrainObservation(
-            crate::state::MergeLedgerCommitError::Persistence(crate::kura::Error::IO(
+        let original_observation = Box::new(crate::state::MergeLedgerCommitError::Persistence(
+            crate::kura::Error::IO(
                 std::io::Error::new(std::io::ErrorKind::PermissionDenied, "original drain owner"),
                 path.clone(),
-            )),
+            ),
+        ));
+        let original_owner = std::ptr::from_ref(original_observation.as_ref());
+        let drain = TransactionsBlockError::from(LaneLifecycleError::DrainObservation(
+            original_observation,
         ));
         let lifecycle = drain
             .source()
@@ -2302,8 +2355,10 @@ mod tests {
             .expect("drain refusal remains a local lifecycle source");
         let observation = lifecycle
             .source()
-            .and_then(|source| source.downcast_ref::<crate::state::MergeLedgerCommitError>())
-            .expect("drain refusal retains its exact observation error");
+            .and_then(|source| source.downcast_ref::<Box<crate::state::MergeLedgerCommitError>>())
+            .expect("drain refusal retains its exact boxed observation error")
+            .as_ref();
+        assert_eq!(std::ptr::from_ref(observation), original_owner);
         assert!(
             matches!(observation, crate::state::MergeLedgerCommitError::Persistence(
             crate::kura::Error::IO(io, actual_path)
@@ -2323,6 +2378,13 @@ mod tests {
 
     #[test]
     fn lane_geometry_commit_refusal_retains_original_release_observation() {
+        // This conversion-only fixture has no State operation owner. Admit its
+        // sole observer from the explicitly bounded fixture pool before refusal.
+        let observer_budget = iroha_allocation::AllocationBudget::new(
+            iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        );
+        let mut release_registration_0 =
+            crate::unit_test_support::release_registration(&observer_budget);
         use crate::state::LaneLifecycleError;
         use std::{
             future::Future as _,
@@ -2345,7 +2407,7 @@ mod tests {
         };
         assert_eq!(field, "original geometry writer");
         assert_eq!(wait, observation);
-        let mut future = wait.wait_for_release();
+        let mut future = wait.wait_for_release(&mut release_registration_0);
         let mut context = Context::from_waker(Waker::noop());
         assert!(Pin::new(&mut future).poll(&mut context).is_pending());
         drop(original_owner);
@@ -2528,12 +2590,24 @@ mod tests {
 
 #[cfg(test)]
 impl TransactionsStorage {
+    /// Hold the actual membership mutex after the original execution has frozen its journal.
+    /// This is a physical blocker, not an injected outcome or replacement predecessor.
+    pub(in crate::state) fn with_membership_publication_blocked_for_test<R>(
+        &self,
+        action: impl FnOnce() -> R,
+    ) -> R {
+        let blocker = self.released.guard(self.write_lock.lock());
+        let result = action();
+        drop(blocker);
+        result
+    }
+
     /// Hold the actual native history writer while a caller probes publication.
     pub(in crate::state) fn with_physical_publication_blocked_for_test<R>(
         &self,
         action: impl FnOnce() -> R,
     ) -> R {
-        let blocker = self.released.guard(self.blocks.acquire_writer());
+        let blocker = self.history_released.guard(self.blocks.acquire_writer());
         let result = action();
         drop(blocker);
         result

@@ -66,6 +66,7 @@ fn time_trigger_call_hashes_bind_transcripts_and_include_failed_invocations() {
         let setup_header = state
             .view()
             .latest_block()
+            .expect("completed original State read")
             .expect("original Time parent")
             .header();
         let mut setup = state.block(setup_header);
@@ -93,7 +94,10 @@ fn time_trigger_call_hashes_bind_transcripts_and_include_failed_invocations() {
         setup.commit_world_overlay_for_testing().unwrap();
     }
     let view = state.view();
-    let predecessor = view.latest_block().expect("original Time genesis");
+    let predecessor = view
+        .latest_block()
+        .expect("completed original State read")
+        .expect("original Time genesis");
     let header = iroha_data_model::block::BlockHeader::new(
         std::num::NonZeroU64::new(2).unwrap(),
         Some(predecessor.hash()),

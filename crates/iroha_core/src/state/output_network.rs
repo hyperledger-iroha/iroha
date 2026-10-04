@@ -417,7 +417,7 @@ pub(in crate::state) fn execute_network_attempt(
     require_source(transaction, input, execution_index, routing)?;
     transaction.require_completed_execution_effect_owner()?;
     let effect_limit_rejection = transaction.execution_effect_limit_exceeded();
-    let mut work = CompletedOutputWork::capture(transaction);
+    let work = CompletedOutputWork::capture(transaction);
     let rejection_fee = transaction.take_execution_fee_settlement()?;
     let penalties = transaction.take_deferred_governance_ballot_penalties_v1();
     if result.is_ok() && !penalties.is_empty() {
@@ -438,103 +438,29 @@ pub(in crate::state) fn execute_network_attempt(
             .callback_journal
             .discard_rejected(Hash::from(input.execution_call_hash()))?;
         drop(attempt);
-        // Confidential work survives every completed attempt. Actual gas/fee
-        // eligibility is decided from the real rejection, never its bounded row.
-        let used_gas = work.gas;
-        work.gas = 0;
-        work.account(state);
-        let mut result = Err(reason);
-        let mut funded_fee = None;
-        let mut fee_receipt = None;
-        let mut penalty_committed = true;
-        if !penalties.is_empty() && signed_source(input).is_none() {
-            result = Err(TransactionRejectionReason::Validation(
-                ValidationFail::InternalError(
-                    "deferred governance ballot penalty has no signed transaction".to_owned(),
-                ),
-            ));
-            penalty_committed = false;
-        } else if !penalties.is_empty() {
-            let mut penalty = OutputTransaction::new(state)?;
-            let transaction = penalty
-                .transaction
-                .as_mut()
-                .ok_or("penalty attempt is absent")?;
-            bind_source(transaction, input, execution_index, routing);
-            let applied =
-                StateBlock::stage_rejected_governance_ballot_penalties_v1(transaction, &penalties);
-            if transaction.fastpq_source_quota.intrinsic_rejected()? {
-                return Err("rejection penalty exceeded its admitted complete source tail".into());
-            }
-            match applied {
-                Ok(()) => {
-                    require_rejection_fragment(transaction, input, execution_index, routing)?;
-                    penalty.apply()?;
+        return complete_network_rejection(
+            state,
+            RejectedNetworkAttempt {
+                inputs,
+                input,
+                input_index,
+                execution_index,
+                height,
+                routing,
+                reason,
+                work,
+                penalties,
+                block_gas_rejection,
+                effect_limit_rejection,
+                reservation,
+            },
+            rejection_fee.map(|basis| {
+                move |transaction: &mut StateTransaction<'_, '_>,
+                      signed: &iroha_data_model::transaction::SignedTransaction| {
+                    basis.settle(transaction, signed)
                 }
-                Err(error) => {
-                    drop(penalty);
-                    result = Err(error);
-                    penalty_committed = false;
-                }
-            }
-        }
-        if !block_gas_rejection && penalty_committed {
-            if rejected_transaction_gas_is_accountable(used_gas, &result) {
-                state.gas_used_in_block = state.gas_used_in_block.saturating_add(used_gas);
-            }
-            let chargeable = !matches!(
-                &result,
-                Err(TransactionRejectionReason::Validation(
-                    ValidationFail::InternalError(_)
-                ))
-            ) && !effect_limit_rejection;
-            if let Some(signed) = signed_source(input)
-                && chargeable
-                && let Some(basis) = rejection_fee
-            {
-                let mut fee = OutputTransaction::new(state)?;
-                let transaction = fee.transaction.as_mut().ok_or("fee attempt is absent")?;
-                bind_source(transaction, input, execution_index, routing);
-                let charged = match basis.settle(transaction, signed) {
-                    Ok(charged) => Ok(charged),
-                    Err(crate::executor::ExecutionFeeSettlementError::Owner(error)) => {
-                        return Err(error.into());
-                    }
-                    Err(crate::executor::ExecutionFeeSettlementError::Charge(error)) => {
-                        Err(TransactionRejectionReason::Validation(error))
-                    }
-                };
-                if transaction.fastpq_source_quota.intrinsic_rejected()? {
-                    return Err("rejection fee exceeded its admitted complete source tail".into());
-                }
-                match charged {
-                    Ok(true) => {
-                        require_rejection_fragment(transaction, input, execution_index, routing)?;
-                        fee_receipt = transaction.pending_nexus_fee_receipt.take();
-                        funded_fee = Some(fee);
-                    }
-                    Ok(false) => drop(fee),
-                    Err(error) => {
-                        drop(fee);
-                        result = Err(error);
-                    }
-                }
-            }
-        }
-        let mut result = TransactionResult::new(result);
-        result.set_nexus_fee_receipt(fee_receipt);
-        let actual = ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
-            input_index,
-            result,
-            completions: Vec::new(),
-        });
-        actual.validate_structure(height, inputs)?;
-        let row = reservation.finish_network_rejection(actual)?;
-        // No charge becomes real before its exact receipt-bearing terminal fits.
-        if let Some(fee) = funded_fee {
-            fee.apply()?;
-        }
-        return Ok(row);
+            }),
+        );
     }
     // The legacy returned DFS vector is not the capture owner. The actual
     // journal also retains nested by-call steps omitted from that vector.
@@ -610,6 +536,163 @@ pub(in crate::state) fn execute_network_attempt(
     }
     work.account(state);
     Ok(row)
+}
+
+// These owners are created only after the original business overlay has been dropped.
+// Keeping rejection fragments in this stage avoids reserving their complete transaction
+// values on the active nested-execution stack. No allocation or lifetime changes are needed.
+struct RejectedNetworkAttempt<'input, 'reservation, Inputs: ?Sized> {
+    inputs: &'input Inputs,
+    input: &'input TransactionEntrypoint,
+    input_index: u32,
+    execution_index: u64,
+    height: u64,
+    routing: RoutingDecision,
+    reason: TransactionRejectionReason,
+    work: CompletedOutputWork,
+    penalties: Vec<crate::state::DeferredGovernanceBallotPenaltyV1>,
+    block_gas_rejection: bool,
+    effect_limit_rejection: bool,
+    reservation: iroha_data_model::block::output_budget::ExecutionOutputReservation<'reservation>,
+}
+
+fn complete_network_rejection<
+    Inputs: iroha_data_model::block::execution_output::ExecutionInputs + ?Sized,
+>(
+    state: &mut StateBlock<'_>,
+    rejected: RejectedNetworkAttempt<'_, '_, Inputs>,
+    settle_fee: Option<
+        impl FnOnce(
+            &mut StateTransaction<'_, '_>,
+            &iroha_data_model::transaction::SignedTransaction,
+        ) -> Result<bool, crate::executor::ExecutionFeeSettlementError>,
+    >,
+) -> Result<ExecutionOutputV1, ExecutionAttemptError<String>> {
+    let RejectedNetworkAttempt {
+        inputs,
+        input,
+        input_index,
+        execution_index,
+        height,
+        routing,
+        reason,
+        mut work,
+        penalties,
+        block_gas_rejection,
+        effect_limit_rejection,
+        reservation,
+    } = rejected;
+    // Confidential work survives every completed attempt. Actual gas/fee
+    // eligibility is decided from the real rejection, never its bounded row.
+    let used_gas = work.gas;
+    work.gas = 0;
+    work.account(state);
+    let mut result = Err(reason);
+    let mut funded_fee = None;
+    let mut fee_receipt = None;
+    let penalty_failure =
+        settle_rejection_penalties(state, input, execution_index, routing, &penalties)?;
+    let penalty_committed = penalty_failure.is_none();
+    if let Some(reason) = penalty_failure {
+        result = Err(reason);
+    }
+    if !block_gas_rejection && penalty_committed {
+        if rejected_transaction_gas_is_accountable(used_gas, &result) {
+            state.gas_used_in_block = state.gas_used_in_block.saturating_add(used_gas);
+        }
+        let chargeable = !matches!(
+            &result,
+            Err(TransactionRejectionReason::Validation(
+                ValidationFail::InternalError(_)
+            ))
+        ) && !effect_limit_rejection;
+        if let Some(signed) = signed_source(input)
+            && chargeable
+            && let Some(settle) = settle_fee
+        {
+            let mut fee = OutputTransaction::new(state)?;
+            let transaction = fee.transaction.as_mut().ok_or("fee attempt is absent")?;
+            bind_source(transaction, input, execution_index, routing);
+            let charged = match settle(transaction, signed) {
+                Ok(charged) => Ok(charged),
+                Err(crate::executor::ExecutionFeeSettlementError::Owner(error)) => {
+                    return Err(error.into());
+                }
+                Err(crate::executor::ExecutionFeeSettlementError::Charge(error)) => {
+                    Err(TransactionRejectionReason::Validation(error))
+                }
+            };
+            if transaction.fastpq_source_quota.intrinsic_rejected()? {
+                return Err("rejection fee exceeded its admitted complete source tail".into());
+            }
+            match charged {
+                Ok(true) => {
+                    require_rejection_fragment(transaction, input, execution_index, routing)?;
+                    fee_receipt = transaction.pending_nexus_fee_receipt.take();
+                    funded_fee = Some(fee);
+                }
+                Ok(false) => drop(fee),
+                Err(error) => {
+                    drop(fee);
+                    result = Err(error);
+                }
+            }
+        }
+    }
+    let mut result = TransactionResult::new(result);
+    result.set_nexus_fee_receipt(fee_receipt);
+    let actual = ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+        input_index,
+        result,
+        completions: Vec::new(),
+    });
+    actual.validate_structure(height, inputs)?;
+    let row = reservation.finish_network_rejection(actual)?;
+    // No charge becomes real before its exact receipt-bearing terminal fits.
+    if let Some(fee) = funded_fee {
+        fee.apply()?;
+    }
+    Ok(row)
+}
+
+fn settle_rejection_penalties(
+    state: &mut StateBlock<'_>,
+    input: &TransactionEntrypoint,
+    execution_index: u64,
+    routing: RoutingDecision,
+    penalties: &[crate::state::DeferredGovernanceBallotPenaltyV1],
+) -> Result<Option<TransactionRejectionReason>, ExecutionAttemptError<String>> {
+    if penalties.is_empty() {
+        return Ok(None);
+    }
+    if signed_source(input).is_none() {
+        return Ok(Some(TransactionRejectionReason::Validation(
+            ValidationFail::InternalError(
+                "deferred governance ballot penalty has no signed transaction".to_owned(),
+            ),
+        )));
+    }
+    let mut penalty = OutputTransaction::new(state)?;
+    let transaction = penalty
+        .transaction
+        .as_mut()
+        .ok_or("penalty attempt is absent")?;
+    bind_source(transaction, input, execution_index, routing);
+    let applied = StateBlock::stage_rejected_governance_ballot_penalties_v1(transaction, penalties);
+    if transaction.fastpq_source_quota.intrinsic_rejected()? {
+        return Err("rejection penalty exceeded its admitted complete source tail".into());
+    }
+    match applied {
+        Ok(()) => {
+            require_rejection_fragment(transaction, input, execution_index, routing)?;
+            penalty.apply()?;
+            Ok(None)
+        }
+        Err(error) => {
+            drop(penalty);
+            Ok(Some(error))
+        }
+    }
 }
 
 fn signed_source(

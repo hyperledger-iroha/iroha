@@ -4,8 +4,7 @@ use clap::Args as ClapArgs;
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
 use iroha_data_model::NetworkId;
-use iroha_model_base::domain::DomainId;
-use iroha_model_base::{name::Name, name::canonicalize_domain_label};
+use iroha_model_base::name::Name;
 use std::{
     collections::BTreeSet,
     fs,
@@ -25,8 +24,15 @@ struct BaseConfig {
     chain: String,
     network_id: NetworkId,
     torii_url: String,
+    account_network: AccountNetwork,
     api_token: Option<Zeroizing<String>>,
     basic_auth: Option<BasicAuth>,
+}
+/// Explicit account network context copied verbatim from the base `[account]` table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AccountNetwork {
+    profile: Option<String>,
+    chain_discriminant: Option<u16>,
 }
 struct BasicAuth {
     web_login: String,
@@ -35,15 +41,12 @@ struct BasicAuth {
 /// Generate per-client CLI configs from a base client.toml.
 #[derive(ClapArgs)]
 pub struct Args {
-    /// Base client config to copy the chain, exact network identity, Torii URL, and credentials from.
+    /// Base client config to copy the chain, exact network identity, account network context, Torii URL, and credentials from.
     #[arg(long, value_name = "PATH")]
     base_config: PathBuf,
     /// Output directory for generated client configs (default: <base-config-dir>/clients).
     #[arg(long, value_name = "DIR")]
     out_dir: Option<PathBuf>,
-    /// Account scope for generated client configs (`dataspace` or `domain.dataspace`).
-    #[arg(long, default_value = "acme.universal", value_name = "SCOPE")]
-    domain: String,
     /// A 32-byte secret master seed encoded as 64 hexadecimal characters.
     ///
     /// Per-client keys are derived with an explicit domain and client name.
@@ -59,7 +62,6 @@ impl<T: Write> RunArgs<T> for Args {
         let Self {
             base_config,
             out_dir,
-            domain,
             seed_hex,
             names,
         } = self;
@@ -71,7 +73,6 @@ impl<T: Write> RunArgs<T> for Args {
         let base = load_base_config(&base_config)?;
         let out_dir = resolve_out_dir(&base_config, out_dir)?;
         let names = normalize_names(names)?;
-        validate_account_scope(&domain)?;
         let out_dir = crate::secure_fs::prepare_empty_private_directory(&out_dir)
             .wrap_err("prepare client-config private output directory")?;
         tui::status(format!(
@@ -86,7 +87,7 @@ impl<T: Write> RunArgs<T> for Args {
                 KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
                     .wrap_err("failed to generate an OS-random client key pair")?
             };
-            let rendered = render_client_config(&base, &domain, &key_pair)?;
+            let rendered = render_client_config(&base, &key_pair)?;
             let path = out_dir.join(format!("{name}.toml"));
             crate::secure_fs::write_private_file_atomic(&path, rendered.as_bytes())
                 .wrap_err_with(|| format!("failed to write {}", path.display()))?;
@@ -180,12 +181,47 @@ fn load_base_config(path: &Path) -> Result<BaseConfig> {
         Some(_) => return Err(eyre!("base config `api_token` must be a TOML string")),
         None => None,
     };
+    let account_network = load_account_network(value.get("account"))?;
     Ok(BaseConfig {
         chain,
         network_id,
         torii_url,
+        account_network,
         api_token,
         basic_auth,
+    })
+}
+/// Read and validate the base `[account]` network context with the SDK's resolution rule.
+///
+/// Generated clients join the base network, so the base must state it: a public `profile`, an
+/// explicit `chain_discriminant`, or both when they agree. There is no default network.
+fn load_account_network(account: Option<&toml::Value>) -> Result<AccountNetwork> {
+    let account = match account {
+        Some(toml::Value::Table(account)) => Some(account),
+        Some(_) => return Err(eyre!("base config `account` must be a TOML table")),
+        None => None,
+    };
+    let profile = match account.and_then(|account| account.get("profile")) {
+        Some(toml::Value::String(profile)) => Some(profile.clone()),
+        Some(_) => return Err(eyre!("base config `account.profile` must be a TOML string")),
+        None => None,
+    };
+    let chain_discriminant = match account.and_then(|account| account.get("chain_discriminant")) {
+        Some(toml::Value::Integer(value)) => Some(u16::try_from(*value).map_err(|_| {
+            eyre!("base config `account.chain_discriminant` must fit an unsigned 16-bit integer")
+        })?),
+        Some(_) => {
+            return Err(eyre!(
+                "base config `account.chain_discriminant` must be a TOML integer"
+            ));
+        }
+        None => None,
+    };
+    iroha::config::resolve_account_chain_discriminant(profile.as_deref(), chain_discriminant)
+        .map_err(|error| eyre!("base config account network context is invalid: {error}"))?;
+    Ok(AccountNetwork {
+        profile,
+        chain_discriminant,
     })
 }
 fn read_base_config(path: &Path) -> Result<Zeroizing<String>> {
@@ -306,12 +342,7 @@ fn normalize_names(raw: Vec<String>) -> Result<Vec<String>> {
     }
     Ok(names)
 }
-fn render_client_config(
-    base: &BaseConfig,
-    account_scope: &str,
-    key_pair: &KeyPair,
-) -> Result<Zeroizing<String>> {
-    validate_account_scope(account_scope)?;
+fn render_client_config(base: &BaseConfig, key_pair: &KeyPair) -> Result<Zeroizing<String>> {
     let public_key = key_pair
         .public_key()
         .try_to_multihash_string()
@@ -356,10 +387,15 @@ fn render_client_config(
     root.insert("transaction".into(), toml::Value::Table(transaction));
 
     let mut account = toml::Table::new();
-    account.insert(
-        "domain".into(),
-        toml::Value::String(account_scope.to_owned()),
-    );
+    if let Some(profile) = &base.account_network.profile {
+        account.insert("profile".into(), toml::Value::String(profile.clone()));
+    }
+    if let Some(chain_discriminant) = base.account_network.chain_discriminant {
+        account.insert(
+            "chain_discriminant".into(),
+            toml::Value::Integer(i64::from(chain_discriminant)),
+        );
+    }
     account.insert(
         "private_key".into(),
         toml::Value::String(private_key.as_str().to_owned()),
@@ -383,24 +419,6 @@ fn render_client_config(
         .map(Zeroizing::new)
         .wrap_err("serialize generated client TOML")
 }
-fn validate_account_scope(value: &str) -> Result<()> {
-    if value.trim().is_empty() || value.trim() != value {
-        return Err(eyre!(
-            "account scope must use canonical `dataspace` or `domain.dataspace` form"
-        ));
-    }
-    let valid = if value.contains('.') {
-        DomainId::parse_fully_qualified(value).is_ok_and(|scope| scope.to_string() == value)
-    } else {
-        canonicalize_domain_label(value).is_ok_and(|scope| scope == value)
-    };
-    if !valid {
-        return Err(eyre!(
-            "account scope must use canonical `dataspace` or `domain.dataspace` form"
-        ));
-    }
-    Ok(())
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,6 +429,9 @@ chain = "demo-chain"
 network_id = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
 torii_url = "http://127.0.0.1:8080/"
 api_token = "owner-listener-token"
+
+[account]
+chain_discriminant = 753
 
 [basic_auth]
 password = "secret"
@@ -441,9 +462,86 @@ web_login = "demo"
             base.api_token.as_deref().map(String::as_str),
             Some("owner-listener-token")
         );
+        assert_eq!(base.account_network, local_network());
         let auth = base.basic_auth.expect("basic auth present");
         assert_eq!(auth.web_login, "demo");
         assert_eq!(auth.password.as_str(), "secret");
+    }
+    fn local_network() -> AccountNetwork {
+        AccountNetwork {
+            profile: None,
+            chain_discriminant: Some(753),
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn load_base_config_requires_consistent_account_network_context() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("client.toml");
+        write_base_config(&path);
+        let original = fs::read_to_string(&path).unwrap();
+        let with_account = |account: &str| {
+            original.replace(
+                "[account]\nchain_discriminant = 753\n",
+                &format!("[account]\n{account}"),
+            )
+        };
+        fs::write(&path, with_account("profile = \"taira\"\n")).unwrap();
+        assert_eq!(
+            load_base_config(&path).unwrap().account_network,
+            AccountNetwork {
+                profile: Some("taira".to_owned()),
+                chain_discriminant: None,
+            }
+        );
+        fs::write(
+            &path,
+            with_account("profile = \"taira\"\nchain_discriminant = 369\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            load_base_config(&path).unwrap().account_network,
+            AccountNetwork {
+                profile: Some("taira".to_owned()),
+                chain_discriminant: Some(369),
+            }
+        );
+        for (account, reason) in [
+            (
+                "",
+                "a base without network context must not imply a default network",
+            ),
+            (
+                "profile = \"taira\"\nchain_discriminant = 753\n",
+                "a profile and an explicit discriminant must agree",
+            ),
+            (
+                "profile = \"unknownnet\"\n",
+                "an unknown profile is not a network",
+            ),
+            (
+                "chain_discriminant = 0\n",
+                "zero is not a chain discriminant",
+            ),
+            ("chain_discriminant = 65536\n", "the discriminant is 16-bit"),
+            (
+                "chain_discriminant = \"753\"\n",
+                "the discriminant is an integer",
+            ),
+            ("profile = 369\n", "the profile is a string"),
+        ] {
+            fs::write(&path, with_account(account)).unwrap();
+            assert!(load_base_config(&path).is_err(), "{reason}");
+        }
+        fs::write(
+            &path,
+            original.replace("[account]\nchain_discriminant = 753\n", ""),
+        )
+        .unwrap();
+        assert!(
+            load_base_config(&path).is_err(),
+            "an absent account table carries no network context"
+        );
     }
     #[cfg(unix)]
     #[test]
@@ -524,6 +622,9 @@ chain = "demo-chain"
 network_id = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
 torii_url = "http://127.0.0.1:8080/"
 basic_auth = "not a table"
+
+[account]
+chain_discriminant = 753
 "#;
         fs::write(&path, malformed).expect("write malformed config");
         #[cfg(unix)]
@@ -618,6 +719,7 @@ basic_auth = "not a table"
                     .parse()
                     .expect("network id"),
             torii_url: "http://127.0.0.1:8080/".to_owned(),
+            account_network: local_network(),
             api_token: Some(Zeroizing::new("owner-listener-token".into())),
             basic_auth: Some(BasicAuth {
                 web_login: "demo".to_owned(),
@@ -626,8 +728,7 @@ basic_auth = "not a table"
         };
         let key_pair = KeyPair::try_from_seed(b"demo-admin1".to_vec(), Algorithm::Ed25519)
             .expect("seeded client key should derive");
-        let rendered =
-            render_client_config(&base, "acme.universal", &key_pair).expect("render config");
+        let rendered = render_client_config(&base, &key_pair).expect("render config");
         let value: toml::Value = toml::from_str(&rendered).expect("parse rendered config");
         assert_eq!(
             value.get("chain").and_then(toml::Value::as_str),
@@ -650,8 +751,15 @@ basic_auth = "not a table"
             .and_then(toml::Value::as_table)
             .expect("account");
         assert_eq!(
-            account.get("domain").and_then(toml::Value::as_str),
-            Some("acme.universal")
+            account
+                .get("chain_discriminant")
+                .and_then(toml::Value::as_integer),
+            Some(753)
+        );
+        assert!(!account.contains_key("profile"));
+        assert!(
+            !account.contains_key("domain"),
+            "client configurations carry no account domain"
         );
         let expected_public = key_pair.public_key().to_string();
         let expected_private = ExposedPrivateKey(key_pair.private_key().clone()).to_string();
@@ -700,7 +808,7 @@ basic_auth = "not a table"
         );
     }
     #[test]
-    fn render_client_config_accepts_dataspace_account_scope() {
+    fn render_client_config_propagates_public_profile() {
         let base = BaseConfig {
             chain: "demo-chain".to_owned(),
             network_id:
@@ -708,12 +816,16 @@ basic_auth = "not a table"
                     .parse()
                     .expect("network id"),
             torii_url: "http://127.0.0.1:8080/".to_owned(),
+            account_network: AccountNetwork {
+                profile: Some("taira".to_owned()),
+                chain_discriminant: None,
+            },
             api_token: None,
             basic_auth: None,
         };
         let key_pair = KeyPair::try_from_seed(b"demo-sender".to_vec(), Algorithm::Ed25519)
             .expect("seeded client key should derive");
-        let rendered = render_client_config(&base, "cbuae", &key_pair).expect("render config");
+        let rendered = render_client_config(&base, &key_pair).expect("render config");
         let value: toml::Value = toml::from_str(&rendered).expect("parse rendered config");
         assert!(value.get("api_token").is_none());
         let account = value
@@ -721,12 +833,23 @@ basic_auth = "not a table"
             .and_then(toml::Value::as_table)
             .expect("account");
         assert_eq!(
-            account.get("domain").and_then(toml::Value::as_str),
-            Some("cbuae")
+            account.get("profile").and_then(toml::Value::as_str),
+            Some("taira")
+        );
+        assert!(!account.contains_key("chain_discriminant"));
+        let config = iroha::config::Config::load_bytes_with_musubi_publication(
+            Path::new("generated-client.toml"),
+            rendered.as_bytes(),
+        )
+        .expect("generated client config loads with the SDK")
+        .0;
+        assert_eq!(
+            config.account_chain_discriminant, 369,
+            "the Taira profile selects its discriminant"
         );
     }
     #[test]
-    fn render_client_config_escapes_values_and_rejects_noncanonical_scope() {
+    fn render_client_config_escapes_values() {
         let base = BaseConfig {
             chain: "demo\"chain\nnext".to_owned(),
             network_id:
@@ -734,6 +857,7 @@ basic_auth = "not a table"
                     .parse()
                     .expect("network id"),
             torii_url: "https://example.test/path?value=\"quoted\"".to_owned(),
+            account_network: local_network(),
             api_token: Some(Zeroizing::new("escaped-\"token\"".into())),
             basic_auth: Some(BasicAuth {
                 web_login: "operator\"name".to_owned(),
@@ -742,8 +866,7 @@ basic_auth = "not a table"
         };
         let key_pair = KeyPair::try_from_seed(b"escaping-client".to_vec(), Algorithm::Ed25519)
             .expect("seeded client key should derive");
-        let rendered =
-            render_client_config(&base, "acme.universal", &key_pair).expect("render config");
+        let rendered = render_client_config(&base, &key_pair).expect("render config");
         let value: toml::Value = toml::from_str(rendered.as_str()).expect("parse rendered config");
         assert_eq!(
             value.get("api_token").and_then(toml::Value::as_str),
@@ -761,8 +884,6 @@ basic_auth = "not a table"
             auth.get("password").and_then(toml::Value::as_str),
             Some(base.basic_auth.as_ref().expect("auth").password.as_str())
         );
-        assert!(render_client_config(&base, "acme.universal\n[evil]", &key_pair).is_err());
-        assert!(render_client_config(&base, "ACME.universal", &key_pair).is_err());
     }
     #[test]
     fn run_writes_client_configs() {
@@ -774,7 +895,6 @@ basic_auth = "not a table"
         let args = Args {
             base_config: base_path.clone(),
             out_dir: Some(out_dir.clone()),
-            domain: "acme.universal".to_owned(),
             seed_hex: Some("11".repeat(32)),
             names: vec!["admin1".to_owned()],
         };
@@ -784,23 +904,26 @@ basic_auth = "not a table"
         assert!(config_path.exists());
     }
     #[test]
-    fn invalid_account_scope_does_not_create_output_directory() {
+    fn missing_account_network_context_does_not_create_output_directory() {
         let temp = tempfile::tempdir().expect("temp dir");
         let root = fs::canonicalize(temp.path()).expect("canonical temp dir");
         let base_path = root.join("client.toml");
         write_base_config(&base_path);
+        let without_network = fs::read_to_string(&base_path)
+            .unwrap()
+            .replace("[account]\nchain_discriminant = 753\n", "");
+        fs::write(&base_path, without_network).unwrap();
         let out_dir = root.join("clients");
         let args = Args {
             base_config: base_path,
             out_dir: Some(out_dir.clone()),
-            domain: "ACME.universal".to_owned(),
             seed_hex: Some("11".repeat(32)),
             names: vec!["admin1".to_owned()],
         };
 
         let _error = args
             .run(&mut BufWriter::new(Vec::new()))
-            .expect_err("noncanonical account scope must fail");
+            .expect_err("a base without network context must fail");
         assert!(
             !out_dir.exists(),
             "validation must finish before creating the fresh custody directory"
@@ -818,7 +941,6 @@ basic_auth = "not a table"
         let args = Args {
             base_config: base_path,
             out_dir: Some(out_dir.clone()),
-            domain: "cbuae".to_owned(),
             seed_hex: None,
             names: vec!["sender".to_owned(), "sponsor".to_owned()],
         };

@@ -931,7 +931,7 @@ fn proposal_usage() -> &'static str {
         --chunker-profile=<handle> --stake-pool-id=<hex32> --stake-amount=<canonical_xor_quantity> \
         --advert-key=<hex32> --por-vrf-key=<normal:hex48|small:hex96> \
         --jurisdiction-code=<ISO3166-1> --endpoint=<kind:host> \
-        [--endpoint-attestation-kind=<kind>] \
+        [--endpoint-attestation-kind=<tls|quic>] \
         --endpoint-attestation-attested-at=<secs> --endpoint-attestation-expires-at=<secs> \
         (--endpoint-attestation-leaf=<path>|--endpoint-attestation-leaf-hex=<lowercase_hex>) \
         [--endpoint-attestation-intermediate=<path>]... \
@@ -1053,7 +1053,7 @@ struct EndpointBuilder {
 impl EndpointBuilder {
     fn new(endpoint: AdvertEndpoint) -> Self {
         let kind = match endpoint.kind {
-            EndpointKind::Torii | EndpointKind::NoritoRpc => EndpointAttestationKind::Mtls,
+            EndpointKind::Torii | EndpointKind::NoritoRpc => EndpointAttestationKind::Tls,
             EndpointKind::Quic => EndpointAttestationKind::Quic,
         };
         Self {
@@ -1419,7 +1419,7 @@ fn parse_bool(value: &str) -> Result<bool, String> {
 }
 fn parse_attestation_kind(value: &str) -> Result<EndpointAttestationKind, String> {
     match value {
-        "mtls" => Ok(EndpointAttestationKind::Mtls),
+        "tls" => Ok(EndpointAttestationKind::Tls),
         "quic" => Ok(EndpointAttestationKind::Quic),
         other => Err(format!("unknown attestation kind: {other}")),
     }
@@ -1654,7 +1654,7 @@ mod tests {
                 endpoint: parse_endpoint("torii:storage.example.com").expect("canonical endpoint"),
                 attestation: EndpointAttestationV1 {
                     version: ENDPOINT_ATTESTATION_VERSION_V1,
-                    kind: EndpointAttestationKind::Mtls,
+                    kind: EndpointAttestationKind::Tls,
                     attested_at: 1,
                     expires_at: 2,
                     leaf_certificate: vec![1],
@@ -1687,6 +1687,37 @@ mod tests {
             .expect("structured range capability must pass proposal validation");
     }
     #[test]
+    fn endpoint_attestation_parser_uses_tls_without_mutual_authentication_alias() {
+        assert_eq!(
+            parse_attestation_kind("tls").unwrap(),
+            EndpointAttestationKind::Tls
+        );
+        assert_eq!(
+            parse_attestation_kind("quic").unwrap(),
+            EndpointAttestationKind::Quic
+        );
+        for value in ["mtls", "MTLS", "Tls", " tls", "tls ", "", "tls|quic"] {
+            assert!(
+                parse_attestation_kind(value).is_err(),
+                "unexpected alias {value:?}"
+            );
+        }
+        for (kind, expected) in [
+            (EndpointKind::Torii, EndpointAttestationKind::Tls),
+            (EndpointKind::NoritoRpc, EndpointAttestationKind::Tls),
+            (EndpointKind::Quic, EndpointAttestationKind::Quic),
+        ] {
+            let builder = EndpointBuilder::new(AdvertEndpoint {
+                kind,
+                host_pattern: "storage.example".into(),
+                metadata: Vec::new(),
+            });
+            assert_eq!(builder.attestation_kind, Some(expected));
+        }
+        assert!(proposal_usage().contains("--endpoint-attestation-kind=<tls|quic>"));
+    }
+
+    #[test]
     fn structured_selector_parsers_reject_compatibility_aliases() {
         for value in ["guard", "majority", "strict"] {
             parse_soranet_pq(value).expect("canonical SoraNet PQ level");
@@ -1701,7 +1732,7 @@ mod tests {
         ] {
             parse_endpoint(value).expect("canonical endpoint");
         }
-        for value in ["mtls", "quic"] {
+        for value in ["tls", "quic"] {
             parse_attestation_kind(value).expect("canonical attestation kind");
         }
         assert!(parse_bool("true").expect("canonical true"));
@@ -1758,7 +1789,7 @@ mod tests {
         ] {
             parse_endpoint(value).expect_err("endpoint alias must fail");
         }
-        for value in ["tls", "MTLS", "Quic"] {
+        for value in ["mtls", "MTLS", "Tls", "Quic"] {
             parse_attestation_kind(value).expect_err("attestation alias must fail");
         }
         for value in ["1", "0", "yes", "no", "TRUE", "False"] {

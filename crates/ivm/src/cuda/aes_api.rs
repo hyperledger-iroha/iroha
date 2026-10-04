@@ -1,20 +1,10 @@
 //! AES kernel qualification and caller-owned batch publication.
 
 use super::policy::{Kernel, public_workload_task_id};
-use iroha_accel::{HostOutput, PtxArtifact, cuda::CudaFailure};
-use std::ffi::CStr;
+use iroha_accel::{HostOutput, cuda::CudaFailure};
 
 #[path = "aes_launch.rs"]
 mod launch;
-
-static ARTIFACT: PtxArtifact = PtxArtifact::new(
-    match CStr::from_bytes_with_nul(
-        concat!(include_str!(concat!(env!("OUT_DIR"), "/aes.ptx")), "\0").as_bytes(),
-    ) {
-        Ok(bytes) => bytes,
-        Err(_) => panic!("embedded AES artifact must contain exactly one terminal NUL"),
-    },
-);
 
 fn stage(
     kernel: Kernel,
@@ -28,14 +18,19 @@ fn stage(
         Kernel::AesDecFused => (true, true),
         _ => return Err(CudaFailure::InvalidRequest),
     };
-    match crate::cuda_dispatch::with_selected(kernel, ARTIFACT, |device| {
+    let artifact = crate::cuda_artifact::artifact(kernel)?;
+    match crate::cuda_dispatch::with_selected(kernel, artifact, |device| {
         // SAFETY: the exact artifact, fixed symbols and public checked geometry
         // are owned here. Input and key arrays stay unchanged through completion.
-        unsafe { launch::aes_output(device, ARTIFACT, decrypt, fused, states, keys) }
+        unsafe { launch::aes_output(device, artifact, decrypt, fused, states, keys) }
     }) {
-        Ok(output) => {
-            super::imp::record_completed_cuda_dispatch();
+        Ok(output) if output.len() == states.len() && !states.is_empty() => {
+            super::imp::record_completed_cuda_dispatch(kernel, artifact);
             Ok(output)
+        }
+        Ok(_) => {
+            crate::cuda_dispatch::quarantine_current_kernel();
+            Err(CudaFailure::Quarantined)
         }
         Err(error) => {
             if !matches!(
@@ -50,7 +45,10 @@ fn stage(
 }
 
 pub(super) fn admit(kernel: Kernel) -> bool {
-    crate::cuda_dispatch::admit_kernel(kernel, ARTIFACT, || {
+    let Ok(artifact) = crate::cuda_artifact::artifact(kernel) else {
+        return false;
+    };
+    crate::cuda_dispatch::admit_kernel(kernel, artifact, || {
         let Some(_guard) = super::imp::SelftestRunningGuard::enter() else {
             return Err(CudaFailure::Busy);
         };

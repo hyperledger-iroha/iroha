@@ -15,23 +15,24 @@ fn prepared(root: &Path) -> PreparedLocalnet {
 }
 
 #[test]
-fn reserve_accounts_are_distinct_non_signing_public_points_bound_to_provider() {
-    let provider = ProviderId::new([0x73; 32]);
-    let accounts = reserve_accounts(provider);
-    assert_eq!(accounts, reserve_accounts(provider));
+fn reserve_accounts_are_distinct_non_signing_public_points_bound_to_network_operations() {
+    let seed = [0x73; 32];
+    let pair = KeyPair::try_from_seed(seed.to_vec(), iroha_crypto::Algorithm::Ed25519).unwrap();
+    let operations = AccountId::new(pair.public_key().clone());
+    let other = KeyPair::try_from_seed(vec![0x74; 32], iroha_crypto::Algorithm::Ed25519).unwrap();
+    let accounts = reserve_accounts(&operations).unwrap();
+    assert_eq!(accounts, reserve_accounts(&operations).unwrap());
     assert_ne!(accounts.custody, accounts.treasury);
-    assert_ne!(accounts, reserve_accounts(ProviderId::new([0x74; 32])));
+    assert_ne!(
+        accounts,
+        reserve_accounts(&AccountId::new(other.public_key().clone())).unwrap()
+    );
     for account in [&accounts.custody, &accounts.treasury] {
         assert_eq!(
             account.try_signatory().unwrap().algorithm(),
             iroha_crypto::Algorithm::Ed25519
         );
-        let seeded = KeyPair::try_from_seed(
-            provider.as_bytes().to_vec(),
-            iroha_crypto::Algorithm::Ed25519,
-        )
-        .unwrap();
-        assert_ne!(account, &AccountId::new(seeded.public_key().clone()));
+        assert_ne!(account, &operations);
     }
     assert_ne!(
         Json::new(ReserveAccountRole::ReserveCustody),
@@ -41,26 +42,29 @@ fn reserve_accounts_are_distinct_non_signing_public_points_bound_to_provider() {
 
 #[test]
 fn owner_seed_is_initial_only_and_uses_the_explicit_address_profile() {
-    let authorities = ROLES
-        .into_iter()
-        .map(|role| {
-            (
-                role,
-                localnet_ephemeral_identity(
-                    Some(b"owner-seed-test"),
-                    role.credential_filename().as_bytes(),
-                )
-                .unwrap(),
-            )
-        })
-        .collect::<Vec<_>>();
-    let generated = GeneratedAuthorities {
-        provider_id: provider_scope(&authorities[0].1.public_key).unwrap(),
-        authorities,
-    };
+    let temporary = crate::localnet::localnet_test_helpers::private_tempdir().unwrap();
+    let seed = Some(b"owner-seed-test".as_slice());
+    let manager = localnet_ephemeral_identity(seed, b"manager").unwrap();
+    let http = localnet_ephemeral_identity(seed, b"http").unwrap();
+    let onboarding = localnet_ephemeral_identity(seed, b"onboarding").unwrap();
+    let generated = generate(
+        LocalnetServiceProfile::StreamTokenAuthorities,
+        temporary.path(),
+        seed,
+        &manager,
+        &http,
+        &onboarding,
+    )
+    .unwrap()
+    .unwrap();
     let _ambient = ChainDiscriminantGuard::enter(369);
     let rendered = generated
-        .seed_provider_owner("[gov]\nconviction_step_blocks = 10\n", Some(42))
+        .configure_peer(
+            "[gov]\nconviction_step_blocks = 10\n",
+            Some(42),
+            temporary.path(),
+            0,
+        )
         .unwrap();
     let table = crate::secret_toml::Table::new(
         crate::secret_toml::parse_table(&rendered, "seed fixture").unwrap(),
@@ -68,13 +72,26 @@ fn owner_seed_is_initial_only_and_uses_the_explicit_address_profile() {
     let gov = table.get("gov").unwrap().as_table().unwrap();
     assert_eq!(gov["conviction_step_blocks"].as_integer(), Some(10));
     let owners = gov["sorafs_provider_owners"].as_table().unwrap();
-    assert_eq!(owners.len(), 1);
-    assert_eq!(
-        owners[hex::encode(generated.provider_id.as_bytes()).as_str()].as_str(),
-        Some(account_id_runtime_literal(&generated.authorities[0].1.account_id, Some(42)).as_str()),
+    assert_eq!(owners.len(), PROVIDER_COUNT);
+    for provider in &generated.providers {
+        assert_eq!(
+            owners[hex::encode(provider.provider_id.as_bytes()).as_str()].as_str(),
+            Some(
+                account_id_runtime_literal(&provider.authorities[0].1.account_id, Some(42))
+                    .as_str()
+            )
+        );
+    }
+    assert!(
+        generated
+            .configure_peer(&rendered, Some(42), temporary.path(), 0)
+            .is_err()
     );
-    assert!(generated.seed_provider_owner(&rendered, Some(42)).is_err());
-    assert!(generated.seed_provider_owner("gov = 1", Some(42)).is_err());
+    assert!(
+        generated
+            .configure_peer("gov = 1", Some(42), temporary.path(), 0)
+            .is_err()
+    );
     assert_eq!(
         iroha_data_model::account::address::chain_discriminant(),
         369
@@ -98,30 +115,42 @@ fn managed_authority_genesis_registers_grants_funds_and_keeps_services_disabled(
             369
         );
     }
-    assert_eq!(manifest.authorities.len(), 7);
+    assert_eq!(manifest.providers.len(), 3);
+    assert_eq!(manifest.network.authorities.len(), 3);
+    assert_eq!(manifest.providers[0].authorities.len(), 10);
+    for provider in &manifest.providers {
+        assert_eq!(
+            provider
+                .authorities
+                .iter()
+                .map(|entry| entry.role)
+                .collect::<Vec<_>>(),
+            ROLES
+        );
+    }
     assert_eq!(
-        manifest
-            .authorities
-            .iter()
-            .map(|entry| entry.role)
-            .collect::<Vec<_>>(),
-        ROLES
-    );
-    assert_eq!(
-        manifest.reserve_accounts,
-        reserve_accounts(manifest.provider_id)
+        manifest.network.reserve_accounts,
+        reserve_accounts(
+            &manifest
+                .network
+                .authority(NetworkServiceAuthorityRole::ReserveOperations)
+                .unwrap()
+                .account
+        )
+        .unwrap()
     );
     let reserve_ids = [
-        &manifest.reserve_accounts.custody,
-        &manifest.reserve_accounts.treasury,
+        &manifest.network.reserve_accounts.custody,
+        &manifest.network.reserve_accounts.treasury,
     ];
     assert_ne!(reserve_ids[0], reserve_ids[1]);
     for account in reserve_ids {
         assert_ne!(account, &manifest.manager);
         assert!(
             manifest
-                .authorities
+                .providers
                 .iter()
+                .flat_map(|provider| &provider.authorities)
                 .all(|entry| &entry.account != account)
         );
     }
@@ -138,12 +167,10 @@ fn managed_authority_genesis_registers_grants_funds_and_keeps_services_disabled(
         NetworkId::from_genesis_hash(block.hash()),
         manifest.network_id
     );
-    let mut expected = grants(
-        &manifest.manager,
-        manifest.provider_id,
-        &manifest.authorities,
-    );
+    let mut expected = grants(&manifest.manager, &manifest.network, &manifest.providers).unwrap();
     let mut registered = BTreeSet::new();
+    let mut provider_initializers = 0;
+    let mut pricing_initializers = 0;
     for transaction in block.external_transactions() {
         for instruction in transaction.instructions().explicit_instructions() {
             if let Some(RegisterBox::Account(register)) =
@@ -174,10 +201,15 @@ fn managed_authority_genesis_registers_grants_funds_and_keeps_services_disabled(
                     "CanOperateSorafsStreamTokenGateway" | "CanCheckSorafsStreamTokenGateway"
                 ));
             }
-            assert!(
-                !instruction
+            provider_initializers += usize::from(
+                instruction
                     .as_any()
-                    .is::<iroha_data_model::isi::sorafs::InitializeSorafsProviderAdmissionV1>()
+                    .is::<iroha_data_model::isi::sorafs::InitializeSorafsProviderAdmissionV1>(),
+            );
+            pricing_initializers += usize::from(
+                instruction
+                    .as_any()
+                    .is::<iroha_data_model::isi::sorafs::SetPricingSchedule>(),
             );
             assert!(
                 !instruction
@@ -215,14 +247,16 @@ fn managed_authority_genesis_registers_grants_funds_and_keeps_services_disabled(
             }
         }
     }
+    assert_eq!((provider_initializers, pricing_initializers), (1, 1));
     assert!(
         expected.is_empty(),
         "every required capability was actually granted in signed genesis"
     );
     assert!(
         manifest
-            .authorities
+            .providers
             .iter()
+            .flat_map(|provider| &provider.authorities)
             .all(|entry| registered.contains(&entry.account))
     );
     assert_eq!(reserve_grants, BTreeSet::from(reserve_permissions));
@@ -232,16 +266,12 @@ fn managed_authority_genesis_registers_grants_funds_and_keeps_services_disabled(
     let inventory =
         PrivateDirectory::open_exact(root.join(LOCALNET_RUNTIME_DIRECTORY).join(DIRECTORY))
             .unwrap();
-    let expected_files = std::iter::once(std::ffi::OsString::from(MANIFEST))
-        .chain(
-            ROLES
-                .into_iter()
-                .map(|role| std::ffi::OsString::from(role.credential_filename())),
-        )
-        .collect::<BTreeSet<_>>();
+    let expected_files = BTreeSet::from(
+        [MANIFEST, NETWORK_DIRECTORY, PROVIDERS_DIRECTORY].map(std::ffi::OsString::from),
+    );
     assert_eq!(
         inventory
-            .entries(8)
+            .entries(expected_files.len())
             .unwrap()
             .into_iter()
             .collect::<BTreeSet<_>>(),
@@ -249,23 +279,64 @@ fn managed_authority_genesis_registers_grants_funds_and_keeps_services_disabled(
     );
     let public_bytes = inventory.read(MANIFEST, MAX_MANIFEST).unwrap();
     let public_text = std::str::from_utf8(&public_bytes).unwrap();
-    for authority in &manifest.authorities {
-        let bytes = inventory
+    let network_directory = inventory.open_child(NETWORK_DIRECTORY).unwrap();
+    let network_files = NETWORK_ROLES
+        .into_iter()
+        .map(|role| role.credential_filename())
+        .chain(network_material::COUNCIL_KEYS)
+        .map(std::ffi::OsString::from)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        network_directory
+            .entries(network_files.len())
+            .unwrap()
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        network_files
+    );
+    for authority in &manifest.network.authorities {
+        let bytes = network_directory
             .read(authority.role.credential_filename(), 256)
             .unwrap();
-        let private = std::str::from_utf8(bytes.strip_suffix(b"\n").unwrap()).unwrap();
-        assert!(!public_text.contains(private));
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            assert_eq!(
-                fs::metadata(inventory.path().join(authority.role.credential_filename()))
-                    .unwrap()
-                    .permissions()
-                    .mode()
-                    & 0o7777,
-                0o600
-            );
+        assert!(
+            !public_text.contains(std::str::from_utf8(bytes.strip_suffix(b"\n").unwrap()).unwrap())
+        );
+    }
+    let expected_files = ROLES
+        .into_iter()
+        .map(|role| role.credential_filename())
+        .chain(provider_material::filenames())
+        .chain(compliance_material::filenames())
+        .map(std::ffi::OsString::from)
+        .collect::<BTreeSet<_>>();
+    for provider in &manifest.providers {
+        let directory = open_provider_directory(&inventory, provider.slot).unwrap();
+        assert_eq!(
+            directory
+                .entries(expected_files.len())
+                .unwrap()
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            expected_files
+        );
+        for authority in &provider.authorities {
+            let bytes = directory
+                .read(authority.role.credential_filename(), 256)
+                .unwrap();
+            let private = std::str::from_utf8(bytes.strip_suffix(b"\n").unwrap()).unwrap();
+            assert!(!public_text.contains(private));
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                assert_eq!(
+                    fs::metadata(directory.path().join(authority.role.credential_filename()))
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o7777,
+                    0o600
+                );
+            }
         }
     }
     let metadata =
@@ -279,10 +350,14 @@ fn managed_authority_genesis_registers_grants_funds_and_keeps_services_disabled(
         .unwrap();
         assert_eq!(
             config.gov.sorafs_provider_owners,
-            std::collections::BTreeMap::from([(
-                manifest.provider_id,
-                manifest.authorities[0].account.clone(),
-            )])
+            manifest
+                .providers
+                .iter()
+                .map(|provider| (
+                    provider.provider_id,
+                    provider.authorities[0].account.clone()
+                ))
+                .collect::<std::collections::BTreeMap<_, _>>()
         );
         assert_eq!(
             configured_execution_policy(&config).unwrap(),
@@ -317,19 +392,53 @@ fn managed_authority_genesis_registers_grants_funds_and_keeps_services_disabled(
             &signed,
             &config,
             |_, staged| {
-                use iroha_core::smartcontracts::ValidSingularQuery as _;
+                use iroha_core::{
+                    smartcontracts::ValidSingularQuery as _, state::WorldReadOnly as _,
+                };
+                let compliance_role: RoleId = "sorafs_gateway_compliance_operator".parse().unwrap();
+                assert!(
+                    staged
+                        .world()
+                        .account_roles_iter(&manifest.manager)
+                        .any(|role| role == &compliance_role)
+                );
+                assert_eq!(
+                    staged
+                        .world()
+                        .role(&compliance_role)
+                        .unwrap()
+                        .permissions()
+                        .len(),
+                    0
+                );
+                let manager = iroha_data_model::query::account::prelude::FindAccountById {
+                    id: manifest.manager.clone(),
+                }
+                .execute(staged)
+                .map_err(|_| eyre!("native genesis has no compliance manager"))?;
+                assert_eq!(
+                    manager.metadata().get(MATERIAL_METADATA),
+                    Some(&Json::new(
+                        profile_commitment(
+                            &manifest.manager,
+                            &manifest.network,
+                            &manifest.providers
+                        )
+                        .unwrap()
+                    ))
+                );
                 let owner = iroha_data_model::query::sorafs::prelude::FindSorafsProviderOwner {
-                    provider_id: manifest.provider_id,
+                    provider_id: manifest.providers[0].provider_id,
                 }
                 .execute(staged)
                 .map_err(|_| eyre!("native genesis has no provider owner"))?;
                 for (id, role) in [
                     (
-                        &manifest.reserve_accounts.custody,
+                        &manifest.network.reserve_accounts.custody,
                         ReserveAccountRole::ReserveCustody,
                     ),
                     (
-                        &manifest.reserve_accounts.treasury,
+                        &manifest.network.reserve_accounts.treasury,
                         ReserveAccountRole::ReserveTreasury,
                     ),
                 ] {
@@ -348,10 +457,15 @@ fn managed_authority_genesis_registers_grants_funds_and_keeps_services_disabled(
                             id: asset_id.clone()
                         }
                         .execute(staged),
-                        Err(iroha_data_model::query::error::QueryExecutionFail::Find(
-                            iroha_data_model::query::error::FindError::Asset(Box::new(asset_id)),
-                        )
-                        .into()),
+                        Err(
+                            iroha_core::execution_attempt::ExecutionAttemptError::Rejected(
+                                iroha_data_model::query::error::QueryExecutionFail::Find(
+                                    iroha_data_model::query::error::FindError::Asset(Box::new(
+                                        asset_id
+                                    )),
+                                ),
+                            )
+                        ),
                         "native reserve accounts start without a funded asset",
                     );
                 }
@@ -362,7 +476,7 @@ fn managed_authority_genesis_registers_grants_funds_and_keeps_services_disabled(
         )
         .unwrap();
     assert_eq!(receipt.genesis().hash(), block.hash());
-    assert_eq!(owner, manifest.authorities[0].account);
+    assert_eq!(owner, manifest.providers[0].authorities[0].account);
     assert_eq!(policy, configured_execution_policy(&config).unwrap());
     let mut external_compliance = config;
     external_compliance.nexus.compliance.enabled = true;
@@ -401,9 +515,9 @@ fn retained_owner_seed_rejects_config_drift_and_reopens_exact_original() {
                         .as_table_mut()
                         .unwrap();
                     owners.insert(
-                        hex::encode(manifest.provider_id.as_bytes()),
+                        hex::encode(manifest.providers[0].provider_id.as_bytes()),
                         toml::Value::String(account_id_runtime_literal(
-                            &manifest.authorities[1].account,
+                            &manifest.providers[0].authorities[1].account,
                             Some(
                                 prepared
                                     .context
@@ -423,7 +537,7 @@ fn retained_owner_seed_rejects_config_drift_and_reopens_exact_original() {
                     owners.insert(
                         hex::encode([0xA5; 32]),
                         toml::Value::String(account_id_runtime_literal(
-                            &manifest.authorities[0].account,
+                            &manifest.providers[0].authorities[0].account,
                             Some(
                                 prepared
                                     .context
@@ -493,11 +607,17 @@ fn retained_authority_inventory_and_credentials_reject_substitution() {
         let mut changed = initial.clone();
         match mutation {
             0 => std::mem::swap(
-                &mut changed.reserve_accounts.custody,
-                &mut changed.reserve_accounts.treasury,
+                &mut changed.network.reserve_accounts.custody,
+                &mut changed.network.reserve_accounts.treasury,
             ),
-            1 => changed.reserve_accounts.custody = changed.authorities[0].account.clone(),
-            2 => changed.reserve_accounts = reserve_accounts(ProviderId::new([0xA1; 32])),
+            1 => {
+                changed.network.reserve_accounts.custody =
+                    changed.providers[0].authorities[0].account.clone()
+            }
+            2 => {
+                changed.network.reserve_accounts =
+                    reserve_accounts(&changed.providers[1].authorities[0].account).unwrap()
+            }
             _ => unreachable!(),
         }
         inventory
@@ -516,7 +636,14 @@ fn retained_authority_inventory_and_credentials_reject_substitution() {
         .write_atomic(MANIFEST, &original, PublishMode::Replace)
         .unwrap();
     let mut missing: norito::json::Value = norito::json::from_slice(&original).unwrap();
-    missing.as_object_mut().unwrap().remove("reserve_accounts");
+    missing
+        .as_object_mut()
+        .unwrap()
+        .get_mut("network")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("reserve_accounts");
     assert!(
         norito::json::from_value::<StreamTokenAuthorityManifest>(missing).is_err(),
         "reserve identity is mandatory"
@@ -534,7 +661,7 @@ fn retained_authority_inventory_and_credentials_reject_substitution() {
     );
     fs::remove_file(inventory.path().join("reserve-custody.key")).unwrap();
     let mut manifest: StreamTokenAuthorityManifest = norito::json::from_slice(&original).unwrap();
-    manifest.authorities.swap(0, 1);
+    manifest.providers[0].authorities.swap(0, 1);
     inventory
         .write_atomic(
             MANIFEST,
@@ -546,19 +673,20 @@ fn retained_authority_inventory_and_credentials_reject_substitution() {
     inventory
         .write_atomic(MANIFEST, &original, PublishMode::Replace)
         .unwrap();
-    let observer = inventory
+    let credentials = open_provider_directory(&inventory, 0).unwrap();
+    let observer = credentials
         .read(
             StreamTokenAuthorityRole::IssuerObserver.credential_filename(),
             256,
         )
         .unwrap();
-    let operator = inventory
+    let operator = credentials
         .read(
             StreamTokenAuthorityRole::IssuerOperator.credential_filename(),
             256,
         )
         .unwrap();
-    inventory
+    credentials
         .write_atomic(
             StreamTokenAuthorityRole::IssuerOperator.credential_filename(),
             &observer,
@@ -566,7 +694,7 @@ fn retained_authority_inventory_and_credentials_reject_substitution() {
         )
         .unwrap();
     assert!(prepared.stream_token_authorities().is_err());
-    inventory
+    credentials
         .write_atomic(
             StreamTokenAuthorityRole::IssuerOperator.credential_filename(),
             &operator,
@@ -575,15 +703,20 @@ fn retained_authority_inventory_and_credentials_reject_substitution() {
         .unwrap();
     // Preserve the canonical role order and replace both matching credentials: account
     // registration/funding sets alone cannot detect this reinterpretation of signed genesis.
-    for (left, right) in [(4, 5), (2, 3)] {
+    for (left, right) in [(4, 5), (2, 3), (6, 7), (7, 8)] {
         let mut paired: StreamTokenAuthorityManifest = norito::json::from_slice(&original).unwrap();
-        let left_name = paired.authorities[left].role.credential_filename();
-        let right_name = paired.authorities[right].role.credential_filename();
-        let left_key = inventory.read(left_name, 256).unwrap();
-        let right_key = inventory.read(right_name, 256).unwrap();
-        let left_account = paired.authorities[left].account.clone();
-        paired.authorities[left].account = paired.authorities[right].account.clone();
-        paired.authorities[right].account = left_account;
+        let left_name = paired.providers[0].authorities[left]
+            .role
+            .credential_filename();
+        let right_name = paired.providers[0].authorities[right]
+            .role
+            .credential_filename();
+        let left_key = credentials.read(left_name, 256).unwrap();
+        let right_key = credentials.read(right_name, 256).unwrap();
+        let left_account = paired.providers[0].authorities[left].account.clone();
+        paired.providers[0].authorities[left].account =
+            paired.providers[0].authorities[right].account.clone();
+        paired.providers[0].authorities[right].account = left_account;
         inventory
             .write_atomic(
                 MANIFEST,
@@ -591,20 +724,20 @@ fn retained_authority_inventory_and_credentials_reject_substitution() {
                 PublishMode::Replace,
             )
             .unwrap();
-        inventory
+        credentials
             .write_atomic(left_name, &right_key, PublishMode::Replace)
             .unwrap();
-        inventory
+        credentials
             .write_atomic(right_name, &left_key, PublishMode::Replace)
             .unwrap();
         assert!(
             prepared.stream_token_authorities().is_err(),
             "signed genesis fixes each original role"
         );
-        inventory
+        credentials
             .write_atomic(left_name, &left_key, PublishMode::Replace)
             .unwrap();
-        inventory
+        credentials
             .write_atomic(right_name, &right_key, PublishMode::Replace)
             .unwrap();
         inventory
@@ -638,7 +771,7 @@ fn retained_authority_inventory_and_credentials_reject_substitution() {
     );
     let alias = inventory.path().join("linked-key");
     fs::hard_link(
-        inventory
+        credentials
             .path()
             .join(StreamTokenAuthorityRole::IssuerOperator.credential_filename()),
         &alias,
@@ -650,6 +783,8 @@ fn retained_authority_inventory_and_credentials_reject_substitution() {
     );
     fs::remove_file(alias).unwrap();
     prepared.stream_token_authorities().unwrap().unwrap();
+    // Parent publication requires releasing its original descendant directory custody.
+    drop(credentials);
     let removed = inventory
         .rename_to_sibling("removed-native-authorities", PublishMode::CreateNew)
         .unwrap();

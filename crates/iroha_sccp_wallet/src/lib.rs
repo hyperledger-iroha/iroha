@@ -12,7 +12,7 @@
 //!   deployments per Taira `NetworkId`), kept in its own file beside the
 //!   client config until the `iroha` client config root nests it;
 //! - `journal`: the resumable journal keyed by `NetworkId`, built on
-//!   `iroha_wallet::operation_journal`.
+//!   `iroha_operation_journal`.
 //!
 //! This crate is never linked into `irohad`; the `sccp_wallet` layer in
 //! `ci/dependency_budget.json` enforces that boundary.

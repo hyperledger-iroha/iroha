@@ -430,6 +430,38 @@ fn execution_output_rejects_foreign_sources_phases_and_duplicate_candidates() {
 }
 
 #[test]
+fn execution_output_duplicate_tracking_obeys_the_original_native_allocation_scope() {
+    let inputs = [input()];
+    let rows = [network()];
+    let scratch = std::alloc::Layout::array::<&PipelineInvocationV1>(rows.len())
+        .unwrap()
+        .size()
+        + std::alloc::Layout::array::<Hash>(rows.len())
+            .unwrap()
+            .size();
+    let limits = norito::DecodeLimits::new(16, 1024, 128, scratch - 1, 16);
+    let (result, usage) = norito::core::with_decode_limits_measured(limits, || {
+        validate_execution_outputs_v1(&rows, proposal(), 8, &inputs)
+    });
+    assert!(result.unwrap_err().contains("original allocation scope"));
+    assert_eq!(
+        usage.total_allocated_bytes(),
+        0,
+        "the complete two-vector scratch must refuse before any tracking allocation"
+    );
+    let limits = norito::DecodeLimits::new(16, 1024, 128, scratch, 16);
+    let (result, usage) = norito::core::with_decode_limits_measured(limits, || {
+        validate_execution_outputs_v1(&rows, proposal(), 8, &inputs)
+    });
+    result.unwrap();
+    assert_eq!(
+        usage.total_allocated_bytes(),
+        scratch,
+        "borrowed invocation references and exact call hashes consume only their admitted layouts"
+    );
+}
+
+#[test]
 fn execution_output_allows_real_candidate_gaps_but_not_event_order_reversal() {
     let inputs = vec![input()];
     let mut first = pipeline();
@@ -833,7 +865,7 @@ fn execution_inputs_borrow_slices_arrays_vectors_and_block_sources() {
         unreachable!()
     };
     builder.push_transaction(signed);
-    let block = builder.build(std::collections::BTreeSet::default());
+    let block = builder.build(crate::block::BlockSignatures::default());
     check(&block, block.network_entrypoint_at(0).unwrap());
 }
 

@@ -2,6 +2,7 @@
 
 use super::Client;
 use super::evidence_http_tests::{base_url, client_with_base_url};
+use crate::collections::{Collection, ListQuery, Page, field};
 use crate::{
     Error, blocking,
     http::{HttpTransport, Method, Response, TransportFuture, TransportRequest},
@@ -49,7 +50,7 @@ use std::{
     },
     time::Duration,
 };
-use wire::{SubscriptionCancelMode, SubscriptionListParams, SubscriptionPlanListParams};
+use wire::SubscriptionCancelMode;
 
 type Responder = dyn Fn(&RequestSnapshot) -> eyre::Result<Response<Vec<u8>>> + Send + Sync;
 
@@ -366,27 +367,20 @@ fn plan_response(
 }
 fn respond(client: &Client, snapshot: &RequestSnapshot) -> Response<Vec<u8>> {
     let path = snapshot.url.path();
+    if path.ends_with("/query") {
+        return json(&Page::<norito::json::Value> {
+            items: Vec::new(),
+            total: Some(0),
+            next_cursor: None,
+        });
+    }
     if snapshot.method == Method::GET {
-        return match path {
-            "/v1/subscriptions/plans" => json(&wire::SubscriptionPlanListResponse {
-                items: Vec::new(),
-                total: Some(0),
-                has_more: false,
-                count_mode: "exact".to_owned(),
-            }),
-            "/v1/subscriptions" => json(&wire::SubscriptionListResponse {
-                items: Vec::new(),
-                total: Some(0),
-                has_more: false,
-                count_mode: "exact".to_owned(),
-            }),
-            _ => json(&wire::SubscriptionGetResponse {
-                subscription_id: id(),
-                subscription: state(&client.account),
-                invoice: None,
-                plan: None,
-            }),
-        };
+        return json(&wire::SubscriptionGetResponse {
+            subscription_id: id(),
+            subscription: state(&client.account),
+            invoice: None,
+            plan: None,
+        });
     }
     if path == "/v1/subscriptions/plans" {
         let request = norito::json::from_slice(&snapshot.body).unwrap();
@@ -440,22 +434,28 @@ async fn all_eleven_operations_use_async_transport_and_exact_authority() {
     let account = client.account_client().unwrap();
     let public = client.subscriptions();
     let private = account.subscriptions();
-    let params = SubscriptionPlanListParams {
-        provider: Some(client.account.to_string()),
-        limit: Some(10),
-        offset: 2,
-        count_mode: Some("exact".to_owned()),
-    };
-    public.list_plans(&params).await.unwrap();
-    public
-        .list(&SubscriptionListParams {
-            owned_by: Some(client.account.to_string()),
-            provider: Some(client.account.to_string()),
-            status: Some("active".to_owned()),
-            limit: Some(10),
-            offset: 3,
-            count_mode: Some("exact".to_owned()),
-        })
+    let params = ListQuery::new()
+        .filter(field("provider").eq(client.account.to_string()))
+        .limit(10)
+        .cursor("plans-cursor")
+        .include_total();
+    client
+        .list_page(&Collection::SubscriptionPlans, &params)
+        .await
+        .unwrap();
+    client
+        .list_page(
+            &Collection::Subscriptions,
+            &ListQuery::new()
+                .filter(
+                    field("owned_by").eq(client.account.to_string())
+                        & field("provider").eq(client.account.to_string())
+                        & field("status").eq("active"),
+                )
+                .limit(10)
+                .cursor("subscriptions-cursor")
+                .include_total(),
+        )
         .await
         .unwrap();
     public.get(&id()).await.unwrap();
@@ -492,7 +492,7 @@ async fn all_eleven_operations_use_async_transport_and_exact_authority() {
     assert_eq!(requests.len(), 11);
     for snapshot in requests.iter() {
         assert_eq!(snapshot.max_response_bytes, 64 * 1024 * 1024);
-        if snapshot.method == Method::POST {
+        if snapshot.method == Method::POST && !snapshot.url.path().ends_with("/query") {
             super::tests::assert_canonical_account_signed_json_request(&client, snapshot);
             let body: norito::json::Value = norito::json::from_slice(&snapshot.body).unwrap();
             assert_eq!(
@@ -507,15 +507,23 @@ async fn all_eleven_operations_use_async_transport_and_exact_authority() {
                     .iter()
                     .any(|(name, _)| name.eq_ignore_ascii_case("X-Iroha-Signature"))
             );
-            if snapshot.url.path() == "/v1/subscriptions/plans"
-                || snapshot.url.path() == "/v1/subscriptions"
-            {
-                assert!(
-                    snapshot
-                        .url
-                        .query_pairs()
-                        .any(|(key, value)| key == "count_mode" && value == "exact")
+            if snapshot.url.path().ends_with("/query") {
+                assert_eq!(snapshot.method, Method::POST);
+                assert!(snapshot.url.query().is_none());
+                let query =
+                    ListQuery::from_json_value(norito::json::from_slice(&snapshot.body).unwrap())
+                        .unwrap();
+                assert!(query.include_total);
+                assert_eq!(query.limit, Some(10));
+                assert_eq!(
+                    query.cursor.as_deref(),
+                    Some(if snapshot.url.path().contains("/plans/") {
+                        "plans-cursor"
+                    } else {
+                        "subscriptions-cursor"
+                    })
                 );
+                assert!(query.filter.is_some());
             }
         }
     }
@@ -540,11 +548,10 @@ async fn public_queries_remain_responsive_and_deadlines_cover_injected_transport
     });
     assert!(matches!(
         client
-            .subscriptions()
-            .list(&SubscriptionListParams::default())
+            .list_page(&Collection::Subscriptions, &ListQuery::new())
             .await,
         Err(Error::Timeout {
-            operation: "subscriptions.list"
+            operation: "collections.subscriptions"
         })
     ));
     ticker.await.unwrap();
@@ -628,11 +635,10 @@ async fn duplicate_response_content_types_are_rejected_without_replay() {
         let (client, _, calls) = attach(
             client_with_base_url(base_url()),
             move |_| {
-                let mut response = json(&wire::SubscriptionListResponse {
+                let mut response = json(&Page::<norito::json::Value> {
                     items: Vec::new(),
                     total: Some(0),
-                    has_more: false,
-                    count_mode: "exact".to_owned(),
+                    next_cursor: None,
                 });
                 response
                     .headers_mut()
@@ -643,11 +649,10 @@ async fn duplicate_response_content_types_are_rejected_without_replay() {
         );
         assert!(matches!(
             client
-                .subscriptions()
-                .list(&SubscriptionListParams::default())
+                .list_page(&Collection::Subscriptions, &ListQuery::new())
                 .await,
             Err(Error::Decode {
-                operation: "subscriptions.list",
+                operation: "collections.subscriptions",
                 ..
             })
         ));
@@ -789,18 +794,28 @@ async fn payload_drafts_reject_unrequested_fixed_transaction_fields() {
                     .prepare_plan(&plan_id(), &plan(client.account.clone()))
                     .await
             };
-            assert_eq!(
-                result.unwrap_err(),
-                Error::ResponseBinding {
-                    operation: if usage {
-                        "subscriptions.prepare_usage"
-                    } else {
-                        "subscriptions.prepare_plan"
-                    },
-                    field,
-                },
-                "must reject {mutation} on the requested operation"
-            );
+            {
+                let actual_error = result.unwrap_err();
+                let Error::ResponseBinding {
+                    operation: actual_operation,
+                    field: actual_field,
+                } = &actual_error
+                else {
+                    panic!("unexpected SDK error: {actual_error:?}");
+                };
+                assert_eq!(
+                    (actual_operation, actual_field,),
+                    (
+                        &(if usage {
+                            "subscriptions.prepare_usage"
+                        } else {
+                            "subscriptions.prepare_plan"
+                        }),
+                        &(field),
+                    ),
+                    "must reject {mutation} on the requested operation"
+                );
+            };
             assert_eq!(calls.load(Ordering::SeqCst), 1);
         }
     }
@@ -934,8 +949,7 @@ fn blocking_subscription_contexts_reuse_async_dispatch_and_reject_nested_runtime
     account.clone().subscriptions().prepare_keep(&id()).unwrap();
     let public = blocking::Client::from_client(client).unwrap();
     public
-        .subscriptions()
-        .list_plans(&SubscriptionPlanListParams::default())
+        .list_page(&Collection::SubscriptionPlans, &ListQuery::new())
         .unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 3);
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -950,9 +964,7 @@ fn blocking_subscription_contexts_reuse_async_dispatch_and_reject_nested_runtime
             ))
         ));
         assert!(matches!(
-            public
-                .subscriptions()
-                .list(&SubscriptionListParams::default()),
+            public.list_page(&Collection::Subscriptions, &ListQuery::new()),
             Err(Error::Blocking(
                 blocking::BlockingCallError::AsyncRuntime { .. }
             ))
@@ -972,8 +984,8 @@ fn subscription_context_futures_are_send_and_drafts_stay_compact() {
     let account = client.account_client().unwrap();
     let public = client.subscriptions();
     let private = account.subscriptions();
-    require_send(public.list_plans(&SubscriptionPlanListParams::default()));
-    require_send(public.list(&SubscriptionListParams::default()));
+    require_send(client.list_page(&Collection::SubscriptionPlans, &ListQuery::new()));
+    require_send(client.list_page(&Collection::Subscriptions, &ListQuery::new()));
     require_send(public.get(&id()));
     require_send(private.prepare_plan(&plan_id(), &plan(client.account.clone())));
     require_send(private.prepare(&intent()));

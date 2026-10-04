@@ -1,72 +1,40 @@
 //! Supervised deployment boundary for the private Musubi publication service.
 //!
-//! The stock daemon injects nothing and therefore opens no publication listener. A deployment
-//! may construct the transport-independent service from `iroha_musubi_service`, retain its TLS
-//! and signing material outside argv and repository configuration, and inject an authenticated
-//! HTTPS ingress here. This module never routes through Torii or the daemon-private runtime
-//! provider broker. The Unix seed-staging backend holds exact verified CAR bytes in a bounded,
-//! handle-pinned directory and releases them only after the daemon-owned finalized registration
-//! reader succeeds; it is a custody component, not a complete publication runner.
-//! The local factory reopens the original journal, seed owners, and clock under the exact daemon
-//! network, but never enables the private ingress without the remaining qualified adapters.
-//! A separate read-only pin-registration reader checks the exact signed instruction, successful
-//! finalized output, and current pin record; it does not provide signing or queue submission.
+//! An explicit installation selects original signed-genesis transport intent and ordinary
+//! account signers after State exists. Startup reopens the original publication journal,
+//! seed custody, native pin session and clock before binding its dedicated private TLS listener.
+//! Standard profiles without installation remain inert; ambiguous injected/configured factories
+//! refuse. Fresh native finality and account-read verification remain mandatory for every
+//! provider observation, independently of TLS intent or listener construction.
 mod finality;
-#[cfg(unix)]
 mod local_custody;
-#[cfg(unix)]
 mod local_factory;
-#[cfg(unix)]
-mod pin_intent_outbox;
-#[cfg(unix)]
-mod pin_outbox_checked;
-#[cfg(unix)]
-mod pin_outbox_finality;
-#[cfg(unix)]
-mod pin_recovery;
+mod native_pin;
+mod native_storage;
+pub(crate) mod stock_installation;
+pub use native_storage::{NativeMusubiStorageBuilderV1, NativeMusubiStorageLimitsV1};
 mod pin_registration;
 mod pin_signer;
 mod private_tls_ingress;
 mod provider_readback;
-#[cfg(unix)]
-mod seed_staging;
-#[cfg(unix)]
 mod shared_seed_staging;
-#[cfg(unix)]
 mod storage_coordination;
 pub use finality::{
     MusubiPublicationFinalizedArchiveRegistrationQueryV1,
     MusubiPublicationFinalizedArchiveRegistrationReadErrorV1,
     MusubiPublicationFinalizedArchiveRegistrationReaderV1,
 };
-#[cfg(unix)]
 pub use local_custody::{
     MusubiPublicationPrivateLocalCustodyErrorV1, MusubiPublicationPrivateLocalCustodyV1,
 };
-#[cfg(unix)]
 pub use local_factory::{
     MusubiPublicationPrivateIngressBuilderV1, MusubiPublicationPrivateLocalFactorySettingsV1,
     MusubiPublicationPrivateLocalFactoryV1, MusubiPublicationPrivateStorageBuilderV1,
 };
-#[cfg(unix)]
-pub use pin_intent_outbox::{
-    DurableMusubiPinIntentOutboxV1, MusubiPinIntentOutboxErrorV1, MusubiPinIntentOutboxLimitsV1,
-    MusubiPinIntentOutboxLocalAuditV1, MusubiRecoveredSignedPinIntentV1,
-};
-#[cfg(unix)]
-pub use pin_outbox_checked::{
-    MusubiPinOutboxCheckedRecoveryV1, MusubiPinOutboxCheckedStageV1,
-    MusubiPublicationPinOutboxCheckedCoordinatorV1,
-};
-#[cfg(unix)]
-pub use pin_outbox_finality::{
-    MusubiPublicationPinOutboxHighWaterReadErrorV1, MusubiPublicationPinOutboxHighWaterReaderV1,
-    MusubiPublicationPinOutboxLocalAnchorV1,
-};
-#[cfg(unix)]
-pub use pin_recovery::{
-    MusubiPublicationPinRecoveryErrorV1, MusubiPublicationPinRecoveryV1,
-    MusubiPublicationRecoveredFinalizedPinV1,
+pub use native_pin::{
+    NativeMusubiFinalizedPinV1, NativeMusubiPinCheckRefusalV1, NativeMusubiPinCoordinatorV1,
+    NativeMusubiPinOriginalV1, NativeMusubiPinPhaseV1, NativeMusubiPinProgressV1,
+    NativePinAuthorizationV1,
 };
 pub use pin_registration::{
     MusubiPublicationFinalizedPinRegistrationQueryV1,
@@ -78,58 +46,14 @@ pub use private_tls_ingress::{
     MusubiPublicationPrivateTlsIngressBuilderV1, MusubiPublicationPrivateTlsSettingsV1,
 };
 pub use provider_readback::MusubiPublicationAuthenticatedProviderReadbackV1;
-#[cfg(unix)]
-pub use seed_staging::{MusubiSeedStagingBackendV1, MusubiSeedStagingErrorV1};
-#[cfg(unix)]
 pub use shared_seed_staging::{
-    MusubiPublicationFinalizedSeedReadCapabilityV1, MusubiPublicationFinalizedSeedReadLeaseV1,
+    MusubiPublicationFinalizedSeedReadCapabilityV1, MusubiPublicationFinalizedSeedReadErrorV1,
+    MusubiPublicationFinalizedSeedReadLeaseV1,
 };
-// TODO: Supply a deployment-qualified runner only after the production boundaries below exist.
-// The stock tree deliberately cannot assemble one from the current SoraFS/Torii primitives:
-//
-// 1. provider ingest durably binds a V5 network/archive authorization context, accepts only
-//    monotonic finalized observations over the retained admission cursor, and keeps generic and
-//    Musubi receipt shapes disjoint. The finalized reader can seal the local provider's exact
-//    opaque completed-row claim, and a fresh verifier result can derive an externally inert
-//    approval request. The bounded capture driver performs the fresh verifier pass. The concrete
-//    external software custody leaf consumes only that opaque approval request, validates its full
-//    public subject, and durably replays a fixed sorted controller set. Deployment qualification
-//    and daemon installation of that driver, signer and existing governed wrapper remain;
-// 2. the approved provider attestation has a bounded journal and an inert, root-fenced local
-//    two-slot CAS adapter with a fixed 128 MiB checkpoint/payload ceiling on Linux/macOS. Its bound
-//    cross-process composite operation lease authenticates the committed initialization-lock
-//    identity plus separate checkpoint-head and immutable-blob namespaces. It binds the exact
-//    network/provider and rejects online substitution, torn writes, and divergent lineage, but is
-//    not daemon-wired; external rollback-resistant provider/session/singleton deployment and
-//    fault/platform qualification remain;
-// 3. the authenticated provider-attestation inventory/coordinator handoff needs production SoraFS
-//    pin/replication mutation APIs and must consume the implemented daemon-owned finalized archive
-//    registration reader before submitting or reconciling those mutations;
-// 4. the authenticated readback transport verifies the full plan/CAR/bundle and rechecks one
-//    coherent current State archive/location/provider cut and council-admitted exact HTTPS advert
-//    on both sides of the fetch. Complete State-root witness publication, live council-admission
-//    refresh, and independent replica readback qualification remain; and
-// 5. the daemon-owned factory assembles the recovered journal, seed backend, durable clock,
-//    runtime signer, authenticated readback, and finalized reader into the service core. The
-//    bounded private TLS ingress and its public listen/mount/concurrency settings exist, but
-//    stock startup has no qualified provider coordinator, runtime credentials, or installation
-//    path; complete network qualification still gates activation.
-//
-// The publication protocol core, publication-service durable clock and replay journal, typed
-// supervisor dependency, provider-attestation journal, inert local two-slot store with its bound
-// composite operation lease, bounded local seed custody, and read-only authoritative
-// archive-registration reader exist. The daemon-local factory reopens the initialized journal
-// before pinning seed custody, opens the durable clock, and retains the same-network finalized
-// reader through its injected storage backend.
-// The bounded finalized-completion capture driver and replay-stable software signer leaf also
-// exist. Their deployment qualification, authenticated inventory adapter, daemon wiring,
-// external rollback-resistant provider/session/singleton deployment, and production fault/platform
-// qualification remain incomplete.
-// Until every boundary above is implemented and deployment-qualified, stock `irohad` must keep the
-// routes absent. In particular, do not
-// substitute an in-memory backend, treat the local two-slot store as protection from privileged
-// offline rollback, treat a public query response or publisher-supplied bytes as finality evidence,
-// or revive the retired public Torii upload path.
+// TODO: Qualify the complete generated multi-provider publication, independent replica
+// readback, crash/resource behavior and supported platforms end to end. The stock assembly
+// and genuine component controls do not establish release readiness. Never substitute cached
+// advertisements, publisher claims or result-only genesis for current certified native state.
 use iroha_core::{queue::Queue, state::State};
 use iroha_data_model::NetworkId;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
@@ -145,6 +69,7 @@ pub struct MusubiPublicationPrivateServiceContextV1 {
     state: Arc<State>,
     queue: Arc<Queue>,
     sorafs_node: sorafs_node::NodeHandle,
+    provider_attestations: Option<Arc<dyn sorafs_node::MusubiProviderAttestationInventoryReaderV1>>,
 }
 impl core::fmt::Debug for MusubiPublicationPrivateServiceContextV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -167,7 +92,25 @@ impl MusubiPublicationPrivateServiceContextV1 {
             state,
             queue,
             sorafs_node,
+            provider_attestations: None,
         }
+    }
+    pub(crate) fn with_native_provider_attestation_inventory(
+        mut self,
+        inventory: Option<Arc<dyn sorafs_node::MusubiProviderAttestationInventoryReaderV1>>,
+    ) -> Self {
+        self.provider_attestations = inventory;
+        self
+    }
+    /// Borrow the exact native provider's locally retained signed-attestation inventory.
+    ///
+    /// This is the same owner used by the supervised capture journal. It grants read access only;
+    /// it proves neither native registry inclusion nor current eligibility. The existing publication
+    /// coordinator must retain its original manager-signed Register and verify native readback.
+    pub fn provider_attestation_inventory(
+        &self,
+    ) -> Option<Arc<dyn sorafs_node::MusubiProviderAttestationInventoryReaderV1>> {
+        self.provider_attestations.clone()
     }
     /// Exact genesis-derived network identity already validated by daemon startup.
     #[must_use]
@@ -250,14 +193,14 @@ pub trait MusubiPublicationPrivateServiceRunnerV1: Send + 'static {
     /// Serve until shutdown while forwarding bounded requests to the publication service core.
     ///
     /// Implementations must enforce TLS, reject duplicate security-sensitive headers, bound the
-    /// body before allocation, strip only their configured private mount prefix, and pass the
+    /// body before allocation, accept only the three exact route paths, and pass the
     /// exact uppercase method plus path/header/body values to
     /// `iroha_musubi_service::MusubiPublicationPrivateServiceV1`.
     /// The runner owns that core together with its injected durable journal, signer, and
     /// `SoraFS` backends; `irohad` never receives those secrets or dependency objects.
     fn serve(self: Box<Self>, shutdown: ShutdownSignal) -> MusubiPublicationPrivateIngressFutureV1;
 }
-/// Complete injected private-service deployment assembled outside stock `irohad` configuration.
+/// Complete private-service deployment assembled from explicit runtime installation or injection.
 pub struct MusubiPublicationPrivateDeploymentV1 {
     runner: Box<dyn MusubiPublicationPrivateServiceRunnerV1>,
 }
@@ -365,12 +308,9 @@ mod tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    #[cfg(unix)]
     use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair};
-    #[cfg(unix)]
     use iroha_data_model::{account::AccountId, block::BlockHeader, sorafs::capacity::ProviderId};
     use iroha_futures::supervisor::Supervisor;
-    #[cfg(unix)]
     use iroha_musubi_service::{
         DurableMusubiPublicationServiceClockV1, DurableMusubiPublicationServiceJournalLimitsV1,
         DurableMusubiPublicationServiceJournalOpenErrorV1,
@@ -380,13 +320,13 @@ mod tests {
         MusubiStorageCoordinationBackendV1, MusubiStorageCoordinationRequestV1,
         MusubiStorageCoordinationResponseV1, SoftwareMusubiSeedIngressReceiptSignerV1,
     };
+    use iroha_musubi_service::{MusubiSeedStagingBackendV1, MusubiSeedStagingErrorV1};
     use sorafs_node::config::StorageConfig;
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     };
-    #[cfg(unix)]
-    use std::{fs, os::unix::fs::PermissionsExt as _, path::Path};
+    use std::{fs, path::Path};
     struct EarlyExitRunner;
     impl MusubiPublicationPrivateServiceRunnerV1 for EarlyExitRunner {
         fn serve(
@@ -411,16 +351,29 @@ mod tests {
             })
         }
     }
-    fn factory_context() -> (MusubiPublicationPrivateServiceContextV1, tempfile::TempDir) {
+    struct PrivateTestRoot {
+        // Retained native handles close before the enclosing temporary directory is removed.
+        directory: iroha_fs::PrivateDirectory,
+        _parent: tempfile::TempDir,
+    }
+    impl PrivateTestRoot {
+        fn path(&self) -> &Path {
+            self.directory.path()
+        }
+    }
+    fn factory_context() -> (MusubiPublicationPrivateServiceContextV1, PrivateTestRoot) {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(World::new(), kura, query));
         let (events, _) = tokio::sync::broadcast::channel(1);
         let queue = Arc::new(Queue::from_config(QueueConfig::default(), events));
-        let root = std::env::temp_dir()
-            .canonicalize()
-            .expect("canonical storage fixture parent");
-        let temp = tempfile::tempdir_in(root).expect("private fixture storage");
+        let parent = tempfile::tempdir().expect("fixture storage workspace");
+        let directory = iroha_fs::PrivateDirectory::open_or_create(parent.path().join("private"))
+            .expect("native private fixture storage");
+        let temp = PrivateTestRoot {
+            directory,
+            _parent: parent,
+        };
         let sorafs_node = sorafs_node::NodeHandle::new(
             StorageConfig::builder()
                 .data_dir(temp.path().join("storage"))
@@ -436,56 +389,15 @@ mod tests {
             temp,
         )
     }
-    #[cfg(unix)]
-    #[test]
-    fn daemon_outbox_open_rejects_locally_valid_inventory_without_finalized_anchor() {
-        let (context, temp) = factory_context();
-        let root = temp.path().join("signed-pin-outbox");
-        fs::create_dir(&root).expect("create owner-only outbox");
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
-            .expect("owner-only permissions");
-        let root = root.canonicalize().expect("canonical outbox root");
-        let authority =
-            KeyPair::try_from_seed(vec![0x72; 32], Algorithm::Ed25519).expect("pin authority");
-        let policy = iroha_config::parameters::actual::MusubiPublicationPaidPinPolicy {
-            storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Hot,
-            retention_horizon_secs: 30 * 24 * 60 * 60,
-            transaction_authority: AccountId::new(authority.public_key().clone()),
-        };
-        let limits = MusubiPinIntentOutboxLimitsV1 {
-            max_records: 1,
-            max_total_bytes: 16 * 1024 * 1024,
-        };
-        DurableMusubiPinIntentOutboxV1::initialize(
-            &root,
-            context.network_id(),
-            [0xa1; 32],
-            policy.clone(),
-            limits,
-        )
-        .expect("locally valid immutable outbox marker");
-        assert!(matches!(
-            context.audit_local_pin_intent_outbox(&root, policy.clone(), limits),
-            Err(MusubiPinIntentOutboxErrorV1::MissingFinalizedAnchor)
-        ));
-        assert!(matches!(
-            context.open_pin_intent_outbox(&root, policy, limits),
-            Err(MusubiPinIntentOutboxErrorV1::MissingFinalizedAnchor)
-        ));
-    }
-    #[cfg(unix)]
     #[test]
     fn local_custody_reopens_only_matching_initialized_journal_and_seed_owner() {
         let (context, temporary) = factory_context();
         let journal_root = temporary.path().join("publication-journal");
         let seed_root = temporary.path().join("publication-seeds");
         for root in [&journal_root, &seed_root] {
-            fs::create_dir(root).expect("private custody directory");
-            fs::set_permissions(root, fs::Permissions::from_mode(0o700))
-                .expect("private custody mode");
+            iroha_fs::PrivateDirectory::open_or_create(root)
+                .expect("native private custody directory");
         }
-        let journal_root = journal_root.canonicalize().expect("canonical journal root");
-        let seed_root = seed_root.canonicalize().expect("canonical seed root");
         let broker_key =
             KeyPair::try_from_seed(vec![0x37; 32], Algorithm::Ed25519).expect("broker fixture key");
         let configuration = MusubiPublicationServiceConfigurationV1 {
@@ -521,6 +433,38 @@ mod tests {
                 .expect("explicit one-time initialization");
         assert_eq!(journal.revision(), 1);
         drop(journal);
+        // A missing seed marker refuses after releasing the already acquired journal lease.
+        assert!(matches!(
+            context.open_local_publication_custody(
+                &journal_root,
+                &seed_root,
+                &configuration,
+                limits,
+                2,
+                128 * 1024 * 1024,
+            ),
+            Err(MusubiPublicationPrivateLocalCustodyErrorV1::Seed(
+                MusubiSeedStagingErrorV1::Invalid
+            )),
+        ));
+        assert_eq!(fs::read_dir(&seed_root).unwrap().count(), 0);
+        drop(
+            DurableMusubiPublicationServiceJournalV1::open(
+                &journal_root,
+                MusubiPublicationServiceJournalBindingV1::from_configuration(&configuration),
+                limits,
+            )
+            .expect("failed seed open releases original journal lock"),
+        );
+        drop(
+            MusubiSeedStagingBackendV1::initialize(
+                &seed_root,
+                configuration.seed_provider,
+                2,
+                128 * 1024 * 1024,
+            )
+            .expect("explicit fresh seed ownership"),
+        );
         let custody = context
             .open_local_publication_custody(
                 &journal_root,
@@ -575,11 +519,9 @@ mod tests {
             .expect("restart reopens exact owners");
         assert_eq!(reopened.into_parts().0.revision(), 1);
     }
-    #[cfg(unix)]
     struct RetainingStorageBackend {
         _finalized_reader: MusubiPublicationFinalizedArchiveRegistrationReaderV1,
     }
-    #[cfg(unix)]
     impl MusubiStorageCoordinationBackendV1 for RetainingStorageBackend {
         fn verify_current_registration(
             &self,
@@ -590,15 +532,13 @@ mod tests {
 
         fn coordinate_storage(
             &mut self,
-            _request: &MusubiStorageCoordinationRequestV1,
+            _request: &iroha_musubi_service::VerifiedStorageCoordinationRequestV1<'_>,
         ) -> Result<MusubiStorageCoordinationResponseV1, MusubiPublicationServiceBackendErrorV1>
         {
             Err(MusubiPublicationServiceBackendErrorV1::Retryable)
         }
     }
-    #[cfg(unix)]
     struct RetainingStorageBuilder(Arc<AtomicBool>, AccountId);
-    #[cfg(unix)]
     impl MusubiPublicationPrivateStorageBuilderV1 for RetainingStorageBuilder {
         fn build(
             self: Box<Self>,
@@ -606,6 +546,7 @@ mod tests {
             finalized_reader: MusubiPublicationFinalizedArchiveRegistrationReaderV1,
             finalized_seed: MusubiPublicationFinalizedSeedReadCapabilityV1,
             paid_pin: iroha_config::parameters::actual::MusubiPublicationPaidPinPolicy,
+            mut clock: Box<dyn iroha_musubi_service::MusubiPublicationServiceClockV1>,
         ) -> Result<
             Box<dyn MusubiStorageCoordinationBackendV1>,
             MusubiPublicationPrivateServiceFactoryErrorV1,
@@ -613,6 +554,7 @@ mod tests {
             assert_eq!(context.network_id(), *context.state().network_id_ref());
             assert_eq!(finalized_seed.provider_id(), ProviderId::new([0x38; 32]));
             assert_eq!(paid_pin.transaction_authority, self.1);
+            assert!(clock.current_time_ms().unwrap() > 0);
             assert_eq!(
                 paid_pin.storage_class,
                 iroha_data_model::sorafs::pin_registry::StorageClass::Hot
@@ -624,13 +566,10 @@ mod tests {
             }))
         }
     }
-    #[cfg(unix)]
     struct RetainingIngressBuilder(Arc<AtomicBool>);
-    #[cfg(unix)]
     struct RetainingServiceRunner {
         service: MusubiPublicationPrivateServiceV1,
     }
-    #[cfg(unix)]
     impl MusubiPublicationPrivateServiceRunnerV1 for RetainingServiceRunner {
         fn serve(
             self: Box<Self>,
@@ -643,7 +582,6 @@ mod tests {
             })
         }
     }
-    #[cfg(unix)]
     impl MusubiPublicationPrivateIngressBuilderV1 for RetainingIngressBuilder {
         fn build(
             self: Box<Self>,
@@ -658,7 +596,6 @@ mod tests {
             )))
         }
     }
-    #[cfg(unix)]
     fn write_authenticated_readback_fixture(
         root: &Path,
         network_id: NetworkId,
@@ -666,30 +603,31 @@ mod tests {
     ) -> iroha_storage_client::musubi_archive_fetch::AuthenticatedMusubiArchiveFetchClientV1 {
         let operator =
             KeyPair::try_from_seed(vec![0x39; 32], Algorithm::Ed25519).expect("operator key");
-        let key_path = root.join("operator.key");
-        fs::write(
-            &key_path,
-            format!("{}\n", ExposedPrivateKey(operator.private_key().clone())),
-        )
-        .expect("runtime-only operator key");
-        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))
-            .expect("private operator key");
-        let config_path = root.join("client.toml");
-        fs::write(
-            &config_path,
-            format!(
-                "[musubi.fetch]\nnetwork_id = \"{network_id}\"\n\n[[musubi.fetch.provider_gateways]]\nprovider_id = \"{}\"\nurl = \"https://8.8.8.8/\"\noperator_public_key = \"{}\"\noperator_private_key_file = \"operator.key\"\n",
-                hex::encode(provider.as_bytes()),
-                operator.public_key(),
-            ),
-        )
-        .expect("non-secret fetch configuration");
-        fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))
+        let directory = iroha_fs::PrivateDirectory::open_or_create(root.join("readback"))
+            .expect("native private readback directory");
+        directory
+            .write_atomic(
+                "operator.key",
+                format!("{}\n", ExposedPrivateKey(operator.private_key().clone())).as_bytes(),
+                iroha_fs::PublishMode::CreateNew,
+            )
+            .expect("runtime-only private operator key");
+        let config_path = directory.path().join("client.toml");
+        directory
+            .write_atomic(
+                "client.toml",
+                format!(
+                    "[musubi.fetch]\nnetwork_id = \"{network_id}\"\n\n[[musubi.fetch.provider_gateways]]\nprovider_id = \"{}\"\nurl = \"https://8.8.8.8/\"\noperator_public_key = \"{}\"\noperator_private_key_file = \"operator.key\"\n",
+                    hex::encode(provider.as_bytes()),
+                    operator.public_key(),
+                )
+                .as_bytes(),
+                iroha_fs::PublishMode::CreateNew,
+            )
             .expect("private platform configuration");
         iroha_storage_client::musubi_archive_fetch::AuthenticatedMusubiArchiveFetchClientV1::load_platform_file(&config_path)
             .expect("authenticated provider transport")
     }
-    #[cfg(unix)]
     #[test]
     fn local_factory_retains_exact_recovered_custody_and_finalized_reader() {
         let (context, temporary) = factory_context();
@@ -703,9 +641,8 @@ mod tests {
         let seed_root = temporary.path().join("seed");
         let clock_root = temporary.path().join("clock");
         for root in [&journal_root, &seed_root, &clock_root] {
-            fs::create_dir(root).expect("private custody directory");
-            fs::set_permissions(root, fs::Permissions::from_mode(0o700))
-                .expect("private directory mode");
+            iroha_fs::PrivateDirectory::open_or_create(root)
+                .expect("native private custody directory");
         }
         let broker_key =
             KeyPair::try_from_seed(vec![0x37; 32], Algorithm::Ed25519).expect("broker key");
@@ -736,6 +673,15 @@ mod tests {
         drop(
             DurableMusubiPublicationServiceClockV1::initialize_system(&clock_root)
                 .expect("initialize durable time floor"),
+        );
+        drop(
+            MusubiSeedStagingBackendV1::initialize(
+                &seed_root,
+                service_configuration.seed_provider,
+                2,
+                128 * 1024 * 1024,
+            )
+            .expect("explicit seed ownership before factory startup"),
         );
         let readback_client = write_authenticated_readback_fixture(
             temporary.path(),

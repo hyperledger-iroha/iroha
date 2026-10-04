@@ -201,7 +201,7 @@ public sealed class NoritoRpcFixtureParityTests
             "EntrypointArgumentRecordV1",
             RequireString(fixture.RootElement, "codec", "Kotodama argument-record fixture"));
         Assert.Equal(
-            "ivm::encode_argument_record_from_json",
+            "ivm_abi::arguments::encode_argument_record_from_json",
             RequireString(fixture.RootElement, "generator", "Kotodama argument-record fixture"));
 
         var contract = fixture.RootElement.GetProperty("contract");

@@ -19,7 +19,6 @@ use iroha_model_base::topology::DataSpaceId;
 use ivm_abi::{
     SyscallPolicy, VMError,
     axt::{AxtDescriptor, ProofBlob, validate_descriptor, validate_proof_blob},
-    codec::decode_canonical_norito,
     metadata::{
         EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,
         EmbeddedStateType, HEADER_SIZE, MAX_EMBEDDED_STATE_TYPE_DEPTH_V1, ParsedLiteralSection,
@@ -32,12 +31,7 @@ use std::fmt::Write as _;
 mod policy;
 /// Maximum executable-image bytes admitted by IVM code memory.
 pub const MAX_CONTRACT_IMAGE_BYTES: u64 = ivm_abi::metadata::MAX_PROGRAM_IMAGE_BYTES_V1 as u64;
-/// One fixed-width decoded instruction in the executable stream.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct DecodedOp {
-    pub(crate) pc: u64,
-    pub(crate) inst: u32,
-}
+use decoded::DecodedOp;
 /// Admission outputs derived from the artifact itself.
 #[derive(Clone, Debug)]
 pub struct VerifiedContractArtifact {
@@ -47,6 +41,7 @@ pub struct VerifiedContractArtifact {
     pub header_len: usize,
     /// Absolute executable-stream offset in the artifact.
     pub code_offset: usize,
+    literal_section: Option<ParsedLiteralSection>,
     /// Domain-separated identity of the complete deployable artifact.
     pub code_hash: Hash,
     /// ABI descriptor hash authenticated by the embedded interface.
@@ -55,6 +50,15 @@ pub struct VerifiedContractArtifact {
     pub contract_interface: EmbeddedContractInterfaceV1,
     /// Canonical unsigned on-chain manifest derived from the interface.
     pub manifest: ContractManifest,
+}
+impl VerifiedContractArtifact {
+    /// Structurally and semantically admitted literal ranges from the original artifact.
+    /// Native preparation consumes these coordinates on that same immutable input; this value
+    /// does not authenticate replacement bytes. No second metadata decode is needed.
+    #[must_use]
+    pub const fn literal_section(&self) -> Option<ParsedLiteralSection> {
+        self.literal_section
+    }
 }
 mod error;
 pub use error::ContractArtifactError;
@@ -67,26 +71,46 @@ pub use error::ContractArtifactError;
 pub fn verify_contract_artifact(
     artifact: &[u8],
 ) -> Result<VerifiedContractArtifact, ContractArtifactError> {
+    verify_contract_artifact_owned(artifact, None)
+}
+/// Verify with temporary instruction-array custody in the original State pool.
+///
+/// The canonical policy checker is shared with diagnostic admission. Literal
+/// directories borrow the original artifact; metadata, typed payload decoding
+/// and control-flow analysis allocations require separate custody.
+///
+/// # Errors
+/// Returns the same protocol errors or an original local allocation refusal.
+pub fn verify_contract_artifact_with_memory_budget(
+    artifact: &[u8],
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<VerifiedContractArtifact, ContractArtifactError> {
+    verify_contract_artifact_owned(artifact, Some(budget))
+}
+fn verify_contract_artifact_owned(
+    artifact: &[u8],
+    budget: Option<&iroha_allocation::AllocationBudget>,
+) -> Result<VerifiedContractArtifact, ContractArtifactError> {
     let mut parsed = parse_contract_metadata(artifact)?;
     let contract_interface = validate_contract_envelope(artifact, &parsed)?;
     let code = artifact.get(parsed.code_offset..).ok_or_else(|| {
         ContractArtifactError::invalid("executable stream offset exceeds artifact length")
     })?;
-    let decoded = decode_instruction_stream(code)?;
+    let decoded = decoded::instructions(code, budget)?;
     policy::validate_contract_interface(
         &parsed.metadata,
         contract_interface,
         &decoded,
         policy::ValidationProfile::Production,
     )?;
-    validate_literal_table(artifact, &parsed, &decoded)?;
+    literal::validate_literal_table(artifact, &parsed, &decoded)?;
     let contract_interface = parsed
         .contract_interface
         .take()
         .expect("validated contract envelope retains its CNTR interface");
     Ok(verified_from_parts(artifact, parsed, contract_interface))
 }
-/// Verify a compiler-produced generic IVM 1.0 Kotodama test harness against
+/// Verify a compiler-produced generic IVM 1.1 Kotodama test harness against
 /// its compiler-owned interface sidecar.
 ///
 /// This is intentionally hidden from ordinary artifact consumers. Native IVM preparation uses it so
@@ -108,7 +132,7 @@ pub fn verify_koto_test_artifact(
         &decoded,
         policy::ValidationProfile::KotoTest,
     )?;
-    validate_literal_table(artifact, &parsed, &decoded)?;
+    literal::validate_literal_table(artifact, &parsed, &decoded)?;
     Ok(verified_from_parts(artifact, parsed, contract_interface))
 }
 fn verified_from_parts(
@@ -144,6 +168,7 @@ fn verified_from_parts(
         metadata: parsed.metadata,
         header_len: parsed.header_len,
         code_offset: parsed.code_offset,
+        literal_section: parsed.literal_section,
         code_hash,
         abi_hash,
         contract_interface,
@@ -157,8 +182,8 @@ fn parse_contract_metadata(
         VMError::ArtifactAbiHashMismatch { expected, actual } => {
             ContractArtifactError::abi_hash_mismatch(expected, actual)
         }
-        _ if header_declares_contract_minor_one(artifact) && cntr_section_missing(artifact) => {
-            ContractArtifactError::invalid("missing required CNTR section")
+        other if other.execution_deferral().is_some() => {
+            ContractArtifactError::preparation("metadata parse", other)
         }
         other => ContractArtifactError::invalid(format!("metadata parse failed: {other}")),
     })
@@ -227,9 +252,9 @@ fn validate_koto_test_envelope(
     contract_interface: &EmbeddedContractInterfaceV1,
 ) -> Result<(), ContractArtifactError> {
     let metadata = &parsed.metadata;
-    if metadata.version_major != 1 || metadata.version_minor != 0 {
+    if metadata.version_major != 1 || metadata.version_minor != 1 {
         return Err(ContractArtifactError::invalid(format!(
-            "expected generic IVM 1.0 Kotodama test harness, got {}.{}",
+            "expected generic IVM 1.1 Kotodama test harness, got {}.{}",
             metadata.version_major, metadata.version_minor
         )));
     }
@@ -261,12 +286,12 @@ fn validate_koto_test_envelope(
     }
     if parsed.contract_interface.is_some() {
         return Err(ContractArtifactError::invalid(
-            "generic IVM 1.0 Kotodama test harness must not embed a CNTR section",
+            "generic IVM 1.1 Kotodama test harness must not embed a CNTR section",
         ));
     }
     if parsed.contract_debug.is_some() {
         return Err(ContractArtifactError::invalid(
-            "generic IVM 1.0 Kotodama test harness must not embed DBG1 metadata",
+            "generic IVM 1.1 Kotodama test harness must not embed DBG1 metadata",
         ));
     }
     let expected_abi_hash = ivm_abi::syscalls::compute_abi_hash(SyscallPolicy::AbiV1);
@@ -297,198 +322,8 @@ fn decode_instruction_stream(code: &[u8]) -> Result<Vec<DecodedOp>, ContractArti
     }
     Ok(decoded)
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DecodedLiteral {
-    Pointer,
-    I64,
-}
-fn validate_literal_table(
-    artifact: &[u8],
-    parsed: &ParsedProgramMetadata,
-    decoded: &[DecodedOp],
-) -> Result<(), ContractArtifactError> {
-    let literals = decode_literal_table(
-        artifact,
-        parsed.header_len,
-        parsed.literal_section,
-        SyscallPolicy::AbiV1,
-    )
-    .map_err(|error| {
-        ContractArtifactError::invalid(format!("literal index validation failed: {error}"))
-    })?;
-    for op in decoded {
-        let expects_i64 = match ivm_abi::instruction::wide::opcode(op.inst) {
-            ivm_abi::instruction::wide::memory::LDLIT => Some(false),
-            ivm_abi::instruction::wide::memory::LDI64 => Some(true),
-            _ => None,
-        };
-        if let Some(expects_i64) = expects_i64 {
-            let literal = literals
-                .get(ivm_abi::instruction::wide::literal_index(op.inst))
-                .ok_or_else(|| {
-                    ContractArtifactError::invalid(
-                        "literal instruction validation failed: invalid metadata",
-                    )
-                })?;
-            if matches!(literal, DecodedLiteral::I64) != expects_i64 {
-                return Err(ContractArtifactError::invalid(
-                    "literal instruction validation failed: invalid metadata",
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-fn decode_literal_table(
-    program: &[u8],
-    header_len: usize,
-    section: Option<ParsedLiteralSection>,
-    policy: SyscallPolicy,
-) -> Result<Vec<DecodedLiteral>, VMError> {
-    use ivm_abi::metadata::{LiteralKindV1, decode_literal_descriptor};
-    let Some(section) = section else {
-        return Ok(Vec::new());
-    };
-    if section.count > usize::from(u16::MAX) + 1 {
-        return Err(VMError::InvalidMetadata);
-    }
-    let mut descriptors = Vec::with_capacity(section.count);
-    let mut previous_target = None;
-    for index in 0..section.count {
-        let entry_start = section
-            .entries_start
-            .checked_add(index.checked_mul(8).ok_or(VMError::InvalidMetadata)?)
-            .ok_or(VMError::InvalidMetadata)?;
-        let entry_end = entry_start.checked_add(8).ok_or(VMError::InvalidMetadata)?;
-        let raw = u64::from_le_bytes(
-            program
-                .get(entry_start..entry_end)
-                .ok_or(VMError::InvalidMetadata)?
-                .try_into()
-                .map_err(|_| VMError::InvalidMetadata)?,
-        );
-        let (kind, relative) = decode_literal_descriptor(raw)?;
-        let target = section
-            .start
-            .checked_add(usize::try_from(relative).map_err(|_| VMError::InvalidMetadata)?)
-            .ok_or(VMError::InvalidMetadata)?;
-        if target < section.data_start || target >= section.data_end {
-            return Err(VMError::InvalidMetadata);
-        }
-        if previous_target.is_some_and(|previous| target <= previous) {
-            return Err(VMError::InvalidMetadata);
-        }
-        previous_target = Some(target);
-        descriptors.push((kind, target));
-    }
-    if descriptors.is_empty() {
-        return (section.data_start == section.data_end)
-            .then(Vec::new)
-            .ok_or(VMError::InvalidMetadata);
-    }
-    if descriptors.first().map(|(_, target)| *target) != Some(section.data_start) {
-        return Err(VMError::InvalidMetadata);
-    }
-    let mut entries = Vec::with_capacity(descriptors.len());
-    for (index, (kind, target)) in descriptors.iter().copied().enumerate() {
-        let end = descriptors
-            .get(index + 1)
-            .map_or(section.data_end, |(_, target)| *target);
-        let bytes = program.get(target..end).ok_or(VMError::InvalidMetadata)?;
-        match kind {
-            LiteralKindV1::PointerTlv => {
-                let tlv = ivm_abi::pointer_abi::validate_tlv_bytes(bytes)
-                    .map_err(|_| VMError::InvalidMetadata)?;
-                let exact_len = 7usize
-                    .checked_add(tlv.payload.len())
-                    .and_then(|len| len.checked_add(iroha_crypto::Hash::LENGTH))
-                    .ok_or(VMError::InvalidMetadata)?;
-                if bytes.len() != exact_len
-                    || !ivm_abi::pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id)
-                    || target.checked_sub(header_len).is_none()
-                {
-                    return Err(VMError::InvalidMetadata);
-                }
-                validate_literal_payload(tlv.type_id, tlv.payload)?;
-                entries.push(DecodedLiteral::Pointer);
-            }
-            LiteralKindV1::I64 => {
-                let _: [u8; 8] = bytes.try_into().map_err(|_| VMError::InvalidMetadata)?;
-                entries.push(DecodedLiteral::I64);
-            }
-        }
-    }
-    Ok(entries)
-}
-fn decode_canonical_literal_payload<T>(payload: &[u8]) -> Result<T, VMError>
-where
-    T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
-{
-    decode_canonical_norito(payload).map_err(|_| VMError::InvalidMetadata)
-}
-fn validate_literal_payload(
-    type_id: ivm_abi::pointer_abi::PointerType,
-    payload: &[u8],
-) -> Result<(), VMError> {
-    use ivm_abi::pointer_abi::PointerType;
-    // A literal pointer's nominal type is part of the authenticated artifact
-    // contract. Validate every compiler-structured payload at admission rather
-    // than deferring malformed frames to whichever syscall first consumes
-    // them. Blob and NoritoBytes deliberately remain opaque byte containers.
-    //
-    // Keep codec details behind the same deterministic metadata failure used
-    // for every malformed literal-table binding.
-    match type_id {
-        PointerType::AccountId => decode_canonical_literal_payload::<AccountId>(payload).map(drop),
-        PointerType::AssetDefinitionId => {
-            decode_canonical_literal_payload::<AssetDefinitionId>(payload).map(drop)
-        }
-        PointerType::Name => decode_canonical_literal_payload::<Name>(payload).map(drop),
-        PointerType::Json => decode_canonical_literal_payload::<Json>(payload).map(drop),
-        PointerType::NftId => decode_canonical_literal_payload::<NftId>(payload).map(drop),
-        PointerType::Blob | PointerType::NoritoBytes => Ok(()),
-        PointerType::AssetId => decode_canonical_literal_payload::<AssetId>(payload).map(drop),
-        PointerType::DomainId => decode_canonical_literal_payload::<DomainId>(payload).map(drop),
-        PointerType::DataSpaceId => {
-            decode_canonical_literal_payload::<DataSpaceId>(payload).map(drop)
-        }
-        PointerType::AxtDescriptor => {
-            let descriptor = decode_canonical_literal_payload::<AxtDescriptor>(payload)?;
-            validate_descriptor(&descriptor).map_err(|_| VMError::InvalidMetadata)
-        }
-        PointerType::ProofBlob => {
-            let proof = decode_canonical_literal_payload::<ProofBlob>(payload)?;
-            validate_proof_blob(&proof).map_err(|_| VMError::InvalidMetadata)
-        }
-        PointerType::AxtAnchoredSpendV1 => {
-            let spend = decode_canonical_literal_payload::<AxtAnchoredSpendV1>(payload)?;
-            spend
-                .issuer_payload_v1()
-                .map(drop)
-                .map_err(|_| VMError::InvalidMetadata)
-        }
-        PointerType::SoracloudRequest => {
-            let request =
-                decode_canonical_literal_payload::<SoracloudHostRequestEnvelopeV1>(payload)?;
-            request.validate().map_err(|_| VMError::InvalidMetadata)
-        }
-        PointerType::SoracloudResponse => {
-            let response =
-                decode_canonical_literal_payload::<SoracloudHostResponseEnvelopeV1>(payload)?;
-            response.validate().map_err(|_| VMError::InvalidMetadata)
-        }
-        PointerType::Int => IntValueV1::decode_frame(payload)
-            .map(drop)
-            .map_err(|_| VMError::InvalidMetadata),
-        PointerType::Decimal => DecimalValueV1::decode_frame(payload)
-            .map(drop)
-            .map_err(|_| VMError::InvalidMetadata),
-        PointerType::Quantity => QuantityValueV1::decode_frame(payload)
-            .map(drop)
-            .map_err(|_| VMError::InvalidMetadata),
-    }
-    .map_err(|_| VMError::InvalidMetadata)
-}
+mod decoded;
+mod literal;
 fn manifest_state_descriptors(states: &[EmbeddedStateDescriptor]) -> Vec<StateDescriptor> {
     states
         .iter()
@@ -653,14 +488,6 @@ fn schedule_manifest_state_type_name<'a>(
         _ => unreachable!("scalar embedded state types returned before compound formatting"),
     }
 }
-fn header_declares_contract_minor_one(artifact: &[u8]) -> bool {
-    artifact.len() >= HEADER_SIZE && artifact[4] == 1 && artifact[5] == 1
-}
-fn cntr_section_missing(artifact: &[u8]) -> bool {
-    artifact.len() < HEADER_SIZE + 4
-        || artifact[HEADER_SIZE..HEADER_SIZE + 4]
-            != ivm_abi::metadata::CONTRACT_INTERFACE_SECTION_MAGIC
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -697,8 +524,8 @@ mod tests {
             callables: vec![ivm_abi::call::EmbeddedCallableV1 {
                 entry_pc: 0,
                 frame_bytes: 0,
-                argument_words: Vec::new(),
-                result_words: vec![ivm_abi::call::CallWordV1::Unit],
+                arguments: ivm_abi::call::CallSchemaV1::empty(),
+                results: ivm_abi::call::CallSchemaV1::unit(),
             }],
             seiyaku_name: "DeepManifest".to_owned(),
             compiler_fingerprint: "ivm-artifact-admission-tests".to_owned(),
@@ -725,6 +552,131 @@ mod tests {
             artifact.extend_from_slice(&word.to_le_bytes());
         }
         artifact
+    }
+    #[test]
+    fn funded_artifact_admission_retains_policy_and_releases_temporary_instructions() {
+        let artifact = contract_artifact_with_state_type(EmbeddedStateType::Bool);
+        let baseline = verify_contract_artifact(&artifact).unwrap();
+        let budget = iroha_allocation::AllocationBudget::new(0);
+        let error = verify_contract_artifact_with_memory_budget(&artifact, &budget).unwrap_err();
+        assert!(matches!(
+            error.local_vm_error(),
+            Some(VMError::AllocationDeferred(_))
+        ));
+        assert_eq!(budget.reserved_bytes(), 0);
+        budget.set_limit_bytes(1024 * 1024);
+        let verified = verify_contract_artifact_with_memory_budget(&artifact, &budget).unwrap();
+        assert_eq!(verified.code_hash, baseline.code_hash);
+        assert_eq!(verified.manifest, baseline.manifest);
+        assert!(budget.peak_reserved_bytes() > 0);
+        assert_eq!(
+            budget.reserved_bytes(),
+            0,
+            "temporary decode backing was reclaimed"
+        );
+        let mut malformed = artifact;
+        malformed[baseline.code_offset..baseline.code_offset + 4]
+            .copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(
+            verify_contract_artifact_with_memory_budget(&malformed, &budget).unwrap_err(),
+            verify_contract_artifact(&malformed).unwrap_err(),
+        );
+        assert_eq!(
+            budget.reserved_bytes(),
+            0,
+            "policy failure releases the admitted array"
+        );
+    }
+    #[test]
+    fn canonical_metadata_refusal_survives_artifact_admission_and_retries() {
+        let artifact = contract_artifact_with_state_type(EmbeddedStateType::Bool);
+        let original = artifact.clone();
+        let baseline = verify_contract_artifact(&artifact).expect("valid canonical artifact");
+        let refusal = norito::core::with_decode_limits_scope(
+            norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+            || verify_contract_artifact(&artifact),
+        )
+        .expect_err("enclosing allocation refusal must reach admission");
+        assert_eq!(
+            refusal.into_vm_error(),
+            VMError::ExecutionDeferred(ivm_abi::error::ExecutionDeferral::ActiveMemoryCapacity)
+        );
+        let retry =
+            verify_contract_artifact(&artifact).expect("retry unchanged canonical artifact");
+        assert_eq!(retry.code_hash, baseline.code_hash);
+        assert_eq!(retry.abi_hash, baseline.abi_hash);
+        assert_eq!(retry.contract_interface, baseline.contract_interface);
+        assert_eq!(retry.manifest, baseline.manifest);
+        assert_eq!(artifact, original);
+    }
+
+    #[test]
+    fn retired_header_rejects_before_metadata_and_original_pool_admission() {
+        let mut artifact = contract_artifact_with_state_type(EmbeddedStateType::Bool);
+        let original = verify_contract_artifact(&artifact).unwrap();
+        artifact[5] = 0;
+        let budget = iroha_allocation::AllocationBudget::new(0);
+        let error = norito::core::with_decode_limits_scope(
+            norito::core::DecodeLimits::new(0, 0, 0, 0, 0),
+            || verify_contract_artifact_with_memory_budget(&artifact, &budget),
+        )
+        .unwrap_err();
+        assert!(error.local_vm_error().is_none());
+        assert!(error.to_string().contains("program version 1.0"), "{error}");
+        assert_eq!(budget.reserved_bytes(), 0);
+        artifact[5] = 1;
+        assert_eq!(
+            verify_contract_artifact(&artifact).unwrap().code_hash,
+            original.code_hash
+        );
+    }
+
+    #[test]
+    fn generic_debug_decode_refusal_is_not_reclassified_as_missing_cntr() {
+        use ivm_abi::metadata::{
+            EmbeddedContractDebugInfoV1, EmbeddedSourceLocation, EmbeddedSourceMapEntryV1,
+        };
+        let debug = EmbeddedContractDebugInfoV1 {
+            source_map: vec![EmbeddedSourceMapEntryV1 {
+                function_name: "main".to_owned(),
+                pc_start: 0,
+                pc_end: 4,
+                source: EmbeddedSourceLocation {
+                    source_path: Some("profile.ko".to_owned()),
+                    source_id: 0,
+                    byte_start: 0,
+                    byte_end: 1,
+                    line: 1,
+                    column: 1,
+                },
+            }],
+            budget_report: Vec::new(),
+        };
+        let mut artifact = ProgramMetadata::default().encode();
+        artifact.extend_from_slice(&debug.encode_section());
+        artifact.extend_from_slice(&ivm_abi::encoding::wide::encode_halt().to_le_bytes());
+        let parsed = parse_contract_metadata(&artifact).unwrap();
+        assert!(parsed.contract_interface.is_none());
+        assert_eq!(parsed.contract_debug, Some(debug));
+        let error = norito::core::with_decode_limits_scope(
+            norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+            || parse_contract_metadata(&artifact),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.into_vm_error(),
+            VMError::ExecutionDeferred(ivm_abi::error::ExecutionDeferral::ActiveMemoryCapacity,)
+        );
+        assert_eq!(
+            parse_contract_metadata(&artifact).unwrap().contract_debug,
+            parsed.contract_debug
+        );
+        assert!(
+            verify_contract_artifact(&artifact)
+                .unwrap_err()
+                .to_string()
+                .contains("DBG1")
+        );
     }
     #[test]
     fn manifest_state_type_names_preserve_variant_spelling_and_order() {
@@ -829,7 +781,7 @@ mod tests {
             touches: vec![touch.clone()],
         };
         assert_eq!(
-            validate_literal_payload(PointerType::AxtDescriptor, &encoded(&valid)),
+            literal::validate_literal_payload(PointerType::AxtDescriptor, &encoded(&valid)),
             Ok(())
         );
         let invalid = [
@@ -864,7 +816,10 @@ mod tests {
         ];
         for descriptor in invalid {
             assert_eq!(
-                validate_literal_payload(PointerType::AxtDescriptor, &encoded(&descriptor)),
+                literal::validate_literal_payload(
+                    PointerType::AxtDescriptor,
+                    &encoded(&descriptor)
+                ),
                 Err(VMError::InvalidMetadata),
                 "invalid descriptor must fail shared artifact admission: {descriptor:?}"
             );
@@ -883,7 +838,7 @@ mod tests {
         let canonical =
             ivm_abi::codec::encode_canonical_norito(&spend).expect("canonical signed-spend frame");
         assert_eq!(
-            validate_literal_payload(PointerType::AxtAnchoredSpendV1, &canonical),
+            literal::validate_literal_payload(PointerType::AxtAnchoredSpendV1, &canonical),
             Ok(())
         );
         let mut malformed = spend;
@@ -891,7 +846,7 @@ mod tests {
         let malformed =
             ivm_abi::codec::encode_canonical_norito(&malformed).expect("canonical malformed frame");
         assert_eq!(
-            validate_literal_payload(PointerType::AxtAnchoredSpendV1, &malformed),
+            literal::validate_literal_payload(PointerType::AxtAnchoredSpendV1, &malformed),
             Err(VMError::InvalidMetadata)
         );
         assert_eq!(
@@ -907,7 +862,7 @@ mod tests {
             expiry_slot: None,
         };
         assert_eq!(
-            validate_literal_payload(PointerType::ProofBlob, &encoded_value(&valid_proof)),
+            literal::validate_literal_payload(PointerType::ProofBlob, &encoded_value(&valid_proof)),
             Ok(())
         );
         let empty_proof = ProofBlob {
@@ -915,7 +870,7 @@ mod tests {
             expiry_slot: None,
         };
         assert_eq!(
-            validate_literal_payload(PointerType::ProofBlob, &encoded_value(&empty_proof)),
+            literal::validate_literal_payload(PointerType::ProofBlob, &encoded_value(&empty_proof)),
             Err(VMError::InvalidMetadata)
         );
     }

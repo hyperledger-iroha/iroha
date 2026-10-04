@@ -1,12 +1,13 @@
 //! Explicit ordinary113 State consumer grammar. Inactive slots create no Mint authority.
 //! Active ordinary MintFold must supply its distinct finalized-source and private opening
 //! consumer; until that relation is installed, it fails before State graph construction.
+#[cfg(test)]
+use super::ordinary_mint_circuit::ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1;
 use super::{
-    KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1,
-    ordinary_mint_circuit::ORDINARY_MINT_PUBLIC_INSTANCE_COUNT_V1,
-    ordinary_mint_public::ORDINARY_MINT_PUBLIC_PREFIX_V1,
+    KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1, ordinary_mint_public::ORDINARY_MINT_PUBLIC_PREFIX_V1,
 };
 use crate::kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, from_u128};
+#[cfg(test)]
 use halo2_base::{
     AssignedValue, Context,
     gates::{GateInstructions as _, RangeChip, RangeInstructions as _},
@@ -39,6 +40,7 @@ pub(super) fn require_inactive_column<F: KagemushaPoseidonFieldV1>(
     }
     Ok(())
 }
+#[cfg(test)]
 pub(super) fn constrain_inactive_column<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,

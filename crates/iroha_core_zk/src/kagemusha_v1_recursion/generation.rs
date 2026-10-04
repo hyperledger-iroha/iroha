@@ -91,6 +91,10 @@ pub(super) mod production_prover;
 pub(crate) mod ordinary_guard_generation;
 
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[path = "ordinary_qualification_artifacts.rs"]
+mod ordinary_qualification_artifacts;
+
+#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 #[path = "ordinary_mint_generation.rs"]
 pub(crate) mod ordinary_mint_generation;
 
@@ -269,7 +273,7 @@ use super::{
     KagemushaMemoryArtifactResolverV1, KagemushaPastaParityV1,
 };
 use super::{
-    composite::{KagemushaRecursiveStateWitnessV1, build_kagemusha_recursive_state_pair_v1},
+    composite::KagemushaRecursiveStateWitnessV1,
     transport_decider::{
         KagemushaTransportDeciderParityWitnessV1, KagemushaTransportDeciderWitnessV1,
         build_kagemusha_transport_decider_pair_v1,
@@ -3423,7 +3427,7 @@ pub fn prove_kagemusha_terminal_authorization_hash_claim_v1(
 pub fn prove_kagemusha_recursive_state_hash_claim_v1(
     eq: &KagemushaLoadedEqMintHashArtifactsV1,
     ep: &KagemushaLoadedEpMintHashArtifactsV1,
-    mut witness: KagemushaRecursiveStateGenerationWitnessV1<'_>,
+    witness: KagemushaRecursiveStateGenerationWitnessV1<'_>,
     recovery_seed: &KagemushaRecoverySeedV1,
 ) -> Result<KagemushaGeneratedMintHashClaimV1, KagemushaArtifactGenerationErrorV1> {
     prove_kagemusha_recursive_state_hash_claim_v1_with_construction(
@@ -11097,6 +11101,10 @@ mod mint_transport_tests;
 mod lookup_recovery_tests;
 
 #[cfg(test)]
+#[path = "ordinary_originals.rs"]
+mod ordinary_originals;
+
+#[cfg(test)]
 #[path = "ordinary_zero_bootstrap_qualification_tests.rs"]
 mod ordinary_zero_bootstrap_qualification_tests;
 
@@ -11147,3 +11155,55 @@ pub(super) fn ordinary_qualification_wallet_account_v1(
 #[cfg(all(test, unix))]
 #[path = "ordinary_full_money_cycle_tests.rs"]
 mod ordinary_full_money_cycle;
+
+/// Test-only entry to the production Eq proving path for the crate-level prover goldens.
+///
+/// Runs [`create_eq_proof_with_key_v1`] unchanged with the state-carrier recovery
+/// label: recovery-seed ChaCha stream, KAGEMUSHA Poseidon transcript and
+/// folded-generator augmentation.
+#[cfg(test)]
+pub(crate) fn create_state_carrier_eq_proof_for_golden_test_v1<C>(
+    parameters: &ParamsIPA<EqAffine>,
+    proving_key: &ProvingKey<EqAffine>,
+    circuit: C,
+    instances: &[Fp],
+    recovery_seed: &KagemushaRecoverySeedV1,
+) -> Result<Vec<u8>, KagemushaArtifactGenerationErrorV1>
+where
+    C: halo2_proofs::plonk::Circuit<Fp>,
+{
+    create_eq_proof_with_key_v1(
+        parameters,
+        proving_key,
+        circuit,
+        instances,
+        KagemushaProofRecoveryPhaseV1::StateCarrier,
+        recovery_seed,
+    )
+}
+
+/// Test-only entry to the production Ep proving path for the crate-level prover goldens.
+///
+/// Runs [`create_ep_proof_with_key_v1`] unchanged with the state-carrier recovery
+/// label: recovery-seed ChaCha stream, KAGEMUSHA Poseidon transcript and
+/// folded-generator augmentation.
+#[cfg(test)]
+pub(crate) fn create_state_carrier_ep_proof_for_golden_test_v1<C>(
+    parameters: &ParamsIPA<EpAffine>,
+    proving_key: &ProvingKey<EpAffine>,
+    circuit: C,
+    instances: &[Fq],
+    recovery_seed: &KagemushaRecoverySeedV1,
+) -> Result<Vec<u8>, KagemushaArtifactGenerationErrorV1>
+where
+    C: halo2_proofs::plonk::Circuit<Fq>,
+{
+    create_ep_proof_with_key_v1(
+        parameters,
+        proving_key,
+        circuit,
+        instances,
+        KagemushaProofRecoveryPhaseV1::StateCarrier,
+        recovery_seed,
+    )
+}

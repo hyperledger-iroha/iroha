@@ -125,7 +125,7 @@ fn callable_descriptors(
     code: &[u32],
 ) -> Vec<ivm_abi::call::EmbeddedCallableV1> {
     use ivm::instruction::wide;
-    use ivm_abi::call::CallWordV1;
+    use ivm_abi::call::CallSchemaV1;
     let mut callables = std::collections::BTreeMap::new();
     for entry in entrypoints {
         callables.insert(
@@ -133,22 +133,18 @@ fn callable_descriptors(
             ivm_abi::call::EmbeddedCallableV1 {
                 entry_pc: entry.entry_pc,
                 frame_bytes: callable_frame_bytes(code, entry.entry_pc),
-                argument_words: entry
+                // Malformed public schemas intentionally retain a well-formed callable
+                // so admission tests reach the public-schema rejection itself.
+                arguments: entry
                     .argument_schema
                     .as_ref()
-                    .and_then(|schema| schema.word_kinds())
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(CallWordV1::from_entrypoint_word)
-                    .collect(),
-                result_words: entry
+                    .and_then(CallSchemaV1::from_entrypoint_arguments)
+                    .unwrap_or_else(CallSchemaV1::empty),
+                results: entry
                     .return_schema
                     .as_ref()
-                    .and_then(|schema| schema.word_kinds())
-                    .unwrap_or_else(|| vec![ivm_abi::entrypoint::EntrypointValueWordKindV1::Unit])
-                    .into_iter()
-                    .map(CallWordV1::from_entrypoint_word)
-                    .collect(),
+                    .and_then(CallSchemaV1::from_entrypoint_type)
+                    .unwrap_or_else(CallSchemaV1::unit),
             },
         );
     }
@@ -726,7 +722,7 @@ fn sdk_code_readback_fixture_is_reproducible_and_admitted() {
     );
     assert_eq!(
         hex::encode(admitted.code_hash.as_ref()),
-        "72fff8fd63bb7a8660839062f9a03800d978cf36df92d21ff140ba5e991f0431"
+        "984f729f8c465b6d7fb6b62bf9ff13c882f7fbb18b76cad922c3c35a63ded6df"
     );
 }
 #[test]

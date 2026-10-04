@@ -56,59 +56,6 @@ pub struct SubscriptionPlanCreateResponse {
     pub signing_message_b64: String,
 }
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
-/// Query parameters for listing subscription plans.
-
-#[derive(Default, norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_torii_shared::subscriptions::SubscriptionPlanListParams",
-    frame = "iroha_torii::routing::SubscriptionPlanListParams"
-)]
-pub struct SubscriptionPlanListParams {
-    /// Optional plan provider filter using a canonical I105 id or on-chain alias.
-    pub provider: Option<String>,
-    /// Optional limit for pagination.
-    pub limit: Option<u64>,
-    /// Offset for pagination (default 0).
-    #[norito(default)]
-    pub offset: u64,
-    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
-    #[norito(default)]
-    pub count_mode: Option<String>,
-}
-#[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
-/// Subscription plan list item.
-
-#[derive(norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_torii_shared::subscriptions::SubscriptionPlanListItem",
-    frame = "iroha_torii::routing::SubscriptionPlanListItem"
-)]
-pub struct SubscriptionPlanListItem {
-    /// Plan asset definition id.
-    pub plan_id: iroha_data_model::asset::AssetDefinitionId,
-    /// Plan metadata payload.
-    pub plan: iroha_data_model::subscription::SubscriptionPlan,
-}
-#[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
-/// Response payload for listing subscription plans.
-
-#[derive(norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_torii_shared::subscriptions::SubscriptionPlanListResponse",
-    frame = "iroha_torii::routing::SubscriptionPlanListResponseDto"
-)]
-pub struct SubscriptionPlanListResponse {
-    /// Plan items.
-    pub items: Vec<SubscriptionPlanListItem>,
-    /// Total number of matching plans.
-    #[norito(default)]
-    pub total: Option<u64>,
-    /// Whether more items are available after this page.
-    pub has_more: bool,
-    /// Count mode used to produce pagination metadata.
-    pub count_mode: String,
-}
-#[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 /// Request payload for creating a subscription.
 
@@ -169,69 +116,6 @@ pub struct SubscriptionCreateResponse {
     pub resulting_subscription: iroha_data_model::subscription::SubscriptionState,
     /// Canonical instructions the authority must sign and submit.
     pub tx_instructions: Vec<SubscriptionInstructionDraft>,
-}
-#[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
-/// Query parameters for listing subscriptions.
-
-#[derive(Default, norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_torii_shared::subscriptions::SubscriptionListParams",
-    frame = "iroha_torii::routing::SubscriptionListParams"
-)]
-pub struct SubscriptionListParams {
-    /// Optional subscriber filter using a canonical I105 id or on-chain alias.
-    pub owned_by: Option<String>,
-    /// Optional provider filter using a canonical I105 id or on-chain alias.
-    pub provider: Option<String>,
-    /// Optional status filter (`active`, `paused`, `past_due`, `canceled`, `suspended`).
-    pub status: Option<String>,
-    /// Optional limit for pagination.
-    pub limit: Option<u64>,
-    /// Offset for pagination (default 0).
-    #[norito(default)]
-    pub offset: u64,
-    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
-    #[norito(default)]
-    pub count_mode: Option<String>,
-}
-#[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
-/// Subscription list item payload.
-
-#[derive(norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_torii_shared::subscriptions::SubscriptionListItem",
-    frame = "iroha_torii::routing::SubscriptionListItem"
-)]
-pub struct SubscriptionListItem {
-    /// Subscription NFT id.
-    pub subscription_id: iroha_data_model::nft::NftId,
-    /// Subscription state metadata.
-    pub subscription: iroha_data_model::subscription::SubscriptionState,
-    /// Optional latest invoice metadata.
-    #[norito(default)]
-    pub invoice: Option<iroha_data_model::subscription::SubscriptionInvoice>,
-    /// Optional plan metadata payload.
-    #[norito(default)]
-    pub plan: Option<iroha_data_model::subscription::SubscriptionPlan>,
-}
-#[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
-/// Response payload for listing subscriptions.
-
-#[derive(norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_torii_shared::subscriptions::SubscriptionListResponse",
-    frame = "iroha_torii::routing::SubscriptionListResponseDto"
-)]
-pub struct SubscriptionListResponse {
-    /// Subscription items.
-    pub items: Vec<SubscriptionListItem>,
-    /// Total number of matching subscriptions.
-    #[norito(default)]
-    pub total: Option<u64>,
-    /// Whether more items are available after this page.
-    pub has_more: bool,
-    /// Count mode used to produce pagination metadata.
-    pub count_mode: String,
 }
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 /// Response payload for fetching a subscription.
@@ -406,18 +290,10 @@ mod tests {
         identity::<SubscriptionPlanCreateResponse>(
             "iroha_torii::routing::SubscriptionPlanCreateResponseDto",
         );
-        identity::<SubscriptionPlanListParams>("iroha_torii::routing::SubscriptionPlanListParams");
-        identity::<SubscriptionPlanListItem>("iroha_torii::routing::SubscriptionPlanListItem");
-        identity::<SubscriptionPlanListResponse>(
-            "iroha_torii::routing::SubscriptionPlanListResponseDto",
-        );
         identity::<SubscriptionCreateRequest>("iroha_torii::routing::SubscriptionCreateDto");
         identity::<SubscriptionCreateResponse>(
             "iroha_torii::routing::SubscriptionCreateResponseDto",
         );
-        identity::<SubscriptionListParams>("iroha_torii::routing::SubscriptionListParams");
-        identity::<SubscriptionListItem>("iroha_torii::routing::SubscriptionListItem");
-        identity::<SubscriptionListResponse>("iroha_torii::routing::SubscriptionListResponseDto");
         identity::<SubscriptionGetResponse>("iroha_torii::routing::SubscriptionGetResponseDto");
         identity::<SubscriptionActionRequest>("iroha_torii::routing::SubscriptionActionDto");
         identity::<SubscriptionCancelMode>("iroha_torii::routing::SubscriptionCancelMode");
@@ -457,26 +333,6 @@ mod tests {
             assert!(norito::json::from_json::<SubscriptionCancelMode>(invalid).is_err());
         }
     }
-
-    #[test]
-    fn list_defaults_and_count_mode_roundtrip_without_codec_changes() {
-        let params: SubscriptionListParams = norito::json::from_json("{}").unwrap();
-        assert_eq!(params.offset, 0);
-        assert!(params.count_mode.is_none());
-        let params = SubscriptionListParams {
-            provider: Some("merchant@paynet".to_owned()),
-            count_mode: Some("exact".to_owned()),
-            limit: Some(10),
-            offset: 3,
-            ..params
-        };
-        let bytes = norito::to_bytes(&params).unwrap();
-        let decoded: SubscriptionListParams = norito::decode_from_bytes(&bytes).unwrap();
-        assert_eq!(
-            norito::json::to_json(&decoded).unwrap(),
-            norito::json::to_json(&params).unwrap()
-        );
-    }
 }
 
 #[cfg(test)]
@@ -507,29 +363,11 @@ mod captured_frame_identity_tests {
         crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionInstructionDraft>(
             "iroha_torii_shared::subscriptions::SubscriptionInstructionDraft",
         );
-        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionListItem>(
-            "iroha_torii_shared::subscriptions::SubscriptionListItem",
-        );
-        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionListParams>(
-            "iroha_torii_shared::subscriptions::SubscriptionListParams",
-        );
-        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionListResponse>(
-            "iroha_torii_shared::subscriptions::SubscriptionListResponse",
-        );
         crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionPlanCreateRequest>(
             "iroha_torii_shared::subscriptions::SubscriptionPlanCreateRequest",
         );
         crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionPlanCreateResponse>(
             "iroha_torii_shared::subscriptions::SubscriptionPlanCreateResponse",
-        );
-        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionPlanListItem>(
-            "iroha_torii_shared::subscriptions::SubscriptionPlanListItem",
-        );
-        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionPlanListParams>(
-            "iroha_torii_shared::subscriptions::SubscriptionPlanListParams",
-        );
-        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionPlanListResponse>(
-            "iroha_torii_shared::subscriptions::SubscriptionPlanListResponse",
         );
         crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionUsageRequest>(
             "iroha_torii_shared::subscriptions::SubscriptionUsageRequest",

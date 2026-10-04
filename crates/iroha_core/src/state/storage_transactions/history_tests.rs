@@ -33,11 +33,216 @@ fn initial_native_tree_and_identity_have_one_exact_finite_admission() {
     )) if requested_bytes == minimum && limit_bytes == minimum - 1)
     );
     assert_eq!(short.reserved_bytes(), 0);
-    let exact = AllocationBudget::new(minimum);
+    let observer_bytes = iroha_allocation::release::ReleaseRegistration::allocation_layout().size();
+    let exact = AllocationBudget::new(minimum + observer_bytes);
+    let mut release_registration_0 = crate::unit_test_support::release_registration(&exact);
+    let occupied = exact.try_reserve_bytes(1).unwrap();
+    let refused = TransactionsStorage::try_new(exact.clone());
+    let release = match refused {
+        Err(MembershipAdmissionError::Capacity(AllocationRefusal::Capacity {
+            requested_bytes,
+            release,
+            ..
+        })) => {
+            assert_eq!(requested_bytes, minimum);
+            release
+        }
+        _ => panic!("both notification controls and initial tree require one original admission"),
+    };
+    assert_eq!(
+        exact.reserved_bytes(),
+        observer_bytes + 1,
+        "no partial owner survives refusal"
+    );
+    let mut wait = release.wait_for_release(&mut release_registration_0);
+    assert!(
+        std::pin::Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending()
+    );
+    drop(occupied);
+    assert!(
+        std::pin::Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_ready()
+    );
     let storage = TransactionsStorage::try_new(exact.clone()).unwrap();
-    assert_eq!(exact.reserved_bytes(), minimum);
+    assert_eq!(exact.reserved_bytes(), minimum + observer_bytes);
     drop(storage);
+    assert_eq!(exact.reserved_bytes(), observer_bytes);
+    drop(wait);
+    drop(release_registration_0);
     assert_eq!(exact.reserved_bytes(), 0);
+}
+
+#[test]
+fn independent_history_release_controls_stay_funded_through_last_observation() {
+    let pool = AllocationBudget::new(1024 * 1024);
+    let storage = TransactionsStorage::try_new(pool.clone()).unwrap();
+    let observation = storage.history_release_wait();
+    let retained = observation.clone();
+    let logical = storage.released.observe();
+    let retained_logical = logical.clone();
+    assert_ne!(observation, logical);
+    assert!(pool.reserved_bytes() > release_control_layout().size() * 2);
+    drop(storage);
+    assert_eq!(pool.reserved_bytes(), release_control_layout().size() * 2);
+    drop(logical);
+    assert_eq!(pool.reserved_bytes(), release_control_layout().size() * 2);
+    drop(retained_logical);
+    assert_eq!(pool.reserved_bytes(), release_control_layout().size());
+    drop(observation);
+    assert_eq!(pool.reserved_bytes(), release_control_layout().size());
+    drop(retained);
+    assert_eq!(pool.reserved_bytes(), 0);
+}
+
+#[test]
+fn physical_history_busy_ignores_logical_cleanup_and_retries_actual_release() {
+    let storage = owner();
+    let mut logical_registration = crate::unit_test_support::release_registration(&storage.budget);
+    let physical_registrations: [_; 3] =
+        std::array::from_fn(|_| crate::unit_test_support::release_registration(&storage.budget));
+    commit(&storage, 1, &[key(1)], false);
+    let reserved = storage.budget.reserved_bytes();
+    let blocker = storage
+        .history_released
+        .guard(storage.blocks.try_acquire_writer().unwrap());
+    let mut waits = Vec::new();
+    for mut physical_registration in physical_registrations {
+        let mut logical = std::pin::pin!(
+            storage
+                .released
+                .observe()
+                .wait_for_release(&mut logical_registration)
+        );
+        let error = match storage.prepare_next_block(false) {
+            Err(error) => error,
+            Ok(_) => panic!("actual physical writer remains held"),
+        };
+        let MembershipAdmissionError::Busy(source) = error else {
+            panic!("physical contention retains its original source")
+        };
+        assert_eq!(source, storage.history_release_wait());
+        assert!(
+            logical
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_ready(),
+            "the unsuccessful operation actually released its logical writer"
+        );
+        assert!(
+            physical_registration
+                .poll_wait(&source, &mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        drop(storage.released.guard(storage.write_lock.lock()));
+        let foreign = AllocationBudget::new(1);
+        drop(foreign.try_reserve_bytes(1).unwrap());
+        assert!(
+            physical_registration
+                .poll_wait(&source, &mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        assert_eq!(storage.budget.reserved_bytes(), reserved);
+        assert_eq!(storage.latest_height(), 1);
+        waits.push((source, physical_registration));
+    }
+    drop(blocker);
+    for (wait, mut registration) in waits {
+        assert!(
+            registration
+                .poll_wait(&wait, &mut Context::from_waker(Waker::noop()))
+                .is_ready()
+        );
+    }
+    let mut original = Some(storage.prepare_next_block(false).unwrap());
+    let mut block = storage.attach_prepared(&mut original).unwrap();
+    block.insert_block([key(2)].into_iter().collect(), height(2));
+    block.commit().unwrap();
+    assert_eq!(storage.view().get(&key(1)), Some(height(1)));
+    assert_eq!(storage.view().get(&key(2)), Some(height(2)));
+}
+
+#[test]
+fn physical_admission_notifies_after_logical_unlock_on_success_refusal_and_unwind() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
+    use std::task::Wake;
+    struct Probe {
+        storage: Arc<TransactionsStorage>,
+        wakes: AtomicUsize,
+        held: AtomicBool,
+    }
+    impl Wake for Probe {
+        fn wake(self: Arc<Self>) {
+            self.held.fetch_or(
+                self.storage.write_lock.try_lock().is_none()
+                    || self.storage.pending.try_lock().is_none()
+                    || self.storage.blocks.try_acquire_writer().is_none(),
+                SeqCst,
+            );
+            self.wakes.fetch_add(1, SeqCst);
+        }
+    }
+    for outcome in 0..3 {
+        let storage = Arc::new(owner());
+        let mut release_registration_0 =
+            crate::unit_test_support::release_registration(&storage.budget);
+        let probe = Arc::new(Probe {
+            storage: Arc::clone(&storage),
+            wakes: AtomicUsize::new(0),
+            held: AtomicBool::new(false),
+        });
+        let waker = Waker::from(Arc::clone(&probe));
+        let source = storage.history_release_wait();
+        let mut wait = std::pin::pin!(source.clone().wait_for_release(&mut release_registration_0));
+        assert!(
+            wait.as_mut()
+                .poll(&mut Context::from_waker(&waker))
+                .is_pending()
+        );
+        match outcome {
+            0 => {
+                let original = storage.prepare_next_block(false).unwrap();
+                drop(original);
+            }
+            1 => {
+                let occupied = storage
+                    .budget
+                    .try_reserve_bytes(
+                        storage.budget.limit_bytes() - storage.budget.reserved_bytes(),
+                    )
+                    .unwrap();
+                assert!(matches!(
+                    storage.prepare_next_block(false),
+                    Err(MembershipAdmissionError::Capacity(
+                        AllocationRefusal::Capacity { .. }
+                    ))
+                ));
+                assert_eq!(probe.wakes.load(SeqCst), 1);
+                drop(occupied);
+            }
+            _ => {
+                assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut physical_releases = storage.history_released.deferred_batch();
+                    let _logical = storage.released.guard(storage.write_lock.lock());
+                    let _pending = storage.pending.lock();
+                    let _ = storage.try_history_writer(&mut physical_releases, |_, _| -> Result<Policy, MembershipAdmissionError> {
+                        panic!("actual admission callback while physical and logical writers are held")
+                    });
+                })).is_err());
+                assert!(storage.blocks.is_poisoned());
+                assert!(source.is_poisoned());
+            }
+        }
+        assert_eq!(probe.wakes.load(SeqCst), 1);
+        assert!(!probe.held.load(SeqCst));
+        assert!(
+            wait.as_mut()
+                .poll(&mut Context::from_waker(&waker))
+                .is_ready()
+        );
+    }
 }
 
 #[test]
@@ -67,6 +272,8 @@ fn empty_successor_retains_exact_cursor_and_identity_layouts() {
 #[test]
 fn initial_successor_reserves_batch_identity_and_cursor_before_work() {
     let storage = owner();
+    let mut release_registration_0 =
+        crate::unit_test_support::release_registration(&storage.budget);
     let keys: Vec<_> = (0..64).map(key).collect();
     commit(&storage, 1, &keys, false);
     let initial = storage.budget.reserved_bytes();
@@ -114,7 +321,7 @@ fn initial_successor_reserves_batch_identity_and_cursor_before_work() {
         assert!(pending.work.is_none());
         assert_eq!(pending.next, 0);
     }
-    let mut future = std::pin::pin!(release.wait_for_release());
+    let mut future = std::pin::pin!(release.wait_for_release(&mut release_registration_0));
     let mut context = Context::from_waker(Waker::noop());
     assert!(future.as_mut().poll(&mut context).is_pending());
     drop(blocker);
@@ -135,6 +342,8 @@ fn initial_successor_reserves_batch_identity_and_cursor_before_work() {
 #[test]
 fn capacity_retry_keeps_original_batch_identity_and_private_predecessor() {
     let storage = owner();
+    let mut release_registration_0 =
+        crate::unit_test_support::release_registration(&storage.budget);
     let keys: Vec<_> = (0..64).map(key).collect();
     commit(&storage, 1, &keys, false);
     let mut cursor_demand = None;
@@ -177,7 +386,7 @@ fn capacity_retry_keeps_original_batch_identity_and_private_predecessor() {
     ));
     assert_eq!(storage.budget.reserved_bytes(), reserved);
     assert_eq!(storage.view().get(&keys[0]), Some(height(1)));
-    let mut future = std::pin::pin!(wait.wait_for_release());
+    let mut future = std::pin::pin!(wait.wait_for_release(&mut release_registration_0));
     let mut context = Context::from_waker(Waker::noop());
     assert!(future.as_mut().poll(&mut context).is_pending());
     drop(blocker);
@@ -280,7 +489,10 @@ fn restore_capacity_is_typed_and_refunds_before_retrying_same_bytes() {
     commit(&source, 2, &[key(2)], false);
     let bytes = json::to_json(&source).unwrap();
     let pool = AllocationBudget::new(4 * 1024 * 1024);
-    let blocker = pool.try_reserve_bytes(pool.limit_bytes()).unwrap();
+    let mut release_registration_0 = crate::unit_test_support::release_registration(&pool);
+    let blocker = pool
+        .try_reserve_bytes(pool.limit_bytes() - pool.reserved_bytes())
+        .unwrap();
     let refusal = match TransactionsStorage::from_json_with_budget(&bytes, pool.clone()) {
         Err(MembershipRestoreError::Admission(MembershipAdmissionError::Capacity(
             AllocationRefusal::Capacity { release, .. },
@@ -288,14 +500,28 @@ fn restore_capacity_is_typed_and_refunds_before_retrying_same_bytes() {
         _ => panic!("history capacity cannot become a JSON/replay fallback error"),
     };
     assert_eq!(pool.reserved_bytes(), pool.limit_bytes());
-    let mut future = std::pin::pin!(refusal.wait_for_release());
+    let mut future = refusal.wait_for_release(&mut release_registration_0);
     let mut context = Context::from_waker(Waker::noop());
-    assert!(future.as_mut().poll(&mut context).is_pending());
+    assert!(
+        std::pin::Pin::new(&mut future)
+            .poll(&mut context)
+            .is_pending()
+    );
     drop(blocker);
-    assert!(future.as_mut().poll(&mut context).is_ready());
+    assert!(
+        std::pin::Pin::new(&mut future)
+            .poll(&mut context)
+            .is_ready()
+    );
     let restored = TransactionsStorage::from_json_with_budget(&bytes, pool.clone()).unwrap();
     assert_eq!(json::to_json(&restored).unwrap(), bytes);
     drop(restored);
+    assert_eq!(
+        pool.reserved_bytes(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size()
+    );
+    drop(future);
+    drop(release_registration_0);
     assert_eq!(pool.reserved_bytes(), 0);
 }
 
@@ -307,8 +533,12 @@ fn unfundable_successor_is_permanent_before_batch_or_identity_allocation() {
         calibration
             .blocks
             .try_write_admitted_with_footprint(|existing, additional| {
-                required =
-                    Some(existing.bytes() + additional.bytes() + Identity::layout().size() * 2);
+                required = Some(
+                    existing.bytes()
+                        + additional.bytes()
+                        + Identity::layout().size() * 2
+                        + release_control_layout().size() * 2,
+                );
                 Err::<Policy, _>(())
             }),
         Err(MapAdmissionError::Refused(()))
@@ -334,6 +564,8 @@ fn unfundable_successor_is_permanent_before_batch_or_identity_allocation() {
 fn checked_out_preparation_is_exclusive_and_abort_wakes_after_clearing_loan() {
     for unwind in [false, true] {
         let storage = owner();
+        let mut release_registration_0 =
+            crate::unit_test_support::release_registration(&storage.budget);
         let original = storage.prepare_next_block(false).unwrap();
         let identity = original.predecessor.clone();
         let reserved = storage.budget.reserved_bytes();
@@ -342,7 +574,7 @@ fn checked_out_preparation_is_exclusive_and_abort_wakes_after_clearing_loan() {
             _ => panic!("one original preparation is checked out"),
         };
         assert_eq!(storage.budget.reserved_bytes(), reserved);
-        let mut future = std::pin::pin!(wait.wait_for_release());
+        let mut future = std::pin::pin!(wait.wait_for_release(&mut release_registration_0));
         let mut context = Context::from_waker(Waker::noop());
         assert!(future.as_mut().poll(&mut context).is_pending());
         if unwind {
@@ -365,6 +597,8 @@ fn checked_out_preparation_is_exclusive_and_abort_wakes_after_clearing_loan() {
 #[test]
 fn physical_busy_return_resumes_exact_original_cursor_batch_and_identity() {
     let storage = owner();
+    let mut release_registration_0 =
+        crate::unit_test_support::release_registration(&storage.budget);
     commit(&storage, 1, &[key(1), key(2)], false);
     let ready = storage.prepare_next_block(false).unwrap();
     let batch = ready.batch.as_ref().unwrap().as_slice().as_ptr();
@@ -376,7 +610,7 @@ fn physical_busy_return_resumes_exact_original_cursor_batch_and_identity() {
     let mut field = super::super::block::TransactionsBlockField::new(block);
     field.try_prepare_publication().unwrap();
     let held = storage
-        .released
+        .history_released
         .guard(storage.blocks.try_acquire_writer().unwrap());
     let wait = match field.try_prepare_physical() {
         Err(TransactionsBlockError::MembershipAdmission(MembershipAdmissionError::Busy(wait))) => {
@@ -394,7 +628,7 @@ fn physical_busy_return_resumes_exact_original_cursor_batch_and_identity() {
     field.release_writers();
     drop(field);
     drop(held);
-    let mut future = std::pin::pin!(wait.wait_for_release());
+    let mut future = std::pin::pin!(wait.wait_for_release(&mut release_registration_0));
     assert!(
         future
             .as_mut()
@@ -437,7 +671,7 @@ fn native_physical_retry_and_unrelated_unwind_preserve_original_generation() {
         "logical preparation owns no reader lock"
     );
     let held = storage
-        .released
+        .history_released
         .guard(storage.blocks.try_acquire_writer().unwrap());
     assert!(matches!(
         field.try_prepare_physical(),
@@ -566,6 +800,8 @@ fn retired_pending_notice_outlives_both_preparation_locks_on_unwind() {
     }
     for unwind in [false, true] {
         let storage = Arc::new(owner());
+        let mut release_registration_0 =
+            crate::unit_test_support::release_registration(&storage.budget);
         let mut original = storage.prepare_next_block(false).unwrap();
         drop(original.release_loan());
         // Current production returns drain these notices. Deliberately retain
@@ -586,7 +822,7 @@ fn retired_pending_notice_outlives_both_preparation_locks_on_unwind() {
             blocked: AtomicBool::new(false),
         });
         let waker = Waker::from(Arc::clone(&observe));
-        let mut future = std::pin::pin!(wait.wait_for_release());
+        let mut future = std::pin::pin!(wait.wait_for_release(&mut release_registration_0));
         assert!(
             future
                 .as_mut()
@@ -649,7 +885,9 @@ fn attached_publication_busy_retry_retains_original_cursor_charge_and_release_so
     field.try_prepare_publication().unwrap();
     let reserved = storage.budget.reserved_bytes();
     for _ in 0..3 {
-        let blocker = storage.released.guard(storage.blocks.acquire_writer());
+        let blocker = storage
+            .history_released
+            .guard(storage.blocks.acquire_writer());
         let Err(TransactionsBlockError::MembershipAdmission(MembershipAdmissionError::Busy(_))) =
             field.try_prepare_physical()
         else {

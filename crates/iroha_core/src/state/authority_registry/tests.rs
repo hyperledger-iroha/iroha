@@ -58,7 +58,7 @@ fn authority_registry_declares_every_owner_and_typed_canonical_schema() {
     assert_eq!(super::runtime::RUNTIME_FIELDS.len(), 10);
     assert_eq!(
         STATE_FIELDS.len(),
-        63 + usize::from(cfg!(feature = "telemetry"))
+        64 + usize::from(cfg!(feature = "telemetry"))
     );
     assert_eq!(
         crate::smartcontracts::isi::triggers::set::AUTHORITY_FIELDS.len(),
@@ -67,6 +67,10 @@ fn authority_registry_declares_every_owner_and_typed_canonical_schema() {
     assert_eq!(V1_LAYOUT.major, 0);
     assert_eq!(V1_LAYOUT.minor, 0);
     assert_eq!(V1_LAYOUT.flags, norito::core::header_flags::COMPACT_LEN);
+    assert!(matches!(
+        fields()["state.ivm_execution_budget"].role,
+        Role::Local(_)
+    ));
     for field in fields().values() {
         assert!(field.id.contains('.'));
         match field.role {
@@ -164,7 +168,6 @@ fn semantic_cursors_and_mixed_configuration_are_not_physical_caches() {
         "state.content",
         "state.settlement",
         "state.lane_compliance",
-        "state.kagemusha_v1_runtime_verifier",
     ] {
         assert!(matches!(fields[id].role, Role::Canonical(_)), "{id}");
     }
@@ -238,6 +241,7 @@ fn semantic_cursors_and_mixed_configuration_are_not_physical_caches() {
         "state.trigger_ivm_cache",
         "state.native_pending_evidence",
         "state.view_generation",
+        "state.kagemusha_v1_runtime_verifier",
     ] {
         assert!(matches!(fields[id].role, Role::Local(_)), "{id}");
     }

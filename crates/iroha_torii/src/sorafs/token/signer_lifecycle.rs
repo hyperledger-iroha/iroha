@@ -1,5 +1,8 @@
 //! One prepared token, one mutating call, and independently authenticated release fences.
 
+#[path = "signer_completed_phase.rs"]
+mod completed_phase;
+
 use super::{
     StreamTokenApprovedCustodyAnchorV1, StreamTokenIssuerError, StreamTokenSignerCallErrorV1,
     StreamTokenSignerClientV1, StreamTokenSignerPinsV1, StreamTokenStateObserverClientV1,
@@ -231,14 +234,14 @@ impl SignerDriverV1 {
         token_window: Option<(u64, u64)>,
     ) -> Result<(VerifiedStreamTokenSignerQualificationV1, u64), StreamTokenIssuerError> {
         let floor = self.query_floor()?;
-        let attempt = SignerStreamTokenObservationExpectedV1::current(
+        let mut attempt = SignerStreamTokenObservationExpectedV1::current(
             self.pins.binding(),
             phase,
             floor.challenge,
             floor.minimum,
             floor.not_before,
         )
-        .map_err(|_| evidence_error())?;
+        .map_err(|error| evidence_admission_error(&error))?;
         // `attempt` is owned by this invocation and is dropped on transport failure; never cached,
         // reconstructed from a response or reused after any validation outcome.
         let reply = self
@@ -249,17 +252,17 @@ impl SignerDriverV1 {
         let (record, observation) = reply.current_evidence().ok_or_else(evidence_error)?;
         let decoded_observation =
             SignerStreamTokenStateObservationV1::decode_canonical(observation)
-                .map_err(|_| evidence_error())?;
+                .map_err(|error| evidence_admission_error(&error))?;
         let verified = verify_stream_token_signer_current_evidence_v1(
             record,
             observation,
             self.pins.binding(),
             self.pins.custody_trust(),
             self.pins.observer_trust(),
-            attempt,
+            &mut attempt,
             self.now_unix_ms()?,
         )
-        .map_err(|_| evidence_error())?;
+        .map_err(|error| evidence_admission_error(&error))?;
         let validated_at = self.accept(
             verified.custody(),
             &decoded_observation.body,
@@ -348,7 +351,7 @@ impl SignerDriverV1 {
             after_floor.minimum,
             after_floor.not_before,
         )
-        .map_err(|_| evidence_error())?;
+        .map_err(|error| evidence_admission_error(&error))?;
         let after_native = self.finality.prepare_completed_check(
             &claims.0,
             Phase::AfterCommit,
@@ -358,54 +361,24 @@ impl SignerDriverV1 {
             .observer
             .observe(after_attempt.request())
             .map_err(map_call_error)?;
-        self.check_handles()?;
-        let after_observation = after_reply
-            .completed_observation()
-            .ok_or_else(evidence_error)?;
-        let after_decoded =
-            SignerStreamTokenStateObservationV1::decode_canonical(after_observation)
-                .map_err(|_| evidence_error())?;
-        let after = verify_stream_token_signer_completed_observation_v1(
-            raw_receipt.bytes(),
-            after_observation,
-            pending.token(),
-            &prepared,
-            self.pins.binding(),
-            self.pins.custody_trust(),
-            self.pins.observer_trust(),
+        let after = completed_phase::Received::new(
+            self,
+            completed_phase::Inputs {
+                receipt: &raw_receipt,
+                token: &pending,
+                prepared: &prepared,
+                original: original.custody(),
+                previous: None,
+                signing_anchor,
+            },
+            after_floor,
             after_attempt,
-            self.now_unix_ms()?,
+            after_reply,
+            after_native,
         )
-        .map_err(|_| evidence_error())?;
-        if !after.custody().continues_active_state(original.custody()) {
-            return Err(StreamTokenIssuerError::SignerStateChanged);
-        }
-        let expiry = pending
-            .token()
-            .body
-            .ttl_epoch
-            .checked_mul(1_000)
-            .ok_or(StreamTokenIssuerError::TimeOverflow)?;
-        let after_native = after_native.verify(
-            &after_decoded.body,
-            self.clock.as_ref(),
-            self.pins.clock_uncertainty_ms(),
-        )?;
-        self.accept(
-            after.custody(),
-            &after_decoded.body,
-            &after_floor,
-            &[
-                HistoricalFinalityV1::Custody(after.custody().statement().anchor),
-                HistoricalFinalityV1::Custody(signing_anchor),
-                HistoricalFinalityV1::Block(FinalityFloorV1 {
-                    height: after.completion().anchor.height,
-                    block_hash: after.completion().anchor.block_hash,
-                }),
-            ],
-            Some((pending.token().body.issued_at, expiry)),
-            Some(&after_native),
-        )?;
+        .authenticate_waiting()?
+        .verify_native()?
+        .accept()?;
 
         let release_floor = self.query_floor()?;
         let release_attempt = SignerStreamTokenObservationExpectedV1::completed(
@@ -418,7 +391,7 @@ impl SignerDriverV1 {
             release_floor.minimum,
             release_floor.not_before,
         )
-        .map_err(|_| evidence_error())?;
+        .map_err(|error| evidence_admission_error(&error))?;
         let release_native = self.finality.prepare_completed_check(
             &claims.0,
             Phase::BeforeRelease,
@@ -428,52 +401,27 @@ impl SignerDriverV1 {
             .observer
             .observe(release_attempt.request())
             .map_err(map_call_error)?;
-        self.check_handles()?;
-        let release_observation = release_reply
-            .completed_observation()
-            .ok_or_else(evidence_error)?;
-        let release_decoded =
-            SignerStreamTokenStateObservationV1::decode_canonical(release_observation)
-                .map_err(|_| evidence_error())?;
-        let released = verify_stream_token_signer_evidence_v1(
-            raw_receipt.bytes(),
-            release_observation,
-            pending.token(),
-            &prepared,
-            self.pins.binding(),
-            self.pins.custody_trust(),
-            self.pins.observer_trust(),
+        let release = completed_phase::Received::new(
+            self,
+            completed_phase::Inputs {
+                receipt: &raw_receipt,
+                token: &pending,
+                prepared: &prepared,
+                original: original.custody(),
+                previous: Some(after.custody()),
+                signing_anchor,
+            },
+            release_floor,
             release_attempt,
-            self.now_unix_ms()?,
+            release_reply,
+            release_native,
         )
-        .map_err(|_| evidence_error())?;
-        if !released.custody().continues_active_state(after.custody())
-            || !released
-                .custody()
-                .continues_active_state(original.custody())
-        {
-            return Err(StreamTokenIssuerError::SignerStateChanged);
-        }
-        let release_native = release_native.verify(
-            &release_decoded.body,
-            self.clock.as_ref(),
-            self.pins.clock_uncertainty_ms(),
-        )?;
-        self.accept(
-            released.custody(),
-            &release_decoded.body,
-            &release_floor,
-            &[
-                HistoricalFinalityV1::Custody(released.custody().statement().anchor),
-                HistoricalFinalityV1::Custody(signing_anchor),
-                HistoricalFinalityV1::Block(FinalityFloorV1 {
-                    height: released.completion().anchor.height,
-                    block_hash: released.completion().anchor.block_hash,
-                }),
-            ],
-            Some((pending.token().body.issued_at, expiry)),
-            Some(&release_native),
-        )?;
+        .authenticate_waiting()?
+        .verify_native()?
+        .accept()?;
+        // Retire both borrowed phase owners before discharging this exact pending token.
+        drop(release);
+        drop(after);
         // The only escape of the pending signature follows the fresh exact completed observation.
         pending.0.take().ok_or_else(evidence_error)
     }
@@ -499,6 +447,17 @@ impl Drop for PendingToken {
         if let Some(token) = &mut self.0 {
             zeroize_value_for_confidential_discard(&mut token.signature);
         }
+    }
+}
+// Fixed service classification outside the retained completed-reply owner. There is no retry
+// here: current-only attempts retire, and pre-reply completed custody remains an explicit gate.
+fn evidence_admission_error(
+    error: &sorafs_manifest::signer::stream_token_evidence::SignerStreamTokenEvidenceAdmissionErrorV1,
+) -> StreamTokenIssuerError {
+    if error.is_retryable() {
+        StreamTokenIssuerError::RuntimeSignerUnavailable
+    } else {
+        evidence_error()
     }
 }
 const fn evidence_error() -> StreamTokenIssuerError {

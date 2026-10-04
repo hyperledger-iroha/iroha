@@ -28,7 +28,7 @@ impl OwnedStatus {
 }
 
 /// Failure to assemble a complete, exactly bound status snapshot.
-#[derive(Clone, Copy, Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum StatusSnapshotError {
     /// Telemetry is not enabled for this owner.
     #[error("telemetry is disabled")]
@@ -51,6 +51,12 @@ pub enum StatusSnapshotError {
     /// A previously classified State checkpoint changed.
     #[error("classified State journal checkpoint changed")]
     CheckpointChanged,
+    /// A canonical history read could not finish under its original allocation budget.
+    #[error("status history read deferred: {0}")]
+    Deferred(crate::execution_attempt::ExecutionDeferred),
+    /// A canonical history read completed with a storage or decoding error.
+    #[error("status history read failed: {0}")]
+    HistoryRead(String),
     /// Kura omitted an applied block from the required prefix.
     #[error("an applied block is missing from Kura")]
     MissingBlock,
@@ -119,6 +125,29 @@ fn network_result_counts(
 }
 
 impl Actor {
+    /// Read canonical history using the original State pool, retaining local retry ownership
+    /// in the actor even when the waiting status request expires or is dropped.
+    pub(super) fn read_status_block(
+        &mut self,
+        height: NonZeroUsize,
+    ) -> Result<Option<iroha_data_model::block::SharedSignedBlock>, StatusSnapshotError> {
+        use crate::execution_attempt::ExecutionAttemptError;
+        self.status_read_refusal = None;
+        match self
+            .kura
+            .get_block(height, &self.state.ivm_execution_budget())
+        {
+            Ok(block) => Ok(block),
+            Err(ExecutionAttemptError::Deferred(reason)) => {
+                self.status_read_refusal = Some(reason.clone());
+                Err(StatusSnapshotError::Deferred(reason))
+            }
+            Err(ExecutionAttemptError::Rejected(error)) => {
+                Err(StatusSnapshotError::HistoryRead(error.to_string()))
+            }
+        }
+    }
+
     /// Finish one finite captured target even when its original HTTP waiter expires.
     /// Verified chunk progress survives; unverified chunk counters never publish.
     pub(super) async fn classify_status_target(
@@ -149,13 +178,12 @@ impl Actor {
             let digest = Hash::new_from_writer(|writer| {
                 write_telemetry_journal_prefix(writer, chunk.start, chunk.end)?;
                 for height in chunk.start + 1..=chunk.end {
-                    let classify = || -> Result<_, StatusSnapshotError> {
+                    let mut classify = || -> Result<_, StatusSnapshotError> {
                         let block = self
-                            .kura
-                            .get_block(
+                            .read_status_block(
                                 NonZeroUsize::new(height)
                                     .ok_or(StatusSnapshotError::JournalMismatch)?,
-                            )
+                            )?
                             .ok_or(StatusSnapshotError::MissingBlock)?;
                         let header = block.header();
                         if header.height().get()
@@ -164,9 +192,9 @@ impl Actor {
                         {
                             return Err(StatusSnapshotError::JournalMismatch);
                         }
-                        // TODO: replace get_block with the precharged exact-finalized
-                        // body reader and actor-owned decode/work reservation. The
-                        // journal authenticates proposal hashes, not output bytes.
+                        // TODO: authenticate exact finalized output provenance and fund
+                        // complete decode/work, beyond the original shared-control charge.
+                        // The journal authenticates proposal hashes, not output bytes.
                         let (approved, rejected) = network_result_counts(&block)?;
                         let mut report = reported
                             .filter(|r| r.height == height)
@@ -493,7 +521,7 @@ mod tests {
         name = "iroha_core::telemetry::classified_status::tests::MutableClassifiedBlock"
     )]
     struct MutableClassifiedBlock {
-        signatures: std::collections::BTreeSet<iroha_data_model::block::BlockSignature>,
+        signatures: iroha_data_model::block::BlockSignatures,
         payload: iroha_data_model::block::BlockPayload,
         result: Option<iroha_data_model::block::BlockResult>,
         commit_certificate: Option<iroha_data_model::block::CommitCertificate>,

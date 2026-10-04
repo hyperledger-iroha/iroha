@@ -11,6 +11,7 @@ mod audit;
 mod bridge;
 mod cli_output;
 mod client_config;
+mod collection_list;
 mod commands;
 mod compute;
 mod confidential;
@@ -27,7 +28,6 @@ mod gov;
 mod ivm_cli;
 mod json_utils;
 mod jurisdiction;
-mod list_support;
 mod nexus;
 mod offline;
 mod operator_key;
@@ -44,7 +44,7 @@ mod taira_public_reset;
 mod transaction_load;
 mod zk; // ZK helpers (app API convenience) // IVM/ABI helpers
 use clap::{CommandFactory, FromArgMatches, error::ErrorKind};
-use error_stack::{IntoReportCompat, Report, ResultExt, fmt::ColorMode};
+use error_stack::{AttachmentKind, FrameKind, IntoReportCompat, Report, ResultExt, fmt::ColorMode};
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::account::address::ChainDiscriminantGuard;
 use iroha::{
@@ -67,7 +67,6 @@ use std::{
     fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
-    sync::LazyLock,
     time::Duration,
 };
 use thiserror::Error;
@@ -288,13 +287,100 @@ fn print_fee_quote_text<C: RunContext + ?Sized>(
 pub(crate) mod json_macros {
     pub use norito::derive::{JsonDeserialize, JsonSerialize};
 }
-/// Output format for CLI responses.
-#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+/// Presentation class used by command implementations.
+///
+/// `--output-format jsonl` selects [`CliOutputFormat::Json`] with line-delimited rendering, so
+/// commands only distinguish machine JSON from human text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CliOutputFormat {
     /// Emit JSON only.
     Json,
     /// Emit human-readable text when available.
     Text,
+}
+/// Value accepted by the global `-o/--output-format` option.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OutputFormatArg {
+    /// One pretty-printed JSON document per response.
+    Json,
+    /// Human-readable text when the command has a text rendering (JSON otherwise).
+    Text,
+    /// Newline-delimited compact JSON: arrays print one element per line, streams one value per line.
+    Jsonl,
+}
+/// Effective output selection after applying the terminal-dependent default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OutputSelection {
+    /// Presentation class seen by commands.
+    pub(crate) format: CliOutputFormat,
+    /// Render JSON as compact newline-delimited values instead of pretty documents.
+    pub(crate) json_lines: bool,
+}
+impl OutputSelection {
+    /// Resolve the explicit option, or default to text on a terminal and JSON otherwise.
+    ///
+    /// `--machine` always defaults to JSON so automation never depends on terminal detection.
+    pub(crate) fn resolve(
+        explicit: Option<OutputFormatArg>,
+        machine: bool,
+        stdout_is_terminal: bool,
+    ) -> Self {
+        let selected = explicit.unwrap_or(if !machine && stdout_is_terminal {
+            OutputFormatArg::Text
+        } else {
+            OutputFormatArg::Json
+        });
+        match selected {
+            OutputFormatArg::Json => Self {
+                format: CliOutputFormat::Json,
+                json_lines: false,
+            },
+            OutputFormatArg::Text => Self {
+                format: CliOutputFormat::Text,
+                json_lines: false,
+            },
+            OutputFormatArg::Jsonl => Self {
+                format: CliOutputFormat::Json,
+                json_lines: true,
+            },
+        }
+    }
+}
+/// Render one JSON value in the selected style.
+///
+/// Line-delimited output prints each element of a top-level array on its own line, so list results
+/// and event streams can be consumed with line-oriented tools.
+pub(crate) fn render_json_output<T: JsonSerialize + ?Sized>(
+    data: &T,
+    json_lines: bool,
+) -> Result<String> {
+    if !json_lines {
+        let mut rendered = norito::json::to_json_pretty(data)
+            .map_err(|err| eyre!("failed to render JSON: {err}"))?;
+        if !rendered.ends_with('\n') {
+            rendered.push('\n');
+        }
+        return Ok(rendered);
+    }
+    let value =
+        norito::json::to_value(data).map_err(|err| eyre!("failed to render JSON: {err}"))?;
+    let mut rendered = String::new();
+    let mut push_line = |item: &json::Value| -> Result<()> {
+        rendered.push_str(
+            &norito::json::to_json(item).map_err(|err| eyre!("failed to render JSON: {err}"))?,
+        );
+        rendered.push('\n');
+        Ok(())
+    };
+    match &value {
+        json::Value::Array(items) => {
+            for item in items {
+                push_line(item)?;
+            }
+        }
+        other => push_line(other)?,
+    }
+    Ok(rendered)
 }
 /// Signature-bound source selected for transaction fees.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -395,10 +481,12 @@ pub(crate) fn wait_for_transaction_applied(
 struct Args {
     /// Path to the configuration file.
     ///
-    /// By default, `iroha` reads `client.toml`; runtime commands require it to be present and
-    /// readable. `taira doctor` and the runtime-authorized `taira public-reset` surface never read
-    /// client configuration or ledger signing material. `dataspace` builds its runtime client
-    /// directly from its definition and explicitly selected public trust profile.
+    /// By default, `iroha` reads `client.toml` from the current directory; relative paths are
+    /// resolved against the current directory. Runtime commands require a readable configuration,
+    /// while offline helpers (`tools address|crypto|ivm|version`) run without one. `taira doctor`
+    /// and the runtime-authorized `taira public-reset` surface never read client configuration or
+    /// ledger signing material. `dataspace` builds its runtime client directly from its definition
+    /// and explicitly selected public trust profile.
     #[arg(short, long, value_name("PATH"))]
     config: Option<PathBuf>,
     /// Read an owner-private regular inherited configuration descriptor without environment overrides.
@@ -435,28 +523,41 @@ struct Args {
     /// Path to a JSON file for attaching transaction metadata (optional)
     #[arg(short, long, value_name("PATH"))]
     metadata: Option<PathBuf>,
-    /// Reads instructions from stdin and appends new ones.
+    /// Read a JSON array of instructions from stdin and run them before this command's own
+    /// instructions, in one transaction.
     ///
     /// Example usage:
     ///
-    /// `echo "[]" | iroha -io asset definition register --id "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --name "USD" --scale 0`
-    #[arg(short, long)]
-    input: bool,
-    /// Outputs instructions to stdout without submitting them.
+    /// `iroha --emit-instructions tx ping --msg first | iroha --fee-payer authority --stdin-instructions tx ping --msg second`
+    #[arg(long = "stdin-instructions")]
+    stdin_instructions: bool,
+    /// Print this command's instructions to stdout as a JSON array instead of submitting them.
     ///
     /// Example usage:
     ///
-    /// `iroha -o asset definition register --id "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --name "USD" --scale 0 | iroha tx stdin`
-    #[arg(short, long)]
-    output: bool,
+    /// `iroha --emit-instructions ledger asset definition register --id "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --name "USD" --scale 0 | iroha --fee-payer authority tx stdin`
+    #[arg(long = "emit-instructions")]
+    emit_instructions: bool,
     /// Output format for command responses.
-    #[arg(long = "output-format", value_enum, default_value_t = CliOutputFormat::Json)]
-    output_format: CliOutputFormat,
+    ///
+    /// Defaults to `text` when stdout is a terminal and to `json` otherwise (always `json` with
+    /// `--machine`), so scripts that capture stdout keep receiving JSON. `jsonl` prints compact
+    /// JSON, one value per line: arrays print one element per line and event streams one event per
+    /// line.
+    #[arg(
+        short = 'o',
+        long = "output-format",
+        value_enum,
+        value_name = "FORMAT",
+        global = true
+    )]
+    output_format: Option<OutputFormatArg>,
     /// Language code for messages, overrides system language
-    #[arg(long, value_name("LANG"))]
+    #[arg(long, value_name("LANG"), global = true)]
     language: Option<String>,
-    /// Enable deterministic machine mode (no startup chatter; strict loading for commands that require client config).
-    #[arg(long)]
+    /// Enable deterministic machine mode: JSON output by default and strict loading for commands
+    /// that require client config.
+    #[arg(long, global = true)]
     machine: bool,
     /// Required signature-bound fee source for transaction submissions.
     #[command(flatten)]
@@ -470,6 +571,9 @@ enum Command {
     /// Canonical account reads and account mutations
     #[command(subcommand)]
     Account(account::Command),
+    /// Explorer feeds with shared filters, projection and cursor paging
+    #[command(subcommand)]
+    Explorer(explorer::Command),
     /// Typed transaction status and transaction helpers
     #[command(subcommand)]
     Tx(transaction::Command),
@@ -525,6 +629,11 @@ fn transaction_submission_receipt_fields(
 /// Context inside which commands run
 trait RunContext {
     fn config(&self) -> &Config;
+    /// Whether [`Self::config`] is a real client configuration rather than the offline sentinel
+    /// used by configuration-free helpers; only a real configuration may reach the network.
+    fn has_client_config(&self) -> bool {
+        true
+    }
     fn connect_queue_root(&self) -> PathBuf {
         client_config::default_connect_queue_root()
     }
@@ -540,6 +649,10 @@ trait RunContext {
     fn i18n(&self) -> &Localizer;
     fn output_format(&self) -> CliOutputFormat {
         CliOutputFormat::Json
+    }
+    /// Whether JSON output is newline-delimited (`--output-format jsonl`).
+    fn json_lines(&self) -> bool {
+        false
     }
     fn print_data<T>(&mut self, data: &T) -> Result<()>
     where
@@ -612,27 +725,31 @@ trait RunContext {
             Executable::ContractCall(invocation) => {
                 if self.input_instructions() || self.output_instructions() {
                     eyre::bail!(
-                        "Incompatible `--input` `--output` flags with contract-call executables"
+                        "`--stdin-instructions` and `--emit-instructions` do not apply to contract-call executables"
                     )
                 }
                 Executable::ContractCall(invocation)
             }
             Executable::Ivm(bytecode) => {
                 if self.input_instructions() || self.output_instructions() {
-                    eyre::bail!("Incompatible `--input` `--output` flags with `iroha tx ivm`")
+                    eyre::bail!(
+                        "`--stdin-instructions` and `--emit-instructions` do not apply to `iroha tx ivm`"
+                    )
                 }
                 Executable::Ivm(bytecode)
             }
             Executable::IvmProved(proved) => {
                 if self.input_instructions() || self.output_instructions() {
-                    eyre::bail!("Incompatible `--input` `--output` flags with `iroha tx ivm`")
+                    eyre::bail!(
+                        "`--stdin-instructions` and `--emit-instructions` do not apply to `iroha tx ivm`"
+                    )
                 }
                 Executable::IvmProved(proved)
             }
             Executable::Batch(items) => {
                 if self.input_instructions() || self.output_instructions() {
                     eyre::bail!(
-                        "Incompatible `--input` `--output` flags with mixed executable batches"
+                        "`--stdin-instructions` and `--emit-instructions` do not apply to mixed executable batches"
                     )
                 }
                 Executable::Batch(items)
@@ -714,6 +831,7 @@ impl Run for Command {
         match self {
             Account(variant) => Run::run(variant, context),
             Tx(variant) => Run::run(variant, context),
+            Explorer(variant) => Run::run(variant, context),
             Ledger(variant) => Run::run(variant, context),
             Trigger(variant) => Run::run(variant, context),
             Ops(variant) => Run::run(variant, context),
@@ -737,6 +855,7 @@ impl Command {
             Self::Tools(command) => command.allows_fallback_config(),
             Self::Account(_)
             | Self::Tx(_)
+            | Self::Explorer(_)
             | Self::Ledger(_)
             | Self::Trigger(_)
             | Self::Ops(_)
@@ -753,7 +872,67 @@ impl Command {
             Self::App(app::Command::Sorafs(crate::commands::sorafs::Command::Toolkit(_))) => true,
             Self::Offline(command) => command.allows_fallback_config(),
             Self::Contract(command) => command.allows_fallback_config(),
+            Self::Tools(command) => command.allows_fallback_config(),
             _ => false,
+        }
+    }
+}
+mod explorer {
+    use super::*;
+    #[derive(clap::Subcommand, Debug)]
+    pub enum Command {
+        /// Read the bounded Accounts Explorer feed.
+        Accounts(crate::collection_list::ListArgs),
+        /// Read the bounded Domains Explorer feed.
+        Domains(crate::collection_list::ListArgs),
+        /// Read the bounded AssetDefinitions Explorer feed.
+        AssetDefinitions(crate::collection_list::ListArgs),
+        /// Read the bounded Assets Explorer feed.
+        Assets(crate::collection_list::ListArgs),
+        /// Read the bounded Nfts Explorer feed.
+        Nfts(crate::collection_list::ListArgs),
+        /// Read the bounded Rwas Explorer feed.
+        Rwas(crate::collection_list::ListArgs),
+        /// Read the bounded Blocks Explorer feed.
+        Blocks(crate::collection_list::ListArgs),
+        /// Read the bounded Transactions Explorer feed.
+        Transactions(crate::collection_list::ListArgs),
+        /// Read the bounded TransactionsLatest Explorer feed.
+        TransactionsLatest(crate::collection_list::ListArgs),
+        /// Read the bounded Instructions Explorer feed.
+        Instructions(crate::collection_list::ListArgs),
+        /// Read the bounded InstructionsLatest Explorer feed.
+        InstructionsLatest(crate::collection_list::ListArgs),
+    }
+    impl Run for Command {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let (collection, args) = match self {
+                Self::Accounts(args) => (iroha::collections::Collection::ExplorerAccounts, args),
+                Self::Domains(args) => (iroha::collections::Collection::ExplorerDomains, args),
+                Self::AssetDefinitions(args) => (
+                    iroha::collections::Collection::ExplorerAssetDefinitions,
+                    args,
+                ),
+                Self::Assets(args) => (iroha::collections::Collection::ExplorerAssets, args),
+                Self::Nfts(args) => (iroha::collections::Collection::ExplorerNfts, args),
+                Self::Rwas(args) => (iroha::collections::Collection::ExplorerRwas, args),
+                Self::Blocks(args) => (iroha::collections::Collection::ExplorerBlocks, args),
+                Self::Transactions(args) => {
+                    (iroha::collections::Collection::ExplorerTransactions, args)
+                }
+                Self::TransactionsLatest(args) => (
+                    iroha::collections::Collection::ExplorerTransactionsLatest,
+                    args,
+                ),
+                Self::Instructions(args) => {
+                    (iroha::collections::Collection::ExplorerInstructions, args)
+                }
+                Self::InstructionsLatest(args) => (
+                    iroha::collections::Collection::ExplorerInstructionsLatest,
+                    args,
+                ),
+            };
+            crate::collection_list::run_list(context, collection, &args)
         }
     }
 }
@@ -1078,14 +1257,25 @@ mod tools {
         }
     }
     impl Command {
+        /// Offline helpers run without a client configuration, also in `--machine` mode.
+        ///
+        /// A readable configuration still supplies defaults such as the I105 discriminant, and
+        /// `version` only contacts Torii when a real configuration was loaded.
         pub(super) fn allows_fallback_config(&self) -> bool {
-            matches!(self, Self::Address(_))
+            match self {
+                Self::Address(_)
+                | Self::Crypto(_)
+                | Self::Ivm(_)
+                | Self::MarkdownHelp(_)
+                | Self::Version(_) => true,
+            }
         }
     }
 }
 #[derive(Error, Debug)]
 enum MainError {
-    #[error("Failed to parse command-line arguments: {0}")]
+    /// Argument parsing or argument-combination failure; clap diagnostics are kept verbatim.
+    #[error("{0}")]
     CliArgs(String),
     #[error("Failed to load config")]
     Config,
@@ -1093,8 +1283,86 @@ enum MainError {
     SerializeConfig,
     #[error("Failed to get transaction metadata from file")]
     TransactionMetadata,
-    #[error("Failed to run the command: {0}")]
+    /// Command failure; the outermost message, with its causes attached to the report.
+    #[error("{0}")]
     Command(String),
+    /// A command rejected its input, such as an invalid list filter, locally or on Torii.
+    #[error("{0}")]
+    Input(String),
+}
+/// Actionable advice attached to an error report and rendered after its causes.
+#[derive(Debug)]
+struct CliHint(String);
+/// Convert a command error into a report whose causes are rendered exactly once.
+///
+/// The outermost message becomes the report context; every distinct cause in the chain becomes a
+/// printable attachment. Error types that embed their source in their own message would otherwise
+/// show that source twice, so a cause already contained in a shown message is skipped.
+fn command_error_report(error: &eyre::Report) -> Report<MainError> {
+    let mut chain = error.chain().map(|cause| cause.to_string());
+    let message = chain.next().unwrap_or_default();
+    let mut shown = vec![message.clone()];
+    let mut causes = Vec::new();
+    for cause in chain {
+        let cause = cause.trim().to_owned();
+        if cause.is_empty() || shown.iter().any(|seen| seen.contains(cause.as_str())) {
+            continue;
+        }
+        shown.push(cause.clone());
+        causes.push(cause);
+    }
+    let context = if is_input_error(error) {
+        MainError::Input(message)
+    } else {
+        MainError::Command(message)
+    };
+    // `frames()` yields the most recent attachment first; attach innermost first so the rendered
+    // chain reads from the outermost cause inwards.
+    let report = causes
+        .into_iter()
+        .rev()
+        .fold(Report::new(context), |report, cause| report.attach(cause));
+    api_error_hints(error)
+        .into_iter()
+        .fold(report, |report, hint| report.attach_opaque(CliHint(hint)))
+}
+/// Whether a command error was caused by invalid input rather than by the command itself.
+///
+/// Invalid list flags and Torii's `invalid_*` collection-query codes are input errors.
+fn is_input_error(error: &eyre::Report) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<collection_list::ListInputError>()
+            .is_some()
+            || cause
+                .downcast_ref::<iroha::Error>()
+                .and_then(iroha::Error::code)
+                .is_some_and(|code| code.starts_with("invalid_"))
+    })
+}
+/// Torii's structured guidance for an API error: its hint and the accepted values.
+fn api_error_hints(error: &eyre::Report) -> Vec<String> {
+    let Some(api) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<iroha::Error>())
+        .and_then(iroha::Error::api_error)
+    else {
+        return Vec::new();
+    };
+    let Some(details) = api.details() else {
+        return Vec::new();
+    };
+    let mut hints = Vec::new();
+    if let Some(hint) = details.hint() {
+        hints.push(hint.to_owned());
+    }
+    if let Some(expected) = details.expected() {
+        hints.push(match details.actual() {
+            Some(actual) => format!("expected {expected}; got {actual}"),
+            None => format!("expected {expected}"),
+        });
+    }
+    hints
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CliErrorKind {
@@ -1133,7 +1401,12 @@ struct Version;
 impl Run for Version {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client_version = build_metadata().version();
-        let response = context.server_version()?;
+        // Without a client configuration there is no node to ask; report the client alone.
+        let response = if context.has_client_config() {
+            Some(context.server_version()?)
+        } else {
+            None
+        };
         match context.output_format() {
             CliOutputFormat::Text => {
                 let (client_git_sha, client_version_msg, server_version_msg) = {
@@ -1144,7 +1417,15 @@ impl Run for Version {
                             &[("sha", build_metadata().source_commit_label())],
                         ),
                         i18n.t_with("info.client_version", &[("version", client_version)]),
-                        i18n.t_with("info.server_version", &[("version", response.as_str())]),
+                        i18n.t_with(
+                            "info.server_version",
+                            &[(
+                                "version",
+                                response
+                                    .as_deref()
+                                    .unwrap_or("unavailable (no client configuration)"),
+                            )],
+                        ),
                     )
                 };
                 context.println(client_git_sha)?;
@@ -1175,17 +1456,17 @@ pub fn main_entry(build: CompiledBuildMetadata) -> std::process::ExitCode {
         return std::process::ExitCode::from(7);
     }
     let raw_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
-    let output_format = output_format_override_from_args(
+    let (explicit_output, machine) = output_format_override_from_args(
         raw_args
             .iter()
             .skip(1)
             .map(|arg| arg.to_string_lossy().into_owned()),
-    )
-    .unwrap_or(CliOutputFormat::Json);
+    );
+    let output = OutputSelection::resolve(explicit_output, machine, stdout_is_terminal());
     match run() {
         Ok(status) => status,
         Err(report) => {
-            let rendered = render_cli_error(&report, output_format);
+            let rendered = render_cli_error(&report, output);
             eprint!("{}", rendered.output);
             std::process::ExitCode::from(rendered.kind.exit_code() as u8)
         }
@@ -1215,17 +1496,26 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
                 print!("{localized}");
                 return Ok(std::process::ExitCode::SUCCESS);
             }
+            ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => {
+                // A command group invoked without a subcommand shows its ordinary help on stderr
+                // with clap's usage status, like the other first-party CLIs.
+                let rendered = err.render().to_string();
+                eprint!("{}", localize_help_text(&rendered, &help_i18n));
+                return Ok(std::process::ExitCode::from(
+                    u8::try_from(err.exit_code()).unwrap_or(2),
+                ));
+            }
             ErrorKind::DisplayVersion => {
                 print!("{}", err.render());
                 return Ok(std::process::ExitCode::SUCCESS);
             }
             _ => {
-                return Err(Report::new(MainError::CliArgs(err.to_string())));
+                return Err(Report::new(MainError::CliArgs(err.render().to_string())));
             }
         },
     };
     let args = Args::from_arg_matches(&matches)
-        .map_err(|err| Report::new(MainError::CliArgs(err.to_string())))?;
+        .map_err(|err| Report::new(MainError::CliArgs(err.render().to_string())))?;
     if let Command::App(app::Command::Sorafs(commands::sorafs::Command::Toolkit(command))) =
         &args.command
         && command.is_artifact_tool()
@@ -1246,9 +1536,6 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
     }
     let language = detect_language(args.language.as_deref());
     let i18n = Localizer::new(Bundle::Cli, language);
-    if !args.machine {
-        eprintln!("{}", i18n.t("info.started"));
-    }
     if let Command::Tools(tools::Command::MarkdownHelp(_md)) = &args.command {
         clap_markdown::print_help_markdown::<Args>();
         return Ok(std::process::ExitCode::SUCCESS);
@@ -1321,11 +1608,11 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
     let (load_path, config_was_explicit) = args.config.as_ref().map_or_else(
         || {
             (
-                LoadPath::Default(PathBuf::from("client.toml")),
+                LoadPath::Default(PathBuf::from(DEFAULT_CLIENT_CONFIG_PATH)),
                 args.config_fd.is_some(),
             )
         },
-        |path| (LoadPath::Explicit(resolve_config_path(path)), true),
+        |path| (LoadPath::Explicit(path.clone()), true),
     );
     let loaded_config = if let Some(fd) = args.config_fd {
         let source = args
@@ -1338,6 +1625,7 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
     } else {
         load_cli_client_config(load_path)
     };
+    let mut offline_fallback = false;
     let (config, filesystem_config) = match loaded_config {
         Ok(loaded) => loaded,
         Err(_)
@@ -1350,18 +1638,20 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
                     .attach("failed to derive offline fallback signing key")
                     .attach(err.to_string())
             })?;
+            offline_fallback = true;
             (config, client_config::FilesystemConfig::default())
         }
         Err(report) => {
-            let mut report = report
+            let hint = if config_was_explicit {
+                "fix the configuration selected with `--config`/`--config-fd`".to_owned()
+            } else {
+                format!(
+                    "runtime commands read `{DEFAULT_CLIENT_CONFIG_PATH}` from the current directory; pass `--config <PATH>` (offline helpers under `iroha tools` need no configuration)"
+                )
+            };
+            return Err(report
                 .change_context(MainError::Config)
-                .attach(i18n.t("error.config_path"));
-            if !config_was_explicit {
-                report = report.attach(
-                    "runtime commands require a readable `client.toml`; use command-specific offline tooling explicitly",
-                );
-            }
-            return Err(report);
+                .attach_opaque(CliHint(hint)));
         }
     };
     if args.verbose {
@@ -1384,24 +1674,27 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
     if let Command::Offline(command) = &args.command {
         command
             .preflight_before_operator_key_load()
-            .map_err(|error| Report::new(MainError::Command(error.to_string())))?;
+            .map_err(|error| command_error_report(&error))?;
     }
     let operator_key_pair = load_runtime_operator_key(&args).map_err(|error| {
         Report::new(MainError::Config)
             .attach("failed to load runtime operator signing key")
             .attach(error.to_string())
     })?;
+    let output = effective_output(&args);
     let mut context = PrintJsonContext {
         write: io::stdout(),
         err_write: io::stderr(),
         config,
         filesystem_config,
+        offline_fallback,
         operator_key_pair,
         transaction_metadata: None,
-        output_format: effective_output_format(&args),
+        output_format: output.format,
+        json_lines: output.json_lines,
         fee_payment: args.fee_payment,
-        input_instructions: args.input,
-        output_instructions: args.output,
+        input_instructions: args.stdin_instructions,
+        output_instructions: args.emit_instructions,
         i18n: i18n.clone(),
     };
     if let Some(path) = args.metadata {
@@ -1431,10 +1724,7 @@ fn run_local_dataspace_profile(
     })())
 }
 fn map_command_result(result: Result<()>) -> ReportResult<(), MainError> {
-    result.into_report().map_err(|report| {
-        let message = format!("{:#}", report.current_context());
-        report.change_context(MainError::Command(message))
-    })
+    result.map_err(|error| command_error_report(&error))
 }
 fn load_runtime_operator_key(args: &Args) -> Result<Option<KeyPair>> {
     match (
@@ -1457,14 +1747,14 @@ fn reject_irrelevant_local_tool_globals(args: &Args, command: &str) -> ReportRes
         || args.operator_private_key_fd.is_some()
         || args.verbose
         || args.metadata.is_some()
-        || args.input
-        || args.output
+        || args.stdin_instructions
+        || args.emit_instructions
         || args.fee_payment.fee_payer.is_some()
         || args.fee_payment.fee_program.is_some()
         || args.fee_payment.fee_program_revision.is_some()
     {
         return Err(Report::new(MainError::CliArgs(format!(
-            "`{command}` is credential-free local tooling and rejects config, operator-key, verbose, metadata, input/output-instruction and fee-selection globals",
+            "`{command}` is credential-free local tooling and rejects config, operator-key, verbose, metadata, stdin/emit-instruction and fee-selection globals",
         ))));
     }
     Ok(())
@@ -1486,11 +1776,11 @@ fn reject_irrelevant_taira_doctor_globals(args: &Args) -> ReportResult<(), MainE
     if args.metadata.is_some() {
         flags.push("--metadata");
     }
-    if args.input {
-        flags.push("--input");
+    if args.stdin_instructions {
+        flags.push("--stdin-instructions");
     }
-    if args.output {
-        flags.push("--output");
+    if args.emit_instructions {
+        flags.push("--emit-instructions");
     }
     if args.fee_payment.fee_payer.is_some() {
         flags.push("--fee-payer");
@@ -1533,14 +1823,16 @@ fn reject_irrelevant_taira_public_reset_globals(args: &Args) -> ReportResult<(),
     if args.metadata.is_some() {
         flags.push("--metadata");
     }
-    if args.input {
-        flags.push("--input");
+    if args.stdin_instructions {
+        flags.push("--stdin-instructions");
     }
-    if args.output {
-        flags.push("--output");
+    if args.emit_instructions {
+        flags.push("--emit-instructions");
     }
-    if args.output_format != CliOutputFormat::Json {
-        flags.push("--output-format text");
+    match args.output_format {
+        None | Some(OutputFormatArg::Json) => {}
+        Some(OutputFormatArg::Text) => flags.push("--output-format text"),
+        Some(OutputFormatArg::Jsonl) => flags.push("--output-format jsonl"),
     }
     if args.fee_payment.fee_payer.is_some() {
         flags.push("--fee-payer");
@@ -1605,37 +1897,64 @@ fn localize_help_text(help: &str, i18n: &Localizer) -> String {
     }
     localized
 }
-fn output_format_override_from_args<I, S>(args: I) -> Option<CliOutputFormat>
+/// Scan raw arguments for the explicit output format and `--machine` before clap parses them.
+///
+/// Argument errors are rendered in the format the caller asked for, even when parsing fails.
+fn output_format_override_from_args<I, S>(args: I) -> (Option<OutputFormatArg>, bool)
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
+    let mut explicit = None;
+    let mut machine = false;
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
         let arg = arg.as_ref();
-        if arg == "--output-format" {
-            if let Some(value) = iter.next() {
-                if let Some(format) = parse_output_format(value.as_ref()) {
-                    return Some(format);
-                }
+        if arg == "--" {
+            break;
+        }
+        if arg == "--machine" {
+            machine = true;
+        } else if arg == "--output-format" || arg == "-o" {
+            if let Some(format) = iter
+                .next()
+                .and_then(|value| parse_output_format(value.as_ref()))
+            {
+                explicit = Some(format);
             }
         } else if let Some(value) = arg.strip_prefix("--output-format=") {
             if let Some(format) = parse_output_format(value) {
-                return Some(format);
+                explicit = Some(format);
+            }
+        } else if let Some(value) = arg.strip_prefix("-o")
+            && !value.is_empty()
+            && !arg.starts_with("--")
+        {
+            if let Some(format) = parse_output_format(value.strip_prefix('=').unwrap_or(value)) {
+                explicit = Some(format);
             }
         }
     }
-    None
+    (explicit, machine)
 }
-fn parse_output_format(value: &str) -> Option<CliOutputFormat> {
+fn parse_output_format(value: &str) -> Option<OutputFormatArg> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "json" => Some(CliOutputFormat::Json),
-        "text" => Some(CliOutputFormat::Text),
+        "json" => Some(OutputFormatArg::Json),
+        "text" => Some(OutputFormatArg::Text),
+        "jsonl" => Some(OutputFormatArg::Jsonl),
         _ => None,
     }
 }
+fn stdout_is_terminal() -> bool {
+    use std::io::IsTerminal as _;
+    io::stdout().is_terminal()
+}
+/// Output selection for parsed arguments, applying the terminal-dependent default.
+fn effective_output(args: &Args) -> OutputSelection {
+    OutputSelection::resolve(args.output_format, args.machine, stdout_is_terminal())
+}
 fn effective_output_format(args: &Args) -> CliOutputFormat {
-    args.output_format
+    effective_output(args).format
 }
 fn color_mode() -> ColorMode {
     if supports_color::on(supports_color::Stream::Stdout).is_some()
@@ -1646,16 +1965,8 @@ fn color_mode() -> ColorMode {
         ColorMode::None
     }
 }
-fn resolve_config_path(path: &Path) -> PathBuf {
-    if path.is_absolute() || path.exists() {
-        return path.to_path_buf();
-    }
-    let candidate = WORKSPACE_ROOT.join(path);
-    if candidate.exists() {
-        return candidate;
-    }
-    path.to_path_buf()
-}
+/// Client configuration read when neither `--config` nor `--config-fd` is given.
+const DEFAULT_CLIENT_CONFIG_PATH: &str = "client.toml";
 fn load_cli_client_config(
     load_path: LoadPath<PathBuf>,
 ) -> ReportResult<(Config, client_config::FilesystemConfig), MainError> {
@@ -1781,14 +2092,6 @@ fn client_config_with_defaults(
 pub(crate) fn fallback_config() -> Config {
     try_fallback_config().expect("offline fallback config should derive a deterministic key pair")
 }
-static WORKSPACE_ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
-        .parent()
-        .and_then(|p| p.parent())
-        .unwrap_or(&manifest_dir)
-        .to_path_buf()
-});
 fn config_to_json(
     config: &Config,
     filesystem_config: &client_config::FilesystemConfig,
@@ -1893,103 +2196,33 @@ fn map_account_admission_error(err: eyre::Report, i18n: &Localizer) -> eyre::Rep
 fn account_admission_rejected_message(hint: &str, i18n: &Localizer) -> String {
     i18n.t_with("error.account_admission_rejected", &[("hint", hint)])
 }
-mod filter {
-    use super::*;
-    use crate::list_support::{CommonArgs, FilterArgs};
-    use iroha::data_model::query::dsl::CompoundPredicate;
-    #[derive(clap::Args, Debug)]
-    pub struct DomainFilter {
-        /// Filtering condition specified as a JSON string
-        #[arg(value_parser = parse_json::<CompoundPredicate<Domain>>)]
-        predicate: CompoundPredicate<Domain>,
-        #[command(flatten)]
-        options: CommonArgs,
-    }
-    impl DomainFilter {
-        pub fn into_list_args(self) -> FilterArgs<CompoundPredicate<Domain>> {
-            FilterArgs::new(self.predicate, self.options)
-        }
-    }
-    #[derive(clap::Args, Debug)]
-    pub struct AccountFilter {
-        /// Filtering condition specified as a JSON string
-        #[arg(value_parser = parse_json::<CompoundPredicate<Account>>)]
-        predicate: CompoundPredicate<Account>,
-        #[command(flatten)]
-        options: CommonArgs,
-    }
-    impl AccountFilter {
-        pub fn into_list_args(self) -> FilterArgs<CompoundPredicate<Account>> {
-            FilterArgs::new(self.predicate, self.options)
-        }
-    }
-    #[derive(clap::Args, Debug)]
-    pub struct AssetFilter {
-        /// Filtering condition specified as a JSON string
-        #[arg(value_parser = parse_json::<CompoundPredicate<Asset>>)]
-        predicate: CompoundPredicate<Asset>,
-        #[command(flatten)]
-        options: CommonArgs,
-    }
-    impl AssetFilter {
-        pub fn into_list_args(self) -> FilterArgs<CompoundPredicate<Asset>> {
-            FilterArgs::new(self.predicate, self.options)
-        }
-    }
-    #[derive(clap::Args, Debug)]
-    pub struct AssetDefinitionFilter {
-        /// Filtering condition specified as a JSON string
-        #[arg(value_parser = parse_json::<CompoundPredicate<AssetDefinition>>)]
-        predicate: CompoundPredicate<AssetDefinition>,
-        #[command(flatten)]
-        options: CommonArgs,
-    }
-    impl AssetDefinitionFilter {
-        pub fn into_list_args(self) -> FilterArgs<CompoundPredicate<AssetDefinition>> {
-            FilterArgs::new(self.predicate, self.options)
-        }
-    }
-    #[derive(clap::Args, Debug)]
-    pub struct NftFilter {
-        /// Filtering condition specified as a JSON string
-        #[arg(value_parser = parse_json::<CompoundPredicate<Nft>>)]
-        predicate: CompoundPredicate<Nft>,
-        #[command(flatten)]
-        options: CommonArgs,
-    }
-    impl NftFilter {
-        pub fn into_list_args(self) -> FilterArgs<CompoundPredicate<Nft>> {
-            FilterArgs::new(self.predicate, self.options)
-        }
-    }
-    #[derive(clap::Args, Debug)]
-    pub struct RwaFilter {
-        /// Filtering condition specified as a JSON string
-        #[arg(value_parser = parse_json::<CompoundPredicate<Rwa>>)]
-        predicate: CompoundPredicate<Rwa>,
-        #[command(flatten)]
-        options: CommonArgs,
-    }
-    impl RwaFilter {
-        pub fn into_list_args(self) -> FilterArgs<CompoundPredicate<Rwa>> {
-            FilterArgs::new(self.predicate, self.options)
-        }
-    }
-}
-fn drive_stream_until_timeout<T, F>(
+/// Drive a subscription until `duration` has elapsed since the call, the stream ends, or
+/// `on_item` fails.
+///
+/// `duration` is a deadline for the whole subscription, not an idle timeout: a stream that keeps
+/// delivering items still stops on time. Each receive waits at most for the time remaining.
+fn drive_stream_until_deadline<T, F>(
     mut receive: impl FnMut(Duration) -> iroha::Result<Option<T>>,
     mut on_item: F,
-    timeout: Duration,
+    duration: Duration,
     timeout_message: &str,
 ) -> Result<()>
 where
     F: FnMut(T) -> Result<()>,
 {
+    let deadline = std::time::Instant::now().checked_add(duration);
     loop {
-        match receive(timeout) {
+        let remaining = deadline.map_or(duration, |deadline| {
+            deadline.saturating_duration_since(std::time::Instant::now())
+        });
+        if remaining.is_zero() {
+            break;
+        }
+        match receive(remaining) {
             Ok(Some(value)) => on_item(value)?,
-            Ok(None)
-            | Err(iroha::Error::Timeout {
+            // The server closed the stream before the deadline.
+            Ok(None) => return Ok(()),
+            Err(iroha::Error::Timeout {
                 operation: "stream.receive",
             }) => break,
             Err(error) => return Err(eyre!("Torii event stream error: {error}")),
@@ -2055,8 +2288,11 @@ mod events {
     use iroha::data_model::events::pipeline::{BlockEventFilter, TransactionEventFilter};
     #[derive(clap::Args, Debug)]
     pub struct Args {
-        /// Duration to listen for events.
-        /// Example: "1y 6M 2w 3d 12h 30m 30s"
+        /// Stop listening once this much time has passed since the subscription started.
+        ///
+        /// This is a deadline for the whole subscription, not an idle timeout: a busy stream still
+        /// stops on time. Without it the command listens until interrupted or the stream closes.
+        /// Example: "30s", "1h 30m"
         #[arg(short, long, global = true)]
         timeout: Option<humantime::Duration>,
         #[command(subcommand)]
@@ -2158,7 +2394,7 @@ mod events {
             .wrap_err("Failed to listen for events")?;
         let result = if let Some(timeout) = timeout {
             let timeout_message = i18n.t("warning.timeout_expired");
-            drive_stream_until_timeout(
+            drive_stream_until_deadline(
                 |timeout| stream.recv(Some(timeout)),
                 |event| context.print_data(&event),
                 timeout,
@@ -2182,8 +2418,11 @@ mod blocks {
     pub struct Args {
         /// Block height from which to start streaming blocks
         height: NonZeroU64,
-        /// Duration to listen for events.
-        /// Example: "1y 6M 2w 3d 12h 30m 30s"
+        /// Stop streaming once this much time has passed since the subscription started.
+        ///
+        /// This is a deadline for the whole subscription, not an idle timeout: a busy stream still
+        /// stops on time. Without it the command streams until interrupted or the stream closes.
+        /// Example: "30s", "1h 30m"
         #[arg(short, long)]
         timeout: Option<humantime::Duration>,
     }
@@ -2209,7 +2448,7 @@ mod blocks {
             .wrap_err("Failed to listen for blocks")?;
         let result = if let Some(timeout) = timeout {
             let timeout_message = i18n.t("warning.timeout_expired");
-            drive_stream_until_timeout(
+            drive_stream_until_deadline(
                 |timeout| stream.recv(Some(timeout)),
                 |block| context.print_data(&block),
                 timeout,
@@ -2231,9 +2470,8 @@ mod domain {
     #[allow(clippy::large_enum_variant)]
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
-        /// List domains
-        #[command(subcommand)]
-        List(List),
+        /// List domains (`/v1/domains`) with filter, sort, projection and paging
+        List(crate::collection_list::ListArgs),
         /// Retrieve details of a specific domain
         Get(Id),
         /// Unregister a domain
@@ -2248,17 +2486,16 @@ mod domain {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
             match self {
-                List(cmd) => cmd.run(context),
+                List(args) => crate::collection_list::run_list(
+                    context,
+                    iroha::collections::Collection::Domains,
+                    &args,
+                ),
                 Get(args) => {
                     let client = context.client_from_config()?;
-                    let entries = client
-                        .query(FindDomains)
-                        .execute_all()
+                    let entry = client
+                        .query_single(FindDomainById::new(args.id))
                         .wrap_err("Failed to get domain")?;
-                    let entry = entries
-                        .into_iter()
-                        .find(|e| e.id() == &args.id)
-                        .ok_or_else(|| eyre!("Domain not found"))?;
                     context.print_data(&entry)
                 }
                 Unregister(args) => {
@@ -2299,68 +2536,6 @@ mod domain {
         #[arg(short, long, value_parser = parse_domain_id_literal)]
         pub id: DomainId,
     }
-    #[derive(clap::Subcommand, Debug)]
-    pub enum List {
-        /// List all IDs, or full entries when `--verbose` is specified
-        All(crate::list_support::AllArgs),
-        /// Filter by a given predicate
-        Filter(filter::DomainFilter),
-    }
-    impl Run for List {
-        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config()?;
-            match self {
-                List::All(args) => list_all(context, client.query(FindDomains), &args),
-                List::Filter(filter) => {
-                    let (predicate, common) = filter.into_list_args().decompose();
-                    let builder = client.query(FindDomains).filter(predicate);
-                    let builder = apply_common_args(builder, &common)?;
-                    let entries = builder.execute_all()?;
-                    context.print_data(&entries)
-                }
-            }
-        }
-    }
-    fn list_all<C: RunContext>(
-        context: &mut C,
-        builder: iroha::data_model::query::builder::QueryBuilder<'_, Client, FindDomains, Domain>,
-        args: &crate::list_support::AllArgs,
-    ) -> Result<()> {
-        let builder = apply_common_args(builder, &args.common)?;
-        let entries = builder.execute_all()?;
-        if args.verbose {
-            context.print_data(&entries)
-        } else {
-            let ids: Vec<_> = entries.into_iter().map(|e| e.id().clone()).collect();
-            context.print_data(&ids)
-        }
-    }
-    fn apply_common_args<'a>(
-        builder: iroha::data_model::query::builder::QueryBuilder<'a, Client, FindDomains, Domain>,
-        common: &'a crate::list_support::CommonArgs,
-    ) -> Result<iroha::data_model::query::builder::QueryBuilder<'a, Client, FindDomains, Domain>>
-    {
-        use iroha::data_model::query::parameters::{FetchSize, Pagination, Sorting};
-        use std::num::NonZeroU64;
-        let mut builder = builder;
-        if let Some(key) = common.sort_by_metadata_key.clone() {
-            let sorting = Sorting::new(Some(key), common.order.map(Into::into));
-            builder = builder.with_sorting(sorting);
-        }
-        if common.limit.is_some() || common.offset > 0 {
-            let pagination = Pagination::new(common.limit.and_then(NonZeroU64::new), common.offset);
-            builder = builder.with_pagination(pagination);
-        }
-        if let Some(n) = common.fetch_size.and_then(NonZeroU64::new) {
-            let fs = FetchSize::new(Some(n));
-            builder = builder.with_fetch_size(fs);
-        }
-        if let Some(sel) = common.select.as_deref() {
-            let tuple = crate::list_support::parse_selector_tuple::<Domain>(sel)?;
-            builder = builder.with_selector_tuple(tuple);
-        }
-        Ok(builder)
-    }
 }
 mod account {
     use super::*;
@@ -2373,9 +2548,10 @@ mod account {
         /// Read and write account permissions
         #[command(subcommand)]
         Permission(PermissionCommand),
-        /// List accounts
-        #[command(subcommand)]
-        List(List),
+        /// List accounts (`/v1/accounts`) with filter, sort, projection and paging
+        List(crate::collection_list::ListArgs),
+        /// List account asset movements with filters, projection and cursor paging
+        History(History),
         /// Retrieve details of a specific account
         Get(Id),
         /// Register an account
@@ -2392,7 +2568,24 @@ mod account {
             match self {
                 Role(cmd) => cmd.run(context),
                 Permission(cmd) => cmd.run(context),
-                List(cmd) => cmd.run(context),
+                List(args) => crate::collection_list::run_list(
+                    context,
+                    iroha::collections::Collection::Accounts,
+                    &args,
+                ),
+                History(args) => {
+                    let account = args
+                        .id
+                        .as_deref()
+                        .map(|id| resolve_account_id(context, id))
+                        .transpose()?
+                        .unwrap_or_else(|| context.config().account.clone());
+                    crate::collection_list::run_list(
+                        context,
+                        iroha::collections::Collection::AccountHistory(account),
+                        &args.list,
+                    )
+                }
                 Get(args) => {
                     let account_id = resolve_account_id(context, &args.id)
                         .wrap_err("failed to resolve --id account")?;
@@ -2424,6 +2617,14 @@ mod account {
                 Meta(cmd) => cmd.run(context),
             }
         }
+    }
+    #[derive(clap::Args, Debug)]
+    pub struct History {
+        /// Account to inspect; defaults to the configured account.
+        #[arg(long)]
+        pub id: Option<String>,
+        #[command(flatten)]
+        pub list: crate::collection_list::ListArgs,
     }
     #[derive(clap::Subcommand, Debug)]
     pub enum RoleCommand {
@@ -2494,15 +2695,11 @@ mod account {
                 List(args) => {
                     let account_id = resolve_account_id(context, &args.id)
                         .wrap_err("failed to resolve --id account")?;
-                    let client = context.client_from_config()?;
-                    let permissions = list_effective_permissions(
-                        &client,
-                        &account_id,
-                        args.limit,
-                        args.offset,
-                        args.fetch_size,
-                    )?;
-                    context.print_data(&permissions)
+                    crate::collection_list::run_list(
+                        context,
+                        iroha::collections::Collection::AccountPermissions(account_id),
+                        &args.list,
+                    )
                 }
                 Grant(args) => {
                     let permission: Permission = parse_json_stdin(context)?;
@@ -2533,108 +2730,14 @@ mod account {
             }
         }
     }
-    /// Read the complete effective permission set before applying global pagination.
-    ///
-    /// Torii's list fanout applies the requested window independently to every route and
-    /// returns a deduplicated page whose `total` is that page's size, not a global count.
-    /// A fully successful merged page shorter than the requested size establishes that
-    /// every route is exhausted: any full route contributes at least that many distinct
-    /// rows to the union. The handler rejects oversized windows rather than clamping
-    /// them, so advancing by the requested size cannot skip a shard row.
+    /// Read every effective permission using the shared cursor page contract.
     pub(crate) fn list_effective_permissions(
         client: &Client,
         account_id: &AccountId,
-        limit: Option<u64>,
-        offset: u64,
-        fetch_size: Option<u64>,
     ) -> Result<Vec<Permission>> {
-        use std::collections::BTreeSet;
-
-        #[derive(crate::json_macros::JsonDeserialize)]
-        struct Page {
-            items: Vec<Permission>,
-            total: u64,
-        }
-
-        let page_size = fetch_size.unwrap_or(500);
-        if page_size == 0 || limit == Some(0) {
-            eyre::bail!("permission --limit and --fetch-size must be positive when provided");
-        }
-        let mut permissions = BTreeSet::new();
-        let mut page_offset = 0_u64;
-        loop {
-            let response = client
-                .get_account_permissions_page_response(account_id, page_size, page_offset)
-                .wrap_err("Failed to get effective account permissions")?;
-            if response.status().as_u16() != 200 {
-                eyre::bail!(
-                    "effective account permissions request failed with HTTP {}",
-                    response.status()
-                );
-            }
-            let header = |name: &str| {
-                response
-                    .headers()
-                    .get(name)
-                    .and_then(|value| value.to_str().ok())
-            };
-            if !header("content-type").is_some_and(|value| {
-                value
-                    .split(';')
-                    .next()
-                    .unwrap_or_default()
-                    .trim()
-                    .eq_ignore_ascii_case("application/json")
-            }) {
-                eyre::bail!("effective account permissions response must be application/json");
-            }
-            if header("x-iroha-account-permission-semantics") != Some("effective-v1") {
-                eyre::bail!("account permissions response is missing effective-v1 semantics");
-            }
-            let counter = |name: &str| -> Result<u64> {
-                header(name)
-                    .and_then(|value| value.parse().ok())
-                    .ok_or_else(|| eyre!("account permissions response has invalid {name}"))
-            };
-            let attempted = counter("x-iroha-fanout-routes-attempted")?;
-            let succeeded = counter("x-iroha-fanout-routes-succeeded")?;
-            if attempted == 0
-                || succeeded != attempted
-                || counter("x-iroha-fanout-routes-failed")? != 0
-                || counter("x-iroha-fanout-routes-denied")? != 0
-                || counter("x-iroha-fanout-routes-unavailable")? != 0
-                || counter("x-iroha-fanout-routes-not-found")? != 0
-            {
-                eyre::bail!("account permissions fanout is incomplete; no partial result returned");
-            }
-            let page: Page = parse_json(
-                std::str::from_utf8(response.body())
-                    .wrap_err("account permissions response is not UTF-8")?,
-            )
-            .wrap_err("Failed to decode effective account permissions page")?;
-            if page.total != u64::try_from(page.items.len())? {
-                eyre::bail!("account permissions merged page total does not match its items");
-            }
-            let exhausted = page.total < page_size;
-            permissions.extend(page.items);
-            if exhausted {
-                break;
-            }
-            page_offset = page_offset
-                .checked_add(page_size)
-                .ok_or_else(|| eyre!("account permissions page offset overflow"))?;
-        }
-        Ok(permissions
-            .into_iter()
-            .enumerate()
-            .filter(|(index, _)| (*index as u64) >= offset)
-            .take(
-                limit
-                    .and_then(|value| usize::try_from(value).ok())
-                    .unwrap_or(usize::MAX),
-            )
-            .map(|(_, permission)| permission)
-            .collect())
+        client
+            .read_effective_permissions(account_id)
+            .map(|permissions| permissions.into_iter().collect())
     }
     #[derive(clap::Args, Debug)]
     pub struct Id {
@@ -2666,13 +2769,13 @@ mod account {
         #[arg(short, long)]
         id: String,
         /// Maximum number of items to return (server-side limit)
-        #[arg(long)]
+        #[arg(long, value_parser = crate::positive_u64)]
         limit: Option<u64>,
         /// Offset into the result set (server-side offset)
         #[arg(long, default_value_t = 0)]
         offset: u64,
         /// Batch fetch size for iterable queries
-        #[arg(long)]
+        #[arg(long, value_parser = crate::positive_u64)]
         fetch_size: Option<u64>,
     }
     #[derive(clap::Args, Debug)]
@@ -2680,15 +2783,9 @@ mod account {
         /// Account identifier (canonical I105 literal)
         #[arg(short, long)]
         id: String,
-        /// Maximum number of effective permissions to return after merging all dataspaces
-        #[arg(long)]
-        limit: Option<u64>,
-        /// Offset into the complete, canonically ordered effective permission set
-        #[arg(long, default_value_t = 0)]
-        offset: u64,
-        /// Number of permissions to fetch per dataspace per request (default: 500)
-        #[arg(long)]
-        fetch_size: Option<u64>,
+        /// Shared collection filter, sort, projection and cursor pagination controls.
+        #[command(flatten)]
+        list: crate::collection_list::ListArgs,
     }
     #[derive(clap::Args, Debug)]
     pub struct IdRole {
@@ -2698,101 +2795,6 @@ mod account {
         /// Role name
         #[arg(short, long)]
         pub role: RoleId,
-    }
-    #[derive(clap::Subcommand, Debug)]
-    pub enum List {
-        /// List all IDs, or full entries when `--verbose` is specified
-        All(crate::list_support::AllArgs),
-        /// Filter by a given predicate
-        Filter(filter::AccountFilter),
-    }
-    impl Run for List {
-        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config()?;
-            match self {
-                List::All(args) => list_all(context, &client, &args),
-                List::Filter(filter) => {
-                    let (predicate, common) = filter.into_list_args().decompose();
-                    let builder = client.query(FindAccounts).filter(predicate);
-                    let builder = apply_common_args(builder, &common)?;
-                    let entries = builder.execute_all()?;
-                    context.print_data(&entries)
-                }
-            }
-        }
-    }
-    fn list_all<C: RunContext>(
-        context: &mut C,
-        client: &Client,
-        args: &crate::list_support::AllArgs,
-    ) -> Result<()> {
-        if args.verbose
-            || args.common.select.is_some()
-            || args.common.sort_by_metadata_key.is_some()
-        {
-            let builder = apply_common_args(client.query(FindAccounts), &args.common)?;
-            let entries = builder.execute_all()?;
-            if args.verbose {
-                context.print_data(&entries)
-            } else {
-                let ids: Vec<_> = entries.into_iter().map(|e| e.id().clone()).collect();
-                context.print_data(&ids)
-            }
-        } else {
-            let builder = apply_common_id_args(client.query(FindAccountIds), &args.common)?;
-            let ids = builder.execute_all()?;
-            context.print_data(&ids)
-        }
-    }
-    fn apply_common_args<'a>(
-        builder: iroha::data_model::query::builder::QueryBuilder<'a, Client, FindAccounts, Account>,
-        common: &'a crate::list_support::CommonArgs,
-    ) -> Result<iroha::data_model::query::builder::QueryBuilder<'a, Client, FindAccounts, Account>>
-    {
-        use iroha::data_model::query::parameters::{FetchSize, Pagination, Sorting};
-        use std::num::NonZeroU64;
-        let mut builder = builder;
-        if let Some(key) = common.sort_by_metadata_key.clone() {
-            let sorting = Sorting::new(Some(key), common.order.map(Into::into));
-            builder = builder.with_sorting(sorting);
-        }
-        if common.limit.is_some() || common.offset > 0 {
-            let pagination = Pagination::new(common.limit.and_then(NonZeroU64::new), common.offset);
-            builder = builder.with_pagination(pagination);
-        }
-        if let Some(n) = common.fetch_size.and_then(NonZeroU64::new) {
-            let fs = FetchSize::new(Some(n));
-            builder = builder.with_fetch_size(fs);
-        }
-        if let Some(sel) = common.select.as_deref() {
-            let tuple = crate::list_support::parse_selector_tuple::<Account>(sel)?;
-            builder = builder.with_selector_tuple(tuple);
-        }
-        Ok(builder)
-    }
-    fn apply_common_id_args<'a>(
-        builder: iroha::data_model::query::builder::QueryBuilder<
-            'a,
-            Client,
-            FindAccountIds,
-            AccountId,
-        >,
-        common: &'a crate::list_support::CommonArgs,
-    ) -> Result<
-        iroha::data_model::query::builder::QueryBuilder<'a, Client, FindAccountIds, AccountId>,
-    > {
-        use iroha::data_model::query::parameters::{FetchSize, Pagination};
-        use std::num::NonZeroU64;
-        let mut builder = builder;
-        if common.limit.is_some() || common.offset > 0 {
-            let pagination = Pagination::new(common.limit.and_then(NonZeroU64::new), common.offset);
-            builder = builder.with_pagination(pagination);
-        }
-        if let Some(n) = common.fetch_size.and_then(NonZeroU64::new) {
-            let fs = FetchSize::new(Some(n));
-            builder = builder.with_fetch_size(fs);
-        }
-        Ok(builder)
     }
 }
 mod asset {
@@ -2825,9 +2827,10 @@ mod asset {
         Definition(definition::Command),
         /// Retrieve details of a specific asset
         Get(Id),
-        /// List assets
-        #[command(subcommand)]
-        List(List),
+        /// List the balances held by one account (`/v1/accounts/{account}/assets`)
+        List(AssetListArgs),
+        /// List the accounts holding one asset definition (`/v1/assets/{definition}/holders`)
+        Holders(HoldersArgs),
         /// Increase the quantity of an asset
         Mint(IdQuantity),
         /// Decrease the quantity of an asset
@@ -2872,7 +2875,35 @@ mod asset {
                         .wrap_err("Failed to get asset")?;
                     context.print_data(&entry)
                 }
-                List(cmd) => cmd.run(context),
+                List(args) => {
+                    let account = match &args.account {
+                        Some(literal) => resolve_account_id(context, literal)
+                            .wrap_err("failed to resolve --account")?,
+                        None => context.config().account.clone(),
+                    };
+                    crate::collection_list::run_list(
+                        context,
+                        iroha::collections::Collection::AccountAssets(account),
+                        &args.list,
+                    )
+                }
+                Holders(args) => {
+                    let definition = match (args.definition, args.definition_alias) {
+                        (Some(definition), None) => definition,
+                        (None, Some(alias)) => {
+                            let client = context.client_from_config()?;
+                            resolve_asset_definition_id_by_alias(&client, &alias)?
+                        }
+                        _ => eyre::bail!(
+                            "provide either `--definition <base58-asset-definition-id>` or `--definition-alias <alias>`"
+                        ),
+                    };
+                    crate::collection_list::run_list(
+                        context,
+                        iroha::collections::Collection::AssetHolders(definition),
+                        &args.list,
+                    )
+                }
                 Mint(args) => {
                     let id = args
                         .resolve_asset_id(context)
@@ -2973,9 +3004,9 @@ mod asset {
         }
         #[derive(clap::Subcommand, Debug)]
         pub enum Command {
-            /// List asset definitions
-            #[command(subcommand)]
-            List(List),
+            /// List asset definitions (`/v1/assets/definitions`) with filter, sort, projection
+            /// and paging
+            List(crate::collection_list::ListArgs),
             /// Retrieve details of a specific asset definition
             Get(Id),
             /// Register an asset definition
@@ -2992,20 +3023,19 @@ mod asset {
             fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
                 use self::Command::*;
                 match self {
-                    List(cmd) => cmd.run(context),
+                    List(args) => crate::collection_list::run_list(
+                        context,
+                        iroha::collections::Collection::AssetDefinitions,
+                        &args,
+                    ),
                     Get(args) => {
                         let id = args
                             .resolve_id(context)
                             .wrap_err("failed to resolve asset definition identifier")?;
                         let client = context.client_from_config()?;
-                        let entries = client
-                            .query(FindAssetsDefinitions)
-                            .execute_all()
+                        let entry = client
+                            .query_single(FindAssetDefinitionById::new(id))
                             .wrap_err("Failed to get asset definition")?;
-                        let entry = entries
-                            .into_iter()
-                            .find(|e| e.id() == &id)
-                            .ok_or_else(|| eyre!("Asset definition not found"))?;
                         context.print_data(&entry)
                     }
                     Register(args) => {
@@ -3117,87 +3147,6 @@ mod asset {
             /// Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`).
             #[arg(long, required_unless_present = "id", conflicts_with = "id")]
             pub alias: Option<AssetDefinitionAlias>,
-        }
-        #[derive(clap::Subcommand, Debug)]
-        pub enum List {
-            /// List all IDs, or full entries when `--verbose` is specified
-            All(crate::list_support::AllArgs),
-            /// Filter by a given predicate
-            Filter(filter::AssetDefinitionFilter),
-        }
-        impl Run for List {
-            fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-                let client = context.client_from_config()?;
-                match self {
-                    List::All(args) => {
-                        list_all(context, client.query(FindAssetsDefinitions), &args)
-                    }
-                    List::Filter(filter) => {
-                        let (predicate, common) = filter.into_list_args().decompose();
-                        let builder = client.query(FindAssetsDefinitions).filter(predicate);
-                        let builder = apply_common_args(builder, &common)?;
-                        let entries = builder.execute_all()?;
-                        context.print_data(&entries)
-                    }
-                }
-            }
-        }
-        fn list_all<C: RunContext>(
-            context: &mut C,
-            builder: iroha::data_model::query::builder::QueryBuilder<
-                '_,
-                Client,
-                FindAssetsDefinitions,
-                AssetDefinition,
-            >,
-            args: &crate::list_support::AllArgs,
-        ) -> Result<()> {
-            let builder = apply_common_args(builder, &args.common)?;
-            let entries = builder.execute_all()?;
-            if args.verbose {
-                context.print_data(&entries)
-            } else {
-                let ids: Vec<_> = entries.into_iter().map(|e| e.id().clone()).collect();
-                context.print_data(&ids)
-            }
-        }
-        fn apply_common_args<'a>(
-            builder: iroha::data_model::query::builder::QueryBuilder<
-                'a,
-                Client,
-                FindAssetsDefinitions,
-                AssetDefinition,
-            >,
-            common: &'a crate::list_support::CommonArgs,
-        ) -> Result<
-            iroha::data_model::query::builder::QueryBuilder<
-                'a,
-                Client,
-                FindAssetsDefinitions,
-                AssetDefinition,
-            >,
-        > {
-            use iroha::data_model::query::parameters::{FetchSize, Pagination, Sorting};
-            use std::num::NonZeroU64;
-            let mut builder = builder;
-            if let Some(key) = common.sort_by_metadata_key.clone() {
-                let sorting = Sorting::new(Some(key), common.order.map(Into::into));
-                builder = builder.with_sorting(sorting);
-            }
-            if common.limit.is_some() || common.offset > 0 {
-                let pagination =
-                    Pagination::new(common.limit.and_then(NonZeroU64::new), common.offset);
-                builder = builder.with_pagination(pagination);
-            }
-            if let Some(n) = common.fetch_size.and_then(NonZeroU64::new) {
-                let fs = FetchSize::new(Some(n));
-                builder = builder.with_fetch_size(fs);
-            }
-            if let Some(sel) = common.select.as_deref() {
-                let tuple = crate::list_support::parse_selector_tuple::<AssetDefinition>(sel)?;
-                builder = builder.with_selector_tuple(tuple);
-            }
-            Ok(builder)
         }
         fn register_alias_from_args(args: &Register) -> Result<Option<AssetDefinitionAlias>> {
             match (&args.alias, &args.alias_domain, &args.alias_dataspace) {
@@ -3357,6 +3306,31 @@ mod asset {
         #[arg(long, value_parser = parse_asset_balance_scope_literal)]
         pub scope: Option<iroha::data_model::asset::AssetBalanceScope>,
     }
+    /// Arguments of `ledger asset list`.
+    #[derive(clap::Args, Debug)]
+    pub struct AssetListArgs {
+        /// Account whose balances to list (canonical I105); defaults to the configured account.
+        #[arg(long)]
+        pub account: Option<String>,
+        #[command(flatten)]
+        pub list: crate::collection_list::ListArgs,
+    }
+    /// Arguments of `ledger asset holders`.
+    #[derive(clap::Args, Debug)]
+    pub struct HoldersArgs {
+        /// Asset definition whose holders to list (unprefixed Base58 address).
+        #[arg(
+            long,
+            conflicts_with = "definition_alias",
+            required_unless_present = "definition_alias"
+        )]
+        pub definition: Option<AssetDefinitionId>,
+        /// Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`).
+        #[arg(long)]
+        pub definition_alias: Option<AssetDefinitionAlias>,
+        #[command(flatten)]
+        pub list: crate::collection_list::ListArgs,
+    }
     #[derive(clap::Args, Debug)]
     pub struct IdQuantity {
         /// Canonical asset definition id (unprefixed Base58 address) used with `--account`.
@@ -3411,68 +3385,6 @@ mod asset {
                 self.scope,
             )
         }
-    }
-    #[derive(clap::Subcommand, Debug)]
-    pub enum List {
-        /// List all IDs, or full entries when `--verbose` is specified
-        All(crate::list_support::AllArgs),
-        /// Filter by a given predicate
-        Filter(filter::AssetFilter),
-    }
-    impl Run for List {
-        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config()?;
-            match self {
-                List::All(args) => list_all(context, client.query(FindAssets), &args),
-                List::Filter(filter) => {
-                    let (predicate, common) = filter.into_list_args().decompose();
-                    let builder = client.query(FindAssets).filter(predicate);
-                    let builder = apply_common_args(builder, &common)?;
-                    let entries = builder.execute_all()?;
-                    context.print_data(&entries)
-                }
-            }
-        }
-    }
-    fn list_all<C: RunContext>(
-        context: &mut C,
-        builder: iroha::data_model::query::builder::QueryBuilder<'_, Client, FindAssets, Asset>,
-        args: &crate::list_support::AllArgs,
-    ) -> Result<()> {
-        let builder = apply_common_args(builder, &args.common)?;
-        let entries = builder.execute_all()?;
-        if args.verbose {
-            context.print_data(&entries)
-        } else {
-            let ids: Vec<_> = entries.into_iter().map(|e| e.id().clone()).collect();
-            context.print_data(&ids)
-        }
-    }
-    fn apply_common_args<'a>(
-        builder: iroha::data_model::query::builder::QueryBuilder<'a, Client, FindAssets, Asset>,
-        common: &'a crate::list_support::CommonArgs,
-    ) -> Result<iroha::data_model::query::builder::QueryBuilder<'a, Client, FindAssets, Asset>>
-    {
-        use iroha::data_model::query::parameters::{FetchSize, Pagination, Sorting};
-        use std::num::NonZeroU64;
-        let mut builder = builder;
-        if let Some(key) = common.sort_by_metadata_key.clone() {
-            let sorting = Sorting::new(Some(key), common.order.map(Into::into));
-            builder = builder.with_sorting(sorting);
-        }
-        if common.limit.is_some() || common.offset > 0 {
-            let pagination = Pagination::new(common.limit.and_then(NonZeroU64::new), common.offset);
-            builder = builder.with_pagination(pagination);
-        }
-        if let Some(n) = common.fetch_size.and_then(NonZeroU64::new) {
-            let fs = FetchSize::new(Some(n));
-            builder = builder.with_fetch_size(fs);
-        }
-        if let Some(sel) = common.select.as_deref() {
-            let tuple = crate::list_support::parse_selector_tuple::<Asset>(sel)?;
-            builder = builder.with_selector_tuple(tuple);
-        }
-        Ok(builder)
     }
     #[cfg(test)]
     mod tests {
@@ -3572,9 +3484,8 @@ mod nft {
     pub enum Command {
         /// Retrieve details of a specific NFT
         Get(Id),
-        /// List NFTs
-        #[clap(subcommand)]
-        List(List),
+        /// List NFTs (`/v1/nfts`) with filter, sort, projection and paging
+        List(crate::collection_list::ListArgs),
         /// Register NFT with content provided from stdin in JSON format
         Register(Id),
         /// Unregister NFT
@@ -3591,17 +3502,16 @@ mod nft {
             match self {
                 Get(args) => {
                     let client = context.client_from_config()?;
-                    let entries = client
-                        .query(FindNfts)
-                        .execute_all()
+                    let entry = client
+                        .query_single(FindNftById::new(args.id))
                         .wrap_err("Failed to get NFT")?;
-                    let entry = entries
-                        .into_iter()
-                        .find(|e| e.id() == &args.id)
-                        .ok_or_else(|| eyre!("NFT not found"))?;
                     context.print_data(&entry)
                 }
-                List(cmd) => cmd.run(context),
+                List(args) => crate::collection_list::run_list(
+                    context,
+                    iroha::collections::Collection::Nfts,
+                    &args,
+                ),
                 Register(args) => {
                     let metadata: Metadata = parse_json_stdin(context)?;
                     let instruction =
@@ -3648,67 +3558,6 @@ mod nft {
         #[arg(short, long)]
         pub id: NftId,
     }
-    #[derive(clap::Subcommand, Debug)]
-    pub enum List {
-        /// List all IDs, or full entries when `--verbose` is specified
-        All(crate::list_support::AllArgs),
-        /// Filter by a given predicate
-        Filter(filter::NftFilter),
-    }
-    impl Run for List {
-        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config()?;
-            match self {
-                List::All(args) => list_all(context, client.query(FindNfts), &args),
-                List::Filter(filter) => {
-                    let (predicate, common) = filter.into_list_args().decompose();
-                    let builder = client.query(FindNfts).filter(predicate);
-                    let builder = apply_common_args(builder, &common)?;
-                    let entries = builder.execute_all()?;
-                    context.print_data(&entries)
-                }
-            }
-        }
-    }
-    fn list_all<C: RunContext>(
-        context: &mut C,
-        builder: iroha::data_model::query::builder::QueryBuilder<'_, Client, FindNfts, Nft>,
-        args: &crate::list_support::AllArgs,
-    ) -> Result<()> {
-        let builder = apply_common_args(builder, &args.common)?;
-        let entries = builder.execute_all()?;
-        if args.verbose {
-            context.print_data(&entries)
-        } else {
-            let ids: Vec<_> = entries.into_iter().map(|e| e.id().clone()).collect();
-            context.print_data(&ids)
-        }
-    }
-    fn apply_common_args<'a>(
-        builder: iroha::data_model::query::builder::QueryBuilder<'a, Client, FindNfts, Nft>,
-        common: &'a crate::list_support::CommonArgs,
-    ) -> Result<iroha::data_model::query::builder::QueryBuilder<'a, Client, FindNfts, Nft>> {
-        use iroha::data_model::query::parameters::{FetchSize, Pagination, Sorting};
-        use std::num::NonZeroU64;
-        let mut builder = builder;
-        if let Some(key) = common.sort_by_metadata_key.clone() {
-            let sorting = Sorting::new(Some(key), common.order.map(Into::into));
-            builder = builder.with_sorting(sorting);
-        }
-        if common.limit.is_some() || common.offset > 0 {
-            let pagination = Pagination::new(common.limit.and_then(NonZeroU64::new), common.offset);
-            builder = builder.with_pagination(pagination);
-        }
-        if let Some(n) = common.fetch_size.and_then(NonZeroU64::new) {
-            let fs = FetchSize::new(Some(n));
-            builder = builder.with_fetch_size(fs);
-        }
-        if let Some(sel) = common.select.as_deref() {
-            let tuple = crate::list_support::parse_selector_tuple::<Nft>(sel)?;
-            builder = builder.with_selector_tuple(tuple);
-        }
-        Ok(builder)
-    }
 }
 mod rwa {
     use super::*;
@@ -3720,9 +3569,8 @@ mod rwa {
     pub enum Command {
         /// Retrieve details of a specific RWA lot
         Get(Id),
-        /// List RWA lots
-        #[clap(subcommand)]
-        List(List),
+        /// List RWA lots (`/v1/rwas`) with filter, sort, projection and paging
+        List(crate::collection_list::ListArgs),
         /// Register an RWA lot using `NewRwa` JSON from stdin
         Register,
         /// Transfer quantity from an existing lot
@@ -3759,18 +3607,18 @@ mod rwa {
             use self::Command::*;
             match self {
                 Get(args) => {
-                    let client = context.client_from_config()?;
-                    let entries = client
-                        .query(FindRwas)
-                        .execute_all()
-                        .wrap_err("Failed to get RWA")?;
-                    let entry = entries
-                        .into_iter()
-                        .find(|e| e.id() == &args.id)
-                        .ok_or_else(|| eyre!("RWA not found"))?;
+                    let entry = crate::collection_list::get_by_id(
+                        context,
+                        iroha::collections::Collection::Rwas,
+                        &args.id.to_string(),
+                    )?;
                     context.print_data(&entry)
                 }
-                List(cmd) => cmd.run(context),
+                List(args) => crate::collection_list::run_list(
+                    context,
+                    iroha::collections::Collection::Rwas,
+                    &args,
+                ),
                 Register => {
                     let rwa: NewRwa = parse_json_stdin(context)?;
                     context
@@ -3892,67 +3740,6 @@ mod rwa {
         #[arg(short, long)]
         pub to: String,
     }
-    #[derive(clap::Subcommand, Debug)]
-    pub enum List {
-        /// List all IDs, or full entries when `--verbose` is specified
-        All(crate::list_support::AllArgs),
-        /// Filter by a given predicate
-        Filter(filter::RwaFilter),
-    }
-    impl Run for List {
-        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config()?;
-            match self {
-                List::All(args) => list_all(context, client.query(FindRwas), &args),
-                List::Filter(filter) => {
-                    let (predicate, common) = filter.into_list_args().decompose();
-                    let builder = client.query(FindRwas).filter(predicate);
-                    let builder = apply_common_args(builder, &common)?;
-                    let entries = builder.execute_all()?;
-                    context.print_data(&entries)
-                }
-            }
-        }
-    }
-    fn list_all<C: RunContext>(
-        context: &mut C,
-        builder: iroha::data_model::query::builder::QueryBuilder<'_, Client, FindRwas, Rwa>,
-        args: &crate::list_support::AllArgs,
-    ) -> Result<()> {
-        let builder = apply_common_args(builder, &args.common)?;
-        let entries = builder.execute_all()?;
-        if args.verbose {
-            context.print_data(&entries)
-        } else {
-            let ids: Vec<_> = entries.into_iter().map(|e| e.id().clone()).collect();
-            context.print_data(&ids)
-        }
-    }
-    fn apply_common_args<'a>(
-        builder: iroha::data_model::query::builder::QueryBuilder<'a, Client, FindRwas, Rwa>,
-        common: &'a crate::list_support::CommonArgs,
-    ) -> Result<iroha::data_model::query::builder::QueryBuilder<'a, Client, FindRwas, Rwa>> {
-        use iroha::data_model::query::parameters::{FetchSize, Pagination, Sorting};
-        use std::num::NonZeroU64;
-        let mut builder = builder;
-        if let Some(key) = common.sort_by_metadata_key.clone() {
-            let sorting = Sorting::new(Some(key), common.order.map(Into::into));
-            builder = builder.with_sorting(sorting);
-        }
-        if common.limit.is_some() || common.offset > 0 {
-            let pagination = Pagination::new(common.limit.and_then(NonZeroU64::new), common.offset);
-            builder = builder.with_pagination(pagination);
-        }
-        if let Some(n) = common.fetch_size.and_then(NonZeroU64::new) {
-            let fs = FetchSize::new(Some(n));
-            builder = builder.with_fetch_size(fs);
-        }
-        if let Some(sel) = common.select.as_deref() {
-            let tuple = crate::list_support::parse_selector_tuple::<Rwa>(sel)?;
-            builder = builder.with_selector_tuple(tuple);
-        }
-        Ok(builder)
-    }
 }
 mod peer {
     use super::*;
@@ -4011,58 +3798,52 @@ mod peer {
     #[derive(clap::Subcommand, Debug)]
     pub enum List {
         /// List all registered peers
-        All(crate::list_support::AllArgs),
+        All(PeerListArgs),
+    }
+    /// Arguments of `ledger peer list all`.
+    #[derive(clap::Args, Debug, Clone)]
+    pub struct PeerListArgs {
+        /// Print full peer entries instead of their public keys
+        #[arg(short, long)]
+        pub verbose: bool,
+        /// Maximum number of peers to return (server-side limit, at least 1)
+        #[arg(long, value_parser = crate::positive_u64)]
+        pub limit: Option<u64>,
+        /// Offset into the result set (server-side offset)
+        #[arg(long, default_value_t = 0)]
+        pub offset: u64,
+        /// Batch fetch size for the iterable query (at least 1)
+        #[arg(long, value_parser = crate::positive_u64)]
+        pub fetch_size: Option<u64>,
     }
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            use iroha::data_model::query::parameters::{FetchSize, Pagination};
             let client = context.client_from_config()?;
             match self {
-                List::All(args) => list_all(context, client.query(FindPeers), &args),
+                List::All(args) => {
+                    let mut builder = client.query(FindPeers);
+                    if args.limit.is_some() || args.offset > 0 {
+                        builder = builder.with_pagination(Pagination::new(
+                            args.limit.and_then(NonZeroU64::new),
+                            args.offset,
+                        ));
+                    }
+                    if let Some(size) = args.fetch_size.and_then(NonZeroU64::new) {
+                        builder = builder.with_fetch_size(FetchSize::new(Some(size)));
+                    }
+                    let entries = builder.execute_all()?;
+                    if args.verbose {
+                        context.print_data(&entries)
+                    } else {
+                        context.print_data(&peer_ids_only(&entries))
+                    }
+                }
             }
-        }
-    }
-    fn list_all<C: RunContext>(
-        context: &mut C,
-        builder: iroha::data_model::query::builder::QueryBuilder<'_, Client, FindPeers, PeerId>,
-        args: &crate::list_support::AllArgs,
-    ) -> Result<()> {
-        let builder = apply_common_args(builder, &args.common)?;
-        let entries = builder.execute_all()?;
-        if args.verbose {
-            context.print_data(&entries)
-        } else {
-            let ids = peer_ids_only(&entries);
-            context.print_data(&ids)
         }
     }
     fn peer_ids_only(entries: &[PeerId]) -> Vec<String> {
         entries.iter().map(ToString::to_string).collect()
-    }
-    fn apply_common_args<'a>(
-        builder: iroha::data_model::query::builder::QueryBuilder<'a, Client, FindPeers, PeerId>,
-        common: &'a crate::list_support::CommonArgs,
-    ) -> Result<iroha::data_model::query::builder::QueryBuilder<'a, Client, FindPeers, PeerId>>
-    {
-        use iroha::data_model::query::parameters::{FetchSize, Pagination, Sorting};
-        use std::num::NonZeroU64;
-        let mut builder = builder;
-        if let Some(key) = common.sort_by_metadata_key.clone() {
-            let sorting = Sorting::new(Some(key), common.order.map(Into::into));
-            builder = builder.with_sorting(sorting);
-        }
-        if common.limit.is_some() || common.offset > 0 {
-            let pagination = Pagination::new(common.limit.and_then(NonZeroU64::new), common.offset);
-            builder = builder.with_pagination(pagination);
-        }
-        if let Some(n) = common.fetch_size.and_then(NonZeroU64::new) {
-            let fs = FetchSize::new(Some(n));
-            builder = builder.with_fetch_size(fs);
-        }
-        if let Some(sel) = common.select.as_deref() {
-            let tuple = crate::list_support::parse_selector_tuple::<PeerId>(sel)?;
-            builder = builder.with_selector_tuple(tuple);
-        }
-        Ok(builder)
     }
     #[derive(clap::Args, Debug)]
     pub struct Id {
@@ -4410,13 +4191,13 @@ mod multisig {
             #[arg(long = "multisig-selector", required = true)]
             multisig_selectors: Vec<String>,
             /// Maximum number of proposals to emit after server ordering (client-side cap)
-            #[arg(long)]
+            #[arg(long, value_parser = crate::positive_u64)]
             limit: Option<u64>,
             /// Number of ordered proposals to skip after fetching cursor pages
             #[arg(long, default_value_t = 0)]
             offset: u64,
             /// Cursor page size for each remote proposals query request
-            #[arg(long)]
+            #[arg(long, value_parser = crate::positive_u64)]
             fetch_size: Option<u64>,
         },
     }
@@ -4988,6 +4769,8 @@ mod transaction {
         Status(Status),
         /// Retrieve details of a specific transaction
         Get(Get),
+        /// List the transactions of one account (`/v1/accounts/{account}/transactions`)
+        List(List),
         /// Send an empty transaction that logs a message
         Ping(Ping),
         /// Collect an exact fixed-schedule transaction trace for multilane qualification
@@ -5005,6 +4788,7 @@ mod transaction {
             match self {
                 Status(cmd) => cmd.run(context),
                 Get(cmd) => cmd.run(context),
+                List(cmd) => cmd.run(context),
                 Ping(cmd) => cmd.run(context),
                 Load(cmd) => cmd.run(context),
                 Ivm(cmd) => cmd.run(context),
@@ -5063,6 +4847,30 @@ mod transaction {
             let client = context.client_from_config()?;
             let details = client.get_transaction_details(self.hash)?;
             context.print_data(&details.transaction)
+        }
+    }
+    /// Arguments of `tx list`.
+    #[derive(clap::Args, Debug)]
+    pub struct List {
+        /// Account whose transactions to list (canonical I105); defaults to the configured account.
+        #[arg(long)]
+        pub account: Option<String>,
+        #[command(flatten)]
+        pub list: crate::collection_list::ListArgs,
+    }
+    impl Run for List {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let account = match &self.account {
+                Some(literal) => {
+                    resolve_account_id(context, literal).wrap_err("failed to resolve --account")?
+                }
+                None => context.config().account.clone(),
+            };
+            crate::collection_list::run_list(
+                context,
+                iroha::collections::Collection::AccountTransactions(account),
+                &self.list,
+            )
         }
     }
     #[derive(clap::Args, Debug)]
@@ -5194,7 +5002,7 @@ mod transaction {
             if count > 1 || parallel > 1 {
                 if context.input_instructions() || context.output_instructions() {
                     eyre::bail!(
-                        "Incompatible `--input` `--output` flags with batch `iroha tx ping`"
+                        "`--stdin-instructions` and `--emit-instructions` do not apply to batch `iroha tx ping`"
                     );
                 }
                 let ping_seed = if no_index && count > 1 {
@@ -5414,7 +5222,7 @@ mod transaction {
     impl Run for SignedSize {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             if context.output_instructions() {
-                eyre::bail!("Incompatible `--output` flag with `iroha tx signed-size`");
+                eyre::bail!("`--emit-instructions` does not apply to `iroha tx signed-size`");
             }
             let instructions: Vec<InstructionBox> = parse_json_stdin(context)?;
             let metadata = context.transaction_metadata().cloned().unwrap_or_default();
@@ -5560,7 +5368,7 @@ mod role {
         #[arg(short, long)]
         id: RoleId,
         /// Maximum number of items to return (client-side for now)
-        #[arg(long)]
+        #[arg(long, value_parser = crate::positive_u64)]
         limit: Option<u64>,
         /// Offset into the result set (client-side for now)
         #[arg(long, default_value_t = 0)]
@@ -5571,13 +5379,13 @@ mod role {
         /// List all role IDs
         All {
             /// Maximum number of items to return (server-side limit)
-            #[arg(long)]
+            #[arg(long, value_parser = crate::positive_u64)]
             limit: Option<u64>,
             /// Offset into the result set (server-side offset)
             #[arg(long, default_value_t = 0)]
             offset: u64,
             /// Batch fetch size for iterable queries
-            #[arg(long)]
+            #[arg(long, value_parser = crate::positive_u64)]
             fetch_size: Option<u64>,
         },
     }
@@ -5741,13 +5549,13 @@ mod trigger {
             #[arg(long)]
             active: bool,
             /// Maximum number of items to return (server-side limit)
-            #[arg(long)]
+            #[arg(long, value_parser = crate::positive_u64)]
             limit: Option<u64>,
             /// Offset into the result set (server-side offset)
             #[arg(long, default_value_t = 0)]
             offset: u64,
             /// Batch fetch size for iterable queries
-            #[arg(long)]
+            #[arg(long, value_parser = crate::positive_u64)]
             fetch_size: Option<u64>,
         },
     }
@@ -6003,7 +5811,7 @@ mod trigger {
         #[arg(long, value_enum, default_value_t = CompletedOutcomeArg::All)]
         pub outcome: CompletedOutcomeArg,
         /// Optional maximum events to emit before returning.
-        #[arg(long)]
+        #[arg(long, value_parser = crate::positive_u64)]
         pub limit: Option<u64>,
         /// Optional maximum live-stream watch time.
         #[arg(long)]
@@ -6170,8 +5978,10 @@ mod trigger {
         /// Path to the compiled IVM bytecode to execute
         #[arg(short, long, value_name("PATH"))]
         pub path: Option<PathBuf>,
-        /// Read JSON array of instructions from stdin instead of bytecode path
-        /// Example: echo "[ {\"Log\": {\"level\": \"INFO\", \"message\": \"hi\"}} ]" | iroha trigger register -i `my_trig` --instructions-stdin
+        /// Read JSON array of instructions from stdin instead of bytecode path.
+        ///
+        /// The array is the output of `--emit-instructions`, for example:
+        /// `iroha --emit-instructions tx ping --msg hi | iroha --fee-payer authority trigger register --id my_trig --instructions-stdin`
         #[arg(long)]
         pub instructions_stdin: bool,
         /// Read JSON array of instructions from a file instead of bytecode path
@@ -6633,14 +6443,9 @@ mod metadata {
                 match self {
                     Get(args) => {
                         let client = context.client_from_config()?;
-                        let entries: Vec<Domain> = client
-                            .query(FindDomains)
-                            .execute_all()
+                        let entry: Domain = client
+                            .query_single(FindDomainById::new(args.id))
                             .wrap_err("Failed to get value")?;
-                        let entry = entries
-                            .into_iter()
-                            .find(|e| e.id() == &args.id)
-                            .ok_or_else(|| eyre!("Domain not found"))?;
                         let value = entry
                             .metadata()
                             .get(&args.key)
@@ -6745,14 +6550,9 @@ mod metadata {
                 match self {
                     Get(args) => {
                         let client = context.client_from_config()?;
-                        let entries: Vec<AssetDefinition> = client
-                            .query(FindAssetsDefinitions)
-                            .execute_all()
+                        let entry: AssetDefinition = client
+                            .query_single(FindAssetDefinitionById::new(args.id))
                             .wrap_err("Failed to get value")?;
-                        let entry = entries
-                            .into_iter()
-                            .find(|e| e.id() == &args.id)
-                            .ok_or_else(|| eyre!("Asset definition not found"))?;
                         let value = entry
                             .metadata()
                             .get(&args.key)
@@ -6801,14 +6601,9 @@ mod metadata {
                 match self {
                     Get(args) => {
                         let client = context.client_from_config()?;
-                        let entries: Vec<Nft> = client
-                            .query(FindNfts)
-                            .execute_all()
+                        let entry: Nft = client
+                            .query_single(FindNftById::new(args.id))
                             .wrap_err("Failed to get value")?;
-                        let entry = entries
-                            .into_iter()
-                            .find(|e| e.id() == &args.id)
-                            .ok_or_else(|| eyre!("NFT not found"))?;
                         let value = entry
                             .content()
                             .get(&args.key)
@@ -6854,18 +6649,15 @@ mod metadata {
                 use self::Command::*;
                 match self {
                     Get(args) => {
-                        let client = context.client_from_config()?;
-                        let entries: Vec<Rwa> = client
-                            .query(FindRwas)
-                            .execute_all()
-                            .wrap_err("Failed to get value")?;
-                        let entry = entries
-                            .into_iter()
-                            .find(|e| e.id() == &args.id)
-                            .ok_or_else(|| eyre!("RWA not found"))?;
+                        let entry = crate::collection_list::get_by_id(
+                            context,
+                            iroha::collections::Collection::Rwas,
+                            &args.id.to_string(),
+                        )
+                        .wrap_err("Failed to get value")?;
                         let value = entry
-                            .metadata()
-                            .get(&args.key)
+                            .get("metadata")
+                            .and_then(|metadata| metadata.get(args.key.as_ref()))
                             .cloned()
                             .ok_or_else(|| eyre!("Key not found"))?;
                         context.print_data(&value)
@@ -6954,9 +6746,10 @@ mod repo {
         Initiate(Initiate),
         /// Unwind an active repo agreement (reverse repo leg)
         Unwind(Unwind),
-        /// Inspect repo agreements stored on-chain
-        #[command(subcommand)]
-        Query(QueryCommand),
+        /// List repo agreements (`/v1/repo/agreements`) with filter, sort, projection and paging
+        List(crate::collection_list::ListArgs),
+        /// Fetch a single repo agreement by identifier
+        Get(QueryId),
         /// Compute the next margin checkpoint for an agreement
         Margin(Margin),
         /// Record a margin call for an active repo agreement
@@ -6968,7 +6761,19 @@ mod repo {
             match self {
                 Initiate(args) => args.run(context),
                 Unwind(args) => args.run(context),
-                Query(cmd) => cmd.run(context),
+                List(args) => crate::collection_list::run_list(
+                    context,
+                    iroha::collections::Collection::RepoAgreements,
+                    &args,
+                ),
+                Get(args) => {
+                    let entry = crate::collection_list::get_by_id(
+                        context,
+                        iroha::collections::Collection::RepoAgreements,
+                        &args.id.to_string(),
+                    )?;
+                    context.print_data(&entry)
+                }
                 Margin(args) => args.run(context),
                 MarginCall(args) => args.run(context),
             }
@@ -7067,42 +6872,6 @@ mod repo {
             context
                 .finish([InstructionBox::from(instruction)])
                 .wrap_err("Failed to settle repo agreement at maturity")
-        }
-    }
-    #[derive(clap::Subcommand, Debug)]
-    pub enum QueryCommand {
-        /// List all repo agreements recorded on-chain
-        List,
-        /// Fetch a single repo agreement by identifier
-        Get(QueryId),
-    }
-    impl Run for QueryCommand {
-        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            use self::QueryCommand::*;
-            match self {
-                List => {
-                    let client = context.client_from_config()?;
-                    let agreements = client
-                        .query(FindRepoAgreements::new())
-                        .execute_all()
-                        .wrap_err("Failed to list repo agreements")?;
-                    context.print_data(&agreements)
-                }
-                Get(args) => {
-                    let client = context.client_from_config()?;
-                    let agreements = client
-                        .query(FindRepoAgreements::new())
-                        .execute_all()
-                        .wrap_err("Failed to fetch repo agreements")?;
-                    let Some(entry) = agreements
-                        .into_iter()
-                        .find(|agreement| agreement.id() == &args.id)
-                    else {
-                        return Err(eyre!("Repo agreement `{}` not found", args.id));
-                    };
-                    context.print_data(&entry)
-                }
-            }
         }
     }
     #[derive(clap::Args, Debug)]
@@ -8363,7 +8132,9 @@ where
     T: JsonDeserialize,
 {
     if context.input_instructions() {
-        eyre::bail!("Incompatible `--input` flag with the command")
+        eyre::bail!(
+            "`--stdin-instructions` does not apply to a command that reads its own JSON from stdin"
+        )
     }
     parse_json_stdin_unchecked()
 }
@@ -8408,6 +8179,16 @@ fn resolve_account_id_with(literal: &str) -> Result<AccountId> {
 }
 pub(crate) fn resolve_account_id<C: RunContext>(_context: &C, literal: &str) -> Result<AccountId> {
     resolve_account_id_with(literal)
+}
+/// Parse a count that must be at least one, such as `--limit` or `--fetch-size`.
+///
+/// Zero is rejected instead of silently meaning "unbounded" or "default".
+pub(crate) fn positive_u64(raw: &str) -> std::result::Result<u64, String> {
+    match raw.parse::<u64>() {
+        Ok(0) => Err("must be at least 1".to_owned()),
+        Ok(value) => Ok(value),
+        Err(error) => Err(error.to_string()),
+    }
 }
 fn parse_asset_balance_scope_literal(
     literal: &str,
@@ -8596,57 +8377,129 @@ fn error_kind_for_report(report: &Report<MainError>) -> CliErrorKind {
         MainError::TransactionMetadata => CliErrorKind::Input,
         MainError::SerializeConfig => CliErrorKind::Internal,
         MainError::Command(_) => CliErrorKind::Command,
+        MainError::Input(_) => CliErrorKind::Input,
     }
 }
 struct CliRenderedError {
     kind: CliErrorKind,
     output: String,
 }
-fn render_cli_error(
-    report: &Report<MainError>,
-    output_format: CliOutputFormat,
-) -> CliRenderedError {
-    let kind = error_kind_for_report(&report);
-    let message = report.to_string();
-    let output = match output_format {
-        CliOutputFormat::Text => format!("error: {message}\n"),
-        CliOutputFormat::Json => {
-            let rendered = json_utils::json_object(vec![(
-                "error",
-                json_utils::json_object(vec![
-                    (
-                        "kind",
-                        json_utils::json_value(&kind.label()).unwrap_or(json::Value::Null),
-                    ),
-                    (
-                        "message",
-                        json_utils::json_value(&message).unwrap_or(json::Value::Null),
-                    ),
-                    (
-                        "exit_code",
-                        json_utils::json_value(&kind.exit_code()).unwrap_or(json::Value::Null),
-                    ),
-                ])
-                .unwrap_or(json::Value::Null),
-            )])
-            .and_then(|value| {
-                norito::json::to_json_pretty(&value)
-                    .map_err(|err| eyre!("failed to render error JSON: {err}"))
-            });
-            match rendered {
-                Ok(mut payload) => {
-                    if !payload.ends_with('\n') {
-                        payload.push('\n');
-                    }
-                    payload
-                }
-                Err(err) => {
-                    format!("error: {message}\nerror: failed to render JSON payload: {err}\n")
-                }
+/// Message, causes and hints of an error report, each listed once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CliErrorDescription {
+    message: String,
+    causes: Vec<String>,
+    hints: Vec<String>,
+}
+fn describe_cli_error(report: &Report<MainError>) -> CliErrorDescription {
+    // `frames()` yields the most recent attachment first; list hints in the order attached.
+    let mut hints: Vec<String> = report
+        .frames()
+        .filter_map(|frame| frame.downcast_ref::<CliHint>())
+        .map(|hint| hint.0.clone())
+        .collect();
+    hints.reverse();
+    if let MainError::CliArgs(text) = report.current_context() {
+        // clap renders `error: <summary>`, then detail lines, `tip:` lines and the usage line.
+        let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
+        let message = lines
+            .next()
+            .map(|line| line.strip_prefix("error: ").unwrap_or(line).to_owned())
+            .unwrap_or_default();
+        let mut causes = Vec::new();
+        for line in lines {
+            if let Some(tip) = line.strip_prefix("tip: ") {
+                hints.push(tip.to_owned());
+            } else if line.starts_with("Usage:") || line.starts_with("For more information") {
+                hints.push(line.to_owned());
+            } else {
+                causes.push(line.to_owned());
             }
         }
+        return CliErrorDescription {
+            message,
+            causes,
+            hints,
+        };
+    }
+    let message = report.current_context().to_string();
+    let mut shown = vec![message.clone()];
+    let mut causes = Vec::new();
+    for frame in report.frames() {
+        let text = match frame.kind() {
+            FrameKind::Context(context) => context.to_string(),
+            FrameKind::Attachment(AttachmentKind::Printable(attachment)) => attachment.to_string(),
+            FrameKind::Attachment(_) => continue,
+        };
+        let text = text.trim();
+        if text.is_empty() || shown.iter().any(|seen| seen.contains(text)) {
+            continue;
+        }
+        shown.push(text.to_owned());
+        causes.push(text.to_owned());
+    }
+    CliErrorDescription {
+        message,
+        causes,
+        hints,
+    }
+}
+fn render_cli_error(report: &Report<MainError>, output: OutputSelection) -> CliRenderedError {
+    let kind = error_kind_for_report(report);
+    let description = describe_cli_error(report);
+    let rendered = match output.format {
+        CliOutputFormat::Text => render_cli_error_text(report, &description),
+        CliOutputFormat::Json => (|| -> Result<String> {
+            let value = json_utils::json_object(vec![(
+                "error",
+                json_utils::json_object(vec![
+                    ("kind", json_utils::json_value(&kind.label())?),
+                    ("message", json_utils::json_value(&description.message)?),
+                    ("causes", json_utils::json_value(&description.causes)?),
+                    ("hints", json_utils::json_value(&description.hints)?),
+                    ("exit_code", json_utils::json_value(&kind.exit_code())?),
+                ])?,
+            )])?;
+            render_json_output(&value, output.json_lines)
+        })(),
     };
+    let output = rendered.unwrap_or_else(|error| {
+        format!(
+            "error: {}\nerror: failed to render the error report: {error}\n",
+            description.message
+        )
+    });
     CliRenderedError { kind, output }
+}
+fn render_cli_error_text(
+    report: &Report<MainError>,
+    description: &CliErrorDescription,
+) -> Result<String> {
+    use std::fmt::Write as _;
+    let mut output = String::new();
+    if let MainError::CliArgs(text) = report.current_context()
+        && text.starts_with("error:")
+    {
+        // clap's own rendering already lists tips and usage in a readable layout.
+        output.push_str(text.trim_end());
+        output.push('\n');
+        return Ok(output);
+    }
+    writeln!(output, "error: {}", description.message)?;
+    match description.causes.as_slice() {
+        [] => {}
+        [cause] => writeln!(output, "\nCaused by:\n    {cause}")?,
+        causes => {
+            writeln!(output, "\nCaused by:")?;
+            for (index, cause) in causes.iter().enumerate() {
+                writeln!(output, "    {index}: {cause}")?;
+            }
+        }
+    }
+    for hint in &description.hints {
+        writeln!(output, "\nhint: {hint}")?;
+    }
+    Ok(output)
 }
 #[cfg(test)]
 #[path = "main_shared_tests.rs"]
@@ -8794,15 +8647,23 @@ mod cli_integration_harness_tests {
         assert!(err.to_string().contains("failed to parse JSON"));
     }
     #[test]
-    fn parse_selector_and_apply_to_builder() {
-        // Selector tuple parses from null under the lightweight DSL.
+    fn parse_selector_and_execute_builder() {
+        // Selectors have one data-free layout: JSON `null` parses, a projection mode does not.
         let tuple: iroha::data_model::query::dsl::SelectorTuple<Domain> =
             super::parse_json("null").expect("parse selector JSON");
-        // Build a query with a non-default selector and ensure it executes via a dummy executor
+        assert_eq!(
+            tuple,
+            iroha::data_model::query::dsl::SelectorTuple::default()
+        );
+        assert!(
+            super::parse_json::<iroha::data_model::query::dsl::SelectorTuple<Domain>>(
+                "\"IdsOnly\""
+            )
+            .is_err()
+        );
+        // Ensure the remaining builder parameters pass through a dummy executor.
         let exec = DummyExec;
-        let builder = QueryBuilder::new(&exec, FindDomains).with_selector_tuple(tuple);
-        // Also exercise other params to ensure they pass through
-        let builder = builder
+        let builder = QueryBuilder::new(&exec, FindDomains)
             .with_sorting(Sorting::default())
             .with_pagination(Pagination::default())
             .with_fetch_size(FetchSize::default());
@@ -9304,12 +9165,7 @@ mod cli_integration_harness_tests {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Asc),
         };
-        // Also assert selector tuple parsing is accepted
-        let tuple: iroha::data_model::query::dsl::SelectorTuple<Domain> =
-            super::parse_json("null").expect("parse selector JSON");
-        let builder = QueryBuilder::new(&exec, FindDomains)
-            .with_selector_tuple(tuple)
-            .with_sorting(sorting);
+        let builder = QueryBuilder::new(&exec, FindDomains).with_sorting(sorting);
         let out: Vec<Domain> = builder.execute_all().expect("exec ok");
         // Expect d2 (rank=1), d1 (rank=2), then d3 (no rank)
         assert_eq!(out[0].id().name().as_ref(), "d2");
@@ -9323,11 +9179,7 @@ mod cli_integration_harness_tests {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Desc),
         };
-        let tuple: iroha::data_model::query::dsl::SelectorTuple<Domain> =
-            super::parse_json("null").expect("parse selector JSON");
-        let builder = QueryBuilder::new(&exec, FindDomains)
-            .with_selector_tuple(tuple)
-            .with_sorting(sorting);
+        let builder = QueryBuilder::new(&exec, FindDomains).with_sorting(sorting);
         let out: Vec<Domain> = builder.execute_all().expect("exec ok");
         // Descending: d1 (2), d2 (1), then d3 (None)
         assert_eq!(out[0].id().name().as_ref(), "d1");
@@ -9343,11 +9195,7 @@ mod cli_integration_harness_tests {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Asc),
         };
-        let tuple: iroha::data_model::query::dsl::SelectorTuple<Account> =
-            super::parse_json("null").expect("parse selector JSON");
-        let builder = QueryBuilder::new(&exec, FindAccounts)
-            .with_selector_tuple(tuple)
-            .with_sorting(sorting);
+        let builder = QueryBuilder::new(&exec, FindAccounts).with_sorting(sorting);
         let out: Vec<Account> = builder.execute_all().expect("exec ok");
         // Expect a2 (rank=1), a1 (rank=2), then a3 (no rank)
         // Check by presence of metadata key for first two and existence of three items
@@ -9380,11 +9228,7 @@ mod cli_integration_harness_tests {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Desc),
         };
-        let tuple: iroha::data_model::query::dsl::SelectorTuple<Account> =
-            super::parse_json("null").expect("parse selector JSON");
-        let builder = QueryBuilder::new(&exec, FindAccounts)
-            .with_selector_tuple(tuple)
-            .with_sorting(sorting);
+        let builder = QueryBuilder::new(&exec, FindAccounts).with_sorting(sorting);
         let out: Vec<Account> = builder.execute_all().expect("exec ok");
         // Descending: ranks [2, 1, None]
         let key: Name = "rank".parse().unwrap();
@@ -9401,17 +9245,13 @@ mod cli_integration_harness_tests {
     #[test]
     fn metadata_sorting_asset_defs_end_to_end() {
         use iroha::data_model::asset::definition::AssetDefinition;
-        use iroha::data_model::prelude::FindAssetsDefinitions;
+        use iroha::data_model::prelude::FindAssetDefinitions;
         let exec = HarnessQueryExecutor::<AssetDefinitionFixture>::ranked_three();
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Asc),
         };
-        let tuple: iroha::data_model::query::dsl::SelectorTuple<AssetDefinition> =
-            super::parse_json("null").expect("parse selector JSON");
-        let builder = QueryBuilder::new(&exec, FindAssetsDefinitions)
-            .with_selector_tuple(tuple)
-            .with_sorting(sorting);
+        let builder = QueryBuilder::new(&exec, FindAssetDefinitions).with_sorting(sorting);
         let out: Vec<AssetDefinition> = builder.execute_all().expect("exec ok");
         // Expect silver (rank=1), gold (rank=2), then bronze (no rank)
         assert_eq!(out.len(), 3);
@@ -9422,17 +9262,13 @@ mod cli_integration_harness_tests {
     #[test]
     fn metadata_sorting_asset_defs_desc_end_to_end() {
         use iroha::data_model::asset::definition::AssetDefinition;
-        use iroha::data_model::prelude::FindAssetsDefinitions;
+        use iroha::data_model::prelude::FindAssetDefinitions;
         let exec = HarnessQueryExecutor::<AssetDefinitionFixture>::ranked_three();
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Desc),
         };
-        let tuple: iroha::data_model::query::dsl::SelectorTuple<AssetDefinition> =
-            super::parse_json("null").expect("parse selector JSON");
-        let builder = QueryBuilder::new(&exec, FindAssetsDefinitions)
-            .with_selector_tuple(tuple)
-            .with_sorting(sorting);
+        let builder = QueryBuilder::new(&exec, FindAssetDefinitions).with_sorting(sorting);
         let out: Vec<AssetDefinition> = builder.execute_all().expect("exec ok");
         // Descending: gold (2), silver (1), bronze (None)
         assert_eq!(out.len(), 3);
@@ -9616,7 +9452,7 @@ mod cli_integration_harness_tests {
     }
     #[test]
     fn pagination_sorting_asset_defs_asc() {
-        use iroha::data_model::prelude::FindAssetsDefinitions;
+        use iroha::data_model::prelude::FindAssetDefinitions;
         use iroha::data_model::query::parameters::{FetchSize, Pagination, SortOrder};
         PSAD_ASC_STARTS.store(0, Ordering::SeqCst);
         PSAD_ASC_CONTS.store(0, Ordering::SeqCst);
@@ -9630,7 +9466,7 @@ mod cli_integration_harness_tests {
             order: Some(SortOrder::Asc),
         };
         let out: Vec<iroha::data_model::asset::definition::AssetDefinition> =
-            QueryBuilder::new(&exec, FindAssetsDefinitions)
+            QueryBuilder::new(&exec, FindAssetDefinitions)
                 .with_sorting(sorting)
                 .with_pagination(Pagination {
                     limit: Some(NonZeroU64::new(3).unwrap()),
@@ -9656,7 +9492,7 @@ mod cli_integration_harness_tests {
     }
     #[test]
     fn pagination_sorting_asset_defs_desc() {
-        use iroha::data_model::prelude::FindAssetsDefinitions;
+        use iroha::data_model::prelude::FindAssetDefinitions;
         use iroha::data_model::query::parameters::{FetchSize, Pagination, SortOrder};
         PSAD_DESC_STARTS.store(0, Ordering::SeqCst);
         PSAD_DESC_CONTS.store(0, Ordering::SeqCst);
@@ -9670,7 +9506,7 @@ mod cli_integration_harness_tests {
             order: Some(SortOrder::Desc),
         };
         let out: Vec<iroha::data_model::asset::definition::AssetDefinition> =
-            QueryBuilder::new(&exec, FindAssetsDefinitions)
+            QueryBuilder::new(&exec, FindAssetDefinitions)
                 .with_sorting(sorting)
                 .with_pagination(Pagination {
                     limit: Some(NonZeroU64::new(3).unwrap()),
@@ -9703,11 +9539,7 @@ mod cli_integration_harness_tests {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Asc),
         };
-        let tuple: iroha::data_model::query::dsl::SelectorTuple<Nft> =
-            super::parse_json("null").expect("parse selector JSON");
-        let builder = QueryBuilder::new(&exec, FindNfts)
-            .with_selector_tuple(tuple)
-            .with_sorting(sorting);
+        let builder = QueryBuilder::new(&exec, FindNfts).with_sorting(sorting);
         let out: Vec<Nft> = builder.execute_all().expect("exec ok");
         // Expect n2 (rank=1), n1 (rank=2), then n3 (no rank)
         assert_eq!(out.len(), 3);
@@ -9724,11 +9556,7 @@ mod cli_integration_harness_tests {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Desc),
         };
-        let tuple: iroha::data_model::query::dsl::SelectorTuple<Nft> =
-            super::parse_json("null").expect("parse selector JSON");
-        let builder = QueryBuilder::new(&exec, FindNfts)
-            .with_selector_tuple(tuple)
-            .with_sorting(sorting);
+        let builder = QueryBuilder::new(&exec, FindNfts).with_sorting(sorting);
         let out: Vec<Nft> = builder.execute_all().expect("exec ok");
         // Descending: n1 (2), n2 (1), then n3 (None)
         assert_eq!(out.len(), 3);
@@ -9835,7 +9663,7 @@ mod cli_integration_harness_tests {
     #[test]
     fn pagination_and_fetch_size_asset_defs() {
         use iroha::data_model::asset::definition::AssetDefinition;
-        use iroha::data_model::prelude::FindAssetsDefinitions;
+        use iroha::data_model::prelude::FindAssetDefinitions;
         use iroha::data_model::query::parameters::{FetchSize, Pagination};
         let exec = HarnessQueryExecutor::<AssetDefinitionFixture>::positioned_five(
             0x90,
@@ -9844,7 +9672,7 @@ mod cli_integration_harness_tests {
         );
         PAGED_ADS_STARTS.store(0, Ordering::SeqCst);
         PAGED_ADS_CONTS.store(0, Ordering::SeqCst);
-        let builder = QueryBuilder::new(&exec, FindAssetsDefinitions)
+        let builder = QueryBuilder::new(&exec, FindAssetDefinitions)
             .with_pagination(Pagination {
                 limit: Some(NonZeroU64::new(3).unwrap()),
                 offset: 1,
@@ -9868,10 +9696,9 @@ mod cli_integration_harness_tests {
         assert_eq!(PAGED_ADS_CONTS.load(Ordering::SeqCst), 1);
     }
 }
-// Experimental: feature-gated integration harness for CLI queries.
+// Feature-gated integration harness for CLI queries.
 //
-// This module sketches how to exercise CLI query flows against a mock server or
-// embedded state once server-side selectors/projections are fully enabled.
+// This module exercises CLI query flows against an in-memory mock query server.
 // It is intentionally behind a feature and unused by default to avoid pulling
 // additional dependencies or affecting production builds.
 #[cfg(all(test, feature = "cli_integration_harness"))]
@@ -9879,8 +9706,6 @@ mod cli_integration_harness {
     use super::*;
     use eyre::eyre;
     use iroha::crypto::KeyPair;
-    #[cfg(feature = "ids_projection")]
-    use iroha::data_model::query::QueryItemKind;
     use iroha::data_model::query::runtime::AbiVersion;
     use iroha::data_model::{
         account::AccountId,
@@ -9896,8 +9721,6 @@ mod cli_integration_harness {
     };
     use iroha_crypto::{Algorithm, Hash};
     use iroha_model_base::domain::DomainId;
-    #[cfg(feature = "ids_projection")]
-    use norito::codec::Decode;
     use std::collections::BTreeMap;
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -9945,81 +9768,6 @@ mod cli_integration_harness {
             "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
         );
     }
-    #[cfg(feature = "ids_projection")]
-    fn build_query_with_params<T, Q, F>(
-        predicate: iroha::data_model::query::dsl::CompoundPredicate<T>,
-        selector: iroha::data_model::query::dsl::SelectorTuple<T>,
-        params: iroha::data_model::query::parameters::QueryParams,
-        builder: F,
-    ) -> QueryWithParams
-    where
-        T: iroha::data_model::query::dsl::HasProjection<
-                iroha::data_model::query::dsl::PredicateMarker,
-            > + iroha::data_model::query::dsl::HasProjection<
-                iroha::data_model::query::dsl::SelectorMarker,
-                AtomType = (),
-            > + Send
-            + Sync
-            + iroha::data_model::query::ItemKindTag
-            + 'static,
-        Q: iroha::data_model::query::Query<Item = T> + norito::codec::Encode,
-        F: FnOnce() -> Q,
-    {
-        let query = builder();
-        QueryWithParams {
-            query: (),
-            query_payload: query.dyn_encode(),
-            item: query.query_item_kind(),
-            predicate_bytes: norito::codec::Encode::encode(&predicate),
-            selector_bytes: norito::codec::Encode::encode(&selector),
-            params,
-        }
-    }
-    #[cfg(feature = "ids_projection")]
-    fn query_projects_domain_ids(query: &QueryWithParams) -> bool {
-        let (item_kind, _, selector_bytes, _) = query.parts();
-        if item_kind != QueryItemKind::Domain {
-            return false;
-        }
-        let mut cursor = selector_bytes;
-        let selector: iroha::data_model::query::dsl::SelectorTuple<
-            iroha::data_model::domain::Domain,
-        > = match Decode::decode(&mut cursor) {
-            Ok(selector) => selector,
-            Err(_) => return false,
-        };
-        selector.is_ids_only()
-    }
-    #[cfg(feature = "ids_projection")]
-    fn query_projects_account_ids(query: &QueryWithParams) -> bool {
-        let (item_kind, _, selector_bytes, _) = query.parts();
-        if item_kind != QueryItemKind::Account {
-            return false;
-        }
-        let mut cursor = selector_bytes;
-        let selector: iroha::data_model::query::dsl::SelectorTuple<
-            iroha::data_model::account::Account,
-        > = match Decode::decode(&mut cursor) {
-            Ok(selector) => selector,
-            Err(_) => return false,
-        };
-        selector.is_ids_only()
-    }
-    #[cfg(feature = "ids_projection")]
-    fn query_projects_asset_definition_ids(query: &QueryWithParams) -> bool {
-        let (item_kind, _, selector_bytes, _) = query.parts();
-        if item_kind != QueryItemKind::AssetDefinition {
-            return false;
-        }
-        let mut cursor = selector_bytes;
-        let selector: iroha::data_model::query::dsl::SelectorTuple<
-            iroha::data_model::asset::definition::AssetDefinition,
-        > = match Decode::decode(&mut cursor) {
-            Ok(selector) => selector,
-            Err(_) => return false,
-        };
-        selector.is_ids_only()
-    }
     // Cursor that carries the remaining items and fetch size
     pub enum MockCursor {
         Domains {
@@ -10034,24 +9782,6 @@ mod cli_integration_harness {
         },
         AssetDefs {
             items: Vec<iroha::data_model::asset::definition::AssetDefinition>,
-            idx: usize,
-            fetch: usize,
-        },
-        #[cfg(feature = "ids_projection")]
-        DomainIds {
-            ids: Vec<iroha_model_base::domain::DomainId>,
-            idx: usize,
-            fetch: usize,
-        },
-        #[cfg(feature = "ids_projection")]
-        AccountIds {
-            ids: Vec<iroha::data_model::account::AccountId>,
-            idx: usize,
-            fetch: usize,
-        },
-        #[cfg(feature = "ids_projection")]
-        AssetDefIds {
-            ids: Vec<iroha::data_model::asset::id::AssetDefinitionId>,
             idx: usize,
             fetch: usize,
         },
@@ -10165,29 +9895,6 @@ mod cli_integration_harness {
                 let first_end = start.saturating_add(fetch).min(end);
                 let first = v[start..first_end].to_vec();
                 let remaining = end.saturating_sub(first_end) as u64;
-                // Detect ids-only selector for domains
-                #[cfg(feature = "ids_projection")]
-                if query_projects_domain_ids(&query) {
-                    let first_ids: Vec<_> = first.iter().map(|d| d.id().clone()).collect();
-                    let remaining_ids: Vec<_> =
-                        v[first_end..end].iter().map(|d| d.id().clone()).collect();
-                    let next = if remaining > 0 {
-                        Some(MockCursor::DomainIds {
-                            ids: remaining_ids,
-                            idx: 0,
-                            fetch,
-                        })
-                    } else {
-                        None
-                    };
-                    return Ok((
-                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::DomainId(
-                            first_ids,
-                        )),
-                        Some(remaining),
-                        next,
-                    ));
-                }
                 let next = if remaining > 0 {
                     Some(MockCursor::Domains {
                         items: v[first_end..end].to_vec(),
@@ -10225,28 +9932,6 @@ mod cli_integration_harness {
                 let first_end = start.saturating_add(fetch).min(end);
                 let first = v[start..first_end].to_vec();
                 let remaining = end.saturating_sub(first_end) as u64;
-                #[cfg(feature = "ids_projection")]
-                if query_projects_account_ids(&query) {
-                    let first_ids: Vec<_> = first.iter().map(|a| a.id().clone()).collect();
-                    let remaining_ids: Vec<_> =
-                        v[first_end..end].iter().map(|a| a.id().clone()).collect();
-                    let next = if remaining > 0 {
-                        Some(MockCursor::AccountIds {
-                            ids: remaining_ids,
-                            idx: 0,
-                            fetch,
-                        })
-                    } else {
-                        None
-                    };
-                    return Ok((
-                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::AccountId(
-                            first_ids,
-                        )),
-                        Some(remaining),
-                        next,
-                    ));
-                }
                 let next = if remaining > 0 {
                     Some(MockCursor::Accounts {
                         items: v[first_end..end].to_vec(),
@@ -10284,28 +9969,6 @@ mod cli_integration_harness {
                 let first_end = start.saturating_add(fetch).min(end);
                 let first = v[start..first_end].to_vec();
                 let remaining = end.saturating_sub(first_end) as u64;
-                #[cfg(feature = "ids_projection")]
-                if query_projects_asset_definition_ids(&query) {
-                    let first_ids: Vec<_> = first.iter().map(|ad| ad.id().clone()).collect();
-                    let remaining_ids: Vec<_> =
-                        v[first_end..end].iter().map(|ad| ad.id().clone()).collect();
-                    let next = if remaining > 0 {
-                        Some(MockCursor::AssetDefIds {
-                            ids: remaining_ids,
-                            idx: 0,
-                            fetch,
-                        })
-                    } else {
-                        None
-                    };
-                    return Ok((
-                        QueryOutputBatchBoxTuple::from_batch(
-                            QueryOutputBatchBox::AssetDefinitionId(first_ids),
-                        ),
-                        Some(remaining),
-                        next,
-                    ));
-                }
                 let next = if remaining > 0 {
                     Some(MockCursor::AssetDefs {
                         items: v[first_end..end].to_vec(),
@@ -10393,68 +10056,6 @@ mod cli_integration_harness {
                         next,
                     ))
                 }
-                #[cfg(feature = "ids_projection")]
-                MockCursor::DomainIds { ids, idx, fetch } => {
-                    let end = (idx + fetch).min(ids.len());
-                    let batch = ids[idx..end].to_vec();
-                    let remaining = ids.len().saturating_sub(end) as u64;
-                    let next = if remaining > 0 {
-                        Some(MockCursor::DomainIds {
-                            ids,
-                            idx: end,
-                            fetch,
-                        })
-                    } else {
-                        None
-                    };
-                    Ok((
-                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::DomainId(batch)),
-                        Some(remaining),
-                        next,
-                    ))
-                }
-                #[cfg(feature = "ids_projection")]
-                MockCursor::AccountIds { ids, idx, fetch } => {
-                    let end = (idx + fetch).min(ids.len());
-                    let batch = ids[idx..end].to_vec();
-                    let remaining = ids.len().saturating_sub(end) as u64;
-                    let next = if remaining > 0 {
-                        Some(MockCursor::AccountIds {
-                            ids,
-                            idx: end,
-                            fetch,
-                        })
-                    } else {
-                        None
-                    };
-                    Ok((
-                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::AccountId(batch)),
-                        Some(remaining),
-                        next,
-                    ))
-                }
-                #[cfg(feature = "ids_projection")]
-                MockCursor::AssetDefIds { ids, idx, fetch } => {
-                    let end = (idx + fetch).min(ids.len());
-                    let batch = ids[idx..end].to_vec();
-                    let remaining = ids.len().saturating_sub(end) as u64;
-                    let next = if remaining > 0 {
-                        Some(MockCursor::AssetDefIds {
-                            ids,
-                            idx: end,
-                            fetch,
-                        })
-                    } else {
-                        None
-                    };
-                    Ok((
-                        QueryOutputBatchBoxTuple::from_batch(
-                            QueryOutputBatchBox::AssetDefinitionId(batch),
-                        ),
-                        Some(remaining),
-                        next,
-                    ))
-                }
             }
         }
     }
@@ -10509,322 +10110,6 @@ mod cli_integration_harness {
         assert_eq!(out[0].id(), w2.id());
         assert_eq!(out[1].id(), w1.id());
         assert_eq!(out[2].id(), w3.id());
-    }
-    #[cfg(feature = "ids_projection")]
-    #[test]
-    fn mock_query_domains_ids_projection() {
-        use iroha::data_model::domain::Domain;
-        use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
-        use iroha::data_model::query::parameters::QueryParams;
-        use iroha::data_model::query::{self};
-        use iroha_model_base::domain::DomainId;
-        let owner_w1 = sample_account_id("w1", 1);
-        let owner_w2 = sample_account_id("w2", 2);
-        let mut server = MockQueryServer::default();
-        server.domains = vec![
-            Domain::new(DomainId::try_new("w1", "universal").unwrap()).build(owner_w1.account()),
-            Domain::new(DomainId::try_new("w2", "universal").unwrap()).build(owner_w2.account()),
-        ];
-        let qwp = build_query_with_params(
-            CompoundPredicate::PASS,
-            SelectorTuple::<Domain>::ids_only(),
-            QueryParams::default(),
-            || query::domain::prelude::FindDomains,
-        );
-        let (batch, _rem, _cur) = server.start_query(qwp).expect("start ok");
-        let ids = match batch.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::DomainId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids.len(), 2);
-        assert_eq!(ids[0], DomainId::try_new("w1", "universal").unwrap());
-        assert_eq!(ids[1], DomainId::try_new("w2", "universal").unwrap());
-    }
-    #[cfg(feature = "ids_projection")]
-    #[test]
-    fn mock_query_accounts_ids_projection() {
-        use iroha::data_model::account::Account;
-        use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
-        use iroha::data_model::query::parameters::QueryParams;
-        use iroha::data_model::query::{self};
-        let alice = sample_account_id("w", 1);
-        let bob = sample_account_id("w", 2);
-        let mut server = MockQueryServer::default();
-        server.accounts = vec![
-            Account::new(alice.clone()).build(&alice),
-            Account::new(bob.clone()).build(&bob),
-        ];
-        let qwp = build_query_with_params(
-            CompoundPredicate::PASS,
-            SelectorTuple::<Account>::ids_only(),
-            QueryParams::default(),
-            || query::account::prelude::FindAccounts,
-        );
-        let (batch, _rem, _cur) = server.start_query(qwp).expect("start ok");
-        let ids = match batch.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::AccountId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids.len(), 2);
-        assert!(ids.iter().any(|id| id == &alice));
-        assert!(ids.iter().any(|id| id == &bob));
-    }
-    #[cfg(feature = "ids_projection")]
-    #[test]
-    fn mock_query_asset_defs_ids_projection() {
-        use iroha::data_model::asset::{definition::AssetDefinition, id::AssetDefinitionId};
-        use iroha::data_model::prelude::NumericSpec;
-        use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
-        use iroha::data_model::query::parameters::QueryParams;
-        use iroha::data_model::query::{self};
-        let owner_w = sample_account_id("w", 1);
-        let mut server = MockQueryServer::default();
-        server.asset_defs = vec![
-            {
-                let __asset_definition_id =
-                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                        DomainId::try_new("w", "universal").unwrap(),
-                        "rose".parse().unwrap(),
-                    );
-                AssetDefinition::new(
-                    __asset_definition_id.clone(),
-                    "rose".to_owned(),
-                    NumericSpec::default(),
-                    iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
-                )
-            }
-            .build(owner_w.account()),
-            {
-                let __asset_definition_id =
-                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                        DomainId::try_new("w", "universal").unwrap(),
-                        "tulip".parse().unwrap(),
-                    );
-                AssetDefinition::new(
-                    __asset_definition_id.clone(),
-                    "tulip".to_owned(),
-                    NumericSpec::default(),
-                    iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
-                )
-            }
-            .build(owner_w.account()),
-        ];
-        let qwp = build_query_with_params(
-            CompoundPredicate::PASS,
-            SelectorTuple::<AssetDefinition>::ids_only(),
-            QueryParams::default(),
-            || query::asset::prelude::FindAssetsDefinitions,
-        );
-        let (batch, _rem, _cur) = server.start_query(qwp).expect("start ok");
-        let ids = match batch.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::AssetDefinitionId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids.len(), 2);
-        assert!(ids.iter().any(|id| id
-            == &AssetDefinitionId::derive_from_components(
-                DomainId::try_new("w", "universal").unwrap(),
-                "rose".parse().unwrap()
-            )));
-        assert!(ids.iter().any(|id| id
-            == &AssetDefinitionId::derive_from_components(
-                DomainId::try_new("w", "universal").unwrap(),
-                "tulip".parse().unwrap()
-            )));
-    }
-    #[cfg(feature = "ids_projection")]
-    #[test]
-    fn mock_query_asset_defs_ids_projection_batched() {
-        use iroha::data_model::asset::{definition::AssetDefinition, id::AssetDefinitionId};
-        use iroha::data_model::prelude::NumericSpec;
-        use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
-        use iroha::data_model::query::parameters::{FetchSize, QueryParams};
-        use iroha::data_model::query::{self};
-        use std::num::NonZeroU64;
-        let owner_w = sample_account_id("w", 2);
-        let mut server = MockQueryServer::default();
-        server.asset_defs = vec![
-            {
-                let __asset_definition_id =
-                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                        DomainId::try_new("w", "universal").unwrap(),
-                        "rose".parse().unwrap(),
-                    );
-                AssetDefinition::new(
-                    __asset_definition_id.clone(),
-                    "rose".to_owned(),
-                    NumericSpec::default(),
-                    iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
-                )
-            }
-            .build(owner_w.account()),
-            {
-                let __asset_definition_id =
-                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                        DomainId::try_new("w", "universal").unwrap(),
-                        "tulip".parse().unwrap(),
-                    );
-                AssetDefinition::new(
-                    __asset_definition_id.clone(),
-                    "tulip".to_owned(),
-                    NumericSpec::default(),
-                    iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
-                )
-            }
-            .build(owner_w.account()),
-            {
-                let __asset_definition_id =
-                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                        DomainId::try_new("w", "universal").unwrap(),
-                        "peony".parse().unwrap(),
-                    );
-                AssetDefinition::new(
-                    __asset_definition_id.clone(),
-                    "peony".to_owned(),
-                    NumericSpec::default(),
-                    iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
-                )
-            }
-            .build(owner_w.account()),
-        ];
-        let mut params = QueryParams::default();
-        params.fetch_size = FetchSize::new(Some(NonZeroU64::new(2).unwrap()));
-        let qwp = build_query_with_params(
-            CompoundPredicate::PASS,
-            SelectorTuple::<AssetDefinition>::ids_only(),
-            params,
-            || query::asset::prelude::FindAssetsDefinitions,
-        );
-        let (batch1, rem, cur) = server.start_query(qwp).expect("start ok");
-        let ids1 = match batch1.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::AssetDefinitionId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids1.len(), 2);
-        assert!(ids1.contains(&AssetDefinitionId::derive_from_components(
-            DomainId::try_new("w", "universal").unwrap(),
-            "rose".parse().unwrap()
-        )));
-        assert!(ids1.contains(&AssetDefinitionId::derive_from_components(
-            DomainId::try_new("w", "universal").unwrap(),
-            "tulip".parse().unwrap()
-        )));
-        assert_eq!(rem, Some(1));
-        let cur = cur.expect("should continue");
-        let (batch2, rem2, cur2) =
-            <MockQueryServer as query::builder::QueryExecutor>::continue_query(cur)
-                .expect("cont ok");
-        let ids2 = match batch2.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::AssetDefinitionId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids2.len(), 1);
-        assert!(ids2.contains(&AssetDefinitionId::derive_from_components(
-            DomainId::try_new("w", "universal").unwrap(),
-            "peony".parse().unwrap()
-        )));
-        assert_eq!(rem2, Some(0));
-        assert!(cur2.is_none());
-    }
-    #[cfg(feature = "ids_projection")]
-    #[test]
-    fn mock_query_accounts_ids_projection_batched() {
-        use iroha::data_model::account::Account;
-        use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
-        use iroha::data_model::query::parameters::{FetchSize, QueryParams};
-        use iroha::data_model::query::{self};
-        use std::num::NonZeroU64;
-        let alice = sample_account_id("w", 3);
-        let bob = sample_account_id("w", 4);
-        let carol = sample_account_id("w", 5);
-        let mut server = MockQueryServer::default();
-        server.accounts = vec![
-            Account::new(alice.clone()).build(&alice),
-            Account::new(bob.clone()).build(&bob),
-            Account::new(carol.clone()).build(&carol),
-        ];
-        let mut params = QueryParams::default();
-        params.fetch_size = FetchSize::new(Some(NonZeroU64::new(2).unwrap()));
-        let qwp = build_query_with_params(
-            CompoundPredicate::PASS,
-            SelectorTuple::<Account>::ids_only(),
-            params,
-            || query::account::prelude::FindAccounts,
-        );
-        let (batch1, rem, cur) = server.start_query(qwp).expect("start ok");
-        let ids1 = match batch1.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::AccountId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids1.len(), 2);
-        assert!(ids1.contains(&alice));
-        assert!(ids1.contains(&bob));
-        assert_eq!(rem, Some(1));
-        let cur = cur.expect("should continue");
-        let (batch2, rem2, cur2) =
-            <MockQueryServer as query::builder::QueryExecutor>::continue_query(cur)
-                .expect("cont ok");
-        let ids2 = match batch2.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::AccountId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids2.len(), 1);
-        assert!(ids2.contains(&carol));
-        assert_eq!(rem2, Some(0));
-        assert!(cur2.is_none());
-    }
-    #[cfg(feature = "ids_projection")]
-    #[test]
-    fn mock_query_domains_ids_projection_batched() {
-        use iroha::data_model::domain::Domain;
-        use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
-        use iroha::data_model::query::parameters::{FetchSize, QueryParams};
-        use iroha::data_model::query::{self};
-        use iroha_model_base::domain::DomainId;
-        use std::num::NonZeroU64;
-        let owner_d1 = sample_account_id("d1", 1);
-        let owner_d2 = sample_account_id("d2", 2);
-        let owner_d3 = sample_account_id("d3", 3);
-        let mut server = MockQueryServer::default();
-        server.domains = vec![
-            Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(owner_d1.account()),
-            Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(owner_d2.account()),
-            Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(owner_d3.account()),
-        ];
-        let mut params = QueryParams::default();
-        params.fetch_size = FetchSize::new(Some(NonZeroU64::new(2).unwrap()));
-        let qwp = build_query_with_params(
-            CompoundPredicate::PASS,
-            SelectorTuple::<Domain>::ids_only(),
-            params,
-            || query::domain::prelude::FindDomains,
-        );
-        let (batch1, rem, cur) = server.start_query(qwp).expect("start ok");
-        let ids1 = match batch1.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::DomainId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids1.len(), 2);
-        assert!(ids1.contains(&DomainId::try_new("d1", "universal").unwrap()));
-        assert!(ids1.contains(&DomainId::try_new("d2", "universal").unwrap()));
-        assert_eq!(rem, Some(1));
-        let cur = cur.expect("should continue");
-        let (batch2, rem2, cur2) =
-            <MockQueryServer as query::builder::QueryExecutor>::continue_query(cur)
-                .expect("cont ok");
-        let ids2 = match batch2.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::DomainId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids2.len(), 1);
-        assert!(ids2.contains(&DomainId::try_new("d3", "universal").unwrap()));
-        assert_eq!(rem2, Some(0));
-        assert!(cur2.is_none());
     }
     #[test]
     fn mock_query_domains_sorting_desc_batched() {

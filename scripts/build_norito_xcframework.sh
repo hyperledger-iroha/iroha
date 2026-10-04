@@ -107,6 +107,10 @@ run_python312_clean() {
 #   executable when the fixed Homebrew/system locators are unavailable.
 # - MOBILE_SDK_RUSTUP_BINARY may select an absolute canonical, non-symbolic
 #   rustup executable when the canonical home-local proxy is unavailable.
+# - MOBILE_SDK_CARGO_HOME may select an existing owned canonical writable Cargo
+#   cache outside source, or build/cargo-home in the local integration lane.
+# - MOBILE_SDK_CARGO_INVOCATION_DIR may select a private external Cargo cwd;
+#   Cargo still builds the authenticated root manifest and locked graph.
 #
 # Usage:
 #   # Normal and CI builds select the reviewed external read-only graph.
@@ -704,7 +708,36 @@ if [[ "$ACTUAL_RUST_TOOLCHAIN" != "$PINNED_RUST_TOOLCHAIN" ]]; then
   exit 1
 fi
 
-MOBILE_CARGO_HOME="$USER_HOME_DIR/.cargo"
+resolve_mobile_cargo_home() {
+  if [[ "${MOBILE_SDK_CARGO_HOME+x}" != "x" ]]; then
+    printf '%s\n' "$USER_HOME_DIR/.cargo"
+    return
+  fi
+  run_python312_clean "$ROOT_DIR/scripts/norito_bridge_local_integration.py" \
+    --root "$ROOT_DIR" --path "$MOBILE_SDK_CARGO_HOME" --role cargo-home \
+    "${LOCAL_INTEGRATION_ARGS[@]+"${LOCAL_INTEGRATION_ARGS[@]}"}"
+}
+MOBILE_CARGO_HOME="$(resolve_mobile_cargo_home)" || exit 1
+if [[ "${MOBILE_SDK_CARGO_HOME+x}" == "x" ]]; then
+  for cache_peer in "$CARGO_TARGET_DIR" "$BUILD_DIR" "$OUT_DIR"; do
+    if [[ "$LOCAL_INTEGRATION" == "1" && "$cache_peer" == "$BUILD_DIR" \
+        && "$MOBILE_CARGO_HOME" == "$BUILD_DIR/cargo-home" ]]; then
+      continue
+    fi
+    if paths_overlap "$MOBILE_CARGO_HOME" "$cache_peer"; then
+      echo "[-] MOBILE_SDK_CARGO_HOME must be disjoint from Cargo target, build, and output roots" >&2
+      exit 1
+    fi
+  done
+fi
+MOBILE_CARGO_INVOCATION_DIR="$ROOT_DIR"
+MOBILE_CARGO_INVOCATION_ARGS=()
+if [[ "${MOBILE_SDK_CARGO_INVOCATION_DIR+x}" == "x" ]]; then
+  MOBILE_CARGO_INVOCATION_DIR="$(run_python312_clean \
+    "$ROOT_DIR/scripts/norito_bridge_local_integration.py" --root "$ROOT_DIR" \
+    --path "$MOBILE_SDK_CARGO_INVOCATION_DIR" --role cargo-invocation)" || exit 1
+  MOBILE_CARGO_INVOCATION_ARGS=(--working-directory "$MOBILE_CARGO_INVOCATION_DIR")
+fi
 MOBILE_RUSTUP_HOME="$USER_HOME_DIR/.rustup"
 MOBILE_TMPDIR="/tmp"
 if [[ "$LOCAL_INTEGRATION" == "1" ]]; then
@@ -769,6 +802,7 @@ run_source_seal() {
     LC_ALL=C.UTF-8 \
     NORITO_BRIDGE_SEAL_HOME="$USER_HOME_DIR" \
     NORITO_BRIDGE_SEAL_CARGO_HOME="$MOBILE_CARGO_HOME" \
+    NORITO_BRIDGE_SEAL_CARGO_INVOCATION_DIR="$MOBILE_CARGO_INVOCATION_DIR" \
     NORITO_BRIDGE_SEAL_RUSTUP_HOME="$MOBILE_RUSTUP_HOME" \
     NORITO_BRIDGE_SEAL_TMPDIR="$MOBILE_TMPDIR" \
     NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" \
@@ -1426,6 +1460,7 @@ run_hermetic_apple_cargo() {
   # byte equality with the root lock before and after this invocation.
   if run_isolated_python "$HERMETIC_RUNNER" \
       --profile "$profile" \
+      "${MOBILE_CARGO_INVOCATION_ARGS[@]+"${MOBILE_CARGO_INVOCATION_ARGS[@]}"}" \
       --set "CARGO=$CARGO_BINARY" \
       --set "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS" \
       --set "CARGO_HOME=$MOBILE_CARGO_HOME" \
@@ -2001,6 +2036,7 @@ env -i \
   LC_ALL=C.UTF-8 \
   NORITO_BRIDGE_SEAL_HOME="$USER_HOME_DIR" \
   NORITO_BRIDGE_SEAL_CARGO_HOME="$MOBILE_CARGO_HOME" \
+  NORITO_BRIDGE_SEAL_CARGO_INVOCATION_DIR="$MOBILE_CARGO_INVOCATION_DIR" \
   NORITO_BRIDGE_SEAL_RUSTUP_HOME="$MOBILE_RUSTUP_HOME" \
   NORITO_BRIDGE_SEAL_TMPDIR="$MOBILE_TMPDIR" \
   NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" \
@@ -2212,6 +2248,8 @@ else
     MOBILE_SDK_ALLOW_DIRTY_SOURCE=1 \
       MOBILE_SDK_APPLE_ARTIFACT_DIR="$PUBLISH_ROOT" \
       MOBILE_SDK_RUSTUP_BINARY="$RUSTUP_BINARY" \
+      MOBILE_SDK_CARGO_HOME="$MOBILE_CARGO_HOME" \
+      MOBILE_SDK_CARGO_INVOCATION_DIR="$MOBILE_CARGO_INVOCATION_DIR" \
       MOBILE_SDK_STAGED_BUILD_VALIDATION=1 \
       MOBILE_SDK_PROSPECTIVE_SWIFT_LOADER_PATH="$PUBLISH_PROSPECTIVE_LOADER" \
       bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --lockfile-path "$CARGO_LOCKFILE" --apple-only \
@@ -2219,6 +2257,8 @@ else
   else
     MOBILE_SDK_APPLE_ARTIFACT_DIR="$PUBLISH_ROOT" \
       MOBILE_SDK_RUSTUP_BINARY="$RUSTUP_BINARY" \
+      MOBILE_SDK_CARGO_HOME="$MOBILE_CARGO_HOME" \
+      MOBILE_SDK_CARGO_INVOCATION_DIR="$MOBILE_CARGO_INVOCATION_DIR" \
       MOBILE_SDK_STAGED_BUILD_VALIDATION=1 \
       MOBILE_SDK_PROSPECTIVE_SWIFT_LOADER_PATH="$PUBLISH_PROSPECTIVE_LOADER" \
       bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --lockfile-path "$CARGO_LOCKFILE" --apple-only \
@@ -2492,6 +2532,7 @@ if [[ -n "$ARCHIVE_OUTPUT" ]]; then
     NORITO_BRIDGE_OUTPUT_LOCK_FD="$NORITO_BRIDGE_OUTPUT_LOCK_FD" \
     NORITO_BRIDGE_SEAL_HOME="$USER_HOME_DIR" \
     NORITO_BRIDGE_SEAL_CARGO_HOME="$MOBILE_CARGO_HOME" \
+    NORITO_BRIDGE_SEAL_CARGO_INVOCATION_DIR="$MOBILE_CARGO_INVOCATION_DIR" \
     NORITO_BRIDGE_SEAL_RUSTUP_HOME="$MOBILE_RUSTUP_HOME" \
     NORITO_BRIDGE_SEAL_TMPDIR="$MOBILE_TMPDIR" \
     NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" \

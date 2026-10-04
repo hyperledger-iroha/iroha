@@ -52,10 +52,7 @@ RUN --mount=type=cache,target=/root/.rustup \
 ARG TARGETPLATFORM
 ARG PROFILE="deploy"
 ARG RUSTFLAGS=""
-ARG FEATURES="irohad/ivm-cuda"
-ARG IVM_CUDA_TRUSTED_KEY_SHA256
-ENV IVM_CUDA_TRUSTED_KEY_SHA256=${IVM_CUDA_TRUSTED_KEY_SHA256}
-ENV IVM_CUDA_PTX_MODE=bundled
+ARG FEATURES=""
 ARG CARGOFLAGS=""
 ARG CARGO_BUILD_JOBS=""
 ARG BINARIES=""
@@ -83,9 +80,9 @@ RUN --mount=type=cache,target=/root/.cargo/git/db \
     test "${#IROHA_GIT_COMMIT_HASH}" -eq 40; \
     test "${IROHA_GIT_COMMIT_HASH}" = "${VERGEN_GIT_SHA}"; \
     case "${VERGEN_GIT_SHA}" in *[!0-9a-f]*) exit 1 ;; esac; \
-    case ",${FEATURES}," in *,irohad/ivm-cuda,*) ;; *) echo "Linux shipping requires irohad/ivm-cuda" >&2; exit 1 ;; esac; \
-    test "${#IVM_CUDA_TRUSTED_KEY_SHA256}" -eq 64; \
-    case "${IVM_CUDA_TRUSTED_KEY_SHA256}" in *[!0-9a-f]*|0000000000000000000000000000000000000000000000000000000000000000) exit 1 ;; esac; \
+    for input in aes.ptx bitonic_sort.ptx bn254.ptx poseidon.ptx sha256.ptx sha256_leaves.ptx sha256_pairs_reduce.ptx sha3.ptx signature.ptx vector.ptx provenance.v1 provenance.v1.pub provenance.v1.sig; do \
+        test -f "crates/ivm/cuda/${input}" && test ! -L "crates/ivm/cuda/${input}" || exit 1; \
+    done; \
     if [ -n "${CARGO_BUILD_JOBS}" ]; then export CARGO_BUILD_JOBS; fi; \
     RUSTFLAGS="${RUSTFLAGS}" mold --run \
     xx-cargo build ${CARGOFLAGS} \

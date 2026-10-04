@@ -367,7 +367,7 @@ inputs = [
   "crates/ivm/src/numeric_gas.rs",
   "crates/ivm/src/syscall_metering.rs",
   "crates/ivm/src/syscalls.rs",
-  "crates/ivm_abi/src/*.rs",
+  "crates/ivm_abi/src/**/*.rs",
   "crates/norito/src/**/*.rs",
 ]
 check = "cargo run --locked -p ivm --features dev-tools --bin gen_header_doc -- --check && cargo run --locked -p ivm --features dev-tools --bin gen_abi_hash_doc -- --check"
@@ -399,7 +399,7 @@ inputs = [
   "crates/iroha_data_model/src/**/*.rs",
   "crates/iroha_primitives/src/**/*.rs",
   "crates/ivm/src/**/*.rs",
-  "crates/ivm_abi/src/*.rs",
+  "crates/ivm_abi/src/**/*.rs",
   "crates/norito/src/**/*.rs",
 ]
 check = "cargo run --locked -p ivm --features dev-tools --bin ivm_fixture_export -- --check"
@@ -575,7 +575,7 @@ outputs = [
 # modes, completion manifests, and every file byte before refreshing tracked
 # outputs as an identity-relative reviewed patch from either sealed tree; then
 # run `norito-rpc-verify`.
-generator = "CARGO_TARGET_DIR=\"${IROHA_NORITO_RPC_FIXTURE_CARGO_TARGET_DIR:?set an existing absolute private external Cargo target directory}\" cargo run --locked --offline --jobs 1 -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures --output-root \"${IROHA_NORITO_RPC_FIXTURE_STAGE:?set an absent absolute private external publication root}\""
+generator = "CARGO_TARGET_DIR=\"${IROHA_NORITO_RPC_FIXTURE_CARGO_TARGET_DIR:?set an existing absolute private external Cargo target directory}\" cargo run --locked --offline --jobs 1 -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures --output-root \"${IROHA_NORITO_RPC_FIXTURE_STAGE:?set an absent absolute publication root under ignored target or outside the workspace}\""
 generator_sources = [
   "crates/iroha/Cargo.toml",
   "crates/iroha/src/client.rs",
@@ -754,10 +754,10 @@ outputs = [
   "integration_tests/fixtures/ivm/smart_contract_can_filter_queries.to",
   "integration_tests/fixtures/ivm/threshold_escrow.to",
 ]
-# The owner writes only an immutable absent root outside the workspace. Refresh
+# The owner creates an immutable absent root under ignored target or outside the workspace. Refresh
 # tracked artifacts as a reviewed identity-relative patch from one of two
 # byte-identical sealed roots, then run the read-only check below.
-generator = "python3 scripts/regenerate_kotodama_goldens.py --write --output-root \"${IROHA_KOTODAMA_V1_ARTIFACT_STAGE:?set an absent absolute private external publication root}\" --koto target/debug/koto --iroha target/debug/iroha"
+generator = "python3 scripts/regenerate_kotodama_goldens.py --write --output-root \"${IROHA_KOTODAMA_V1_ARTIFACT_STAGE:?set an absent absolute publication root under ignored target or outside the workspace}\" --koto target/debug/koto --admission-tool target/debug/ivm_artifact_admit"
 generator_sources = [
   "scripts/regenerate_kotodama_goldens.py",
 ]
@@ -769,12 +769,16 @@ inputs = [
   "crates/iroha_data_model/src/**/*.rs",
   "crates/iroha_primitives/src/**/*.rs",
   "crates/ivm/src/**/*.rs",
-  "crates/ivm_abi/src/*.rs",
+  "crates/ivm_abi/src/**/*.rs",
+  "crates/ivm_artifact_admission/Cargo.toml",
+  "crates/ivm_artifact_admission/src/**/*.rs",
+  "crates/iroha_fs/Cargo.toml",
+  "crates/iroha_fs/src/**/*.rs",
   "crates/kotodama_lang/src/**/*.rs",
   "crates/norito/src/**/*.rs",
   "scripts/ivm_artifacts.tsv",
 ]
-check = "python3 scripts/regenerate_kotodama_goldens.py --check --koto target/debug/koto --iroha target/debug/iroha"
+check = "python3 scripts/regenerate_kotodama_goldens.py --check --koto target/debug/koto --admission-tool target/debug/ivm_artifact_admit"
 
 [[generated]]
 name = "kagami-norito-schemas"

@@ -371,7 +371,7 @@ def run_native(argv, directory, *, phase, pass_fds=(), env=None, journal_path=No
 def qualification_steps(scope):
     """Exact first-release native journal sequence; never reinterpret old indices."""
     require(scope in ("core_testnet", "full_inrou"), "one explicit canonical qualification scope is required")
-    return ("preflight", "stage", "stop", "install", "reset") + (("preseed",) if scope == "full_inrou" else ()) + ("start", "canary", "convergence", "restart_proof", "edge_stage", "edge_cutover", "edge_verify", "seal", "cleanup")
+    return ("preflight", "stage", "stop", "install", "reset") + (("preseed",) if scope == "full_inrou" else ()) + ("start", "canary", "convergence", "edge_stage", "edge_cutover", "edge_verify", "seal", "cleanup")
 
 
 def require_candidate_probe_inventory(inventory):

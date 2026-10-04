@@ -76,6 +76,33 @@ mod tests {
     }
 
     #[test]
+    fn certified_archive_cannot_borrow_the_state_pool_after_operation_capacity_refusal() {
+        let chain = chain();
+        let view = chain.state().view();
+        let state_budget = view.execution_budget();
+        let original_reserved = state_budget.reserved_bytes();
+        let operation_budget = iroha_allocation::AllocationBudget::new(0);
+        assert!(matches!(
+            CertifiedArchiveView::new_with_budget(&view, chain.kura(), &operation_budget),
+            Err(ArchiveFinalityError::Deferred(_))
+        ));
+        assert_eq!(operation_budget.reserved_bytes(), 0);
+        assert_eq!(operation_budget.peak_reserved_bytes(), 0);
+        assert_eq!(
+            state_budget.reserved_bytes(),
+            original_reserved,
+            "the unchanged State's independently retained pool grants no operation credits"
+        );
+        assert_eq!(
+            CertifiedArchiveView::new(&view, chain.kura())
+                .unwrap()
+                .tip_height(),
+            1,
+            "resource refusal preserves the genuine original State/Kura trust source"
+        );
+    }
+
+    #[test]
     fn certified_archive_rejects_foreign_kura_and_hash_cache_only_state() {
         let chain = chain();
         let kura = Kura::blank_kura_for_testing();
@@ -142,7 +169,11 @@ mod tests {
         );
         let executed_genesis = chain
             .kura()
-            .get_block(std::num::NonZeroUsize::MIN)
+            .get_block(
+                std::num::NonZeroUsize::MIN,
+                &chain.state().ivm_execution_budget(),
+            )
+            .expect("original genesis history read completes")
             .expect("retained executed genesis");
         assert!(executed_genesis.commit_certificate().is_some());
         let genesis_hash = executed_genesis.hash();
@@ -175,6 +206,15 @@ pub(crate) struct CertifiedArchiveView<'v, V: StateReadOnly + ?Sized> {
 impl<'v, V: StateReadOnly + ?Sized> CertifiedArchiveView<'v, V> {
     /// Authenticate the State/Kura association and freeze the durable hash journal.
     pub(crate) fn new(view: &'v V, kura: &'v Kura) -> Result<Self, ArchiveFinalityError> {
+        Self::new_with_budget(view, kura, &view.execution_budget())
+    }
+
+    /// Authenticate the same State/Kura boundary while retaining the supplied operation pool.
+    pub(crate) fn new_with_budget(
+        view: &'v V,
+        kura: &'v Kura,
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<Self, ArchiveFinalityError> {
         if !std::ptr::eq(view.kura(), kura) {
             return Err(ArchiveFinalityError::ForeignKura);
         }
@@ -187,7 +227,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedArchiveView<'v, V> {
         {
             return Err(ArchiveFinalityError::BoundaryMismatch);
         }
-        let chain = CertifiedChain::new(view)?;
+        let chain = CertifiedChain::new_with_budget(view, budget.clone())?;
         Ok(Self {
             kura,
             boundary,

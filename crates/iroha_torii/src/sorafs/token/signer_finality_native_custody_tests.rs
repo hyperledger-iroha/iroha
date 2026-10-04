@@ -185,7 +185,7 @@ impl NativeCustodyFixture {
         &self,
         current_anchor: SignerCustodyAnchorV1,
     ) -> SignerStreamTokenStateObservationBodyV1 {
-        let expected = SignerStreamTokenObservationExpectedV1::current(
+        let mut expected = SignerStreamTokenObservationExpectedV1::current(
             self.pins.binding(),
             SignerStreamTokenObservationPhaseV1::BeforeAdmission,
             [0x93; 32],
@@ -233,7 +233,7 @@ impl NativeCustodyFixture {
             self.pins.binding(),
             self.pins.custody_trust(),
             self.pins.observer_trust(),
-            expected,
+            &mut expected,
             NOW_MS,
         )
         .expect("full independent custody and observation verification");
@@ -261,7 +261,7 @@ impl NativeCustodyFixture {
 #[test]
 fn actual_native_custody_requires_both_certified_blocks_then_accepts_signed_observation() {
     for height in [2, 3] {
-        let mut fixture = NativeCustodyFixture::new();
+        let fixture = NativeCustodyFixture::new();
         // Publish both native mutations with genuine quorum certificates first. Corrupt the
         // retained configuration/enrollment QC independently at the consumer boundary: the
         // real publication worker must never be asked to accept a below-quorum certificate.
@@ -398,7 +398,7 @@ fn actual_native_custody_checks_every_unsorted_and_duplicate_height_target() {
 
 #[test]
 fn actual_native_custody_rechecks_certificates_after_successful_validation() {
-    let mut fixture = NativeCustodyFixture::new();
+    let fixture = NativeCustodyFixture::new();
     let guard = fixture.guard();
     let observation = fixture.verified_observation_at(fixture.current.anchor);
     let floor = guard.capture(fixture.approval).expect("certified floor");

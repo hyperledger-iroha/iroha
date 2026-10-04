@@ -15,10 +15,8 @@ pub use iroha_deploy::managed::{
     ManagedConfirmedAnchor, ManagedDataspaceStatus, ManagedDeploymentReport, ManagedPhase,
 };
 pub use musubi::deployment_runtime::ContractInput;
-use musubi::{
-    archive_fetch::{MusubiArchiveDiscoveryErrorV1, PreparedProductionSorafsArchiveTransportV1},
-    deployment_runtime::{AliasSelection, DeploymentRuntime},
-};
+use musubi::deployment_runtime::{AliasSelection, DeploymentRuntime};
+pub use musubi::generated_publication::{GeneratedPublishAction, GeneratedPublishOutcome};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -102,7 +100,8 @@ impl DeveloperWorkspace {
 
     /// Create or recover one owner-private dataspace using the installed parent profile.
     ///
-    /// The shared native worker owns all custody, funding, namespace and outbound relay work.
+    /// The shared native worker owns custody, funding, paid namespace and `admin@alias` leases,
+    /// and outbound relay work.
     /// A timeout retains exact work for retry; the complete foreground budget is sixty seconds.
     /// # Errors
     /// Invalid identity/profile, unsafe custody, failed private startup or unconfirmed attachment.
@@ -118,6 +117,7 @@ impl DeveloperWorkspace {
                 name: name.to_owned(),
                 network: network.to_owned(),
                 alias: alias.to_owned(),
+                account_alias: "admin".to_owned(),
                 timeout: Duration::from_secs(60),
             },
         )?)
@@ -168,6 +168,18 @@ impl DeveloperWorkspace {
     /// Unknown or invalid retained context.
     pub fn select(&self, name: &str) -> Result<ManagedContext> {
         Ok(ManagedStore::open(&self.root)?.select(name)?)
+    }
+
+    /// Create a new named global localnet without resuming any existing context.
+    ///
+    /// The canonical store owns the name check under its operation lock. A stale desktop
+    /// context list cannot adopt a global or private generation created by another frontend.
+    ///
+    /// # Errors
+    /// Existing or concurrently owned name, generation, custody or startup failure.
+    pub fn create_localnet(&self, name: &str) -> Result<ManagedStatus> {
+        Ok(ManagedStore::open(&self.root)?
+            .create_localnet(&self.runtime.localnet_request(name, Duration::from_secs(30)))?)
     }
 
     /// Start a new localnet or restart the exact retained global or private generation.
@@ -223,6 +235,86 @@ impl DeveloperWorkspace {
         Ok(ManagedStore::open(&self.root)?.logs(name, peer, maximum)?)
     }
 
+    /// Publish an explicit package action through the same generated context and engine as Kagami.
+    ///
+    /// Run this blocking action on the desktop executor. Begin may start the default environment;
+    /// Resume/Recover require an existing selection and retain their original operation. Original
+    /// generation-bound publication/cache roots and namespace custody are shared with the CLI.
+    /// The returned outcome uses canonical redacting output; it is not a readiness assertion.
+    /// # Errors
+    /// Invalid workspace, missing selection, original profile/registry mismatch or startup failure.
+    pub fn publish_package(
+        &self,
+        manifest: &Path,
+        context: Option<&str>,
+        action: GeneratedPublishAction,
+    ) -> Result<GeneratedPublishOutcome> {
+        let manifest = self.resolve_path(manifest);
+        // Resume observes the retained journal/sidecars and does not reopen source manifests.
+        if !matches!(&action, GeneratedPublishAction::Resume { .. }) {
+            let workspace = musubi::workspace::load_workspace(&manifest)?;
+            if let GeneratedPublishAction::Begin { package, .. } = &action {
+                let packages = package.iter().cloned().collect::<Vec<_>>();
+                ensure!(
+                    workspace.select_members(false, &packages, &[])?.len() == 1,
+                    "package publication requires exactly one selected member"
+                );
+            }
+        }
+        let store = ManagedStore::open(&self.root)?;
+        if !matches!(&action, GeneratedPublishAction::Begin { .. }) {
+            store.context(context)?;
+        }
+        let selected = store
+            .ensure_selected(&self.runtime, context, Duration::from_secs(30))?
+            .context;
+        let prepared = store.prepared(&selected.name)?;
+        ensure!(
+            prepared.context == selected,
+            "selected publication generation changed"
+        );
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let original = prepared.publication_client_config()?.ok_or_else(|| {
+            color_eyre::eyre::eyre!("selected generation has no generated publication intent")
+        })?;
+        let context =
+            musubi::publication_runtime::GeneratedPublicationContextV1::from_original_image(
+                original.client_config_path(),
+                original.client_config_image(),
+                original.publication_transport()?,
+                musubi::publication_runtime::GeneratedPublicationNamespaceIntentV1 {
+                    publisher: original.publisher().clone(),
+                    binding: original.namespace_binding().clone(),
+                    policy: original.registry_policy().clone(),
+                    fee_payment: original.namespace_fee_payment(),
+                    journal_root: original.namespace_journal_root().to_path_buf(),
+                },
+            )?;
+        let (registry, archive_transport) = store
+            .build_registry(&self.runtime, &selected.name, deadline)?
+            .ok_or_else(|| {
+                color_eyre::eyre::eyre!("selected generation has no authenticated build registry")
+            })?;
+        ensure!(
+            registry.account == *original.publisher()
+                && registry.network_id == original.service_plan().network_id()
+                && registry.chain.as_str() == original.service_plan().chain_id()
+                && registry.torii_api_url.as_str() == prepared.context.torii_url
+                && store.prepared(&selected.name)? == prepared,
+            "generated publication registry or generation changed"
+        );
+        Ok(musubi::generated_publication::publish_generated(
+            &context,
+            &musubi::generated_publication::GeneratedPublishRequest {
+                manifest_path: manifest,
+                state_root: original.publication_state_root(),
+                cache_root: original.publication_cache_root(),
+                archive_transport,
+                action,
+            },
+        ))
+    }
+
     /// Compile and deploy one input, starting the default localnet if no context was selected.
     ///
     /// `review` sees exact signed-plan fee quotes before dispatch; `progress` reports native
@@ -244,7 +336,13 @@ impl DeveloperWorkspace {
             .context;
         let target = store.capture_deployment(&selected)?;
         let config = selected.load_client_config()?;
-        let runtime = self.deployment_runtime(config, &selected.name);
+        let prepared = store.prepared(&selected.name)?;
+        ensure!(
+            prepared.context == selected,
+            "deployment generation changed before cache selection"
+        );
+        let cache_root = prepared.build_cache_root();
+        let runtime = self.deployment_runtime(config, &selected.name, cache_root);
         let alias = alias.map_or_else(
             || AliasSelection::Scope {
                 domain: None,
@@ -285,7 +383,14 @@ impl DeveloperWorkspace {
             .ensure_selected(&self.runtime, context, Duration::from_secs(30))?
             .context;
         let target = store.capture_deployment(&selected)?;
-        let runtime = self.deployment_runtime(selected.load_client_config()?, &selected.name);
+        let prepared = store.prepared(&selected.name)?;
+        ensure!(
+            prepared.context == selected,
+            "deployment generation changed before cache selection"
+        );
+        let cache_root = prepared.build_cache_root();
+        let runtime =
+            self.deployment_runtime(selected.load_client_config()?, &selected.name, cache_root);
         let run = runtime.resume(
             journal,
             &mut |preflight| {
@@ -300,42 +405,22 @@ impl DeveloperWorkspace {
         Ok(target.finish(&store, run.receipt, run.journal)?)
     }
 
-    fn deployment_runtime(&self, config: iroha::config::Config, name: &str) -> DeploymentRuntime {
+    fn deployment_runtime(
+        &self,
+        config: iroha::config::Config,
+        name: &str,
+        cache_root: PathBuf,
+    ) -> DeploymentRuntime {
         let registry_root = self.root.clone();
         let registry_context = name.to_owned();
         let installed = self.runtime.clone();
-        DeploymentRuntime::new(config, self.root.join("deployments").join(name))
+        DeploymentRuntime::new(config, self.root.join("deployments").join(name), cache_root)
             .with_build_registry_resolver(Arc::new(move || {
                 // Musubi calls this only after local resolution and exact authenticated cache
                 // hits cannot satisfy the graph. Selecting a private context does no parent I/O.
                 let deadline = Instant::now() + Duration::from_secs(60);
                 let store = ManagedStore::open(&registry_root)?;
-                let Some(registry) =
-                    store.build_registry(&installed, &registry_context, deadline)?
-                else {
-                    return Ok(None);
-                };
-                let parent = registry.config().clone();
-                let transport = PreparedProductionSorafsArchiveTransportV1::from_account_registry(
-                    parent.clone(),
-                    Arc::new(move |provider| {
-                        registry.discover(provider, deadline).map_err(|error| {
-                            if Instant::now() >= deadline {
-                                MusubiArchiveDiscoveryErrorV1::Deadline
-                            } else {
-                                match error {
-                                    iroha_deploy::bootstrap::BootstrapError::Busy
-                                    | iroha_deploy::bootstrap::BootstrapError::Io(_) => {
-                                        MusubiArchiveDiscoveryErrorV1::Unavailable
-                                    }
-                                    _ => MusubiArchiveDiscoveryErrorV1::Rejected,
-                                }
-                            }
-                        })
-                    }),
-                    Duration::from_secs(30),
-                )?;
-                Ok(Some((parent, transport)))
+                Ok(store.build_registry(&installed, &registry_context, deadline)?)
             }))
     }
 }
@@ -480,6 +565,102 @@ mod tests {
     use super::*;
 
     #[test]
+    fn desktop_publication_refuses_invalid_input_and_missing_recovery_selection_without_workers() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = temporary.path().join("project");
+        let bin = temporary.path().join("bin");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::create_dir(&bin).unwrap();
+        for program in ["kagami", "iroha3d"] {
+            std::fs::write(
+                bin.join(format!("{program}{}", std::env::consts::EXE_SUFFIX)),
+                b"not executable",
+            )
+            .unwrap();
+        }
+        let desktop = DeveloperWorkspace::with_runtime(
+            &temporary.path().join("state"),
+            &project,
+            InstalledRuntime::from_directory(&bin).unwrap(),
+        )
+        .unwrap();
+        let manifest = project.join("Musubi.toml");
+        std::fs::write(&manifest, "invalid manifest").unwrap();
+        assert!(
+            desktop
+                .publish_package(
+                    Path::new("Musubi.toml"),
+                    None,
+                    GeneratedPublishAction::Begin {
+                        package: None,
+                        detach: false
+                    }
+                )
+                .is_err()
+        );
+        assert!(desktop.contexts().unwrap().is_empty());
+        std::fs::write(&manifest, "manifest-version = 1\n[package]\nnamespace = \"dev.universal\"\nname = \"demo\"\nversion = \"1.0.0\"\nedition = \"1\"\nabi-version = 1\n[lib]\nexports = []\n").unwrap();
+        let operation_id = "56".repeat(32).parse().unwrap();
+        for action in [
+            GeneratedPublishAction::Resume { operation_id },
+            GeneratedPublishAction::Recover { operation_id },
+        ] {
+            let error = desktop
+                .publish_package(Path::new("Musubi.toml"), None, action)
+                .err()
+                .unwrap();
+            assert!(matches!(
+                error.downcast_ref::<iroha_deploy::managed::Error>(),
+                Some(iroha_deploy::managed::Error::NoSelection)
+            ));
+            assert!(desktop.contexts().unwrap().is_empty());
+            assert_eq!(desktop.selected_name().unwrap(), None);
+        }
+        for missing in [false, true] {
+            if missing {
+                std::fs::remove_file(&manifest).unwrap();
+            } else {
+                std::fs::write(&manifest, "invalid changed source").unwrap();
+            }
+            let error = desktop
+                .publish_package(
+                    Path::new("Musubi.toml"),
+                    None,
+                    GeneratedPublishAction::Resume { operation_id },
+                )
+                .err()
+                .unwrap();
+            assert!(
+                matches!(
+                    error.downcast_ref::<iroha_deploy::managed::Error>(),
+                    Some(iroha_deploy::managed::Error::NoSelection)
+                ),
+                "resume must reach original context without reopening source: {error}"
+            );
+            assert!(desktop.contexts().unwrap().is_empty());
+        }
+        assert!(!desktop.state_root().join("deployments").exists());
+    }
+
+    fn assert_create_refuses_retained_context(desktop: &DeveloperWorkspace, name: &str) {
+        let store = ManagedStore::open(desktop.state_root()).unwrap();
+        let original = store.prepared(name).unwrap();
+        let selection = desktop.selected_name().unwrap();
+        let config = std::fs::read(&original.context.client_config).unwrap();
+        let error = desktop.create_localnet(name).unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<iroha_deploy::managed::Error>(),
+            Some(iroha_deploy::managed::Error::Invalid(message)) if message.contains("already exists")
+        ));
+        assert_eq!(store.prepared(name).unwrap(), original);
+        assert_eq!(desktop.selected_name().unwrap(), selection);
+        assert_eq!(
+            std::fs::read(&original.context.client_config).unwrap(),
+            config
+        );
+    }
+
+    #[test]
     fn desktop_restart_keeps_the_cli_prepared_private_root_and_owner() {
         use iroha_data_model::sns::{DATASPACE_ALIAS_SUFFIX_ID, NameSelectorV1};
         let temporary = tempfile::tempdir().unwrap();
@@ -514,7 +695,7 @@ mod tests {
         let store = ManagedStore::open(desktop.state_root()).unwrap();
         let request = desktop
             .runtime
-            .localnet_request("private", Duration::from_secs(120));
+            .private_root_request("private", Duration::from_secs(120));
         assert!(
             matches!(
                 store.up_private_root(&request, &spec),
@@ -525,6 +706,7 @@ mod tests {
         let prepared = store.prepared("private").unwrap();
         let owner = prepared.context.load_client_config().unwrap();
         assert!(owner.api_token.is_some());
+        assert_create_refuses_retained_context(&desktop, "private");
         let failure = desktop.start("private").unwrap_err();
         assert!(
             matches!(
@@ -621,6 +803,7 @@ mod tests {
         assert!(desktop.reset("missing").is_err());
         assert!(desktop.logs("missing", None, 1024).is_err());
         assert!(desktop.start("../invalid").is_err());
+        assert!(desktop.create_localnet("../invalid").is_err());
         assert!(
             desktop
                 .resume(Path::new("journal"), None, &mut |_| Ok(()), &mut |_| {})
@@ -661,8 +844,16 @@ mod tests {
             InstalledRuntime::from_directory(&bin).unwrap(),
         )
         .unwrap();
-        assert!(desktop.start("fixture").is_err());
+        let failure = desktop.start("fixture").unwrap_err();
+        assert!(
+            matches!(
+                failure.downcast_ref::<iroha_deploy::managed::Error>(),
+                Some(iroha_deploy::managed::Error::Io(_))
+            ),
+            "genuine generation must reach the intentionally unavailable worker: {failure}"
+        );
         let context = desktop.select("fixture").unwrap();
+        assert_create_refuses_retained_context(&desktop, "fixture");
         let network = desktop.network(None).unwrap();
         assert_eq!(network.prepared().peers.len(), 4);
         // Even a deliberately absent registry context cannot affect a local source build.
@@ -675,13 +866,18 @@ mod tests {
         .unwrap();
         assert_eq!(
             desktop
-                .deployment_runtime(network.config.clone(), "missing-registry-context")
+                .deployment_runtime(
+                    network.config.clone(),
+                    "missing-registry-context",
+                    network.prepared().build_cache_root(),
+                )
                 .build(&ContractInput::Source(source))
                 .unwrap()
                 .name(),
             "Offline"
         );
         assert!(!desktop.state_root().join("deployments").exists());
+        assert!(!network.prepared().build_cache_root().exists());
         assert_eq!(
             network.signer().account_id().to_string(),
             context.account_id

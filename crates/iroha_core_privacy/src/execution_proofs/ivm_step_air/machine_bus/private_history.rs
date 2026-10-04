@@ -10,21 +10,39 @@
 
 use super::*;
 
+mod view;
+#[cfg(test)]
+pub(super) use view::Segment;
+pub(super) use view::{ShapeError, View};
+
+/// Bounded relation geometry only. This does not enlarge the one-segment public
+/// STARK adapter or admit segmented proofs; joint commitment ownership is open.
+const MAX_SEGMENTS: usize = 2;
+
 /// Shape-only fixed schedule shared by every witness with the same public cap.
 #[derive(Clone, Copy)]
 pub(super) struct Schedule {
     trace_log2: u8,
+    segments: u8,
 }
 
 impl Schedule {
-    pub(super) fn new(trace_log2: u8) -> Option<Self> {
-        (MIN_LOG..=MAX_LOG)
-            .contains(&trace_log2)
-            .then_some(Self { trace_log2 })
+    pub(super) fn new(trace_log2: u8, segments: u8) -> Option<Self> {
+        ((MIN_LOG..=MAX_LOG).contains(&trace_log2)
+            && (1..=MAX_SEGMENTS).contains(&usize::from(segments)))
+        .then_some(Self {
+            trace_log2,
+            segments,
+        })
+    }
+
+    pub(super) fn segment_size(self) -> usize {
+        1 << self.trace_log2
     }
 
     pub(super) fn size(self) -> usize {
-        1 << self.trace_log2
+        // Both factors were bounded before constructing the schedule.
+        self.segment_size() * usize::from(self.segments)
     }
 
     pub(super) fn fixed(self, index: usize) -> Option<[F; FIXED_WIDTH]> {
@@ -49,7 +67,7 @@ impl Schedule {
 /// supplied event commitment. Its complete semantic producer must also be
 /// constrained in that relation; consistency alone cannot authorize its writes.
 pub(super) fn append_residues(
-    out: &mut Vec<F>,
+    out: &mut impl crate::execution_proofs::ivm_step_air::residues::Sink,
     row: &[F; ROW_WIDTH],
     next: &[F; ROW_WIDTH],
     aux: &[F],
@@ -82,3 +100,6 @@ pub(super) fn append_residues(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod segmented_tests;

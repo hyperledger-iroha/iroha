@@ -12,23 +12,24 @@ fn fixture() -> Result<(Config, PreparedContractCall, TransactionRecord)> {
             "seiyaku Example { kotoage fn run() authorize(\"CanInvokeContractEntrypoint\") {} }",
         )
         .map_err(|error| eyre!(error))?;
-    let verified = ivm_artifact_admission::verify_contract_artifact(&artifact)?;
     let address = ContractAddress::derive(
         &config.network_id,
         &config.account,
         7,
         DataSpaceId::UNIVERSAL,
     )?;
-    let intent = ContractCallDraftIntent {
-        invocation: iroha::data_model::transaction::executable::ContractInvocation {
-            contract_address: address,
-            expected_code_hash: verified.code_hash,
-            entrypoint: "run".to_owned(),
-            arguments: None,
-        },
-        metadata: Metadata::default(),
-    };
+    let (intent, payload) =
+        trusted_contract_intent(&artifact, address, "run", norito::json!({}), false)?;
     let fee = FeePaymentIntent::authority(Vec::new(), std::num::NonZeroU64::new(1_500_000));
+    let transaction_ttl_ms = u64::try_from(config.transaction_ttl.as_millis())?;
+    let mut builder =
+        TransactionBuilder::new(config.network_id, config.account.clone(), fee.clone());
+    builder.set_creation_time(Duration::from_millis(1));
+    builder.set_ttl(Duration::from_millis(transaction_ttl_ms.min(59_999)));
+    let call = builder
+        .with_metadata(intent.metadata.clone())
+        .with_executable(Executable::ContractCall(intent.invocation.clone()))
+        .try_sign(config.key_pair.private_key())?;
     let mut plan = CallPlan {
         version: 1,
         network_id: config.network_id,
@@ -38,32 +39,69 @@ fn fixture() -> Result<(Config, PreparedContractCall, TransactionRecord)> {
         created_at_ns: 1,
         artifact_hex: hex::encode(artifact),
         alias: "example::universal".parse()?,
-        payload: None,
+        payload,
         intent,
         requested_fee: fee,
+        authorization: CallAuthorization {
+            signing_deadline_unix_ms: 60_000,
+            max_total_fees: BTreeMap::from([(
+                AssetDefinitionId::derive_from_components(
+                    iroha_model_base::domain::DomainId::parse_fully_qualified(
+                        "wonderland.universal",
+                    )?,
+                    "xor".parse()?,
+                ),
+                Quantity::from(1_000_000_u32),
+            )]),
+        },
+        transaction_ttl_ms,
         grant: None,
+        call: transaction_record("contract-call", &call),
     };
     bind_operation_metadata(&mut plan)?;
-    let signature = Signature::try_new(config.key_pair.private_key(), &plan_signing_bytes(&plan)?)?;
-    let prepared = PreparedContractCall {
+    let mut prepared = PreparedContractCall {
         plan,
-        signature_hex: hex::encode(signature.payload()),
+        signature_hex: String::new(),
     };
-    let signed = TransactionBuilder::new(
+    let step = refresh_prepared_call(&config, &mut prepared)?;
+    Ok((config, prepared, step))
+}
+fn refresh_prepared_call(
+    config: &Config,
+    prepared: &mut PreparedContractCall,
+) -> Result<TransactionRecord> {
+    bind_operation_metadata(&mut prepared.plan)?;
+    let signed = fixture_builder(&config, &prepared)?
+        .with_metadata(prepared.plan.intent.metadata.clone())
+        .with_executable(Executable::ContractCall(
+            prepared.plan.intent.invocation.clone(),
+        ))
+        .try_sign(config.key_pair.private_key())?;
+    let step = transaction_record("contract-call", &signed);
+    prepared.plan.call = step.clone();
+    prepared.signature_hex = hex::encode(
+        Signature::try_new(
+            config.key_pair.private_key(),
+            &plan_signing_bytes(&prepared.plan)?,
+        )?
+        .payload(),
+    );
+    Ok(step)
+}
+fn fixture_builder(config: &Config, prepared: &PreparedContractCall) -> Result<TransactionBuilder> {
+    let mut builder = TransactionBuilder::new(
         config.network_id,
         config.account.clone(),
         prepared.plan.requested_fee.clone(),
-    )
-    .with_metadata(prepared.plan.intent.metadata.clone())
-    .with_executable(Executable::ContractCall(
-        prepared.plan.intent.invocation.clone(),
-    ))
-    .try_sign(config.key_pair.private_key())?;
-    Ok((
-        config,
-        prepared,
-        transaction_record("contract-call", &signed),
-    ))
+    );
+    builder.set_creation_time(Duration::from_millis(1));
+    builder.set_ttl(Duration::from_millis(
+        prepared
+            .plan
+            .authorization
+            .ttl_ms(1, prepared.plan.transaction_ttl_ms)?,
+    ));
+    Ok(builder)
 }
 struct Transport {
     submits: Cell<usize>,
@@ -99,7 +137,6 @@ fn call_resume_never_resubmits_after_ambiguous_dispatch() -> Result<()> {
     let temporary = tempfile::tempdir()?;
     let journal = Journal::open(&temporary.path().join("call"), true)?;
     journal.put_exact("plan.json", &prepared)?;
-    journal.put_exact("call.json", &step)?;
     let transport = Transport {
         submits: Cell::new(0),
         ambiguous: Cell::new(true),
@@ -122,6 +159,9 @@ fn call_signed_plan_and_transaction_reject_substitution() -> Result<()> {
     let (config, prepared, step) = fixture()?;
     validate_plan(&prepared, &config)?;
     let mutations: Vec<PlanMutation> = vec![
+        Box::new(|p| p.plan.authorization.signing_deadline_unix_ms += 1),
+        Box::new(|p| p.plan.authorization.max_total_fees.clear()),
+        Box::new(|p| p.plan.transaction_ttl_ms += 1),
         Box::new(|p| p.plan.intent.invocation.entrypoint = "other".into()),
         Box::new(|p| p.plan.alias = "other::universal".parse().unwrap()),
         Box::new(|p| p.plan.created_at_ns += 1),
@@ -141,14 +181,7 @@ fn call_signed_plan_and_transaction_reject_substitution() -> Result<()> {
     }
     let mut later = prepared.clone();
     later.plan.created_at_ns += 1;
-    bind_operation_metadata(&mut later.plan)?;
-    later.signature_hex = hex::encode(
-        Signature::try_new(
-            config.key_pair.private_key(),
-            &plan_signing_bytes(&later.plan)?,
-        )?
-        .payload(),
-    );
+    refresh_prepared_call(&config, &mut later)?;
     validate_plan(&later, &config)?;
     assert_ne!(later.operation_id()?, prepared.operation_id()?);
     assert!(
@@ -185,8 +218,143 @@ fn call_signed_plan_and_transaction_reject_substitution() -> Result<()> {
     );
     Ok(())
 }
+
 #[test]
-fn call_rejects_missing_payload_and_conflicting_retained_evidence() -> Result<()> {
+fn call_authorization_checked_totals_and_fixed_expiry_survive_recovery() -> Result<()> {
+    use iroha::data_model::transaction::{FeeChargeKind, FeeChargeLimit};
+    let (config, prepared, step) = fixture()?;
+    let asset = prepared
+        .plan
+        .authorization
+        .max_total_fees
+        .keys()
+        .next()
+        .unwrap()
+        .clone();
+    let auth = CallAuthorization {
+        signing_deadline_unix_ms: 60_000,
+        max_total_fees: BTreeMap::from([(asset.clone(), Quantity::from(10_u32))]),
+    };
+    let fee = |amount| {
+        FeePaymentIntent::authority(
+            vec![FeeChargeLimit::new(
+                FeeChargeKind::Nexus,
+                asset.clone(),
+                Quantity::from(amount),
+            )],
+            std::num::NonZeroU64::new(1_500_000),
+        )
+    };
+    auth.check_fees([&fee(4_u32), &fee(6_u32)])?;
+    assert!(auth.check_fees([&fee(4_u32), &fee(7_u32)]).is_err());
+    assert_eq!(auth.ttl_ms(59_999, 30_000)?, 1);
+    assert!(auth.ttl_ms(60_000, 30_000).is_err());
+    assert!(auth.require_signing().is_err());
+    // Expired signing authorization does not invalidate an already signed exact transaction.
+    validate_plan(&prepared, &config)?;
+    validate_call_transaction(&prepared.plan, &step)?;
+    let original = decode_transaction(&step)?;
+    let mut changed = original.payload().clone();
+    changed.time_to_live_ms = std::num::NonZeroU64::new(60_000);
+    let changed = Client::new(config.clone())?
+        .account_client()
+        .sign_transaction(changed)?;
+    assert!(validate_transaction_expiry(&prepared.plan, &changed).is_err());
+    assert!(
+        validate_call_transaction(
+            &prepared.plan,
+            &transaction_record("contract-call", &changed)
+        )
+        .is_err()
+    );
+    let bytes = norito::json::to_vec(&prepared)?;
+    let roundtrip: PreparedContractCall = norito::json::from_slice(&bytes)?;
+    assert_eq!(roundtrip.operation_id()?, prepared.operation_id()?);
+    for field in ["authorization", "transaction_ttl_ms", "call"] {
+        let mut missing: Value = norito::json::from_slice(&bytes)?;
+        missing
+            .as_object_mut()
+            .unwrap()
+            .get_mut("plan")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove(field);
+        assert!(norito::json::from_value::<PreparedContractCall>(missing).is_err());
+    }
+    let mut null: Value = norito::json::from_slice(&bytes)?;
+    null.as_object_mut()
+        .unwrap()
+        .get_mut("plan")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("call".into(), Value::Null);
+    assert!(norito::json::from_value::<PreparedContractCall>(null).is_err());
+    Ok(())
+}
+
+#[test]
+fn contract_arguments_are_admitted_before_decode_and_bind_local_schema() -> Result<()> {
+    assert!(parse_contract_arguments(&format!("\"{}\"", "x".repeat(64 * 1024))).is_err());
+    let depth = format!("{}0{}", "[".repeat(129), "]".repeat(129));
+    assert!(parse_contract_arguments(&depth).is_err());
+    let many = format!("[{}]", vec!["0"; 8193].join(","));
+    assert!(parse_contract_arguments(&many).is_err());
+    let (config, prepared, _) = fixture()?;
+    let artifact = kotodama_lang::compiler::Compiler::new().compile_source("seiyaku Example { kotoage fn write(int next) authorize(\"CanInvokeContractEntrypoint\") {} view fn read() -> int { return 1; } }").map_err(|error| eyre!(error))?;
+    let (intent, payload) = trusted_contract_intent(
+        &artifact,
+        prepared.contract_address().clone(),
+        "write",
+        parse_contract_arguments(r#"{"next":"7"}"#)?,
+        false,
+    )?;
+    validate_trusted_intent(&artifact, &intent, &payload, false)?;
+    assert!(
+        validate_trusted_intent(
+            &artifact,
+            &intent,
+            &Some(norito::json!({"next":"8"})),
+            false
+        )
+        .is_err()
+    );
+    assert!(intent.invocation.arguments.is_some());
+    assert!(payload.is_some());
+    assert!(
+        trusted_contract_intent(
+            &artifact,
+            prepared.contract_address().clone(),
+            "write",
+            norito::json!({"wrong":"7"}),
+            false
+        )
+        .is_err()
+    );
+    assert!(
+        trusted_contract_intent(
+            &artifact,
+            prepared.contract_address().clone(),
+            "read",
+            norito::json!({}),
+            false
+        )
+        .is_err()
+    );
+    let (_, payload) = trusted_contract_intent(
+        &artifact,
+        prepared.contract_address().clone(),
+        "read",
+        norito::json!({}),
+        true,
+    )?;
+    assert!(payload.is_none());
+    validate_plan(&prepared, &config)?;
+    Ok(())
+}
+#[test]
+fn call_rejects_retired_payload_and_conflicting_retained_evidence() -> Result<()> {
     let (_, prepared, step) = fixture()?;
     let temporary = tempfile::tempdir()?;
     let journal = Journal::open(&temporary.path().join("call"), true)?;
@@ -197,13 +365,9 @@ fn call_rejects_missing_payload_and_conflicting_retained_evidence() -> Result<()
             hash: step.hash.clone(),
         },
     )?;
-    assert!(
-        validate_stage_layout(&journal, &prepared.plan)
-            .unwrap_err()
-            .to_string()
-            .contains("must never be prepared again")
-    );
-    journal.put_exact("call.json", &step)?;
+    let retired = Journal::open(&temporary.path().join("retired-call"), true)?;
+    retired.put_exact("call.json", &step)?;
+    assert!(validate_stage_layout(&retired, &prepared.plan).is_err());
     validate_stage_layout(&journal, &prepared.plan)?;
     let transport = Transport {
         submits: Cell::new(0),
@@ -217,51 +381,52 @@ fn call_rejects_missing_payload_and_conflicting_retained_evidence() -> Result<()
     Ok(())
 }
 #[test]
-fn call_self_grant_is_exact_and_precedes_call_preparation() -> Result<()> {
+fn call_both_signed_stages_are_retained_before_dispatch_and_grant_applies_first() -> Result<()> {
     let (config, mut prepared, _) = fixture()?;
     let artifact = hex::decode(&prepared.plan.artifact_hex)?;
     let verified = ivm_artifact_admission::verify_contract_artifact(&artifact)?;
     let permission =
         required_permission(&verified, &prepared.plan.intent)?.expect("guarded entrypoint");
-    let grant = TransactionBuilder::new(
-        config.network_id,
-        config.account.clone(),
-        prepared.plan.requested_fee.clone(),
-    )
-    .with_instructions([Grant::account_permission(
-        permission,
-        config.account.clone(),
-    )])
-    .try_sign(config.key_pair.private_key())?;
+    let grant = fixture_builder(&config, &prepared)?
+        .with_instructions([Grant::account_permission(
+            permission,
+            config.account.clone(),
+        )])
+        .try_sign(config.key_pair.private_key())?;
     prepared.plan.grant = Some(transaction_record("entrypoint-grant", &grant));
-    bind_operation_metadata(&mut prepared.plan)?;
-    prepared.signature_hex = hex::encode(
-        Signature::try_new(
-            config.key_pair.private_key(),
-            &plan_signing_bytes(&prepared.plan)?,
-        )?
-        .payload(),
-    );
+    let step = refresh_prepared_call(&config, &mut prepared)?;
     validate_plan(&prepared, &config)?;
-    let signed_call = TransactionBuilder::new(
-        config.network_id,
-        config.account.clone(),
-        prepared.plan.requested_fee.clone(),
-    )
-    .with_metadata(prepared.plan.intent.metadata.clone())
-    .with_executable(Executable::ContractCall(
-        prepared.plan.intent.invocation.clone(),
-    ))
-    .try_sign(config.key_pair.private_key())?;
-    let step = transaction_record("contract-call", &signed_call);
     let temporary = tempfile::tempdir()?;
     let journal = Journal::open(&temporary.path().join("call"), true)?;
-    journal.put_exact("call.json", &step)?;
-    assert!(validate_stage_layout(&journal, &prepared.plan).is_err());
+    journal.put_exact("plan.json", &prepared)?;
+    assert_eq!(
+        read_call_plan(&journal)?.plan.call.norito_hex,
+        step.norito_hex
+    );
+    validate_stage_layout(&journal, &prepared.plan)?;
+    let bad = Journal::open(&temporary.path().join("bad-order"), true)?;
+    bad.put_exact(
+        "attempt-0001.json",
+        &TransactionAttempt {
+            name: step.name.clone(),
+            hash: step.hash.clone(),
+        },
+    )?;
+    assert!(validate_stage_layout(&bad, &prepared.plan).is_err());
     let transport = Transport {
         submits: Cell::new(0),
-        ambiguous: Cell::new(false),
+        ambiguous: Cell::new(true),
     };
+    let retained_call = read_call_plan(&journal)?.plan.call;
+    let grant = prepared.plan.grant.as_ref().unwrap();
+    let error = execute_step(&journal, grant, 0, &transport).expect_err("ambiguous grant");
+    assert!(error.downcast_ref::<ContractCallPending>().is_some());
+    assert_eq!(transport.submits.get(), 1);
+    let recovered = read_call_plan(&journal)?;
+    assert_eq!(recovered.operation_id()?, prepared.operation_id()?);
+    assert_eq!(recovered.plan.call.norito_hex, retained_call.norito_hex);
+    assert!(!journal.exists("attempt-0001.json")?);
+    transport.ambiguous.set(false);
     execute_step(
         &journal,
         prepared.plan.grant.as_ref().unwrap(),
@@ -270,30 +435,23 @@ fn call_self_grant_is_exact_and_precedes_call_preparation() -> Result<()> {
     )?;
     validate_stage_layout(&journal, &prepared.plan)?;
     execute_step(&journal, &step, 1, &transport)?;
-    assert_eq!(transport.submits.get(), 2);
-    let other = KeyPair::random();
-    let wrong_grant = TransactionBuilder::new(
-        config.network_id,
-        config.account.clone(),
-        prepared.plan.requested_fee.clone(),
-    )
-    .with_instructions([Grant::account_permission(
-        CanInvokeContractEntrypoint {
-            contract: prepared.plan.intent.invocation.contract_address.clone(),
-            entrypoint: "run".into(),
-        },
-        AccountId::new(other.public_key().clone()),
-    )])
-    .try_sign(config.key_pair.private_key())?;
-    prepared.plan.grant = Some(transaction_record("entrypoint-grant", &wrong_grant));
-    bind_operation_metadata(&mut prepared.plan)?;
-    prepared.signature_hex = hex::encode(
-        Signature::try_new(
-            config.key_pair.private_key(),
-            &plan_signing_bytes(&prepared.plan)?,
-        )?
-        .payload(),
+    assert_eq!(
+        transport.submits.get(),
+        2,
+        "grant recovery must not resubmit; the call is the second original dispatch"
     );
+    let other = KeyPair::random();
+    let wrong_grant = fixture_builder(&config, &prepared)?
+        .with_instructions([Grant::account_permission(
+            CanInvokeContractEntrypoint {
+                contract: prepared.plan.intent.invocation.contract_address.clone(),
+                entrypoint: "run".into(),
+            },
+            AccountId::new(other.public_key().clone()),
+        )])
+        .try_sign(config.key_pair.private_key())?;
+    prepared.plan.grant = Some(transaction_record("entrypoint-grant", &wrong_grant));
+    refresh_prepared_call(&config, &mut prepared)?;
     assert!(validate_plan(&prepared, &config).is_err());
     Ok(())
 }

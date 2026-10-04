@@ -15,7 +15,6 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
-import ctypes
 import hashlib
 import os
 from pathlib import Path, PurePosixPath
@@ -39,6 +38,7 @@ from release_artifact_contract import (
     exclusive_output_fd,
     exclusive_write_bytes,
     load_json_object,
+    publish_directory_noreplace,
     stable_hash_path,
     stable_open_relative,
     stable_read_path,
@@ -442,31 +442,21 @@ def _stage(destination):
     return create_fresh_directory(stage, mode=0o700)
 
 
-def _publish(stage, destination):
+def _publish(stage, destination, *, stage_mode=0o700):
     """Exclusive directory rename; failures retain a private incomplete artifact."""
     _directory(destination.parent)
     _need(stage.parent == destination.parent, "source publication crossed directories")
-    parent_fd, _, before = _open_absolute_directory(stage.parent, "source publication parent")
+    parent_fd, _, _ = _open_absolute_directory(stage.parent, "source publication parent")
+    stage_fd = -1
     try:
-        staged = stage.lstat()
-        libc = ctypes.CDLL(None, use_errno=True)
-        if sys.platform == "linux":
-            function = libc.renameat2
-            flag = 1  # RENAME_NOREPLACE
-        elif sys.platform == "darwin":
-            function = libc.renameatx_np
-            flag = 4  # RENAME_EXCL
-        else:
-            raise SourceCaptureError("exclusive source publication requires Linux or macOS")
-        function.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
-        function.restype = ctypes.c_int
-        code = function(parent_fd, os.fsencode(stage.name), parent_fd, os.fsencode(destination.name), flag)
-        if code != 0:
-            raise SourceCaptureError(f"exclusive source publication failed (errno {ctypes.get_errno()})")
-        os.fsync(parent_fd)
-        _need(_identity(before)[:2] == _identity(stage.parent.lstat())[:2]
-              and _identity(staged)[:2] == _identity(destination.lstat())[:2], "source publication custody changed")
+        stage_fd, _, _ = _open_absolute_directory(stage, "source publication stage")
+        publish_directory_noreplace(stage, destination, parent_fd=parent_fd, stage_fd=stage_fd,
+                                    stage_mode=stage_mode)
+    except ReleaseArtifactError as error:
+        raise SourceCaptureError(f"exclusive source publication failed: {error}") from error
     finally:
+        if stage_fd >= 0:
+            os.close(stage_fd)
         os.close(parent_fd)
 
 
@@ -840,7 +830,7 @@ def import_source(pack_path: Path, manifest_path: Path, expected_commit: str,
     _need(stable_hash_path(pack_path, max_size=MAX_PACK_BYTES) == pack_pin
           and stable_hash_path(manifest_path, max_size=MAX_MANIFEST_BYTES) == manifest_pin,
           "source input changed before publication")
-    _publish(stage, Path(source_root))
+    _publish(stage, Path(source_root), stage_mode=0o755)
     return _facts(Path(source_root), manifest)
 
 

@@ -10,8 +10,7 @@ pub(crate) mod producer;
 use crate::{
     beacon::{
         GlobalThresholdBeaconPulseLinkV1, GlobalThresholdBeaconSessionBindingV1,
-        authenticated_global_threshold_beacon_roster_hash_v1,
-        validate_global_threshold_beacon_session_v1,
+        authenticated_global_threshold_beacon_roster_hash_iter_v1,
         validate_persisted_global_threshold_beacon_pulse_v1,
         verify_finalized_global_threshold_beacon_pulse_v1,
     },
@@ -190,20 +189,19 @@ pub(crate) fn capture(
     {
         return Err("native beacon witness changes the authorized generation or transcript".into());
     }
-    let peers = current
-        .committee
-        .iter()
-        .map(|seat| seat.validator.clone())
-        .collect::<Vec<_>>();
-    let roster_hash = authenticated_global_threshold_beacon_roster_hash_v1(&record.session, &peers)
-        .map_err(|error| error.to_string())?;
+    let peers = current.committee.iter().map(|seat| &seat.validator);
+    let roster_hash =
+        authenticated_global_threshold_beacon_roster_hash_iter_v1(&record.session, peers)
+            .map_err(|error| error.to_string())?;
     let binding = GlobalThresholdBeaconSessionBindingV1 {
         network_id: current.network_id,
         session_id: pulse.session_id,
         roster_hash,
         transcript_hash: record.session.transcript_hash,
     };
-    let session = validate_global_threshold_beacon_session_v1(record.session.clone(), &binding)
+    let session = &record.session;
+    session
+        .check_binding(&binding)
         .map_err(|error| error.to_string())?;
     let link = verify_finalized_global_threshold_beacon_pulse_v1(
         &session,

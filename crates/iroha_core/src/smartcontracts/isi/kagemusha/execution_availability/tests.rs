@@ -152,6 +152,19 @@ fn actual_transaction_retains_unavailable_owner_and_discards_caught_effects() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
+    let (source_observation, current_bytes, predecessor_bytes) = {
+        let pair = state
+            .world
+            .kagemusha_verifier_registry
+            .try_committed_borrow()
+            .unwrap();
+        let current = norito::encode_canonical(pair.current()).unwrap();
+        let predecessor = pair
+            .undo()
+            .as_ref()
+            .map(|value| norito::encode_canonical(value).unwrap());
+        (pair.release_observation().unwrap(), current, predecessor)
+    };
     for operation in [Operation::TopUp, Operation::Redemption] {
         let mut block = state.block(iroha_data_model::block::BlockHeader::new(
             std::num::NonZeroU64::MIN,
@@ -185,6 +198,23 @@ fn actual_transaction_retains_unavailable_owner_and_discards_caught_effects() {
         assert!(
             block.world.domains.get(&marker).is_none(),
             "catching the local error cannot publish semantic effects"
+        );
+        drop(block);
+        assert!(source_observation.try_matches_current().unwrap());
+        let pair = state
+            .world
+            .kagemusha_verifier_registry
+            .try_committed_borrow()
+            .unwrap();
+        assert_eq!(
+            norito::encode_canonical(pair.current()).unwrap(),
+            current_bytes
+        );
+        assert_eq!(
+            pair.undo()
+                .as_ref()
+                .map(|value| norito::encode_canonical(value).unwrap()),
+            predecessor_bytes
         );
     }
 }

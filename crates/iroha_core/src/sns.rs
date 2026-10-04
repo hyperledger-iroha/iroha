@@ -1076,15 +1076,20 @@ pub fn dataspace_id_for_sns_alias(alias: &str) -> Option<DataSpaceId> {
     }
     Some(DataSpaceId::from_hash(&selector.name_hash()))
 }
-fn selector_for_account_alias_literal(
-    literal: &str,
-    catalog: &DataSpaceCatalog,
-) -> Result<NameSelectorV1, SnsError> {
-    let alias = AccountAlias::from_literal(literal, catalog)
+fn selector_for_account_alias_literal(literal: &str) -> Result<NameSelectorV1, SnsError> {
+    let alias = literal
+        .parse::<AccountAliasName>()
         .map_err(|err| SnsError::BadRequest(err.to_string()))?;
-    selector_for_account_alias(&alias, catalog).map_err(|err| SnsError::BadRequest(err.to_string()))
+    Ok(NameSelectorV1 {
+        version: NameSelectorV1::VERSION,
+        suffix_id: ACCOUNT_ALIAS_SUFFIX_ID,
+        label: alias.canonical_text(),
+    })
 }
 /// Canonicalize a namespace-scoped literal into the fixed SNS selector.
+/// Registration names are textual SNS identities; a private dataspace does not need a
+/// physical catalog entry to read its lease. Numeric routing and permission resolution
+/// separately validate the active dataspace mapping.
 ///
 /// # Errors
 ///
@@ -1092,10 +1097,9 @@ fn selector_for_account_alias_literal(
 pub fn selector_for_namespace_literal(
     namespace: SnsNamespace,
     literal: &str,
-    catalog: &DataSpaceCatalog,
 ) -> Result<NameSelectorV1, SnsError> {
     match namespace {
-        SnsNamespace::AccountAlias => selector_for_account_alias_literal(literal, catalog),
+        SnsNamespace::AccountAlias => selector_for_account_alias_literal(literal),
         SnsNamespace::Domain => {
             let domain = DomainId::parse_fully_qualified(literal.trim())
                 .map_err(|err| SnsError::BadRequest(err.reason().to_owned()))?;
@@ -2052,24 +2056,6 @@ fn ensure_selector_is_mutable(selector: &NameSelectorV1) -> Result<(), SnsError>
     }
     Ok(())
 }
-#[cfg(test)]
-fn canonicalize_request_selector(
-    selector: NameSelectorV1,
-    catalog: &DataSpaceCatalog,
-) -> Result<(SnsNamespace, NameSelectorV1), SnsError> {
-    let namespace = SnsNamespace::from_suffix_id(selector.suffix_id)?;
-    let canonical = match namespace {
-        SnsNamespace::AccountAlias => selector_for_account_alias_literal(&selector.label, catalog)?,
-        SnsNamespace::Domain => {
-            let domain = DomainId::parse_fully_qualified(selector.label.trim())
-                .map_err(|err| SnsError::BadRequest(err.reason().to_owned()))?;
-            selector_for_domain(&domain).map_err(|err| SnsError::BadRequest(err.to_string()))?
-        }
-        SnsNamespace::Dataspace => NameSelectorV1::new(selector.suffix_id, selector.label)
-            .map_err(|err| SnsError::BadRequest(err.to_string()))?,
-    };
-    Ok((namespace, canonical))
-}
 fn canonicalize_resolved_selector(
     selector: NameSelectorV1,
 ) -> Result<(SnsNamespace, NameSelectorV1), SnsError> {
@@ -2126,12 +2112,11 @@ fn policy_or_not_found(
 /// is missing from authoritative state.
 pub fn get_name_record(
     world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
     namespace: SnsNamespace,
     literal: &str,
     now_ms: u64,
 ) -> Result<NameRecordV1, SnsError> {
-    let selector = selector_for_namespace_literal(namespace, literal, catalog)?;
+    let selector = selector_for_namespace_literal(namespace, literal)?;
     get_name_record_by_selector(world, &selector, now_ms)
 }
 /// Fetch a SNS record by pre-canonicalized selector and apply the current lifecycle view.
@@ -2433,7 +2418,7 @@ fn register_name(
     state_transaction: &mut StateTransaction<'_, '_>,
     request: RegisterNameInput,
 ) -> Result<NameRecordV1, SnsError> {
-    register_name_with_selector(state_transaction, request, canonicalize_request_selector)
+    register_resolved_name(state_transaction, request)
 }
 /// Register a catalog-free, pre-resolved SNS selector in authoritative state.
 ///
@@ -2443,9 +2428,7 @@ pub(crate) fn register_resolved_name(
     state_transaction: &mut StateTransaction<'_, '_>,
     request: RegisterNameInput,
 ) -> Result<NameRecordV1, SnsError> {
-    register_name_with_selector(state_transaction, request, |selector, _catalog| {
-        canonicalize_resolved_selector(selector)
-    })
+    register_name_with_selector(state_transaction, request)
 }
 /// Apply a catalog-free absolute-expiry renewal after exact payment was charged.
 pub(crate) fn renew_resolved_name(
@@ -2486,10 +2469,6 @@ pub(crate) fn renew_resolved_name(
 fn register_name_with_selector(
     state_transaction: &mut StateTransaction<'_, '_>,
     request: RegisterNameInput,
-    canonicalize: impl FnOnce(
-        NameSelectorV1,
-        &DataSpaceCatalog,
-    ) -> Result<(SnsNamespace, NameSelectorV1), SnsError>,
 ) -> Result<NameRecordV1, SnsError> {
     let RegisterNameInput {
         selector,
@@ -2500,8 +2479,7 @@ fn register_name_with_selector(
         payment,
         metadata,
     } = request;
-    let (namespace, canonical_selector) =
-        canonicalize(selector, &state_transaction.nexus.dataspace_catalog)?;
+    let (namespace, canonical_selector) = canonicalize_resolved_selector(selector)?;
     ensure_selector_is_mutable(&canonical_selector)?;
     let policy = policy_or_not_found(state_transaction.world(), canonical_selector.suffix_id)?;
     enforce_policy_active(&policy)?;
@@ -2547,11 +2525,7 @@ fn set_name_lease_expiry(
     literal: &str,
     expires_at_ms: u64,
 ) -> Result<NameRecordV1, SnsError> {
-    let selector = selector_for_namespace_literal(
-        namespace,
-        literal,
-        &state_transaction.nexus.dataspace_catalog,
-    )?;
+    let selector = selector_for_namespace_literal(namespace, literal)?;
     ensure_selector_is_mutable(&selector)?;
     let policy = policy_or_not_found(state_transaction.world(), selector.suffix_id)?;
     enforce_policy_active(&policy)?;
@@ -2589,7 +2563,14 @@ pub fn apply_with_state_block<T>(
     state: &State,
     mutation: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<T, SnsError>,
 ) -> Result<T, SnsError> {
-    let latest_block = state.view().latest_block();
+    let latest_block = state.view().latest_block().map_err(|error| match error {
+        crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+            SnsError::Deferred(reason)
+        }
+        crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+            SnsError::Internal(error.to_string())
+        }
+    })?;
     let next_height = latest_block
         .as_ref()
         .map(|block| block.header().height().get().saturating_add(1))

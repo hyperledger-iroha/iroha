@@ -35,6 +35,7 @@ pub mod kagemusha_release_v1;
 pub mod kagemusha_retail_enrollment_challenge_v1;
 pub mod kagemusha_retail_enrollment_v1;
 pub mod kagemusha_v1;
+pub mod kagemusha_wallet_v1;
 pub mod verifier_registry_v1;
 
 pub mod kagemusha_ordinary_mint_debit_v1;
@@ -57,7 +58,8 @@ pub use self::{
     kagemusha_platform_attestation_original_v1::*, kagemusha_play_integrity_provider_policy_v1::*,
     kagemusha_play_integrity_refresh_v1::*, kagemusha_raw_app_attestation_admission_v1::*,
     kagemusha_release_v1::*, kagemusha_retail_enrollment_challenge_v1::*,
-    kagemusha_retail_enrollment_v1::*, kagemusha_v1::*, verifier_registry_v1::*,
+    kagemusha_retail_enrollment_v1::*, kagemusha_v1::*, kagemusha_wallet_v1::*,
+    verifier_registry_v1::*,
 };
 
 /// Prefix embedded into KAGEMUSHA V1 instruction rejection messages.

@@ -8,7 +8,10 @@
 pub mod https_source;
 pub mod https_source_evidence;
 pub mod https_source_pool;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
+#[path = "sorafs_provider_ingest_runtime/native_attestation.rs"]
+mod native_attestation;
+#[cfg(any(unix, windows))]
 pub(crate) mod native_software;
 
 use crate::sorafs_provider_ingest_finalized_query::{
@@ -31,7 +34,6 @@ use iroha_core::{
     tx::AcceptedTransaction,
 };
 use iroha_crypto::{Hash, HashOf};
-#[cfg(test)]
 use iroha_data_model::musubi::{
     MusubiProviderBundleAttestationKeyV1, MusubiProviderBundleVerificationAttestationV1,
     MusubiProviderBundleVerificationPayloadV1,
@@ -44,9 +46,9 @@ use iroha_data_model::{
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
-            PinManifestRecord, PinStatus, ProviderIngestFinalizedAnchorV1, ReplicationOrderId,
-            ReplicationOrderRecord, ReplicationOrderStatus,
-            derive_sorafs_auto_replication_order_id_v1,
+            PinManifestRecord, PinStatus, ProviderIngestCompletionAuthorityV1,
+            ProviderIngestFinalizedAnchorV1, ReplicationOrderId, ReplicationOrderRecord,
+            ReplicationOrderStatus, derive_sorafs_auto_replication_order_id_v1,
         },
     },
     transaction::{
@@ -95,7 +97,6 @@ use sorafs_node::{
     ProviderIngestTransactionIngressV1, ProviderIngestTransactionObservationV1,
     store::{StorageError, StoredManifest},
 };
-#[cfg(test)]
 use sorafs_node::{
     MusubiProviderAttestationClaimOwnerV1, MusubiProviderAttestationInventoryErrorV1,
     MusubiProviderAttestationInventoryItemV1, MusubiProviderAttestationInventoryQualificationV1,
@@ -158,11 +159,8 @@ pub(crate) fn compose_inert_completed_musubi_capture_coordinator_v1(
 ///
 /// `journal` must come from ordinary `open_journal_runtime`; the node binder
 /// rejects a runtime returned by the explicit H0 initialization path. This
-/// composer never initializes H0, activates capture, starts a child, or calls
-/// an effect. Stock daemon launch therefore remains unconditionally closed.
-// TODO: Compile this composer outside tests once the provider-attestation archive,
-// checkpoint-head seal and supervised journal are activation-qualified.
-#[cfg(test)]
+/// composer never initializes history, activates capture, starts a child, or calls an effect.
+/// Native startup supplies the exact ordinary-open custody before supervising the driver.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn compose_inert_completed_musubi_attestation_driver_v1(
     node: &NodeHandle,
@@ -180,7 +178,7 @@ pub(crate) fn compose_inert_completed_musubi_attestation_driver_v1(
         .ok_or_else(|| eyre::eyre!("SoraFS provider identity is not configured"))?;
     let policy = provider_attestation_journal_policy(config)?;
     let claim_owner = random_provider_attestation_claim_owner()?;
-    let owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1> = state;
+    let owner_authority: Arc<dyn ProviderIngestFinalizedCompletionAuthorityV1> = state;
     let signer: Arc<dyn MusubiProviderAttestationSignerV1> =
         Arc::new(GovernedMusubiProviderAttestationSignerV1::new(
             signer,
@@ -433,7 +431,7 @@ impl ProviderIngestAuthenticatedSourceFetchV1 for AuthenticatedSourceAdapterV1 {
 #[derive(Clone)]
 struct GovernedCompletionSignerV1 {
     signer: Arc<dyn ProviderIngestCompletionSignerV1>,
-    owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1>,
+    owner_authority: Arc<dyn ProviderIngestFinalizedCompletionAuthorityV1>,
     provider_id: ProviderId,
     expected_context: ProviderIngestCompletionSignerResolutionContextV1,
     expected_binding: ProviderIngestCompletionSignerBindingV1,
@@ -443,7 +441,7 @@ fn completion_payload_matches_resolution_context(
     context: &ProviderIngestCompletionSignerResolutionContextV1,
     expected_provider_id: ProviderId,
 ) -> bool {
-    if !context.is_valid() || payload.authority() != &context.provider_owner {
+    if !context.is_valid() || payload.authority() != &context.expected_authority.completion_signer {
         return false;
     }
     let iroha_data_model::transaction::Executable::Instructions(instructions) =
@@ -467,8 +465,7 @@ fn completion_payload_matches_resolution_context(
         && *completion.completion_epoch() != 0
         && *completion.expected_assignment_revision() == context.expected_assignment_revision
         && authority.is_valid()
-        && authority.provider_owner == context.provider_owner
-        && authority.signer_policy == context.signer_policy
+        && authority == &context.expected_authority
         && anchor.height == context.finalized_cursor.height
         && anchor.block_hash == context.finalized_cursor.block_hash
 }
@@ -490,7 +487,8 @@ impl ProviderIngestCompletionSignerV1 for GovernedCompletionSignerV1 {
             || self.signer.runtime_handle() != self.expected_binding.runtime_handle.as_str()
             || qualification != self.expected_binding.qualification
             || qualification.validate().is_err()
-            || !qualification.matches_authority(&self.expected_context.provider_owner)
+            || !qualification
+                .matches_authority(&self.expected_context.expected_authority.completion_signer)
         {
             return Err(ProviderIngestCompletionSignerErrorV1::Unavailable);
         }
@@ -509,11 +507,12 @@ impl ProviderIngestCompletionSignerV1 for GovernedCompletionSignerV1 {
         let current_policy = self.signer.current_eligibility()?;
         if !self
             .owner_authority
-            .owner_matches(self.provider_id, &self.expected_context.provider_owner)
-            || self.signer.authority() != &self.expected_context.provider_owner
+            .authority_matches(self.provider_id, &self.expected_context.expected_authority)
+            || self.signer.authority()
+                != &self.expected_context.expected_authority.completion_signer
             || self.signer.signer_policy() != current_policy
             || current_policy != qualification.signer_policy
-            || current_policy != self.expected_context.signer_policy
+            || current_policy != self.expected_context.expected_authority.signer_policy
             || !current_policy.is_valid()
         {
             return Err(ProviderIngestCompletionSignerErrorV1::Unavailable);
@@ -555,7 +554,7 @@ impl ProviderIngestCompletionSignerV1 for GovernedCompletionSignerV1 {
 #[derive(Clone)]
 struct GovernedSignerResolverAdapterV1 {
     resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1>,
-    owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1>,
+    owner_authority: Arc<dyn ProviderIngestFinalizedCompletionAuthorityV1>,
     provider_id: ProviderId,
     expected_resolver_qualification: ProviderIngestRuntimeProviderQualificationV1,
     expected_signer_binding: ProviderIngestCompletionSignerBindingV1,
@@ -597,7 +596,8 @@ impl ProviderIngestCompletionSignerResolverV1 for GovernedSignerResolverAdapterV
     > {
         Box::pin(async move {
             if !context.is_valid()
-                || context.signer_policy != self.expected_signer_binding.qualification.signer_policy
+                || context.expected_authority.signer_policy
+                    != self.expected_signer_binding.qualification.signer_policy
             {
                 return Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected);
             }
@@ -611,7 +611,7 @@ impl ProviderIngestCompletionSignerResolverV1 for GovernedSignerResolverAdapterV
             )?;
             if !self
                 .owner_authority
-                .owner_matches(self.provider_id, &context.provider_owner)
+                .authority_matches(self.provider_id, &context.expected_authority)
             {
                 return Err(ProviderIngestCompletionSignerResolverErrorV1::Unavailable);
             }
@@ -649,18 +649,19 @@ impl ProviderIngestCompletionSignerResolverV1 for GovernedSignerResolverAdapterV
             };
             if !self
                 .owner_authority
-                .owner_matches(self.provider_id, &expected_context.provider_owner)
+                .authority_matches(self.provider_id, &expected_context.expected_authority)
             {
                 return Err(ProviderIngestCompletionSignerResolverErrorV1::Unavailable);
             }
-            if signer.authority() != &expected_context.provider_owner
+            if signer.authority() != &expected_context.expected_authority.completion_signer
                 || signer.signer_policy() != expected_policy
                 || !expected_policy.is_valid()
-                || expected_policy != expected_context.signer_policy
+                || expected_policy != expected_context.expected_authority.signer_policy
                 || signer.runtime_handle() != self.expected_signer_binding.runtime_handle.as_str()
                 || signer_qualification != self.expected_signer_binding.qualification
                 || signer_qualification.validate().is_err()
-                || !signer_qualification.matches_authority(&expected_context.provider_owner)
+                || !signer_qualification
+                    .matches_authority(&expected_context.expected_authority.completion_signer)
                 || expected_policy != signer_qualification.signer_policy
             {
                 return Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected);
@@ -675,32 +676,45 @@ impl ProviderIngestCompletionSignerResolverV1 for GovernedSignerResolverAdapterV
         })
     }
 }
-trait ProviderIngestFinalizedOwnerAuthorityV1: Send + Sync + 'static {
-    fn owner_matches(&self, provider_id: ProviderId, expected_owner: &AccountId) -> bool;
+trait ProviderIngestFinalizedCompletionAuthorityV1: Send + Sync + 'static {
+    fn authority_matches(
+        &self,
+        provider_id: ProviderId,
+        expected: &ProviderIngestCompletionAuthorityV1,
+    ) -> bool;
 }
-impl ProviderIngestFinalizedOwnerAuthorityV1 for State {
-    fn owner_matches(&self, provider_id: ProviderId, expected_owner: &AccountId) -> bool {
-        self.query_view()
-            .world()
-            .provider_owners()
-            .get(&provider_id)
-            == Some(expected_owner)
+impl ProviderIngestFinalizedCompletionAuthorityV1 for State {
+    fn authority_matches(
+        &self,
+        provider_id: ProviderId,
+        expected: &ProviderIngestCompletionAuthorityV1,
+    ) -> bool {
+        let view = self.query_view();
+        let world = view.world();
+        expected.is_valid()
+            && world.accounts().get(&expected.provider_owner).is_some()
+            && world.accounts().get(&expected.completion_signer).is_some()
+            && world.provider_owners().get(&provider_id) == Some(&expected.provider_owner)
+            && world
+                .provider_ingest_completion_authorities()
+                .get(&provider_id)
+                == Some(expected)
+            && iroha_core::query::provider_ingest_source::has_provider_completion_permission_v1(
+                world,
+                &expected.completion_signer,
+                provider_id,
+            )
     }
 }
-// The standard daemon keeps this governed signer uninstantiated until the
-// provider-attestation archive, checkpoint-head seal, and supervised journal
-// are activation-qualified. Its private construction surface prevents
-// unqualified stock-daemon use.
-#[cfg(test)]
+// Native composition retains this full-authority guard around its exact dedicated-key signer.
 #[derive(Clone)]
 struct GovernedMusubiProviderAttestationSignerV1 {
     signer: Arc<dyn MusubiProviderAttestationSignerV1>,
     configured_binding: SorafsProviderAttestationRuntimeBinding,
-    owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1>,
+    owner_authority: Arc<dyn ProviderIngestFinalizedCompletionAuthorityV1>,
     expected_network_id: NetworkId,
     expected_provider_id: ProviderId,
 }
-#[cfg(test)]
 #[derive(Clone, Copy)]
 struct MusubiProviderAttestationRequestBindingV1<'a> {
     payload: &'a MusubiProviderBundleVerificationPayloadV1,
@@ -708,12 +722,10 @@ struct MusubiProviderAttestationRequestBindingV1<'a> {
     observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
     signer_policy: ProviderIngestCompletionSignerPolicyV1,
 }
-#[cfg(test)]
 type MusubiProviderAttestationApprovalFutureV1<'a> = ProviderIngestFutureV1<
     'a,
     Result<MusubiProviderBundleVerificationAttestationV1, MusubiProviderAttestationSignerErrorV1>,
 >;
-#[cfg(test)]
 impl<'a> From<&'a ProviderIngestMusubiAttestationApprovalRequestV1>
     for MusubiProviderAttestationRequestBindingV1<'a>
 {
@@ -726,12 +738,11 @@ impl<'a> From<&'a ProviderIngestMusubiAttestationApprovalRequestV1>
         }
     }
 }
-#[cfg(test)]
 impl GovernedMusubiProviderAttestationSignerV1 {
     fn new(
         signer: Arc<dyn MusubiProviderAttestationSignerV1>,
         configured_binding: SorafsProviderAttestationRuntimeBinding,
-        owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1>,
+        owner_authority: Arc<dyn ProviderIngestFinalizedCompletionAuthorityV1>,
         expected_network_id: NetworkId,
         expected_provider_id: ProviderId,
     ) -> Self {
@@ -800,7 +811,7 @@ impl GovernedMusubiProviderAttestationSignerV1 {
             || finalized_cursor.height == 0
             || finalized_cursor.block_hash == [0; 32]
             || !request.signer_policy.is_valid()
-            || binding.completed_by != binding.completion_authority.provider_owner
+            || binding.completed_by != binding.completion_authority.completion_signer
             || request.signer_policy != binding.completion_authority.signer_policy
             || finalized_anchor.height > finalized_cursor.height
             || finalized_anchor.height == finalized_cursor.height
@@ -841,36 +852,36 @@ impl GovernedMusubiProviderAttestationSignerV1 {
             || binding.provider_id != self.expected_provider_id
             || request.completion_claim_digest == [0; 32]
             || !request.signer_policy.is_valid()
-            || binding.completed_by != binding.completion_authority.provider_owner
+            || binding.completed_by != binding.completion_authority.completion_signer
             || request.signer_policy != binding.completion_authority.signer_policy
         {
             return Err(MusubiProviderAttestationSignerErrorV1::Rejected);
         }
-        let expected_owner = binding.completed_by.clone();
+        let expected_authority = &binding.completion_authority;
         if !self
             .owner_authority
-            .owner_matches(self.expected_provider_id, &expected_owner)
+            .authority_matches(self.expected_provider_id, expected_authority)
         {
             return Err(MusubiProviderAttestationSignerErrorV1::Unavailable);
         }
         let qualification_before = self.request_snapshot(request)?;
         if !self
             .owner_authority
-            .owner_matches(self.expected_provider_id, &expected_owner)
+            .authority_matches(self.expected_provider_id, expected_authority)
         {
             return Err(MusubiProviderAttestationSignerErrorV1::Unavailable);
         }
         let approval = approve().await;
         if !self
             .owner_authority
-            .owner_matches(self.expected_provider_id, &expected_owner)
+            .authority_matches(self.expected_provider_id, expected_authority)
         {
             return Err(MusubiProviderAttestationSignerErrorV1::Unavailable);
         }
         let qualification_after = self.request_snapshot(request);
         if !self
             .owner_authority
-            .owner_matches(self.expected_provider_id, &expected_owner)
+            .authority_matches(self.expected_provider_id, expected_authority)
         {
             return Err(MusubiProviderAttestationSignerErrorV1::Unavailable);
         }
@@ -887,7 +898,6 @@ impl GovernedMusubiProviderAttestationSignerV1 {
         Ok(attestation)
     }
 }
-#[cfg(test)]
 impl MusubiProviderAttestationSignerV1 for GovernedMusubiProviderAttestationSignerV1 {
     fn runtime_handle(&self) -> &str {
         &self.configured_binding.handle
@@ -933,11 +943,8 @@ impl MusubiProviderAttestationSignerV1 for GovernedMusubiProviderAttestationSign
         Box::pin(self.approve_bound(request.into(), || self.signer.approve(request)))
     }
 }
-// The standard daemon keeps this governed inventory uninstantiated until the
-// provider-attestation archive, checkpoint-head seal, and supervised journal
-// are activation-qualified. Its private construction surface prevents an
-// inventory implementation from bypassing the daemon-owned deployment binding.
-#[cfg(test)]
+// Private composition fences the exact selected local inventory around every effect.
+// Local retention is separate from independently registered native attestation inclusion.
 #[derive(Clone)]
 struct GovernedMusubiProviderAttestationInventoryV1 {
     inventory: Arc<dyn MusubiProviderAttestationInventoryRuntimeV1>,
@@ -945,7 +952,6 @@ struct GovernedMusubiProviderAttestationInventoryV1 {
     expected_network_id: NetworkId,
     expected_provider_id: ProviderId,
 }
-#[cfg(test)]
 impl GovernedMusubiProviderAttestationInventoryV1 {
     fn new(
         inventory: Arc<dyn MusubiProviderAttestationInventoryRuntimeV1>,
@@ -1062,7 +1068,6 @@ impl GovernedMusubiProviderAttestationInventoryV1 {
         Ok(())
     }
 }
-#[cfg(test)]
 fn map_musubi_inventory_runtime_error(
     error: MusubiProviderAttestationInventoryRuntimeErrorV1,
 ) -> MusubiProviderAttestationInventoryErrorV1 {
@@ -1075,7 +1080,6 @@ fn map_musubi_inventory_runtime_error(
         }
     }
 }
-#[cfg(test)]
 impl MusubiProviderAttestationInventoryRuntimeV1 for GovernedMusubiProviderAttestationInventoryV1 {
     fn runtime_handle(&self) -> &str {
         &self.configured_binding.handle
@@ -1110,7 +1114,6 @@ impl MusubiProviderAttestationInventoryRuntimeV1 for GovernedMusubiProviderAttes
         })
     }
 }
-#[cfg(test)]
 impl MusubiProviderAttestationInventorySinkV1 for GovernedMusubiProviderAttestationInventoryV1 {
     fn put(
         &self,
@@ -1139,7 +1142,6 @@ impl MusubiProviderAttestationInventorySinkV1 for GovernedMusubiProviderAttestat
         })
     }
 }
-#[cfg(test)]
 impl MusubiProviderAttestationInventoryReaderV1 for GovernedMusubiProviderAttestationInventoryV1 {
     fn get<'a>(
         &'a self,
@@ -1990,6 +1992,7 @@ impl NativeCompletionPayloadBuilderV1 {
         order_id: ReplicationOrderId,
         provider_id: ProviderId,
     ) -> std::result::Result<TransactionPayload, ProviderIngestCompletionPayloadErrorV1> {
+        let completion_signer = request.expected_authority.completion_signer.clone();
         let instruction = CompleteReplicationOrder::new(
             order_id,
             provider_id,
@@ -2003,7 +2006,7 @@ impl NativeCompletionPayloadBuilderV1 {
         );
         let mut builder = TransactionBuilder::new(
             *self.state.network_id_ref(),
-            request.provider_owner,
+            completion_signer,
             FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([instruction]);
@@ -2038,11 +2041,13 @@ impl NativeCompletionPayloadBuilderV1 {
             .ok_or(ProviderIngestCompletionPayloadErrorV1::Rejected)?;
         let finalized_at_unix_ms = view
             .block_by_height(finalized_height)
+            .map_err(|_| ProviderIngestCompletionPayloadErrorV1::Unavailable)?
             .ok_or(ProviderIngestCompletionPayloadErrorV1::Unavailable)?
             .header()
             .creation_time_ms;
         let head_at_unix_ms = view
             .latest_block()
+            .map_err(|_| ProviderIngestCompletionPayloadErrorV1::Unavailable)?
             .ok_or(ProviderIngestCompletionPayloadErrorV1::Unavailable)?
             .header()
             .creation_time_ms;
@@ -2216,7 +2221,7 @@ impl NativeTransactionIngressV1 {
                 ProviderIngestTransactionObservationV1::Unknown
             };
         };
-        let Some(block) = self.state.block_by_height(height) else {
+        let Ok(Some(block)) = self.state.block_by_height(height) else {
             return ProviderIngestTransactionObservationV1::Unavailable;
         };
         observe_committed_provider_transaction(&block, hash)
@@ -3141,7 +3146,7 @@ fn provider_attestation_journal_policy(
     config: &SorafsProviderAttestationJournal,
 ) -> Result<MusubiProviderAttestationJournalPolicyV1> {
     for (role, binding) in [
-        ("clock seal", &config.clock_seal),
+        ("clock seal", &config.clock),
         ("approval signer", &config.approval_signer),
         ("inventory", &config.inventory),
     ] {
@@ -3203,7 +3208,8 @@ fn assemble_native_provider_ingest_runtime(
         ttl: Duration::from_millis(config.completion_transaction_ttl_ms),
         max_signed_transaction_bytes: config.outbox.max_signed_transaction_bytes.0,
     });
-    let owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1> = context.state.clone();
+    let owner_authority: Arc<dyn ProviderIngestFinalizedCompletionAuthorityV1> =
+        context.state.clone();
     let resolver = Arc::new(GovernedSignerResolverAdapterV1 {
         resolver: Arc::clone(&context.signer_resolver),
         owner_authority,
@@ -3672,7 +3678,6 @@ fn random_claim_owner() -> Result<ProviderIngestClaimOwnerV1> {
     }
     bail!("operating-system randomness repeatedly returned a zero provider-ingest claim owner")
 }
-#[cfg(test)]
 fn random_provider_attestation_claim_owner() -> Result<MusubiProviderAttestationClaimOwnerV1> {
     for _ in 0..8 {
         let mut bytes = [0_u8; 32];
@@ -3777,3 +3782,6 @@ fn validate_authenticated_source_inventory(
 }
 #[cfg(test)]
 mod tests;
+
+#[cfg(any(unix, windows))]
+pub(crate) use native_attestation::start as start_native_attestation;

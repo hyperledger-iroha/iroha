@@ -13,19 +13,26 @@ crates/iroha_data_model/src/sorafs/release_manifest_authority.rs	//! TODO: Add p
 crates/iroha_data_model/src/sorafs/topology_authority.rs	//! The typed V1 ISI is registered but Core admission is closed. TODO: integrate this reducer into
 crates/iroha_torii/src/lib.rs	// TODO: routed iterable fanout is parked (`bounded_canonical_iterable_fanout_variant`
 crates/iroha_torii/src/mcp.rs	// TODO: Move audited `AdditiveOnly` declarations into explicit curated capability entries as
-crates/iroha_torii/src/routing.rs	// TODO: fetch bounded multi-page prefixes from each shard before admitting wider fanout
 crates/iroha_torii/src/routing.rs	// TODO: the swaps fills/candles scans are always bounded; honor `count_mode`
+crates/iroha_torii/src/sorafs/token/signer_completed_finality.rs	// TODO: give finalize_check itself durable sign/submit/recovery custody;
+crates/iroha_torii/src/sorafs/token/signer_completed_phase.rs	// TODO: accept/SignerFinality::validate still project some original reader refusals.
+crates/iroha_torii/src/sorafs/token/signer_completed_phase.rs	//! TODO: receipt/custody nested codec provenance, pre-return observer transport custody and
 crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/release_evidence.rs	// TODO: Install authenticated proof-size, SoraFS, work, and RSS reports
+crates/irohad/src/runtime_provider_broker/canonical_attempt.rs	// TODO: the existing conservative operation permit does not fund all
+crates/irohad/src/runtime_provider_broker/protocol_codec_and_bindings.rs	// TODO: replace that conservative decode envelope with actual funded raw
+crates/irohad/src/runtime_provider_broker/received_exchange/observer.rs	//! TODO: server pre-write ownership, partial-I/O ambiguity, physical backing for all
+crates/irohad/src/runtime_provider_broker/stream_token_signer_protocol.rs	// TODO: retain the original phase and exact returned bytes across pre-return
 crates/irohad/src/sorafs_provider_ingest_finalized_query.rs	// TODO: an independently administered HTTPS gateway-grant resolver must still join
-crates/irohad/src/sorafs_provider_ingest_runtime.rs	// TODO: Compile this composer outside tests once the provider-attestation archive,
 crates/sorafs_manifest/src/signer/custody.rs	//! TODO: Finish the remaining SoraFS runtime/receipt consumers and production state adapters.
 crates/sorafs_manifest/src/signer/mod.rs	//! TODO: Complete the production consumer hard cut and real signer/state adapters; this public
 crates/sorafs_manifest/src/signer/stream_token/subject_tests.rs	// TODO: the complete receipt/coordinator integration must reject recovery of initial under
+crates/sorafs_manifest/src/signer/stream_token_evidence.rs	// TODO: fund this output and all nested serializer scratch from the original
+crates/sorafs_manifest/src/signer/stream_token_evidence/request.rs	// TODO: preserve original receipt/custody codec admission throughout this
 crates/sorafs_manifest/src/signer/topology.rs	//! a permitted operation. TODO: add native topology custody/current-Check/operation producers and
 crates/sorafs_node/src/provider_ingest_runtime/completed_musubi_capture.rs	// TODO: compile outside tests once the opaque attestation driver is
-crates/sorafs_node/src/provider_ingest_runtime/completed_musubi_capture.rs	// TODO: compile the drive loop outside tests once irohad supervises the bound driver; until then
 javascript/iroha_js/src/toriiClient.js	// TODO: Carry the attestor statement and independent trust pins for phone requests.
 javascript/iroha_js/src/toriiClient.js	// TODO: validate each SccpGovernanceBaseRevisionV1 and SccpGovernanceActionV1
+python/iroha_python/src/iroha_python/client.py	# TODO: qualify an absolute operation deadline in the canonical Requests
 python/iroha_torii_client/governance_proposals.py	# TODO: decode SccpGovernanceProposalV1 base revisions and actions into typed
 scripts/check_sorafs_production_promotion_bundle.py	# TODO: Connect purpose-owned native completed-operation/current-state verification for
 scripts/check_sorafs_production_promotion_bundle.py	# TODO: Replace this with a purpose-owned native custody/operation Check verifier, never

@@ -83,10 +83,14 @@ pub(super) fn derive_struct_deserialize(
     fields: &Fields,
     container_attrs: &[Attribute],
 ) -> TokenStream2 {
-    let validation = match ContainerAttr::parse(container_attrs) {
-        Ok(attrs) => attrs.validate,
+    let attrs = match ContainerAttr::parse(container_attrs) {
+        Ok(attrs) => attrs,
         Err(error) => return error.to_compile_error(),
     };
+    if attrs.decode_fields {
+        return field_destination::derive(ident, generics, fields, container_attrs, &attrs);
+    }
+    let validation = attrs.validate;
     let validated_value = decode_validation::value(validation.as_ref(), quote!(__value));
     let mut r#gen = generics.clone();
     let parsed_fields = struct_fields(fields);
@@ -222,6 +226,13 @@ pub(super) fn derive_enum_deserialize(
 ) -> TokenStream2 {
     let mut r#gen = generics.clone();
     let validation = match ContainerAttr::parse(container_attrs) {
+        Ok(attrs) if attrs.decode_fields => {
+            return syn::Error::new_spanned(
+                ident,
+                "decode_fields requires a closed positional record",
+            )
+            .to_compile_error();
+        }
         Ok(attrs) => attrs.validate,
         Err(error) => return error.to_compile_error(),
     };

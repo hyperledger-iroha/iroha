@@ -71,7 +71,6 @@ import { analyzeEntrypointValueTypeV1, MAX_ENTRYPOINT_CALL_TABLE_WORDS_V1 } from
 import {
   createValidationError,
   ValidationErrorCode,
-  ValidationError,
 } from "./validationError.js";
 import {
   normalizeTransactionStatusScope,
@@ -136,10 +135,7 @@ import {
   rejectPrecomputedCanonicalHeaders,
   requireCanonicalApplicationAuthority,
 } from "./applicationPostAuth.js";
-import {
-  sortJsonForErrorMessage,
-  strictDecodeBase64,
-} from "./toriiClientEncoding.js";
+import { strictDecodeBase64 } from "./toriiClientEncoding.js";
 import {
   isExactJsonMediaType,
   maybeBoundedJsonResponse, maybeJsonResponse,
@@ -170,16 +166,27 @@ import {
   normalizeValidationFeeLedgerBindingV1,
 } from "./validationFeeTrust.js";
 import { SorafsOrderbookSubmissionAmbiguousError } from "./sorafsOrderbookAmbiguousError.js";
+import { ToriiHttpError, extractToriiErrorFields } from "./toriiErrors.js";
+import { createToriiCollections } from "./query/collections.js";
+import { decodePageText, stringifyRequestJson } from "./query/page.js";
+import { filterQueryText } from "./query/listQuery.js";
+import { decodeEventFrames } from "./toriiEventStream.js";
 export { SorafsOrderbookSubmissionAmbiguousError };
+export {
+  FilterSyntaxError,
+  ListQueryError,
+  ToriiError,
+  ToriiHttpError,
+  ToriiStreamGapError,
+} from "./toriiErrors.js";
+export * from "./query/index.js";
 
 const CANONICAL_AUTH_FIELD = "canonicalAuth";
+const COLLECTION_QUERY_OPTION_KEYS = new Set(["signal", CANONICAL_AUTH_FIELD]);
 const EXPECTED_FINALIZED_HASH_FIELD = "expectedFinalizedBlockHashHex";
 const EXPECTED_FINALIZED_HEIGHT_FIELD = "expectedFinalizedHeight";
 const GOVERNANCE_MANIFEST_ADMISSION_CONTEXT = "governance.manifest_admission";
 const DEFAULT_PAGE_SIZE = 100;
-const EXPLORER_CURSOR_DEFAULT_LIMIT = 25;
-const EXPLORER_CURSOR_MAX_LIMIT = 100;
-const EXPLORER_CURSOR_MAX_LENGTH = 1_424;
 const EXPLORER_CURSOR_PATTERN = /^[A-Za-z0-9_-]+$/u;
 const EXPLORER_CURSOR_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const SORAFS_POR_PAGE_DEFAULT_LIMIT = 100;
@@ -376,7 +383,8 @@ const TX_STATUS_POLL_OPTION_KEYS = new Set([
   "maxAttempts",
   "onStatus",
 ]);
-const GET_METRICS_OPTION_KEYS = new Set(["asText", "signal"]);
+const PLAIN_TEXT_PROBE_MAX_BYTES = 4 * 1024;
+const METRICS_TEXT_MAX_BYTES = 16 * 1024 * 1024;
 const CONNECT_APP_LIST_OPTION_KEYS = new Set(["limit", "cursor", "signal"]);
 const GET_TX_STATUS_OPTION_KEYS = new Set(["signal", "scope"]);
 const ALIAS_CANONICAL_AUTH_OPTION_KEYS = new Set([CANONICAL_AUTH_FIELD]);
@@ -824,6 +832,20 @@ function removeSignalAbortListener(signal, listener) {
   }
 }
 
+const RESPONSE_CALLER_SIGNALS = new WeakMap();
+
+function rememberResponseCallerSignal(response, signal) {
+  if (signal && response !== null && (typeof response === JS_TYPE_OBJECT || typeof response === JS_TYPE_FUNCTION)) {
+    RESPONSE_CALLER_SIGNALS.set(response, signal);
+  }
+}
+
+function responseCallerSignal(response) {
+  return response !== null && (typeof response === JS_TYPE_OBJECT || typeof response === JS_TYPE_FUNCTION)
+    ? RESPONSE_CALLER_SIGNALS.get(response)
+    : undefined;
+}
+
 function bodyReadAbortError(signal, context) {
   const reason = signalAbortReason(signal);
   if (reason instanceof Error) return reason;
@@ -846,35 +868,11 @@ const SORAFS_PIN_LIST_MAX_ITEMS = 256;
 const SORAFS_PIN_LIST_MIN_PAGE_BYTES = 1024;
 const SORAFS_PIN_LIST_MAX_PAGE_BYTES = 256 * 1024;
 const UAID_MANIFEST_STATUS_VALUES = new Set(["Pending", "Active", "Expired", "Revoked"]);
-const UAID_MANIFEST_FILTER_VALUES = new Set(["active", "inactive", "all"]);
-const UAID_MANIFEST_COUNT_MODE_VALUES = new Set(["bounded", "exact"]);
 const UAID_MANIFEST_ROLE_VALUES = new Set(["Initiator", "Participant"]);
 const UAID_MANIFEST_ALLOWANCE_WINDOW_VALUES = new Set([
   "PerSlot",
   "PerMinute",
   "PerDay",
-]);
-const SUBSCRIPTION_STATUS_VALUES = new Set([
-  "active",
-  "paused",
-  "past_due",
-  "canceled",
-  "suspended",
-]);
-const SUBSCRIPTION_PLAN_LIST_OPTION_KEYS = new Set([
-  "provider",
-  "limit",
-  "offset",
-  "signal",
-]);
-const SUBSCRIPTION_LIST_OPTION_KEYS = new Set([
-  "owned_by",
-  "ownedBy",
-  "provider",
-  "status",
-  "limit",
-  "offset",
-  "signal",
 ]);
 function encodeCanonicalVersionedSignedTransactionV1(payload, nativeRuntime) {
   const native = resolveNativeBinding(nativeRuntime);
@@ -932,7 +930,21 @@ function isAbsoluteUrl(candidate) {
   return /^[a-z][a-z0-9+.-]*:\/\//iu.test(candidate);
 }
 
-const EMPTY_FILTER_FIELD_SET = new Set();
+/**
+ * Resolve a Torii route below the configured base URL, keeping any base path
+ * prefix (`https://gateway.example/torii` + `/v1/domains` →
+ * `https://gateway.example/torii/v1/domains`). The base URL's query and
+ * fragment are not part of the prefix.
+ */
+function resolveBaseRelativeUrl(baseUrl, path) {
+  const base = new URL(baseUrl);
+  base.search = "";
+  base.hash = "";
+  if (!base.pathname.endsWith("/")) base.pathname = `${base.pathname}/`;
+  const relative = String(path).replace(/^\/(?!\/)/u, "");
+  return new URL(relative, base);
+}
+
 const SNS_CONTROLLER_TYPES = new Set(["Account", "Multisig", "ResolverTemplate", "ExternalLink"]);
 const SNS_NAME_STATUS_VALUES = new Set(["Active", "GracePeriod", "Redemption", "Frozen", "Tombstoned"]);
 const SNS_SUFFIX_STATUS_VALUES = new Set(["Active", "Paused", "Revoked"]);
@@ -946,40 +958,6 @@ const ITERABLE_LIST_OPTION_KEYS = new Set([
   "count_mode",
   "signal",
   CANONICAL_AUTH_FIELD,
-]);
-const ASSET_ID_LIST_OPTION_KEYS = new Set([
-  ...ITERABLE_LIST_OPTION_KEYS,
-  "assetId",
-]);
-const ACCOUNT_PERMISSIONS_LIST_OPTION_KEYS = new Set([
-  "limit",
-  "offset",
-  "signal",
-  CANONICAL_AUTH_FIELD,
-]);
-const CONTRACT_ACTIVITY_LIST_OPTION_KEYS = new Set([
-  ...ITERABLE_LIST_OPTION_KEYS,
-  "authority",
-  "contractAddress",
-  "contractAlias",
-  "contractEntrypoint",
-  "sinceTimestampMs",
-  "untilTimestampMs",
-  "resultOk",
-]);
-const CONTRACT_EVENT_LIST_OPTION_KEYS = new Set([
-  ...ITERABLE_LIST_OPTION_KEYS,
-  "authority",
-  "contractAddress",
-  "contractAlias",
-  "module",
-  "eventKind",
-  "participant",
-  "assetId",
-  "provenance",
-  "sinceTimestampMs",
-  "untilTimestampMs",
-  "resultOk",
 ]);
 const ITERABLE_OPTION_KEYS = new Set([
   "limit",
@@ -1163,35 +1141,6 @@ const ITERABLE_QUERY_OPTION_KEYS = new Set([
   "signal",
   CANONICAL_AUTH_FIELD,
 ]);
-const TRANSACTION_QUERY_OPTION_KEYS = [
-  "assetId",
-  "authority",
-  "resultOk",
-  "sinceTimestampMs",
-  "untilTimestampMs",
-];
-const EXPLORER_NFT_LIST_OPTION_KEYS = new Set([
-  "limit",
-  "cursor",
-  "ownedBy",
-  "domainId",
-  "signal",
-]);
-const EXPLORER_NFT_ITERATOR_OPTION_KEYS = new Set([
-  ...EXPLORER_NFT_LIST_OPTION_KEYS,
-  "maxItems",
-]);
-const EXPLORER_RWA_LIST_OPTION_KEYS = new Set([
-  "limit",
-  "cursor",
-  "ownedBy",
-  "domainId",
-  "signal",
-]);
-const EXPLORER_RWA_ITERATOR_OPTION_KEYS = new Set([
-  ...EXPLORER_RWA_LIST_OPTION_KEYS,
-  "maxItems",
-]);
 const UPLOAD_ATTACHMENT_OPTION_KEYS = new Set(["contentType", "content_type", "signal", CANONICAL_AUTH_FIELD]);
 export class TransactionStatusError extends Error {
   constructor(hashHex, status, payload) {
@@ -1239,51 +1188,6 @@ export class IsoMessageTimeoutError extends Error {
 }
 
 export { ToriiDataModelMismatchError };
-
-export class ToriiHttpError extends Error {
-  constructor({
-    status,
-    expected,
-    statusText,
-    code,
-    rejectCode,
-    errorMessage,
-    bodyText,
-    bodyJson,
-    details,
-  }) {
-    const expectedLabel =
-      Array.isArray(expected) && expected.length > 0
-        ? expected.slice().sort((a, b) => a - b).join(", ")
-        : "none";
-    const statusLabel = statusText ? `${status} ${statusText}` : String(status);
-    const detailParts = [];
-    if (rejectCode && rejectCode !== code) {
-      detailParts.push(`reject=${rejectCode}`);
-    }
-    if (code) {
-      detailParts.push(code);
-    }
-    if (errorMessage && (!code || errorMessage !== code)) {
-      detailParts.push(errorMessage);
-    }
-    if (detailParts.length === 0 && bodyText) {
-      detailParts.push(bodyText);
-    }
-    const suffix = detailParts.length > 0 ? `: ${detailParts.join(" — ")}` : "";
-    super(`Torii responded with HTTP ${statusLabel} (expected ${expectedLabel})${suffix}`);
-    this.name = "ToriiHttpError";
-    this.status = status;
-    this.statusText = statusText ?? null;
-    this.expected = Array.isArray(expected) ? [...expected] : [];
-    this.code = code ?? null;
-    this.rejectCode = rejectCode ?? null;
-    this.errorMessage = errorMessage ?? null;
-    this.bodyText = bodyText ?? null;
-    this.bodyJson = bodyJson ?? null;
-    this.details = details ?? null;
-  }
-}
 
 /**
  * Extract the pipeline status kind from a Torii pipeline payload.
@@ -1424,6 +1328,7 @@ export class ToriiClient {
     dataModelValidationPromise: null,
   };
   #statusState = createStatusSnapshotState();
+  #collections;
 
   /**
    * @param {string} baseUrl Base Torii URL (e.g. http://localhost:8080).
@@ -1501,7 +1406,9 @@ export class ToriiClient {
       "ToriiClient options.canonicalRequestAuth",
     );
     const normalizedBaseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
-    const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+    // Never invoke fetch as a method of the client: WebIDL fetch rejects a
+    // foreign `this` ("Illegal invocation") in browsers and edge runtimes.
+    const fetchImpl = opts.fetchImpl ?? globalThis.fetch?.bind(globalThis);
     if (typeof fetchImpl !== JS_TYPE_FUNCTION) {
       rejectError("fetch implementation is required");
     }
@@ -1619,6 +1526,192 @@ export class ToriiClient {
     if (hasCredentials && !this.#allowInsecure && !isSecureProtocol(this.#baseProtocol)) {
       rejectError("ToriiClient: auth/api tokens require an https base URL; pass allowInsecure: true for local/dev use only.");
     }
+    this.#collections = createToriiCollections((path, query, requestOptions) =>
+      this.#queryCollection(path, query, requestOptions),
+      {
+        accountPermission: (row) => normalizeAccountPermissionItem(row, "account permission row"),
+        uaidManifest: (row, uaid) => normalizeUaidManifestRecord(row, uaid, "uaid manifest row"),
+        contractActivity: (row) => normalizeContractActivityListItem(row, "contract activity row"),
+        contractEvents: (row) => normalizeContractEventListItem(row, "contract event row"),
+        explorerRwas: (row) => {
+          normalizeExplorerRwaRecord(row, "explorer rwa row");
+          return row;
+        },
+
+      },
+    );
+  }
+
+  /** Domains (`POST /v1/domains/query`). */
+  get domains() {
+    return this.#collections.domains;
+  }
+
+  /** Accounts (`POST /v1/accounts/query`). */
+  get accounts() {
+    return this.#collections.accounts;
+  }
+
+  /** Asset definitions (`POST /v1/assets/definitions/query`). */
+  get assetDefinitions() {
+    return this.#collections.assetDefinitions;
+  }
+
+  /** NFTs (`POST /v1/nfts/query`). */
+  get nfts() {
+    return this.#collections.nfts;
+  }
+
+  /** RWA lots (`POST /v1/rwas/query`). */
+  get rwas() {
+    return this.#collections.rwas;
+  }
+
+  /** Committed contract calls, newest first, with history cursors. */
+  /** Bounded Explorer accounts collection with shared query controls. */
+  get explorerAccounts() { return this.#collections.explorerAccounts; }
+
+  /** Bounded Explorer domains collection with shared query controls. */
+  get explorerDomains() { return this.#collections.explorerDomains; }
+
+  /** Bounded Explorer asset-definitions collection with shared query controls. */
+  get explorerAssetDefinitions() { return this.#collections.explorerAssetDefinitions; }
+
+  /** Bounded Explorer assets collection with shared query controls. */
+  get explorerAssets() { return this.#collections.explorerAssets; }
+
+  /** Bounded Explorer nfts collection with shared query controls. */
+  get explorerNfts() { return this.#collections.explorerNfts; }
+
+  /** Bounded Explorer rwas collection with shared query controls. */
+  get explorerRwas() { return this.#collections.explorerRwas; }
+
+  /** Bounded Explorer blocks collection with shared query controls. */
+  get explorerBlocks() { return this.#collections.explorerBlocks; }
+
+  /** Bounded Explorer transactions collection with shared query controls. */
+  get explorerTransactions() { return this.#collections.explorerTransactions; }
+
+  /** Bounded Explorer transactions/latest collection with shared query controls. */
+  get explorerLatestTransactions() { return this.#collections.explorerLatestTransactions; }
+
+  /** Bounded Explorer instructions collection with shared query controls. */
+  get explorerInstructions() { return this.#collections.explorerInstructions; }
+
+  /** Bounded Explorer instructions/latest collection with shared query controls. */
+  get explorerLatestInstructions() { return this.#collections.explorerLatestInstructions; }
+
+  get contractActivity() {
+    return this.#collections.contractActivity;
+  }
+
+  /** Committed contract events, newest first, with history cursors. */
+  get contractEvents() {
+    return this.#collections.contractEvents;
+  }
+
+  /** Subscription plans (`POST /v1/subscriptions/plans/query`). */
+  get subscriptionPlans() {
+    return this.#collections.subscriptionPlans;
+  }
+
+  /** Subscriptions (`POST /v1/subscriptions/query`). */
+  get subscriptions() {
+    return this.#collections.subscriptions;
+  }
+
+  /** Effective direct and role-inherited permissions for one account. */
+  /** Indexed account movements, newest first by block and movement position. */
+  accountHistory(accountId) {
+    return this.#collections.accountHistory(accountId);
+  }
+
+  accountPermissions(accountId) {
+    return this.#collections.accountPermissions(normalizeAccountPathLiteral(accountId, "accountId"));
+  }
+
+  /** Space Directory manifest rows for one UAID. */
+  uaidManifests(uaid) {
+    return this.#collections.uaidManifests(normalizeUaidLiteral(uaid, "uaidManifests.uaid"));
+  }
+
+  /** Repo agreements (`POST /v1/repo/agreements/query`). */
+  get repoAgreements() {
+    return this.#collections.repoAgreements;
+  }
+
+  /**
+   * Committed transactions, newest first (`POST /v1/transactions/query`).
+   * A history collection: `sort`, `includeTotal` and `aggregate` are rejected.
+   */
+  get transactions() {
+    return this.#collections.transactions;
+  }
+
+  /**
+   * Asset balances of one account (`POST /v1/accounts/{account_id}/assets/query`).
+   * @param {string} accountId canonical I105 account id or account alias
+   */
+  accountAssets(accountId) {
+    return this.#collections.accountAssets(accountId);
+  }
+
+  /**
+   * Holders of one asset definition (`POST /v1/assets/{definition_id}/holders/query`).
+   * @param {string} assetDefinitionId asset definition id or alias
+   */
+  assetHolders(assetDefinitionId) {
+    return this.#collections.assetHolders(assetDefinitionId);
+  }
+
+  /**
+   * Transactions of one account, newest first
+   * (`POST /v1/accounts/{account_id}/transactions/query`). A history
+   * collection: `sort`, `includeTotal` and `aggregate` are rejected.
+   * @param {string} accountId canonical I105 account id or account alias
+   */
+  accountTransactions(accountId) {
+    return this.#collections.accountTransactions(accountId);
+  }
+
+  /**
+   * Execute one collection query. The request is signed with the per-call or
+   * configured canonical account credentials when present; collection routes
+   * never require them (a signature only widens dataspace visibility).
+   */
+  async #queryCollection(path, query, options) {
+    const context = `${path} query options`;
+    const record =
+      options === undefined || options === null
+        ? {}
+        : requirePlainObjectOption(options, context);
+    assertSupportedOptionKeys(record, COLLECTION_QUERY_OPTION_KEYS, context);
+    const { signal } = normalizeSignalOption(record, `${path} query`);
+    const canonicalAuth =
+      record.canonicalAuth === undefined
+        ? this.#canonicalRequestAuth
+        : ToriiClient.#normalizeCanonicalAuth(record.canonicalAuth);
+    const target = `${path}/query`;
+    const response = await this.#request("POST", target, {
+      headers: JSON_REQUEST_HEADERS,
+      body: stringifyRequestJson(query.toJSON(), `${target} body`),
+      signal,
+      canonicalAuth: canonicalAuth ?? undefined,
+    });
+    await this.#expectStatus(response, [200], { signal });
+    const { bytes } = await this.#readBoundedResponseBytes(
+      response,
+      JSON_RESPONSE_MAX_BYTES,
+      `${target} response`,
+      { signal },
+    );
+    let text;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch (error) {
+      rejectType(`${target} response must be valid UTF-8`, { cause: error });
+    }
+    return decodePageText(text, `${target} response`);
   }
 
   /** Discover exact network identity and the explicit V1 account-signing default without credentials. */
@@ -1782,447 +1875,11 @@ export class ToriiClient {
     });
     return status;
   }
-  /**
-   * List accounts (`GET /v1/accounts`).
-   * @param {IterableListOptions} [options]
-   * @returns {Promise<{items: Array<{id: string}>, total: number}>}
-   */
-  async listAccounts(options = {}) {
-    return this._listIterable("/v1/accounts", options, normalizeAccountListResponse);
-  }
 
-  /**
-   * Query accounts (`POST /v1/accounts/query`).
-   * @param {IterableQueryOptions} [options]
-   * @returns {Promise<{items: Array<{id: string}>, total: number}>}
-   */
-  async queryAccounts(options = {}) {
-    return this._queryIterable("/v1/accounts/query", options, normalizeAccountListResponse);
-  }
 
-  /**
-   * Iterate over accounts using automatic pagination.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<{id: string}, void, unknown>}
-   */
-  iterateAccounts(options = {}) {
-    return this._iterateIterable(this.listAccounts, options);
-  }
 
-  /**
-   * Iterate accounts via the structured query endpoint.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<{id: string}, void, unknown>}
-   */
-  iterateAccountsQuery(options = {}) {
-    return this._iterateIterable(this.queryAccounts, options);
-  }
 
-  /**
-   * List domains (`GET /v1/domains`).
-   * @param {IterableListOptions} [options]
-   * @returns {Promise<{items: Array<{id: string}>, total: number}>}
-   */
-  async listDomains(options = {}) {
-    return this._listIterable("/v1/domains", options, normalizeDomainListResponse);
-  }
 
-  /**
-   * Query domains (`POST /v1/domains/query`).
-   * @param {IterableQueryOptions} [options]
-   * @returns {Promise<{items: Array<{id: string}>, total: number}>}
-   */
-  async queryDomains(options = {}) {
-    return this._queryIterable("/v1/domains/query", options, normalizeDomainListResponse);
-  }
-
-  /**
-   * Iterate domains with automatic pagination.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<{id: string}, void, unknown>}
-   */
-  iterateDomains(options = {}) {
-    return this._iterateIterable(this.listDomains, options);
-  }
-
-  /**
-   * Iterate domains via the structured query endpoint.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<{id: string}, void, unknown>}
-   */
-  iterateDomainsQuery(options = {}) {
-    return this._iterateIterable(this.queryDomains, options);
-  }
-
-  /**
-   * List asset definitions (`GET /v1/assets/definitions`).
-   * Returned items expose the full asset-definition record and may include
-   * `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`.
-   * Structured filters/sorts accept `alias_binding.status`,
-   * `alias_binding.lease_expiry_ms`, `alias_binding.grace_until_ms`, and
-   * `alias_binding.bound_at_ms`.
-   * @param {IterableListOptions} [options]
-   * @returns {Promise<{items: Array<object>, total: number}>}
-   */
-  async listAssetDefinitions(options = {}) {
-    const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
-      options,
-      "listAssetDefinitions",
-    );
-    this._assertPermissionRequirement(requirePermissions, "listAssetDefinitions");
-    return this._listIterable(
-      "/v1/assets/definitions",
-      rest,
-      normalizeAssetDefinitionListResponse,
-    );
-  }
-
-  /**
-   * Query asset definitions (`POST /v1/assets/definitions/query`).
-   * Returned items expose the full asset-definition record and may include
-   * `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`.
-   * @param {IterableQueryOptions} [options]
-   * @returns {Promise<{items: Array<object>, total: number}>}
-   */
-  async queryAssetDefinitions(options = {}) {
-    const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
-      options,
-      "queryAssetDefinitions",
-    );
-    this._assertPermissionRequirement(requirePermissions, "queryAssetDefinitions");
-    return this._queryIterable(
-      "/v1/assets/definitions/query",
-      rest,
-      normalizeAssetDefinitionListResponse,
-    );
-  }
-
-  /**
-   * Iterate over asset definitions using automatic pagination.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<object, void, unknown>}
-   */
-  iterateAssetDefinitions(options = {}) {
-    const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
-      options,
-      "iterateAssetDefinitions",
-    );
-    this._assertPermissionRequirement(requirePermissions, "iterateAssetDefinitions");
-    return this._iterateIterable(this.listAssetDefinitions, rest);
-  }
-
-  /**
-   * Iterate asset definitions via the structured query endpoint.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<object, void, unknown>}
-   */
-  iterateAssetDefinitionsQuery(options = {}) {
-    const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
-      options,
-      "iterateAssetDefinitionsQuery",
-    );
-    this._assertPermissionRequirement(requirePermissions, "iterateAssetDefinitionsQuery");
-    return this._iterateIterable(this.queryAssetDefinitions, rest);
-  }
-
-  /**
-   * List repo agreements (`GET /v1/repo/agreements`).
-   * @param {IterableListOptions} [options]
-   * @returns {Promise<{items: ReadonlyArray<ToriiRepoAgreement>, total: number}>}
-   */
-  async listRepoAgreements(options = {}) {
-    return this._listIterable(
-      "/v1/repo/agreements",
-      options,
-      normalizeRepoAgreementListResponse,
-    );
-  }
-
-  /**
-   * Query repo agreements (`POST /v1/repo/agreements/query`).
-   * @param {IterableQueryOptions} [options]
-   * @returns {Promise<{items: ReadonlyArray<ToriiRepoAgreement>, total: number}>}
-   */
-  async queryRepoAgreements(options = {}) {
-    return this._queryIterable(
-      "/v1/repo/agreements/query",
-      options,
-      normalizeRepoAgreementListResponse,
-    );
-  }
-
-  /**
-   * Iterate repo agreements with automatic pagination.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<ToriiRepoAgreement, void, unknown>}
-   */
-  iterateRepoAgreements(options = {}) {
-    return this._iterateIterable(this.listRepoAgreements, options);
-  }
-
-  /**
-   * Iterate repo agreements using the structured query endpoint.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<ToriiRepoAgreement, void, unknown>}
-   */
-  iterateRepoAgreementsQuery(options = {}) {
-    return this._iterateIterable(this.queryRepoAgreements, options);
-  }
-
-  /**
-   * List NFTs (`GET /v1/nfts`).
-   * @param {IterableListOptions} [options]
-   * @returns {Promise<{items: Array<{id: string}>, total: number}>}
-   */
-  async listNfts(options = {}) {
-    const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
-      options,
-      "listNfts",
-    );
-    this._assertPermissionRequirement(requirePermissions, "listNfts");
-    return this._listIterable("/v1/nfts", rest, normalizeNftListResponse);
-  }
-
-  /**
-   * Query NFTs (`POST /v1/nfts/query`).
-   * @param {IterableQueryOptions} [options]
-   * @returns {Promise<{items: Array<{id: string}>, total: number}>}
-   */
-  async queryNfts(options = {}) {
-    const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
-      options,
-      "queryNfts",
-    );
-    this._assertPermissionRequirement(requirePermissions, "queryNfts");
-    return this._queryIterable("/v1/nfts/query", rest, normalizeNftListResponse);
-  }
-
-  /**
-   * Iterate over NFTs using automatic pagination.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<{id: string}, void, unknown>}
-   */
-  iterateNfts(options = {}) {
-    const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
-      options,
-      "iterateNfts",
-    );
-    this._assertPermissionRequirement(requirePermissions, "iterateNfts");
-    return this._iterateIterable(this.listNfts, rest);
-  }
-
-  /**
-   * Iterate NFTs via the structured query endpoint.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<{id: string}, void, unknown>}
-   */
-  iterateNftsQuery(options = {}) {
-    const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
-      options,
-      "iterateNftsQuery",
-    );
-    this._assertPermissionRequirement(requirePermissions, "iterateNftsQuery");
-    return this._iterateIterable(this.queryNfts, rest);
-  }
-
-  /**
-   * List explorer NFTs with optional owner/domain filters (`GET /v1/explorer/nfts`).
-   * @param {ExplorerNftListOptions} [options]
-   * @returns {Promise<{pagination: ToriiExplorerCursorMeta, items: Array<{id: string, ownedBy: string, metadata: unknown}>}>}
-   */
-  async listExplorerNfts(options = {}) {
-    const normalized = ToriiClient._normalizeExplorerNftListOptions(
-      options,
-      "listExplorerNfts options",
-    );
-    const params = {
-      limit: normalized.limit,
-    };
-    if (normalized.cursor !== undefined) {
-      params.cursor = normalized.cursor;
-    }
-    if (normalized.ownedBy !== undefined) {
-      params.owned_by = normalized.ownedBy;
-    }
-    if (normalized.domain !== undefined) {
-      params.domain = normalized.domain;
-    }
-    const response = await this._request("GET", "/v1/explorer/nfts", {
-      params,
-      headers: JSON_ACCEPT_HEADERS,
-      signal: normalized.signal,
-      canonicalAuth: this.#canonicalRequestAuth,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      rejectError("explorer nfts endpoint returned no payload");
-    }
-    return normalizeExplorerNftPage(payload);
-  }
-
-  /**
-   * Iterate explorer NFTs with optional owner/domain filters.
-   * @param {ExplorerNftIteratorOptions} [options]
-   * @returns {AsyncGenerator<{id: string, ownedBy: string, metadata: unknown}, void, unknown>}
-   */
-  iterateExplorerNfts(options = {}) {
-    const normalized = ToriiClient._normalizeExplorerNftIteratorOptions(
-      options,
-      "iterateExplorerNfts options",
-    );
-    const { maxItems, ...listOptions } = normalized;
-    const self = this;
-    return (async function* iterator() {
-      let cursor = normalized.cursor;
-      let remaining = maxItems;
-      const seenCursors = new Set();
-      if (cursor !== undefined) seenCursors.add(cursor);
-      while (true) {
-        const limit = remaining === null
-          ? normalized.limit
-          : Math.min(normalized.limit, remaining);
-        const pageResult = await self.listExplorerNfts({
-          ...listOptions,
-          cursor,
-          limit,
-        });
-        const items = Array.isArray(pageResult?.items) ? pageResult.items : [];
-        for (const item of items) {
-          yield item;
-          if (remaining !== null) {
-            remaining -= 1;
-            if (remaining <= 0) {
-              return;
-            }
-          }
-        }
-        const { pagination } = pageResult;
-        if (!pagination.hasMore) {
-          return;
-        }
-        cursor = pagination.nextCursor;
-        if (seenCursors.has(cursor)) {
-          rejectError("explorer nfts endpoint repeated a cursor");
-        }
-        seenCursors.add(cursor);
-      }
-    })();
-  }
-
-  /**
-   * List NFTs owned by an account (`GET /v1/explorer/nfts?owned_by=...`).
-   * @param {string} accountId
-   * @param {ExplorerNftListOptions} [options]
-   * @returns {Promise<{pagination: ToriiExplorerCursorMeta, items: Array<{id: string, ownedBy: string, metadata: unknown}>}>}
-   */
-  async listAccountNfts(accountId, options = {}) {
-    const normalizedId = ToriiClient._normalizeAccountId(accountId, "accountId");
-    return this.listExplorerNfts({ ...options, ownedBy: normalizedId });
-  }
-
-  /**
-   * Iterate NFTs owned by an account.
-   * @param {string} accountId
-   * @param {ExplorerNftIteratorOptions} [options]
-   * @returns {AsyncGenerator<{id: string, ownedBy: string, metadata: unknown}, void, unknown>}
-   */
-  iterateAccountNfts(accountId, options = {}) {
-    const normalizedId = ToriiClient._normalizeAccountId(accountId, "accountId");
-    return this.iterateExplorerNfts({ ...options, ownedBy: normalizedId });
-  }
-
-  /**
-   * List RWAs (`GET /v1/rwas`).
-   * @param {IterableListOptions} [options]
-   * @returns {Promise<{items: Array<{id: string}>, total: number}>}
-   */
-  async listRwas(options = {}) {
-    const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
-      options,
-      "listRwas",
-    );
-    this._assertPermissionRequirement(requirePermissions, "listRwas");
-    return this._listIterable("/v1/rwas", rest, normalizeRwaListResponse);
-  }
-
-  /**
-   * Query RWAs (`POST /v1/rwas/query`).
-   * @param {IterableQueryOptions} [options]
-   * @returns {Promise<{items: Array<{id: string}>, total: number}>}
-   */
-  async queryRwas(options = {}) {
-    const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
-      options,
-      "queryRwas",
-    );
-    this._assertPermissionRequirement(requirePermissions, "queryRwas");
-    return this._queryIterable("/v1/rwas/query", rest, normalizeRwaListResponse);
-  }
-
-  /**
-   * Iterate over RWAs using automatic pagination.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<{id: string}, void, unknown>}
-   */
-  iterateRwas(options = {}) {
-    const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
-      options,
-      "iterateRwas",
-    );
-    this._assertPermissionRequirement(requirePermissions, "iterateRwas");
-    return this._iterateIterable(this.listRwas, rest);
-  }
-
-  /**
-   * Iterate RWAs via the structured query endpoint.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<{id: string}, void, unknown>}
-   */
-  iterateRwasQuery(options = {}) {
-    const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
-      options,
-      "iterateRwasQuery",
-    );
-    this._assertPermissionRequirement(requirePermissions, "iterateRwasQuery");
-    return this._iterateIterable(this.queryRwas, rest);
-  }
-
-  /**
-   * List explorer RWAs with optional owner/domain filters (`GET /v1/explorer/rwas`).
-   * @param {ExplorerRwaListOptions} [options]
-   * @returns {Promise<{pagination: ToriiExplorerCursorMeta, items: Array<object>}>}
-   */
-  async listExplorerRwas(options = {}) {
-    const normalized = ToriiClient._normalizeExplorerRwaListOptions(
-      options,
-      "listExplorerRwas options",
-    );
-    const params = {
-      limit: normalized.limit,
-    };
-    if (normalized.cursor !== undefined) {
-      params.cursor = normalized.cursor;
-    }
-    if (normalized.ownedBy !== undefined) {
-      params.owned_by = normalized.ownedBy;
-    }
-    if (normalized.domain !== undefined) {
-      params.domain = normalized.domain;
-    }
-    const response = await this._request("GET", "/v1/explorer/rwas", {
-      params,
-      headers: JSON_ACCEPT_HEADERS,
-      signal: normalized.signal,
-      canonicalAuth: this.#canonicalRequestAuth,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      rejectError("explorer rwas endpoint returned no payload");
-    }
-    return normalizeExplorerRwaPage(payload);
-  }
 
   /**
    * Get explorer detail for a single RWA (`GET /v1/explorer/rwas/{rwaId}`).
@@ -2250,472 +1907,8 @@ export class ToriiClient {
     return normalizeExplorerRwaRecord(payload, "explorer rwa detail response");
   }
 
-  /**
-   * Iterate explorer RWAs with optional owner/domain filters.
-   * @param {ExplorerRwaIteratorOptions} [options]
-   * @returns {AsyncGenerator<object, void, unknown>}
-   */
-  iterateExplorerRwas(options = {}) {
-    const normalized = ToriiClient._normalizeExplorerRwaIteratorOptions(
-      options,
-      "iterateExplorerRwas options",
-    );
-    const { maxItems, ...listOptions } = normalized;
-    const self = this;
-    return (async function* iterator() {
-      let cursor = normalized.cursor;
-      let remaining = maxItems;
-      const seenCursors = new Set();
-      if (cursor !== undefined) seenCursors.add(cursor);
-      while (true) {
-        const limit = remaining === null
-          ? normalized.limit
-          : Math.min(normalized.limit, remaining);
-        const pageResult = await self.listExplorerRwas({
-          ...listOptions,
-          cursor,
-          limit,
-        });
-        const items = Array.isArray(pageResult?.items) ? pageResult.items : [];
-        for (const item of items) {
-          yield item;
-          if (remaining !== null) {
-            remaining -= 1;
-            if (remaining <= 0) {
-              return;
-            }
-          }
-        }
-        const { pagination } = pageResult;
-        if (!pagination.hasMore) {
-          return;
-        }
-        cursor = pagination.nextCursor;
-        if (seenCursors.has(cursor)) {
-          rejectError("explorer rwas endpoint repeated a cursor");
-        }
-        seenCursors.add(cursor);
-      }
-    })();
-  }
 
-  /**
-   * List explorer RWAs owned by an account (`GET /v1/explorer/rwas?owned_by=...`).
-   * @param {string} accountId
-   * @param {ExplorerRwaListOptions} [options]
-   * @returns {Promise<{pagination: ToriiExplorerCursorMeta, items: Array<object>}>}
-   */
-  async listAccountRwas(accountId, options = {}) {
-    const normalizedId = ToriiClient._normalizeAccountId(accountId, "accountId");
-    return this.listExplorerRwas({ ...options, ownedBy: normalizedId });
-  }
 
-  /**
-   * Iterate explorer RWAs owned by an account.
-   * @param {string} accountId
-   * @param {ExplorerRwaIteratorOptions} [options]
-   * @returns {AsyncGenerator<object, void, unknown>}
-   */
-  iterateAccountRwas(accountId, options = {}) {
-    const normalizedId = ToriiClient._normalizeAccountId(accountId, "accountId");
-    return this.iterateExplorerRwas({ ...options, ownedBy: normalizedId });
-  }
-
-  /**
-   * List asset holdings belonging to an account (`GET /v1/accounts/{id}/assets`).
-   * @param {string} accountId
-   * @param {AccountAssetListOptions} [options]
-   * @returns {Promise<{items: Array<{asset_id: string, quantity: string}>, total: number}>}
-   */
-  async listAccountAssets(accountId, options = {}) {
-    const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
-    const encodedId = encodeURIComponent(normalizedId);
-    const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
-      options,
-      "listAccountAssets",
-    );
-    this._assertPermissionRequirement(requirePermissions, "listAccountAssets");
-    const optionContext = `options for /v1/accounts/${encodedId}/assets`;
-    const normalizedOptions = normalizeIterableListOptions(
-      rest,
-      optionContext,
-      ASSET_ID_LIST_OPTION_KEYS,
-    );
-    const canonicalAuth = normalizedOptions.canonicalAuth === undefined
-      ? this.#canonicalRequestAuth
-      : ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
-    const { signal, canonicalAuth: _ignoredCanonical, ...listOptions } = normalizedOptions;
-    const params = ToriiClient._encodeIterableListParams(
-      listOptions,
-      optionContext,
-      ASSET_ID_LIST_OPTION_KEYS,
-    ) ?? {};
-    if (listOptions.assetId !== undefined && listOptions.assetId !== null) {
-      params.asset = ToriiClient._normalizeAssetId(listOptions.assetId, "assetId");
-      delete params.asset_id;
-    }
-    const response = await this._request("GET", `/v1/accounts/${encodedId}/assets`, {
-      params: Object.keys(params).length > 0 ? params : undefined,
-      headers: JSON_ACCEPT_HEADERS,
-      signal,
-      canonicalAuth,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    const base = ToriiClient._validateIterablePayload(payload);
-    return normalizeAccountAssetListResponse(base);
-  }
-
-  /**
-   * Query asset holdings belonging to an account (`POST /v1/accounts/{id}/assets/query`).
-   * @param {string} accountId
-   * @param {IterableQueryOptions} [options]
-   * @returns {Promise<{items: Array<{asset_id: string, quantity: string}>, total: number}>}
-   */
-  async queryAccountAssets(accountId, options = {}) {
-    const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
-    const encodedId = encodeURIComponent(normalizedId);
-    const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
-      options,
-      "queryAccountAssets",
-    );
-    this._assertPermissionRequirement(requirePermissions, "queryAccountAssets");
-    return this._queryIterable(
-      `/v1/accounts/${encodedId}/assets/query`,
-      rest,
-      normalizeAccountAssetListResponse,
-    );
-  }
-
-  /**
-   * Iterate over an account's asset holdings.
-   * @param {string} accountId
-   * @param {AccountAssetIteratorOptions} [options]
-   * @returns {AsyncGenerator<{asset_id: string, quantity: string}, void, unknown>}
-   */
-  iterateAccountAssets(accountId, options = {}) {
-    const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
-    const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
-      options,
-      "iterateAccountAssets",
-    );
-    this._assertPermissionRequirement(requirePermissions, "iterateAccountAssets");
-    return this._iterateIterable(this.listAccountAssets.bind(this, normalizedId), rest);
-  }
-
-  /**
-   * Iterate per-account asset balances via the query endpoint.
-   * @param {string} accountId
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<{asset_id: string, quantity: string}, void, unknown>}
-   */
-  iterateAccountAssetsQuery(accountId, options = {}) {
-    const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
-    const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
-      options,
-      "iterateAccountAssetsQuery",
-    );
-    this._assertPermissionRequirement(requirePermissions, "iterateAccountAssetsQuery");
-    return this._iterateIterable(this.queryAccountAssets.bind(this, normalizedId), rest);
-  }
-
-  /**
-   * List transactions involving an account (`GET /v1/accounts/{id}/transactions`).
-   * @param {string} accountId
-   * @param {AccountTransactionListOptions} [options]
-   * @returns {Promise<{items: Array<object>, total: number}>}
-   */
-  async listAccountTransactions(accountId, options = {}) {
-    const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
-    const encodedId = encodeURIComponent(normalizedId);
-    return this._listIterable(
-      `/v1/accounts/${encodedId}/transactions`,
-      options,
-      normalizeAccountTransactionListResponse,
-      ASSET_ID_LIST_OPTION_KEYS,
-      this.#canonicalRequestAuth,
-    );
-  }
-
-  /**
-   * Query transactions involving an account (`POST /v1/accounts/{id}/transactions/query`).
-   * @param {string} accountId
-   * @param {IterableQueryOptions & {assetId?: string, authority?: string, resultOk?: boolean, sinceTimestampMs?: number, untilTimestampMs?: number}} [options]
-   * @returns {Promise<{items: Array<object>, total: number}>}
-   */
-  async queryAccountTransactions(accountId, options = {}) {
-    const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
-    const encodedId = encodeURIComponent(normalizedId);
-    const normalizedOptions = normalizeTransactionQueryOptions(
-      options,
-      `options for /v1/accounts/${encodedId}/transactions/query`,
-    );
-    return this._queryIterable(
-      `/v1/accounts/${encodedId}/transactions/query`,
-      normalizedOptions,
-      normalizeAccountTransactionListResponse,
-    );
-  }
-
-  /**
-   * Query committed transactions (`POST /v1/transactions/query`).
-   * @param {IterableQueryOptions & {assetId?: string, authority?: string, resultOk?: boolean, sinceTimestampMs?: number, untilTimestampMs?: number}} [options]
-   * @returns {Promise<{items: Array<object>, total: number}>}
-   */
-  async queryTransactions(options = {}) {
-    const normalizedOptions = normalizeTransactionQueryOptions(
-      options,
-      "options for /v1/transactions/query",
-    );
-    return this._queryIterable(
-      "/v1/transactions/query",
-      normalizedOptions,
-      normalizeAccountTransactionListResponse,
-    );
-  }
-
-  /**
-   * Iterate over transactions involving an account.
-   * @param {string} accountId
-   * @param {AccountTransactionIteratorOptions} [options]
-   * @returns {AsyncGenerator<object, void, unknown>}
-   */
-  iterateAccountTransactions(accountId, options = {}) {
-    const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
-    return this._iterateIterable(
-      this.listAccountTransactions.bind(this, normalizedId),
-      options,
-    );
-  }
-
-  /**
-   * Iterate per-account transactions via the structured query endpoint.
-   * @param {string} accountId
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<object, void, unknown>}
-   */
-  iterateAccountTransactionsQuery(accountId, options = {}) {
-    const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
-    return this._iterateIterable(
-      this.queryAccountTransactions.bind(this, normalizedId),
-      options,
-    );
-  }
-
-  /**
-   * Iterate committed transactions via the structured query endpoint.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<object, void, unknown>}
-   */
-  iterateTransactionsQuery(options = {}) {
-    return this._iterateIterable(this.queryTransactions.bind(this), options);
-  }
-
-  /**
-   * List committed contract-call activity (`GET /v1/contracts/activity`).
-   * @param {ContractActivityListOptions} [options]
-   * @returns {Promise<{items: Array<object>, total: number}>}
-   */
-  async listContractActivity(options = {}) {
-    return this._listIterable(
-      "/v1/contracts/activity",
-      options,
-      normalizeContractActivityListResponse,
-      CONTRACT_ACTIVITY_LIST_OPTION_KEYS,
-      this.#canonicalRequestAuth,
-    );
-  }
-
-  /**
-   * List generic contract events (`GET /v1/contracts/events`).
-   * @param {ContractEventListOptions} [options]
-   * @returns {Promise<{items: Array<object>, total: number}>}
-   */
-  async listContractEvents(options = {}) {
-    const optionContext = "options for /v1/contracts/events";
-    const normalizedOptions = normalizeIterableListOptions(
-      options,
-      optionContext,
-      CONTRACT_EVENT_LIST_OPTION_KEYS,
-    );
-    const canonicalAuth = normalizedOptions.canonicalAuth === undefined
-      ? this.#canonicalRequestAuth
-      : ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
-    const { signal, canonicalAuth: _ignoredCanonical, ...rest } = normalizedOptions;
-    const params = {};
-    if (rest.limit !== undefined && rest.limit !== null) {
-      params.limit = ToriiClient._normalizeUnsignedInteger(rest.limit, "limit", {
-        allowZero: true,
-      });
-    }
-    if (rest.offset !== undefined && rest.offset !== null) {
-      params.offset = ToriiClient._normalizeOffset(rest.offset);
-    }
-    const filterParam = ToriiClient._normalizeFilterParam(rest.filter);
-    if (filterParam !== undefined) {
-      params.filter = filterParam;
-    }
-    const sortParam = ToriiClient._encodeSortQueryParam(rest.sort);
-    if (sortParam !== undefined) {
-      params.sort = sortParam;
-    }
-    if (rest.authority !== undefined && rest.authority !== null) {
-      params.authority = ToriiClient._normalizeAccountId(rest.authority, "authority");
-    }
-    if (rest.contractAddress !== undefined && rest.contractAddress !== null) {
-      params.contract_address = requireExactNonEmptyString(rest.contractAddress, "contractAddress");
-    }
-    if (rest.contractAlias !== undefined && rest.contractAlias !== null) {
-      params.contract_alias = requireExactNonEmptyString(rest.contractAlias, "contractAlias");
-    }
-    if (rest.module !== undefined && rest.module !== null) {
-      params.module = requireNonEmptyString(rest.module, "module");
-    }
-    if (rest.eventKind !== undefined && rest.eventKind !== null) {
-      params.event_kind = requireNonEmptyString(rest.eventKind, "eventKind");
-    }
-    if (rest.participant !== undefined && rest.participant !== null) {
-      params.participant = requireExactNonEmptyString(rest.participant, "participant");
-    }
-    if (rest.assetId !== undefined && rest.assetId !== null) {
-      params.asset_id = requireExactNonEmptyString(rest.assetId, "assetId");
-    }
-    if (rest.provenance !== undefined && rest.provenance !== null) {
-      params.provenance = requireNonEmptyString(rest.provenance, "provenance");
-    }
-    if (rest.sinceTimestampMs !== undefined && rest.sinceTimestampMs !== null) {
-      params.since_timestamp_ms = ToriiClient._normalizeUnsignedInteger(
-        rest.sinceTimestampMs,
-        "sinceTimestampMs",
-        { allowZero: true },
-      );
-    }
-    if (rest.untilTimestampMs !== undefined && rest.untilTimestampMs !== null) {
-      params.until_timestamp_ms = ToriiClient._normalizeUnsignedInteger(
-        rest.untilTimestampMs,
-        "untilTimestampMs",
-        { allowZero: true },
-      );
-    }
-    if (rest.resultOk !== undefined && rest.resultOk !== null) {
-      params.result_ok = requireBooleanLike(rest.resultOk, "resultOk");
-    }
-    const response = await this._request("GET", "/v1/contracts/events", {
-      params: Object.keys(params).length > 0 ? params : undefined,
-      headers: JSON_ACCEPT_HEADERS,
-      signal,
-      canonicalAuth,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    const base = ToriiClient._validateIterablePayload(payload);
-    return normalizeContractEventListResponse(base);
-  }
-
-  /**
-   * List holders for an asset definition (`GET /v1/assets/{definitionId}/holders`).
-   * @param {string} assetDefinitionId
-   * @param {AssetHolderListOptions} [options]
-   * @returns {Promise<{items: Array<{account_id: string, quantity: string}>, total: number}>}
-   */
-  async listAssetHolders(assetDefinitionId, options = {}) {
-    const normalizedId = ToriiClient._requireAssetDefinitionId(assetDefinitionId);
-    const encodedId = encodeURIComponent(normalizedId);
-    return this._listIterable(
-      `/v1/assets/${encodedId}/holders`,
-      options,
-      normalizeAssetHolderListResponse,
-      ASSET_ID_LIST_OPTION_KEYS,
-    );
-  }
-
-  /**
-   * Query holders for an asset definition (`POST /v1/assets/{definitionId}/holders/query`).
-   * @param {string} assetDefinitionId
-   * @param {IterableQueryOptions} [options]
-   * @returns {Promise<{items: Array<{account_id: string, quantity: string}>, total: number}>}
-   */
-  async queryAssetHolders(assetDefinitionId, options = {}) {
-    const normalizedId = ToriiClient._requireAssetDefinitionId(assetDefinitionId);
-    const encodedId = encodeURIComponent(normalizedId);
-    return this._queryIterable(
-      `/v1/assets/${encodedId}/holders/query`,
-      options,
-      normalizeAssetHolderListResponse,
-    );
-  }
-
-  /**
-   * Iterate over holders for an asset definition.
-   * @param {string} assetDefinitionId
-   * @param {AssetHolderIteratorOptions} [options]
-   * @returns {AsyncGenerator<{account_id: string, quantity: string}, void, unknown>}
-   */
-  iterateAssetHolders(assetDefinitionId, options = {}) {
-    const normalizedId = ToriiClient._requireAssetDefinitionId(assetDefinitionId);
-    return this._iterateIterable(this.listAssetHolders.bind(this, normalizedId), options);
-  }
-
-  /**
-   * Iterate asset-definition holders via the query endpoint.
-   * @param {string} assetDefinitionId
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<{account_id: string, quantity: string}, void, unknown>}
-   */
-  iterateAssetHoldersQuery(assetDefinitionId, options = {}) {
-    const normalizedId = ToriiClient._requireAssetDefinitionId(assetDefinitionId);
-    return this._iterateIterable(this.queryAssetHolders.bind(this, normalizedId), options);
-  }
-
-  /**
-   * List effective permission tokens for an account, including grants inherited from assigned roles
-   * (`GET /v1/accounts/{accountId}/permissions`).
-   * @param {string} accountId
-   * @param {{limit?: number, offset?: number, signal?: AbortSignal, canonicalAuth?: CanonicalRequestAuth | null}} [options]
-   * @returns {Promise<{items: Array<{name: string, payload: unknown}>, total: number}>}
-   */
-  async listAccountPermissions(accountId, options = {}) {
-    const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
-    const encodedId = encodeURIComponent(normalizedId);
-    const normalizedOptions = normalizeIterableListOptions(
-      options,
-      "listAccountPermissions",
-      ACCOUNT_PERMISSIONS_LIST_OPTION_KEYS,
-    );
-    const canonicalAuth = normalizedOptions.canonicalAuth === undefined
-      ? this.#canonicalRequestAuth
-      : ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
-    const { signal, canonicalAuth: _ignoredCanonical, ...rest } = normalizedOptions;
-    const params = ToriiClient._encodePaginationParams(rest);
-    const response = await this._request(
-      "GET",
-      `/v1/accounts/${encodedId}/permissions`,
-      {
-        headers: JSON_ACCEPT_HEADERS,
-        params: params ?? undefined,
-        signal,
-        canonicalAuth,
-      },
-    );
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    const base = ToriiClient._validateIterablePayload(payload);
-    return normalizeAccountPermissionListResponse(base);
-  }
-
-  /**
-   * Iterate effective permission tokens, including grants inherited from assigned roles.
-   * @param {string} accountId
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<{name: string, payload: unknown}, void, unknown>}
-   */
-  iterateAccountPermissions(accountId, options = {}) {
-    const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
-    return this._iterateIterable(
-      this.listAccountPermissions.bind(this, normalizedId),
-      options,
-    );
-  }
 
   /**
    * Upload an attachment to Torii.
@@ -3144,6 +2337,51 @@ export class ToriiClient {
       rejectType("fee sponsor program response.id does not match the requested exact program id");
     }
     return program;
+  }
+
+  /**
+   * Observe exact staking signing inputs. This signs/submits no transaction and
+   * authenticates no ledger state. The expected XOR definition is an explicit
+   * operator pin; neither an alias nor the server response establishes that pin.
+   */
+  async preparePublicLanePlan(request, xorAssetDefinitionId, options = {}) {
+    const context = requireLocalDraftSigningContext(this._localSigningContext, "preparePublicLanePlan");
+    const opts = requirePlainObjectOption(options, "preparePublicLanePlan options");
+    if (Object.keys(opts).some((key) => key !== "signal")) rejectType("preparePublicLanePlan only accepts signal");
+    const configuredTimeoutMs = Number(this.#config.timeoutMs);
+    const timeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
+      ? Math.min(configuredTimeoutMs, BOUNDED_JSON_MAX_READ_TIMEOUT_MS)
+      : BOUNDED_JSON_MAX_READ_TIMEOUT_MS;
+    // Keep one original deadline alive across module preparation, headers, and
+    // every success/error body read. Per-attempt/header cleanup cannot reset it.
+    const operation = composeRequestSignal(opts.signal, timeoutMs);
+    const { signal } = operation;
+    try {
+      throwIfAborted(signal);
+      const xor = normalizeAssetDefinitionId(xorAssetDefinitionId, "staking preparation XOR pin");
+      const { encodeValidatorStakingPreparationFrameV1: encode, decodeValidatorStakingPreparationFrameV1: decode,
+        validateValidatorStakingPreparationV1: validate } = await waitForPromiseWithSignal(loadToriiOptionalModule(), signal);
+      const body = encode("PreparationRequest", request);
+      const retainedRequest = decode("PreparationRequest", body);
+      throwIfAborted(signal);
+      const response = await waitForResponseWithSignal(this._request("POST", "/v1/nexus/staking/prepare", {
+        headers: { "Content-Type": APPLICATION_NORITO, Accept: APPLICATION_NORITO },
+        body, signal, disableRetries: true, redirect: "error",
+      }), signal, "staking preparation");
+      await this._expectStatus(response, [200], { signal, maximumBodyBytes: 256 * 1024, responseLabel: "staking preparation" });
+      const type = this._getHeader(response, "content-type") ?? "";
+      if (!/^[ \t]*application\/x-norito[ \t]*$/iu.test(type)) {
+        cancelResponseBodyBestEffort(response, "staking preparation requires application/x-norito");
+        rejectType("staking preparation requires application/x-norito");
+      }
+      const { bytes } = await this._readBoundedResponseBytes(response, 256 * 1024, "staking preparation", { signal });
+      const prepared = decode("Preparation", bytes);
+      validate(prepared, retainedRequest, context.networkId, xor);
+      throwIfAborted(signal);
+      return prepared;
+    } finally {
+      operation.cleanup();
+    }
   }
 
   /**
@@ -5526,76 +4764,6 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch Space Directory manifests for a UAID (`GET /v1/space-directory/uaids/{uaid}/manifests`).
-   * @param {string} uaid
-   * @param {{dataspaceId?: number, status?: "active" | "inactive" | "all", limit?: number, offset?: number, countMode?: "bounded" | "exact", signal?: AbortSignal}} [options]
-   * @returns {Promise<UaidManifestsResponse>}
-   */
-  async getUaidManifests(uaid, options = {}) {
-    const canonicalUaid = normalizeUaidLiteral(uaid, "getUaidManifests.uaid");
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
-      options,
-      "getUaidManifests",
-    );
-    assertSupportedOptionKeys(
-      rest,
-      new Set(["dataspaceId", "status", "limit", "offset", "countMode"]),
-      "getUaidManifests options",
-    );
-    const params = {};
-    if (rest.dataspaceId !== undefined) {
-      params.dataspace = requireExactJsonUnsignedInteger(
-        rest.dataspaceId,
-        "getUaidManifests.dataspaceId",
-        { allowZero: true },
-      );
-    }
-    if (rest.status !== undefined) {
-      params.status = requireExactEnumString(
-        rest.status,
-        UAID_MANIFEST_FILTER_VALUES,
-        "getUaidManifests.status",
-      );
-    }
-    if (rest.limit !== undefined) {
-      params.limit = requireExactJsonUnsignedInteger(
-        rest.limit,
-        "getUaidManifests.limit",
-        { allowZero: false },
-      );
-    }
-    if (rest.offset !== undefined) {
-      params.offset = requireExactJsonUnsignedInteger(
-        rest.offset,
-        "getUaidManifests.offset",
-        { allowZero: true },
-      );
-    }
-    if (rest.countMode !== undefined) {
-      params.count_mode = requireExactEnumString(
-        rest.countMode,
-        UAID_MANIFEST_COUNT_MODE_VALUES,
-        "getUaidManifests.countMode",
-      );
-    }
-    const response = await this._request(
-      "GET",
-      `/v1/space-directory/uaids/${encodeURIComponent(canonicalUaid)}/manifests`,
-      {
-        headers: JSON_ACCEPT_HEADERS,
-        params,
-        signal,
-      },
-    );
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      rejectError("uaid manifests endpoint returned no payload");
-    }
-    return normalizeUaidManifestsResponse(payload, canonicalUaid);
-  }
-
-  /**
    * Publish (or rotate) a Space Directory manifest (`POST /v1/space-directory/manifests`).
    * @param {PublishSpaceDirectoryManifestRequest} request
    * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
@@ -5886,10 +5054,7 @@ export class ToriiClient {
 
   async _ensureDataModelValidation(signal) {
     return ensureNodeDataModelCompatibility(this.#dataModelState, () =>
-      this.getNodeCapabilities({
-        canonicalAuth: this.#canonicalRequestAuth,
-        signal,
-      }),
+      this.getNodeCapabilities({ signal }),
     );
   }
 
@@ -5957,19 +5122,6 @@ export class ToriiClient {
       normalizedHash,
       "transaction status response",
     );
-  }
-
-  /**
-   * Fetch transaction pipeline status and normalise the diagnostic payload.
-   * @param {string} hashHex
-   * @returns {Promise<ToriiPipelineTransactionStatus | null>}
-   */
-  async getTransactionStatusTyped(hashHex, options = {}) {
-    const payload = await this.getTransactionStatus(hashHex, options);
-    if (!payload) {
-      return null;
-    }
-    return normalizePipelineStatusPayload(payload);
   }
 
   /**
@@ -6072,55 +5224,58 @@ export class ToriiClient {
   }
 
   /**
-   * Poll until exact state-resolved Applied finality and normalise the payload.
-   * @param {string} hashHex
-   * @param {TransactionStatusPollOptions} [options]
-   * @returns {Promise<ToriiAppliedTransactionStatus>}
-   */
-  async waitForTransactionStatusTyped(hashHex, options = {}) {
-    const payload = await this.waitForTransactionStatus(hashHex, options);
-    return normalizePipelineStatusPayload(payload);
-  }
-
-  /**
-   * Submit a transaction payload and await exact state-resolved Applied finality.
+   * Submit a signed transaction and await exact state-resolved Applied finality.
+   * The transaction hash is derived from the signed bytes; an optional
+   * `hashHex` is checked against it before anything is sent.
    * @param {ArrayBufferView | ArrayBuffer | Buffer} payload
    * @param {{
-   *   hashHex: string,
+   *   hashHex?: string,
    *   intervalMs?: number,
    *   timeoutMs?: number | null,
    *   maxAttempts?: number | null,
+   *   signal?: AbortSignal,
    *   onStatus?: (status: string | null, payload: any, attempt: number) => (void | Promise<void>)
-   * }} options
-   * @returns {Promise<any>}
+   * }} [options]
+   * @returns {Promise<ToriiAppliedTransactionStatus>}
    */
-  async submitTransactionAndWait(payload, options) {
+  async submitTransactionAndWait(payload, options = {}) {
     const record = ToriiClient._requirePlainObject(
       options,
       "submitTransactionAndWait options",
     );
     const { hashHex, ...pollOptions } = record;
-    const normalizedHash = requireCanonicalTransactionHashString(
-      hashHex,
-      "options.hashHex",
-    );
     ToriiClient._normalizeTransactionStatusPollOptions(
       pollOptions,
       "submitTransactionAndWait options",
     );
+    const asserted =
+      hashHex === undefined
+        ? undefined
+        : requireCanonicalTransactionHashString(hashHex, "options.hashHex");
+    const transactionHash = this.#signedTransactionHashHex(payload);
+    if (asserted !== undefined) {
+      if (asserted !== transactionHash) {
+        throw createValidationError(
+          ValidationErrorCode.INVALID_HEX,
+          `submitTransactionAndWait options.hashHex ${asserted} does not match the signed transaction hash ${transactionHash}`,
+          "submitTransactionAndWait.options.hashHex",
+        );
+      }
+    }
     await this.submitTransaction(payload, { signal: pollOptions.signal });
-    return this.waitForTransactionStatus(normalizedHash, pollOptions);
+    return this.waitForTransactionStatus(transactionHash, pollOptions);
   }
 
-  /**
-   * Submit a transaction payload and await exact Applied finality (normalised structure).
-   * @param {ArrayBufferView | ArrayBuffer | Buffer} payload
-   * @param {SubmitTransactionAndWaitOptions} options
-   * @returns {Promise<ToriiAppliedTransactionStatus>}
-   */
-  async submitTransactionAndWaitTyped(payload, options) {
-    const status = await this.submitTransactionAndWait(payload, options);
-    return normalizePipelineStatusPayload(status);
+  /** Canonical entrypoint hash of exact VersionedSignedTransaction V1 bytes. */
+  #signedTransactionHashHex(payload) {
+    const native = resolveNativeBinding(this._nativeRuntime);
+    if (!native || typeof native.hashSignedTransaction !== JS_TYPE_FUNCTION) {
+      rejectError(
+        "Deriving the transaction hash requires the native hashSignedTransaction codec.",
+      );
+    }
+    const hashHex = Buffer.from(native.hashSignedTransaction(toBuffer(payload))).toString("hex");
+    return requireCanonicalTransactionHashString(hashHex, "signed transaction hash");
   }
 
   /**
@@ -6263,22 +5418,24 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch Torii health snapshot (`GET /v1/health`).
+   * Check Torii liveness (`GET /health`, a plain-text probe such as `Healthy`).
    * @param {{ signal?: AbortSignal }} [options]
-   * @returns {Promise<Record<string, unknown> | {status: string} | null>}
+   * @returns {Promise<{status: string}>}
    */
   async getHealth(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getHealth");
-    const response = await this._request("GET", "/v1/health", {
-      headers: JSON_ACCEPT_HEADERS,
+    const response = await this._request("GET", "/health", {
+      headers: { Accept: "text/plain" },
       signal,
     });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (payload === null || payload === undefined) {
-      return null;
-    }
-    return normalizeHealthSnapshot(payload, "health response");
+    await this._expectStatus(response, [200], { signal });
+    const text = await this.#readBoundedText(
+      response,
+      PLAIN_TEXT_PROBE_MAX_BYTES,
+      "health response",
+      signal,
+    );
+    return { status: requireNonEmptyString(text.trim(), "health response") };
   }
 
   /**
@@ -6458,15 +5615,17 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch node capability advert (`GET /v1/node/capabilities`).
+   * Fetch the public node capability advert (`GET /v1/node/capabilities`).
+   * The route needs no credentials and none are sent.
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<ToriiNodeCapabilities>}
    */
-  async getNodeCapabilities(options) {
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getNodeCapabilities");
+  async getNodeCapabilities(options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "getNodeCapabilities");
     const response = await this._request("GET", "/v1/node/capabilities", {
       headers: JSON_ACCEPT_HEADERS,
-      signal, canonicalAuth,
+      signal,
+      publicRequest: true,
     });
     await this._expectStatus(response, [200], { signal });
     const payload = await this._maybeBoundedJson(
@@ -6494,7 +5653,7 @@ export class ToriiClient {
       this._localSigningContext?.networkId,
       "Exact12 capability admission LocalSigningContext.networkId",
     );
-    const expectedUrl = new URL("/v1/privacy/capabilities", `${this._baseUrl}/`).href;
+    const expectedUrl = resolveBaseRelativeUrl(this._baseUrl, "/v1/privacy/capabilities").href;
     const context = "Exact12 capability manifest response";
     const response = await this.#request("GET", "/v1/privacy/capabilities", {
       headers: { Accept: APPLICATION_NORITO, "Cache-Control": "no-store" },
@@ -7972,43 +7131,29 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch metrics (`GET /v1/metrics`). When `asText` is true the raw text payload is returned.
-   * @param {{asText?: boolean, signal?: AbortSignal}} [options]
-   * @returns {Promise<unknown>}
+   * Fetch Prometheus metrics (`GET /metrics`, text exposition format).
+   * @param {{ signal?: AbortSignal }} [options]
+   * @returns {Promise<string>}
    */
   async getMetrics(options = {}) {
-    const normalizedOptions =
-      options === undefined ? {} : ensureRecord(options, "getMetrics options");
-    assertSupportedOptionKeys(
-      normalizedOptions,
-      GET_METRICS_OPTION_KEYS,
-      "getMetrics options",
-    );
-    const { signal } = normalizeSignalOption(normalizedOptions, "getMetrics");
-    let asText = false;
-    if ("asText" in normalizedOptions) {
-      if (typeof normalizedOptions.asText !== "boolean") {
-        throw createValidationError(
-          ValidationErrorCode.INVALID_OBJECT,
-          "getMetrics options.asText must be boolean",
-          "getMetrics.options.asText",
-        );
-      }
-      asText = normalizedOptions.asText;
-    }
-    const response = await this._request("GET", "/v1/metrics", {
-      headers: { Accept: asText ? "text/plain" : APPLICATION_JSON },
+    const { signal } = normalizeSignalOnlyOption(options, "getMetrics");
+    const response = await this._request("GET", "/metrics", {
+      headers: { Accept: "text/plain" },
       signal,
     });
-    await this._expectStatus(response, [200]);
-    if (asText) {
-      if (typeof response.text === JS_TYPE_FUNCTION) {
-        return response.text();
-      }
-      const buffer = Buffer.from(await response.arrayBuffer());
-      return buffer.toString("utf8");
+    await this._expectStatus(response, [200], { signal });
+    return this.#readBoundedText(response, METRICS_TEXT_MAX_BYTES, "metrics response", signal);
+  }
+
+  async #readBoundedText(response, maxBytes, context, signal) {
+    const { bytes } = await this.#readBoundedResponseBytes(response, maxBytes, context, {
+      signal,
+    });
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch (error) {
+      rejectType(`${context} must be valid UTF-8`, { cause: error });
     }
-    return this._maybeJson(response);
   }
 
   /**
@@ -8095,31 +7240,16 @@ export class ToriiClient {
     return normalizeExplorerBlockRecord(payload, "explorer block response");
   }
 
-  /**
-   * List Explorer blocks with optional pagination (`GET /v1/explorer/blocks`).
-   * @param {BlockListOptions} [options]
-   * @returns {Promise<any>}
-   */
-  async listBlocks(options) {
-    const normalizedOptions = ToriiClient._normalizeBlockListOptions(options);
-    const params = { limit: normalizedOptions.limit };
-    if (normalizedOptions.cursor !== undefined) params.cursor = normalizedOptions.cursor;
-    const response = await this._request("GET", "/v1/explorer/blocks", {
-      params,
-      headers: JSON_ACCEPT_HEADERS,
-      signal: normalizedOptions.signal,
-      canonicalAuth: this.#canonicalRequestAuth,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      rejectError("explorer blocks endpoint returned no payload");
-    }
-    return normalizeExplorerBlocksPage(payload);
-  }
 
   /**
-   * Stream JSON events from `/v1/events/sse`.
+   * Stream JSON events from `/v1/events/sse`. `options.filter` uses the
+   * collection-query text grammar over event fields (`tx_hash`, `tx_status`,
+   * `tx_block_height`, `block_height`, `proof_backend`, ...): pass a `Filter`
+   * built with `field()`, a text filter such as
+   * `tx_status in ["Approved", "Rejected"]`, or the JSON form. Each payload
+   * frame's `data` is one JSON object with `category` and `event`; integers
+   * beyond `Number.MAX_SAFE_INTEGER` are `bigint`. A terminal
+   * `event: stream_error` frame is yielded before the stream ends.
    * @template [T=unknown]
    * @param {EventStreamOptions} [options]
    * @returns {AsyncGenerator<SseEvent<T>, void, unknown>}
@@ -8132,17 +7262,20 @@ export class ToriiClient {
       false,
     );
     const params = {};
-    const filterValue =
-      options && typeof options === JS_TYPE_OBJECT ? options.filter : undefined;
-    const filterPayload = ToriiClient._normalizeEventFilter(filterValue);
-    if (filterPayload) {
-      params.filter = filterPayload;
+    const filter = filterQueryText(
+      options && typeof options === JS_TYPE_OBJECT ? options.filter : undefined,
+    );
+    if (filter !== undefined) {
+      params.filter = filter;
     }
-    return this._streamSse("/v1/events/sse", {
-      params: Object.keys(params).length > 0 ? params : undefined,
-      signal,
-      canonicalAuth: this.#canonicalRequestAuth,
-    });
+    return decodeEventFrames(
+      this._streamSse("/v1/events/sse", {
+        params: Object.keys(params).length > 0 ? params : undefined,
+        signal,
+        canonicalAuth: this.#canonicalRequestAuth,
+      }),
+      "The event stream",
+    );
   }
 
   /**
@@ -9410,32 +8543,6 @@ export class ToriiClient {
   }
 
   /**
-   * List subscription plans (`GET /v1/subscriptions/plans`).
-   * @param {SubscriptionPlanListOptions} [options]
-   * @returns {Promise<SubscriptionPlanListResponse>}
-   */
-  async listSubscriptionPlans(options = {}) {
-    const { signal, params } = buildSubscriptionPlanListQuery(options);
-    const response = await this._request("GET", "/v1/subscriptions/plans", {
-      headers: JSON_ACCEPT_HEADERS,
-      params,
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    return normalizeSubscriptionPlanListResponse(payload);
-  }
-
-  /**
-   * Iterate subscription plans using the list endpoint.
-   * @param {SubscriptionPlanIteratorOptions} [options]
-   * @returns {AsyncGenerator<SubscriptionPlanListItem, void, unknown>}
-   */
-  iterateSubscriptionPlans(options = {}) {
-    return this._iterateIterable(this.listSubscriptionPlans, options);
-  }
-
-  /**
    * Create a subscription plan (`POST /v1/subscriptions/plans`).
    * @param {SubscriptionPlanCreateRequest} request
    * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
@@ -9447,32 +8554,6 @@ export class ToriiClient {
       "/v1/subscriptions/plans", payload, options, "createSubscriptionPlan", [200],
     );
     return normalizeSubscriptionPlanCreateResponse(body, payload.plan_id);
-  }
-
-  /**
-   * List subscriptions (`GET /v1/subscriptions`).
-   * @param {SubscriptionListOptions} [options]
-   * @returns {Promise<SubscriptionListResponse>}
-   */
-  async listSubscriptions(options = {}) {
-    const { signal, params } = buildSubscriptionListQuery(options);
-    const response = await this._request("GET", "/v1/subscriptions", {
-      headers: JSON_ACCEPT_HEADERS,
-      params,
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    return normalizeSubscriptionListResponse(payload);
-  }
-
-  /**
-   * Iterate subscriptions using the list endpoint.
-   * @param {SubscriptionIteratorOptions} [options]
-   * @returns {AsyncGenerator<SubscriptionListItem, void, unknown>}
-   */
-  iterateSubscriptions(options = {}) {
-    return this._iterateIterable(this.listSubscriptions, options);
   }
 
   /**
@@ -10089,7 +9170,7 @@ export class ToriiClient {
 
   async #request(method, path, options = {}) {
     const pathIsAbsolute = isAbsoluteUrl(path);
-    const url = pathIsAbsolute ? new URL(path) : new URL(path, this._baseUrl + "/");
+    const url = pathIsAbsolute ? new URL(path) : resolveBaseRelativeUrl(this._baseUrl, path);
     const protocol = url.protocol.toLowerCase();
     const originMatches =
       url.host === this.#baseHost && protocol === this.#baseProtocol;
@@ -10259,13 +9340,13 @@ export class ToriiClient {
       );
       const signal = attemptSignal.signal;
       try {
-        const response = await this._fetch(url.toString(), {
+        const response = await Reflect.apply(this._fetch, undefined, [url.toString(), {
           ...init,
           // Give fetch a fresh header bag for each retry attempt. Reusing the
           // same object across retries can break native fetch implementations.
           headers: cloneHeadersForFetch(initHeaders),
           signal: signal ?? undefined,
-        });
+        }]);
         attemptSignal.cleanup();
         let responseStatus;
         try {
@@ -10281,6 +9362,7 @@ export class ToriiClient {
           !this._shouldRetryResponse(methodUpper, responseStatus, retryPolicy) ||
           attempt > maxRetries
         ) {
+          rememberResponseCallerSignal(response, callerSignal);
           return response;
         }
         cancelResponseBodyBestEffort(
@@ -10533,24 +9615,18 @@ export class ToriiClient {
 
   async _buildHttpError(response, expected, options = {}) {
     const { bodyText, bodyJson } = await this._readErrorBody(response, options);
-    const details = this._extractErrorDetails(bodyJson);
-    const rejectCode = this._extractRejectCode(response, bodyJson);
-    const code =
-      rejectCode ??
-      this._extractErrorCode(bodyJson) ??
-      this._extractCodeFromText(bodyText) ??
-      null;
-    const errorMessage = this._extractErrorMessage(bodyJson, bodyText);
+    const fields = extractToriiErrorFields({
+      bodyText,
+      bodyJson,
+      rejectCodeHeader: this._getHeader(response, "x-iroha-reject-code"),
+    });
     return new ToriiHttpError({
       status: responseStatusWithoutUserGetter(response),
       statusText: responseStatusTextWithoutUserGetter(response),
       expected,
-      code,
-      rejectCode,
-      errorMessage,
+      ...fields,
       bodyText,
       bodyJson,
-      details,
     });
   }
 
@@ -10627,153 +9703,6 @@ export class ToriiClient {
     } catch {
       return { bodyText: text, bodyJson: null };
     }
-  }
-
-  _extractErrorCode(payload) {
-    if (!payload || typeof payload !== JS_TYPE_OBJECT) {
-      return null;
-    }
-    if (typeof payload.code === JS_TYPE_STRING && payload.code) {
-      return payload.code;
-    }
-    if (typeof payload.reason === JS_TYPE_STRING && payload.reason) {
-      return payload.reason;
-    }
-    const detailsRejectCode = this._extractRejectCodeFromDetails(payload.details);
-    if (detailsRejectCode) {
-      return detailsRejectCode;
-    }
-    if (typeof payload.error === JS_TYPE_STRING && payload.error.startsWith("ERR_")) {
-      return payload.error;
-    }
-    return null;
-  }
-
-  _extractCodeFromText(text) {
-    if (typeof text !== JS_TYPE_STRING || !text) {
-      return null;
-    }
-    const match = text.match(/ERR_[A-Z0-9_]+/u);
-    return match ? match[0] : null;
-  }
-
-  _trimErrorBodyText(text, maxLength = 512) {
-    if (typeof text !== JS_TYPE_STRING) {
-      return null;
-    }
-    const trimmed = text.trim();
-    if (!trimmed) {
-      return null;
-    }
-    if (trimmed.length <= maxLength) {
-      return trimmed;
-    }
-    return `${trimmed.slice(0, maxLength)}...`;
-  }
-
-  _extractErrorMessageValue(value) {
-    if (typeof value === JS_TYPE_STRING) {
-      return this._trimErrorBodyText(value);
-    }
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        const nested = this._extractErrorMessageValue(item);
-        if (nested) {
-          return nested;
-        }
-      }
-      return null;
-    }
-    if (!value || typeof value !== JS_TYPE_OBJECT) {
-      return null;
-    }
-    const candidateKeys = [
-      "message",
-      "error",
-      "errors",
-      "detail",
-      "details",
-      "reason",
-      "rejection_reason",
-      "description",
-    ];
-    const caseInsensitiveValues = new Map();
-    for (const [key, entryValue] of Object.entries(value)) {
-      const normalizedKey = String(key).toLowerCase();
-      if (!caseInsensitiveValues.has(normalizedKey)) {
-        caseInsensitiveValues.set(normalizedKey, entryValue);
-      }
-    }
-    for (const key of candidateKeys) {
-      if (!caseInsensitiveValues.has(key)) {
-        continue;
-      }
-      const nested = this._extractErrorMessageValue(caseInsensitiveValues.get(key));
-      if (nested) {
-        return nested;
-      }
-    }
-    return null;
-  }
-
-  _compactErrorJson(value) {
-    if (value === null || value === undefined) {
-      return null;
-    }
-    try {
-      return this._trimErrorBodyText(JSON.stringify(sortJsonForErrorMessage(value)));
-    } catch {
-      return null;
-    }
-  }
-
-  _extractErrorMessage(payload, defaultText) {
-    const nested = this._extractErrorMessageValue(payload);
-    if (nested) {
-      return nested;
-    }
-    const compact = this._compactErrorJson(payload);
-    if (compact) {
-      return compact;
-    }
-    if (typeof defaultText === JS_TYPE_STRING && defaultText.trim()) {
-      return this._trimErrorBodyText(defaultText);
-    }
-    return null;
-  }
-
-  _extractErrorDetails(payload) {
-    if (!payload || typeof payload !== JS_TYPE_OBJECT) {
-      return null;
-    }
-    const details = payload.details;
-    return details && typeof details === JS_TYPE_OBJECT ? details : null;
-  }
-
-  _extractRejectCodeFromDetails(details) {
-    if (!details || typeof details !== JS_TYPE_OBJECT) {
-      return null;
-    }
-    const direct = details.reject_code ?? details.rejectCode;
-    if (typeof direct === JS_TYPE_STRING && direct.trim()) {
-      return direct.trim();
-    }
-    const axtCode = details.axt?.code;
-    if (typeof axtCode === JS_TYPE_STRING && axtCode.trim()) {
-      return axtCode.trim();
-    }
-    return null;
-  }
-
-  _extractRejectCode(response, bodyJson = null) {
-    const raw = this._getHeader(response, "x-iroha-reject-code");
-    if (typeof raw === JS_TYPE_STRING) {
-      const trimmed = raw.trim();
-      if (trimmed) {
-        return trimmed;
-      }
-    }
-    return this._extractRejectCodeFromDetails(bodyJson?.details);
   }
 
   static _encodeProverFilters(filters) {
@@ -10916,7 +9845,7 @@ export class ToriiClient {
         fatal: options.strictUtf8 === true,
       });
       let buffer = "";
-      for await (const chunk of readBodyChunks(response.body)) {
+      for await (const chunk of readBodyChunks(responseBodyWithoutUserGetter(response), signal)) {
         buffer += decoder.decode(chunk, { stream: true });
         const { events, remainder } = flushSseBuffer(buffer);
         buffer = remainder;
@@ -10932,39 +9861,6 @@ export class ToriiClient {
         }
       }
     })();
-  }
-
-  static _normalizeEventFilter(filter) {
-    if (filter === undefined || filter === null) {
-      return undefined;
-    }
-    if (typeof filter === JS_TYPE_STRING) {
-      return normalizeProductionEventFilterBackendPayload(filter, "eventFilter");
-    }
-    if (typeof filter === JS_TYPE_OBJECT) {
-      try {
-        return JSON.stringify(
-          normalizeProductionEventFilterBackendPayload(filter, "eventFilter"),
-        );
-      } catch (error) {
-        if (error instanceof ValidationError) {
-          throw error;
-        }
-        throw createValidationError(
-          ValidationErrorCode.INVALID_JSON_VALUE,
-          `failed to serialise filter: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-          "eventFilter",
-          error instanceof Error ? error : undefined,
-        );
-      }
-    }
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      "filter must be a string or plain object",
-      "eventFilter",
-    );
   }
 
   /**
@@ -11140,7 +10036,10 @@ export class ToriiClient {
     return this.#readBoundedResponseBytes(response, maxBytes, context, { signal });
   }
 
-  async #readBoundedResponseBytes(response, maxBytes, context, { signal } = {}) {
+  async #readBoundedResponseBytes(response, maxBytes, context, options = {}) {
+    // Body reads stay abortable after the headers arrived: default to the
+    // signal the request was issued with.
+    const signal = options.signal ?? responseCallerSignal(response);
     const rejectResponse = (error) => {
       cancelResponseBodyBestEffort(response, `${context} rejected its response body`);
       throw error;
@@ -11355,49 +10254,6 @@ export class ToriiClient {
     const response = await this._request("GET", path, {
       params: params ?? undefined,
       headers: JSON_ACCEPT_HEADERS,
-      signal,
-      canonicalAuth,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    const base = ToriiClient._validateIterablePayload(payload);
-    return typeof normalizePage === JS_TYPE_FUNCTION ? normalizePage(base) : base;
-  }
-
-  async _queryIterable(
-    path,
-    options = {},
-    normalizePage,
-    envelopeHook,
-    extraAllowedKeys = [],
-    includeListParams = false,
-  ) {
-    const optionContext = `options for ${path}`;
-    const normalizedOptions = normalizeIterableQueryOptions(
-      options,
-      optionContext,
-      extraAllowedKeys,
-    );
-    const { signal, canonicalAuth, rest } = normalizeCanonicalApplicationPostOptions(normalizedOptions, optionContext, ToriiClient, this.#canonicalRequestAuth);
-    const envelope = ToriiClient._buildIterableQueryEnvelope(rest);
-    if (typeof envelopeHook === JS_TYPE_FUNCTION) {
-      envelopeHook(envelope, rest);
-    }
-    const listParamAllowedKeys = new Set([
-      ...ITERABLE_QUERY_OPTION_KEYS,
-      ...extraAllowedKeys,
-    ]);
-    const params = includeListParams
-      ? ToriiClient._encodeIterableListParams(
-          rest,
-          optionContext,
-          listParamAllowedKeys,
-        )
-      : undefined;
-    const response = await this._request("POST", path, {
-      headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify(envelope),
-      params: params ?? undefined,
       signal,
       canonicalAuth,
     });
@@ -12060,138 +10916,10 @@ export class ToriiClient {
     return { signal, rest };
   }
 
-  static _normalizeBlockListOptions(options) {
-    if (options === undefined || options === null) {
-      return { limit: EXPLORER_CURSOR_DEFAULT_LIMIT, signal: undefined };
-    }
-    const record = requirePlainObjectOption(options, "block list options");
-    assertSupportedOptionKeys(
-      record,
-      new Set(["cursor", "limit", "signal"]),
-      "block list options",
-    );
-    const { signal } = normalizeSignalOption(record, "listBlocks");
-    const normalized = {
-      limit: ToriiClient._normalizeUnsignedInteger(
-        record.limit ?? EXPLORER_CURSOR_DEFAULT_LIMIT,
-        "limit",
-        { allowZero: false, max: EXPLORER_CURSOR_MAX_LIMIT },
-      ),
-      signal,
-    };
-    if (record.cursor !== undefined && record.cursor !== null) {
-      normalized.cursor = normalizeExplorerCursorValue(record.cursor, "cursor");
-    }
-    return normalized;
-  }
 
-  static _normalizeExplorerNftListOptions(options = {}, context = "explorer nft options") {
-    const normalized = ToriiClient._normalizeIterableOptions(
-      options,
-      context,
-      EXPLORER_NFT_LIST_OPTION_KEYS,
-    );
-    const { signal } = normalizeSignalOption(normalized, context);
-    const limit = ToriiClient._normalizeUnsignedInteger(
-      normalized.limit ?? EXPLORER_CURSOR_DEFAULT_LIMIT,
-      `${context}.limit`,
-      { allowZero: false, max: EXPLORER_CURSOR_MAX_LIMIT },
-    );
-    const ownedByRaw = normalized.ownedBy;
-    const domainRaw = normalized.domainId;
-    const base = {
-      limit,
-      signal,
-    };
-    if (normalized.cursor !== undefined && normalized.cursor !== null) {
-      base.cursor = normalizeExplorerCursorValue(normalized.cursor, `${context}.cursor`);
-    }
-    if (ownedByRaw !== undefined && ownedByRaw !== null) {
-      base.ownedBy = ToriiClient._normalizeAccountId(ownedByRaw, `${context}.ownedBy`);
-    }
-    if (domainRaw !== undefined && domainRaw !== null) {
-      base.domain = ToriiClient._requireDomainId(domainRaw, `${context}.domainId`);
-    }
-    return base;
-  }
 
-  static _normalizeExplorerNftIteratorOptions(
-    options = {},
-    context = "explorer nft iterator options",
-  ) {
-    const normalized = ToriiClient._normalizeIterableOptions(
-      options,
-      context,
-      EXPLORER_NFT_ITERATOR_OPTION_KEYS,
-    );
-    const { maxItems, ...listOptions } = normalized;
-    const base = ToriiClient._normalizeExplorerNftListOptions(listOptions, context);
-    const iterator = { ...base };
-    if (maxItems !== undefined && maxItems !== null) {
-      iterator.maxItems = ToriiClient._normalizeUnsignedInteger(
-        maxItems,
-        `${context}.maxItems`,
-        { allowZero: false },
-      );
-    } else {
-      iterator.maxItems = null;
-    }
-    return iterator;
-  }
 
-  static _normalizeExplorerRwaListOptions(options = {}, context = "explorer rwa options") {
-    const normalized = ToriiClient._normalizeIterableOptions(
-      options,
-      context,
-      EXPLORER_RWA_LIST_OPTION_KEYS,
-    );
-    const { signal } = normalizeSignalOption(normalized, context);
-    const limit = ToriiClient._normalizeUnsignedInteger(
-      normalized.limit ?? EXPLORER_CURSOR_DEFAULT_LIMIT,
-      `${context}.limit`,
-      { allowZero: false, max: EXPLORER_CURSOR_MAX_LIMIT },
-    );
-    const ownedByRaw = normalized.ownedBy;
-    const domainRaw = normalized.domainId;
-    const base = {
-      limit,
-      signal,
-    };
-    if (normalized.cursor !== undefined && normalized.cursor !== null) {
-      base.cursor = normalizeExplorerCursorValue(normalized.cursor, `${context}.cursor`);
-    }
-    if (ownedByRaw !== undefined && ownedByRaw !== null) {
-      base.ownedBy = ToriiClient._normalizeAccountId(ownedByRaw, `${context}.ownedBy`);
-    }
-    if (domainRaw !== undefined && domainRaw !== null) {
-      base.domain = ToriiClient._requireDomainId(domainRaw, `${context}.domainId`);
-    }
-    return base;
-  }
 
-  static _normalizeExplorerRwaIteratorOptions(
-    options = {},
-    context = "explorer rwa iterator options",
-  ) {
-    const normalized = ToriiClient._normalizeIterableOptions(
-      options,
-      context,
-      EXPLORER_RWA_ITERATOR_OPTION_KEYS,
-    );
-    const { maxItems, ...listOptions } = normalized;
-    const base = ToriiClient._normalizeExplorerRwaListOptions(listOptions, context);
-    const iterator = { ...base };
-    if (maxItems !== undefined && maxItems !== null) {
-      iterator.maxItems = ToriiClient._normalizeUnsignedInteger(
-        maxItems,
-        `${context}.maxItems`,
-        { allowZero: false },
-      );
-    } else {
-      iterator.maxItems = null;
-    }
-    return iterator;
-  }
 
   static _normalizeTransactionStatusPollOptions(options, context = "transaction status options") {
     if (options === undefined || options === null) {
@@ -12784,269 +11512,6 @@ export class ToriiClient {
       "filter must be a string or plain object",
       "filter",
     );
-  }
-
-  static _validateFilterExpression(node, context, rules) {
-    const expr = ToriiClient._requirePlainObject(node, context);
-    const operators = Object.keys(expr);
-    if (operators.length !== 1) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context} must contain exactly one filter operator`,
-        normalizeErrorPath(context),
-      );
-    }
-    const operator = operators[0];
-    const operand = expr[operator];
-    switch (operator) {
-      case "And":
-      case "Or": {
-        const list = ToriiClient._requireArray(
-          operand,
-          `${context}.${operator}`,
-          { allowEmpty: false },
-        );
-        list.forEach((entry, index) =>
-          ToriiClient._validateFilterExpression(
-            entry,
-            `${context}.${operator}[${index}]`,
-            rules,
-          ),
-        );
-        return;
-      }
-      case "Not": {
-        if (Array.isArray(operand)) {
-          if (operand.length !== 1) {
-            throw createValidationError(
-              ValidationErrorCode.INVALID_OBJECT,
-              `${context}.Not must include exactly one expression`,
-              normalizeErrorPath(`${context}.Not`),
-            );
-          }
-          ToriiClient._validateFilterExpression(
-            operand[0],
-            `${context}.Not[0]`,
-            rules,
-          );
-          return;
-        }
-        ToriiClient._validateFilterExpression(
-          operand,
-          `${context}.Not`,
-          rules,
-        );
-        return;
-      }
-      case "Eq":
-      case "Ne":
-        ToriiClient._validateFilterEquality(operator, operand, rules, context);
-        return;
-      case "In":
-      case "Nin":
-        ToriiClient._validateFilterMembership(operator, operand, rules, context);
-        return;
-      case "Lt":
-      case "Lte":
-      case "Gt":
-      case "Gte":
-        ToriiClient._validateFilterRange(operator, operand, rules, context);
-        return;
-      case "Exists":
-        ToriiClient._validateFilterExists(operator, operand, rules, context);
-        return;
-      case "IsNull":
-        throw createValidationError(
-          ValidationErrorCode.INVALID_OBJECT,
-          `${context}.IsNull is not supported`,
-          normalizeErrorPath(`${context}.IsNull`),
-        );
-      default:
-        throw createValidationError(
-          ValidationErrorCode.INVALID_OBJECT,
-          `${context}: unsupported filter operator "${operator}"`,
-          normalizeErrorPath(context),
-        );
-    }
-  }
-
-  static _validateFilterEquality(operator, operand, rules, context) {
-    const { field, value } = ToriiClient._extractFilterFieldValuePair(
-      operand,
-      operator,
-      context,
-    );
-    const stringFields = rules?.stringFields ?? EMPTY_FILTER_FIELD_SET;
-    const numericFields = rules?.numericFields ?? EMPTY_FILTER_FIELD_SET;
-    if (stringFields.has(field)) {
-      ToriiClient._assertFilterStringValue(value, `${context}.${operator}[1]`);
-      return;
-    }
-    if (numericFields.has(field)) {
-      ToriiClient._assertFilterNumberValue(value, `${context}.${operator}[1]`);
-      return;
-    }
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.${operator}: field "${field}" is not allowed for filters`,
-      normalizeErrorPath(`${context}.${operator}`),
-    );
-  }
-
-  static _validateFilterMembership(operator, operand, rules, context) {
-    const { field, valueList } = ToriiClient._extractFilterFieldListPair(
-      operand,
-      operator,
-      context,
-    );
-    const stringFields = rules?.stringFields ?? EMPTY_FILTER_FIELD_SET;
-    if (!stringFields.has(field)) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context}.${operator}: field "${field}" is not allowed for filters`,
-        normalizeErrorPath(`${context}.${operator}`),
-      );
-    }
-    valueList.forEach((entry, index) =>
-      ToriiClient._assertFilterStringValue(
-        entry,
-        `${context}.${operator}[1][${index}]`,
-      ),
-    );
-  }
-
-  static _validateFilterRange(operator, operand, rules, context) {
-    const { field, value } = ToriiClient._extractFilterFieldValuePair(
-      operand,
-      operator,
-      context,
-    );
-    const rangeFields = rules?.rangeFields ?? EMPTY_FILTER_FIELD_SET;
-    if (!rangeFields.has(field)) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context}.${operator}: field "${field}" does not support range filters`,
-        normalizeErrorPath(`${context}.${operator}`),
-      );
-    }
-    ToriiClient._assertFilterNumberValue(value, `${context}.${operator}[1]`);
-  }
-
-  static _validateFilterExists(operator, operand, rules, context) {
-    const field = ToriiClient._extractFilterFieldName(
-      operand,
-      operator,
-      context,
-    );
-    const existsFields = rules?.existsFields ?? EMPTY_FILTER_FIELD_SET;
-    if (!existsFields.has(field)) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context}.${operator}: field "${field}" does not support existence checks`,
-        normalizeErrorPath(`${context}.${operator}`),
-      );
-    }
-  }
-
-  static _extractFilterFieldValuePair(operand, operator, context) {
-    const pair = ToriiClient._requireArray(
-      operand,
-      `${context}.${operator}`,
-      { expectedLength: 2 },
-    );
-    const field = ToriiClient._normalizeFilterField(pair[0], `${context}.${operator}[0]`);
-    return { field, value: pair[1] };
-  }
-
-  static _extractFilterFieldListPair(operand, operator, context) {
-    const pair = ToriiClient._requireArray(
-      operand,
-      `${context}.${operator}`,
-      { expectedLength: 2 },
-    );
-    const field = ToriiClient._normalizeFilterField(pair[0], `${context}.${operator}[0]`);
-    const values = ToriiClient._requireArray(
-      pair[1],
-      `${context}.${operator}[1]`,
-      { allowEmpty: true },
-    );
-    return { field, valueList: values };
-  }
-
-  static _extractFilterFieldName(operand, operator, context) {
-    if (Array.isArray(operand)) {
-      if (operand.length === 0) {
-        throw createValidationError(
-          ValidationErrorCode.INVALID_OBJECT,
-          `${context}.${operator} must include a field name`,
-          normalizeErrorPath(`${context}.${operator}`),
-        );
-      }
-      return ToriiClient._normalizeFilterField(operand[0], `${context}.${operator}[0]`);
-    }
-    return ToriiClient._normalizeFilterField(operand, `${context}.${operator}`);
-  }
-
-  static _normalizeFilterField(value, context) {
-    const raw = ToriiClient._requireNonEmptyString(value, context);
-    const trimmed = raw.trim();
-    if (!trimmed) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_STRING,
-        `${context} must be a non-empty string`,
-        normalizeErrorPath(context),
-      );
-    }
-    return trimmed;
-  }
-
-  static _assertFilterStringValue(value, context) {
-    if (typeof value !== JS_TYPE_STRING) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_STRING,
-        `${context} must be a string`,
-        normalizeErrorPath(context),
-      );
-    }
-    return value;
-  }
-
-  static _assertFilterNumberValue(value, context) {
-    if (typeof value !== JS_TYPE_NUMBER || !Number.isFinite(value)) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_NUMERIC,
-        `${context} must be numeric`,
-        normalizeErrorPath(context),
-      );
-    }
-    return value;
-  }
-
-  static _requireArray(value, context, { expectedLength = null, allowEmpty = true } = {}) {
-    if (!Array.isArray(value)) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context} must be an array`,
-        normalizeErrorPath(context),
-      );
-    }
-    if (expectedLength !== null && value.length !== expectedLength) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context} must contain exactly ${expectedLength} entr${
-          expectedLength === 1 ? "y" : "ies"
-        }`,
-        normalizeErrorPath(context),
-      );
-    }
-    if (!allowEmpty && value.length === 0) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context} must not be empty`,
-        normalizeErrorPath(context),
-      );
-    }
-    return value;
   }
 
   static _encodeSortArray(sort) {
@@ -13749,25 +12214,6 @@ function normalizeIsoPayload(message, context) {
   }
 }
 
-function normalizeHealthSnapshot(payload, context) {
-  if (payload === null || payload === undefined) {
-    rejectType(`${context} must not be empty`);
-  }
-  if (typeof payload === JS_TYPE_STRING) {
-    return { status: requireNonEmptyString(payload, context) };
-  }
-  const record = ensureRecord(payload, context);
-  const source = record.status;
-  const status = requireNonEmptyString(
-    source == null ? "" : String(source),
-    `${context}.status`,
-  );
-  if (typeof record.status === JS_TYPE_STRING && record.status === status) {
-    return record;
-  }
-  return { ...record, status };
-}
-
 function normalizeStatusSnapshot(payload, state) {
   if (!isPlainObject(payload)) {
     rejectType("status response must be a JSON object");
@@ -14070,10 +12516,6 @@ function parseGovernanceActivations(payload) {
       ),
     };
   });
-}
-
-function normalizePipelineStatusPayload(payload) {
-  return normalizePipelineTransactionStatus(payload, "pipeline status payload");
 }
 
 function parseDataspaceCatalog(payload) {
@@ -16473,46 +14915,6 @@ function normalizeSnsNameStatus(payload, context) {
   return { status };
 }
 
-function normalizeExplorerNftRecord(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  const id = requireNonEmptyString(record.id ?? "", `${context}.id`);
-  const ownedBy = requireNonEmptyString(
-    record.owned_by ?? "",
-    `${context}.owned_by`,
-  );
-  const metadata =
-    record.metadata === undefined || record.metadata === null
-      ? {}
-      : cloneJsonValue(record.metadata, `${context}.metadata`);
-  return { id, ownedBy, metadata };
-}
-
-function normalizeExplorerNftPage(payload) {
-  const record = ensureRecord(payload ?? {}, "explorer nfts response");
-  requireExactExplorerCursorFields(
-    record,
-    ["pagination", "items"],
-    "explorer nfts response",
-  );
-  const items = record.items;
-  if (!Array.isArray(items)) {
-    rejectType("explorer nfts response.items must be an array");
-  }
-  const pagination = normalizeExplorerCursorMeta(
-    record.pagination,
-    "explorer nfts response.pagination",
-  );
-  if (items.length > pagination.limit) {
-    rejectType("explorer nfts response.items must not exceed pagination.limit");
-  }
-  return {
-    pagination,
-    items: items.map((item, index) =>
-      normalizeExplorerNftRecord(item, `explorer nfts response.items[${index}]`),
-    ),
-  };
-}
-
 function normalizeExplorerRwaRecord(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const id = requireNonEmptyString(record.id ?? "", `${context}.id`);
@@ -16547,58 +14949,6 @@ function normalizeExplorerRwaRecord(payload, context) {
     isFrozen: record.is_frozen,
     metadata,
     raw: cloneJsonValue(record, `${context}.raw`),
-  };
-}
-
-function normalizeExplorerRwaPage(payload) {
-  const record = ensureRecord(payload ?? {}, "explorer rwas response");
-  requireExactExplorerCursorFields(
-    record,
-    ["pagination", "items"],
-    "explorer rwas response",
-  );
-  const items = record.items;
-  if (!Array.isArray(items)) {
-    rejectType("explorer rwas response.items must be an array");
-  }
-  const pagination = normalizeExplorerCursorMeta(
-    record.pagination,
-    "explorer rwas response.pagination",
-  );
-  if (items.length > pagination.limit) {
-    rejectType("explorer rwas response.items must not exceed pagination.limit");
-  }
-  return {
-    pagination,
-    items: items.map((item, index) =>
-      normalizeExplorerRwaRecord(item, `explorer rwas response.items[${index}]`),
-    ),
-  };
-}
-
-function normalizeExplorerBlocksPage(payload) {
-  const record = ensureRecord(payload ?? {}, "explorer blocks response");
-  requireExactExplorerCursorFields(
-    record,
-    ["pagination", "items"],
-    "explorer blocks response",
-  );
-  const items = record.items;
-  if (!Array.isArray(items)) {
-    rejectType("explorer blocks response.items must be an array");
-  }
-  const pagination = normalizeExplorerHistoryCursorMeta(
-    record.pagination,
-    "explorer blocks response.pagination",
-  );
-  if (items.length > pagination.limit) {
-    rejectType("explorer blocks response.items must not exceed pagination.limit");
-  }
-  return {
-    pagination,
-    items: items.map((item, index) =>
-      normalizeExplorerBlockRecord(item, `explorer blocks response.items[${index}]`),
-    ),
   };
 }
 
@@ -16637,122 +14987,6 @@ function normalizeExplorerAccountQrResponse(payload, context) {
     modules,
     qrVersion,
     svg,
-  };
-}
-
-function normalizeExplorerCursorValue(value, context, { nullable = false } = {}) {
-  if (value === null && nullable) return null;
-  if (typeof value !== JS_TYPE_STRING || value.length === 0) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must be a non-empty base64url string`,
-      context,
-    );
-  }
-  const remainder = value.length % 4;
-  const trailingSextet = EXPLORER_CURSOR_ALPHABET.indexOf(value[value.length - 1]);
-  const hasNonCanonicalTrailingBits =
-    (remainder === 2 && (trailingSextet & 0x0f) !== 0) ||
-    (remainder === 3 && (trailingSextet & 0x03) !== 0);
-  if (
-    value.length > EXPLORER_CURSOR_MAX_LENGTH ||
-    remainder === 1 ||
-    !EXPLORER_CURSOR_PATTERN.test(value) ||
-    hasNonCanonicalTrailingBits
-  ) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must be canonical base64url without padding and at most ${EXPLORER_CURSOR_MAX_LENGTH} characters`,
-      context,
-    );
-  }
-  return value;
-}
-
-function requireExactExplorerCursorFields(record, expectedFields, context) {
-  const expected = new Set(expectedFields);
-  const unknown = Object.keys(record).find((field) => !expected.has(field));
-  if (unknown !== undefined) {
-    rejectType(`${context} contains unknown field ${unknown}`);
-  }
-  const missing = expectedFields.find(
-    (field) => !Object.prototype.hasOwnProperty.call(record, field),
-  );
-  if (missing !== undefined) {
-    rejectType(`${context} is missing required field ${missing}`);
-  }
-  return record;
-}
-
-function normalizeExplorerCursorMeta(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  requireExactExplorerCursorFields(record, ["limit", "next_cursor", "has_more"], context);
-  const limit = ToriiClient._normalizeUnsignedInteger(record.limit, `${context}.limit`, {
-    allowZero: false,
-    max: EXPLORER_CURSOR_MAX_LIMIT,
-  });
-  if (typeof record.has_more !== "boolean") {
-    rejectType(`${context}.has_more must be a boolean`);
-  }
-  if (record.next_cursor === undefined) {
-    rejectType(`${context}.next_cursor must be a string or null`);
-  }
-  const nextCursor = normalizeExplorerCursorValue(
-    record.next_cursor,
-    `${context}.next_cursor`,
-    { nullable: true },
-  );
-  if (record.has_more !== (nextCursor !== null)) {
-    rejectType(`${context}.has_more must match next_cursor availability`);
-  }
-  return {
-    limit,
-    nextCursor,
-    hasMore: record.has_more,
-  };
-}
-
-function normalizeExplorerHistoryCursorMeta(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  requireExactExplorerCursorFields(
-    record,
-    ["limit", "snapshot_height", "snapshot_hash", "next_cursor", "has_more"],
-    context,
-  );
-  const limit = requireExactJsonUnsignedInteger(record.limit, `${context}.limit`, {
-    allowZero: false,
-  });
-  if (limit > EXPLORER_CURSOR_MAX_LIMIT) {
-    rejectType(`${context}.limit must be between 1 and ${EXPLORER_CURSOR_MAX_LIMIT}`);
-  }
-  const snapshotHeight = requireExactJsonUnsignedInteger(
-    record.snapshot_height,
-    `${context}.snapshot_height`,
-  );
-  const snapshotHash = requireOptionalExactLowerHex32String(
-    record.snapshot_hash,
-    `${context}.snapshot_hash`,
-  );
-  if ((snapshotHeight === 0) !== (snapshotHash === null)) {
-    rejectType(`${context}.snapshot_hash must be null exactly when snapshot_height is zero`);
-  }
-  if (typeof record.has_more !== "boolean") {
-    rejectType(`${context}.has_more must be a boolean`);
-  }
-  const nextCursor = normalizeExplorerCursorValue(
-    record.next_cursor,
-    `${context}.next_cursor`,
-    { nullable: true },
-  );
-  if (record.has_more !== (nextCursor !== null)) {
-    rejectType(`${context}.has_more must match next_cursor availability`);
-  }
-  return {
-    limit,
-    snapshotHeight,
-    snapshotHash,
-    nextCursor,
-    hasMore: record.has_more,
   };
 }
 
@@ -17440,53 +15674,6 @@ function normalizeUaidBindingsDataspace(value, context) {
   };
 }
 
-function normalizeUaidManifestsResponse(payload, expectedUaid) {
-  const record = requireExactUaidRecord(
-    payload,
-    ["uaid", "total", "has_more", "count_mode", "manifests"],
-    [],
-    "uaid manifests response",
-  );
-  const uaid = normalizeUaidLiteral(record.uaid, "uaid manifests response.uaid");
-  if (expectedUaid !== undefined && uaid !== expectedUaid) {
-    rejectType("uaid manifests response.uaid does not match the requested UAID");
-  }
-  const total = requireExactJsonUnsignedInteger(
-    record.total,
-    "uaid manifests response.total",
-    { allowZero: true },
-  );
-  if (typeof record.has_more !== "boolean") {
-    rejectType("uaid manifests response.has_more must be a boolean");
-  }
-  const countMode = requireExactEnumString(
-    record.count_mode,
-    UAID_MANIFEST_COUNT_MODE_VALUES,
-    "uaid manifests response.count_mode",
-  );
-  const manifestsValue = requireDenseArray(
-    record.manifests,
-    "uaid manifests response.manifests",
-  );
-  const manifests = manifestsValue.map((entry, index) =>
-    normalizeUaidManifestRecord(
-      entry,
-      uaid,
-      `uaid manifests response.manifests[${index}]`,
-    ),
-  );
-  if (total < manifests.length) {
-    rejectType("uaid manifests response.total cannot be smaller than the page");
-  }
-  return {
-    uaid,
-    total,
-    has_more: record.has_more,
-    count_mode: countMode,
-    manifests,
-  };
-}
-
 function normalizeUaidManifestRecord(value, expectedUaid, context) {
   const record = requireExactUaidRecord(
     value,
@@ -17938,36 +16125,81 @@ const PROVER_REPORT_ITERATOR_OPTION_KEYS = (() => {
   return keys;
 })();
 
-async function* readBodyChunks(body) {
+/**
+ * Yield the chunks of a streaming response body until it ends, the caller
+ * aborts `signal`, or the consumer stops iterating. Aborting or leaving the
+ * loop early cancels the body so the underlying connection is released.
+ */
+async function* readBodyChunks(body, signal) {
   if (!body) {
     return;
   }
+  throwIfAborted(signal);
   if (typeof body.getReader === JS_TYPE_FUNCTION) {
     const reader = body.getReader();
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          break;
-        }
-        if (value) {
-          yield value;
-        }
-      }
+      yield* pumpBodyChunks(
+        () => reader.read(),
+        (reason) => bestEffortCleanup(() => reader.cancel?.(reason)),
+        signal,
+      );
     } finally {
-      if (typeof reader.releaseLock === JS_TYPE_FUNCTION) {
-        reader.releaseLock();
+      try {
+        reader.releaseLock?.();
+      } catch {
+        // Some custom readers do not implement lock release correctly.
       }
     }
     return;
   }
   if (typeof body[Symbol.asyncIterator] === JS_TYPE_FUNCTION) {
-    for await (const chunk of body) {
-      yield chunk;
-    }
+    const iterator = body[Symbol.asyncIterator]();
+    yield* pumpBodyChunks(
+      () => iterator.next(),
+      () => bestEffortCleanup(() => iterator.return?.()),
+      signal,
+    );
     return;
   }
   rejectError("SSE response body is not async iterable");
+}
+
+function bestEffortCleanup(action) {
+  try {
+    Promise.resolve(action()).catch(() => {});
+  } catch {
+    // Cleanup must never replace the authoritative outcome.
+  }
+}
+
+async function* pumpBodyChunks(read, cancel, signal) {
+  let finished = false;
+  let rejectAbort;
+  const aborted = new Promise((_, reject) => {
+    rejectAbort = reject;
+  });
+  aborted.catch(() => {});
+  const onAbort = () => {
+    rejectAbort(signalAbortReason(signal) ?? createAbortError());
+    cancel(signalAbortReason(signal));
+  };
+  if (signal) addSignalAbortListener(signal, onAbort);
+  try {
+    while (true) {
+      const { done, value } = await Promise.race([read(), aborted]);
+      if (done) {
+        finished = true;
+        break;
+      }
+      if (value) {
+        yield value;
+      }
+    }
+  } finally {
+    if (signal) removeSignalAbortListener(signal, onAbort);
+    if (!finished) cancel();
+  }
+  throwIfAborted(signal);
 }
 
 function flushSseBuffer(buffer) {
@@ -18264,7 +16496,14 @@ function waitForPromiseWithSignal(promise, signal) {
   });
 }
 
-function waitForResponseWithSignal(promise, signal, context) { const awaited = waitForPromiseWithSignal(promise, signal); Promise.resolve(promise).then((response) => { if (signalIsAborted(signal)) cancelResponseBodyBestEffort(response, `${context} late response`); }, () => {}); return awaited; }
+function waitForResponseWithSignal(promise, signal, context) {
+  // Install disposal before observing cancellation: a custom fetch callback may
+  // abort synchronously and still produce a response after the caller returns.
+  Promise.resolve(promise).then((response) => {
+    if (signalIsAborted(signal)) cancelResponseBodyBestEffort(response, `${context} late response`);
+  }, () => {});
+  return waitForPromiseWithSignal(promise, signal);
+}
 
 const CONNECT_SID_BYTES = 32;
 const BASE64URL_BODY_PATTERN = /^[A-Za-z0-9_-]+$/;
@@ -28424,127 +26663,6 @@ function buildTriggerListQuery(options = {}) {
   return { signal, params: Object.keys(params).length === 0 ? undefined : params };
 }
 
-function buildSubscriptionPlanListQuery(options = {}) {
-  const normalizedOptions =
-    options === undefined || options === null
-      ? undefined
-      : ensureRecord(options, "subscription plan list options");
-  if (normalizedOptions) {
-    assertSupportedOptionKeys(
-      normalizedOptions,
-      SUBSCRIPTION_PLAN_LIST_OPTION_KEYS,
-      "subscription plan list options",
-    );
-  }
-  const { signal } = normalizeSignalOption(
-    normalizedOptions ?? undefined,
-    "subscription plans",
-  );
-  const params = {};
-  const source = normalizedOptions ?? {};
-  if (source.provider !== undefined && source.provider !== null) {
-    params.provider = normalizeAccountId(
-      source.provider,
-      "subscriptionPlans.provider",
-    );
-  }
-  if (source.limit !== undefined && source.limit !== null) {
-    params.limit = ToriiClient._normalizeUnsignedInteger(
-      source.limit,
-      "subscriptionPlans.limit",
-      { allowZero: false },
-    );
-  }
-  if (source.offset !== undefined && source.offset !== null) {
-    params.offset = ToriiClient._normalizeUnsignedInteger(
-      source.offset,
-      "subscriptionPlans.offset",
-      { allowZero: true },
-    );
-  }
-  return { signal, params: Object.keys(params).length === 0 ? undefined : params };
-}
-
-function normalizeSubscriptionStatusFilter(value, context) {
-  const normalized = requireNonEmptyString(value, context).toLowerCase();
-  if (!SUBSCRIPTION_STATUS_VALUES.has(normalized)) {
-    rejectType(`${context} must be one of ${Array.from(SUBSCRIPTION_STATUS_VALUES).join(", ")}`);
-  }
-  return normalized;
-}
-
-function buildSubscriptionListQuery(options = {}) {
-  const normalizedOptions =
-    options === undefined || options === null
-      ? undefined
-      : ensureRecord(options, "subscription list options");
-  if (normalizedOptions) {
-    assertSupportedOptionKeys(
-      normalizedOptions,
-      SUBSCRIPTION_LIST_OPTION_KEYS,
-      "subscription list options",
-    );
-  }
-  const { signal } = normalizeSignalOption(
-    normalizedOptions ?? undefined,
-    "subscriptions",
-  );
-  const params = {};
-  const source = normalizedOptions ?? {};
-  const ownedBy = pickOverride(source, "owned_by", "ownedBy");
-  if (ownedBy !== undefined && ownedBy !== null) {
-    params.owned_by = normalizeAccountId(ownedBy, "subscriptions.ownedBy");
-  }
-  if (source.provider !== undefined && source.provider !== null) {
-    params.provider = normalizeAccountId(source.provider, "subscriptions.provider");
-  }
-  if (source.status !== undefined && source.status !== null) {
-    params.status = normalizeSubscriptionStatusFilter(
-      source.status,
-      "subscriptions.status",
-    );
-  }
-  if (source.limit !== undefined && source.limit !== null) {
-    params.limit = ToriiClient._normalizeUnsignedInteger(
-      source.limit,
-      "subscriptions.limit",
-      { allowZero: false },
-    );
-  }
-  if (source.offset !== undefined && source.offset !== null) {
-    params.offset = ToriiClient._normalizeUnsignedInteger(
-      source.offset,
-      "subscriptions.offset",
-      { allowZero: true },
-    );
-  }
-  return { signal, params: Object.keys(params).length === 0 ? undefined : params };
-}
-
-function normalizeAccountListResponse(payload) {
-  return normalizeIdListResponse(payload, "account list response");
-}
-
-function normalizeDomainListResponse(payload) {
-  return normalizeIdListResponse(payload, "domain list response");
-}
-
-function normalizeAssetDefinitionListResponse(payload) {
-  return normalizeIterableItems(
-    payload,
-    "asset definition list response",
-    normalizeAssetDefinitionListItem,
-  );
-}
-
-function normalizeNftListResponse(payload) {
-  return normalizeIdListResponse(payload, "nft list response");
-}
-
-function normalizeRwaListResponse(payload) {
-  return normalizeIdListResponse(payload, "rwa list response");
-}
-
 function normalizeSignalOption(options, context) {
   if (options === undefined) {
     return { signal: undefined };
@@ -28749,109 +26867,6 @@ function normalizeIterableQueryOptions(options, context, extraAllowedKeys = []) 
   return normalized;
 }
 
-function transactionFilter(op, field, value) {
-  return { op, args: [field, value] };
-}
-
-function normalizeTransactionQuerySort(sort) {
-  if (sort === undefined || sort === null) {
-    return undefined;
-  }
-  if (typeof sort === JS_TYPE_STRING) {
-    const normalized = sort.trim().toLowerCase();
-    if (normalized === "newest") {
-      return [
-        { key: "timestamp_ms", order: "desc" },
-        { key: "entrypoint_hash", order: "desc" },
-      ];
-    }
-    if (normalized === "oldest") {
-      return [
-        { key: "timestamp_ms", order: "asc" },
-        { key: "entrypoint_hash", order: "asc" },
-      ];
-    }
-  }
-  return sort;
-}
-
-function mergeTransactionFilters(rawFilter, convenienceFilters) {
-  if (convenienceFilters.length === 0) {
-    return rawFilter;
-  }
-  const filters = [...convenienceFilters];
-  const existing = ToriiClient._normalizeFilterObject(rawFilter);
-  if (existing !== undefined) {
-    filters.unshift(existing);
-  }
-  return filters.length === 1 ? filters[0] : { op: "and", args: filters };
-}
-
-function normalizeTransactionQueryOptions(options, context) {
-  const normalized = normalizeIterableQueryOptions(
-    options,
-    context,
-    TRANSACTION_QUERY_OPTION_KEYS,
-  );
-  const {
-    assetId,
-    authority,
-    resultOk,
-    sinceTimestampMs,
-    untilTimestampMs,
-    filter,
-    sort,
-    ...rest
-  } = normalized;
-  const convenienceFilters = [];
-  if (assetId !== undefined && assetId !== null) {
-    convenienceFilters.push(
-      transactionFilter("eq", "asset_id", ToriiClient._normalizeAssetId(assetId, "assetId")),
-    );
-  }
-  if (authority !== undefined && authority !== null) {
-    convenienceFilters.push(
-      transactionFilter(
-        "eq",
-        "authority",
-        ToriiClient._normalizeAccountId(authority, "authority"),
-      ),
-    );
-  }
-  if (resultOk !== undefined && resultOk !== null) {
-    convenienceFilters.push(
-      transactionFilter("eq", "result_ok", requireBooleanLike(resultOk, "resultOk")),
-    );
-  }
-  if (sinceTimestampMs !== undefined && sinceTimestampMs !== null) {
-    convenienceFilters.push(
-      transactionFilter(
-        "gte",
-        "timestamp_ms",
-        ToriiClient._normalizeUnsignedInteger(sinceTimestampMs, "sinceTimestampMs", {
-          allowZero: true,
-        }),
-      ),
-    );
-  }
-  if (untilTimestampMs !== undefined && untilTimestampMs !== null) {
-    convenienceFilters.push(
-      transactionFilter(
-        "lte",
-        "timestamp_ms",
-        ToriiClient._normalizeUnsignedInteger(untilTimestampMs, "untilTimestampMs", {
-          allowZero: true,
-        }),
-      ),
-    );
-  }
-  return {
-    ...rest,
-    sort: normalizeTransactionQuerySort(sort),
-    filter: mergeTransactionFilters(filter, convenienceFilters),
-  };
-}
-
 function normalizeEventStreamOptions(
   options,
   context,
@@ -28879,99 +26894,6 @@ function normalizeEventStreamOptions(
   return { signal, lastEventId };
 }
 
-function normalizeProductionEventFilterBackendPayload(filter, context) {
-  if (typeof filter === JS_TYPE_STRING) {
-    const trimmed = filter.trim();
-    if (!trimmed || (trimmed[0] !== "{" && trimmed[0] !== "[")) {
-      return filter;
-    }
-    try {
-      const parsed = JSON.parse(trimmed);
-      const normalized = normalizeProductionEventFilterBackendPayload(
-        parsed,
-        context,
-      );
-      return normalized === parsed ? filter : JSON.stringify(normalized);
-    } catch (error) {
-      if (error instanceof ValidationError) {
-        throw error;
-      }
-      return filter;
-    }
-  }
-  if (
-    filter === null ||
-    typeof filter !== JS_TYPE_OBJECT ||
-    Array.isArray(filter)
-  ) {
-    return filter;
-  }
-
-  let normalized = filter;
-  for (const eventKind of ["VerifyingKey", "Proof"]) {
-    const body = filter[eventKind];
-    if (body === null || typeof body !== JS_TYPE_OBJECT || Array.isArray(body)) {
-      continue;
-    }
-    const matcher = body.id_matcher;
-    if (
-      matcher === null ||
-      typeof matcher !== JS_TYPE_OBJECT ||
-      Array.isArray(matcher) ||
-      !Object.prototype.hasOwnProperty.call(matcher, "backend")
-    ) {
-      continue;
-    }
-    const backend = assertProductionVerifyBackendLabel(
-      matcher.backend,
-      `${context}.${eventKind}.id_matcher.backend`,
-    );
-    const normalizedMatcher = {
-      ...matcher,
-      backend,
-    };
-    if (eventKind === "Proof") {
-      if (Object.prototype.hasOwnProperty.call(matcher, "hash_hex")) {
-        normalizedMatcher.hash_hex = normalizeHex32String(
-          matcher.hash_hex,
-          `${context}.${eventKind}.id_matcher.hash_hex`,
-        );
-      }
-      if (Object.prototype.hasOwnProperty.call(matcher, "proof_hash_hex")) {
-        normalizedMatcher.proof_hash_hex = normalizeHex32String(
-          matcher.proof_hash_hex,
-          `${context}.${eventKind}.id_matcher.proof_hash_hex`,
-        );
-      }
-    } else if (Object.prototype.hasOwnProperty.call(matcher, "name")) {
-      normalizedMatcher.name = normalizeVerifyingKeyEventMatcherName(
-        matcher.name,
-        `${context}.${eventKind}.id_matcher.name`,
-      );
-    }
-    if (normalized === filter) {
-      normalized = { ...filter };
-    }
-    normalized[eventKind] = {
-      ...body,
-      id_matcher: normalizedMatcher,
-    };
-  }
-  return normalized;
-}
-
-function normalizeVerifyingKeyEventMatcherName(value, context) {
-  const normalized = requireExactNonEmptyString(value, context);
-  if (normalized.includes(":")) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must not contain ':'`,
-      context,
-    );
-  }
-  return normalized;
-}
-
 function isAbortSignalLike(value) {
   if (typeof value !== JS_TYPE_OBJECT || value === null) return false;
   if (hasAbortSignalBrand(value)) return true;
@@ -28984,149 +26906,6 @@ function isAbortSignalLike(value) {
   } catch {
     return false;
   }
-}
-
-function normalizeAccountAssetListResponse(payload) {
-  return normalizeIterableItems(
-    payload,
-    "account asset list response",
-    normalizeAccountAssetListItem,
-  );
-}
-
-function normalizeAccountTransactionListResponse(payload) {
-  return normalizeIterableItems(
-    payload,
-    "account transaction list response",
-    normalizeAccountTransactionListItem,
-  );
-}
-
-function normalizeContractActivityListResponse(payload) {
-  return normalizeIterableItems(
-    payload,
-    "contract activity list response",
-    normalizeContractActivityListItem,
-  );
-}
-
-function normalizeContractEventListResponse(payload) {
-  return normalizeIterableItems(
-    payload,
-    "contract event list response",
-    normalizeContractEventListItem,
-  );
-}
-
-function normalizeAssetHolderListResponse(payload) {
-  return normalizeIterableItems(
-    payload,
-    "asset holder list response",
-    normalizeAssetHolderListItem,
-  );
-}
-
-function normalizeAccountPermissionListResponse(payload) {
-  return normalizeIterableItems(
-    payload,
-    "account permission list response",
-    normalizeAccountPermissionItem,
-  );
-}
-
-function normalizeRepoAgreementListResponse(payload) {
-  return normalizeIterableItems(
-    payload,
-    "repo agreement list response",
-    normalizeRepoAgreement,
-  );
-}
-
-function normalizeRepoAgreement(entry, context) {
-  const record = ensureRecord(entry, context);
-  const id = requireNonEmptyString(record.id, `${context}.id`);
-  const initiator = requireNonEmptyString(record.initiator, `${context}.initiator`);
-  const counterparty = requireNonEmptyString(
-    record.counterparty,
-    `${context}.counterparty`,
-  );
-  const custodian =
-    record.custodian === undefined || record.custodian === null
-      ? null
-      : requireNonEmptyString(record.custodian, `${context}.custodian`);
-  const rateBps = Number(record.rate_bps ?? 0);
-  const maturityTimestampMs = ToriiClient._normalizeUnsignedInteger(
-    record.maturity_timestamp_ms ?? 0,
-    `${context}.maturity_timestamp_ms`,
-    { allowZero: true },
-  );
-  const initiatedTimestampMs = ToriiClient._normalizeUnsignedInteger(
-    record.initiated_timestamp_ms ?? 0,
-    `${context}.initiated_timestamp_ms`,
-    { allowZero: true },
-  );
-  const lastMarginCheckTimestampMs = ToriiClient._normalizeUnsignedInteger(
-    record.last_margin_check_timestamp_ms ?? 0,
-    `${context}.last_margin_check_timestamp_ms`,
-    { allowZero: true },
-  );
-  const settlementTimestampMs =
-    record.settlement_timestamp_ms === null
-      ? null
-      : ToriiClient._normalizeUnsignedInteger(
-          record.settlement_timestamp_ms,
-          `${context}.settlement_timestamp_ms`,
-          { allowZero: true },
-        );
-  const status = requireNonEmptyString(record.status, `${context}.status`);
-  const expectedStatus = settlementTimestampMs === null ? "active" : "settled";
-  if (status !== expectedStatus) {
-    rejectType(`${context}.status must agree with settlement_timestamp_ms (expected ${expectedStatus})`);
-  }
-  return {
-    id,
-    initiator,
-    counterparty,
-    custodian,
-    cashLeg: normalizeRepoLeg(record.cash_leg, `${context}.cash_leg`),
-    cashSource: requireNonEmptyString(record.cash_source, `${context}.cash_source`),
-    collateralLeg: normalizeRepoLeg(record.collateral_leg, `${context}.collateral_leg`),
-    collateralCustodyAsset: requireNonEmptyString(
-      record.collateral_custody_asset,
-      `${context}.collateral_custody_asset`,
-    ),
-    rateBps,
-    maturityTimestampMs,
-    initiatedTimestampMs,
-    lastMarginCheckTimestampMs,
-    governance: normalizeRepoGovernance(record.governance, `${context}.governance`),
-    settlementTimestampMs,
-    status,
-  };
-}
-
-function normalizeRepoLeg(value, context) {
-  const record = ensureRecord(value, context);
-  return {
-    assetDefinitionId: requireNonEmptyString(
-      record.asset_definition_id,
-      `${context}.asset_definition_id`,
-    ),
-    quantity: requireCanonicalQuantity(record.quantity, `${context}.quantity`),
-    metadata: cloneJsonValue(record.metadata ?? {}, `${context}.metadata`),
-  };
-}
-
-function normalizeRepoGovernance(value, context) {
-  const record = ensureRecord(value, context);
-  return {
-    haircutBps: Number(record.haircut_bps ?? 0),
-    marginFrequencySecs: ToriiClient._normalizeUnsignedInteger(
-      record.margin_frequency_secs ?? 0,
-      `${context}.margin_frequency_secs`,
-      { allowZero: true },
-    ),
-  };
 }
 
 function normalizeAttachmentMetadataList(payload, context = "attachment list response") {
@@ -29229,42 +27008,6 @@ function loadVerifyingKeyClient() {
         return client;
       },
     ));
-}
-
-const PRODUCTION_VERIFY_BACKEND_LABELS_V1 = new Set([
-  "halo2/ipa",
-  "halo2/pasta/kaigi-authorization-v1",
-  "halo2/pasta/kaigi-usage-v1",
-  "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-  "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-  "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-  "stark/fri/poseidon-x7-goldilocks-6x64-v1",
-]);
-
-function assertProductionVerifyBackendLabel(value, context) {
-  if (typeof value !== JS_TYPE_STRING || value.trim() === "") {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must be a non-empty string`,
-      context,
-    );
-  }
-  const backend = value;
-  if (backend.trim() !== backend) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must not contain surrounding whitespace`,
-      context,
-    );
-  }
-  if (!PRODUCTION_VERIFY_BACKEND_LABELS_V1.has(backend)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} uses unsupported production verifier backend ${backend}`,
-      context,
-    );
-  }
-  return backend;
 }
 
 function rejectVerifyingKeyPrivateKeyFields(record, context) {
@@ -29521,8 +27264,8 @@ function normalizeSumeragiEvidencePenaltyStatus(value, context) {
     }
     return { status, details: null };
   }
-  if (status !== "applied" && status !== "cancelled") {
-    rejectRange(`${context}.status must be pending, applied, or cancelled`);
+  if (status !== "applied") {
+    rejectRange(`${context}.status must be pending or applied`);
   }
   const details = ensureRecord(record.details, `${context}.details`);
   assertExactSumeragiEvidenceFields(details, `${context}.details`, ["height"]);
@@ -29611,120 +27354,10 @@ function normalizeSumeragiEvidenceRecord(value, context) {
   };
 }
 
-function normalizeIterableItems(payload, context, normalizeItem) {
-  const normalizedItems = payload.items.map((entry, index) =>
-    normalizeItem(entry, `${context}.items[${index}]`),
-  );
-  return {
-    ...payload,
-    items: normalizedItems,
-  };
-}
-
-function normalizeIdListResponse(payload, context) {
-  return normalizeIterableItems(payload, context, normalizeListItemWithId);
-}
-
-function normalizeListItemWithId(value, context) {
-  const record = ensureRecord(value, context);
-  const id = requireNonEmptyString(record.id, `${context}.id`);
-  return { ...record, id };
-}
-
-function normalizeAssetDefinitionListItem(value, context) {
-  const normalized = normalizeListItemWithId(value, context);
-  if (normalized.total_quantity === undefined || normalized.total_quantity === null) {
-    return normalized;
-  }
-  return {
-    ...normalized,
-    total_quantity: requireCanonicalQuantity(
-      normalized.total_quantity,
-      `${context}.total_quantity`,
-    ),
-  };
-}
-
 function rejectAliasField(record, context, aliasKey, canonicalKey) {
   if (Object.prototype.hasOwnProperty.call(record, aliasKey)) {
     rejectType(`${context}.${aliasKey} is not supported; use ${canonicalKey}`);
   }
-}
-
-function normalizeAccountAssetListItem(value, context) {
-  const record = ensureRecord(value, context);
-  rejectAliasField(record, context, "assetId", "asset_id");
-  const assetId = requireNonEmptyString(
-    record.asset_id ?? record.asset,
-    `${context}.asset`,
-  );
-  const quantity = requireCanonicalQuantity(record.quantity, `${context}.quantity`);
-  const normalized = {
-    ...record,
-    asset: record.asset ?? assetId,
-    asset_id: assetId,
-    quantity,
-  };
-  return normalized;
-}
-
-function normalizeAssetHolderListItem(value, context) {
-  const record = ensureRecord(value, context);
-  rejectAliasField(record, context, "accountId", "account_id");
-  const accountId = requireNonEmptyString(
-    record.account_id,
-    `${context}.account_id`,
-  );
-  const quantity = requireCanonicalQuantity(record.quantity, `${context}.quantity`);
-  const normalized = {
-    ...record,
-    account_id: accountId,
-    quantity,
-  };
-  return normalized;
-}
-
-function normalizeAccountTransactionListItem(value, context) {
-  const record = ensureRecord(value, context);
-  rejectAliasField(record, context, "entrypointHash", "entrypoint_hash");
-  rejectAliasField(record, context, "resultOk", "result_ok");
-  rejectAliasField(record, context, "timestampMs", "timestamp_ms");
-  const entrypointHash = requireNonEmptyString(
-    record.entrypoint_hash,
-    `${context}.entrypoint_hash`,
-  );
-  const resultOk = requireBooleanLike(
-    record.result_ok,
-    `${context}.result_ok`,
-  );
-  let authorityValue = record.authority;
-  if (authorityValue !== undefined && authorityValue !== null) {
-    authorityValue = requireNonEmptyString(authorityValue, `${context}.authority`);
-  }
-  let timestampValue = record.timestamp_ms;
-  if (timestampValue !== undefined && timestampValue !== null) {
-    timestampValue = ToriiClient._normalizeUnsignedInteger(
-      timestampValue,
-      `${context}.timestamp_ms`,
-      { allowZero: true },
-    );
-  } else {
-    timestampValue = undefined;
-  }
-  const normalized = {
-    ...record,
-    entrypoint_hash: entrypointHash,
-    result_ok: resultOk,
-  };
-  if (authorityValue !== undefined) {
-    normalized.authority = authorityValue;
-  }
-  if (timestampValue !== undefined) {
-    normalized.timestamp_ms = timestampValue;
-  } else {
-    delete normalized.timestamp_ms;
-  }
-  return normalized;
 }
 
 function normalizeContractActivityListItem(value, context) {
@@ -30179,70 +27812,7 @@ const {
   requireNonEmptyString,
 });
 
-function normalizeSubscriptionPlanListResponse(payload) {
-  const record = ensureRecord(payload ?? {}, "subscription plan list response");
-  const rawItems = record.items ?? [];
-  if (!Array.isArray(rawItems)) {
-    rejectType("subscription plan list response.items must be an array");
-  }
-  const items = rawItems.map((entry, index) => {
-    const item = ensureRecord(entry, `subscription plan list response.items[${index}]`);
-    const planValue = item.plan;
-    if (planValue === undefined || planValue === null) {
-      rejectType(`subscription plan list response.items[${index}].plan is required`);
-    }
-    if (!isPlainObject(planValue)) {
-      rejectType(`subscription plan list response.items[${index}].plan must be an object`);
-    }
-    return {
-      plan_id: requireNonEmptyString(
-        item.plan_id,
-        `subscription plan list response.items[${index}].plan_id`,
-      ),
-      plan: cloneJsonValue(
-        planValue,
-        `subscription plan list response.items[${index}].plan`,
-      ),
-    };
-  });
-  const totalValue =
-    record.total === undefined || record.total === null
-      ? items.length
-      : ToriiClient._normalizeUnsignedInteger(
-          record.total,
-          "subscription plan list response.total",
-          { allowZero: true },
-        );
-  return {
-    items,
-    total: totalValue,
-  };
-}
-
-function normalizeSubscriptionListResponse(payload) {
-  const record = ensureRecord(payload ?? {}, "subscription list response");
-  const rawItems = record.items ?? [];
-  if (!Array.isArray(rawItems)) {
-    rejectType("subscription list response.items must be an array");
-  }
-  const items = rawItems.map((entry, index) =>
-    normalizeSubscriptionListItem(entry, `subscription list response.items[${index}]`),
-  );
-  const totalValue =
-    record.total === undefined || record.total === null
-      ? items.length
-      : ToriiClient._normalizeUnsignedInteger(
-          record.total,
-          "subscription list response.total",
-          { allowZero: true },
-        );
-  return {
-    items,
-    total: totalValue,
-  };
-}
-
-function normalizeSubscriptionListItem(value, context) {
+function normalizeSubscriptionRecord(value, context) {
   const record = ensureRecord(value, context);
   const subscriptionValue = record.subscription;
   if (subscriptionValue === undefined || subscriptionValue === null) {
@@ -30279,7 +27849,7 @@ function normalizeSubscriptionListItem(value, context) {
 
 function normalizeSubscriptionGetResponse(payload) {
   const record = ensureRecord(payload, "subscription get response");
-  return normalizeSubscriptionListItem(record, "subscription get response");
+  return normalizeSubscriptionRecord(record, "subscription get response");
 }
 
 function normalizeConnectSessionResponse(payload, context) {
@@ -30896,7 +28466,9 @@ function buildSorafsOrderbookEventsWebSocketUrlInternal(baseUrl, options, contex
   );
   const endpointPath = params.endpointPath ?? DEFAULT_SORAFS_ORDERBOOK_EVENTS_WS_PATH;
   const baseWithSlash = resolvedBase.endsWith("/") ? resolvedBase : `${resolvedBase}/`;
-  const endpoint = new URL(endpointPath, baseWithSlash);
+  const endpoint = isAbsoluteUrl(endpointPath)
+    ? new URL(endpointPath)
+    : resolveBaseRelativeUrl(baseWithSlash, endpointPath);
   if (endpoint.host !== baseParsed.host) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
@@ -31125,7 +28697,9 @@ function buildConnectWebSocketDescriptor(baseUrl, options, context) {
   const token = requireNonEmptyString(params.token, `${context}.token`);
   const endpointPath = params.endpointPath ?? DEFAULT_CONNECT_WS_PATH;
   const baseWithSlash = resolvedBase.endsWith("/") ? resolvedBase : `${resolvedBase}/`;
-  const endpoint = new URL(endpointPath, baseWithSlash);
+  const endpoint = isAbsoluteUrl(endpointPath)
+    ? new URL(endpointPath)
+    : resolveBaseRelativeUrl(baseWithSlash, endpointPath);
   const endpointHost = endpoint.host;
   const endpointProtocol = mapHttpProtocolToWebSocket(endpoint.protocol, context);
   if (endpointHost !== baseHost) {

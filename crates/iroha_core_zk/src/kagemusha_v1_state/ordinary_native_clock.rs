@@ -179,6 +179,7 @@ pub struct KagemushaOrdinaryNativeClockNodeV1 {
 /// alone admits an installation, account session, FI or money. There is no C/JNI constructor.
 pub struct KagemushaOrdinaryNativeClockOriginalsV1 {
     checkpoint: SumeragiFinalityCheckpoint,
+    status_config_fingerprint: Hash,
     network: NetworkId,
     chain_id: String,
     nodes: [KagemushaOrdinaryNativeClockNodeV1; 4],
@@ -201,7 +202,11 @@ impl KagemushaOrdinaryNativeClockOriginalsV1 {
         if chain_id.is_empty() || chain_id.len() > 256 || chain_id.chars().any(char::is_control) {
             return Err(Rejected);
         }
-        SumeragiFinalityVerifier::from_trusted_checkpoint(&checkpoint, &network, &chain_id)
+        let verifier =
+            SumeragiFinalityVerifier::from_trusted_checkpoint(&checkpoint, &network, &chain_id)
+                .map_err(|_| Rejected)?;
+        let status_config_fingerprint = verifier
+            .consensus_configuration_fingerprint()
             .map_err(|_| Rejected)?;
         for (index, node) in nodes.iter().enumerate() {
             if node.peer_id.public_key().algorithm() != Algorithm::BlsNormal
@@ -230,6 +235,7 @@ impl KagemushaOrdinaryNativeClockOriginalsV1 {
         }
         Ok(Self {
             checkpoint,
+            status_config_fingerprint,
             network,
             chain_id,
             nodes,
@@ -833,7 +839,7 @@ fn verify_signed_observations(
             || body.node_id != node.peer_id
             || body.build_fingerprint != node.build_fingerprint
             || body.config_fingerprint != node.config_fingerprint
-            || body.status.config_fingerprint != node.config_fingerprint
+            || body.status.config_fingerprint != selected.status_config_fingerprint
             || body.status.instance != verifier.instance().0
             || body.status.signer.as_ref() != Some(node.peer_id.public_key())
             || body.status.unanchored

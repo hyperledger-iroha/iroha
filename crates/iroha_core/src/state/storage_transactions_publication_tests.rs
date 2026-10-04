@@ -134,6 +134,7 @@ fn membership_abort_detach_and_commit_signal_the_exact_busy_writer() {
     };
     for finish in 0..5 {
         let storage = TransactionsStorage::new();
+        let mut release_slot_0 = crate::unit_test_support::release_registration(&storage.budget);
         stage(&storage, 1, &[1]).commit().unwrap();
         let journal = stage(&storage, 2, &[2]).prepare_commit().unwrap().detach();
         let pointer = std::ptr::from_ref(journal.staged_membership().1);
@@ -145,7 +146,7 @@ fn membership_abort_detach_and_commit_signal_the_exact_busy_writer() {
         let PublicationPreparationError::Busy(wait) = error else {
             panic!("writer wait");
         };
-        let mut wait = wait.wait_for_release();
+        let mut wait = wait.wait_for_release(&mut release_slot_0);
         let mut context = Context::from_waker(Waker::noop());
         if finish % 2 == 0 {
             assert!(Pin::new(&mut wait).poll(&mut context).is_pending());
@@ -295,6 +296,8 @@ fn membership_publication_retains_original_cleanup_until_outer_unlock() {
     for detached in [false, true] {
         for unwind in [false, true] {
             let storage = Arc::new(TransactionsStorage::new());
+            let mut release_slot_0 =
+                crate::unit_test_support::release_registration(&storage.budget);
             stage(&storage, 1, &[1]).commit().unwrap();
             let tip = tip_weak_for_tests(storage.latest_block.load().as_ref().unwrap());
             let identity = storage.write_lock.lock().observe_retirement_for_tests();
@@ -308,7 +311,12 @@ fn membership_publication_retains_original_cleanup_until_outer_unlock() {
             };
             let outer = Arc::new(crate::publication_lock::PublicationMutex::default());
             let outer_guard = outer.lock();
-            let mut pending = Box::pin(storage.released.observe().wait_for_release());
+            let mut pending = Box::pin(
+                storage
+                    .released
+                    .observe()
+                    .wait_for_release(&mut release_slot_0),
+            );
             let probe = Arc::new(Reenter {
                 storage: Arc::clone(&storage),
                 outer: Arc::clone(&outer),

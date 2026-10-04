@@ -628,6 +628,117 @@ fn ensure_source_bound(
     }
     Ok(())
 }
+/// Stable reason code that starts every signed `POST /v1/query` refusal of an
+/// iterable query shape.
+///
+/// Torii returns the refusal as HTTP 400 `query_validation_failed`; the message
+/// is `signed_query_shape_not_admitted: <query> <reason>. …` and always lists
+/// [`TORII_COLLECTION_ENDPOINTS`].
+pub const SIGNED_QUERY_SHAPE_NOT_ADMITTED: &str = "signed_query_shape_not_admitted";
+/// Torii collection endpoints that serve listing reads (`specs/torii/collection_queries.md`).
+pub const TORII_COLLECTION_ENDPOINTS: [&str; 9] = [
+    "/v1/domains",
+    "/v1/accounts",
+    "/v1/assets/definitions",
+    "/v1/nfts",
+    "/v1/rwas",
+    "/v1/accounts/{id}/assets",
+    "/v1/assets/{definition}/holders",
+    "/v1/transactions/query",
+    "/v1/repo/agreements",
+];
+/// Build the stable, actionable refusal for an iterable shape that signed
+/// `POST /v1/query` does not admit.
+///
+/// `query` names the refused query (for example `FindDomains`) and `reason`
+/// the refused modifier; the message always lists [`TORII_COLLECTION_ENDPOINTS`].
+pub fn signed_query_shape_not_admitted(query: &str, reason: &str) -> Error {
+    Error::Conversion(format!(
+        "{SIGNED_QUERY_SHAPE_NOT_ADMITTED}: {query} {reason}. Signed POST /v1/query admits \
+         singular queries and FindPeers, FindAccountIds, FindTriggers and \
+         FindActiveTriggerIds starts with a pass predicate, bounded counting, zero offset \
+         and no sorting (FindPeers in ephemeral cursor mode only). Read listings through \
+         the Torii collection endpoints: {}.",
+        TORII_COLLECTION_ENDPOINTS.join(", ")
+    ))
+}
+/// Iterable producers that signed `POST /v1/query` admits.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum AdmittedIterableSource {
+    /// `FindPeers`, ephemeral cursor mode only.
+    Peers,
+    /// `FindAccountIds`.
+    AccountIds,
+    /// `FindTriggers`.
+    Triggers,
+    /// `FindActiveTriggerIds`.
+    ActiveTriggerIds,
+}
+impl AdmittedIterableSource {
+    fn for_item(item: iroha_data_model::query::QueryItemKind) -> Option<Self> {
+        use iroha_data_model::query::QueryItemKind;
+        match item {
+            QueryItemKind::PeerId => Some(Self::Peers),
+            QueryItemKind::AccountId => Some(Self::AccountIds),
+            QueryItemKind::Trigger => Some(Self::Triggers),
+            QueryItemKind::TriggerId => Some(Self::ActiveTriggerIds),
+            _ => None,
+        }
+    }
+}
+/// Name the iterable query carried by a canonical Start the same way the
+/// typed dispatch resolves it: by item kind and, where two queries share an
+/// item kind, by whether the query payload is empty.
+fn iterable_query_name(
+    item: iroha_data_model::query::QueryItemKind,
+    query_payload: &[u8],
+) -> &'static str {
+    use iroha_data_model::query::QueryItemKind;
+    let parameterized = !query_payload.is_empty();
+    match item {
+        QueryItemKind::Domain if parameterized => "FindDomainsByAccountId",
+        QueryItemKind::Domain => "FindDomains",
+        QueryItemKind::Account if parameterized => "FindAccountsWithAsset",
+        QueryItemKind::Account => "FindAccounts",
+        QueryItemKind::AccountId => "FindAccountIds",
+        QueryItemKind::Asset if parameterized => "FindAssetsByAccountId",
+        QueryItemKind::Asset => "FindAssets",
+        QueryItemKind::AssetDefinition => "FindAssetDefinitions",
+        QueryItemKind::RepoAgreement => "FindRepoAgreements",
+        QueryItemKind::Nft if parameterized => "FindNftsByAccountId",
+        QueryItemKind::Nft => "FindNfts",
+        QueryItemKind::Rwa => "FindRwas",
+        QueryItemKind::Role => "FindRoles",
+        QueryItemKind::RoleId if parameterized => "FindRolesByAccountId",
+        QueryItemKind::RoleId => "FindRoleIds",
+        QueryItemKind::PeerId => "FindPeers",
+        QueryItemKind::TriggerId => "FindActiveTriggerIds",
+        QueryItemKind::Trigger => "FindTriggers",
+        QueryItemKind::CommittedTransaction => "FindTransactions",
+        QueryItemKind::SignedBlock => "FindBlocks",
+        QueryItemKind::BlockHeader => "FindBlockHeaders",
+        QueryItemKind::ProofRecord if parameterized => {
+            "FindProofRecordsByBackend/FindProofRecordsByStatus"
+        }
+        QueryItemKind::ProofRecord => "FindProofRecords",
+        QueryItemKind::OracleFeedConfig => "FindOracleFeeds",
+        QueryItemKind::OracleFeedEventRecord => "FindOracleHistoryByFeedId",
+        QueryItemKind::OracleProviderStatsRecord => "FindOracleProviderStatsByFeedId",
+        QueryItemKind::OracleDispute if parameterized => "FindOracleDisputesByFeedId",
+        QueryItemKind::OracleDispute => "FindOracleDisputes",
+        QueryItemKind::OracleChangeProposal => "FindOracleChanges",
+        QueryItemKind::TwitterBindingRecord => "FindTwitterBindingsByUaid",
+        QueryItemKind::DefiOracleAttestation => "FindDefiOracleAttestationsByKey",
+        QueryItemKind::Permission => "FindPermissionsByAccountId",
+        QueryItemKind::AssetEscrowRecord => "FindAssetEscrows",
+        QueryItemKind::AssetEscrowsBySeller => "FindAssetEscrowsBySeller",
+        QueryItemKind::AssetEscrowsByBuyer => "FindAssetEscrowsByBuyer",
+        QueryItemKind::AssetEscrowsByStatus => "FindAssetEscrowsByStatus",
+        QueryItemKind::FeeSponsorProgram if parameterized => "FindFeeSponsorProgramsBySponsor",
+        QueryItemKind::FeeSponsorProgram => "FindFeeSponsorPrograms",
+        QueryItemKind::FeeSponsorProgramId => "FindFeeSponsorProgramIds",
+    }
+}
 fn ensure_world_state_start_shape(
     start: &iroha_data_model::query::QueryWithParams,
     mode: OrdinaryCursorMode,
@@ -635,72 +746,89 @@ fn ensure_world_state_start_shape(
     limits: OrdinaryQueryExecutionLimits,
 ) -> Result<(), Error> {
     ensure_source_bound(limits, ORDINARY_NAME_ID_SOURCE_BYTES)?;
+    let (item, _, _, query_payload) = start.parts();
+    let query = iterable_query_name(item, query_payload);
+    // Listing reads belong to the Torii collection endpoints. A further shape
+    // is admitted here only together with a source-specific borrowed adapter
+    // in `ordinary_iterable` that bounds its scan before any row is cloned.
+    let Some(source) = AdmittedIterableSource::for_item(item) else {
+        return Err(signed_query_shape_not_admitted(
+            query,
+            "has no bounded signed-query source",
+        ));
+    };
     if query_limits.count_mode != QueryCountMode::Bounded {
-        return Err(Error::Conversion(
-            "ordinary iterable adapters require bounded query counting".to_owned(),
+        return Err(signed_query_shape_not_admitted(
+            query,
+            "requires bounded counting",
         ));
     }
-    let peer_source = canonical_peer_source_shape(start, query_limits)?;
-    let account_source = canonical_account_source_shape(start, query_limits)?;
-    if !peer_source && !account_source {
-        // TODO: Add query-specific borrowed adapters for the remaining 35
-        // world producers. The three Kura producers additionally require an
-        // authenticated fixed projection in the bounded reader.
-        return Err(Error::Conversion(
-            "ordinary iterable producer is awaiting a source-specific bounded adapter".to_owned(),
+    if !admitted_source_has_pass_predicate(start, source, query_limits)? {
+        return Err(signed_query_shape_not_admitted(
+            query,
+            "admits only the pass (match-all) predicate",
         ));
     }
-    if (peer_source && mode != OrdinaryCursorMode::Ephemeral)
-        || start.params.pagination.offset_value() != 0
-        || start.params.sorting.sort_by_metadata_key.is_some()
-    {
-        return Err(Error::Conversion(
-            "ordinary iterable adapters require unsorted, zero-offset pagination; peers require ephemeral mode"
-                .to_owned(),
+    if start.params.sorting.sort_by_metadata_key.is_some() {
+        return Err(signed_query_shape_not_admitted(
+            query,
+            "does not admit metadata sorting",
+        ));
+    }
+    if start.params.pagination.offset_value() != 0 {
+        return Err(signed_query_shape_not_admitted(
+            query,
+            "admits only a zero offset",
+        ));
+    }
+    if source == AdmittedIterableSource::Peers && mode != OrdinaryCursorMode::Ephemeral {
+        return Err(signed_query_shape_not_admitted(
+            query,
+            "is admitted only in ephemeral cursor mode",
         ));
     }
     ensure_iterable_params(&start.params, mode, query_limits, limits)
 }
-fn canonical_peer_source_shape(
+/// Exactly decode an admitted source's query, predicate and selector, and
+/// report whether the predicate is the pass predicate.
+///
+/// The selector is decoded only to require its single canonical (empty)
+/// encoding; it never projects.
+fn admitted_source_has_pass_predicate(
     start: &iroha_data_model::query::QueryWithParams,
+    source: AdmittedIterableSource,
     query_limits: QueryLimits,
 ) -> Result<bool, Error> {
     use iroha_data_model::query::{
-        QueryItemKind,
-        dsl::{CompoundPredicate, SelectorTuple},
-        peer::prelude::FindPeers,
-    };
-    let (item, predicate, selector, payload) = start.parts();
-    if item != QueryItemKind::PeerId {
-        return Ok(false);
-    }
-    let mut decoder =
-        super::FastIterComponentDecoder::new(query_limits, [payload, predicate, selector])?;
-    let _: FindPeers = decoder.decode(payload)?;
-    let predicate: CompoundPredicate<iroha_model_base::peer::PeerId> = decoder.decode(predicate)?;
-    let selector: SelectorTuple<iroha_model_base::peer::PeerId> = decoder.decode(selector)?;
-    Ok(predicate.is_pass() && selector.iter().next().is_none())
-}
-fn canonical_account_source_shape(
-    start: &iroha_data_model::query::QueryWithParams,
-    query_limits: QueryLimits,
-) -> Result<bool, Error> {
-    use iroha_data_model::query::{
-        QueryItemKind,
         account::prelude::FindAccountIds,
         dsl::{CompoundPredicate, SelectorTuple},
+        peer::prelude::FindPeers,
+        trigger::prelude::{FindActiveTriggerIds, FindTriggers},
     };
-    let (item, predicate, selector, payload) = start.parts();
-    if item != QueryItemKind::AccountId {
-        return Ok(false);
-    }
+    use iroha_data_model::{
+        account::AccountId,
+        trigger::{Trigger, TriggerId},
+    };
+    use iroha_model_base::peer::PeerId;
+    let (_, predicate, selector, payload) = start.parts();
     let mut decoder =
         super::FastIterComponentDecoder::new(query_limits, [payload, predicate, selector])?;
-    let _: FindAccountIds = decoder.decode(payload)?;
-    let predicate: CompoundPredicate<iroha_data_model::account::AccountId> =
-        decoder.decode(predicate)?;
-    let selector: SelectorTuple<iroha_data_model::account::AccountId> = decoder.decode(selector)?;
-    Ok(predicate.is_pass() && selector.iter().next().is_none())
+    macro_rules! pass_shape {
+        ($query:ty, $item:ty) => {{
+            let _: $query = decoder.decode(payload)?;
+            let predicate: CompoundPredicate<$item> = decoder.decode(predicate)?;
+            let _: SelectorTuple<$item> = decoder.decode(selector)?;
+            Ok(predicate.is_pass())
+        }};
+    }
+    match source {
+        AdmittedIterableSource::Peers => pass_shape!(FindPeers, PeerId),
+        AdmittedIterableSource::AccountIds => pass_shape!(FindAccountIds, AccountId),
+        AdmittedIterableSource::Triggers => pass_shape!(FindTriggers, Trigger),
+        AdmittedIterableSource::ActiveTriggerIds => {
+            pass_shape!(FindActiveTriggerIds, TriggerId)
+        }
+    }
 }
 fn ensure_iterable_params(
     params: &QueryParams,
@@ -2029,6 +2157,267 @@ mod tests {
             ensure_iterable_params(&params, OrdinaryCursorMode::Stored, query_limits, limits(),),
             Err(Error::CapacityLimit),
             "bounded Start must account for offset, first page, retained tail, and overflow probe"
+        );
+    }
+    fn bounded_ordinary_limits() -> QueryLimits {
+        QueryLimits::new(16)
+            .with_count_mode(QueryCountMode::Bounded)
+            .with_ordinary_execution_limits(limits())
+    }
+    fn erased_start<T>(
+        predicate: iroha_data_model::query::dsl::CompoundPredicate<T>,
+        query_payload: Vec<u8>,
+        params: QueryParams,
+    ) -> QueryRequest
+    where
+        T: iroha_data_model::query::dsl::HasProjection<
+                iroha_data_model::query::dsl::PredicateMarker,
+            > + iroha_data_model::query::dsl::HasProjection<
+                iroha_data_model::query::dsl::SelectorMarker,
+                AtomType = (),
+            > + Send
+            + Sync
+            + 'static,
+        iroha_data_model::query::ErasedIterQuery<T>:
+            iroha_data_model::query::ErasedQuery<iroha_data_model::query::QueryOutputBatchBox>,
+    {
+        use iroha_data_model::query::{
+            ErasedIterQuery, QueryBox, QueryOutputBatchBox, QueryWithParams, dsl::SelectorTuple,
+        };
+        let query: QueryBox<QueryOutputBatchBox> = Box::new(ErasedIterQuery::<T>::new(
+            predicate,
+            SelectorTuple::default(),
+            query_payload,
+        ));
+        QueryRequest::Start(
+            QueryWithParams::new(&query, params).expect("query type has a canonical mapping"),
+        )
+    }
+    fn shape_refusal(
+        request: &QueryRequest,
+        mode: OrdinaryCursorMode,
+        query_limits: QueryLimits,
+    ) -> String {
+        match ensure_request_admitted(request, mode, query_limits, limits()) {
+            Err(Error::Conversion(message)) => message,
+            other => panic!("expected a signed-query shape refusal, got {other:?}"),
+        }
+    }
+    fn assert_shape_refusal(message: &str, query: &str, reason: &str) {
+        let expected = format!("{SIGNED_QUERY_SHAPE_NOT_ADMITTED}: {query} {reason}. ");
+        assert!(
+            message.starts_with(&expected),
+            "refusal must start with `{expected}`: {message}"
+        );
+        for endpoint in TORII_COLLECTION_ENDPOINTS {
+            assert!(
+                message.contains(endpoint),
+                "refusal must point listing reads to {endpoint}: {message}"
+            );
+        }
+    }
+    #[test]
+    fn listing_queries_are_refused_with_their_name_and_collection_endpoints() {
+        use iroha_data_model::{
+            account::Account,
+            asset::{definition::AssetDefinition, value::Asset},
+            domain::Domain,
+            query::{
+                account::prelude::FindAccounts,
+                asset::prelude::{FindAssetDefinitions, FindAssetsByAccountId},
+                domain::prelude::FindDomains,
+                dsl::CompoundPredicate,
+            },
+        };
+        use norito::codec::Encode as _;
+        for (request, query) in [
+            (
+                erased_start::<Domain>(
+                    CompoundPredicate::PASS,
+                    FindDomains.encode(),
+                    peer_params(),
+                ),
+                "FindDomains",
+            ),
+            (
+                erased_start::<Account>(
+                    CompoundPredicate::PASS,
+                    FindAccounts.encode(),
+                    peer_params(),
+                ),
+                "FindAccounts",
+            ),
+            (
+                erased_start::<AssetDefinition>(
+                    CompoundPredicate::PASS,
+                    FindAssetDefinitions.encode(),
+                    peer_params(),
+                ),
+                "FindAssetDefinitions",
+            ),
+            (
+                erased_start::<Asset>(
+                    CompoundPredicate::PASS,
+                    FindAssetsByAccountId::new(iroha_test_samples::ALICE_ID.clone()).encode(),
+                    peer_params(),
+                ),
+                "FindAssetsByAccountId",
+            ),
+        ] {
+            let wire = norito::encode_canonical(&request).expect("canonical listing request");
+            let request: QueryRequest =
+                norito::decode_from_bytes(&wire).expect("decode canonical listing request");
+            for mode in [OrdinaryCursorMode::Ephemeral, OrdinaryCursorMode::Stored] {
+                let message = shape_refusal(&request, mode, bounded_ordinary_limits());
+                assert_shape_refusal(&message, query, "has no bounded signed-query source");
+            }
+        }
+    }
+    #[test]
+    fn admitted_iterable_shapes_survive_canonical_transport() {
+        use iroha_data_model::{
+            account::AccountId,
+            query::{
+                account::FindAccountIds,
+                dsl::CompoundPredicate,
+                trigger::{FindActiveTriggerIds, FindTriggers},
+            },
+            trigger::{Trigger, TriggerId},
+        };
+        use norito::codec::Encode as _;
+        for request in [
+            peer_start(peer_params()),
+            erased_start::<AccountId>(
+                CompoundPredicate::PASS,
+                FindAccountIds.encode(),
+                peer_params(),
+            ),
+            erased_start::<Trigger>(
+                CompoundPredicate::PASS,
+                FindTriggers.encode(),
+                peer_params(),
+            ),
+            erased_start::<TriggerId>(
+                CompoundPredicate::PASS,
+                FindActiveTriggerIds.encode(),
+                peer_params(),
+            ),
+        ] {
+            let wire = norito::encode_canonical(&request).expect("canonical admitted request");
+            let request: QueryRequest =
+                norito::decode_from_bytes(&wire).expect("decode canonical admitted request");
+            ensure_request_admitted(
+                &request,
+                OrdinaryCursorMode::Ephemeral,
+                bounded_ordinary_limits(),
+                limits(),
+            )
+            .expect("documented ephemeral iterable shape");
+            let QueryRequest::Start(start) = &request else {
+                unreachable!("only iterable starts in the matrix");
+            };
+            if start.parts().0 != iroha_data_model::query::QueryItemKind::PeerId {
+                ensure_request_admitted(
+                    &request,
+                    OrdinaryCursorMode::Stored,
+                    bounded_ordinary_limits(),
+                    limits(),
+                )
+                .expect("documented stored iterable shape");
+            }
+        }
+    }
+    #[test]
+    fn admitted_sources_name_each_refused_modifier() {
+        use iroha_data_model::query::account::prelude::FindAccountIds;
+        use iroha_data_model::{account::AccountId, query::dsl::CompoundPredicate};
+        use norito::codec::Encode as _;
+        let account_ids = |predicate: CompoundPredicate<AccountId>, params: QueryParams| {
+            erased_start::<AccountId>(predicate, FindAccountIds.encode(), params)
+        };
+        let filtered = account_ids(
+            CompoundPredicate::<AccountId>::build(|p| {
+                p.equals("id", iroha_test_samples::ALICE_ID.to_string())
+            }),
+            peer_params(),
+        );
+        assert_shape_refusal(
+            &shape_refusal(
+                &filtered,
+                OrdinaryCursorMode::Ephemeral,
+                bounded_ordinary_limits(),
+            ),
+            "FindAccountIds",
+            "admits only the pass (match-all) predicate",
+        );
+        let mut sorted = peer_params();
+        sorted.sorting.sort_by_metadata_key = Some("rank".parse().expect("metadata key"));
+        assert_shape_refusal(
+            &shape_refusal(
+                &account_ids(CompoundPredicate::PASS, sorted),
+                OrdinaryCursorMode::Stored,
+                bounded_ordinary_limits(),
+            ),
+            "FindAccountIds",
+            "does not admit metadata sorting",
+        );
+        let mut offset = peer_params();
+        offset.pagination = Pagination::new(None, 1);
+        assert_shape_refusal(
+            &shape_refusal(
+                &peer_start(offset),
+                OrdinaryCursorMode::Ephemeral,
+                bounded_ordinary_limits(),
+            ),
+            "FindPeers",
+            "admits only a zero offset",
+        );
+        assert_shape_refusal(
+            &shape_refusal(
+                &peer_start(peer_params()),
+                OrdinaryCursorMode::Stored,
+                bounded_ordinary_limits(),
+            ),
+            "FindPeers",
+            "is admitted only in ephemeral cursor mode",
+        );
+        assert_shape_refusal(
+            &shape_refusal(
+                &peer_start(peer_params()),
+                OrdinaryCursorMode::Ephemeral,
+                QueryLimits::new(16).with_ordinary_execution_limits(limits()),
+            ),
+            "FindPeers",
+            "requires bounded counting",
+        );
+        ensure_request_admitted(
+            &account_ids(CompoundPredicate::PASS, peer_params()),
+            OrdinaryCursorMode::Stored,
+            bounded_ordinary_limits(),
+            limits(),
+        )
+        .expect("the unfiltered account-identifier shape stays admitted");
+    }
+    #[test]
+    fn iterable_query_names_follow_the_typed_dispatch() {
+        use iroha_data_model::query::QueryItemKind;
+        assert_eq!(iterable_query_name(QueryItemKind::Asset, &[]), "FindAssets");
+        assert_eq!(
+            iterable_query_name(QueryItemKind::Asset, &[1]),
+            "FindAssetsByAccountId"
+        );
+        assert_eq!(
+            iterable_query_name(QueryItemKind::AssetDefinition, &[]),
+            "FindAssetDefinitions"
+        );
+        assert_eq!(
+            iterable_query_name(QueryItemKind::RoleId, &[1]),
+            "FindRolesByAccountId"
+        );
+        assert_eq!(iterable_query_name(QueryItemKind::PeerId, &[]), "FindPeers");
+        assert_eq!(
+            iterable_query_name(QueryItemKind::CommittedTransaction, &[]),
+            "FindTransactions"
         );
     }
 }

@@ -3,7 +3,7 @@ use super::*;
 use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use crate::sumeragi::{body_read::BodyReadPoll, crypto::BlsCrypto};
 use iroha_data_model::{
-    block::decode_versioned_signed_block,
+    block::decode_framed_signed_block,
     sumeragi_finality::{ScheduledSlot, test_fixtures::NativeFinalityFixture},
 };
 use iroha_sumeragi::{availability::AvailabilityFrame, crypto::NoAttestation, types::HeightConfig};
@@ -22,7 +22,7 @@ impl AvailabilitySchedule for Schedule {
 struct Fixture {
     store: KuraBlockStore,
     schedule: Arc<Schedule>,
-    executed: Arc<SignedBlock>,
+    executed: iroha_data_model::block::SharedSignedBlock,
     body: AvailableBody,
     qc: Qc,
 }
@@ -52,8 +52,13 @@ fn fixture() -> Fixture {
     });
     let budget = AllocationBudget::new(1 << 27);
     let kura = Kura::blank_kura_for_testing();
-    kura.store_block(fixture.genesis().clone()).unwrap();
-    let mut executed = decode_versioned_signed_block(&fixture.latest().block_wire).unwrap();
+    kura.store_block(
+        iroha_data_model::block::SharedSignedBlock::reserve(&budget)
+            .unwrap()
+            .initialize(fixture.genesis().clone()),
+    )
+    .unwrap();
+    let mut executed = decode_framed_signed_block(&fixture.latest().block_wire).unwrap();
     let c = executed
         .commit_certificate()
         .unwrap()
@@ -61,7 +66,9 @@ fn fixture() -> Fixture {
         .admit(&budget)
         .unwrap();
     executed.set_commit_certificate(Some(c));
-    let executed = Arc::new(executed);
+    let executed = iroha_data_model::block::SharedSignedBlock::reserve(&budget)
+        .unwrap()
+        .initialize(executed);
     let store = KuraBlockStore::new(
         kura,
         crypto,
@@ -88,11 +95,11 @@ fn fixture() -> Fixture {
         qc,
     }
 }
-fn stage(f: &Fixture, executed: Arc<SignedBlock>) {
-    f.store.staging.stage(Arc::new(StagedBlock {
+fn stage(f: &Fixture, executed: iroha_data_model::block::SharedSignedBlock) {
+    f.store.staging.stage(StagedBlock {
         block_hash: f.qc.block_hash,
         executed,
-    }));
+    });
 }
 #[test]
 fn exact_original_frame_publishes_replays_and_serves_original_availability() {
@@ -108,7 +115,8 @@ fn exact_original_frame_publishes_replays_and_serves_original_availability() {
     let original = f
         .store
         .kura
-        .get_block(NonZeroUsize::new(2).unwrap())
+        .get_block(NonZeroUsize::new(2).unwrap(), &f.store.execution_budget)
+        .expect("original block read attempt")
         .unwrap();
     assert_eq!(
         original.encode_wire().unwrap(),
@@ -181,7 +189,14 @@ fn corrupt_availability_is_an_error_not_missing_or_served_metadata() {
             table,
         ),
     ));
-    f.store.kura.store_block(block).unwrap();
+    f.store
+        .kura
+        .store_block(
+            iroha_data_model::block::SharedSignedBlock::reserve(&f.store.execution_budget)
+                .unwrap()
+                .initialize(block),
+        )
+        .unwrap();
     assert_eq!(
         f.store.entry(2).unwrap_err().io_kind(),
         io::ErrorKind::InvalidData
@@ -336,10 +351,14 @@ fn kura_body_reader_competing_hash_never_hides_corrupt_stored_certificates() {
         f.store
             .kura
             .store_block(
-                f.executed
-                    .as_ref()
-                    .clone()
-                    .with_commit_certificate(Some(certificate)),
+                iroha_data_model::block::SharedSignedBlock::reserve(&f.store.execution_budget)
+                    .unwrap()
+                    .initialize(
+                        f.executed
+                            .as_ref()
+                            .clone()
+                            .with_commit_certificate(Some(certificate)),
+                    ),
             )
             .unwrap();
         let source = f
@@ -379,7 +398,12 @@ fn invalid_full_qc_or_staged_certificate_never_reaches_kura() {
         .admit(&f.store.execution_budget)
         .unwrap(),
     ));
-    stage(&f, Arc::new(bad));
+    stage(
+        &f,
+        iroha_data_model::block::SharedSignedBlock::reserve(&f.store.execution_budget)
+            .unwrap()
+            .initialize(bad),
+    );
     assert!(f.store.append(&f.body, &f.qc).is_err());
     assert_eq!(f.store.height(), 1);
     let foreign = AllocationBudget::new(1 << 27);
@@ -393,7 +417,12 @@ fn invalid_full_qc_or_staged_certificate_never_reaches_kura() {
         .admit(&foreign)
         .unwrap(),
     ));
-    stage(&f, Arc::new(bad));
+    stage(
+        &f,
+        iroha_data_model::block::SharedSignedBlock::reserve(&f.store.execution_budget)
+            .unwrap()
+            .initialize(bad),
+    );
     assert!(f.store.append(&f.body, &f.qc).is_err());
     assert_eq!(f.store.height(), 1);
 }
@@ -445,10 +474,14 @@ fn empty_payload_header_cannot_restore_committed_body() {
     f.store
         .kura
         .store_block(
-            f.executed
-                .as_ref()
-                .clone()
-                .with_commit_certificate(Some(certificate)),
+            iroha_data_model::block::SharedSignedBlock::reserve(&f.store.execution_budget)
+                .unwrap()
+                .initialize(
+                    f.executed
+                        .as_ref()
+                        .clone()
+                        .with_commit_certificate(Some(certificate)),
+                ),
         )
         .unwrap();
     assert_eq!(
@@ -465,7 +498,8 @@ fn refused_certificate_read_observation_preserves_original_source_and_table() {
     let source = f
         .store
         .kura
-        .get_block(NonZeroUsize::new(2).unwrap())
+        .get_block(NonZeroUsize::new(2).unwrap(), &f.store.execution_budget)
+        .expect("original block read attempt")
         .unwrap();
     let budget = &f.store.execution_budget;
     let limit = budget.limit_bytes();
@@ -477,7 +511,7 @@ fn refused_certificate_read_observation_preserves_original_source_and_table() {
         io::ErrorKind::WouldBlock
     );
     let owners = f.store.pending_certificate_read_for_test().unwrap();
-    assert_eq!(owners.0, Arc::as_ptr(&source));
+    assert_eq!(owners.0, std::ptr::from_ref(source.as_ref()));
     assert!(owners.1.is_some());
     assert!(owners.2.is_none());
     assert_eq!(budget.reserved_bytes(), reserved + table_len);
@@ -499,18 +533,24 @@ fn refused_certificate_read_observation_preserves_original_source_and_table() {
 #[test]
 fn staging_preserves_original_identity_across_lookup_and_clear() {
     let f = fixture();
-    let original = Arc::new(StagedBlock {
+    let original = StagedBlock {
         block_hash: f.qc.block_hash,
         executed: f.executed.clone(),
-    });
+    };
     assert!(f.store.staging().get(&f.qc.block_hash).is_none());
     f.store.staging().stage(original.clone());
     assert!(f.store.staging().get(&Hash32([0x99; 32])).is_none());
     let first = f.store.staging().get(&f.qc.block_hash).unwrap();
     let retry = f.store.staging().get(&f.qc.block_hash).unwrap();
-    assert!(Arc::ptr_eq(&first, &original));
-    assert!(Arc::ptr_eq(&first, &retry));
-    assert!(Arc::ptr_eq(&first.executed, &retry.executed));
+    assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+        &first.executed,
+        &original.executed
+    ));
+    assert_eq!(first.block_hash, retry.block_hash);
+    assert!(iroha_data_model::block::SharedSignedBlock::ptr_eq(
+        &first.executed,
+        &retry.executed
+    ));
     assert!(std::ptr::eq(
         first.executed.commit_certificate().unwrap(),
         retry.executed.commit_certificate().unwrap()
@@ -525,7 +565,9 @@ fn real_valid_future_certificate_cannot_skip_a_height_and_reopening_keeps_origin
     let mut chain = NativeFinalityFixture::new();
     let block = chain.block_with_submitted_work(chain.next_header());
     chain.certify(block);
-    let third = Arc::new(decode_versioned_signed_block(&chain.latest().block_wire).unwrap());
+    let third = iroha_data_model::block::SharedSignedBlock::reserve(&f.store.execution_budget)
+        .unwrap()
+        .initialize(decode_framed_signed_block(&chain.latest().block_wire).unwrap());
     let mut read = CommittedRead::new(
         third,
         3,
@@ -569,12 +611,14 @@ fn untrusted_certificate_and_mismatching_staged_payload_are_never_written() {
     );
     stage(
         &f,
-        Arc::new(
-            f.executed
-                .as_ref()
-                .clone()
-                .with_commit_certificate(Some(untrusted)),
-        ),
+        iroha_data_model::block::SharedSignedBlock::reserve(&f.store.execution_budget)
+            .unwrap()
+            .initialize(
+                f.executed
+                    .as_ref()
+                    .clone()
+                    .with_commit_certificate(Some(untrusted)),
+            ),
     );
     assert!(f.store.append(&f.body, &f.qc).is_err());
     assert_eq!(f.store.height(), 1);
@@ -583,19 +627,31 @@ fn untrusted_certificate_and_mismatching_staged_payload_are_never_written() {
     header.creation_time_ms += 17;
     let different = other.block_with_submitted_work(header);
     other.certify(different);
-    let mut mismatching = decode_versioned_signed_block(&other.latest().block_wire).unwrap();
+    let mut mismatching = decode_framed_signed_block(&other.latest().block_wire).unwrap();
     assert_eq!(mismatching.header().height().get(), 2);
     assert!(!publication::matches_payload(&mismatching, f.body.payload().as_slice()).unwrap());
     // Keep the original valid certificate but provide another executed frame: it must fail
     // before publication even though the certificate and pool themselves are admitted.
     mismatching.set_commit_certificate(Some(c.clone()));
-    stage(&f, Arc::new(mismatching));
+    stage(
+        &f,
+        iroha_data_model::block::SharedSignedBlock::reserve(&f.store.execution_budget)
+            .unwrap()
+            .initialize(mismatching),
+    );
     assert!(f.store.append(&f.body, &f.qc).is_err());
     assert_eq!(f.store.height(), 1);
     let garbage = CommitCertificate::from_untrusted_parts(vec![1, 2, 3], vec![], vec![], vec![]);
     assert!(decode_certificate(&garbage).is_err());
     let uncertified = f.executed.as_ref().clone().with_commit_certificate(None);
-    f.store.kura.store_block(uncertified).unwrap();
+    f.store
+        .kura
+        .store_block(
+            iroha_data_model::block::SharedSignedBlock::reserve(&f.store.execution_budget)
+                .unwrap()
+                .initialize(uncertified),
+        )
+        .unwrap();
     assert_eq!(
         f.store.entry(2).unwrap_err().io_kind(),
         io::ErrorKind::InvalidData
@@ -645,7 +701,12 @@ fn review_changed_executed_result_must_not_publish_under_original_certificate() 
         ),
         (len, hash)
     );
-    stage(&f, Arc::new(changed));
+    stage(
+        &f,
+        iroha_data_model::block::SharedSignedBlock::reserve(&f.store.execution_budget)
+            .unwrap()
+            .initialize(changed),
+    );
     assert!(
         f.store.append(&f.body, &f.qc).is_err(),
         "the actual changed execution is not the result authenticated by the original QC"
@@ -695,7 +756,14 @@ fn review_changed_executed_result_must_not_be_served_from_committed_storage() {
         ),
         (len, hash)
     );
-    f.store.kura.store_block(changed).unwrap();
+    f.store
+        .kura
+        .store_block(
+            iroha_data_model::block::SharedSignedBlock::reserve(&f.store.execution_budget)
+                .unwrap()
+                .initialize(changed),
+        )
+        .unwrap();
     assert!(
         f.store.committed_body(2).is_err(),
         "changed stored execution is not the result authenticated by its original QC"
@@ -841,7 +909,9 @@ fn merged_execution_fixture() -> Fixture {
     .unwrap();
     executed.set_commit_certificate(Some(certificate));
     execution::validate(&executed).unwrap();
-    f.executed = Arc::new(executed);
+    f.executed = iroha_data_model::block::SharedSignedBlock::reserve(&f.store.execution_budget)
+        .unwrap()
+        .initialize(executed);
     f.body = authored.body;
     f.qc = qc;
     f
@@ -858,7 +928,8 @@ fn merged_execution_publishes_the_exact_original_signed_proposal() {
     let stored = f
         .store
         .kura
-        .get_block(NonZeroUsize::new(2).unwrap())
+        .get_block(NonZeroUsize::new(2).unwrap(), &f.store.execution_budget)
+        .expect("original block read attempt")
         .unwrap();
     assert_eq!(
         stored.encode_wire().unwrap(),
@@ -938,7 +1009,9 @@ fn changed_merged_execution_suffix_cannot_use_the_original_result_certificate() 
     );
     assert!(publication::matches_payload(&changed, f.body.payload().as_slice()).unwrap());
     assert!(execution::validate(&changed).is_err());
-    let changed = Arc::new(changed);
+    let changed = iroha_data_model::block::SharedSignedBlock::reserve(&f.store.execution_budget)
+        .unwrap()
+        .initialize(changed);
     stage(&f, changed.clone());
     assert!(f.store.append(&f.body, &f.qc).is_err());
     assert_eq!(f.store.height(), 1);

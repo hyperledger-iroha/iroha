@@ -102,6 +102,8 @@ fn retained_cut_preserves_original_rows_after_source_replacement_and_refuses_equ
 #[test]
 fn source_acquisition_preserves_original_revision_busy_release_and_poison() {
     let state = state();
+    let mut registration =
+        crate::unit_test_support::release_registration(&state.ivm_execution_budget());
     let unrelated = mv::cell::Cell::new(1_u64);
     let held = state.world.musubi_resolver_index_revision.block();
     let Err(error) = StateMusubiSourceCut::try_capture(&state) else {
@@ -111,7 +113,7 @@ fn source_acquisition_preserves_original_revision_busy_release_and_poison() {
     let PublicationPreparationError::Busy(release) = error.original else {
         panic!("exact original revision contention")
     };
-    let mut wait = pin!(release.wait_for_release());
+    let mut wait = pin!(release.wait_for_release(&mut registration));
     let mut cx = Context::from_waker(Waker::noop());
     assert_eq!(wait.as_mut().poll(&mut cx), Poll::Pending);
     drop(unrelated.block());

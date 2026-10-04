@@ -18,7 +18,7 @@ AUTHENTICATION_TESTS = (
     / "crates/iroha_torii_shared/src/route_catalog/authentication_routes_test.rs"
 )
 INCLUDE = 'include!("authentication_routes_test.rs");'
-REQUIRED_POLICY_CASES = ('application_query_posts_authenticate_before_expensive_compute', 'local_sorafs_governance_state_is_operator_signed', 'node_local_core_and_pipeline_reads_require_exact_operator_signatures', 'sorafs_inventory_and_storage_reads_declare_fail_closed_admission', 'soracloud_commands_require_exact_account_authentication_and_honest_effects', 'soracloud_sensitive_reads_require_exact_account_authentication', 'soracloud_public_reads_are_bounded_single_object_discovery', 'subscription_commands_require_exact_account_authentication_and_mutation_admission', 'application_drafts_and_cryptographic_services_require_exact_account_authentication', 'webhook_registry_is_operator_signed_and_effects_are_exact', 'zk_attachment_tenant_routes_are_account_authenticated_before_storage_access', 'zk_compute_routes_require_exact_account_authentication', 'account_and_node_bootstrap_capabilities_are_public', 'state_backed_runtime_and_governance_routes_require_exact_account_authentication', 'moderation_dead_letter_routes_are_account_signed_operator_role_posts')
+REQUIRED_POLICY_CASES = ('collection_queries_preserve_authentication_and_proofs_remain_expensive', 'local_sorafs_governance_state_is_operator_signed', 'node_local_core_and_pipeline_reads_require_exact_operator_signatures', 'sorafs_inventory_and_storage_reads_declare_fail_closed_admission', 'soracloud_commands_require_exact_account_authentication_and_honest_effects', 'soracloud_sensitive_reads_require_exact_account_authentication', 'soracloud_public_reads_are_bounded_single_object_discovery', 'subscription_commands_require_exact_account_authentication_and_mutation_admission', 'application_drafts_and_cryptographic_services_require_exact_account_authentication', 'webhook_registry_is_operator_signed_and_effects_are_exact', 'zk_attachment_tenant_routes_are_account_authenticated_before_storage_access', 'zk_compute_routes_require_exact_account_authentication', 'account_and_node_bootstrap_capabilities_are_public', 'state_backed_runtime_and_governance_routes_require_exact_account_authentication', 'moderation_dead_letter_routes_are_account_signed_operator_role_posts')
 DUPLICATE_TEST_NAMES = {
     "canonical_catalog_includes_host_gateway_and_directory_routes",
     "public_runtime_gateway_authentication_is_exactly_scoped",
@@ -80,6 +80,59 @@ def _macro_invocations(source: str) -> dict[str, str]:
     return invocations
 
 
+
+def _validate_collection_query_policy(source: str, invocation: str) -> None:
+    """Keep collection reads authenticated and proof computation independently bound."""
+    masked = mask_rust_comments(source)
+    constant = re.search(
+        r"const DATASPACE_READ: RoutePolicyExpectation = RoutePolicyExpectation \{(.*?)\};",
+        masked,
+        re.DOTALL,
+    )
+    if constant is None:
+        raise AssertionError("collection read policy constant is missing")
+    for expected in (
+        "effect: Some(RouteEffect::ReadOnly)",
+        "admission: Some(AdmissionPolicy::DataspaceVisible)",
+        "authentication: Some(AuthenticationPolicy::OptionalCanonicalAccountSignature)",
+    ):
+        if expected not in constant.group(1):
+            raise AssertionError("collection read policy changed: " + expected)
+    collection = re.search(
+        r"assert_route_policies\(\s*\[(.*?)\],\s*DATASPACE_READ,\s*\);",
+        mask_rust_comments(invocation),
+        re.DOTALL,
+    )
+    expected_routes = {
+        "application_api::DOMAINS_QUERY_POST",
+        "application_api::ACCOUNTS_QUERY_POST",
+        "application_api::TRANSACTIONS_QUERY_POST",
+        "application_api::ASSETS_DEFINITIONS_QUERY_POST",
+        "application_api::NFTS_QUERY_POST",
+        "application_api::RWAS_QUERY_POST",
+        "application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST",
+        "application_api::ACCOUNTS_BY_ACCOUNT_ID_ASSETS_QUERY_POST",
+        "telemetry::ASSET_HOLDERS_QUERY",
+    }
+    actual_routes = (
+        re.findall(r"(?:application_api|telemetry)::[A-Z_]+", collection.group(1))
+        if collection is not None else []
+    )
+    if set(actual_routes) != expected_routes or len(actual_routes) != len(expected_routes):
+        raise AssertionError("collection queries lost direct dataspace read policy assertions")
+    compact = re.sub(r"\s+", "", mask_rust_comments(invocation))
+    for expected in (
+        "assert_route_policies([application_api::REPO_AGREEMENTS_QUERY_POST],"
+        "RoutePolicyExpectation{effect:Some(RouteEffect::ReadOnly),..ACCOUNT_AUTHENTICATED},);",
+        "assert_route_policy(application_api::PROOFS_QUERY_POST,RoutePolicyExpectation{"
+        "effect:Some(RouteEffect::ExpensiveCompute),admission:Some(AdmissionPolicy::AuthenticatedAccount),"
+        "authentication:Some(AuthenticationPolicy::CanonicalSignedBody),"
+        "..RoutePolicyExpectation::default()},);",
+    ):
+        if expected not in compact:
+            raise AssertionError("account read or expensive signed proof policy assertion changed")
+
+
 def _validate_policy_matrix(source: str) -> None:
     """Require named coverage and direct comparisons for every policy dimension."""
     invocations = _macro_invocations(source)
@@ -93,6 +146,7 @@ def _validate_policy_matrix(source: str) -> None:
     for name in REQUIRED_POLICY_CASES:
         if "assert_route_polic" not in invocations[name]:
             raise AssertionError("policy case has no direct assertions: " + name)
+    _validate_collection_query_policy(source, invocations[REQUIRED_POLICY_CASES[0]])
 
 
 class RouteCatalogAuthenticationSourceTest(unittest.TestCase):
@@ -112,7 +166,7 @@ class RouteCatalogAuthenticationSourceTest(unittest.TestCase):
         source = AUTHENTICATION_TESTS.read_text(encoding="utf-8")
         for old, new in (
             ("assert_expected_route_value!(route, expected, authentication);", ""),
-            ("application_query_posts_authenticate_before_expensive_compute", "retired_case"),
+            ("collection_queries_preserve_authentication_and_proofs_remain_expensive", "retired_case"),
             ("assert_expected_route_value!(route, expected, admission);", ""),
         ):
             with self.subTest(marker=old), self.assertRaises(AssertionError):
@@ -120,6 +174,32 @@ class RouteCatalogAuthenticationSourceTest(unittest.TestCase):
         name = REQUIRED_POLICY_CASES[0]
         with self.assertRaisesRegex(AssertionError, "duplicate"):
             _validate_policy_matrix(source + "\nnamed_route_policy_test!(" + name + ", {});\n")
+
+    def test_collection_read_and_signed_proof_policy_mutations_are_rejected(self) -> None:
+        source = AUTHENTICATION_TESTS.read_text(encoding="utf-8")
+        name = REQUIRED_POLICY_CASES[0]
+        invocation = _macro_invocations(source)[name]
+        constant_start = source.index("const DATASPACE_READ:")
+        constant_end = source.index("};", constant_start) + 2
+        constant = source[constant_start:constant_end]
+        for original, replacement in (
+            ("RouteEffect::ReadOnly", "RouteEffect::ExpensiveCompute"),
+            ("AdmissionPolicy::DataspaceVisible", "AdmissionPolicy::Public"),
+            ("AuthenticationPolicy::OptionalCanonicalAccountSignature", "AuthenticationPolicy::ToriiDefault"),
+        ):
+            with self.subTest(constant=original), self.assertRaisesRegex(AssertionError, "collection read policy"):
+                self.assertEqual(constant.count(original), 1)
+                _validate_policy_matrix(source.replace(constant, constant.replace(original, replacement, 1), 1))
+        for original, replacement in (
+            ("DATASPACE_READ,", "EMPTY_POLICY,"),
+            ("application_api::NFTS_QUERY_POST,", ""),
+            ("..ACCOUNT_AUTHENTICATED", "..EMPTY_POLICY"),
+            ("RouteEffect::ExpensiveCompute", "RouteEffect::ReadOnly"),
+            ("AuthenticationPolicy::CanonicalSignedBody", "AuthenticationPolicy::ToriiDefault"),
+        ):
+            with self.subTest(case=original), self.assertRaises(AssertionError):
+                self.assertEqual(invocation.count(original), 1)
+                _validate_policy_matrix(source.replace(invocation, invocation.replace(original, replacement, 1), 1))
 
     def test_preexisting_duplicate_tests_remain_only_in_the_catalog_suite(self) -> None:
         catalog_tests = CATALOG_TESTS.read_text(encoding="utf-8")

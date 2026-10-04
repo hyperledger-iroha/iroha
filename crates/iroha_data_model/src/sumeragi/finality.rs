@@ -17,6 +17,13 @@ pub const NATIVE_FINALITY_MAX_JOURNAL_BYTES: usize = 64 * 1024 * 1024;
 /// Maximum number of consecutive source frames in one bounded journal.
 pub const NATIVE_FINALITY_MAX_BLOCK_COUNT: usize = 65_536;
 
+mod prepared_source;
+pub use prepared_source::{
+    NativeFinalityChargedFrame, NativeFinalityFrame, NativeFinalityFrames, NativeFinalitySource,
+    PreparedNativeFinalityDestinationError, PreparedNativeFinalityError,
+    PreparedNativeFinalityJournal,
+};
+
 /// Explicit caller-owned admission bounds. There is no implicit unbounded/default mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NativeFinalityLimits {
@@ -81,7 +88,7 @@ impl NativeFinalityLimits {
     norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_data_model::sumeragi::finality::NativeFinalityArtifact")]
-#[norito(deny_unknown_fields)]
+#[norito(deny_unknown_fields, decode_fields)]
 pub struct NativeFinalityArtifact {
     /// The only source body. JSON transports the same bytes as base64.
     #[norito(
@@ -107,6 +114,56 @@ impl NativeFinalityArtifactError {
             .decode_resource_error()
             .map_or_else(|| Self::Invalid(error.to_string()), Self::Resource)
     }
+}
+
+/// Native finality source decoding, retaining the original caller resource cause.
+#[derive(Debug, thiserror::Error)]
+pub enum NativeFinalityDecodeError {
+    /// A source or configured protocol bound is invalid.
+    #[error("native finality: {0}")]
+    Invalid(String),
+    /// The frame fails intrinsic canonical decoding.
+    #[error("native finality frame is invalid")]
+    Malformed(#[source] norito::core::DecodeAttemptError),
+    /// The caller's original decoder allowance or allocator refused.
+    #[error("native finality decoder is unavailable")]
+    Resource(#[source] norito::core::DecodeAttemptError),
+}
+impl From<String> for NativeFinalityDecodeError {
+    fn from(value: String) -> Self {
+        Self::Invalid(value)
+    }
+}
+impl From<&str> for NativeFinalityDecodeError {
+    fn from(value: &str) -> Self {
+        Self::Invalid(value.into())
+    }
+}
+impl From<norito::core::DecodeAttemptError> for NativeFinalityDecodeError {
+    fn from(value: norito::core::DecodeAttemptError) -> Self {
+        match value.kind() {
+            norito::core::DecodeAttemptErrorKind::Invalid => Self::Malformed(value),
+            norito::core::DecodeAttemptErrorKind::Allocator
+            | norito::core::DecodeAttemptErrorKind::EnclosingLimit => Self::Resource(value),
+        }
+    }
+}
+
+/// Borrow one native source under operation bounds and the sole canonical block decoder.
+///
+/// # Errors
+/// Retains malformed-frame and original local decoder-refusal causes separately.
+pub fn decode_native_finality_block(
+    wire: &[u8],
+    limits: NativeFinalityLimits,
+) -> Result<SignedBlock, NativeFinalityDecodeError> {
+    limits.validate()?;
+    if wire.is_empty() || wire.len() > limits.block_bytes {
+        return Err("native block frame exceeds its configured source bound".into());
+    }
+    norito::core::with_decode_limits_scope(limits.decode_limits()?, || {
+        decode_framed_signed_block(wire).map_err(Into::into)
+    })
 }
 
 impl NativeFinalityArtifact {
@@ -183,14 +240,11 @@ impl NativeFinalityArtifact {
     /// # Errors
     /// Rejects invalid limits, empty or oversized sources, noncanonical encoding, or exhausted
     /// aggregate decoding and allocation limits.
-    pub fn decode_block(&self, limits: NativeFinalityLimits) -> Result<SignedBlock, String> {
-        limits.validate()?;
-        if self.block_wire.is_empty() || self.block_wire.len() > limits.block_bytes {
-            return Err("native block frame exceeds its configured source bound".into());
-        }
-        norito::core::with_decode_limits_scope(limits.decode_limits()?, || {
-            decode_framed_signed_block(&self.block_wire).map_err(|error| error.to_string())
-        })
+    pub fn decode_block(
+        &self,
+        limits: NativeFinalityLimits,
+    ) -> Result<SignedBlock, NativeFinalityDecodeError> {
+        decode_native_finality_block(&self.block_wire, limits)
     }
 }
 
@@ -209,7 +263,7 @@ impl NativeFinalityArtifact {
     norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_data_model::sumeragi::finality::NativeFinalityJournal")]
-#[norito(deny_unknown_fields)]
+#[norito(deny_unknown_fields, decode_fields)]
 pub struct NativeFinalityJournal {
     /// Exact canonical source frames in ascending one-based height order.
     pub blocks: Vec<NativeFinalityArtifact>,
@@ -221,23 +275,7 @@ impl NativeFinalityJournal {
     /// Rejects invalid limits, empty or excessive block counts, invalid frame sizes, or an
     /// overflowing or excessive aggregate source length.
     pub fn validate_source(&self, limits: NativeFinalityLimits) -> Result<(), String> {
-        limits.validate()?;
-        if self.blocks.is_empty() || self.blocks.len() > limits.block_count {
-            return Err("native journal block count exceeds its configured bound".into());
-        }
-        let mut total = 0_usize;
-        for block in &self.blocks {
-            if block.block_wire.is_empty() || block.block_wire.len() > limits.block_bytes {
-                return Err("native journal contains an oversized or empty frame".into());
-            }
-            total = total
-                .checked_add(block.block_wire.len())
-                .ok_or("native journal size overflow")?;
-            if total > limits.journal_bytes {
-                return Err("native journal exceeds its configured aggregate byte bound".into());
-            }
-        }
-        Ok(())
+        NativeFinalitySource::from(self).validate(limits)
     }
 
     /// Decode a canonical journal archive within the supplied aggregate byte/allocation caps.
@@ -245,13 +283,21 @@ impl NativeFinalityJournal {
     /// # Errors
     /// Rejects invalid limits, empty or excessive archive bytes, noncanonical decoding,
     /// allocation refusal, or a journal whose source sizes fail validation.
-    pub fn decode(bytes: &[u8], limits: NativeFinalityLimits) -> Result<Self, String> {
+    pub fn decode(
+        bytes: &[u8],
+        limits: NativeFinalityLimits,
+    ) -> Result<Self, NativeFinalityDecodeError> {
         limits.validate()?;
         if bytes.is_empty() || bytes.len() > limits.journal_bytes {
             return Err("native journal archive exceeds its configured byte bound".into());
         }
-        let journal: Self = norito::decode_canonical_with_limits(bytes, limits.decode_limits()?)
-            .map_err(|error| error.to_string())?;
+        let journal: Self =
+            norito::core::with_decode_limits_scope(limits.decode_limits()?, || {
+                norito::decode_canonical_for_admission(
+                    bytes,
+                    norito::canonical_decode_limits(bytes.len()),
+                )
+            })?;
         journal.validate_source(limits)?;
         Ok(journal)
     }
@@ -280,7 +326,7 @@ mod tests {
             2,
             0,
         ))
-        .build(std::collections::BTreeSet::default())
+        .build(crate::block::BlockSignatures::default())
     }
     #[test]
     fn codec_error_keeps_resource_refusal_distinct_from_malformed_source() {
@@ -433,5 +479,54 @@ mod tests {
         let mut trailing = bytes;
         trailing.push(0);
         assert!(NativeFinalityJournal::decode(&trailing, limits()).is_err());
+    }
+
+    #[test]
+    fn native_finality_decoders_preserve_original_scope_refusal_and_exact_retry() {
+        let artifact = NativeFinalityArtifact::from_block(&source(), limits()).unwrap();
+        let journal = NativeFinalityJournal {
+            blocks: vec![artifact.clone()],
+        };
+        let bytes = norito::encode_canonical(&journal).unwrap();
+        let no_allocation =
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+        let errors = [
+            norito::core::with_decode_limits_scope(no_allocation, || {
+                artifact.decode_block(limits())
+            })
+            .unwrap_err(),
+            norito::core::with_decode_limits_scope(no_allocation, || {
+                NativeFinalityJournal::decode(&bytes, limits())
+            })
+            .unwrap_err(),
+        ];
+        for error in errors {
+            let NativeFinalityDecodeError::Resource(original) = error else {
+                panic!("{error:?}");
+            };
+            assert_eq!(
+                original.kind(),
+                norito::core::DecodeAttemptErrorKind::EnclosingLimit
+            );
+            assert!(matches!(
+                original.into_error().decode_resource_error(),
+                Some(norito::core::DecodeResourceError::TotalAllocationExceeded { limit: 0, .. })
+            ));
+        }
+        assert_eq!(artifact.decode_block(limits()).unwrap(), source());
+        assert_eq!(
+            NativeFinalityJournal::decode(&bytes, limits()).unwrap(),
+            journal
+        );
+        let mut changed = artifact;
+        changed.block_wire[0] = 99;
+        assert!(
+            matches!(changed.decode_block(limits()), Err(NativeFinalityDecodeError::Malformed(e)) if e.kind() == norito::core::DecodeAttemptErrorKind::Invalid)
+        );
+        let mut trailing = bytes;
+        trailing.push(0);
+        assert!(
+            matches!(NativeFinalityJournal::decode(&trailing, limits()), Err(NativeFinalityDecodeError::Malformed(e)) if e.kind() == norito::core::DecodeAttemptErrorKind::Invalid)
+        );
     }
 }

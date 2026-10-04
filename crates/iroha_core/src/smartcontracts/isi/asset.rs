@@ -134,7 +134,8 @@ pub mod isi {
                 self,
                 &resolved_id,
                 &candidate,
-            )?;
+            )
+            .map_err(|error| self.attempt_error_to_instruction_error(error))?;
             crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit(
                 self,
                 &resolved_id,
@@ -262,7 +263,8 @@ pub mod isi {
                 self,
                 source_id,
                 source_after,
-            )?;
+            )
+            .map_err(|error| self.attempt_error_to_instruction_error(error))?;
             if enforce_credit_controls {
                 self.ensure_numeric_asset_holding_limit(destination_id, &to_balance_after)?;
             }
@@ -346,7 +348,8 @@ pub mod isi {
                 self,
                 source_id,
                 balance_after,
-            )?;
+            )
+            .map_err(|error| self.attempt_error_to_instruction_error(error))?;
             if source_id == destination_id {
                 self.precheck_quantity_balance_assignment(source_id, &delta.to_balance_after)?;
                 self.quantity_mutation_observation.changed();
@@ -2105,6 +2108,8 @@ pub mod isi {
         },
         /// Fund a native escrow retained record.
         NativeEscrow(Vec<u8>),
+        /// Fund one original signed-root AMX transfer escrow.
+        NativeAmx(Vec<u8>),
         /// Fund an exact native racing seat.
         GameSession(Vec<u8>),
         /// Fund a VPN lease retained record.
@@ -2151,6 +2156,8 @@ pub mod isi {
         CitizenshipRelease(Vec<u8>),
         /// Move value according to an exact native escrow record.
         NativeEscrow(Vec<u8>),
+        /// Apply or release only an authenticated global AMX decision.
+        NativeAmx(Vec<u8>),
         /// Settle or refund an exact native racing liability.
         GameSession(Vec<u8>),
         /// Move value according to an exact VPN lease record.
@@ -2184,7 +2191,8 @@ pub mod isi {
         destination_admission: NumericAssetDestinationAdmissionPolicy,
     }
     /// Measure before output allocation and debit the logical frame quota, including its delimiter.
-    /// TODO: retain original physical funding for the remaining retail-policy binding frames.
+    /// Independent owned-frame oracle; production contexts stream borrowed values.
+    #[cfg(test)]
     fn bounded_quantity_frame<T: norito::NoritoSerialize>(
         value: &T,
         remaining: &mut u64,
@@ -2305,6 +2313,11 @@ pub mod isi {
                 EmbeddedNumericAssetMovementPurpose::NativeEscrow(binding) => (
                     NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
                     "native-escrow-funding",
+                    binding,
+                ),
+                EmbeddedNumericAssetMovementPurpose::NativeAmx(binding) => (
+                    NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
+                    "native-amx-prepare",
                     binding,
                 ),
                 EmbeddedNumericAssetMovementPurpose::GameSession(binding) => (
@@ -2455,6 +2468,12 @@ pub mod isi {
                     NumericAssetTransferSourcePolicy::NativeEscrowCustody,
                     NumericAssetTransferControlPolicy::Enforce,
                 ),
+                RetainedNumericAssetMovementPurpose::NativeAmx(binding) => (
+                    "native-amx-certified-settlement",
+                    binding,
+                    NumericAssetTransferSourcePolicy::NativeEscrowCustody,
+                    NumericAssetTransferControlPolicy::Enforce,
+                ),
                 RetainedNumericAssetMovementPurpose::GameSession(binding) => (
                     "game-proof-settlement",
                     binding,
@@ -2572,6 +2591,14 @@ pub mod isi {
         /// Hash the actual already-checked typed authorization without deriving source ownership.
         /// Unlike the legacy transcript identity, this retains purpose when a call hash exists.
         fn quantity_authorization_context_inputs(
+            &self,
+            bindings: &quantity_authorization::BindingFrame<'_>,
+        ) -> Option<Hash> {
+            self.quantity_authorization_context_stream(bindings, u64::MAX)
+        }
+        // One canonical byte stream; tests retain independent small-cap oracles.
+        // The production entry above is independent of optional proof limits.
+        fn quantity_authorization_context_stream(
             &self,
             bindings: &quantity_authorization::BindingFrame<'_>,
             limit: u64,
@@ -2720,7 +2747,7 @@ pub mod isi {
             bindings: &[(AssetId, AssetId, Quantity)],
             limit: u64,
         ) -> Option<Hash> {
-            self.quantity_authorization_context_inputs(
+            self.quantity_authorization_context_stream(
                 &quantity_authorization::BindingFrame::Owned(bindings),
                 limit,
             )
@@ -2866,27 +2893,8 @@ pub mod isi {
             legs: &[(AssetId, AssetId, TransferDeltaTranscript)],
             apply: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<T, Error>,
         ) -> Result<T, Error> {
-            let limit = state.quantity_candidate_preimage_limit();
-            let measured = legs
-                .iter()
-                .try_fold(0u64, |sum, (source, destination, delta)| {
-                    let source = u64::try_from(norito::canonical_frame_len(source).ok()?).ok()?;
-                    let destination =
-                        u64::try_from(norito::canonical_frame_len(destination).ok()?).ok()?;
-                    let amount =
-                        u64::try_from(norito::canonical_frame_len(&delta.amount).ok()?).ok()?;
-                    sum.checked_add(source)?
-                        .checked_add(destination)?
-                        .checked_add(amount)?
-                        .checked_add(32)
-                });
-            if measured.is_none_or(|bytes| bytes > limit) {
-                state.poison_quantity_candidate_owner();
-                return apply(state);
-            }
             let Some(context) = self.quantity_authorization_context_inputs(
                 &quantity_authorization::BindingFrame::Transfers(legs),
-                limit,
             ) else {
                 state.poison_quantity_candidate_owner();
                 return apply(state);
@@ -3467,7 +3475,10 @@ pub mod isi {
                     &captured_source,
                     &captured_amount,
                     false,
-                    ("account-admission-fee-burn", Some(&[])),
+                    (
+                        "account-admission-fee-burn",
+                        Some(quantity_authorization::SupplyBinding::Bytes(&[])),
+                    ),
                     apply,
                 )
             }
@@ -3480,7 +3491,10 @@ pub mod isi {
                     &captured_source,
                     &captured_amount,
                     false,
-                    ("verified-fee-sponsor-burn", Some(&owner.binding)),
+                    (
+                        "verified-fee-sponsor-burn",
+                        Some(quantity_authorization::SupplyBinding::Bytes(&owner.binding)),
+                    ),
                     apply,
                 )
             }
@@ -4199,7 +4213,12 @@ pub mod isi {
             &movement.plan.destination_id,
             &amount,
             &movement.plan.prechecked_delta.to_balance_after,
-        )?;
+        )
+        .map_err(|error| {
+            state_transaction
+                .world
+                .attempt_error_to_instruction_error(error)
+        })?;
         movement.apply(state_transaction)?;
         custody.apply(&mut state_transaction.world);
         Ok(())
@@ -4788,6 +4807,135 @@ pub mod isi {
                 RetainedNumericAssetMovementPurpose::SccpEscrowRelease(binding),
             ),
         )
+    }
+    /// Consume one native AMX movement after independently rejoining exact canonical custody.
+    /// The producer is the signed-root participant owner; generic escrow has no constructor.
+    pub(crate) fn execute_verified_amx_movement(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::sumeragi::amx::VerifiedAmxMovement,
+    ) -> Result<(), Error> {
+        use iroha_data_model::sumeragi_amx::{AmxOutcomeV1, AmxVoteV1};
+        let (owner, slot, outcome) = authorization.into_parts();
+        if !owner.belongs_to(
+            state_transaction
+                .pipeline_ivm_prepared_cache
+                .execution_budget(),
+        ) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "native AMX movement belongs to a foreign allocation pool".into(),
+            ));
+        }
+        let record = owner
+            .canonical()
+            .and_then(|value| value.escrows.get(slot))
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "native AMX capability lost its exact original funded escrow slot".into(),
+                )
+            })?;
+        let tx = record.tx;
+        let effects_hash = iroha_data_model::sumeragi_amx::native_transfer_effects_hash(
+            &record.leg,
+        )
+        .map_err(|error| {
+            if let iroha_data_model::sumeragi_amx::AmxError::Resource(resource) = &error {
+                state_transaction.arm_local_storage_refusal(
+                    crate::state::StateStorageAdmissionError::AmxDecode(*resource),
+                );
+            }
+            InstructionExecutionError::InvariantViolation(error.to_string().into())
+        })?;
+        let participant = state_transaction
+            .world
+            .sumeragi_amx_participant()
+            .canonical()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "native AMX movement has no genesis-installed participant".into(),
+                )
+            })?;
+        if record.tx != tx
+            || record.custody != participant.custody
+            || record.leg.source.scope()
+                != &AssetBalanceScope::Dataspace(participant.participant.dataspace)
+            || record.effects_hash != effects_hash
+            || record.settled.is_some()
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "native AMX movement differs from its exact protected leg".into(),
+            ));
+        }
+        let custody_id = AssetId::with_scope(
+            record.leg.source.definition().clone(),
+            record.custody.clone(),
+            *record.leg.source.scope(),
+        );
+        let binding = canonical_numeric_movement_binding(&(tx, record.effects_hash, outcome))?;
+        let (source_id, destination_id, authorization) = match outcome {
+            None => {
+                if participant.participant.entry(&tx).is_some()
+                    || participant
+                        .escrows
+                        .binary_search_by_key(&tx, |record| record.tx)
+                        .is_ok()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "native AMX funding repeats an original transaction".into(),
+                    ));
+                }
+                (
+                    record.leg.source.clone(),
+                    custody_id,
+                    NumericAssetMovementAuthorization::embedded_user(
+                        record.leg.source.account(),
+                        EmbeddedNumericAssetMovementPurpose::NativeAmx(binding),
+                    ),
+                )
+            }
+            Some(outcome) => {
+                let original = participant
+                    .escrows
+                    .binary_search_by_key(&tx, |record| record.tx)
+                    .ok()
+                    .map(|slot| &participant.escrows[slot]);
+                if original != Some(record)
+                    || !participant.participant.entry(&tx).is_some_and(|entry| {
+                        entry.settled.is_none() && entry.vote == AmxVoteV1::Yes(record.effects_hash)
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "native AMX settlement has no identical original unsettled Yes escrow"
+                            .into(),
+                    ));
+                }
+                let receiver = match outcome {
+                    AmxOutcomeV1::Commit => &record.leg.destination,
+                    AmxOutcomeV1::Abort => record.leg.source.account(),
+                };
+                let destination = AssetId::with_scope(
+                    record.leg.source.definition().clone(),
+                    receiver.clone(),
+                    *record.leg.source.scope(),
+                );
+                (
+                    custody_id,
+                    destination,
+                    NumericAssetMovementAuthorization::retained(
+                        record.leg.source.account(),
+                        RetainedNumericAssetMovementPurpose::NativeAmx(binding),
+                    ),
+                )
+            }
+        };
+        PreparedNumericAssetMovement::prepare_with_scope(
+            state_transaction,
+            source_id,
+            destination_id,
+            record.leg.amount.clone(),
+            authorization,
+            NumericAssetTransferScopePolicy::ExplicitBilateral,
+        )?
+        .apply(state_transaction)
     }
     /// Consume one exact native-escrow movement capability.
     pub(in crate::smartcontracts::isi) fn execute_verified_native_escrow_movement(
@@ -5633,11 +5781,8 @@ pub mod isi {
             )?;
             crate::retail_fee::settle_balance(&mut state_transaction.world, &source_id)?;
             crate::retail_fee::settle_balance(&mut state_transaction.world, &destination_id)?;
-            crate::validation_fee_rewards::ensure_reward_custody_debit(
-                state_transaction,
-                &source_id,
-                &amount,
-            )?;
+            // The common transfer precheck below protects all additive reserves
+            // against the final net balance, including an exact self-transfer.
             let retail_usage_update = prepare_retail_daily_usage_update(
                 state_transaction,
                 &source_id,
@@ -6017,7 +6162,12 @@ pub mod isi {
                         state_transaction.world(),
                         source_id,
                         after,
-                    )?;
+                    )
+                    .map_err(|error| {
+                        state_transaction
+                            .world
+                            .attempt_error_to_instruction_error(error)
+                    })?;
                 }
             }
             let mut aggregate_outbound =
@@ -6258,7 +6408,12 @@ pub mod isi {
                 state_transaction.world(),
                 &source,
                 &after,
-            )?;
+            )
+            .map_err(|error| {
+                state_transaction
+                    .world
+                    .attempt_error_to_instruction_error(error)
+            })?;
         }
         let mut plans = Vec::with_capacity(movements.as_slice().len());
         for movement in movements.as_slice() {
@@ -6534,33 +6689,19 @@ pub mod isi {
             NumericAssetTransferControlPolicy::Enforce,
             NumericAssetDestinationAdmissionPolicy::ExistingAccount,
         )?;
-        let mut remaining = state_transaction.quantity_candidate_preimage_limit();
-        let quantity_authorization_context = (|| {
-            if u64::try_from(norito::canonical_frame_len(policy).ok()?).ok()? > remaining {
-                return None;
-            }
-            bounded_quantity_frame(
-                &(
-                    "iroha:fastpq:native-fx-authorization:v1".to_owned(),
-                    submitting_authority.clone(),
-                    policy.clone(),
-                    vec![
-                        (
-                            source.source_id.clone(),
-                            source.destination_id.clone(),
-                            source.amount.clone(),
-                        ),
-                        (
-                            destination.source_id.clone(),
-                            destination.destination_id.clone(),
-                            destination.amount.clone(),
-                        ),
-                    ],
-                ),
-                &mut remaining,
-            )
-            .map(Hash::new)
-        })();
+        let quantity_authorization_context =
+            quantity_authorization::fx_context(&quantity_authorization::FxFrame {
+                authority: submitting_authority,
+                policy,
+                legs: [
+                    (&source.source_id, &source.destination_id, &source.amount),
+                    (
+                        &destination.source_id,
+                        &destination.destination_id,
+                        &destination.amount,
+                    ),
+                ],
+            });
         Ok(PreparedNumericTransferPair {
             source,
             destination,
@@ -7273,6 +7414,10 @@ pub mod isi {
     impl<'a> QuantityRetirementOwner<'a> {
         /// Observe the already authorized native instruction. Failure affects only
         /// capture; it never changes the original business operation or error order.
+        #[expect(
+            single_use_lifetimes,
+            reason = "Rust 1.93 requires a named lifetime for reference items in impl ExactSizeIterator bounds"
+        )]
         pub(in crate::smartcontracts::isi) fn retain<'ids>(
             state: &StateTransaction<'_, '_>,
             authority: &'a AccountId,
@@ -7356,7 +7501,6 @@ pub mod isi {
                 incarnation,
                 domain,
                 balance,
-                state.quantity_candidate_preimage_limit(),
             )
             .ok_or(QuantityCaptureIssue::Capacity)?;
             Ok((hash, context))
@@ -7416,17 +7560,15 @@ pub mod isi {
         let binding = if let Some(owner) = retirement {
             owner.context(state, asset_id.definition(), Some((asset_id, &amount)))
         } else {
-            let context = quantity_authorization::supply_context(
-                &quantity_authorization::SupplyFrame {
+            let context =
+                quantity_authorization::supply_context(&quantity_authorization::SupplyFrame {
                     mint: false,
                     purpose: "account-unregister-burn",
-                    binding: &[],
+                    binding: quantity_authorization::SupplyBinding::Bytes(&[]),
                     authority,
                     id: asset_id,
                     amount: &amount,
-                },
-                state.quantity_candidate_preimage_limit(),
-            );
+                });
             state
                 .tx_call_hash
                 .zip(context)
@@ -7536,24 +7678,21 @@ pub mod isi {
         id: &AssetId,
         amount: &Quantity,
         mint: bool,
-        purpose: (&str, Option<&[u8]>),
+        purpose: (&str, Option<quantity_authorization::SupplyBinding<'_>>),
         apply: impl FnOnce(
             &mut StateTransaction<'_, '_>,
             PreparedNumericSupplyChange,
         ) -> Result<T, Error>,
     ) -> Result<T, Error> {
         let context = purpose.1.and_then(|binding| {
-            quantity_authorization::supply_context(
-                &quantity_authorization::SupplyFrame {
-                    mint,
-                    purpose: purpose.0,
-                    binding,
-                    authority,
-                    id,
-                    amount,
-                },
-                state.quantity_candidate_preimage_limit(),
-            )
+            quantity_authorization::supply_context(&quantity_authorization::SupplyFrame {
+                mint,
+                purpose: purpose.0,
+                binding,
+                authority,
+                id,
+                amount,
+            })
         });
         let original = PreparedNumericSupplyChange::prepare(state, id, amount, mint);
         let prepared = match (state.tx_call_hash, context, &original) {
@@ -7642,7 +7781,10 @@ pub mod isi {
                 &resolved_asset_id,
                 &captured_quantity,
                 true,
-                ("ordinary-mint", Some(&[])),
+                (
+                    "ordinary-mint",
+                    Some(quantity_authorization::SupplyBinding::Bytes(&[])),
+                ),
                 |state_transaction, original| {
                     // Deposit into destination asset balance, creating if needed
                     #[cfg(feature = "telemetry")]
@@ -7723,7 +7865,10 @@ pub mod isi {
                 &resolved_asset_id,
                 &captured_quantity,
                 false,
-                ("ordinary-burn", Some(&[])),
+                (
+                    "ordinary-burn",
+                    Some(quantity_authorization::SupplyBinding::Bytes(&[])),
+                ),
                 |state_transaction, original| {
                     // Withdraw from source asset balance and remove if it reaches zero
                     let total = original.apply_balance(&mut state_transaction.world)?;
@@ -7834,17 +7979,18 @@ pub mod isi {
         let flipped = assert_can_mint_cached(state_transaction, asset_id.definition())?;
         let captured_quantity = quantity.clone();
         let captured_id = asset_id.clone();
-        let policy_binding = bounded_quantity_frame(
-            &authorized_policy,
-            &mut state_transaction.quantity_candidate_preimage_limit(),
-        );
         apply_with_supply_quantity_candidate(
             state_transaction,
             authority,
             &captured_id,
             &captured_quantity,
             true,
-            ("retail-reserve-mint", policy_binding.as_deref()),
+            (
+                "retail-reserve-mint",
+                Some(quantity_authorization::SupplyBinding::RetailPolicy(
+                    &authorized_policy,
+                )),
+            ),
             |state_transaction, original| {
                 original
                     .apply_balance(&mut state_transaction.world)?
@@ -7925,17 +8071,18 @@ pub mod isi {
         ensure_not_sccp_escrow_source(state_transaction, &asset_id)?;
         let captured_quantity = quantity.clone();
         let captured_id = asset_id.clone();
-        let policy_binding = bounded_quantity_frame(
-            &authorized_policy,
-            &mut state_transaction.quantity_candidate_preimage_limit(),
-        );
         apply_with_supply_quantity_candidate(
             state_transaction,
             authority,
             &captured_id,
             &captured_quantity,
             false,
-            ("retail-reserve-burn", policy_binding.as_deref()),
+            (
+                "retail-reserve-burn",
+                Some(quantity_authorization::SupplyBinding::RetailPolicy(
+                    &authorized_policy,
+                )),
+            ),
             |state_transaction, original| {
                 original
                     .apply_balance(&mut state_transaction.world)?
@@ -9865,7 +10012,7 @@ pub mod query {
             )
         }
     }
-    impl ValidQuery for FindAssetsDefinitions {
+    impl ValidQuery for FindAssetDefinitions {
         #[metrics(+"find_asset_definitions")]
         fn execute(
             self,

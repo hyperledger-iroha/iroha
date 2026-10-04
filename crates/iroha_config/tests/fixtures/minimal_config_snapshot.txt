@@ -154,6 +154,8 @@ Root {
         },
     },
     runtime_provider_broker: RuntimeProviderBroker {
+        observer_operation_timeout: 15s,
+        credential_max_memory_bytes: 67108864,
         endpoint_path: RuntimeProviderBrokerEndpointPath(
             "<platform-default broker endpoint>",
         ),
@@ -385,6 +387,12 @@ Root {
         receipt_signer: [REDACTED; 0 configured],
         query_max_inflight: 256,
         query_heavy_max_inflight: 64,
+        query_fanout_max_retained_bytes: Bytes(
+            512000000,
+        ),
+        query_fanout_max_working_set_bytes: Bytes(
+            48000000,
+        ),
         require_api_token: false,
         api_tokens: [REDACTED; 0 Torii API token(s)],
         peer_telemetry_urls: [REDACTED; 0 configured],
@@ -401,10 +409,10 @@ Root {
             ],
             tokens: [REDACTED; 0 configured],
             rate_per_minute: Some(
-                30,
+                60000000,
             ),
             burst: Some(
-                10,
+                10000000,
             ),
             ephemeral_state_capacity: 4096,
             credential_capacity: 64,
@@ -438,6 +446,7 @@ Root {
                     65536,
                 ),
             },
+            https: None,
             norito_rpc: NoritoRpcTransport {
                 enabled: true,
                 require_mtls: false,
@@ -459,18 +468,18 @@ Root {
             allow_tool_prefixes: [],
             deny_tool_prefixes: [],
             rate_per_minute: Some(
-                600000,
+                60000000,
             ),
             burst: Some(
-                100000,
+                10000000,
             ),
         },
         proof_api: ProofApi {
             rate_per_minute: Some(
-                600000,
+                60000000,
             ),
             burst: Some(
-                100000,
+                10000000,
             ),
             max_body_bytes: Bytes(
                 8388608,
@@ -497,7 +506,7 @@ Root {
             policy_id: Name(
                 "cbuae_aed_sbp_pkr",
             ),
-            requests_per_minute: 30,
+            requests_per_minute: 60000000,
             request_timeout: 4s,
             routes: [],
         },
@@ -610,10 +619,10 @@ Root {
         push: Push {
             enabled: false,
             rate_per_minute: Some(
-                600000,
+                60000000,
             ),
             burst: Some(
-                100000,
+                10000000,
             ),
             connect_timeout: 5s,
             request_timeout: 10s,
@@ -672,9 +681,9 @@ Root {
         },
     },
     musubi_publication: MusubiPublication {
+        installation: None,
         custody_root: "./storage/musubi-publication",
         private_tls_bind: 127.0.0.1:18495,
-        private_mount_prefix: "/private",
         max_inflight_requests: 2,
         journal_max_operations: 1024,
         journal_max_authorizations: 4096,
@@ -802,7 +811,7 @@ Root {
                 67108864,
             ),
             retained_carrier_shell_bytes: 268435456,
-            consensus_evidence_preparation_bytes: 266155872,
+            consensus_evidence_preparation_bytes: 441187328,
             consensus_stake_index_bytes: 67108864,
             disk_budget_weights: NexusStorageWeights {
                 kura_blocks_bps: 3500,
@@ -1307,7 +1316,7 @@ Root {
         slo: ComputeSlo {
             max_inflight_per_route: 32,
             queue_depth_per_route: 512,
-            max_requests_per_second: 200,
+            max_requests_per_second: 1000000,
             target_p50_latency_ms: 25,
             target_p95_latency_ms: 75,
             target_p99_latency_ms: 120,
@@ -1321,8 +1330,8 @@ Root {
         chunk_size_bytes: 65536,
         publish_allow_accounts: [],
         limits: ContentLimits {
-            max_requests_per_second: 10000,
-            request_burst: 100000,
+            max_requests_per_second: 1000000,
+            request_burst: 10000000,
             max_egress_bytes_per_second: 268435456,
             egress_burst_bytes: 1073741824,
         },

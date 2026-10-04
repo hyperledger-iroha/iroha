@@ -143,6 +143,8 @@ const BOOTLE_LANTERN_RESPONSE_BYTES_V1: usize =
     iroha_core_privacy::privacy_engines::bootle_lantern::codec::BLIND_ISSUANCE_RESPONSE_BYTES_V1;
 const MAX_PROVIDER_INGEST_ACCOUNT_BYTES_V1: usize =
     fixed_u64_bound(provider_ingest_outbox_defaults::COMPLETION_ACCOUNT_ID_MAX_CANONICAL_BYTES_V1);
+const MAX_PROVIDER_INGEST_AUTHORITY_BYTES_V1: usize =
+    MAX_PROVIDER_INGEST_ACCOUNT_BYTES_V1 * 2 + 512;
 const MAX_PROVIDER_INGEST_PUBLIC_KEY_BYTES_V1: usize = 16 * 1024;
 const MAX_PROVIDER_INGEST_CHECKPOINT_BYTES_V1: usize =
     fixed_u64_bound(provider_ingest_outbox_defaults::CHECKPOINT_MAX_BYTES_LIMIT);
@@ -252,7 +254,7 @@ const MAX_GATEWAY_ACME_FRAME_BYTES_V1: usize = 7 * 1024 * 1024;
 const MAX_GATEWAY_COMPLIANCE_URL_BYTES_V1: usize = 2_048;
 const MAX_GATEWAY_COMPLIANCE_DNS_ADDRESSES_V1: usize = 32;
 const MAX_GATEWAY_COMPLIANCE_BODY_BYTES_V1: usize =
-    iroha_torii::sorafs::gateway::MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1;
+    sorafs_manifest::gateway_compliance::MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1;
 const MAX_GATEWAY_COMPLIANCE_FRAME_BYTES_V1: usize =
     MAX_GATEWAY_COMPLIANCE_BODY_BYTES_V1 + 128 * 1024;
 const MAX_POP_RUNTIME_FRAME_BYTES_V1: usize = 8 * 1024 * 1024;
@@ -537,6 +539,7 @@ const STANDARD_DECODE_POLICY_V1: DecodeResourcePolicyV1 = DecodeResourcePolicyV1
         5,
     ),
 );
+include!("beacon_decode_profile.rs");
 const OPAQUE_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 64 * 1024 * 1024;
 const OPAQUE_BLOB_DECODE_POLICY_V1: DecodeResourcePolicyV1 = DecodeResourcePolicyV1::new(
     (
@@ -1894,7 +1897,10 @@ fn validate_catalog_slot_ids(slot_ids: impl IntoIterator<Item = u16>) -> Result<
         }
         let slot = IrohaRuntimeProviderSlotV1::from_wire_id(wire_id)
             .ok_or(BrokerError::BindingMismatch)?;
-        let slot_index = usize::from(wire_id - 1);
+        // Wire IDs are sparse. Count only positions in the canonical inventory.
+        let slot_index = IrohaRuntimeProviderSlotV1::ALL
+            .binary_search(&slot)
+            .map_err(|_| BrokerError::BindingMismatch)?;
         multiplicities[slot_index] = multiplicities[slot_index]
             .checked_add(1)
             .ok_or(BrokerError::BindingMismatch)?;
@@ -3341,7 +3347,7 @@ define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protoco
 define_broker_wire_struct!(copy frame "irohad::runtime_provider_broker::protocol::SealedDeleteRequestWireV1"; SealedDeleteRequestWireV1 { slot: u8, expected_revision: [u8; 32], });
 define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::ProviderIngestResolverQualificationWireV1"; ProviderIngestResolverQualificationWireV1 { revision: u64, policy_digest: [u8; 32], signer_binding: ProviderIngestSignerBindingWireV1, });
 define_broker_wire_struct!(copy frame "irohad::runtime_provider_broker::protocol::ProviderIngestRuntimeQualificationWireV1"; ProviderIngestRuntimeQualificationWireV1 { revision: u64, policy_digest: [u8; 32], });
-define_broker_wire_struct!(owned ProviderIngestSignerRequestContextWireV1 { provider_owner: Vec<u8>, signer_policy_id: [u8; 32], signer_policy_revision: u64, signer_policy_predecessor_digest: Option<[u8; 32]>, signer_policy_digest: [u8; 32], expected_assignment_revision: u64, finalized_height: u64, finalized_block_hash: [u8; 32], });
+define_broker_wire_struct!(owned ProviderIngestSignerRequestContextWireV1 { expected_authority: Vec<u8>, expected_assignment_revision: u64, finalized_height: u64, finalized_block_hash: [u8; 32], });
 define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::ProviderIngestResolveSignerRequestWireV1"; ProviderIngestResolveSignerRequestWireV1 { context: ProviderIngestSignerRequestContextWireV1, });
 define_broker_wire_struct!(copy frame "irohad::runtime_provider_broker::protocol::ProviderIngestResolveSignerResultWireV1"; ProviderIngestResolveSignerResultWireV1 { eligible: bool, });
 define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::ProviderIngestSignRequestWireV1"; ProviderIngestSignRequestWireV1 { context: ProviderIngestSignerRequestContextWireV1, transaction_payload: Vec<u8>, });
@@ -3399,6 +3405,10 @@ impl_broker_debug_fields!(BillingCompareAndSwapEpochRequestWireV1 as value {
     "epoch_sequence" => value.next.epoch_sequence,
     "checkpoint_len" => value.next.checkpoint_bytes.len(),
 } => finish_non_exhaustive);
+#[path = "canonical_attempt.rs"]
+mod canonical_attempt;
+use canonical_attempt::CanonicalAttemptErrorV1;
+
 include!("protocol_codec_and_bindings.rs");
 include!("stream_token_signer_protocol.rs");
 include!("protocol_operation_validation.rs");

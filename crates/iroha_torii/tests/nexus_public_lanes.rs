@@ -171,7 +171,7 @@ fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
     let delegator_asset_id = AssetId::new(asset_definition_id.clone(), delegator_id.clone());
     let validator_asset = Asset::new(validator_asset_id, Quantity::from(10_000_u64));
     let delegator_asset = Asset::new(delegator_asset_id, Quantity::from(10_000_u64));
-    let mut world = World::with_assets(
+    let world = World::with_assets(
         [domain],
         [validator, delegator, escrow],
         [asset_definition],

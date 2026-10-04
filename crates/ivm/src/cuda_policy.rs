@@ -4,31 +4,52 @@
 /// Independently admitted production CUDA kernels.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(usize)]
-pub(crate) enum Kernel {
+pub enum Kernel {
+    /// Lane-wise wrapping 32-bit addition.
     Add32,
+    /// Lane-wise wrapping 64-bit addition.
     Add64,
+    /// Lane-wise bitwise conjunction.
     And,
+    /// Lane-wise bitwise exclusive disjunction.
     Xor,
+    /// Lane-wise bitwise disjunction.
     Or,
+    /// One SHA-256 compression block.
     Sha256,
+    /// Batched padded SHA-256 leaves.
     ShaLeaves,
+    /// Complete SHA-256 pair reduction with left promotion.
     ShaPairs,
+    /// Keccak-f1600 permutation.
     Keccak,
+    /// Width-three Poseidon permutation for two public inputs.
     Poseidon2,
+    /// Width-six Poseidon permutation.
     Poseidon6,
+    /// Batched single-round AES encryption.
     AesEnc,
+    /// Batched single-round AES decryption.
     AesDec,
+    /// Batched fused AES encryption rounds.
     AesEncFused,
+    /// Batched fused AES decryption rounds.
     AesDecFused,
+    /// Canonical BN254 field addition.
     BnAdd,
+    /// Canonical BN254 field subtraction.
     BnSub,
+    /// Canonical BN254 field multiplication.
     BnMul,
+    /// Batched Ed25519 signature verification.
     Ed25519,
+    /// Lexicographic bitonic pair sorting.
     Bitonic,
 }
 
 impl Kernel {
-    pub(crate) const ALL: [Self; 20] = [
+    /// Every independently admitted production kernel in stable diagnostic order.
+    pub const ALL: [Self; 20] = [
         Self::Add32,
         Self::Add64,
         Self::And,

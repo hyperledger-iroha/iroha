@@ -16,7 +16,7 @@ use crate::{
     sumeragi::finality::build_proof,
 };
 use iroha_data_model::{
-    block::{consensus::ExecWitness, decode_versioned_signed_block},
+    block::{consensus::ExecWitness, decode_framed_signed_block},
     isi::kagemusha_v1::{
         KAGEMUSHA_CHAIN_VERSION_V1, KagemushaOperationFinalityV1, KagemushaOperationKindV1,
         KagemushaReserveReceiptWitnessV1, KagemushaTopUpMembershipWitnessV1,
@@ -131,7 +131,7 @@ pub fn amx_record_proof(
     // second Kura read which could substitute certificate bytes after source verification.
     let block = norito::core::with_decode_limits_scope(
         norito::canonical_decode_limits(source.finality.block_wire.len()),
-        || decode_versioned_signed_block(&source.finality.block_wire),
+        || decode_framed_signed_block(&source.finality.block_wire),
     )
     .map_err(|error| error.to_string())?;
     let certificate = block
@@ -196,7 +196,7 @@ pub fn private_dataspace_record_proof(
         .map_err(|error| error.to_string())?;
     let block = norito::core::with_decode_limits_scope(
         norito::canonical_decode_limits(source.finality.block_wire.len()),
-        || decode_versioned_signed_block(&source.finality.block_wire),
+        || decode_framed_signed_block(&source.finality.block_wire),
     )
     .map_err(|error| error.to_string())?;
     let certificate = block

@@ -39,6 +39,7 @@ fn assert_release_fixture_rfc_column_preflight_v1(maximum: bool) {
         assembly.allocated_payload_bytes_v1()
     );
     let material = &assembly.rfc_base;
+    assert_source_node_root_base_rows_v1(material);
     eprintln!(
         "maximum={maximum} RFC native owned payload bytes={}",
         material.allocated_heap_bytes_v1()
@@ -119,6 +120,13 @@ fn assert_release_fixture_rfc_column_preflight_v1(maximum: bool) {
                 .filter(|row| *row <= last),
             );
         }
+    }
+    // A compact source family stops at its last populated document. Visit every
+    // verifier-fixed root, including roots beyond that retained extent.
+    let source_start = material.schedule.starts[ZkX509Rfc5280StarkFamilyV1::SourceNode as usize];
+    for document in 0..MAX_SOURCE_DOCUMENTS_V1 {
+        let root = source_start + document * 2_048;
+        checkpoints.extend([root - 1, root, root + 1]);
     }
     checkpoints.sort_unstable();
     checkpoints.dedup();
@@ -290,9 +298,12 @@ fn crl_number_profile_lookup_requires_the_exact_embedded_der_extent() {
         Err(ZkX509Rfc5280StarkErrorV1::Semantic),
         "the old prefix-only producer flag cannot match the verifier's exact-end table"
     );
-    // The bounded batch clears every per-row context and all fixed column
-    // states. On refusal its output guard clears the failed column, then the
-    // outer owned table clears that already-zero backing a second time.
+    // The production window clears each row's copied two-sum state, all 24
+    // eight-cell pairs (including 21 unused pairs), and four working cells.
+    // The original row contexts and eight final states still clear once each.
+    // On refusal the output guard clears the failed column, then its outer
+    // owned table clears that already-zero backing a second time. These are
+    // repeated clearing events, not simultaneously resident allocations.
     let mut ownership_census = std::collections::BTreeMap::new();
     for entry in &erased {
         let counts = ownership_census.entry(entry.cells).or_insert((0, 0));
@@ -301,11 +312,12 @@ fn crl_number_profile_lookup_requires_the_exact_embedded_der_extent() {
         assert_eq!(entry.nonzero_after, 0);
     }
     let rows = ZK_X509_RFC5280_STARK_TRACE_SIZE_V1;
+    let batch = crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1;
+    let pairs = 3 * batch;
     let mut expected_clears = [
-        (
-            2,
-            crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
-        ),
+        (2, rows + batch),
+        (4, rows),
+        (8, pairs * rows),
         (16, 1),
         (ZK_X509_RFC5280_STARK_BASE_WIDTH_V1, rows),
         (ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1, rows),
@@ -321,9 +333,43 @@ fn crl_number_profile_lookup_requires_the_exact_embedded_der_extent() {
         "every stack context, column state and failed output owner must clear"
     );
     assert_eq!(ownership_census[&rows].1, 1, "failed output is dirty once");
+    // Per-row copies precede the eight final-state drops. Preserve the
+    // original assertion on those final owners, separately from the copies.
     assert_eq!(
-        ownership_census[&2].1, 1,
-        "only the requested state is active"
+        erased
+            .iter()
+            .filter(|entry| entry.cells == 2)
+            .skip(rows)
+            .filter(|entry| entry.nonzero_before > 0)
+            .count(),
+        1,
+        "only the requested final state is active"
+    );
+    assert_eq!(
+        erased
+            .iter()
+            .find(|entry| entry.cells == 2)
+            .unwrap()
+            .nonzero_before,
+        0,
+        "the first copied recurrence starts with zero sums"
+    );
+    assert!(
+        erased
+            .iter()
+            .filter(|entry| entry.cells == 2)
+            .take(rows)
+            .any(|entry| entry.nonzero_before > 0),
+        "later copied recurrences carry private prefix sums"
+    );
+    // The profile descriptor requests exactly three factors on every row.
+    // All remaining pairs are zero but must still be erased by the same owner.
+    for (index, entry) in erased.iter().filter(|entry| entry.cells == 8).enumerate() {
+        assert_eq!(entry.nonzero_before > 0, index % pairs < 3);
+    }
+    assert_eq!(
+        ownership_census[&4].1, rows,
+        "every product workspace is live"
     );
     assert!(ownership_census[&ZK_X509_RFC5280_STARK_BASE_WIDTH_V1].1 > 0);
     assert!(ownership_census[&ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1].1 > 0);
@@ -332,7 +378,8 @@ fn crl_number_profile_lookup_requires_the_exact_embedded_der_extent() {
         2 * rows
             + 16
             + rows * (ZK_X509_RFC5280_STARK_BASE_WIDTH_V1 + ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1)
-            + 2 * crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+            + 2 * batch
+            + rows * (2 + 4 + pairs * 8)
     );
     assert_eq!(
         erased
@@ -717,6 +764,160 @@ fn temporal_byte_positions_and_integer_slack_reject_unbound_local_mutations() {
                 .any(|field| *field != F::ZERO),
                 "field-wrapped negative slack must exceed the38-bit bound"
             );
+        }
+    }
+}
+
+// Check genuinely admitted material, including each unretained document root.
+// These are base constraints; no auxiliary column, mask or proof is constructed.
+fn assert_source_node_root_base_rows_v1(material: &ZkX509Rfc5280StarkBaseMaterialV1) {
+    let source_start = material.schedule.starts[ZkX509Rfc5280StarkFamilyV1::SourceNode as usize];
+    let document_count = usize::from(material.private_shape.top_document_count)
+        + usize::from(material.private_shape.embedded_document_count);
+    let cert2 = material.private_shape.certificate_slot_2_active == F::ONE;
+    let unused = [F::ZERO; ZK_X509_RFC5280_STARK_AUX_WIDTH_V1];
+    for document in 0..MAX_SOURCE_DOCUMENTS_V1 {
+        let position = source_start + document * 2_048;
+        let current = material.base_row(position).unwrap();
+        let next = material.base_row(position + 1).unwrap();
+        let fixed = material.fixed_row(position).unwrap();
+        let present = document < document_count;
+        assert_eq!(current[BASE_ACTIVE], F(u64::from(present)));
+        let kind = if !present {
+            0
+        } else if document < 2 || (document == 2 && cert2) {
+            1
+        } else if document == 2 || (document == 3 && cert2) {
+            2
+        } else {
+            3
+        };
+        assert_eq!(
+            current[BASE_EXPECTED_ROOT_KIND],
+            F(kind),
+            "source document {document}, present={present}"
+        );
+        for row in [position - 1, position, position + 1] {
+            let residues = local_base_prefix_v1(material, row, |_| {});
+            assert!(
+                residues.iter().all(|residue| *residue == F::ZERO),
+                "source document {document}, row {row}, nonzero base residues={:?}",
+                residues
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, residue)| (*residue != F::ZERO).then_some(index))
+                    .collect::<Vec<_>>()
+            );
+        }
+        // Use the actual shared evaluator without normalizing the mutation.
+        // The original helper-defining constraint must remain mandatory.
+        let mut mutated = current;
+        mutated[BASE_EXPECTED_ROOT_KIND] = mutated[BASE_EXPECTED_ROOT_KIND].add(F::ONE);
+        let residues = evaluate_zk_x509_rfc5280_stark_residues_v1(
+            &mutated,
+            &next,
+            &unused,
+            &unused,
+            &fixed,
+            der_challenges_v1(),
+            challenges_v1(),
+            ZkX509Rfc5280StarkTerminalClaimsV1::canonical_identity_v1(),
+        )
+        .unwrap();
+        assert_ne!(residues[14], F::ZERO, "root-kind helper definition");
+    }
+}
+
+#[test]
+fn admitted_release_source_node_roots_cover_both_depths_and_unused_documents() {
+    use crate::privacy_engines::zk_x509::{
+        main_assembly::build_zk_x509_main_trace_assembly_v1,
+        relation::{
+            ZkX509GovernanceV1,
+            release_fixture::{build_zk_x509_release_fixture_v1, reference_statement_context_v1},
+        },
+    };
+
+    for maximum in [false, true] {
+        let fixture = build_zk_x509_release_fixture_v1(reference_statement_context_v1(), maximum)
+            .expect("actual admitted release witness");
+        let trust_anchor = fixture.authoritative_state.trust_anchor();
+        let crl = fixture.authoritative_state.crl_record();
+        let assembly = build_zk_x509_main_trace_assembly_v1(
+            &fixture.statement,
+            ZkX509GovernanceV1 {
+                trust_anchor: &trust_anchor,
+                certificate_policy: fixture.authoritative_state.certificate_policy(),
+                crl: &crl,
+            },
+            &fixture.witness,
+        )
+        .expect("complete reference-admitted MAIN assembly");
+        let material = &assembly.rfc_base;
+        assert_eq!(
+            material.private_shape.chain_depth,
+            if maximum { 3 } else { 2 }
+        );
+        assert_eq!(
+            material.private_shape.top_document_count,
+            if maximum { 4 } else { 3 }
+        );
+        assert_eq!(
+            material.private_shape.embedded_document_count,
+            if maximum { 15 } else { 11 }
+        );
+        assert_source_node_root_base_rows_v1(material);
+    }
+}
+
+#[test]
+fn canonical_profile_eku_subsets_compile_exact_complete_fixed_patterns() {
+    let oids = [
+        &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x02][..],
+        crate::privacy_engines::zk_x509::profile::ZK_X509_DOCUMENT_SIGNING_EKU_DER_VALUE_V1,
+        crate::privacy_engines::zk_x509::profile::ZK_X509_WALLET_IDENTITY_EKU_DER_VALUE_V1,
+    ];
+    for mask in 1_u8..8 {
+        let mut shape = ZkX509Rfc5280StarkShapeV1 {
+            leaf_extended_key_usages: [0; 3],
+            leaf_extended_key_usage_count: 0,
+            ..ZkX509Rfc5280StarkShapeV1::default()
+        };
+        let mut body = Vec::new();
+        for (index, oid) in oids.iter().enumerate() {
+            if mask & (1_u8 << index) != 0 {
+                let count = usize::from(shape.leaf_extended_key_usage_count);
+                shape.leaf_extended_key_usages[count] = u8::try_from(index + 1).unwrap();
+                shape.leaf_extended_key_usage_count += 1;
+                body.extend_from_slice(&[0x06, u8::try_from(oid.len()).unwrap()]);
+                body.extend_from_slice(oid);
+            }
+        }
+        let mut expected = vec![0x30, u8::try_from(body.len()).unwrap()];
+        expected.extend_from_slice(&body);
+        let table = compile_profile_byte_table_v1(shape).unwrap();
+        assert!(table.len() <= FIXED_SEMANTIC_SOURCE_ROWS_V1);
+        let entries: Vec<_> = table.iter().filter(|entry| entry.purpose == 12).collect();
+        assert_eq!(entries.len(), expected.len());
+        assert_eq!(
+            encode_eku_v1(&shape.leaf_extended_key_usages().unwrap()).unwrap(),
+            expected
+        );
+        for (offset, entry) in entries.iter().enumerate() {
+            assert_eq!(entry.variant, 0);
+            assert_eq!(
+                entry.source_role,
+                ZkX509Rfc5280GrammarRoleV1::EmbeddedEku as u16
+            );
+            assert_eq!(usize::from(entry.offset), offset);
+            assert_eq!(usize::from(entry.length), expected.len());
+            assert_eq!(entry.expected, expected[offset]);
+            assert!(!entry.contents_only);
+            assert!(entry.exact_end);
+        }
+        if mask == 7 {
+            assert_eq!(expected.len(), 55);
+            assert!(expected.len() <= copy_census::EMBEDDED_BYTES);
         }
     }
 }

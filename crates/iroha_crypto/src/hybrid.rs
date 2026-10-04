@@ -7,12 +7,12 @@
 //! envelopes without advertising new long-term public keys.
 use crate::kex::is_x25519_low_order_public_key;
 use core::{fmt, str::FromStr};
-use hkdf::Hkdf;
+use hkdf::HkdfExtract;
 use rand_core::TryCryptoRng;
 use sha3::{Digest, Sha3_256};
 use soranet_pq::{
-    HedgedRngSeed, MlKemSuite, decapsulate_mlkem, encapsulate_mlkem, generate_mlkem_keypair,
-    hedged_chacha20_rng,
+    HedgedRngSeed, MlKemSuite, decapsulate_mlkem_into, encapsulate_mlkem_into,
+    generate_mlkem_keypair_into, hedged_chacha20_rng,
 };
 use thiserror::Error;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
@@ -141,7 +141,7 @@ pub enum HybridError {
 #[derive(Clone)]
 pub struct HybridPublicKey {
     x25519: X25519PublicKey,
-    kyber: Vec<u8>,
+    kyber: [u8; HYBRID_KEM_SUITE.public_key_len()],
 }
 impl HybridPublicKey {
     /// Create a [`HybridPublicKey`] from raw component bytes.
@@ -154,7 +154,29 @@ impl HybridPublicKey {
         x25519: impl AsRef<[u8]>,
         kyber: impl AsRef<[u8]>,
     ) -> Result<Self, HybridError> {
-        let x25519_bytes = x25519.as_ref();
+        let kyber_bytes = kyber.as_ref();
+        let x25519 = Self::checked_components(x25519.as_ref(), kyber_bytes)?;
+        Ok(Self {
+            x25519,
+            kyber: kyber_bytes
+                .try_into()
+                .map_err(|_| HybridError::InvalidKyberPublicKey)?,
+        })
+    }
+    /// Validate borrowed component bytes without allocating an owned key.
+    ///
+    /// This applies the same ordered curve, length and canonical ML-KEM checks
+    /// as [`Self::from_bytes`]. It neither retains nor copies the input backing.
+    ///
+    /// # Errors
+    /// Returns the same [`HybridError`] as the owning constructor for invalid inputs.
+    pub fn validate_bytes(x25519: &[u8], kyber: &[u8]) -> Result<(), HybridError> {
+        Self::checked_components(x25519, kyber).map(|_| ())
+    }
+    fn checked_components(
+        x25519_bytes: &[u8],
+        kyber_bytes: &[u8],
+    ) -> Result<X25519PublicKey, HybridError> {
         if x25519_bytes.len() != 32 {
             return Err(HybridError::InvalidX25519PublicKeyLength {
                 expected: 32,
@@ -164,7 +186,6 @@ impl HybridPublicKey {
         let mut x25519_array = [0_u8; 32];
         x25519_array.copy_from_slice(x25519_bytes);
         let x25519 = decode_x25519_public_key(x25519_array)?;
-        let kyber_bytes = kyber.as_ref();
         let expected_len = HYBRID_KEM_SUITE.public_key_len();
         if kyber_bytes.len() != expected_len {
             return Err(HybridError::InvalidKyberPublicKeyLength {
@@ -176,10 +197,7 @@ impl HybridPublicKey {
         HYBRID_KEM_SUITE
             .validate_public_key(kyber_bytes)
             .map_err(|_| HybridError::InvalidKyberPublicKey)?;
-        Ok(Self {
-            x25519,
-            kyber: kyber_bytes.to_vec(),
-        })
+        Ok(x25519)
     }
     /// Return the contained X25519 public key.
     #[must_use]
@@ -200,7 +218,7 @@ impl HybridPublicKey {
 impl fmt::Debug for HybridPublicKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut digest = Sha3_256::new();
-        digest.update(&self.kyber);
+        digest.update(self.kyber.as_slice());
         let fingerprint = hex::encode(digest.finalize());
         f.debug_struct("HybridPublicKey")
             .field("suite", &HybridSuite::X25519MlKem768ChaCha20Poly1305)
@@ -212,7 +230,7 @@ impl fmt::Debug for HybridPublicKey {
 /// Hybrid secret key pairing the X25519 scalar with the Kyber secret.
 pub struct HybridSecretKey {
     x25519: StaticSecret,
-    kyber: Zeroizing<Vec<u8>>,
+    kyber: Zeroizing<[u8; HYBRID_KEM_SUITE.secret_key_len()]>,
     public: HybridPublicKey,
 }
 impl HybridSecretKey {
@@ -252,7 +270,8 @@ impl HybridSecretKey {
         HYBRID_KEM_SUITE
             .validate_secret_key(kyber_bytes)
             .map_err(|_| HybridError::InvalidKyberSecretKey)?;
-        let kyber_secret = Zeroizing::new(kyber_bytes.to_vec());
+        let mut kyber_secret = Zeroizing::new([0_u8; HYBRID_KEM_SUITE.secret_key_len()]);
+        kyber_secret.copy_from_slice(kyber_bytes);
         // Kyber secret keys embed the public key in their trailing bytes per PQClean.
         let secret_bytes = kyber_secret.as_slice();
         let kyber_public_len = HYBRID_KEM_SUITE.public_key_len();
@@ -286,8 +305,8 @@ impl HybridSecretKey {
     }
     /// Export the component bytes. The Kyber secret key bytes include the embedded public key.
     #[must_use]
-    pub fn to_bytes(&self) -> ([u8; 32], Vec<u8>) {
-        (self.x25519.to_bytes(), self.kyber.as_slice().to_vec())
+    pub fn to_bytes(&self) -> ([u8; 32], Zeroizing<[u8; HYBRID_KEM_SUITE.secret_key_len()]>) {
+        (self.x25519.to_bytes(), self.kyber.clone())
     }
 }
 impl fmt::Debug for HybridSecretKey {
@@ -301,7 +320,7 @@ impl Clone for HybridSecretKey {
     fn clone(&self) -> Self {
         Self {
             x25519: self.x25519.clone(),
-            kyber: Zeroizing::new(self.kyber.as_slice().to_vec()),
+            kyber: self.kyber.clone(),
             public: self.public.clone(),
         }
     }
@@ -309,10 +328,14 @@ impl Clone for HybridSecretKey {
 /// Key pair for the hybrid suite.
 #[derive(Clone, Debug)]
 pub struct HybridKeyPair {
-    public: HybridPublicKey,
     secret: HybridSecretKey,
 }
 impl HybridKeyPair {
+    /// Move an already checked secret owner after authenticated checkpoint recovery.
+    pub(crate) fn from_checkpoint_secret(secret: HybridSecretKey) -> Self {
+        Self { secret }
+    }
+
     /// Fallibly generate a fresh key pair using the provided RNG.
     ///
     /// # Errors
@@ -337,15 +360,19 @@ impl HybridKeyPair {
             HedgedRngSeed::from_entropy(*kem_seed),
             b"iroha-crypto:hybrid:keypair",
         );
-        let kem_pair = generate_mlkem_keypair(HYBRID_KEM_SUITE, &mut kem_rng)
-            .map_err(|_| HybridError::InvalidKyberSecretKey)?;
+        let mut kem_public = [0_u8; HYBRID_KEM_SUITE.public_key_len()];
+        let mut kem_secret = Zeroizing::new([0_u8; HYBRID_KEM_SUITE.secret_key_len()]);
+        generate_mlkem_keypair_into(
+            HYBRID_KEM_SUITE,
+            &mut kem_rng,
+            &mut kem_public,
+            &mut kem_secret[..],
+        )
+        .map_err(|_| HybridError::InvalidKyberSecretKey)?;
         let x25519_secret_bytes = Zeroizing::new(x25519_secret.to_bytes());
-        let secret = HybridSecretKey::from_bytes(
-            x25519_secret_bytes.as_ref(),
-            kem_pair.secret_key.as_slice(),
-        )?;
-        let public = secret.public().clone();
-        Ok(Self { public, secret })
+        let secret =
+            HybridSecretKey::from_bytes(x25519_secret_bytes.as_ref(), kem_secret.as_slice())?;
+        Ok(Self { secret })
     }
     /// Generate a fresh key pair using the provided RNG.
     ///
@@ -363,7 +390,7 @@ impl HybridKeyPair {
     /// Return the public component.
     #[must_use]
     pub fn public(&self) -> &HybridPublicKey {
-        &self.public
+        self.secret.public()
     }
     /// Return the secret component.
     #[must_use]
@@ -375,7 +402,7 @@ impl HybridKeyPair {
 #[derive(Clone, PartialEq, Eq)]
 pub struct HybridKemCiphertext {
     ephemeral_public: [u8; 32],
-    kyber_ciphertext: Vec<u8>,
+    kyber_ciphertext: [u8; HYBRID_KEM_SUITE.ciphertext_len()],
 }
 impl HybridKemCiphertext {
     /// Build a ciphertext bundle from raw parts.
@@ -388,7 +415,29 @@ impl HybridKemCiphertext {
         ephemeral_public: impl AsRef<[u8]>,
         kyber_ciphertext: impl AsRef<[u8]>,
     ) -> Result<Self, HybridError> {
-        let ephemeral_bytes = ephemeral_public.as_ref();
+        let kyber_bytes = kyber_ciphertext.as_ref();
+        let ephemeral_public = Self::checked_parts(ephemeral_public.as_ref(), kyber_bytes)?;
+        Ok(Self {
+            ephemeral_public,
+            kyber_ciphertext: kyber_bytes
+                .try_into()
+                .map_err(|_| HybridError::InvalidKyberCiphertext)?,
+        })
+    }
+    /// Validate borrowed ciphertext components without allocating an owned bundle.
+    ///
+    /// This applies the same ordered curve, length and ML-KEM checks as
+    /// [`Self::from_parts`]. It does not decrypt or authenticate a private payload.
+    ///
+    /// # Errors
+    /// Returns the same [`HybridError`] as the owning constructor for invalid inputs.
+    pub fn validate_parts(
+        ephemeral_public: &[u8],
+        kyber_ciphertext: &[u8],
+    ) -> Result<(), HybridError> {
+        Self::checked_parts(ephemeral_public, kyber_ciphertext).map(|_| ())
+    }
+    fn checked_parts(ephemeral_bytes: &[u8], kyber_bytes: &[u8]) -> Result<[u8; 32], HybridError> {
         if ephemeral_bytes.len() != 32 {
             return Err(HybridError::InvalidX25519PublicKeyLength {
                 expected: 32,
@@ -398,7 +447,6 @@ impl HybridKemCiphertext {
         let mut ephemeral_public_array = [0_u8; 32];
         ephemeral_public_array.copy_from_slice(ephemeral_bytes);
         let _ephemeral_public = decode_x25519_public_key(ephemeral_public_array)?;
-        let kyber_bytes = kyber_ciphertext.as_ref();
         let expected_ct_len = HYBRID_KEM_SUITE.ciphertext_len();
         if kyber_bytes.len() != expected_ct_len {
             return Err(HybridError::InvalidKyberCiphertext);
@@ -407,10 +455,7 @@ impl HybridKemCiphertext {
         HYBRID_KEM_SUITE
             .validate_ciphertext(kyber_bytes)
             .map_err(|_| HybridError::InvalidKyberCiphertext)?;
-        Ok(Self {
-            ephemeral_public: ephemeral_public_array,
-            kyber_ciphertext: kyber_bytes.to_vec(),
-        })
+        Ok(ephemeral_public_array)
     }
     /// Return the sender's ephemeral X25519 public key.
     #[must_use]
@@ -509,30 +554,29 @@ where
                 HedgedRngSeed::from_entropy(*kem_seed),
                 b"iroha-crypto:hybrid:encapsulate",
             );
-            let (kyber_shared, kyber_ciphertext) =
-                encapsulate_mlkem(HYBRID_KEM_SUITE, recipient.kyber_bytes(), &mut kem_rng)
-                    .map_err(|_| HybridError::InvalidKyberPublicKey)?;
-            debug_assert_eq!(
-                kyber_ciphertext.as_bytes().len(),
-                HYBRID_KEM_SUITE.ciphertext_len()
-            );
+            let mut kyber_shared = Zeroizing::new([0_u8; HYBRID_KEM_SUITE.shared_secret_len()]);
+            let mut kyber_ciphertext = [0_u8; HYBRID_KEM_SUITE.ciphertext_len()];
+            encapsulate_mlkem_into(
+                HYBRID_KEM_SUITE,
+                recipient.kyber_bytes(),
+                &mut kem_rng,
+                &mut kyber_shared[..],
+                &mut kyber_ciphertext,
+            )
+            .map_err(|_| HybridError::InvalidKyberPublicKey)?;
             let recipient_x25519 = recipient.x25519_bytes();
             let ephemeral_public_bytes = ephemeral_public.to_bytes();
             let transcript = HybridTranscript {
                 recipient_x25519: &recipient_x25519,
                 recipient_kyber: recipient.kyber_bytes(),
                 ephemeral_x25519: &ephemeral_public_bytes,
-                kyber_ciphertext: kyber_ciphertext.as_bytes(),
+                kyber_ciphertext: &kyber_ciphertext,
             };
-            let derived = derive_material(
-                suite,
-                shared_ecdh.as_bytes(),
-                kyber_shared.as_bytes(),
-                transcript,
-            )?;
+            let derived =
+                derive_material(suite, shared_ecdh.as_bytes(), &kyber_shared[..], transcript)?;
             let ciphertext = HybridKemCiphertext {
                 ephemeral_public: ephemeral_public_bytes,
-                kyber_ciphertext: kyber_ciphertext.as_bytes().to_vec(),
+                kyber_ciphertext,
             };
             Ok((ciphertext, derived))
         }
@@ -578,10 +622,12 @@ pub fn decapsulate(
             HYBRID_KEM_SUITE
                 .validate_ciphertext(ciphertext.kyber_ciphertext())
                 .map_err(|_| HybridError::InvalidKyberCiphertext)?;
-            let kyber_secret = decapsulate_mlkem(
+            let mut kyber_secret = Zeroizing::new([0_u8; HYBRID_KEM_SUITE.shared_secret_len()]);
+            decapsulate_mlkem_into(
                 HYBRID_KEM_SUITE,
                 recipient.kyber_bytes(),
                 ciphertext.kyber_ciphertext(),
+                &mut kyber_secret[..],
             )
             .map_err(|_| HybridError::InvalidKyberCiphertext)?;
             let recipient_x25519 = recipient.public().x25519_bytes();
@@ -591,12 +637,7 @@ pub fn decapsulate(
                 ephemeral_x25519: ciphertext.ephemeral_public(),
                 kyber_ciphertext: ciphertext.kyber_ciphertext(),
             };
-            derive_material(
-                suite,
-                shared_ecdh.as_bytes(),
-                kyber_secret.as_bytes(),
-                transcript,
-            )
+            derive_material(suite, shared_ecdh.as_bytes(), &kyber_secret[..], transcript)
         }
     }
 }
@@ -636,13 +677,18 @@ fn derive_material(
             .and_then(|value| value.checked_add(component.len()))
             .ok_or(HybridError::InvalidHkdfLength)?;
     }
-    let mut ikm = Zeroizing::new(Vec::with_capacity(capacity));
-    ikm.extend_from_slice(ecdh);
-    ikm.extend_from_slice(kyber);
+    let _ = capacity;
+    // Keep the complete length preflight, then stream exactly the same extract
+    // input without retaining an unaccounted concatenation buffer.
+    let mut extract = HkdfExtract::<Sha3_256>::new(Some(suite.hkdf_salt()));
+    extract.input_ikm(ecdh);
+    extract.input_ikm(kyber);
     for component in transcript_components {
-        append_transcript_component(&mut ikm, component)?;
+        let len = u64::try_from(component.len()).map_err(|_| HybridError::InvalidHkdfLength)?;
+        extract.input_ikm(&len.to_be_bytes());
+        extract.input_ikm(component);
     }
-    let hkdf = Hkdf::<Sha3_256>::new(Some(suite.hkdf_salt()), ikm.as_ref());
+    let hkdf = extract.finalize().1;
     let mut okm = Zeroizing::new([0_u8; 64]);
     hkdf.expand(suite.hkdf_info(), okm.as_mut())
         .map_err(|_| HybridError::InvalidHkdfLength)?;
@@ -652,15 +698,6 @@ fn derive_material(
     hkdf.expand(suite.rekey_info(), rekey_secret.as_mut())
         .map_err(|_| HybridError::InvalidHkdfLength)?;
     Ok(DerivedSecret::new(encryption_key, rekey_secret))
-}
-fn append_transcript_component(
-    out: &mut Zeroizing<Vec<u8>>,
-    component: &[u8],
-) -> Result<(), HybridError> {
-    let len = u64::try_from(component.len()).map_err(|_| HybridError::InvalidHkdfLength)?;
-    out.extend_from_slice(&len.to_be_bytes());
-    out.extend_from_slice(component);
-    Ok(())
 }
 fn decode_x25519_public_key(bytes: [u8; 32]) -> Result<X25519PublicKey, HybridError> {
     let public_key = X25519PublicKey::from(bytes);
@@ -1126,7 +1163,7 @@ mod tests {
         let mut rng = ChaCha20Rng::from_seed([0x7B; 32]);
         let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
         let (x25519, mut kyber_secret) = pair.secret().to_bytes();
-        set_first_mlkem_12_bit_coefficient_noncanonical(&mut kyber_secret);
+        set_first_mlkem_12_bit_coefficient_noncanonical(&mut kyber_secret[..]);
         let err = HybridSecretKey::from_bytes(x25519, kyber_secret)
             .expect_err("noncanonical Kyber secret key must be rejected while decoding");
         assert_eq!(err, HybridError::InvalidKyberSecretKey);
@@ -1154,7 +1191,7 @@ mod tests {
         let mut rng = ChaCha20Rng::from_seed([0x7E; 32]);
         let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
         let (x25519, mut kyber_secret) = pair.secret().to_bytes();
-        mlkem_secret_with_zero_embedded_public_key(&mut kyber_secret);
+        mlkem_secret_with_zero_embedded_public_key(&mut kyber_secret[..]);
         let err = HybridSecretKey::from_bytes(x25519, kyber_secret)
             .expect_err("all-zero embedded Kyber public key must be rejected while decoding");
         assert_eq!(err, HybridError::InvalidKyberSecretKey);
@@ -1208,3 +1245,10 @@ mod tests {
         assert_eq!(err, HybridError::InvalidX25519SharedSecret);
     }
 }
+
+#[cfg(test)]
+#[path = "hybrid/borrowed_validation_tests.rs"]
+mod borrowed_validation_tests;
+
+#[cfg(test)]
+mod fixed_owner_tests;

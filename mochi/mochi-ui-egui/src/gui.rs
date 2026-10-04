@@ -5,8 +5,9 @@ use mochi_core::{
     DashboardAccountInput, DashboardSnapshot, InstructionDraft, ManagedBlockStream,
     ManagedEventStream, StatePage, StateQueryKind, TransactionPreview,
     developer::{
-        ContractInput, DeveloperWorkspace, ManagedAttachmentPhase, ManagedAttachmentStatus,
-        ManagedDataspaceStatus, ManagedNetwork, ManagedPhase,
+        ContractInput, DeveloperWorkspace, GeneratedPublishAction, GeneratedPublishOutcome,
+        ManagedAttachmentPhase, ManagedAttachmentStatus, ManagedDataspaceStatus, ManagedNetwork,
+        ManagedPhase,
     },
     drafts_from_json_str, drafts_to_pretty_json, fetch_dashboard_snapshot, run_state_query,
 };
@@ -38,14 +39,16 @@ enum View {
     Activity,
     Composer,
     Contracts,
+    Packages,
 }
 impl View {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Dashboard,
         Self::State,
         Self::Activity,
         Self::Composer,
         Self::Contracts,
+        Self::Packages,
     ];
     fn label(self) -> &'static str {
         match self {
@@ -54,6 +57,7 @@ impl View {
             Self::Activity => "Activity",
             Self::Composer => "Compose",
             Self::Contracts => "Contracts",
+            Self::Packages => "Packages",
         }
     }
 }
@@ -123,6 +127,10 @@ fn inspect_workspace(workspace: DeveloperWorkspace) -> UiResult<Opened> {
 enum Message {
     Opened(UiResult<Opened>),
     Selected(UiResult<Selection>),
+    LocalnetStarted {
+        result: UiResult<Selection>,
+        names: UiResult<Vec<String>>,
+    },
     Reset(UiResult<Vec<String>>),
     Dashboard(UiResult<DashboardSnapshot>),
     State(UiResult<StatePage>),
@@ -135,6 +143,10 @@ enum Message {
     Progress(String),
     Deployed {
         result: UiResult<String>,
+        refreshed: UiResult<Opened>,
+    },
+    Published {
+        result: UiResult<PublicationOutput>,
         refreshed: UiResult<Opened>,
     },
     Attached {
@@ -152,6 +164,211 @@ struct Review {
     decision: Sender<bool>,
 }
 
+struct LocalnetDialog {
+    name: String,
+}
+
+enum LocalnetDialogAction {
+    Cancel,
+    Start(String),
+}
+
+impl LocalnetDialog {
+    fn new(names: &[String]) -> Self {
+        let mut name = "local".to_owned();
+        let mut suffix = 2;
+        while names.contains(&name) {
+            name = format!("local-{suffix}");
+            suffix += 1;
+        }
+        Self { name }
+    }
+
+    fn show(
+        &mut self,
+        context: &egui::Context,
+        names: &[String],
+        busy: bool,
+    ) -> Option<LocalnetDialogAction> {
+        let mut action = None;
+        egui::Window::new("New localnet")
+            .collapsible(false)
+            .resizable(false)
+            .show(context, |ui| {
+                ui.label("Create four local validators and a funded account. No configuration files needed.");
+                ui.label("Your current environment stays available. The new localnet becomes selected when ready.");
+                ui.horizontal(|ui| {
+                    ui.label("Name");
+                    ui.text_edit_singleline(&mut self.name);
+                });
+                let name = self.name.trim();
+                let exists = names.iter().any(|existing| existing == name);
+                if exists {
+                    ui.label("This name already exists. Choose it from the environment menu to resume it.");
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        action = Some(LocalnetDialogAction::Cancel);
+                    }
+                    if ui
+                        .add_enabled(
+                            !busy && !name.is_empty() && !exists,
+                            egui::Button::new("Create localnet"),
+                        )
+                        .clicked()
+                    {
+                        action = Some(LocalnetDialogAction::Start(name.to_owned()));
+                    }
+                });
+            });
+        action
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PublicationAction {
+    Begin,
+    Resume,
+    Recover,
+}
+
+struct PublicationForm {
+    manifest: String,
+    package: String,
+    detach: bool,
+    operation_id: String,
+}
+
+impl Default for PublicationForm {
+    fn default() -> Self {
+        Self {
+            manifest: ".".into(),
+            package: String::new(),
+            detach: false,
+            operation_id: String::new(),
+        }
+    }
+}
+
+impl PublicationForm {
+    fn action(&self, action: PublicationAction) -> UiResult<GeneratedPublishAction> {
+        match action {
+            PublicationAction::Begin => Ok(GeneratedPublishAction::Begin {
+                package: optional_selector(&self.package)
+                    .map(|value| value.parse())
+                    .transpose()
+                    .map_err(|error| format!("Invalid package selector: {error}"))?,
+                detach: self.detach,
+            }),
+            PublicationAction::Resume | PublicationAction::Recover => {
+                let operation_id = self
+                    .operation_id
+                    .trim()
+                    .parse()
+                    .map_err(|error| format!("Invalid publication operation ID: {error}"))?;
+                Ok(if action == PublicationAction::Resume {
+                    GeneratedPublishAction::Resume { operation_id }
+                } else {
+                    GeneratedPublishAction::Recover { operation_id }
+                })
+            }
+        }
+    }
+
+    fn show(&mut self, ui: &mut egui::Ui, available: bool) -> Option<PublicationAction> {
+        let mut action = None;
+        ui.heading("Publish a package");
+        ui.label("Publish to the selected generated localnet. Publish starts a default localnet when none is selected.");
+        ui.label("Publication can register the package namespace and pay transaction fees.");
+        ui.add(
+            egui::TextEdit::singleline(&mut self.manifest)
+                .hint_text("Manifest or workspace path")
+                .desired_width(700.0),
+        );
+        ui.add(
+            egui::TextEdit::singleline(&mut self.package)
+                .hint_text("Package selector (optional)")
+                .desired_width(700.0),
+        );
+        ui.checkbox(&mut self.detach, "Return after durable seed staging");
+        if ui
+            .add_enabled(available, egui::Button::new("Publish package"))
+            .clicked()
+        {
+            action = Some(PublicationAction::Begin);
+        }
+        ui.separator();
+        ui.label("Use the original operation ID from publication output. Resume uses its retained package; Recover package files requires the original workspace.");
+        ui.add(
+            egui::TextEdit::singleline(&mut self.operation_id)
+                .hint_text("Publication operation ID")
+                .desired_width(700.0),
+        );
+        ui.horizontal_wrapped(|ui| {
+            let enabled = available && !self.operation_id.trim().is_empty();
+            if ui
+                .add_enabled(enabled, egui::Button::new("Resume publication"))
+                .clicked()
+            {
+                action = Some(PublicationAction::Resume);
+            }
+            if ui
+                .add_enabled(enabled, egui::Button::new("Recover package files"))
+                .clicked()
+            {
+                action = Some(PublicationAction::Recover);
+            }
+        });
+        action
+    }
+}
+
+// Presentation only. The canonical outcome owns all publication status and diagnostics.
+struct PublicationOutput {
+    exit_code: i32,
+    stdout: String,
+    stderr: String,
+}
+
+impl PublicationOutput {
+    fn from_outcome(outcome: GeneratedPublishOutcome) -> UiResult<Self> {
+        let rendered = outcome
+            .render(Default::default())
+            .map_err(|error| error.to_string())?;
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        rendered
+            .write_to(&mut stdout, &mut stderr)
+            .map_err(|error| error.to_string())?;
+        Ok(Self {
+            exit_code: rendered.exit_code(),
+            stdout: String::from_utf8(stdout).map_err(|error| error.to_string())?,
+            stderr: String::from_utf8(stderr).map_err(|error| error.to_string())?,
+        })
+    }
+
+    fn show(&self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.strong(format!(
+            "Publication output · exit status {}",
+            self.exit_code
+        ));
+        if !self.stdout.is_empty() {
+            ui.label("Output");
+            if ui.button("Copy publication output").clicked() {
+                ui.ctx().copy_text(self.stdout.clone());
+            }
+            ui.add(egui::Label::new(egui::RichText::new(&self.stdout).monospace()).wrap());
+        }
+        if !self.stderr.is_empty() {
+            ui.label("Diagnostics");
+            if ui.button("Copy publication diagnostics").clicked() {
+                ui.ctx().copy_text(self.stderr.clone());
+            }
+            ui.add(egui::Label::new(egui::RichText::new(&self.stderr).monospace()).wrap());
+        }
+    }
+}
+
 struct Desktop {
     runtime: Option<tokio::runtime::Runtime>,
     sender: Sender<(u64, Message)>,
@@ -162,6 +379,7 @@ struct Desktop {
     workspace: Option<DeveloperWorkspace>,
     names: Vec<String>,
     new_name: String,
+    localnet_dialog: Option<LocalnetDialog>,
     profiles: UiResult<Vec<String>>,
     private_dialog: bool,
     private_alias: String,
@@ -205,6 +423,8 @@ struct Desktop {
     journal_path: String,
     review: Option<Review>,
     receipt: Option<String>,
+    publication: PublicationForm,
+    publication_output: Option<PublicationOutput>,
 }
 
 impl Desktop {
@@ -239,6 +459,7 @@ impl Desktop {
             workspace: None,
             names: Vec::new(),
             new_name: "local".into(),
+            localnet_dialog: None,
             profiles: Ok(Vec::new()),
             private_dialog: false,
             private_alias: "myapp".into(),
@@ -276,12 +497,18 @@ impl Desktop {
             journal_path: String::new(),
             review: None,
             receipt: None,
+            publication: PublicationForm::default(),
+            publication_output: None,
         }
     }
 
     fn spawn(&mut self, work: impl FnOnce() -> Message + Send + 'static) {
-        self.busy = true;
         self.error = None;
+        self.spawn_task(work);
+    }
+
+    fn spawn_task(&mut self, work: impl FnOnce() -> Message + Send + 'static) {
+        self.busy = true;
         let sender = self.sender.clone();
         let epoch = self.epoch;
         std::thread::spawn(move || {
@@ -301,6 +528,8 @@ impl Desktop {
         self.preview = None;
         self.submitted_hash = None;
         self.receipt = None;
+        self.publication_output = None;
+        self.publication.operation_id.clear();
         self.notice = None;
         self.reset_intent = false;
     }
@@ -311,6 +540,7 @@ impl Desktop {
         self.workspace = None;
         self.names.clear();
         self.new_name = "local".into();
+        self.localnet_dialog = None;
         self.profiles = Ok(Vec::new());
         self.private_dialog = false;
         self.attaching = None;
@@ -354,6 +584,28 @@ impl Desktop {
                 .map_err(|e| e.to_string())
                 .and_then(|_| load_selection(&workspace, Some(&name))),
             )
+        });
+    }
+
+    fn start_localnet(&mut self, name: String) {
+        let Some(workspace) = self.workspace.clone() else {
+            return;
+        };
+        self.spawn(move || {
+            let result = workspace
+                .create_localnet(&name)
+                .map_err(|e| e.to_string())
+                .and_then(|status| {
+                    require_ready_localnet(status.phase, status.failure.as_deref())?;
+                    let selection = load_selection(&workspace, Some(&name))?;
+                    require_ready_localnet(selection.phase, selection.failure.as_deref())?;
+                    Ok(selection)
+                });
+            let names = workspace
+                .contexts()
+                .map(|contexts| contexts.into_iter().map(|context| context.name).collect())
+                .map_err(|e| e.to_string());
+            Message::LocalnetStarted { result, names }
         });
     }
 
@@ -430,7 +682,8 @@ impl Desktop {
         };
         let name = selected.network.prepared().context.name.clone();
         self.last_poll = Instant::now();
-        self.spawn(move || Message::Selected(load_selection(&workspace, Some(&name))));
+        // Periodic successful observations must not erase a foreground operation's failure.
+        self.spawn_task(move || Message::Selected(load_selection(&workspace, Some(&name))));
     }
 
     fn install_selection(&mut self, selection: Selection) {
@@ -519,6 +772,16 @@ impl Desktop {
                         self.error = Some(error);
                     }
                 },
+                Message::LocalnetStarted { result, names } => {
+                    match names {
+                        Ok(names) => self.names = names,
+                        Err(error) => self.error = Some(error),
+                    }
+                    match result {
+                        Ok(selected) => self.install_selection(selected),
+                        Err(error) => self.error = Some(error),
+                    }
+                }
                 Message::Reset(result) => match result {
                     Ok(names) => {
                         self.clear_network();
@@ -560,6 +823,18 @@ impl Desktop {
                     }
                     match result {
                         Ok(receipt) => self.receipt = Some(receipt),
+                        Err(error) => self.error = Some(error),
+                    }
+                }
+                Message::Published { result, refreshed } => {
+                    match refreshed {
+                        Ok(opened) => self.install_opened(opened),
+                        Err(error) => {
+                            self.error = Some(format!("Workspace refresh failed: {error}."))
+                        }
+                    }
+                    match result {
+                        Ok(output) => self.publication_output = Some(output),
                         Err(error) => self.error = Some(error),
                     }
                 }
@@ -657,6 +932,12 @@ impl Desktop {
                     self.lifecycle(true);
                 }
                 if ui
+                    .add_enabled(self.workspace.is_some(), egui::Button::new("New localnet…"))
+                    .clicked()
+                {
+                    self.localnet_dialog = Some(LocalnetDialog::new(&self.names));
+                }
+                if ui
                     .add_enabled(
                         self.workspace.is_some(),
                         egui::Button::new("Private dataspace…"),
@@ -678,6 +959,7 @@ impl Desktop {
                     .add_enabled(self.selected.is_some(), egui::Button::new("Refresh"))
                     .clicked()
                 {
+                    self.error = None;
                     self.refresh_selection();
                 }
                 if ui
@@ -1115,25 +1397,6 @@ impl Desktop {
         {
             self.deploy(true);
         }
-        if let Some(review) = &self.review {
-            ui.separator();
-            ui.strong("Review the exact deployment and quoted fees");
-            ui.monospace(&review.evidence);
-            let mut decision = None;
-            ui.horizontal(|ui| {
-                if ui.button("Deploy with these fees").clicked() {
-                    decision = Some(true);
-                }
-                if ui.button("Cancel").clicked() {
-                    decision = Some(false);
-                }
-            });
-            if let Some(accepted) = decision {
-                if let Some(review) = self.review.take() {
-                    let _ = review.decision.send(accepted);
-                }
-            }
-        }
         if let Some(receipt) = &self.receipt {
             ui.separator();
             ui.strong("Verified deployment receipt");
@@ -1221,10 +1484,94 @@ impl Desktop {
         });
     }
 
+    fn packages(&mut self, ui: &mut egui::Ui) {
+        if let Some(action) = self
+            .publication
+            .show(ui, !self.busy && self.workspace.is_some())
+        {
+            self.publish_package(action);
+        }
+        if let Some(output) = &self.publication_output {
+            output.show(ui);
+        }
+    }
+
+    fn publish_package(&mut self, action: PublicationAction) {
+        if self.busy {
+            return;
+        }
+        let action = match self.publication.action(action) {
+            Ok(action) => action,
+            Err(error) => {
+                self.error = Some(error);
+                return;
+            }
+        };
+        let Some(workspace) = self.workspace.clone() else {
+            return;
+        };
+        let context = self
+            .selected
+            .as_ref()
+            .map(|selected| selected.network.prepared().context.name.clone());
+        let manifest = PathBuf::from(if self.publication.manifest.is_empty() {
+            "."
+        } else {
+            &self.publication.manifest
+        });
+        self.publication_output = None;
+        self.notice = None;
+        self.spawn(move || {
+            let result = workspace
+                .publish_package(&manifest, context.as_deref(), action)
+                .map_err(|error| error.to_string())
+                .and_then(PublicationOutput::from_outcome);
+            Message::Published {
+                result,
+                refreshed: inspect_workspace(workspace),
+            }
+        });
+    }
+
     fn ready(&self) -> bool {
         self.selected
             .as_ref()
             .is_some_and(|s| s.phase == ManagedPhase::Ready)
+    }
+
+    fn review_dialog(&mut self, context: &egui::Context) {
+        let Some(review) = &self.review else {
+            return;
+        };
+        let mut decision = None;
+        let viewport = context.content_rect();
+        let width = (viewport.width() - 48.0).clamp(160.0, 760.0);
+        let evidence_height = (viewport.height() - 200.0).clamp(40.0, 400.0);
+        egui::Modal::new(egui::Id::new("deployment-review")).show(context, |ui| {
+            ui.set_width(width);
+            ui.heading("Review deployment");
+            ui.strong("Review the exact deployment and quoted fees");
+            egui::ScrollArea::vertical()
+                .max_height(evidence_height)
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(&review.evidence).monospace()).wrap(),
+                    );
+                });
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Deploy with these fees").clicked() {
+                    decision = Some(true);
+                }
+                if ui.button("Cancel").clicked() {
+                    decision = Some(false);
+                }
+            });
+        });
+        if let Some(accepted) = decision {
+            if let Some(review) = self.review.take() {
+                let _ = review.decision.send(accepted);
+            }
+        }
     }
 
     fn private_dataspace_dialog(&mut self, context: &egui::Context) {
@@ -1257,9 +1604,8 @@ impl Desktop {
     }
 }
 
-impl eframe::App for Desktop {
-    fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
-        self.poll();
+impl Desktop {
+    fn show(&mut self, context: &egui::Context) {
         egui::TopBottomPanel::top("workspace").show(context, |ui| self.top_bar(ui));
         egui::SidePanel::left("navigation")
             .resizable(false)
@@ -1306,6 +1652,7 @@ impl eframe::App for Desktop {
                 View::Activity => self.activity(ui),
                 View::Composer => self.composer(ui),
                 View::Contracts => self.contracts(ui),
+                View::Packages => self.packages(ui),
             });
         });
         if self.reset_intent {
@@ -1324,14 +1671,44 @@ impl eframe::App for Desktop {
                 });
             });
         }
+        if let Some(dialog) = &mut self.localnet_dialog {
+            if let Some(action) = dialog.show(context, &self.names, self.busy) {
+                self.localnet_dialog = None;
+                if let LocalnetDialogAction::Start(name) = action {
+                    self.start_localnet(name);
+                }
+            }
+        }
         self.private_dataspace_dialog(context);
+        self.review_dialog(context);
         context.request_repaint_after(Duration::from_millis(100));
+    }
+}
+
+impl eframe::App for Desktop {
+    fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll();
+        self.show(context);
     }
 }
 
 fn optional_selector(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_owned())
+}
+
+fn require_ready_localnet(phase: ManagedPhase, failure: Option<&str>) -> UiResult<()> {
+    if phase == ManagedPhase::Ready {
+        return Ok(());
+    }
+    let mut message = format!(
+        "Localnet startup ended in {phase:?}. Its prepared generation is retained; choose its name from the environment menu to inspect or resume it."
+    );
+    if let Some(failure) = failure {
+        message.push(' ');
+        message.push_str(&bounded_text(failure));
+    }
+    Err(message)
 }
 
 fn attachment_summary(status: &ManagedAttachmentStatus) -> String {
@@ -1450,6 +1827,304 @@ fn drain_stream<T: Clone>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    pub(super) fn render_frame(
+        context: &egui::Context,
+        events: Vec<egui::Event>,
+        draw: &mut impl FnMut(&egui::Context),
+    ) -> egui::FullOutput {
+        render_sized_frame(context, egui::vec2(1280.0, 900.0), events, draw)
+    }
+
+    fn render_sized_frame(
+        context: &egui::Context,
+        size: egui::Vec2,
+        events: Vec<egui::Event>,
+        draw: &mut impl FnMut(&egui::Context),
+    ) -> egui::FullOutput {
+        context.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                events,
+                ..Default::default()
+            },
+            |context| draw(context),
+        )
+    }
+
+    pub(super) fn text_position(output: &egui::FullOutput, expected: &str) -> Option<egui::Pos2> {
+        fn find(shape: &egui::Shape, expected: &str) -> Option<egui::Pos2> {
+            match shape {
+                egui::Shape::Text(text) if text.galley.text() == expected => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| find(shape, expected)),
+                _ => None,
+            }
+        }
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| find(&shape.shape, expected))
+    }
+
+    pub(super) fn click_label(
+        context: &egui::Context,
+        label: &str,
+        mut draw: impl FnMut(&egui::Context),
+    ) {
+        // A window needs its measured previous frame before testing pointer hit regions.
+        let _ = render_frame(context, Vec::new(), &mut draw);
+        let output = render_frame(context, Vec::new(), &mut draw);
+        let pos = text_position(&output, label).expect("requested control is rendered");
+        for pressed in [true, false] {
+            let _ = render_frame(
+                context,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                &mut draw,
+            );
+        }
+    }
+
+    #[test]
+    fn new_localnet_dialog_emits_only_the_explicit_available_name() {
+        let names = vec!["local".into(), "local-2".into(), "private".into()];
+        let mut dialog = LocalnetDialog::new(&names);
+        assert_eq!(dialog.name, "local-3");
+        dialog.name = "  contracts  ".into();
+        let context = egui::Context::default();
+        let mut requested = None;
+        click_label(&context, "Create localnet", |context| {
+            if let Some(action) = dialog.show(context, &names, false) {
+                requested = Some(action);
+            }
+        });
+        assert!(
+            matches!(requested, Some(LocalnetDialogAction::Start(name)) if name == "contracts")
+        );
+        assert_eq!(names, ["local", "local-2", "private"]);
+    }
+
+    #[test]
+    fn new_localnet_dialog_refuses_retained_names_empty_names_and_busy_work() {
+        let names = vec!["local".into(), "private".into()];
+        for (name, busy) in [(" private ", false), ("  ", false), ("new", true)] {
+            let context = egui::Context::default();
+            let mut dialog = LocalnetDialog { name: name.into() };
+            let mut requested = None;
+            click_label(&context, "Create localnet", |context| {
+                if let Some(action) = dialog.show(context, &names, busy) {
+                    requested = Some(action);
+                }
+            });
+            assert!(requested.is_none());
+        }
+        let context = egui::Context::default();
+        let mut dialog = LocalnetDialog::new(&names);
+        let mut requested = None;
+        click_label(&context, "Cancel", |context| {
+            if let Some(action) = dialog.show(context, &names, false) {
+                requested = Some(action);
+            }
+        });
+        assert!(matches!(requested, Some(LocalnetDialogAction::Cancel)));
+    }
+
+    #[test]
+    fn failed_new_localnet_keeps_current_observations_and_exposes_retained_name() {
+        let mut desktop = Desktop::model(PathBuf::from("unused"));
+        desktop.busy = true;
+        desktop.new_name = "original".into();
+        desktop.names = vec!["original".into()];
+        desktop.logs = "original validator logs".into();
+        desktop.receipt = Some("original deployment receipt".into());
+        desktop
+            .sender
+            .send((
+                0,
+                Message::LocalnetStarted {
+                    result: Err("startup timed out; prepared generation retained".into()),
+                    names: Ok(vec!["contracts".into(), "original".into()]),
+                },
+            ))
+            .unwrap();
+        desktop.poll();
+        assert!(!desktop.busy);
+        assert_eq!(desktop.new_name, "original");
+        assert_eq!(desktop.names, ["contracts", "original"]);
+        assert_eq!(desktop.logs, "original validator logs");
+        assert_eq!(
+            desktop.receipt.as_deref(),
+            Some("original deployment receipt")
+        );
+        assert!(
+            desktop
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("generation retained")
+        );
+    }
+
+    #[test]
+    fn new_localnet_selection_requires_ready_even_when_start_returned_a_status() {
+        assert!(require_ready_localnet(ManagedPhase::Ready, None).is_ok());
+        for phase in [
+            ManagedPhase::Stopped,
+            ManagedPhase::Starting,
+            ManagedPhase::Failed,
+        ] {
+            let error = require_ready_localnet(phase, Some("exact readiness failure")).unwrap_err();
+            assert!(error.contains(&format!("{phase:?}")));
+            assert!(error.contains("prepared generation is retained"));
+            assert!(error.contains("exact readiness failure"));
+        }
+    }
+
+    #[test]
+    fn automatic_observation_keeps_the_foreground_failure_until_another_action() {
+        let mut desktop = Desktop::model(PathBuf::from("unused"));
+        desktop.error = Some("new localnet failed; prepared generation retained".into());
+        desktop.last_poll = Instant::now() - Duration::from_secs(6);
+        // Exercise the exact task owner used by refresh_selection, without creating a
+        // managed context or invoking native filesystem/process services from a UI test.
+        desktop.spawn_task(|| Message::Logs(Ok("original context observation".into())));
+        assert_eq!(
+            desktop.error.as_deref(),
+            Some("new localnet failed; prepared generation retained")
+        );
+        let completion = desktop
+            .receiver
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        desktop.sender.send(completion).unwrap();
+        desktop.poll();
+        assert!(!desktop.busy);
+        assert_eq!(desktop.logs, "original context observation");
+        assert_eq!(
+            desktop.error.as_deref(),
+            Some("new localnet failed; prepared generation retained")
+        );
+        desktop.spawn(|| Message::Logs(Ok("explicit action".into())));
+        assert!(desktop.error.is_none());
+        let completion = desktop
+            .receiver
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        desktop.sender.send(completion).unwrap();
+        desktop.poll();
+        assert_eq!(desktop.logs, "explicit action");
+    }
+
+    #[test]
+    fn deployment_review_is_visible_and_waits_for_explicit_approval_in_every_view() {
+        for view in View::ALL {
+            let mut desktop = Desktop::model(PathBuf::from("unused"));
+            desktop.busy = true;
+            desktop.view = view;
+            let (decision, answer) = mpsc::channel();
+            desktop
+                .sender
+                .send((
+                    0,
+                    Message::Review {
+                        evidence: "exact original signed intent and quoted fees".into(),
+                        decision,
+                    },
+                ))
+                .unwrap();
+            desktop.poll();
+            let context = egui::Context::default();
+            let _ = render_frame(&context, Vec::new(), &mut |context| desktop.show(context));
+            let output = render_frame(&context, Vec::new(), &mut |context| desktop.show(context));
+            assert!(
+                text_position(&output, "exact original signed intent and quoted fees").is_some()
+            );
+            assert!(matches!(answer.try_recv(), Err(mpsc::TryRecvError::Empty)));
+            assert!(desktop.busy);
+            click_label(&context, "Deploy with these fees", |context| {
+                desktop.show(context)
+            });
+            assert_eq!(answer.try_recv(), Ok(true));
+            assert!(desktop.review.is_none());
+            assert!(
+                desktop.busy,
+                "approval does not fabricate deployment completion"
+            );
+        }
+    }
+
+    #[test]
+    fn deployment_review_cancel_from_another_view_withholds_approval() {
+        let mut desktop = Desktop::model(PathBuf::from("unused"));
+        desktop.busy = true;
+        desktop.view = View::Activity;
+        let (decision, answer) = mpsc::channel();
+        desktop.review = Some(Review {
+            evidence: "exact retained plan".into(),
+            decision,
+        });
+        let context = egui::Context::default();
+        click_label(&context, "Cancel", |context| desktop.show(context));
+        assert_eq!(answer.try_recv(), Ok(false));
+        assert!(desktop.review.is_none());
+        assert!(desktop.busy);
+    }
+
+    #[test]
+    fn deployment_review_keeps_decision_buttons_reachable_in_a_small_viewport() {
+        let mut desktop = Desktop::model(PathBuf::from("unused"));
+        desktop.busy = true;
+        desktop.view = View::Dashboard;
+        let (decision, answer) = mpsc::channel();
+        desktop.review = Some(Review {
+            evidence: "a long original signed transaction and exact fee evidence ".repeat(300),
+            decision,
+        });
+        let context = egui::Context::default();
+        let size = egui::vec2(360.0, 320.0);
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+        let _ = render_sized_frame(&context, size, Vec::new(), &mut |context| {
+            desktop.show(context)
+        });
+        let output = render_sized_frame(&context, size, Vec::new(), &mut |context| {
+            desktop.show(context)
+        });
+        for label in ["Deploy with these fees", "Cancel"] {
+            let pos = text_position(&output, label).expect("decision button rendered");
+            assert!(
+                viewport.contains(pos),
+                "{label} must remain inside the viewport"
+            );
+        }
+        let pos = text_position(&output, "Cancel").unwrap();
+        for pressed in [true, false] {
+            let _ = render_sized_frame(
+                &context,
+                size,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                &mut |context| desktop.show(context),
+            );
+        }
+        assert_eq!(answer.try_recv(), Ok(false));
+        assert!(desktop.review.is_none());
+    }
 
     #[test]
     fn completed_deployment_survives_failed_workspace_refresh() {
@@ -1659,6 +2334,7 @@ mod tests {
                     View::Activity => desktop.activity(ui),
                     View::Composer => desktop.composer(ui),
                     View::Contracts => desktop.contracts(ui),
+                    View::Packages => desktop.packages(ui),
                 });
             });
             assert!(!output.shapes.is_empty());
@@ -1680,3 +2356,7 @@ mod tests {
         assert_eq!(activity.back().unwrap(), "9");
     }
 }
+
+#[cfg(test)]
+#[path = "gui/publication_tests.rs"]
+mod publication_tests;

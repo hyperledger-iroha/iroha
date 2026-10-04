@@ -903,7 +903,7 @@ fn trigger_completion_query_response(
         let carrier = app
             .state
             .read_finalized_execution_carrier(height_usize, remaining_work, remaining_bytes)
-            .map_err(pipeline_status_projection_error)?;
+            .map_err(crate::canonical_history::query_attempt_error)?;
         remaining_work -= carrier.work_items();
         remaining_bytes -= carrier.wire_bytes();
         let mut reached_limit = false;
@@ -1110,7 +1110,7 @@ fn authenticate_canonical_transaction_outcome(
             }
         },
     )
-    .map_err(pipeline_status_projection_error)?;
+    .map_err(crate::canonical_history::query_attempt_error)?;
     if duplicate {
         return Err(pipeline_status_projection_error(format!(
             "transaction {hash} occurs more than once in its finalized carrier"
@@ -1397,7 +1397,7 @@ fn canonical_transaction_details_for_indexed_identity(
     let carrier = app
         .state
         .read_finalized_execution_carrier(block_height, work, bytes)
-        .map_err(pipeline_status_projection_error)?;
+        .map_err(crate::canonical_history::query_attempt_error)?;
     if carrier.block().hash() != expected_hash {
         return Err(pipeline_status_projection_error(
             "native carrier differs from its exact committed binding",

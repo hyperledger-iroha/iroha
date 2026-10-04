@@ -1,0 +1,598 @@
+//! Initial reserve planning tests use claimed inputs; they supply no authenticated native state.
+
+use super::*;
+use iroha::http::{HttpTransport, Response, TransportFuture, TransportRequest};
+use iroha_crypto::{Algorithm, Hash, KeyPair};
+use iroha_data_model::sorafs::reserve::{RESERVE_AUTHORITY_POLICY_VERSION_V1, ReservePolicyV1};
+use sorafs_manifest::deal::XorQuantity;
+use std::{
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Instant,
+};
+
+#[derive(Debug, Default)]
+struct Transport {
+    requests: AtomicUsize,
+    quotes: AtomicUsize,
+    submissions: AtomicUsize,
+    journal: Mutex<Option<std::path::PathBuf>>,
+}
+impl HttpTransport for Transport {
+    fn send_blocking(&self, request: TransportRequest) -> Result<Response<Vec<u8>>> {
+        self.requests.fetch_add(1, Ordering::SeqCst);
+        let (status, body) = match request.url.path() {
+            "/v1/node/capabilities" => (
+                200,
+                norito::json::to_vec(&norito::json!({
+                    "data_model_version": (iroha_data_model::DATA_MODEL_VERSION),
+                    "signed_transaction_schema_hash_hex": (hex::encode(norito::schema::identity::frame_hash::<SignedTransaction>()))
+                }))?,
+            ),
+            "/v1/fees/quote" => {
+                self.quotes.fetch_add(1, Ordering::SeqCst);
+                let request: iroha_torii_shared::FeeQuoteRequest =
+                    norito::json::from_slice(&request.body)?;
+                (
+                    200,
+                    norito::json::to_vec(&empty_quote(
+                        request.payload.authority(),
+                        request.payload.fee_payment_intent(),
+                    ))?,
+                )
+            }
+            "/v1/pipeline/transactions/status" => {
+                assert_eq!(request.method, iroha::http::Method::GET);
+                let hash = request
+                    .url
+                    .query_pairs()
+                    .find(|(key, _)| key == "hash")
+                    .unwrap()
+                    .1
+                    .parse::<iroha_crypto::HashOf<SignedTransaction>>()?;
+                let absence = iroha_torii_shared::ErrorEnvelope::new(
+                    iroha_torii_shared::PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE,
+                    "Missing status.",
+                )
+                .with_details(iroha_torii_shared::ErrorDetails {
+                    pipeline_transaction_status_not_found: Some(
+                        iroha_torii_shared::PipelineTransactionStatusNotFoundV1::new(
+                            &hash, "global",
+                        ),
+                    ),
+                    ..iroha_torii_shared::ErrorDetails::default()
+                });
+                (404, norito::json::to_vec(&absence)?)
+            }
+            path if path == iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path() => {
+                self.submissions.fetch_add(1, Ordering::SeqCst);
+                let journal = self.journal.lock().unwrap();
+                let path = journal
+                    .as_ref()
+                    .expect("submission requires a prepared journal");
+                assert!(path.join("operation.json").is_file());
+                assert!(path.join("submission.json").is_file());
+                (503, b"unavailable".to_vec())
+            }
+            path => panic!("unexpected reserve HTTP request {path}"),
+        };
+        Ok(Response::builder()
+            .status(status)
+            .header("Content-Type", "application/json")
+            .body(body)?)
+    }
+    fn send(&self, request: TransportRequest) -> TransportFuture<'_> {
+        Box::pin(async move { self.send_blocking(request) })
+    }
+}
+
+fn empty_quote(authority: &AccountId, intent: &FeePaymentIntent) -> FeeQuoteResponse {
+    FeeQuoteResponse {
+        intent: intent.clone(),
+        observation: iroha_torii_shared::FeeQuoteObservation {
+            ledger_time_ms: 1,
+            next_block_height: 1,
+            route_dataspace_id: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        },
+        components: Vec::new(),
+        capacities: Vec::new(),
+        decision: iroha_torii_shared::FeeQuoteDecision::Accepted {
+            debit_source: iroha_data_model::nexus::FeeDebitSource::Account(authority.clone()),
+            program_revision: None,
+        },
+    }
+}
+fn service() -> (AccountService, Arc<Transport>) {
+    let config = super::super::tests::fixture_config();
+    let transport = Arc::new(Transport::default());
+    let client = Client::with_http_transport(config.clone(), transport.clone()).unwrap();
+    (
+        AccountService {
+            config,
+            client,
+            deadline: None,
+            cancellation: None,
+        },
+        transport,
+    )
+}
+fn account(seed: u8) -> AccountId {
+    AccountId::new(
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .unwrap()
+            .public_key()
+            .clone(),
+    )
+}
+fn request(config: &Config, now: u64) -> InitialReservePolicyRequest {
+    let policy = ReserveAuthorityPolicyV1 {
+        version: RESERVE_AUTHORITY_POLICY_VERSION_V1,
+        revision: 1,
+        predecessor_policy_digest: None,
+        economics: ReservePolicyV1::default(),
+        asset_definition: XOR_ASSET_DEFINITION.parse().unwrap(),
+        custody_account: account(20),
+        treasury_account: account(21),
+        operations_authority: account(22),
+        decision_authority: account(23),
+        grace_period_days: 7,
+        default_after_days: 30,
+        max_provider_debt: XorQuantity::try_from_micro(1_000_000_000).unwrap(),
+        max_pending_movements_per_provider: 4,
+        max_open_appeals_per_provider: 2,
+    };
+    InitialReservePolicyRequest {
+        selection: InitialReservePolicySelection {
+            chain_id: config.chain.to_string(),
+            network_id: config.network_id,
+            manager: config.account.clone(),
+            policy_digest: policy.digest().unwrap(),
+            asset_definition: policy.asset_definition.clone(),
+            custody_account: policy.custody_account.clone(),
+            treasury_account: policy.treasury_account.clone(),
+            operations_authority: policy.operations_authority.clone(),
+            decision_authority: policy.decision_authority.clone(),
+        },
+        policy,
+        deadline_unix_ms: now + 50_000,
+        options: BoundedTransactionOptions {
+            fee_payment: FeePaymentIntent::authority(Vec::new(), None),
+            max_total_fees: BTreeMap::new(),
+            deadline: Instant::now() + Duration::from_secs(60),
+        },
+    }
+}
+
+#[test]
+fn structural_plan_retains_exact_single_policy_without_claiming_native_state() {
+    let (service, transport) = service();
+    let request = request(&service.config, current_unix_ms().unwrap());
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("policy");
+    let report = service
+        .prepare_initial_reserve_policy(&request, &path)
+        .unwrap();
+    // No state proof or permission response exists in this transport. Prepared is only a local plan.
+    assert_eq!(report.status, OperationStatus::Prepared);
+    assert_eq!(
+        report.data.get("operation").and_then(Value::as_str),
+        Some("initial_reserve_policy")
+    );
+    assert!(!report.status.is_complete());
+    let calls = transport.requests.load(Ordering::SeqCst);
+    let signed = service
+        .verify_initial_reserve_policy_journal(&path, &request)
+        .unwrap();
+    assert_eq!(transport.requests.load(Ordering::SeqCst), calls);
+    let record: TransactionJournal = Journal::open(&path).unwrap().read_operation().unwrap();
+    assert_eq!(
+        signed.encode_versioned(),
+        hex::decode(&record.signed_transaction_hex).unwrap()
+    );
+    let Executable::Instructions(instructions) = signed.instructions() else {
+        panic!("native policy")
+    };
+    assert_eq!(instructions.len(), 1);
+    let instruction = instructions[0]
+        .as_any()
+        .downcast_ref::<SetSorafsReservePolicy>()
+        .unwrap();
+    assert_eq!(instruction.policy, request.policy);
+    assert!(signed.attachments().is_none() && signed.multisig_signatures().is_none());
+    assert!(record.deadline_ms <= request.deadline_unix_ms);
+    assert!(
+        service
+            .submit(&path, NativeOperationKind::InitialReservePolicy)
+            .is_err()
+    );
+    assert!(
+        service
+            .resume(&path, NativeOperationKind::InitialReservePolicy)
+            .is_err()
+    );
+    assert_eq!(transport.quotes.load(Ordering::SeqCst), 1);
+    assert_eq!(transport.submissions.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn noninitial_network_manager_digest_and_every_policy_role_refuse_before_http() {
+    let (service, transport) = service();
+    let request = request(&service.config, current_unix_ms().unwrap());
+    let mut variants = Vec::new();
+    let mut changed = request.clone();
+    changed.policy.revision = 2;
+    changed.policy.predecessor_policy_digest = Some([1; 32]);
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed.policy.predecessor_policy_digest = Some([1; 32]);
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed.selection.chain_id.push('x');
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed.selection.network_id = NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"other genesis")),
+    );
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed.selection.manager = account(99);
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed.selection.policy_digest[0] ^= 1;
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed.selection.asset_definition = AssetDefinitionId::from_uuid_bytes([
+        0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x80, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44,
+        0x44,
+    ])
+    .unwrap();
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed.selection.custody_account = account(99);
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed.selection.treasury_account = account(99);
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed.selection.operations_authority = account(99);
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed.selection.decision_authority = account(99);
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed.policy.max_pending_movements_per_provider = 0;
+    variants.push(changed);
+    for deadline in [0, current_unix_ms().unwrap() - 1, u64::MAX] {
+        let mut changed = request.clone();
+        changed.deadline_unix_ms = deadline;
+        variants.push(changed);
+    }
+    let root = tempfile::tempdir().unwrap();
+    for (index, changed) in variants.iter().enumerate() {
+        let path = root.path().join(index.to_string());
+        assert!(
+            service
+                .prepare_initial_reserve_policy(changed, &path)
+                .is_err(),
+            "variant {index}"
+        );
+        assert!(!path.exists());
+    }
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn held_journal_rejects_changed_request_and_fees_then_dispatches_original_once() {
+    let (service, transport) = service();
+    let mut request = request(&service.config, current_unix_ms().unwrap());
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("policy");
+    service
+        .prepare_initial_reserve_policy(&request, &path)
+        .unwrap();
+    *transport.journal.lock().unwrap() = Some(path.clone());
+    let before = std::fs::read(path.join("operation.json")).unwrap();
+    let mut variants = Vec::new();
+    let mut changed = request.clone();
+    changed.deadline_unix_ms += 1;
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed.policy.grace_period_days += 1;
+    changed.selection.policy_digest = changed.policy.digest().unwrap();
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed.options.max_total_fees.insert(
+        request.policy.asset_definition.clone(),
+        Quantity::from(1u32),
+    );
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed.options.fee_payment =
+        FeePaymentIntent::authority(Vec::new(), std::num::NonZeroU64::new(99));
+    variants.push(changed);
+    let calls = transport.requests.load(Ordering::SeqCst);
+    for changed in variants {
+        assert!(
+            service
+                .verify_initial_reserve_policy_journal(&path, &changed)
+                .is_err()
+        );
+        assert!(
+            service
+                .submit_initial_reserve_policy(&path, &changed)
+                .is_err()
+        );
+        assert!(
+            service
+                .resume_initial_reserve_policy(&path, &changed)
+                .is_err()
+        );
+    }
+    assert_eq!(transport.requests.load(Ordering::SeqCst), calls);
+    for _ in 0..2 {
+        assert_eq!(
+            service
+                .submit_initial_reserve_policy(&path, &request)
+                .unwrap()
+                .status,
+            OperationStatus::Pending
+        );
+    }
+    request.options.deadline = Instant::now() + Duration::from_secs(120);
+    assert_eq!(
+        service
+            .resume_initial_reserve_policy(&path, &request)
+            .unwrap()
+            .status,
+        OperationStatus::Pending
+    );
+    let signed = service
+        .verify_initial_reserve_policy_journal(&path, &request)
+        .unwrap();
+    assert!(transaction_deadline(&signed).unwrap() <= request.deadline_unix_ms);
+    assert_eq!(std::fs::read(path.join("operation.json")).unwrap(), before);
+    assert_eq!(transport.submissions.load(Ordering::SeqCst), 1);
+    assert_eq!(transport.quotes.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn expired_original_can_be_verified_and_read_without_renewal_or_dispatch() {
+    let (service, transport) = service();
+    let original_time = current_unix_ms().unwrap() - 200_000;
+    let mut request = request(&service.config, original_time);
+    let plan = Plan::new(&request, original_time).unwrap();
+    let mut terms = BoundedTerms::new(&request.options).unwrap();
+    terms.deadline_ms = request.deadline_unix_ms;
+    let operation = NativeOperation::InitialReservePolicy {
+        plan: encode_bounded(&plan, MAX_PLAN_BYTES).unwrap(),
+        terms,
+    };
+    let mut builder = iroha_data_model::transaction::TransactionBuilder::new(
+        service.config.network_id,
+        service.config.account.clone(),
+        request.options.fee_payment.clone(),
+    )
+    .with_instructions(operation.instructions(&service.config).unwrap());
+    builder.set_creation_time(Duration::from_millis(original_time));
+    builder.set_ttl(Duration::from_millis(
+        request.deadline_unix_ms - original_time,
+    ));
+    let signed = builder.sign(service.config.key_pair.private_key());
+    let record = TransactionJournal {
+        schema: "iroha.wallet.native-transaction.v1".into(),
+        torii_url: service.config.torii_api_url.to_string(),
+        chain_id: service.config.chain.to_string(),
+        network_id: service.config.network_id,
+        chain_discriminant: service.config.account_chain_discriminant,
+        account_id: service.config.account.clone(),
+        operation,
+        requested_fee: request.options.fee_payment.clone(),
+        quote: empty_quote(&service.config.account, &request.options.fee_payment),
+        transaction_hash: signed.hash().to_string(),
+        signed_transaction_hex: hex::encode(signed.encode_versioned()),
+        deadline_ms: request.deadline_unix_ms,
+    };
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("historical");
+    drop(preparation::retain_signed_fixture(&path, &record).unwrap());
+    let before = std::fs::read(path.join("operation.json")).unwrap();
+    request.options.deadline = Instant::now() + Duration::from_secs(120);
+    assert_eq!(
+        service
+            .verify_initial_reserve_policy_journal(&path, &request)
+            .unwrap()
+            .encode_versioned(),
+        signed.encode_versioned()
+    );
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        service
+            .resume_initial_reserve_policy(&path, &request)
+            .unwrap()
+            .status,
+        OperationStatus::Absent
+    );
+    assert_eq!(
+        service
+            .submit_initial_reserve_policy(&path, &request)
+            .unwrap()
+            .status,
+        OperationStatus::Expired
+    );
+    assert!(
+        service
+            .prepare_initial_reserve_policy(&request, &root.path().join("fresh"))
+            .is_err()
+    );
+    assert!(!path.join("submission.json").exists());
+    assert_eq!(std::fs::read(path.join("operation.json")).unwrap(), before);
+    assert_eq!(transport.quotes.load(Ordering::SeqCst), 0);
+    assert_eq!(transport.submissions.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn plan_fee_and_component_bounds_reject_before_publication() {
+    let (service, transport) = service();
+    let request = request(&service.config, current_unix_ms().unwrap());
+    let mut variants = Vec::new();
+    let mut changed = request.clone();
+    changed.selection.chain_id = "x".repeat(MAX_SELECTION_BYTES);
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed.policy.economics.rent_rates =
+        vec![changed.policy.economics.rent_rates[0].clone(); MAX_POLICY_BYTES];
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed.options.deadline = Instant::now() - Duration::from_secs(1);
+    variants.push(changed);
+    let mut changed = request.clone();
+    changed
+        .options
+        .max_total_fees
+        .insert(request.policy.asset_definition.clone(), Quantity::zero());
+    variants.push(changed);
+    let mut changed = request.clone();
+    for value in 1..=17u8 {
+        let mut bytes = [value; 16];
+        bytes[6] = 0x40;
+        bytes[8] = 0x80;
+        changed.options.max_total_fees.insert(
+            AssetDefinitionId::from_uuid_bytes(bytes).unwrap(),
+            Quantity::from(1u32),
+        );
+    }
+    variants.push(changed);
+    let root = tempfile::tempdir().unwrap();
+    for (index, changed) in variants.iter().enumerate() {
+        let path = root.path().join(index.to_string());
+        assert!(
+            service
+                .prepare_initial_reserve_policy(changed, &path)
+                .is_err()
+        );
+        assert!(!path.exists());
+    }
+    let plan = Plan::new(&request, current_unix_ms().unwrap()).unwrap();
+    let mut bytes = encode_bounded(&plan, MAX_PLAN_BYTES).unwrap();
+    bytes.push(0);
+    assert!(instructions(&service.config, &bytes, request.deadline_unix_ms).is_err());
+    assert!(
+        instructions(
+            &service.config,
+            &vec![0; MAX_PLAN_BYTES + 1],
+            request.deadline_unix_ms
+        )
+        .is_err()
+    );
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn retained_journal_rejects_substituted_signed_body_and_wire() {
+    let (service, _) = service();
+    let request = request(&service.config, current_unix_ms().unwrap());
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("policy");
+    service
+        .prepare_initial_reserve_policy(&request, &path)
+        .unwrap();
+    let record: TransactionJournal = Journal::open(&path).unwrap().read_operation().unwrap();
+    let original = record.verify(&service.config).unwrap();
+    let mut changed = record.clone();
+    changed.signed_transaction_hex.push_str("00");
+    assert!(changed.verify(&service.config).is_err());
+    let mut payload = original.payload().clone();
+    let instruction = Plan::new(&request, current_unix_ms().unwrap())
+        .unwrap()
+        .instruction(&service.config)
+        .unwrap();
+    payload.instructions = vec![instruction.clone(), instruction].into();
+    let signed = service
+        .client
+        .account_client()
+        .sign_transaction(payload)
+        .unwrap();
+    let mut changed = record.clone();
+    changed.signed_transaction_hex = hex::encode(signed.encode_versioned());
+    changed.transaction_hash = signed.hash().to_string();
+    assert!(changed.verify(&service.config).is_err());
+    let mut changed = record;
+    changed.operation = NativeOperation::StreamTokenCustodyConfigure {
+        plan: Vec::new(),
+        terms: BoundedTerms::new(&request.options).unwrap(),
+    };
+    assert!(
+        ReservePolicyExpectation(&request)
+            .verify(&preparation::Selection {
+                operation: &changed.operation,
+                requested_fee: &changed.requested_fee,
+                deadline_ms: changed.deadline_ms
+            })
+            .is_err()
+    );
+}
+
+#[test]
+fn retain_initial_reserve_policy_request_is_a_real_unsigned_zero_http_boundary() {
+    let (service, transport) = service();
+    let request = request(&service.config, current_unix_ms().unwrap());
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("request-only-boundary");
+    let before = transport.requests.load(std::sync::atomic::Ordering::SeqCst);
+    let first = service
+        .retain_initial_reserve_policy_request(&request, &path)
+        .unwrap();
+    assert_eq!(first.phase(), NativePreparationPhase::RequestOnly);
+    let commitment = first.request_sha256().unwrap().to_owned();
+    let original = std::fs::read(path.join("preparation.json")).unwrap();
+    assert!(!path.join("payload.json").exists());
+    assert!(!path.join("operation.json").exists());
+    assert!(!path.join("submission.json").exists());
+    let repeated = service
+        .retain_initial_reserve_policy_request(&request, &path)
+        .unwrap();
+    assert_eq!(repeated.request_sha256(), Some(commitment.as_str()));
+    let mut changed = request.clone();
+    changed.deadline_unix_ms += 1;
+    assert!(
+        service
+            .retain_initial_reserve_policy_request(&changed, &path)
+            .is_err()
+    );
+    assert_eq!(
+        transport.requests.load(std::sync::atomic::Ordering::SeqCst),
+        before
+    );
+    assert_eq!(
+        std::fs::read(path.join("preparation.json")).unwrap(),
+        original
+    );
+
+    service
+        .prepare_initial_reserve_policy(&request, &path)
+        .unwrap();
+    let before = transport.requests.load(std::sync::atomic::Ordering::SeqCst);
+    let signed = service
+        .retain_initial_reserve_policy_request(&request, &path)
+        .unwrap();
+    assert_eq!(signed.phase(), NativePreparationPhase::Signed);
+    assert_eq!(signed.request_sha256(), Some(commitment.as_str()));
+    assert_eq!(
+        std::fs::read(path.join("preparation.json")).unwrap(),
+        original
+    );
+    // Genuine durable prefix before signature publication; retain cannot finish the payload.
+    std::fs::remove_file(path.join("operation.json")).unwrap();
+    let partial = service
+        .retain_initial_reserve_policy_request(&request, &path)
+        .unwrap();
+    assert_eq!(partial.phase(), NativePreparationPhase::PayloadRetained);
+    assert_eq!(partial.request_sha256(), Some(commitment.as_str()));
+    assert!(!path.join("operation.json").exists());
+    assert_eq!(
+        transport.requests.load(std::sync::atomic::Ordering::SeqCst),
+        before
+    );
+}

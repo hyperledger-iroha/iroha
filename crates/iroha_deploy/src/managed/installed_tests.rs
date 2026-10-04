@@ -79,7 +79,7 @@ fn installed_private_root_startup_cost_diagnostic() {
     let runtime = InstalledRuntime::from_directory(&runtime_directory).unwrap();
     let temporary = tempfile::tempdir().unwrap();
     let store = ManagedStore::open(&temporary.path().join("managed")).unwrap();
-    let request = runtime.localnet_request("private", Duration::from_secs(30));
+    let request = runtime.private_root_request("private", Duration::from_secs(30));
     let spec = super::private_spec();
     let directory = iroha_fs::PrivateDirectory::open(store.root())
         .unwrap()
@@ -161,7 +161,7 @@ fn installed_private_root_lifecycle_and_listener_isolation() {
     };
     let store = ManagedStore::open(&root).unwrap();
     eprintln!("PRIVATE_SMOKE_STORE={}", store.root().display());
-    let request = runtime.localnet_request("private", Duration::from_secs(30));
+    let request = runtime.private_root_request("private", Duration::from_secs(30));
     let spec = super::private_spec();
     let _cleanup = StopOnDrop {
         store: &store,

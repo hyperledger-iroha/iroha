@@ -131,6 +131,20 @@ impl<'a> core::fmt::Debug for Tlv<'a> {
             .finish()
     }
 }
+/// Encode a V1 typed pointer envelope over the exact payload bytes.
+///
+/// # Errors
+/// Returns [`VMError::NoritoInvalid`] when the payload length does not fit the V1 header.
+pub fn encode_tlv(pointer_type: PointerType, payload: &[u8]) -> Result<Vec<u8>, VMError> {
+    let payload_len = u32::try_from(payload.len()).map_err(|_| VMError::NoritoInvalid)?;
+    let mut out = Vec::with_capacity(7 + payload.len() + iroha_crypto::Hash::LENGTH);
+    out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
+    out.push(1);
+    out.extend_from_slice(&payload_len.to_be_bytes());
+    out.extend_from_slice(payload);
+    out.extend_from_slice(iroha_crypto::Hash::new(payload).as_ref());
+    Ok(out)
+}
 /// Validate a TLV envelope provided as a raw byte slice and return a view over
 /// its payload. The slice must contain the full header, payload, and hash.
 pub fn validate_tlv_bytes(bytes: &[u8]) -> Result<Tlv<'_>, VMError> {
@@ -166,41 +180,36 @@ pub fn validate_tlv_bytes(bytes: &[u8]) -> Result<Tlv<'_>, VMError> {
     })
 }
 // Memory-region validation lives in the VM crate, which owns the `Memory` type.
-/// Return the set of pointer types allowed for a given syscall ABI policy.
-fn allowed_types_for_policy(policy: SyscallPolicy) -> &'static HashSet<PointerType> {
-    static ABI_V1: OnceLock<HashSet<PointerType>> = OnceLock::new();
-    let v1 = ABI_V1.get_or_init(|| {
-        HashSet::from([
-            PointerType::AccountId,
-            PointerType::AssetDefinitionId,
-            PointerType::Name,
-            PointerType::Json,
-            PointerType::NftId,
-            PointerType::Blob,
-            PointerType::AssetId,
-            PointerType::DomainId,
-            PointerType::NoritoBytes,
-            PointerType::DataSpaceId,
-            PointerType::AxtDescriptor,
-            PointerType::ProofBlob,
-            PointerType::SoracloudRequest,
-            PointerType::SoracloudResponse,
-            PointerType::Quantity,
-            PointerType::Int,
-            PointerType::Decimal,
-            PointerType::AxtAnchoredSpendV1,
-        ])
-    });
-    let SyscallPolicy::AbiV1 = policy;
-    v1
-}
+const ABI_V1_POINTER_TYPES: &[PointerType] = &[
+    PointerType::AccountId,
+    PointerType::AssetDefinitionId,
+    PointerType::Name,
+    PointerType::Json,
+    PointerType::NftId,
+    PointerType::Blob,
+    PointerType::AssetId,
+    PointerType::DomainId,
+    PointerType::NoritoBytes,
+    PointerType::DataSpaceId,
+    PointerType::AxtDescriptor,
+    PointerType::ProofBlob,
+    PointerType::SoracloudRequest,
+    PointerType::SoracloudResponse,
+    PointerType::Quantity,
+    PointerType::Int,
+    PointerType::Decimal,
+    PointerType::AxtAnchoredSpendV1,
+];
 /// Expose the policy allowlist for callers that need to diff surfaces.
 pub fn policy_pointer_types(policy: SyscallPolicy) -> &'static HashSet<PointerType> {
-    allowed_types_for_policy(policy)
+    static ABI_V1: OnceLock<HashSet<PointerType>> = OnceLock::new();
+    let SyscallPolicy::AbiV1 = policy;
+    ABI_V1.get_or_init(|| ABI_V1_POINTER_TYPES.iter().copied().collect())
 }
-/// Check whether a pointer-ABI `type_id` is allowed for the given ABI policy.
+/// Check the static pointer-ABI allowlist without allocating on first use.
 pub fn is_type_allowed_for_policy(policy: SyscallPolicy, ty: PointerType) -> bool {
-    allowed_types_for_policy(policy).contains(&ty)
+    let SyscallPolicy::AbiV1 = policy;
+    ABI_V1_POINTER_TYPES.contains(&ty)
 }
 thread_local! {
     static ENFORCED_POLICY: Cell<Option<(SyscallPolicy, u8)>> = const { Cell::new(None) };
@@ -291,10 +300,35 @@ pub fn render_pointer_types_markdown_table() -> String {
 }
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn encoded_tlv_authenticates_exact_payload_and_rejects_trailing_bytes() {
+        let payload = b"canonical shared pointer payload";
+        let mut envelope =
+            super::encode_tlv(PointerType::Blob, payload).expect("encode V1 pointer");
+        let tlv = validate_tlv_bytes(&envelope).expect("validate V1 pointer");
+        assert_eq!(tlv.type_id, PointerType::Blob);
+        assert_eq!(tlv.version, 1);
+        assert_eq!(tlv.payload, payload);
+        envelope.push(0);
+        assert!(validate_tlv_bytes(&envelope).is_err());
+    }
+
     use super::{
         PointerPolicyGuard, PointerType, SyscallPolicy, VMError, current_policy,
         is_type_allowed_for_policy, validate_tlv_bytes,
     };
+    #[test]
+    fn static_policy_membership_matches_the_diagnostic_allowlist() {
+        let diagnostic = super::policy_pointer_types(SyscallPolicy::AbiV1);
+        assert_eq!(diagnostic.len(), super::ABI_V1_POINTER_TYPES.len());
+        for ty in PointerType::all() {
+            assert_eq!(
+                is_type_allowed_for_policy(SyscallPolicy::AbiV1, *ty),
+                diagnostic.contains(ty)
+            );
+        }
+    }
     #[test]
     fn pointer_policy_guard_sets_and_restores() {
         assert!(current_policy().is_none());
