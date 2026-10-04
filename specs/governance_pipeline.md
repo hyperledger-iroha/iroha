@@ -6,6 +6,13 @@ This file describes the attempt reducer and native execution boundary that are
 present in the source tree. It does not declare the current checkout or a binary
 release qualified.
 
+The [first-release requirements and launch decision](parliament_private_ballot_design.md)
+fix the no-decryption-custodian requirement, variable and possibly small membership,
+and the independent epoch-seated pause panel. No owner decision remains pending;
+binding-governance mainnet launch is blocked on a qualifying keyless PQ construction. The
+timed-OVN and consensus-mandatory Parliament pulse behavior documented below
+describes current source, not satisfaction of that replacement target.
+
 # Canonical proposal attempt lifecycle
 
 1. A typed `ProposalKind` is admitted into governance storage. Its canonical

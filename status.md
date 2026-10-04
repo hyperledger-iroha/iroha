@@ -296,7 +296,15 @@ passes.
   execution/finalized-State binding and signed release evidence remain open under
   the [ZK goals](specs/zk_first_release_goals.md).
 
-- **Services:** Musubi publication/paid contracts, Parliament/standalone elections,
+- **Parliament:** the [final requirements and launch decision](specs/parliament_private_ballot_design.md)
+  requires PQ private ballots without decryption custodians and with potentially
+  small electorates. No construction satisfying accepted-voter dropout is
+  selected; this is a construction blocker, with no pending owner decision.
+  Binding-governance mainnet launch is no-go until qualification. The fast pause
+  panel is seated per epoch independently of attempts. Current timed-OVN ballots and consensus-mandatory Parliament pulse/
+  custody checks do not satisfy that target; construction and availability
+  isolation remain blockers.
+- **Services:** Musubi publication/paid contracts, standalone elections,
   SoraNet/Linux helpers, SCCP live corridors and Inrou Linux/AArch64/KVM isolation
   remain unqualified.
 - **Offline money/devices:** the [single KAGEMUSHA target](specs/kagemusha_single_design_proposal.md)
