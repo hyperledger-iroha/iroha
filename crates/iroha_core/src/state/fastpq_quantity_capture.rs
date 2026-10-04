@@ -1,18 +1,24 @@
-//! Bounded, rollback-local candidate capture of actual typed quantity effects.
+//! Rollback-local mandatory quantity commitments and optional original proof tapes.
 //!
 //! This journal is diagnostic preparation for the complete ordinary relation. It
 //! cannot export proof/source authority: raw storage mutation coverage and every
 //! retained mandatory supply owner must be closed before that boundary is added.
-//! Capture failures poison only this candidate, preserving current business
-//! execution and existing replay publication. Facts and poison apply together.
+//! Optional tape failures preserve current business execution. Mandatory journal
+//! allocation shortages defer the local attempt through its original retry owner.
+//! Facts, deterministic coverage status and rollback remain with the original World.
 
 use super::fastpq_quantity_archive::{
     QuantityArchiveMap, QuantityBalanceInput, QuantityKindInput, QuantitySupplyInput, QuantityTape,
     QuantityTransferInput,
 };
 use super::fastpq_quantity_write_plan::{QuantityWriteKey, QuantityWritePlan};
+mod commitment_journal;
+pub(crate) use commitment_journal::{
+    AdmittedQuantityArchive, CapturedExecWitness, CapturedQuantityEntry,
+};
 mod source_census;
 use super::*;
+use commitment_journal::{CoverageGap, PreparedQuantityJournal, QuantityCommitmentJournal};
 use iroha_allocation::ChargedBuffer;
 use iroha_data_model::fastpq::{
     FastpqExecutionAssetV1, FastpqExecutionEffectContextV1, FastpqExecutionEffectKindV1,
@@ -23,6 +29,7 @@ use iroha_data_model::fastpq::{
     FastpqExecutionBalanceV1, FastpqExecutionEffectV1, FastpqExecutionSupplyChangeV1,
     FastpqExecutionTransferV1,
 };
+use iroha_data_model::isi::error::InstructionExecutionError;
 use source_census::QuantitySourceCensusState;
 
 /// A finite diagnostic; no attacker-controlled message or unbounded evidence is retained.
@@ -118,7 +125,6 @@ impl std::ops::Deref for QuantityArchivedEntry {
     }
 }
 impl QuantityArchivedEntry {
-    #[cfg(test)]
     fn wire(&self) -> &FastpqExecutionEffectsV1 {
         self.tape.wire()
     }
@@ -128,6 +134,8 @@ impl QuantityArchivedEntry {
 #[derive(Default)]
 pub(crate) struct QuantityCandidateArchive {
     entries: QuantityArchiveMap<QuantityArchivedEntry>,
+    /// Mandatory fixed source commitments, independent of optional archive capacity.
+    commitments: QuantityCommitmentJournal,
     /// Exact pre-admitted map backing for the parent's eventual complete replacement.
     parent_backing: Option<ChargedBuffer<(Hash, QuantityArchivedEntry)>>,
     /// Applied full usage, or pending incremental usage beyond `base_usage`.
@@ -152,6 +160,12 @@ impl std::fmt::Debug for QuantityCandidateArchive {
     }
 }
 impl QuantityCandidateArchive {
+    /// Inspect the original optional-capture diagnostic without changing custody.
+    #[cfg(test)]
+    pub(super) fn issue_for_test(&self) -> Option<QuantityCaptureIssue> {
+        self.issue
+    }
+
     fn poison(&mut self, issue: QuantityCaptureIssue) {
         // Retire the exact census and its original credit on every later refusal.
         self.source_census = QuantitySourceCensusState::Failed;
@@ -174,17 +188,27 @@ impl QuantityCandidateArchive {
             || world.asset_definitions.has_raw_write()
         {
             self.poison(QuantityCaptureIssue::UnownedMutation);
+            self.commitments.unsupported(CoverageGap::RawQuantityWrite);
         }
         if observation.owned || observation.plan.is_some() {
             self.poison(QuantityCaptureIssue::InterruptedScope);
+            self.commitments.invalidate();
         }
     }
     pub(super) fn apply(&mut self, mut pending: Self) {
         if self.source_census.is_preparing_or_sealed()
             || pending.source_census.is_preparing_or_sealed()
+            || self.entries.is_frozen()
+            || pending.entries.is_frozen()
         {
             self.poison(QuantityCaptureIssue::InvalidFacts);
+            self.commitments.invalidate();
+            // Business World application already completed in its original
+            // owner. Refuse only optional capture; never mutate a frozen tape.
+            return;
         }
+        self.commitments
+            .apply(std::mem::take(&mut pending.commitments));
         let Some(next) = self.applied_world_transactions.checked_add(1) else {
             self.poison(QuantityCaptureIssue::Capacity);
             return;
@@ -397,8 +421,12 @@ impl QuantityLifecycleOrder {
 
 /// Move-only captured tape and exact write plan, still bound to its original execution owner.
 pub(crate) struct PreparedQuantityCapture {
+    journal: Result<PreparedQuantityJournal, crate::execution_attempt::ExecutionDeferred>,
+    archive: Result<PreparedQuantityArchive, QuantityCaptureIssue>,
+}
+
+struct PreparedQuantityArchive {
     lifecycle_order: QuantityLifecycleOrder,
-    write_plan: Option<QuantityWritePlan<QuantityWriteKey, Quantity>>,
     accounting: PreparedQuantityAccounting,
     tape: QuantityTape,
     pending_backing: ChargedBuffer<(Hash, QuantityArchivedEntry)>,
@@ -416,6 +444,9 @@ impl StateBlock<'_> {
         if balances.0 || supplies.0 || balances.1 != expected || supplies.1 != expected {
             self.fastpq_quantity_candidate
                 .poison(QuantityCaptureIssue::UnownedMutation);
+            self.fastpq_quantity_candidate
+                .commitments
+                .unsupported(CoverageGap::RawQuantityWrite);
         }
         self.observe_quantity_source_census();
     }
@@ -521,16 +552,6 @@ impl WorldTransaction<'_, '_> {
 }
 
 impl StateTransaction<'_, '_> {
-    /// Frozen diagnostic preimage ceiling; inspection grants no invocation owner.
-    pub(crate) fn quantity_candidate_preimage_limit(&self) -> u64 {
-        let profile = self.fastpq_source_policy.0;
-        if self.tx_call_hash.is_some() || self.fastpq_source_quota.has_native_purpose() {
-            profile.intrinsic.max_input_transcript_bytes
-        } else {
-            profile.mandatory.per_obligation.max_input_transcript_bytes
-        }
-    }
-
     /// Record an unsupported authenticated owner without changing its business execution.
     pub(crate) fn poison_quantity_candidate_owner(&mut self) {
         self.quantity_candidate_issue(QuantityCaptureIssue::UnsupportedOwner);
@@ -835,6 +856,72 @@ impl StateTransaction<'_, '_> {
         if self.world.assets.has_raw_write() || self.world.asset_definitions.has_raw_write() {
             return Err(QuantityCaptureIssue::UnownedMutation);
         }
+        for kind in kinds.clone() {
+            if !self.quantity_kind_matches_live_lifecycle(kind?) {
+                return Err(QuantityCaptureIssue::InvalidFacts);
+            }
+        }
+        let captured = self
+            .fastpq_source_context
+            .capture_transcript(
+                self.tx_call_hash,
+                entry_hash,
+                self.current_lane_id,
+                self.current_dataspace_id,
+                *self.committed_fragments,
+            )
+            .map_err(|_| QuantityCaptureIssue::InvalidFacts)?;
+        self.fastpq_source_quota
+            .require_existing_quantity_capture_entry(entry_hash, captured.is_protocol_purpose())
+            .map_err(|_| QuantityCaptureIssue::UnsupportedOwner)?;
+        let context = FastpqExecutionEffectContextV1 {
+            source: captured.source(),
+            entry: FastpqSourceExecutionEntryV1 {
+                entry_hash,
+                execution_kind: captured.execution_kind(),
+                route: captured.route(),
+                dataspace_id: captured.dataspace_id(),
+            },
+        };
+        let journal = match PreparedQuantityJournal::prepare(
+            self,
+            context,
+            crate::fastpq::authority_digest(authority),
+            authorization_context,
+            kinds.clone(),
+        ) {
+            Ok(journal) => Ok(journal),
+            Err(commitment_journal::PrepareError::Unsupported(issue)) => return Err(issue),
+            Err(commitment_journal::PrepareError::Deferred(refusal)) => Err(refusal),
+        };
+        // Do not allocate an optional proof tape after the mandatory owner refused.
+        let archive = if journal.is_ok() {
+            self.prepare_quantity_archive_inputs(
+                authority,
+                entry_hash,
+                authorization_context,
+                kinds,
+            )
+        } else {
+            Err(QuantityCaptureIssue::Capacity)
+        };
+        Ok(PreparedQuantityCapture { journal, archive })
+    }
+
+    fn prepare_quantity_archive_inputs<'a, Inputs>(
+        &self,
+        authority: &AccountId,
+        entry_hash: Hash,
+        authorization_context: Hash,
+        kinds: Inputs,
+    ) -> Result<PreparedQuantityArchive, QuantityCaptureIssue>
+    where
+        Inputs:
+            Clone + ExactSizeIterator<Item = Result<QuantityKindInput<'a>, QuantityCaptureIssue>>,
+    {
+        if self.world.assets.has_raw_write() || self.world.asset_definitions.has_raw_write() {
+            return Err(QuantityCaptureIssue::UnownedMutation);
+        }
         if self.pending_fastpq_quantity_candidate.issue.is_some()
             || self.block_fastpq_quantity_candidate.issue.is_some()
         {
@@ -990,56 +1077,77 @@ impl StateTransaction<'_, '_> {
             parent_capacity,
             self.pipeline_ivm_prepared_cache.execution_budget(),
         )?;
-        let write_plan = QuantityWritePlan::from_effects(
-            &tape.effects[ordinal..],
-            usize::try_from(limit.max_deltas)
-                .ok()
-                .and_then(|count| count.checked_mul(2))
-                .ok_or(QuantityCaptureIssue::Capacity)?,
-            self.pipeline_ivm_prepared_cache.execution_budget(),
-        )
-        .map_err(|_| QuantityCaptureIssue::Capacity)?;
-        if !self.quantity_pre_state_matches(&write_plan) {
-            return Err(QuantityCaptureIssue::InvalidFacts);
-        }
         let lifecycle_order = QuantityLifecycleOrder::prepare(
             &tape.effects,
             self.pipeline_ivm_prepared_cache.execution_budget(),
         )?;
-        Ok(PreparedQuantityCapture {
+        Ok(PreparedQuantityArchive {
             lifecycle_order,
-            write_plan: Some(write_plan),
             accounting,
             tape,
             pending_backing,
             parent_backing,
         })
     }
-    /// Apply an original business owner under its already prepared capture, or retain refusal.
+    /// Apply only after original mandatory journal admission; retain optional tape refusal.
     pub(crate) fn apply_with_quantity_candidate<T>(
         &mut self,
         prepared: Result<PreparedQuantityCapture, QuantityCaptureIssue>,
         apply: impl FnOnce(&mut Self) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        let mut prepared = match prepared {
-            Ok(prepared) => Some(prepared),
+        if self.execution_deferral().is_some() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "local execution attempt did not complete".into(),
+            )
+            .into());
+        }
+        let (mut journal, prepared) = match prepared {
+            Ok(PreparedQuantityCapture {
+                journal: Err(refusal),
+                ..
+            }) => {
+                let _ = self.defer_execution(refusal);
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "local execution attempt did not complete".into(),
+                )
+                .into());
+            }
+            Ok(PreparedQuantityCapture {
+                journal: Ok(journal),
+                archive,
+            }) => {
+                let archive = match archive {
+                    Ok(archive) => Some(archive),
+                    Err(issue) => {
+                        self.quantity_candidate_issue(issue);
+                        None
+                    }
+                };
+                (Some(journal), archive)
+            }
             Err(issue) => {
                 self.quantity_candidate_issue(issue);
-                None
+                (None, None)
             }
         };
         if self.world.quantity_mutation_observation.owned {
             self.quantity_candidate_issue(QuantityCaptureIssue::InterruptedScope);
+            self.pending_fastpq_quantity_candidate
+                .commitments
+                .invalidate();
         }
         let previous_owned = self.world.quantity_mutation_observation.owned;
         let previous_plan = self.world.quantity_mutation_observation.plan.take();
         if previous_plan.is_some() {
             self.quantity_candidate_issue(QuantityCaptureIssue::InterruptedScope);
+            self.pending_fastpq_quantity_candidate
+                .commitments
+                .invalidate();
         }
         self.world.quantity_mutation_observation.owned = true;
-        self.world.quantity_mutation_observation.plan = prepared
+        self.world.quantity_mutation_observation.plan = journal
             .as_mut()
-            .and_then(|prepared| prepared.write_plan.take());
+            .and_then(|journal| journal.write_plan.take());
         let result = apply(self);
         let completed_plan = self.world.quantity_mutation_observation.plan.take();
         let post_state_matches = completed_plan
@@ -1047,16 +1155,40 @@ impl StateTransaction<'_, '_> {
             .is_some_and(|plan| self.quantity_post_state_matches(plan));
         self.world.quantity_mutation_observation.plan = previous_plan;
         self.world.quantity_mutation_observation.owned = previous_owned;
-        if prepared.is_some() && completed_plan.is_none_or(|plan| plan.finish().is_err()) {
+        let applied_ports = completed_plan
+            .as_ref()
+            .map_or(0, QuantityWritePlan::applied_count);
+        let permits_complete = completed_plan.is_some_and(|plan| plan.finish().is_ok());
+        if journal.is_some() && (!permits_complete || !post_state_matches) {
             self.quantity_candidate_issue(QuantityCaptureIssue::InvalidFacts);
+            if applied_ports != 0 {
+                self.pending_fastpq_quantity_candidate
+                    .commitments
+                    .unsupported(CoverageGap::PartialTypedOperation);
+            }
         }
         if self.world.assets.has_raw_write() || self.world.asset_definitions.has_raw_write() {
             self.world.quantity_mutation_observation.unowned = true;
             self.quantity_candidate_issue(QuantityCaptureIssue::UnownedMutation);
+            self.pending_fastpq_quantity_candidate
+                .commitments
+                .unsupported(CoverageGap::RawQuantityWrite);
         }
         if result.is_err() {
             // A caller may catch an error after partial writes. Such a candidate can never export.
             self.quantity_candidate_issue(QuantityCaptureIssue::InterruptedScope);
+        }
+        // A later error may be caught by an enclosing owner. Retain every complete
+        // actual operation in this same rollback journal; dropping the transaction
+        // discards it together with its World effects.
+        if permits_complete && post_state_matches {
+            if let Some(journal) = journal.take() {
+                if journal.publish(self).is_err() {
+                    self.pending_fastpq_quantity_candidate
+                        .commitments
+                        .invalidate();
+                }
+            }
         }
         if result.is_ok() {
             if let Some(mut prepared) = prepared {
@@ -1104,7 +1236,7 @@ impl StateTransaction<'_, '_> {
         }
         result
     }
-    /// Observe an already-authorized exact transfer; preparation failure cannot alter business execution.
+    /// Observe an already-authorized exact transfer; physical journal shortage defers locally.
     /// The caller supplies actual resolved storage IDs, never reconstructed legacy transcript keys.
     pub(crate) fn apply_with_quantity_transfer_candidate<T>(
         &mut self,
@@ -1115,16 +1247,6 @@ impl StateTransaction<'_, '_> {
         apply: impl FnOnce(&mut Self) -> Result<T, Error>,
     ) -> Result<T, Error> {
         let prepared = (|| {
-            let max = self.fastpq_source_policy.0.intrinsic.max_deltas.max(
-                self.fastpq_source_policy
-                    .0
-                    .mandatory
-                    .per_obligation
-                    .max_deltas,
-            ) as usize;
-            if legs.len() > max {
-                return Err(QuantityCaptureIssue::Capacity);
-            }
             let kinds = legs.iter().map(|(source, destination, delta)| {
                 if source.definition() != destination.definition()
                     || source.definition() != &delta.asset_definition
@@ -1164,11 +1286,18 @@ impl StateTransaction<'_, '_> {
         )>,
         QuantityCaptureIssue,
     > {
-        if count > self.fastpq_source_policy.0.intrinsic.max_deltas as usize {
-            return Err(QuantityCaptureIssue::Capacity);
-        }
-        ChargedBuffer::new(count, self.pipeline_ivm_prepared_cache.execution_budget())
-            .map_err(|_| QuantityCaptureIssue::Capacity)
+        ChargedBuffer::new(count, self.pipeline_ivm_prepared_cache.execution_budget()).map_err(
+            |error| {
+                let refusal: crate::execution_attempt::ExecutionDeferred = match error {
+                    iroha_allocation::ChargedBufferError::Admission(refusal) => refusal.into(),
+                    iroha_allocation::ChargedBufferError::Allocator { .. } => {
+                        ivm::error::ExecutionDeferral::AllocationUnavailable.into()
+                    }
+                };
+                let _ = self.world.defer_execution(refusal);
+                QuantityCaptureIssue::Capacity
+            },
+        )
     }
 
     /// Retain the actual signed-call source and its existing quota owner after the
@@ -1277,12 +1406,14 @@ impl StateTransaction<'_, '_> {
             &Quantity::zero(),
             supply_after,
         )?;
-        prepared
-            .write_plan
-            .as_mut()
-            .ok_or(QuantityCaptureIssue::InvalidFacts)?
-            .order_supply_before_complete_removal(id, amount)
-            .map_err(|_| QuantityCaptureIssue::InvalidFacts)?;
+        if let Ok(journal) = &mut prepared.journal {
+            journal
+                .write_plan
+                .as_mut()
+                .ok_or(QuantityCaptureIssue::InvalidFacts)?
+                .order_supply_before_complete_removal(id, amount)
+                .map_err(|_| QuantityCaptureIssue::InvalidFacts)?;
+        }
         Ok(prepared)
     }
 

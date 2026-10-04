@@ -387,6 +387,12 @@ Root {
         receipt_signer: [REDACTED; 0 configured],
         query_max_inflight: 256,
         query_heavy_max_inflight: 64,
+        query_fanout_max_retained_bytes: Bytes(
+            512000000,
+        ),
+        query_fanout_max_working_set_bytes: Bytes(
+            48000000,
+        ),
         require_api_token: false,
         api_tokens: [REDACTED; 0 Torii API token(s)],
         peer_telemetry_urls: [REDACTED; 0 configured],

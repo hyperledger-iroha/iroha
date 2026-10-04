@@ -110,6 +110,7 @@ use zeroize::{Zeroize as _, Zeroizing};
 
 mod private_root;
 pub(crate) use custody::sync_private_tree;
+pub(crate) use private_root::private_fee_policy;
 pub use private_root::{PrivateRootSpec, prepare_private_root};
 pub(crate) use private_root::{prepare_private_root_at, verify_retained as verify_private_root};
 
@@ -737,7 +738,7 @@ fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId 
 pub fn canonical_asset_definition_literal(domain: &str, name: &str) -> String {
     canonical_asset_definition_id(domain, name).canonical_address()
 }
-fn localnet_xor_asset_definition_id() -> AssetDefinitionId {
+pub(crate) fn localnet_xor_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::parse_address_literal(TAIRA_XOR_ASSET_DEFINITION_ID)
         .expect("canonical isolated-network XOR definition")
 }
@@ -7448,13 +7449,14 @@ mod managed_tests {
         );
         let authorities = prepared.stream_token_authorities().unwrap().unwrap();
         assert_eq!(authorities.network.authorities.len(), 2);
-        assert!(
-            authorities
-                .providers
-                .iter()
-                .all(|provider| provider.authorities.len() == 10),
-            "every original provider holds its ten fixed service roles"
-        );
+        assert_eq!(authorities.providers.len(), 3);
+        for provider in &authorities.providers {
+            assert_eq!(
+                provider.authorities.len(),
+                10,
+                "every original provider holds its ten fixed service roles"
+            );
+        }
         assert_eq!(authorities.network_id, config.network_id);
         assert_eq!(authorities.manager, config.account);
         let operator = prepared.load_operator_key_pair().unwrap();

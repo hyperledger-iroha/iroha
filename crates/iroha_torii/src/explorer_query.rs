@@ -318,7 +318,7 @@ impl ScanQuery {
                 items,
                 next_cursor,
                 total: None,
-            })
+            })?
             .into_page())
     }
 }

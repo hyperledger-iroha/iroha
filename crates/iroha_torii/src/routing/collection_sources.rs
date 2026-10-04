@@ -124,6 +124,18 @@ pub(crate) fn collection_limits() -> Limits {
     Limits::from_page_limits(limits.default_page_limit, limits.max_page_limit)
 }
 
+pub(crate) fn collection_execution_limits(app: Option<&crate::SharedAppState>) -> Result<Limits> {
+    let mut limits = collection_limits();
+    if let Some(app) = app {
+        limits.bytes = collections::memory::BytePolicy::for_admitted_read(
+            crate::current_routed_read_memory_envelope(app)
+                .map_err(|_| collections::memory::capacity("working set"))?,
+            app.torii_proxy_max_response_bytes,
+        );
+    }
+    Ok(limits)
+}
+
 /// Storage entries in canonical key order strictly after `after` (strictly
 /// before it when `descending`): the seek behind identity-ordered pages.
 fn seek_entries<'a, K, V, S>(
@@ -150,7 +162,7 @@ where
 fn seek_keys<'a, K, V, S>(
     storage: &'a S,
     candidates: Option<BTreeSet<K>>,
-    after: Option<&K>,
+    after: Option<&'a K>,
     descending: bool,
 ) -> Box<dyn Iterator<Item = (&'a K, &'a V)> + 'a>
 where
@@ -161,18 +173,22 @@ where
     let Some(candidates) = candidates else {
         return seek_entries(storage, after, descending);
     };
-    let mut keys: Vec<K> = candidates
-        .into_iter()
-        .filter(|key| after.is_none_or(|after| if descending { key < after } else { key > after }))
-        .collect();
     if descending {
-        keys.reverse();
+        Box::new(
+            candidates
+                .into_iter()
+                .rev()
+                .filter(move |key| after.is_none_or(|after| key < after))
+                .filter_map(move |key| storage.get_key_value(&key)),
+        )
+    } else {
+        Box::new(
+            candidates
+                .into_iter()
+                .filter(move |key| after.is_none_or(|after| key > after))
+                .filter_map(move |key| storage.get_key_value(&key)),
+        )
     }
-    let entries: Vec<(&'a K, &'a V)> = keys
-        .iter()
-        .filter_map(|key| storage.get_key_value(key))
-        .collect();
-    Box::new(entries.into_iter())
 }
 
 /// Whether a storage key follows the cursor in the requested order. Totals
@@ -264,8 +280,30 @@ pub(crate) async fn execute_collection_local(
     visibility: &DataspaceReadVisibility,
 ) -> Result<RowPage> {
     canonicalize_collection_query(state, target, &mut query, telemetry)?;
-    let limits = collection_limits();
+    let limits = collection_execution_limits(app)?;
     let prepared = collections::prepare(target.spec(), target.scope(), &query, &limits)?;
+    execute_prepared_collection_local(
+        app, state, target, &query, telemetry, visibility, &prepared, &limits,
+    )
+    .await
+}
+
+/// Execute the one admitted plan without cloning its query or preparing again.
+async fn execute_prepared_collection_local(
+    app: Option<&crate::SharedAppState>,
+    state: &Arc<CoreState>,
+    target: &CollectionTarget,
+    query: &ListQuery,
+    telemetry: &MaybeTelemetry,
+    visibility: &DataspaceReadVisibility,
+    prepared: &collections::Prepared<'_>,
+    limits: &Limits,
+) -> Result<RowPage> {
+    // Source helpers can allocate display/key scratch while the plan remains
+    // alive. They must use its remaining phase, just like the engine does.
+    let mut runtime_limits = *limits;
+    runtime_limits.bytes = prepared.runtime_bytes();
+    let limits = &runtime_limits;
     let page = match target {
         // Identity-ordered reads seek in storage order from the cursor; exact
         // `id` (and alias) constraints become direct lookups. The engine still
@@ -284,7 +322,7 @@ pub(crate) async fn execute_collection_local(
                 scan.is_some_and(|scan| scan.descending),
             )
             .map(|(id, domain)| {
-                (
+                Ok((
                     entry_after_cursor(
                         id,
                         after.as_ref(),
@@ -292,18 +330,24 @@ pub(crate) async fn execute_collection_local(
                     ),
                     visibility
                         .allows_domain(&world, id)
-                        .then(|| domain_row(domain)),
-                )
+                        .then(|| domain_row(domain, limits.bytes))
+                        .transpose()?,
+                ))
             });
-            if scan.is_some() {
+            let mut failure = None;
+            let rows = until_error(rows, &mut failure);
+            let page = if scan.is_some() {
                 prepared.execute_ordered(rows, &limits)
             } else {
                 prepared.execute_entries(rows.map(|(_, row)| row), &limits)
+            };
+            if let Some(error) = failure {
+                return Err(error);
             }
+            page
         }
         CollectionTarget::Accounts => {
             let world = state.world_view();
-            let catalog = state.nexus_snapshot().dataspace_catalog;
             let scan = prepared.ordered_scan();
             let after = cursor_key(scan.and_then(|scan| scan.after), |id| {
                 AccountId::parse_encoded(id).ok()
@@ -316,7 +360,7 @@ pub(crate) async fn execute_collection_local(
                 scan.is_some_and(|scan| scan.descending),
             )
             .map(|(id, value)| {
-                (
+                Ok((
                     entry_after_cursor(
                         id,
                         after.as_ref(),
@@ -324,14 +368,21 @@ pub(crate) async fn execute_collection_local(
                     ),
                     visibility
                         .allows_account(&world, id)
-                        .then(|| account_row(&account_from_key_value(id, value), &catalog)),
-                )
+                        .then(|| account_row(id, value.as_ref(), limits.bytes))
+                        .transpose()?,
+                ))
             });
-            if scan.is_some() {
+            let mut failure = None;
+            let rows = until_error(rows, &mut failure);
+            let page = if scan.is_some() {
                 prepared.execute_ordered(rows, &limits)
             } else {
                 prepared.execute_entries(rows.map(|(_, row)| row), &limits)
+            };
+            if let Some(error) = failure {
+                return Err(error);
             }
+            page
         }
         CollectionTarget::AssetDefinitions => {
             let world = state.world_view();
@@ -393,7 +444,7 @@ pub(crate) async fn execute_collection_local(
                 scan.is_some_and(|scan| scan.descending),
             )
             .map(|(id, value)| {
-                (
+                Ok((
                     entry_after_cursor(
                         id,
                         after.as_ref(),
@@ -401,14 +452,21 @@ pub(crate) async fn execute_collection_local(
                     ),
                     visibility
                         .allows_nft(world_ref, id)
-                        .then(|| nft_row(&nft_from_key_value(id, value))),
-                )
+                        .then(|| nft_row(id, value.as_ref(), limits.bytes))
+                        .transpose()?,
+                ))
             });
-            if scan.is_some() {
+            let mut failure = None;
+            let rows = until_error(rows, &mut failure);
+            let page = if scan.is_some() {
                 prepared.execute_ordered(rows, &limits)
             } else {
                 prepared.execute_entries(rows.map(|(_, row)| row), &limits)
+            };
+            if let Some(error) = failure {
+                return Err(error);
             }
+            page
         }
         CollectionTarget::Rwas => {
             let world = state.world_view();
@@ -519,7 +577,9 @@ pub(crate) async fn execute_collection_local(
                 ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
             )?;
             if !visibility.allows_account(&state.world_view(), &account) {
-                return Ok(prepared.positioned_page(Vec::new(), None));
+                return prepared
+                    .positioned_page(Vec::new(), None)
+                    .map_err(Into::into);
             }
             let allowed = app
                 .map(|app| crate::resolve_tx_history_allowed_asset_definition_id(app))
@@ -701,7 +761,7 @@ pub(crate) async fn execute_collection_local(
                 target.endpoint(),
             )?;
             if !visibility.allows_account(&state.world_view(), &account) {
-                return Ok(prepared.movement_page(Vec::new(), None));
+                return prepared.movement_page(Vec::new(), None).map_err(Into::into);
             }
             let allowed = app
                 .map(|app| crate::resolve_tx_history_allowed_asset_definition_id(app))
@@ -789,7 +849,7 @@ fn account_movement_page(
         .transpose()?;
     let (lowest, highest) = prepared.height_range();
     if lowest > highest {
-        return Ok(prepared.movement_page(Vec::new(), None));
+        return prepared.movement_page(Vec::new(), None).map_err(Into::into);
     }
     let ceiling = highest
         .checked_add(1)
@@ -905,7 +965,9 @@ fn account_movement_page(
             "query_scan_limit_exceeded", "cursor", "reaching this history page exceeds the node's history scan budget",
         ).into()),
     };
-    Ok(prepared.movement_page(items, continuation))
+    prepared
+        .movement_page(items, continuation)
+        .map_err(Into::into)
 }
 
 /// One page of committed transactions, newest first, strictly before the
@@ -944,7 +1006,9 @@ fn transaction_page(
         .transpose()?;
     let (lowest, highest) = prepared.height_range();
     if lowest > highest {
-        return Ok(prepared.positioned_page(Vec::new(), None));
+        return prepared
+            .positioned_page(Vec::new(), None)
+            .map_err(Into::into);
     }
     // Start the walk at the top of the filter's height range.
     let ceiling = highest
@@ -1039,10 +1103,12 @@ fn transaction_page(
         }
         TransactionHistoryPageEnd::Exhausted => None,
     };
-    Ok(prepared.positioned_page(
-        items,
-        resume.map(|position| (position.height(), position.block_index())),
-    ))
+    prepared
+        .positioned_page(
+            items,
+            resume.map(|position| (position.height(), position.block_index())),
+        )
+        .map_err(Into::into)
 }
 
 /// Project one committed contract call without constructing a history-wide index.
@@ -1131,24 +1197,34 @@ pub(crate) async fn execute_collection_response(
     app: Option<&crate::SharedAppState>,
     state: &Arc<CoreState>,
     target: &CollectionTarget,
-    query: ListQuery,
+    mut query: ListQuery,
     telemetry: &MaybeTelemetry,
     visibility: &DataspaceReadVisibility,
 ) -> Result<Response> {
-    let limits = collection_limits();
+    canonicalize_collection_query(state, target, &mut query, telemetry)?;
+    let limits = collection_execution_limits(app)?;
     let prepared = collections::prepare(target.spec(), target.scope(), &query, &limits)?;
-    let page =
-        execute_collection_local(app, state, target, query.clone(), telemetry, visibility).await?;
-    row_page_response(prepared.project(page))
+    let page = execute_prepared_collection_local(
+        app, state, target, &query, telemetry, visibility, &prepared, &limits,
+    )
+    .await?;
+    row_page_response(prepared.project(page)?, limits.bytes)
 }
 
 /// Serialize a page as the JSON page envelope.
-pub(crate) fn row_page_response(page: RowPage) -> Result<Response> {
-    let body = norito::json::to_json(&page.into_page()).map_err(|err| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-            "failed to encode collection page: {err}"
-        )))
-    })?;
+pub(crate) fn row_page_response(
+    page: RowPage,
+    bytes: collections::memory::BytePolicy,
+) -> Result<Response> {
+    let page = iroha_torii_shared::list_query::Page {
+        items: page.items,
+        next_cursor: page.next_cursor,
+        total: page.total,
+    };
+    let body = norito::json::to_json_bounded_boxed(&page, bytes.response_bytes)
+        .map_err(|_| Error::from(collections::memory::capacity("response body")))?;
+    // Keep the exact checked encoder layout as the HTTP body's owned buffer.
+    let body = axum::body::Bytes::from(body);
     let mut response = Response::new(axum::body::Body::from(body));
     response.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
@@ -1157,61 +1233,57 @@ pub(crate) fn row_page_response(page: RowPage) -> Result<Response> {
     Ok(response)
 }
 
-fn domain_row(domain: &iroha_data_model::domain::Domain) -> Map {
-    let mut row = Map::new();
-    row.insert("id".into(), Value::from(domain.id().to_string()));
-    row.insert(
-        "owned_by".into(),
-        Value::from(domain.owned_by().to_string()),
-    );
-    row.insert(
-        "logo".into(),
-        domain
-            .logo()
-            .as_ref()
-            .map_or(Value::Null, |logo| Value::from(logo.to_string())),
-    );
-    row.insert(
-        "metadata".into(),
-        crate::explorer::metadata_to_json(&domain.metadata),
-    );
-    row
+fn domain_row(
+    domain: &iroha_data_model::domain::Domain,
+    bytes: collections::memory::BytePolicy,
+) -> Result<Map> {
+    bytes
+        .row_fields([
+            ("id", domain.id()),
+            ("owned_by", domain.owned_by()),
+            ("logo", domain.logo()),
+            ("metadata", &domain.metadata),
+        ])
+        .map_err(Into::into)
 }
 
-fn account_row(account: &iroha_data_model::account::Account, catalog: &DataSpaceCatalog) -> Map {
-    let mut row = Map::new();
-    row.insert("id".into(), Value::from(account.id().to_string()));
-    row.insert(
-        "label".into(),
-        account
-            .label
-            .as_ref()
-            .and_then(|label| label.to_literal(catalog).ok())
-            .map_or(Value::Null, Value::from),
-    );
-    row.insert(
-        "uaid".into(),
-        account
-            .uaid
-            .as_ref()
-            .map_or(Value::Null, |uaid| Value::from(uaid.to_string())),
-    );
-    row.insert(
-        "metadata".into(),
-        crate::explorer::metadata_to_json(&account.metadata),
-    );
-    row
+fn account_row(
+    id: &AccountId,
+    details: &iroha_data_model::account::AccountDetails,
+    bytes: collections::memory::BytePolicy,
+) -> Result<Map> {
+    // Canonical World accounts carry their alias bindings separately; the
+    // collection's existing label field is null without a resolved binding.
+    let label = None::<&str>;
+    // The collection exposes the canonical UAID literal, not its structural
+    // Norito JSON representation. Admit its display text before allocating it.
+    let uaid = details
+        .uaid
+        .as_ref()
+        .map(|uaid| bytes.display(uaid))
+        .transpose()?;
+    bytes
+        .row_fields([
+            ("id", id),
+            ("label", &label),
+            ("uaid", &uaid),
+            ("metadata", &details.metadata),
+        ])
+        .map_err(Into::into)
 }
 
-fn nft_row(nft: &iroha_data_model::nft::Nft) -> Map {
-    let mut row = Map::new();
-    row.insert("id".into(), Value::from(nft.id().to_string()));
-    row.insert("owned_by".into(), Value::from(nft.owned_by().to_string()));
-    row.insert(
-        "metadata".into(),
-        crate::explorer::metadata_to_json(nft.content()),
-    );
-    row
+fn nft_row(
+    id: &NftId,
+    nft: &iroha_data_model::nft::NftData,
+    bytes: collections::memory::BytePolicy,
+) -> Result<Map> {
+    bytes
+        .row_fields([
+            ("id", id),
+            ("owned_by", &nft.owned_by),
+            ("metadata", &nft.content),
+        ])
+        .map_err(Into::into)
 }
 
 /// Flatten subscription state into the common collection row contract.
@@ -1378,6 +1450,105 @@ mod tests {
         DomainId::try_new(name, "universal").expect("fixture domain")
     }
 
+    #[test]
+    fn bounded_borrowed_collection_rows_preserve_owned_wire_fields() {
+        let owner = authority(0xC1);
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "nested".parse().unwrap(),
+            Json::new(norito::json!({"text":"quoted \\\"", "values":[1,null,true]})),
+        );
+        let domain = dm::Domain::new(domain_id("parity"))
+            .with_logo("sorafs://bafybeigdyrzt".parse().expect("logo URI"))
+            .with_metadata(metadata.clone())
+            .build(&owner);
+        let bytes = collections::memory::BytePolicy::canonical();
+        let actual = domain_row(&domain, bytes).expect("bounded domain row");
+        let expected = Map::from_iter([
+            ("id".to_owned(), Value::from(domain.id().to_string())),
+            (
+                "owned_by".to_owned(),
+                Value::from(domain.owned_by().to_string()),
+            ),
+            (
+                "logo".to_owned(),
+                domain
+                    .logo()
+                    .as_ref()
+                    .map_or(Value::Null, |logo| Value::from(logo.to_string())),
+            ),
+            (
+                "metadata".to_owned(),
+                crate::explorer::metadata_to_json(&domain.metadata),
+            ),
+        ]);
+        assert_eq!(actual, expected);
+        let uaid = "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+            .parse()
+            .unwrap();
+        let label = iroha_data_model::account::rekey::AccountAlias::domainless(
+            "source_label".parse().unwrap(),
+            iroha_model_base::topology::DataSpaceId::new(0),
+        );
+        let details = iroha_data_model::account::AccountDetails::new(
+            metadata.clone(),
+            Some(label),
+            Some(uaid),
+            Vec::new(),
+        );
+        let owned = account_from_key_value(
+            &owner,
+            &iroha_data_model::common::Owned::new(details.clone()),
+        );
+        assert!(owned.label().is_none());
+        let actual = account_row(&owner, &details, bytes).expect("bounded account row");
+        assert_eq!(
+            actual,
+            Map::from_iter([
+                ("id".to_owned(), Value::from(owned.id().to_string())),
+                ("label".to_owned(), Value::Null),
+                (
+                    "uaid".to_owned(),
+                    Value::from(owned.uaid().unwrap().to_string())
+                ),
+                (
+                    "metadata".to_owned(),
+                    crate::explorer::metadata_to_json(owned.metadata())
+                ),
+            ])
+        );
+        let mut tight = bytes;
+        tight.scratch_bytes = owned.uaid().unwrap().to_string().len() - 1;
+        assert!(matches!(
+            account_row(&owner, &details, tight),
+            Err(Error::CollectionQuery(error)) if error.code == "query_capacity_exceeded"
+        ));
+        tight.scratch_bytes += 1;
+        assert_eq!(account_row(&owner, &details, tight).unwrap(), actual);
+        let mut no_uaid = details.clone();
+        no_uaid.uaid = None;
+        tight.scratch_bytes = 0;
+        assert_eq!(
+            account_row(&owner, &no_uaid, tight).unwrap().get("uaid"),
+            Some(&Value::Null)
+        );
+        let id = NftId::new(domain_id("parity"), "item".parse().unwrap());
+        let nft = iroha_data_model::nft::NftData {
+            content: metadata,
+            owned_by: owner,
+        };
+        let actual = nft_row(&id, &nft, bytes).unwrap();
+        assert_eq!(actual.get("id"), Some(&Value::from(id.to_string())));
+        assert_eq!(
+            actual.get("owned_by"),
+            Some(&Value::from(nft.owned_by.to_string()))
+        );
+        assert_eq!(
+            actual.get("metadata"),
+            Some(&crate::explorer::metadata_to_json(&nft.content))
+        );
+    }
+
     fn fixture() -> (Arc<CoreState>, dm::AccountId, dm::AccountId) {
         let alice = authority(0xC1);
         let bob = authority(0xC2);
@@ -1405,6 +1576,95 @@ mod tests {
             LiveQueryStore::start_test(),
         ));
         (state, alice, bob)
+    }
+
+    #[test]
+    fn exact_key_seek_streams_storage_order_and_skips_missing_keys() {
+        let (state, _, _) = fixture();
+        let world = state.world_view();
+        let candidates = || {
+            BTreeSet::from([
+                domain_id("echo"),
+                domain_id("alpha"),
+                domain_id("charlie"),
+                domain_id("absent"),
+            ])
+        };
+        let after = domain_id("bravo");
+        let ids = |descending| {
+            seek_keys(
+                world.domains(),
+                Some(candidates()),
+                Some(&after),
+                descending,
+            )
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(false), [domain_id("charlie"), domain_id("echo")]);
+        assert_eq!(ids(true), [domain_id("alpha")]);
+        let all = seek_keys(world.domains(), Some(candidates()), None, true)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            all,
+            [domain_id("echo"), domain_id("charlie"), domain_id("alpha")]
+        );
+    }
+
+    #[tokio::test]
+    async fn canonical_world_accounts_refuse_metadata_expansion_before_retention() {
+        let owner = authority(0xC1);
+        let mut limits = collection_limits();
+        limits.bytes = collections::memory::BytePolicy {
+            source_frame_bytes: 16 * 1024,
+            row_bytes: 8 * 1024,
+            retained_bytes: 16 * 1024,
+            scratch_bytes: 16 * 1024,
+            response_bytes: 16 * 1024,
+        };
+        let empty = iroha_data_model::account::AccountDetails::new(
+            Metadata::default(),
+            None,
+            None,
+            Vec::new(),
+        );
+        assert!(
+            account_row(&owner, &empty, limits.bytes).is_ok(),
+            "the ordinary row fits the same quota"
+        );
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "dense".parse().unwrap(),
+            Json::new(Value::Array(vec![Value::Null; 1024])),
+        );
+        let account = dm::Account::new(owner.clone())
+            .with_metadata(metadata)
+            .build(&owner);
+        let state = Arc::new(State::new_for_testing(
+            World::with([], [account], []),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let query = ListQuery::new();
+        let target = CollectionTarget::Accounts;
+        let prepared =
+            collections::prepare(target.spec(), target.scope(), &query, &limits).unwrap();
+        let error = execute_prepared_collection_local(
+            None,
+            &state,
+            &target,
+            &query,
+            &MaybeTelemetry::for_tests(),
+            &DataspaceReadVisibility::all_for_tests(),
+            &prepared,
+            &limits,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(error, Error::CollectionQuery(ref error) if error.code == "query_capacity_exceeded")
+        );
     }
 
     #[test]

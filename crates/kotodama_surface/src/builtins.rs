@@ -11,26 +11,45 @@
 )]
 #[strum(serialize_all = "snake_case", const_into_str)]
 pub enum PointerConstructor {
+    /// Parse an account identity into an `AccountId` pointer.
     #[default]
     AccountId,
+    /// Parse an asset definition identity into an `AssetDefinitionId` pointer.
     AssetDefinition,
+    /// Parse an asset identity into an `AssetId` pointer.
     AssetId,
+    /// Parse an NFT identity into an `NftId` pointer.
     NftId,
+    /// Parse a validated ledger `Name` pointer.
     Name,
+    /// Parse a `Json` pointer from its string representation.
     Json,
+    /// Internal constructor for a `DomainId` pointer.
     Domain,
+    /// Parse a domain identity into a `DomainId` pointer.
     DomainId,
+    /// Internal constructor for a byte-buffer pointer.
     Blob,
+    /// Internal constructor for Norito-encoded bytes.
     NoritoBytes,
+    /// Parse a dataspace identity into a `DataSpaceId` pointer.
     #[strum(serialize = "dataspace_id")]
     DataSpaceId,
+    /// Parse an atomic cross-dataspace transaction descriptor.
     AxtDescriptor,
+    /// Parse a V1 anchored-spend descriptor for an atomic cross-dataspace transaction.
     AxtAnchoredSpendV1,
+    /// Internal constructor for an opaque proof pointer.
     ProofBlob,
+    /// Internal constructor for a typed Soracloud host request.
     SoracloudRequest,
+    /// Internal constructor for a typed Soracloud host response.
     SoracloudResponse,
 }
 impl PointerConstructor {
+    /// Resolve a pointer constructor by its compiler-internal spelling.
+    ///
+    /// Source visibility is determined by the enclosing [`Builtin`] registry entry.
     pub fn from_name(name: &str) -> Option<Self> {
         Some(match name {
             "account_id" => Self::AccountId,
@@ -52,6 +71,7 @@ impl PointerConstructor {
             _ => return None,
         })
     }
+    /// Return the canonical compiler-internal spelling of this constructor.
     pub const fn name(self) -> &'static str {
         self.into_str()
     }
@@ -269,205 +289,394 @@ pub struct BuiltinSpec {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, strum::EnumIter, strum::IntoStaticStr)]
 #[strum(serialize_all = "snake_case", const_into_str)]
 pub enum Builtin {
+    /// Construct the selected typed pointer-ABI value from a string.
     PointerConstructor(PointerConstructor),
+    /// Check whether a durable state map contains a key.
     Contains,
+    /// Read a durable state map value, using the supplied default when absent.
     GetOrDefault,
+    /// Read a durable state map value with an optional default.
     GetOr,
+    /// Ensure a durable state map entry exists and return its value.
     Ensure,
+    /// Remove a durable state map entry and return its previous optional value.
     #[strum(serialize = "remove")]
     StateMapRemove,
+    /// Internal bounded key scan of an integer-keyed state map.
     KeysTake2,
+    /// Internal bounded value scan of an integer-valued state map.
     ValuesTake2,
+    /// Internal bounded key/value scan of an integer state map.
     KeysValuesTake2,
+    /// Read the byte value at a durable state path.
     StateGet,
+    /// Write a byte value at a durable state path.
     StateSet,
+    /// Delete the value at a durable state path.
     StateDel,
+    /// Check whether a durable state path exists.
     StateHas,
+    /// Read the length reported by the durable state path syscall.
     StateLen,
+    /// Count entries under a durable state path.
     StateCount,
+    /// Internal execution of a Norito-encoded host query.
     QueryExecuteNorito,
+    /// Query the optional projected view of an account.
     QueryGetAccount,
+    /// Query the optional projected view of an asset.
     QueryGetAsset,
+    /// Query the optional projected view of an asset definition.
     QueryGetAssetDefinition,
+    /// Query the optional projected view of a domain.
     QueryGetDomain,
+    /// Query the optional projected view of an NFT.
     QueryGetNft,
+    /// Query a bounded page of projected account views.
     QueryPageAccounts,
+    /// Query a bounded page of projected asset views.
     QueryPageAssets,
+    /// Query a bounded page of projected asset definition views.
     QueryPageAssetDefinitions,
+    /// Query a bounded page of projected domain views.
     QueryPageDomains,
+    /// Query a bounded page of projected NFT views.
     QueryPageNfts,
+    /// Query a named ledger parameter.
     QueryGetParameter,
+    /// Query an encoded seiyaku manifest.
     QueryGetContractManifest,
+    /// Query a named seiyaku instance.
     QueryGetContractInstance,
+    /// Internal execution of an encoded smart-contract query.
     ExecuteQuery,
+    /// Submit the encoded governance ballot instruction.
     ScExecuteSubmitBallot,
+    /// Resolve an account alias to its canonical account identity.
     ResolveAccountAlias,
+    /// Bill the active host-managed subscription.
     SubscriptionBill,
+    /// Record usage for the active host-managed subscription.
     SubscriptionRecordUsage,
+    /// Read the quantity held by an account for an asset definition.
     GetAccountBalance,
+    /// Read a named public input as bytes.
     GetPublicInput,
+    /// Invoke a seiyaku with quantity input and minimum-output constraints.
     ContractInvokeQuantity2,
+    /// Internal integer debug-output syscall.
     DebugPrint,
+    /// Internal string debug-log syscall.
     DebugLog,
+    /// Assert a condition in a local test build.
     Assert,
+    /// Reject contract execution with a typed error when a condition is false.
     Require,
+    /// Emit an informational debug record for a string or integer.
     Info,
+    /// Assert integer equality in a local test build.
     AssertEq,
+    /// Invoke a runtime kotoage from a test using the current caller.
     #[strum(serialize = "invoke_entrypoint")]
     TestInvokeEntrypoint,
+    /// Invoke a runtime kotoage from a test as a fixture actor.
     #[strum(serialize = "invoke_entrypoint_as")]
     TestInvokeEntrypointAs,
+    /// Require a fixture-actor invocation to produce the expected rejection.
     #[strum(serialize = "expect_reject_as")]
     TestExpectRejectAs,
+    /// Require a fixture-actor invocation to reject.
     #[strum(serialize = "expect_any_reject_as")]
     TestExpectAnyRejectAs,
+    /// Read a fixture actor's canonical account identity.
     #[strum(serialize = "actor_account")]
     TestActorAccount,
+    /// Read a fixture actor's public key bytes.
     #[strum(serialize = "actor_public_key")]
     TestActorPublicKey,
+    /// Sign a payload with a fixture actor's test key.
     #[strum(serialize = "actor_sign")]
     TestActorSign,
+    /// Set one JSON metadata entry on an account.
     SetAccountDetail,
+    /// Mint an asset quantity for an account.
     MintAsset,
+    /// Burn an asset quantity held by an account.
     BurnAsset,
+    /// Transfer an asset quantity between accounts in a specified dataspace.
     TransferAsset,
+    /// Update an account asset's transfer availability at an expected revision.
     SetAssetTransferAvailability,
+    /// Set or remove an account asset's daily transfer cap.
     SetAssetTransferDailyLimit,
+    /// Set or remove an account asset's holding limit.
     SetAssetHoldingLimit,
+    /// Propose an alias account-recovery replacement for a request generation.
     AccountRecoveryPropose,
+    /// Approve an alias account-recovery request generation.
     AccountRecoveryApprove,
+    /// Cancel an alias account-recovery request generation.
     AccountRecoveryCancel,
+    /// Finalize an alias account-recovery request generation.
     AccountRecoveryFinalize,
+    /// Mint an NFT for its owner.
     NftMintAsset,
+    /// Set one JSON metadata entry on an NFT.
     NftSetMetadata,
+    /// Burn an NFT.
     NftBurnAsset,
+    /// Transfer an NFT between accounts.
     NftTransferAsset,
+    /// Register a ledger domain.
     RegisterDomain,
+    /// Unregister a ledger domain.
     UnregisterDomain,
+    /// Transfer ownership of a ledger domain between accounts.
     TransferDomain,
+    /// Register a canonical account identity.
     RegisterAccount,
+    /// Unregister an account.
     UnregisterAccount,
+    /// Register an asset definition with its name, scale and mintability.
     RegisterAsset,
+    /// Create an asset definition with an explicit owner.
     CreateNewAsset,
+    /// Unregister an asset definition.
     UnregisterAsset,
+    /// Register a peer described by JSON.
     RegisterPeer,
+    /// Unregister a peer described by JSON.
     UnregisterPeer,
+    /// Register a trigger described by JSON.
     RegisterTrigger,
+    /// Unregister a named trigger.
     UnregisterTrigger,
+    /// Change a named trigger's enabled state.
     SetTriggerEnabled,
+    /// Create a named role with a JSON permission set.
     CreateRole,
+    /// Delete a named role.
     DeleteRole,
+    /// Grant a role to an account.
     GrantRole,
+    /// Revoke a role from an account.
     RevokeRole,
+    /// Grant a permission to an account.
     GrantPermission,
+    /// Revoke a permission from an account.
     RevokePermission,
+    /// Grant an account permission to invoke a seiyaku kotoage.
     GrantContractEntrypoint,
+    /// Revoke an account's permission to invoke a seiyaku kotoage.
     RevokeContractEntrypoint,
+    /// Open an escrow offer with an asset quantity and optional evidence.
     EscrowOpenOffer,
+    /// Accept a named escrow offer.
     EscrowAccept,
+    /// Mark payment as sent for a named escrow offer.
     EscrowMarkPaymentSent,
+    /// Release a named escrow offer.
     EscrowRelease,
+    /// Cancel a named escrow offer.
     EscrowCancel,
+    /// Open a dispute for an escrow offer with optional evidence.
     EscrowOpenDispute,
+    /// Resolve an escrow dispute with buyer and seller quantities.
     EscrowResolveDispute,
+    /// Read a private numeric input in ZK mode.
     GetPrivateInput,
+    /// Commit the current output in ZK mode.
     CommitOutput,
+    /// Request host creation of NFTs for all users.
     CreateNftsForAllUsers,
+    /// Internal mutation of the host execution-depth limit.
     SetExecutionDepth,
+    /// Begin a host-managed V1 asset transfer batch.
     TransferV1BatchBegin,
+    /// End a host-managed V1 asset transfer batch.
     TransferV1BatchEnd,
+    /// Apply an encoded V1 asset transfer batch.
     TransferV1BatchApply,
+    /// Lower a bounded list of asset transfers to a host-managed batch.
     TransferBatch,
+    /// Begin an atomic cross-dataspace transaction using its descriptor.
     AxtBegin,
+    /// Declare a dataspace touch and its manifest in an atomic transaction.
     AxtTouch,
+    /// Stage a V1 anchored spend in an atomic cross-dataspace transaction.
     #[strum(serialize = "axt_stage_anchored_spend")]
     StageAnchoredSpend,
+    /// Internal verification of a dataspace proof.
     VerifyDsProof,
+    /// Commit the active atomic cross-dataspace transaction.
     AxtCommit,
+    /// Internal request to deactivate a seiyaku instance.
     DeactivateContractInstance,
+    /// Internal request to remove registered seiyaku code bytes.
     RemoveSmartContractBytes,
+    /// Internal request to register seiyaku code.
     RegisterSmartContractCode,
+    /// Internal request to register seiyaku bytecode.
     RegisterSmartContractBytes,
+    /// Internal request to activate a seiyaku instance.
     ActivateContractInstance,
+    /// Read encoded roots from the host ZK registry.
     ZkRootsGet,
+    /// Read an encoded governance vote tally.
     ZkVoteGetTally,
+    /// Ask the host to verify an encoded ZK proof batch.
     ZkVerifyBatch,
+    /// Ask the host to verify an encoded governance ballot.
     ZkVoteVerifyBallot,
+    /// Ask the host to verify an encoded governance tally.
     ZkVoteVerifyTally,
+    /// Build an encoded governance ballot instruction from its proof fields.
     BuildSubmitBallotInline,
+    /// Read an encoded VRF epoch seed.
     VrfEpochSeed,
+    /// Verify an encoded VRF request and return its response.
     VrfVerify,
+    /// Verify an encoded batch of VRF requests and return its response.
     VrfVerifyBatch,
+    /// Hash bytes with SM3.
     Sm3Hash,
+    /// Hash bytes with SHA-256.
     Sha256Hash,
+    /// Hash bytes with SHA-3.
     Sha3Hash,
+    /// Hash bytes with BLAKE2b-256.
     Blake2b256Hash,
+    /// Hash bytes with Keccak-256.
     Keccak256Hash,
+    /// Hash bytes with the canonical Iroha hash operation.
     IrohaHash,
+    /// Verify an SM2 signature with an optional distinguishing identifier.
     Sm2Verify,
+    /// Verify a signature using the selected signature scheme.
     VerifySignature,
+    /// Seal bytes using SM4-GCM with nonce and associated data.
     Sm4GcmSeal,
+    /// Open authenticated bytes using SM4-GCM.
     Sm4GcmOpen,
+    /// Seal bytes using SM4-CCM with an optional tag length.
     Sm4CcmSeal,
+    /// Open authenticated bytes using SM4-CCM.
     Sm4CcmOpen,
+    /// Internal heap allocation helper.
     Alloc,
+    /// Read the encoded execution summary.
     ExecutionSummary,
+    /// Internal heap-growth helper.
     GrowHeap,
+    /// Verify an encoded proof through the host.
     VerifyProof,
+    /// Internal memory Merkle-path extraction helper.
     GetMerklePath,
+    /// Internal compact memory Merkle-path extraction helper.
     GetMerkleCompact,
+    /// Internal compact register Merkle-path extraction helper.
     GetRegisterMerkleCompact,
+    /// Internal Soracloud committed-state read request.
     SoracloudReadCommittedState,
+    /// Internal Soracloud state-mutation request.
     SoracloudEmitStateMutation,
+    /// Internal Soracloud mailbox-message emission request.
     SoracloudEmitMailboxMessage,
+    /// Internal Soracloud journal-append request.
     SoracloudAppendJournal,
+    /// Internal Soracloud checkpoint-publication request.
     SoracloudPublishCheckpoint,
+    /// Internal Soracloud configuration read request.
     SoracloudReadConfig,
+    /// Internal Soracloud secret-envelope read request.
     SoracloudReadSecretEnvelope,
+    /// Add a signatory to an account.
     AddSignatory,
+    /// Remove a signatory from an account.
     RemoveSignatory,
+    /// Set an account's signature quorum.
     SetAccountQuorum,
+    /// Build a durable state path key through its receiver method.
     Path,
+    /// Internal decoding of a ledger `Name` from bytes.
     NameDecode,
+    /// Internal equality check of two pointer-ABI values.
     TlvEq,
+    /// Internal length query for a pointer-ABI value.
     TlvLen,
+    /// Read the length of a byte value.
     BytesLen,
+    /// Internal encoding of a pointer-ABI value as Norito bytes.
     PointerToNorito,
+    /// Create an empty JSON object.
     JsonObject,
+    /// Internal scalar integer setter for a JSON object.
     JsonSetInt,
+    /// Set an account identity in a JSON object.
     JsonSetAccountId,
+    /// Internal encoding of JSON to bytes.
     EncodeJson,
+    /// Internal decoding of JSON from bytes.
     DecodeJson,
+    /// Internal encoding of JSON according to a named schema.
     #[strum(serialize = "encode_schema")]
     SchemaEncode,
+    /// Internal decoding of bytes according to a named schema.
     #[strum(serialize = "decode_schema")]
     SchemaDecode,
+    /// Internal query of a named schema's JSON description.
     SchemaInfo,
+    /// Internal exact conversion of a wide numeric value to an integer.
     NumericToInt,
+    /// Internal lowering of integer or decimal negation.
     NumericNeg,
+    /// Internal lowering of wide numeric addition.
     NumericAdd,
+    /// Internal lowering of wide numeric subtraction.
     NumericSub,
+    /// Internal lowering of wide numeric multiplication.
     NumericMul,
+    /// Internal lowering of wide numeric division.
     NumericDiv,
+    /// Internal lowering of integer remainder.
     NumericRem,
+    /// Internal lowering of wide numeric equality.
     NumericEq,
+    /// Internal lowering of wide numeric inequality.
     NumericNe,
+    /// Internal lowering of wide numeric less-than comparison.
     NumericLt,
+    /// Internal lowering of wide numeric less-than-or-equal comparison.
     NumericLe,
+    /// Internal lowering of wide numeric greater-than comparison.
     NumericGt,
+    /// Internal lowering of wide numeric greater-than-or-equal comparison.
     NumericGe,
+    /// Internal instruction-only numeric-to-integer helper.
     NumericToIntDirect,
+    /// Internal instruction-only numeric addition helper.
     NumericAddDirect,
+    /// Internal instruction-only numeric subtraction helper.
     NumericSubDirect,
+    /// Internal instruction-only numeric multiplication helper.
     NumericMulDirect,
+    /// Internal instruction-only numeric division helper.
     NumericDivDirect,
+    /// Internal instruction-only numeric remainder helper.
     NumericRemDirect,
+    /// Internal instruction-only numeric negation helper.
     NumericNegDirect,
+    /// Internal instruction-only numeric equality helper.
     NumericEqDirect,
+    /// Internal instruction-only numeric inequality helper.
     NumericNeDirect,
+    /// Internal instruction-only numeric less-than comparison helper.
     NumericLtDirect,
+    /// Internal instruction-only numeric less-than-or-equal comparison helper.
     NumericLeDirect,
+    /// Internal instruction-only numeric greater-than comparison helper.
     NumericGtDirect,
+    /// Internal instruction-only numeric greater-than-or-equal comparison helper.
     NumericGeDirect,
     /// Explicit modulo-2^512 `int` addition.
     WrappingAdd,
@@ -477,37 +686,68 @@ pub enum Builtin {
     WrappingMul,
     /// Explicit modulo-2^512 `int` negation.
     WrappingNeg,
+    /// Compute the integer square root.
     Isqrt,
+    /// Compute an integer's absolute value.
     Abs,
+    /// Select the smaller of two integers.
     Min,
+    /// Select the larger of two integers.
     Max,
+    /// Divide integers with rounding toward positive infinity.
     DivCeil,
+    /// Compute the greatest common divisor of two integers.
     Gcd,
+    /// Compute the integer mean of two integers.
     Mean,
+    /// Internal Poseidon helper over two scalar register values.
     Poseidon2,
+    /// Internal Poseidon helper over six scalar register values.
     Poseidon6,
+    /// Internal public-key generation helper over a scalar register value.
     Pubkgen,
+    /// Commit secret numeric values in ZK mode.
     Valcom,
+    /// Internal vector-length selection helper.
     #[strum(serialize = "setvl")]
     SetVl,
+    /// Read an optional integer field from JSON.
     GetInt,
+    /// Read an optional decimal field from JSON.
     GetDecimal,
+    /// Read an optional quantity field from JSON.
     GetQuantity,
+    /// Read an optional nested JSON field.
     GetJson,
+    /// Read an optional ledger name field from JSON.
     GetName,
+    /// Read an optional account identity field from JSON.
     GetAccountId,
+    /// Read an optional asset definition identity field from JSON.
     GetAssetDefinitionId,
+    /// Read an optional NFT identity field from JSON.
     GetNftId,
+    /// Read an optional byte field encoded as hexadecimal in JSON.
     GetBlobHex,
+    /// Read the current trigger event as JSON.
     TriggerEvent,
+    /// Read the current execution authority.
     Authority,
+    /// Read the current seiyaku subject account.
     ContractSubject,
+    /// Read the host's current time in milliseconds.
     CurrentTimeMs,
+    /// Read the current block height.
     BlockHeight,
+    /// Read the current block timestamp in milliseconds.
     BlockTimeMs,
+    /// Read the encoded chain identity.
     ChainId,
+    /// Read the encoded seiyaku address.
     ContractAddress,
+    /// Read the current kotoage name as bytes.
     Entrypoint,
+    /// Internal system-variable read of the execution authority.
     SysvarAuthority,
 }
 impl Builtin {

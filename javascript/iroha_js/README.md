@@ -107,8 +107,38 @@ Torii listener access controls still apply. `GET /v1/node/capabilities` is publi
 as well: `getNodeCapabilities()` reads it without credentials, and the
 transaction preflight caches only a successful, matching probe.
 
-From an Iroha source checkout, run the native build (wrapping
-`cargo build -p iroha_js_host`) before using native-backed APIs:
+Ordinary source-checkout unit tests can use a separate current Debug N-API
+producer. From the repository root, select the worktree's existing warm Cargo
+lane and an external artifact directory whose parent is owned mode `0700`:
+
+```bash
+python3.12 -I -S -B scripts/native_js_local_unit.py produce \
+  --root "$PWD" --target-dir "$PWD/target/cargo-fast/<existing-lane>" \
+  --output /absolute/owner-only-directory/js-native \
+  --config /absolute/local-native-tools.json --acknowledge-local-unit-recipe
+(cd javascript/iroha_js && IROHA_JS_NATIVE_DIR=/absolute/owner-only-directory/js-native \
+  node ./scripts/run-test-profile.mjs unit)
+```
+
+The tool configuration has exactly `python`, `cargo`, `rustc`, `rustdoc`,
+`node`, `clang`, `ld`, `codesign`, `sdk` and `developer_dir` paths. Use the
+current canonical Python 3.12 and Node executables, stock Rust 1.93.1 tools,
+and the selected Xcode's macOS SDK, clang and Apple linker. The producer uses
+locked, offline Cargo with its native jobserver and incremental compilation;
+it creates no additional Cargo target. It retains the actual compiler JSON,
+complete dep-info after Cargo's natural successful terminal, original source
+and native build inputs, exact tools, and independently copied emitted bytes.
+The real Node consumer checks the current ABI and required exports before the
+explicit local-unit manifest can be loaded. Loading rechecks current consumed
+inputs and code before making an immutable native snapshot. No test is skipped
+when source, receipt, native or export checks fail.
+
+This artifact has only host Debug local-unit scope. Package publication,
+`prepack`, Release/deploy and installed native qualification retain the strict
+V4 provenance path below and do not admit its local-unit manifest.
+
+From an Iroha source checkout, the provenance build for packaged native
+artifacts wraps `cargo build -p iroha_js_host`:
 
 ```bash
 npm install
@@ -4388,9 +4418,9 @@ console.log(JSON.stringify(active)); // {"op":"or","args":[...]}
 // (code `invalid_filter`) with `line` and `column`.
 const named = Filter.parse("metadata.`display-name` is not null");
 
-// Grouped metrics (POST only): items are aggregate rows. Torii computes them
-// where the rows live: a read whose visible rows span several dataspace routes
-// is rejected with 400 invalid_aggregate; page through the rows instead.
+// Grouped metrics (POST only): items are aggregate rows. Torii executes the query
+// once over the caller-visible global state, so supported totals and aggregates
+// count visible rows exactly once across dataspace routes.
 const supply = await torii.accountAssets("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB").list({
   filter: "quantity > 0",
   aggregate: {

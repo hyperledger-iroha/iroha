@@ -83,9 +83,13 @@ class LocalAppleIntegrationTests(unittest.TestCase):
             policy.directory(self.root, cargo, 'cargo')
 
     def test_local_lane_cannot_share_another_owner(self):
+        cache = self.lane / 'build/cargo-home'
+        cache.mkdir(mode=0o700)
         with mock.patch.object(policy.os, 'geteuid', return_value=os.geteuid() + 1):
             with self.assertRaises(ValueError):
                 policy.directory(self.root, self.lane / 'cargo', 'cargo')
+            with self.assertRaises(ValueError):
+                policy.cargo_home(self.root, cache, local_integration=True)
 
     def test_forced_tracked_output_and_unignored_lane_are_rejected(self):
         for tracked, ignored in [(b'target/norito-bridge-local/source.rs\0', 0), (b'', 1)]:
@@ -159,6 +163,7 @@ class LocalAppleIntegrationTests(unittest.TestCase):
         ])
         for forbidden in ('-Z', '--lockfile-path', '--config', 'RUSTC_BOOTSTRAP=1'):
             self.assertNotIn(forbidden, args)
+        self.assertIn('CARGO_HOME=/fixture/cargo-home', args)
 
     def test_apple_builder_rejects_any_bootstrap_assignment(self):
         self.git.stop()

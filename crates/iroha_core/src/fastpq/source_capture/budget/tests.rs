@@ -3,13 +3,13 @@
 use super::super::tests::transaction_wire_hash;
 use super::super::{
     FastpqSourceExecutionEntryV1, FastpqSourceExecutionKindV1, FastpqSourceRouteV1,
-    FastpqSourceStatementContextV1, derive_fastpq_ordinary_source_manifest_v1,
+    FastpqSourceStatementContextV1, prepare_transfer_archive_diagnostic,
 };
 use super::*;
 use crate::fastpq::{
     FastpqPublicInputsTemplate, poseidon_preimage_digest,
     quantity_statement::quantity_materializer_invocations_for_testing,
-    quantity_statement_from_finalized_transcripts,
+    quantity_statement_from_finalized_transcripts_for_testing,
 };
 use fastpq_prover::{
     ProofSemantics,
@@ -118,7 +118,7 @@ fn encoded_bundle(bundle: &[TransferTranscript], slot: u64, perm: [u8; 32]) -> u
         perm_root: perm,
     }
     .with_tx_set_hash([255; 32]);
-    let statement = quantity_statement_from_finalized_transcripts(
+    let statement = quantity_statement_from_finalized_transcripts_for_testing(
         inputs,
         bundle,
         source_statement_public_limits(limits()).unwrap(),
@@ -166,7 +166,7 @@ fn exact_frames_and_all_six_caps_precede_every_private_constructor() {
     assert_eq!(measured.max_statement_bytes, *sizes.iter().max().unwrap());
     assert_eq!(measured.total_statement_bytes, sizes.iter().sum::<usize>());
     let bound = exact(measured, 2);
-    let ordinary = derive_fastpq_ordinary_source_manifest_v1(
+    let ordinary = prepare_transfer_archive_diagnostic(
         source(),
         &entries,
         9,
@@ -176,7 +176,7 @@ fn exact_frames_and_all_six_caps_precede_every_private_constructor() {
         limits(),
     )
     .unwrap();
-    let exact_result = derive_fastpq_ordinary_source_manifest_v1(
+    let exact_result = prepare_transfer_archive_diagnostic(
         source(),
         &entries,
         9,
@@ -199,7 +199,7 @@ fn exact_frames_and_all_six_caps_precede_every_private_constructor() {
         }
         let calls = quantity_materializer_invocations_for_testing();
         assert!(
-            derive_fastpq_ordinary_source_manifest_v1(
+            prepare_transfer_archive_diagnostic(
                 source(),
                 &entries,
                 9,
@@ -518,7 +518,7 @@ fn public_failures_and_output_caps_have_explicit_canonical_map_precedence() {
     ordered[0].entry_hash = *map.keys().next_back().unwrap();
     let before = norito::encode_canonical(&map).unwrap();
     let calls = quantity_materializer_invocations_for_testing();
-    let error = derive_fastpq_ordinary_source_manifest_v1(
+    let error = prepare_transfer_archive_diagnostic(
         source(),
         &ordered,
         9,
@@ -531,7 +531,7 @@ fn public_failures_and_output_caps_have_explicit_canonical_map_precedence() {
     assert!(error.contains(&format!("source bundle {}", map.keys().next().unwrap())));
     ordered.reverse();
     assert_eq!(
-        derive_fastpq_ordinary_source_manifest_v1(
+        prepare_transfer_archive_diagnostic(
             source(),
             &ordered,
             9,
@@ -561,7 +561,7 @@ fn invalid_digest_policy_and_public_arithmetic_fail_before_private_constructor()
         let before = norito::encode_canonical(&map).unwrap();
         let calls = quantity_materializer_invocations_for_testing();
         assert!(
-            derive_fastpq_ordinary_source_manifest_v1(
+            prepare_transfer_archive_diagnostic(
                 source(),
                 &entries,
                 9,
@@ -618,7 +618,7 @@ fn same_entry_fragments_require_complete_frame_measurement_before_private_work()
         max_statement_bytes: singleton_max,
         ..limits()
     };
-    let error = derive_fastpq_ordinary_source_manifest_v1(
+    let error = prepare_transfer_archive_diagnostic(
         source(),
         &entries(*map.keys().next().unwrap()),
         9,
@@ -662,7 +662,7 @@ fn complete_bundle_cumulative_cap_rejects_before_any_private_tree() {
     assert_eq!(usage.total_statement_bytes, expected_bytes);
     assert!(usage.max_statement_bytes < usage.total_statement_bytes);
     let bound = exact(usage, 3);
-    let (manifest, leaves) = derive_fastpq_ordinary_source_manifest_v1(
+    let (manifest, leaves) = prepare_transfer_archive_diagnostic(
         source(),
         &complete_entries,
         9,
@@ -688,7 +688,7 @@ fn complete_bundle_cumulative_cap_rejects_before_any_private_tree() {
         max_total_statement_bytes: expected_bytes - 1,
         ..bound
     };
-    let error = derive_fastpq_ordinary_source_manifest_v1(
+    let error = prepare_transfer_archive_diagnostic(
         source(),
         &complete_entries,
         9,
@@ -721,7 +721,7 @@ fn cross_transcript_discontinuity_order_and_duplicate_fail_before_private_work()
         }
         let before = norito::encode_canonical(&map).unwrap();
         let calls = quantity_materializer_invocations_for_testing();
-        let error = derive_fastpq_ordinary_source_manifest_v1(
+        let error = prepare_transfer_archive_diagnostic(
             source(),
             &entries(original_hash),
             9,

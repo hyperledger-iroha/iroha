@@ -384,7 +384,7 @@ pub(super) struct ConfigRebase {
     output: PathBuf,
 }
 
-/// Rebase an inline client NetworkId, or project a checked loopback route without changing it.
+/// Rebase an inline client NetworkId, or project a checked Torii root without changing it.
 ///
 /// Route projection consumes an inherited read-only descriptor and checks its original path.
 /// The paired routes must come from explicit owner-approved public metadata. Use the same
@@ -420,7 +420,7 @@ pub(super) struct ClientConfigRebase {
     /// Explicit checked identity of the new genesis.
     #[arg(long, value_name = "NETWORK_ID", value_parser = canonical_network_id)]
     network_id: NetworkId,
-    /// Exact current loopback Torii root; paired with --torii-url and original provenance.
+    /// Exact current loopback HTTP or public HTTPS DNS root; paired with --torii-url and original provenance.
     #[arg(long, value_name = "URL", requires = "torii_url", value_parser = canonical_client_torii_url)]
     expected_torii_url: Option<String>,
     /// Project only the Torii route while keeping the exact current NetworkId.
@@ -441,10 +441,16 @@ pub(super) struct OperatorKeygen {
     private_key_file: PathBuf,
 }
 
-/// Admit only one explicit canonical IPv4 loopback listener root, never a credential or path.
+/// Admit an explicit loopback HTTP or public HTTPS DNS root without credentials or a path prefix.
 fn canonical_client_torii_url(value: &str) -> Result<String, String> {
-    let failure =
-        || "client Torii route must be an explicit normalized http IPv4 loopback root".to_owned();
+    let failure = || {
+        "client Torii route must be a normalized loopback HTTP or public HTTPS DNS root".to_owned()
+    };
+    if value.starts_with("https://") {
+        let root = value.strip_suffix('/').unwrap_or(value);
+        validate_validator_public_origin(&format!("{root}/")).map_err(|_| failure())?;
+        return Ok(root.to_owned());
+    }
     let digits = value
         .strip_prefix("http://127.0.0.1:")
         .ok_or_else(failure)?;
@@ -1372,7 +1378,7 @@ fn project_client_route(table: &mut toml::Table, route: ClientRouteProjection<'_
         .and_then(toml::Value::as_str)
         .ok_or_else(|| eyre!("client config requires its current explicit Torii root"))?;
     let current = canonical_client_torii_url(current)
-        .map_err(|_| eyre!("client config has no admissible loopback Torii root"))?;
+        .map_err(|_| eyre!("client config has no admissible Torii root"))?;
     if current != expected {
         return Err(eyre!(
             "client Torii root differs from the explicitly retained route"
@@ -1724,10 +1730,21 @@ password = "fixture-password-not-runtime"
     }
 
     #[test]
-    fn client_route_roots_are_normalized_loopback_and_never_credentials_or_paths() {
+    fn client_route_roots_are_normalized_and_never_credentials_or_paths() {
         for port in [1, 80, 8080, 18080, 65535] {
             let root = format!("http://127.0.0.1:{port}");
             assert_eq!(canonical_client_torii_url(&root).unwrap(), root);
+            assert_eq!(
+                canonical_client_torii_url(&format!("{root}/")).unwrap(),
+                root
+            );
+        }
+        for root in [
+            "https://taira.sora.org",
+            "https://taira.sora.org:8443",
+            "https://taira.sora.org:8446",
+        ] {
+            assert_eq!(canonical_client_torii_url(root).unwrap(), root);
             assert_eq!(
                 canonical_client_torii_url(&format!("{root}/")).unwrap(),
                 root
@@ -1746,6 +1763,16 @@ password = "fixture-password-not-runtime"
             "http://127.0.0.2:18080",
             "http://[::1]:18080",
             "https://127.0.0.1:18080",
+            "https://localhost:8443",
+            "https://taira.local:8443",
+            "https://taira.sora.org:0",
+            "https://taira.sora.org:08443",
+            "https://taira.sora.org:8443/path",
+            "https://taira.sora.org:8443?query=1",
+            "https://taira.sora.org:8443#fragment",
+            "https://user:secret@taira.sora.org:8443",
+            "https://taira.sora.org:8443//",
+            "https://taira.sora.org:8443\n",
             "http://user:secret@127.0.0.1:18080",
             "http://127.0.0.1:18080/path",
             "http://127.0.0.1:18080?query=1",
@@ -1756,6 +1783,32 @@ password = "fixture-password-not-runtime"
             let error = canonical_client_torii_url(invalid).unwrap_err();
             assert!(!error.contains("secret"));
         }
+    }
+
+    #[test]
+    fn client_route_projection_preserves_identity_and_custody_for_public_tls() {
+        let network = network_fixture(b"public TLS projection keeps original network");
+        let source = Path::new("/private/runtime/original/client.toml");
+        let output = Path::new("/private/runtime/projected/client.toml");
+        let mut table: toml::Table =
+            toml::from_str(std::str::from_utf8(&route_fixture(&network)).unwrap()).unwrap();
+        let original = table.clone();
+        project_client_route(
+            &mut table,
+            ClientRouteProjection {
+                expected: "http://127.0.0.1:8080",
+                replacement: "https://taira.sora.org:8443/",
+                source_path: source,
+                output_path: output,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            table["torii_url"].as_str(),
+            Some("https://taira.sora.org:8443")
+        );
+        table.insert("torii_url".into(), original["torii_url"].clone());
+        assert!(table == original);
     }
 
     #[test]
@@ -1787,6 +1840,16 @@ password = "fixture-password-not-runtime"
             "/private/runtime/original/client.toml",
         ]);
         assert!(crate::Args::try_parse_from(complete).is_ok());
+        let mut public_tls = base.to_vec();
+        public_tls.extend([
+            "--expected-torii-url",
+            "http://127.0.0.1:8080",
+            "--torii-url",
+            "https://taira.sora.org:8443/",
+            "--config-source-path",
+            "/private/runtime/original/client.toml",
+        ]);
+        assert!(crate::Args::try_parse_from(public_tls).is_ok());
         for partial in [
             vec!["--expected-torii-url", "http://127.0.0.1:8080"],
             vec!["--torii-url", "http://127.0.0.1:18080"],
@@ -2471,7 +2534,7 @@ password = "fixture-password-not-runtime"
 
     #[cfg(unix)]
     #[test]
-    fn client_route_native_fd_roundtrip_retains_offset_source_and_public_proof() {
+    fn client_route_native_fd_public_tls_retains_offset_source_and_public_proof() {
         use std::os::fd::AsRawFd as _;
         let directory = operator_runtime_fixture();
         let root = directory.path().canonicalize().unwrap();
@@ -2500,7 +2563,7 @@ password = "fixture-password-not-runtime"
                 expected_network_id: network,
                 network_id: network,
                 expected_torii_url: Some("http://127.0.0.1:8080".into()),
-                torii_url: Some("http://127.0.0.1:18080".into()),
+                torii_url: Some("https://taira.sora.org:8443/".into()),
                 config_source_path: Some(source_path.clone()),
                 output: output_path.clone(),
             }),
@@ -2523,7 +2586,7 @@ password = "fixture-password-not-runtime"
                 && before.network_id == after.network_id
         );
         assert!(before.key_pair.public_key() == after.key_pair.public_key());
-        assert_eq!(after.torii_api_url.as_str(), "http://127.0.0.1:18080/");
+        assert_eq!(after.torii_api_url.as_str(), "https://taira.sora.org:8443/");
         let retained_proof = Path::new(publication.namespace_delegation_file.as_deref().unwrap());
         assert_eq!(retained_proof, public_proof);
         assert_eq!(

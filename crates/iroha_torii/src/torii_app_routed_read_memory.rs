@@ -50,13 +50,23 @@ struct ToriiRoutedReadMemoryBudget {
 }
 impl ToriiRoutedReadMemoryBudget {
     fn new(working_set_bytes: usize, configured_body_limit_bytes: usize) -> Result<Self, Response> {
-        Ok(Self {
-            envelope: QueryFanoutMemoryEnvelope::for_body_admission(working_set_bytes)?,
+        Ok(Self::from_envelope(
+            QueryFanoutMemoryEnvelope::for_body_admission(working_set_bytes)?,
+            configured_body_limit_bytes,
+        ))
+    }
+    /// Derive the corridor from the geometry retained by its actual owner.
+    fn from_envelope(
+        envelope: QueryFanoutMemoryEnvelope,
+        configured_body_limit_bytes: usize,
+    ) -> Self {
+        Self {
+            envelope,
             configured_body_limit_bytes,
             retained_decoded_bytes: 0,
             retained_canonical_bytes: 0,
             merge_allocated_bytes: 0,
-        })
+        }
     }
     /// Bound the complete routed request retained across transport retries.
     fn admit_request_bytes(&self, bytes: usize) -> Result<(), Response> {

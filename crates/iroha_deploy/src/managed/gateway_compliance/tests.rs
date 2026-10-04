@@ -450,7 +450,7 @@ fn complete_script() -> Vec<Step> {
         Step::Status(Observation::Promoted),
     ]
 }
-fn bytes(operation: &Path, name: &str) -> Vec<u8> {
+fn bytes(operation: &Path, name: &str) -> zeroize::Zeroizing<Vec<u8>> {
     PrivateDirectory::open_exact(operation.join("catalogs").join(catalog_name(1)))
         .unwrap()
         .read(name, MAX_RECORD_BYTES)
@@ -1001,7 +1001,7 @@ fn acknowledgement_changed_during_its_reply_never_reaches_promotion() {
             .all(|request| request.target.path() != Mutation::Promote.path())
     );
     assert_eq!(
-        bytes(&path, "acknowledgement.nrt"),
+        bytes(&path, "acknowledgement.nrt").as_slice(),
         b"changed during ACK reply"
     );
 }

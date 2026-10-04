@@ -82,6 +82,24 @@ entries before the cursor, with a limit of 1,048,576 storage entries per request
 (`query_scan_limit_exceeded` beyond that).
 Rows with equal sort values are ordered by their identity.
 
+**Memory admission.** `torii.query_fanout_max_retained_bytes` bounds aggregate
+query memory (default 512,000,000 bytes), while
+`torii.query_fanout_max_working_set_bytes` bounds one complete query working set
+(default 48,000,000 bytes). One quarter of the aggregate belongs to independent
+signed-query ingress. With the default content limit, the remaining
+384,000,000 bytes admit eight complete query owners. Increasing aggregate
+capacity raises concurrency without increasing one query's decode, source or
+response ceilings. Smaller aggregate pools reduce the admitted owner and all
+its phase limits together.
+
+The same owner follows collection request decoding, local execution and the
+returned HTTP body. Compiled plans, decoded cursors and the next cursor share
+the scratch phase with runtime ordering and projection; cursor JSON, its frame
+and base64 output are charged for their actual overlap. Bodyless reads wait
+within the finite query admission queue before query decoding. Reads with a
+body fail admission before body polling when every complete owner is occupied.
+These memory-capacity failures are independent of request-rate limits.
+
 Query strings use ordinary RFC 3986 percent-encoding: any valid escape
 (upper- or lower-case hexadecimal) and literal sub-delimiters such as `:` `,`
 `!` `(` `)` are accepted, and `+` and `%20` both decode to a space. Decoded

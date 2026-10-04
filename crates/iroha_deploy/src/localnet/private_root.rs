@@ -686,7 +686,7 @@ fn private_peer_config(
     Ok(Zeroizing::new(toml::to_string(&*root)?))
 }
 
-fn private_fee_policy(spec: &PrivateRootSpec) -> Result<PrivateRootFeePolicy> {
+pub(crate) fn private_fee_policy(spec: &PrivateRootSpec) -> Result<PrivateRootFeePolicy> {
     let policy = PrivateRootFeePolicy {
         asset_definition_id: AssetDefinitionId::derive_from_components(
             DomainId::parse_fully_qualified(&format!("app.{}", spec.dataspace_alias))?,

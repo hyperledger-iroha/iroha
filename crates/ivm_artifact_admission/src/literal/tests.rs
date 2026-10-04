@@ -21,14 +21,26 @@ fn program(ty: PointerType, payload: &[u8]) -> Vec<u8> {
 fn section(ty: PointerType, payload: &[u8], preceding_prefix: usize) -> Vec<u8> {
     let mut envelope = (ty as u16).to_be_bytes().to_vec();
     envelope.push(1);
-    envelope.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    envelope.extend_from_slice(
+        &u32::try_from(payload.len())
+            .expect("fixture value fits u32")
+            .to_be_bytes(),
+    );
     envelope.extend_from_slice(payload);
     envelope.extend_from_slice(iroha_crypto::Hash::new(payload).as_ref());
     let padding = (4 - (preceding_prefix + 24 + envelope.len()) % 4) % 4;
     let mut bytes = LITERAL_SECTION_MAGIC.to_vec();
     bytes.extend_from_slice(&1_u32.to_le_bytes());
-    bytes.extend_from_slice(&(padding as u32).to_le_bytes());
-    bytes.extend_from_slice(&(envelope.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(
+        &u32::try_from(padding)
+            .expect("fixture value fits u32")
+            .to_le_bytes(),
+    );
+    bytes.extend_from_slice(
+        &u32::try_from(envelope.len())
+            .expect("fixture value fits u32")
+            .to_le_bytes(),
+    );
     bytes.extend_from_slice(&24_u64.to_le_bytes());
     bytes.extend_from_slice(&envelope);
     bytes.extend(std::iter::repeat_n(0, padding));
@@ -147,9 +159,21 @@ fn actual_artifact_admission_keeps_literal_refusal_after_metadata_succeeds() {
     let count = old.count + 1;
     let padding = (4 - (old.start - original.header_len + 16 + 8 * count + data_len) % 4) % 4;
     let mut replacement = LITERAL_SECTION_MAGIC.to_vec();
-    replacement.extend_from_slice(&(count as u32).to_le_bytes());
-    replacement.extend_from_slice(&(padding as u32).to_le_bytes());
-    replacement.extend_from_slice(&(data_len as u32).to_le_bytes());
+    replacement.extend_from_slice(
+        &u32::try_from(count)
+            .expect("fixture value fits u32")
+            .to_le_bytes(),
+    );
+    replacement.extend_from_slice(
+        &u32::try_from(padding)
+            .expect("fixture value fits u32")
+            .to_le_bytes(),
+    );
+    replacement.extend_from_slice(
+        &u32::try_from(data_len)
+            .expect("fixture value fits u32")
+            .to_le_bytes(),
+    );
     for raw in artifact[old.entries_start..old.data_start].chunks_exact(8) {
         let (kind, offset) = ivm_abi::metadata::decode_literal_descriptor(u64::from_le_bytes(
             raw.try_into().unwrap(),

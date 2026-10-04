@@ -5,14 +5,16 @@ use iroha::{blocking, config::Config, sns::SnsNamespacePath};
 use iroha_data_model::{
     account::{AccountId, address::ChainDiscriminantGuard},
     alias_setup::{
+        AccountAliasName, AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1,
         AliasDataSpaceIntentV1, AliasDomainIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1,
-        AliasQuoteGuardV1, AliasSetupPlanRequestV1, ResolvedDataSpaceV1, ResolvedDomainV1,
+        AliasQuoteGuardV1, AliasSetupPlanRequestV1, ResolvedAccountAliasV1, ResolvedDataSpaceV1,
+        ResolvedDomainV1,
     },
     asset::AssetDefinitionId,
     isi::alias_setup::EnsureAlias,
     sns::{
-        DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID, NameRecordV1, NameSelectorV1, NameStatus,
-        SuffixPolicyV1, pricing::quote_lease_price,
+        ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID, NameRecordV1,
+        NameSelectorV1, NameStatus, SuffixPolicyV1, pricing::quote_lease_price,
     },
 };
 use iroha_model_base::{domain::DomainId, topology::DataSpaceId};
@@ -37,14 +39,16 @@ pub struct DomainNamespaceQuote {
     pub valid_until_ms: u64,
 }
 
-/// One ordinary paid SNS lease for an independently executed private dataspace.
+/// One ordinary paid SNS request for a private dataspace and its exact owner alias.
 #[derive(Debug, Clone)]
 pub struct PrivateDataspaceNamespaceQuote {
-    /// Exact one-year lease request, bound to the wallet owner and current policy.
+    /// Ordered one-year dataspace and account-alias leases bound to the same wallet owner.
     pub request: AliasSetupPlanRequestV1,
     /// Canonical SNS name and its hash-derived dataspace id.
     pub dataspace: ResolvedDataSpaceV1,
-    /// Maximum quoted namespace rent, separate from transaction fees.
+    /// Exact owner alias resolved without a physical parent catalog.
+    pub account_alias: ResolvedAccountAliasV1,
+    /// Combined maximum quoted rent for both leases, separate from transaction fees.
     pub rent: Quantity,
     /// Exact rent currency selected by the native pricing policy.
     pub payment_asset: AssetDefinitionId,
@@ -52,7 +56,7 @@ pub struct PrivateDataspaceNamespaceQuote {
     pub valid_until_ms: u64,
 }
 
-/// Prepare a canonical private dataspace lease without adding a physical parent lane/catalog.
+/// Prepare canonical private dataspace and owner-alias leases without a physical parent lane/catalog.
 /// The caller has already selected and authenticated the parent network. These read-only policy
 /// observations prepare an ordinary paid request; the native planner and committed execution
 /// recheck exact owner, namespace, price and generation. They do not establish parent finality.
@@ -64,9 +68,11 @@ pub struct PrivateDataspaceNamespaceQuote {
 pub fn prepare_private_dataspace_request(
     config: &Config,
     alias: &str,
+    account_alias: &str,
     deadline: Instant,
 ) -> Result<PrivateDataspaceNamespaceQuote> {
     let selector = private_dataspace_selector(alias)?;
+    let owner_alias = resolve_private_owner_alias(alias, account_alias)?;
     let _profile = ChainDiscriminantGuard::enter(config.account_chain_discriminant);
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
@@ -98,6 +104,11 @@ pub fn prepare_private_dataspace_request(
         .client()
         .sns()
         .get_name_optional(SnsNamespacePath::Dataspace, alias)?;
+    let account_policy = client.client().sns().get_policy(ACCOUNT_ALIAS_SUFFIX_ID)?;
+    let account_record = client.client().sns().get_name_optional(
+        SnsNamespacePath::AccountAlias,
+        &owner_alias.canonical_text(),
+    )?;
     let quote = quote_private_dataspace(
         &policy,
         selector,
@@ -106,11 +117,35 @@ pub fn prepare_private_dataspace_request(
         config.transaction_ttl,
         &status.dataspace_catalog,
         record.as_ref(),
+        &account_policy,
+        owner_alias,
+        account_record.as_ref(),
     )?;
     if Instant::now() >= deadline {
         return Err(eyre!("private dataspace namespace deadline expired"));
     }
     Ok(quote)
+}
+
+/// Resolve one canonical owner label against the private dataspace's exact SNS name hash.
+///
+/// This constructs an explicit text/id pair for the native planner, which authenticates the
+/// preceding paid dataspace intent or active SNS lease. It never invents a physical catalog entry.
+///
+/// # Errors
+/// Rejects reserved or noncanonical dataspaces and owner labels containing another scope.
+pub fn resolve_private_owner_alias(dataspace: &str, label: &str) -> Result<ResolvedAccountAliasV1> {
+    let selector = private_dataspace_selector(dataspace)?;
+    let canonical_name = AccountAliasName::try_new(label, None::<&str>, dataspace)?;
+    if canonical_name.label.as_ref() != label || canonical_name.dataspace.as_ref() != dataspace {
+        return Err(eyre!(
+            "private owner alias must use exact canonical spelling"
+        ));
+    }
+    Ok(ResolvedAccountAliasV1::new(
+        canonical_name,
+        DataSpaceId::from_hash(&selector.name_hash()),
+    ))
 }
 
 fn private_dataspace_selector(alias: &str) -> Result<NameSelectorV1> {
@@ -125,6 +160,7 @@ fn private_dataspace_selector(alias: &str) -> Result<NameSelectorV1> {
     Ok(selector)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn quote_private_dataspace(
     policy: &SuffixPolicyV1,
     selector: NameSelectorV1,
@@ -133,6 +169,9 @@ fn quote_private_dataspace(
     ttl: Duration,
     catalog: &[NexusDataspaceCatalogStatus],
     record: Option<&NameRecordV1>,
+    account_policy: &SuffixPolicyV1,
+    account_alias: ResolvedAccountAliasV1,
+    account_record: Option<&NameRecordV1>,
 ) -> Result<PrivateDataspaceNamespaceQuote> {
     let alias = selector.normalized_label();
     let dataspace_id = DataSpaceId::from_hash(&selector.name_hash());
@@ -166,24 +205,74 @@ fn quote_private_dataspace(
         .checked_add(lifetime_ms)
         .ok_or_else(|| eyre!("namespace quote deadline overflow"))?;
     let price = quote_lease_price(policy, &selector, 1, None)?;
+    if account_alias
+        != resolve_private_owner_alias(alias, account_alias.canonical_name.label.as_ref())?
+    {
+        return Err(eyre!(
+            "private owner alias differs from the exact dataspace scope"
+        ));
+    }
+    let account_selector = NameSelectorV1 {
+        version: NameSelectorV1::VERSION,
+        suffix_id: ACCOUNT_ALIAS_SUFFIX_ID,
+        label: account_alias.canonical_text(),
+    };
+    if let Some(record) = account_record
+        && (record.selector != account_selector
+            || record.name_hash != account_selector.name_hash()
+            || record.owner != owner
+            || !matches!(record.status, NameStatus::Active)
+            || record.ownership_generation == 0
+            || record.registered_at_ms > observed_at_ms
+            || record.expires_at_ms <= observed_at_ms)
+    {
+        return Err(eyre!(
+            "existing private owner alias is not the exact active owner lease"
+        ));
+    }
+    let account_price = quote_lease_price(account_policy, &account_selector, 1, None)?;
+    if account_price.payment_asset != price.payment_asset {
+        return Err(eyre!(
+            "private namespace leases must use one authorized rent currency"
+        ));
+    }
+    let rent = price.amount.checked_add(&account_price.amount)?;
     let dataspace = ResolvedDataSpaceV1::new(alias.parse()?, dataspace_id);
-    let request = AliasSetupPlanRequestV1::new(vec![EnsureAlias::new(
-        AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
-            dataspace: dataspace.clone(),
-            owner,
-        }),
-        AliasLeaseAcquisitionV1::new(1, Some(price.pricing_class)),
-        AliasQuoteGuardV1 {
-            expected_policy_version: policy.policy_version,
-            expected_payment_asset: price.payment_asset.clone(),
-            max_amount: price.amount.clone(),
-            valid_until_ms,
-        },
-    )]);
+    let request = AliasSetupPlanRequestV1::new(vec![
+        EnsureAlias::new(
+            AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
+                dataspace: dataspace.clone(),
+                owner: owner.clone(),
+            }),
+            AliasLeaseAcquisitionV1::new(1, Some(price.pricing_class)),
+            AliasQuoteGuardV1 {
+                expected_policy_version: policy.policy_version,
+                expected_payment_asset: price.payment_asset.clone(),
+                max_amount: price.amount.clone(),
+                valid_until_ms,
+            },
+        ),
+        EnsureAlias::new(
+            AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+                alias: account_alias.clone(),
+                target_account: owner,
+                provision: AccountProvisionV1::Existing,
+                role: AccountAliasRoleV1::Additional,
+            }),
+            AliasLeaseAcquisitionV1::new(1, Some(account_price.pricing_class)),
+            AliasQuoteGuardV1 {
+                expected_policy_version: account_policy.policy_version,
+                expected_payment_asset: account_price.payment_asset,
+                max_amount: account_price.amount,
+                valid_until_ms,
+            },
+        ),
+    ]);
     Ok(PrivateDataspaceNamespaceQuote {
         request,
         dataspace,
-        rent: price.amount,
+        account_alias,
+        rent,
         payment_asset: price.payment_asset,
         valid_until_ms,
     })

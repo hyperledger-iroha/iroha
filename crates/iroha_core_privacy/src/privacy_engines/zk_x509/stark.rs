@@ -283,7 +283,7 @@ use thiserror::Error;
 /// Complete proof-system descriptor for the implemented aggregate adapters.
 ///
 /// The descriptor is transcript-bound and records the first-release geometry.
-pub(crate) const ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-aggregate-stark-v1-incompatible:wire=outer-X5S1-containing-exactly-one-X5M1-main-and-one-X5C1-ca:X5M1-claim-free-key-openings-plus-length-delimited-aggregate-no-fixed-sidecar-no-legacy:exact-statement-derived-shape:goldilocks-fp4-w4=7:main-common-lde-log22:compact-ca-local-lde-log16:ordered-native-stride-logical-trace-groups-main-joined-base-and-aux-roots:verifier-owned-logical-adapter-registration:exact-column-ranges-widths-constraint-counts-and-degrees-transcript-bound:64-column-physical-budget-chunks:main-49-registrations-6-groups-logs5,8,15,16,18,19-80-chunks:compact-ca-dedicated-log12-13-chunks:sha3-384-opaque48-vector-row-merkle:p256-binding-sink-degree3-including-fixed-selectors:sha-capacity-and-call-degree6-including-fixed-selectors:sha-digest-address-polynomial-select:sha-fixed-algebraic-width472-verifier-derived-no-proof-bytes:p256-fixed-algebraic-width404-verifier-derived-no-proof-bytes:fixed-polynomials-verifier-derived-at-deep-point-and-native-translates:x5b1-shared-challenge-pre-aux=single-joined-main-base-root-then-ca-base-root+main-profile+ca-profile+main-public+ca-public+sample-exact272-goldilocks-post-base-challenges-in-11-family-order=sha-call28,rfc48,projection28,io20,der52,sha-word-memory16,sha-word-base-fold4,p256-value28,p256-cross16,p256-scalar20,p256-arithmetic-copy12+opaque-main-post-base-session:main-io=statement-compiled-40+5d-declarations-logical55922+4736d-active-rows-padded-to262144:rfc5280-output-role-products=9-normalized-producer+9-actual-consumer-four-lane-aux-accumulators+36-private-equalities+4-private-CA-governed-root-consumer-links+16-private-sha-bridges+20-quartic-joins:main-key-byte-joins=12-blocks647-equalities-root-powers2,8:main-sha-digest-joins=5-blocks40-u32-equalities-root-power32:main-sha-rfc-private-union=16-constant-native-bridges+16-segment-quartic-links+4-role-quartic-links-original-masks-no-extra-openings:rfc5280-calendar-and-numeric=base285-aux280-fixed147-constraints1941-degree4-five-key-and-five-complete-spki-outputs-der-node-byte-lookups-key-length66-offset1-spki-content89-total91-offset0-nine-variable-tbs-crl-signature-byte-and-canonical-u16-in-eight-byte-length-pairs-live-prefix-count-node-continuity-source-start-helper-projection-leaf-serial-magnitude-sign-octet-nonzero-first-byte-big-endian-length-selected-original-subject-oid-value-provenance-with-complete-name-oid-census-three-original-classes-disjoint-document-stride12-keys1through48-six-bit-positive-gaps-uniqueness-nonempty-bounded-rdns-and-complete-original-value-census-country-printable-utf8-dfa-output-metadata-six-verifier-fixed-equations-authenticated72-time-census-73-relations-38bit-slack-affine-loglookup-39relation-bound:local-component-history:both-original-aux-roots-before-active-fp4-local-constraint-alphas:then192-private-endpoint-link-descriptors-and-fp4-link-alphas:then17-key-and-digest-join-descriptors-and-fp4-alphas:then20-private-sha-union-descriptors-and-fp4-alphas:then108-CA-private-link-descriptors-and-fp4-alphas:private-links-linear-and-quartic-quotients-original-masks-before-composition-commitment:one-fp4-composition-lane:main-six-composition-chunks:ca-four-composition-chunks:canonical-quotient-stride=fri-cap-minus137:independent-fp4-adjacent-chunk-masks137-before-composition-root:fri-rate9over64:binary-fri:ordered-low-high-pair-leaves:affine-batching-m3-binary-fold-arity2:136-uniform-distinct-queries-without-replacement:main-terminal1024-degree143:ca-terminal1024-degree143:main-mask1816-coefficients:ca-mask2100-coefficients:one-shared-transcript-derived-deep-point-current+next+MAIN24-CA108-original-openings-both-local-records-bound-before-mixes:MAIN31-derived-key-and-digest-openings-power2,8,32-admissibility-and-DEEP-authentication:ca-complete-fp4-local-air1363-plus-MAIN108-original-cross-equations-at-deep-current-only-queried-trace-rows:main-complete-fp4-air49-native-vanishing-and-six-chunk-recomposition-at-deep-current-only-queried-trace-rows:grinding20:p256-four-independent-base-field-bus-lanes-per-family:all-roots-transcript-ordered:subproof-machinery-complete:X5M1-codec-and-accounting-complete:full-main-production-provider-verifier=complete:activation=unavailable-independent-qualification";
+pub(crate) const ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-aggregate-stark-v1-incompatible:wire=outer-X5S1-containing-exactly-one-X5M1-main-and-one-X5C1-ca:X5M1-claim-free-key-openings-plus-length-delimited-aggregate-no-fixed-sidecar-no-legacy:exact-statement-derived-shape:goldilocks-fp4-w4=7:main-common-lde-log22:compact-ca-local-lde-log16:ordered-native-stride-logical-trace-groups-main-joined-base-and-aux-roots:verifier-owned-logical-adapter-registration:exact-column-ranges-widths-constraint-counts-and-degrees-transcript-bound:64-column-physical-budget-chunks:main-49-registrations-6-groups-logs5,8,15,16,18,19-80-chunks:compact-ca-dedicated-log12-13-chunks:sha3-384-opaque48-vector-row-merkle:p256-binding-sink-degree3-including-fixed-selectors:sha-capacity-and-call-degree6-including-fixed-selectors:sha-digest-address-polynomial-select:sha-fixed-algebraic-width472-verifier-derived-no-proof-bytes:p256-fixed-algebraic-width404-verifier-derived-no-proof-bytes:fixed-polynomials-verifier-derived-at-deep-point-and-native-translates:x5b1-shared-challenge-pre-aux=single-joined-main-base-root-then-ca-base-root+main-profile+ca-profile+main-public+ca-public+sample-exact272-goldilocks-post-base-challenges-in-11-family-order=sha-call28,rfc48,projection28,io20,der52,sha-word-memory16,sha-word-base-fold4,p256-value28,p256-cross16,p256-scalar20,p256-arithmetic-copy12+opaque-main-post-base-session:main-io=statement-compiled-40+5d-declarations-logical55922+4736d-active-rows-padded-to262144:rfc5280-output-role-products=9-normalized-producer+9-actual-consumer-four-lane-aux-accumulators+36-private-equalities+4-private-CA-governed-root-consumer-links+16-private-sha-bridges+20-quartic-joins:main-key-byte-joins=12-blocks647-equalities-root-powers2,8:main-sha-digest-joins=5-blocks40-u32-equalities-root-power32:main-sha-rfc-private-union=16-constant-native-bridges+16-segment-quartic-links+4-role-quartic-links-original-masks-no-extra-openings:rfc5280-calendar-and-numeric=base285-aux280-fixed147-constraints2145-degree4-basic-constraints-fixed3x12-signed-parent-complete-canonical-u32-and-32bit-nonwrapping-slack-source-node-root-kind-active-gated-helper-fixed-eight-equality-and-fifteen-embedded-endpoint-slots-complete-nonempty-original-node-spans-live-prefix-count-typed-copy-domains103-104-optional-slot-canonical-zero-exact-extension-oid-ordinal-ku-document-and-critical-cardinality-five-key-and-five-complete-spki-outputs-der-node-byte-lookups-key-length66-offset1-spki-content89-total91-offset0-nine-variable-tbs-crl-signature-byte-and-canonical-u16-in-eight-byte-length-pairs-live-prefix-count-node-continuity-source-start-helper-projection-leaf-serial-magnitude-sign-octet-nonzero-first-byte-big-endian-length-selected-original-subject-oid-value-provenance-with-complete-name-oid-census-three-original-classes-disjoint-document-stride12-keys1through48-six-bit-positive-gaps-uniqueness-nonempty-bounded-rdns-and-complete-original-value-census-country-printable-utf8-dfa-output-metadata-six-verifier-fixed-equations-authenticated72-time-census-73-relations-38bit-slack-affine-loglookup-39relation-bound:local-component-history:both-original-aux-roots-before-active-fp4-local-constraint-alphas:then192-private-endpoint-link-descriptors-and-fp4-link-alphas:then17-key-and-digest-join-descriptors-and-fp4-alphas:then20-private-sha-union-descriptors-and-fp4-alphas:then108-CA-private-link-descriptors-and-fp4-alphas:private-links-linear-and-quartic-quotients-original-masks-before-composition-commitment:one-fp4-composition-lane:main-six-composition-chunks:ca-four-composition-chunks:canonical-quotient-stride=fri-cap-minus137:independent-fp4-adjacent-chunk-masks137-before-composition-root:fri-rate9over64:binary-fri:ordered-low-high-pair-leaves:affine-batching-m3-binary-fold-arity2:136-uniform-distinct-queries-without-replacement:main-terminal1024-degree143:ca-terminal1024-degree143:main-mask1816-coefficients:ca-mask2100-coefficients:one-shared-transcript-derived-deep-point-current+next+MAIN24-CA108-original-openings-both-local-records-bound-before-mixes:MAIN31-derived-key-and-digest-openings-power2,8,32-admissibility-and-DEEP-authentication:ca-complete-fp4-local-air1363-plus-MAIN108-original-cross-equations-at-deep-current-only-queried-trace-rows:main-complete-fp4-air49-native-vanishing-and-six-chunk-recomposition-at-deep-current-only-queried-trace-rows:grinding20:p256-four-independent-base-field-bus-lanes-per-family:all-roots-transcript-ordered:subproof-machinery-complete:X5M1-codec-and-accounting-complete:full-main-production-provider-verifier=complete:activation=unavailable-independent-qualification";
 const PROOF_MAGIC_V1: [u8; 4] = *b"X5S1";
 const SECURITY_LANES: usize = ZK_X509_COMPOSITION_LANES_V1 as usize;
 const QUERY_COUNT: usize = ZK_X509_FRI_QUERY_COUNT_V1 as usize;
@@ -1881,11 +1881,15 @@ impl AggregateProofLayoutV1 {
         {
             aggregate::AggregateTraceLayoutV1::JoinedCurrent
         } else if self.registered_segments.len() == 1
-            && self.registered_segments[0].segment.adapter == SegmentAdapterIdV1::CaAccumulator
+            && matches!(
+                self.registered_segments[0].segment.adapter,
+                SegmentAdapterIdV1::CaAccumulator | SegmentAdapterIdV1::StrictDer
+            )
         {
+            // Both relations check every constraint at the authenticated DEEP point.
             aggregate::AggregateTraceLayoutV1::GroupedCurrent
         } else {
-            // Isolated AIR fixtures retain the ordinary full-row layout.
+            // Other isolated AIR fixtures retain the ordinary full-row layout.
             aggregate::AggregateTraceLayoutV1::GroupedCurrentNext
         };
         let shared = aggregate::AggregateProofLayoutV1::new_with_trace_layout_v1(
@@ -6748,13 +6752,7 @@ fn build_zk_x509_der_segmented_stark_proof_v1_with_rng<R: TryRngCore>(
     queries
         .try_reserve_exact(query_indices.len())
         .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-    let next_stride = aggregate_layout
-        .trace_groups
-        .first()
-        .ok_or(ZkX509StarkErrorV1::InternalInvariant)?
-        .next_stride(aggregate_layout.common_lde_log2)?;
     for (query_position, index) in query_indices.iter().copied().enumerate() {
-        let next = (index + next_stride) % aggregate_layout.common_lde_size();
         let base_current = base_openings
             .opened_rows
             .get(&index)
@@ -6762,13 +6760,7 @@ fn build_zk_x509_der_segmented_stark_proof_v1_with_rng<R: TryRngCore>(
             .iter()
             .map(|value| value.0)
             .collect();
-        let base_next = base_openings
-            .opened_rows
-            .get(&next)
-            .ok_or(ZkX509StarkErrorV1::InternalInvariant)?
-            .iter()
-            .map(|value| value.0)
-            .collect();
+
         let aux_current = aux_openings
             .opened_rows
             .get(&index)
@@ -6776,20 +6768,14 @@ fn build_zk_x509_der_segmented_stark_proof_v1_with_rng<R: TryRngCore>(
             .iter()
             .map(|value| value.0)
             .collect();
-        let aux_next = aux_openings
-            .opened_rows
-            .get(&next)
-            .ok_or(ZkX509StarkErrorV1::InternalInvariant)?
-            .iter()
-            .map(|value| value.0)
-            .collect();
+
         queries.push(aggregate::AggregateQueryProofV1 {
             index: u32::try_from(index).map_err(|_| ZkX509StarkErrorV1::InternalInvariant)?,
             trace_groups: vec![aggregate::AggregateTraceGroupQueryV1 {
                 base_current,
-                base_next,
+                base_next: Vec::new(),
                 aux_current,
-                aux_next,
+                aux_next: Vec::new(),
             }],
             composition_values: compositions
                 .iter()
@@ -8542,6 +8528,11 @@ impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
             vector_v1(&self.der.base.rows),
             vector_v1(&self.der.aux_rows),
             self.sha_fixed.allocated_heap_bytes_v1(),
+            sum_v1(
+                self.sha_aux
+                    .iter()
+                    .map(ZkX509ShaBatchSegmentAuxSourceV1::retained_aux_heap_bytes_v1),
+            ),
         ])
     }
     /// Consume every challenge-independent log19 child exactly once under the
@@ -8576,11 +8567,20 @@ impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
                     .map_err(map_main_sha_source_error_v1)?,
             );
         }
-        let sha_aux: [ZkX509ShaBatchSegmentAuxSourceV1<'a>; ZK_X509_SHA_SEGMENT_COUNT_V1] = sha_aux
-            .try_into()
-            .map_err(|_: Vec<ZkX509ShaBatchSegmentAuxSourceV1<'a>>| {
-                ZkX509StarkErrorV1::InternalInvariant
-            })?;
+        let mut sha_aux: [ZkX509ShaBatchSegmentAuxSourceV1<'a>; ZK_X509_SHA_SEGMENT_COUNT_V1] =
+            sha_aux
+                .try_into()
+                .map_err(|_: Vec<ZkX509ShaBatchSegmentAuxSourceV1<'a>>| {
+                    ZkX509StarkErrorV1::InternalInvariant
+                })?;
+        // The complete public cache forecast was admitted before constructing
+        // sources. Build after the temporary owner vector has been consumed so
+        // private cached endpoints never remain in that retired allocation.
+        for source in &mut sha_aux {
+            source
+                .retain_native_aux_v1()
+                .map_err(map_main_sha_source_error_v1)?;
+        }
         #[cfg(test)]
         let der_timer = super::prover_observation::PhaseTimerV1::start_v1(
             super::prover_observation::PhaseV1::DerBinding,
@@ -11665,37 +11665,16 @@ pub(crate) fn verify_zk_x509_der_segmented_stark_v1(
         &expected_indices,
     )
     .map_err(map_aggregate_error_v1)?;
-    let next_stride = aggregate_layout
-        .trace_groups
-        .first()
-        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?
-        .next_stride(aggregate_layout.common_lde_log2)?;
-    let fixed_indices = expected_indices
-        .iter()
-        .flat_map(|index| {
-            [
-                *index,
-                (*index + next_stride) % aggregate_layout.common_lde_size(),
-            ]
-        })
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    let fixed_openings = der_fixed_openings_v1(&schedule, layout, &fixed_indices)?;
-    let lde_root =
-        goldilocks_primitive_root_v1(layout.lde_log2).map_err(map_transparent_error_v1)?;
-    let mut evaluator = DerOpenedRowEvaluatorV1 {
-        aggregate_layout: &aggregate_layout,
-        layout,
-        fixed_openings: &fixed_openings,
+    main_aggregate::verify_standalone_der_oods_v1(
+        &aggregate_layout,
+        &proof.deep,
+        deep_point,
         challenges,
         public,
         claims,
-        alphas: &alphas[0],
-        mixes: &mixes[0],
-        lde_root,
-    };
-    aggregate::verify_opened_query_relations_with_deep_v1(
+        &alphas[0],
+    )?;
+    aggregate::verify_opened_query_relations_after_complete_oods_v1(
         &proof.aggregate,
         &proof.deep,
         deep_point,
@@ -11705,7 +11684,7 @@ pub(crate) fn verify_zk_x509_der_segmented_stark_v1(
         &expected_indices,
         &fri_betas,
         &terminal_fields,
-        &mut evaluator,
+        &[],
     )
     .map_err(map_aggregate_error_v1)
 }

@@ -1,5 +1,5 @@
 //! Real bounded loopback refusals before signing; no transport response invents native proof.
-use super::tests::{fixture, gateway, ingest, options, reputation};
+use super::tests::{fixture, gateway, ingest, options, reputation, reputation_labels};
 use super::*;
 use crate::managed::native_operation::Fees;
 use crate::managed::native_operation::test_support::UnavailablePeers;

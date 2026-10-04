@@ -2,12 +2,13 @@
 use super::{
     CollectionError,
     cursor::{self, CursorError, DIGEST_BYTES},
+    memory::{self, BytePolicy},
     specs::{CollectionSpec, FieldType},
 };
 use iroha_primitives::numeric::{Numeric, RoundingMode};
 use iroha_torii_shared::list_query::{
     AggregateFn, AggregateMetric, AggregateSpec, CURSOR_MAX_BYTES, FieldPath, FilterExpr,
-    ListQuery, Order, Page, is_decimal_text, sort_to_string,
+    ListQuery, Order, Page, is_decimal_text,
 };
 use norito::json::{Map, Value};
 use std::{
@@ -30,6 +31,8 @@ pub(crate) struct Limits {
     pub(crate) ordered_page_scan_budget: usize,
     /// Groups (and distinct values) one aggregate may hold.
     pub(crate) max_groups: usize,
+    /// Byte ceilings backed by the current routed-read reservation.
+    pub(crate) bytes: BytePolicy,
 }
 
 impl Limits {
@@ -43,6 +46,7 @@ impl Limits {
             max_scanned_rows: 1 << 20,
             ordered_page_scan_budget: 1 << 16,
             max_groups: 1 << 16,
+            bytes: BytePolicy::canonical(),
         }
     }
 }
@@ -392,10 +396,9 @@ fn literal_for(
             },
             control,
             format!(
-                "`{}` holds {} values, so it cannot be compared with {}",
+                "`{}` holds {} values, so it cannot be compared with this JSON value",
                 field.0,
-                ty.label(),
-                norito::json::to_json(value).unwrap_or_default()
+                ty.label()
             ),
         )
         .with_actual(field.0.clone())
@@ -533,34 +536,47 @@ enum SortValue {
 }
 
 impl SortValue {
-    fn from_value(value: &Value, ty: FieldType) -> Self {
+    fn from_value(
+        value: &Value,
+        ty: FieldType,
+        bytes: BytePolicy,
+    ) -> Result<Self, CollectionError> {
         if value.is_null() {
-            return Self::Null;
+            return Ok(Self::Null);
         }
+        if matches!(ty, FieldType::Number | FieldType::Json) && numeric_may_allocate(value) {
+            memory::ensure(256, bytes.scratch_bytes, "numeric ordering key")?;
+        }
+        let text_key = |text: &str| {
+            memory::ensure(text.len(), bytes.scratch_bytes, "ordering key")?;
+            Ok(Self::Text(text.to_owned()))
+        };
         match ty {
-            FieldType::Number => numeric(value).map_or_else(|| Self::other(value), Self::Number),
+            FieldType::Number => {
+                numeric(value).map_or_else(|| Self::other(value, bytes), |v| Ok(Self::Number(v)))
+            }
             FieldType::String => value
                 .as_str()
-                .map_or_else(|| Self::other(value), |text| Self::Text(text.to_owned())),
+                .map_or_else(|| Self::other(value, bytes), text_key),
             FieldType::Bool => value
                 .as_bool()
-                .map_or_else(|| Self::other(value), Self::Bool),
+                .map_or_else(|| Self::other(value, bytes), |v| Ok(Self::Bool(v))),
             FieldType::Json => {
                 if let Some(flag) = value.as_bool() {
-                    Self::Bool(flag)
+                    Ok(Self::Bool(flag))
                 } else if let Some(number) = numeric(value) {
-                    Self::Number(number)
+                    Ok(Self::Number(number))
                 } else if let Some(text) = value.as_str() {
-                    Self::Text(text.to_owned())
+                    text_key(text)
                 } else {
-                    Self::other(value)
+                    Self::other(value, bytes)
                 }
             }
         }
     }
 
-    fn other(value: &Value) -> Self {
-        Self::Other(norito::json::to_json(value).unwrap_or_default())
+    fn other(value: &Value, bytes: BytePolicy) -> Result<Self, CollectionError> {
+        Ok(Self::Other(bytes.key(value)?))
     }
 
     const fn rank(&self) -> u8 {
@@ -626,6 +642,7 @@ struct Entry {
     key: RowKey,
     seq: u64,
     row: Map,
+    charge: usize,
 }
 
 impl PartialEq for Entry {
@@ -672,6 +689,7 @@ pub(crate) struct Prepared<'q> {
     /// The cursor's `id` for an identity-ordered read.
     after_id: Option<String>,
     digest: [u8; DIGEST_BYTES],
+    bytes: BytePolicy,
 }
 
 /// Where an identity-ordered page starts: strictly after `after` in
@@ -703,6 +721,8 @@ pub(crate) fn prepare<'q>(
     limits: &Limits,
 ) -> Result<Prepared<'q>, CollectionError> {
     query.validate()?;
+    let plan_charge = admit_query_plan(spec, query, limits.bytes)?;
+    let mut scratch = plan_charge;
     let collection = Schema::Collection(spec);
     let filter = query
         .filter
@@ -724,7 +744,7 @@ pub(crate) fn prepare<'q>(
         .as_ref()
         .map(|aggregate| plan_aggregate(spec, aggregate))
         .transpose()?;
-    let sort = effective_sort(spec, query, aggregate.as_ref())?;
+    let sort = effective_sort(spec, query, aggregate.as_ref(), limits.bytes)?;
     let limit = query.limit.unwrap_or(limits.default_limit);
     if limit == 0 || limit > limits.max_limit {
         return Err(CollectionError::new(
@@ -738,20 +758,54 @@ pub(crate) fn prepare<'q>(
     let filter_text = query
         .filter
         .as_ref()
-        .map(|filter| norito::json::to_json(&filter.to_json_value()).unwrap_or_default())
+        .map(|filter| {
+            BytePolicy {
+                scratch_bytes: limits.bytes.scratch_bytes - scratch,
+                ..limits.bytes
+            }
+            .key(filter)
+        })
+        .transpose()?
         .unwrap_or_default();
+    scratch = memory::add(scratch, filter_text.capacity())?;
     let aggregate_text = query
         .aggregate
         .as_ref()
-        .map(|aggregate| norito::json::to_json(aggregate).unwrap_or_default())
+        .map(|aggregate| {
+            BytePolicy {
+                scratch_bytes: limits.bytes.scratch_bytes - scratch,
+                ..limits.bytes
+            }
+            .key(aggregate)
+        })
+        .transpose()?
         .unwrap_or_default();
-    let digest = cursor::digest(&[
-        spec.id,
-        scope,
-        &filter_text,
-        &sort_to_string(&query.sort),
-        &aggregate_text,
-    ]);
+    scratch = memory::add(scratch, aggregate_text.capacity())?;
+    struct SortText<'a>(&'a [iroha_torii_shared::list_query::SortKey]);
+    impl core::fmt::Display for SortText<'_> {
+        fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            for (index, key) in self.0.iter().enumerate() {
+                if index != 0 {
+                    out.write_str(",")?;
+                }
+                write!(out, "{key}")?;
+            }
+            Ok(())
+        }
+    }
+    let sort_text = BytePolicy {
+        scratch_bytes: limits.bytes.scratch_bytes - scratch,
+        ..limits.bytes
+    }
+    .display(&SortText(&query.sort))?;
+    scratch = memory::add(scratch, sort_text.capacity())?;
+    let digest = cursor::digest(
+        &[spec.id, scope, &filter_text, &sort_text, &aggregate_text],
+        limits.bytes.scratch_bytes - scratch,
+    )?;
+    drop(filter_text);
+    drop(aggregate_text);
+    drop(sort_text);
     let ordered = (spec.ordered && aggregate.is_none())
         .then(|| match query.sort.as_slice() {
             [] => Some(false),
@@ -764,22 +818,57 @@ pub(crate) fn prepare<'q>(
         None => (None, None),
         Some(token) if spec.positioned > 0 => (
             None,
-            Some(decode_position(spec, &digest, token).map_err(cursor_error)?),
+            Some(
+                decode_position(spec, &digest, token, limits.bytes.row_bytes)
+                    .map_err(cursor_error)?,
+            ),
         ),
         Some(token) => {
             let values =
-                cursor::decode(token, spec.tag, &digest, sort.len()).map_err(cursor_error)?;
+                cursor::decode(token, spec.tag, &digest, sort.len(), limits.bytes.row_bytes)
+                    .map_err(cursor_error)?;
+            let mut remaining = limits.bytes.scratch_bytes - plan_charge;
             if ordered.is_some() {
-                after_id = Some(
-                    values[0]
-                        .as_str()
-                        .ok_or_else(|| cursor_error(CursorError::Malformed))?
-                        .to_owned(),
-                );
+                let id = values[0]
+                    .as_str()
+                    .ok_or_else(|| cursor_error(CursorError::Malformed))?;
+                memory::ensure(id.len(), remaining, "retained cursor identity")?;
+                remaining -= id.len();
+                after_id = Some(id.to_owned());
             }
-            (Some(key_from_values(&sort, &values)), None)
+            (
+                Some(key_from_values(
+                    &sort,
+                    &values,
+                    BytePolicy {
+                        scratch_bytes: remaining,
+                        ..limits.bytes
+                    },
+                )?),
+                None,
+            )
         }
     };
+    // The compiled plan and decoded cursor remain alive for the entire scan
+    // and projection. They share the scratch phase with runtime keys; they
+    // cannot each consume that phase's full ceiling independently.
+    let retained_cursor_bytes = memory::add(
+        after.as_ref().map(row_key_bytes).transpose()?.unwrap_or(0),
+        memory::add(
+            after_id.as_ref().map_or(0, String::capacity),
+            after_position
+                .as_ref()
+                .map(|position| memory::slots::<u64>(position.capacity()))
+                .transpose()?
+                .unwrap_or(0),
+        )?,
+    )?;
+    let retained_plan_bytes = memory::add(plan_charge, retained_cursor_bytes)?;
+    memory::ensure(
+        retained_plan_bytes,
+        limits.bytes.scratch_bytes,
+        "retained query plan and cursor",
+    )?;
     Ok(Prepared {
         spec,
         query,
@@ -792,18 +881,155 @@ pub(crate) fn prepare<'q>(
         ordered,
         after_id,
         digest,
+        bytes: BytePolicy {
+            scratch_bytes: limits.bytes.scratch_bytes - retained_plan_bytes,
+            ..limits.bytes
+        },
     })
+}
+
+/// Admit owned query compilation before copying paths, literals or aggregate
+/// plans. Container charges include native collection growth and Numeric's
+/// bounded 512-bit arithmetic scratch; error rendering shares this phase.
+fn admit_query_plan(
+    spec: &CollectionSpec,
+    query: &ListQuery,
+    bytes: BytePolicy,
+) -> Result<usize, CollectionError> {
+    fn path(field: &FieldPath) -> Result<usize, CollectionError> {
+        memory::add(
+            field
+                .0
+                .len()
+                .checked_mul(4)
+                .ok_or_else(|| memory::capacity("query paths"))?,
+            memory::slots::<String>(field.0.split('.').count().saturating_mul(2))?,
+        )
+    }
+    fn literal(value: &Value) -> Result<usize, CollectionError> {
+        memory::add(
+            memory::value_heap_bytes(value)?
+                .checked_mul(2)
+                .ok_or_else(|| memory::capacity("query literals"))?,
+            512,
+        )
+    }
+    fn filter(expr: &FilterExpr) -> Result<usize, CollectionError> {
+        let base = core::mem::size_of::<Compiled>();
+        let extra = match expr {
+            FilterExpr::And(children) | FilterExpr::Or(children) => children.iter().try_fold(
+                memory::slots::<Compiled>(children.len().saturating_mul(2))?,
+                |sum, child| memory::add(sum, filter(child)?),
+            )?,
+            FilterExpr::Not(inner) => memory::add(base, filter(inner)?)?,
+            FilterExpr::Eq(field, value)
+            | FilterExpr::Ne(field, value)
+            | FilterExpr::Lt(field, value)
+            | FilterExpr::Lte(field, value)
+            | FilterExpr::Gt(field, value)
+            | FilterExpr::Gte(field, value) => memory::add(path(field)?, literal(value)?)?,
+            FilterExpr::In(field, values) | FilterExpr::Nin(field, values) => {
+                values.iter().try_fold(
+                    memory::add(
+                        path(field)?,
+                        memory::slots::<Literal>(values.len().saturating_mul(2))?,
+                    )?,
+                    |sum, value| memory::add(sum, literal(value)?),
+                )?
+            }
+            FilterExpr::Exists(field) | FilterExpr::IsNull(field) => path(field)?,
+        };
+        memory::add(base, extra)
+    }
+    let mut charge = memory::add(
+        sort_plan_bytes(spec, query)?,
+        query.filter.as_ref().map(filter).transpose()?.unwrap_or(0),
+    )?;
+    for key in &query.sort {
+        charge = memory::add(charge, path(&key.key)?)?;
+    }
+    if let Some(select) = &query.select {
+        for field in select {
+            charge = memory::add(charge, path(field)?)?;
+        }
+    }
+    if let Some(aggregate) = &query.aggregate {
+        for field in &aggregate.group_by {
+            charge = memory::add(charge, memory::add(path(field)?, 512)?)?;
+        }
+        for metric in &aggregate.metrics {
+            charge = memory::add(
+                charge,
+                memory::add(metric.alias.len().saturating_mul(4), 1024)?,
+            )?;
+            if let Some(field) = &metric.field {
+                charge = memory::add(charge, path(field)?)?;
+            }
+        }
+        if let Some(having) = &aggregate.having {
+            charge = memory::add(charge, filter(having)?)?;
+        }
+    }
+    memory::ensure(charge, bytes.scratch_bytes, "query plan")?;
+    Ok(charge)
+}
+
+/// Admit the one exact sort vector and every field name it can own. Identity
+/// names already present in the initial order may be skipped; charging all of
+/// them keeps this bound independent of the later schema validation.
+fn sort_plan_capacity(spec: &CollectionSpec, query: &ListQuery) -> Result<usize, CollectionError> {
+    let initial = if !query.sort.is_empty() {
+        query.sort.len()
+    } else if let Some(aggregate) = &query.aggregate {
+        aggregate.group_by.len()
+    } else {
+        spec.default_sort.len()
+    };
+    let identities = query
+        .aggregate
+        .as_ref()
+        .map_or(spec.identity.len(), |aggregate| aggregate.group_by.len());
+    memory::add(initial, identities)
+}
+
+fn sort_plan_bytes(spec: &CollectionSpec, query: &ListQuery) -> Result<usize, CollectionError> {
+    let mut charge = memory::slots::<SortField>(sort_plan_capacity(spec, query)?)?;
+    if !query.sort.is_empty() {
+        for key in &query.sort {
+            charge = memory::add(charge, key.key.0.len())?;
+        }
+    } else if let Some(aggregate) = &query.aggregate {
+        for field in &aggregate.group_by {
+            charge = memory::add(charge, field.0.len())?;
+        }
+    } else {
+        for (name, _) in spec.default_sort {
+            charge = memory::add(charge, name.len())?;
+        }
+    }
+    if let Some(aggregate) = &query.aggregate {
+        for field in &aggregate.group_by {
+            charge = memory::add(charge, field.0.len())?;
+        }
+    } else {
+        for name in spec.identity {
+            charge = memory::add(charge, name.len())?;
+        }
+    }
+    Ok(charge)
 }
 
 fn decode_position(
     spec: &CollectionSpec,
     digest: &[u8; DIGEST_BYTES],
     token: &str,
+    allocation_bytes: usize,
 ) -> Result<Vec<u64>, CursorError> {
-    let position: Vec<u64> = cursor::decode(token, spec.tag, digest, spec.positioned)?
-        .iter()
-        .map(|value| value.as_u64().ok_or(CursorError::Malformed))
-        .collect::<Result<_, _>>()?;
+    let position: Vec<u64> =
+        cursor::decode(token, spec.tag, digest, spec.positioned, allocation_bytes)?
+            .iter()
+            .map(|value| value.as_u64().ok_or(CursorError::Malformed))
+            .collect::<Result<_, _>>()?;
     if position.first() == Some(&0) {
         return Err(CursorError::Malformed);
     }
@@ -896,12 +1122,22 @@ fn effective_sort(
     spec: &'static CollectionSpec,
     query: &ListQuery,
     aggregate: Option<&AggregatePlan>,
+    bytes: BytePolicy,
 ) -> Result<Vec<SortField>, CollectionError> {
     let schema = match aggregate {
         Some(plan) => Schema::Aggregate(&plan.outputs),
         None => Schema::Collection(spec),
     };
-    let mut fields = Vec::new();
+    memory::ensure(
+        sort_plan_bytes(spec, query)?,
+        bytes.scratch_bytes,
+        "sort plan",
+    )?;
+    let mut fields = memory::vector(
+        sort_plan_capacity(spec, query)?,
+        bytes.scratch_bytes,
+        "sort plan fields",
+    )?;
     for key in &query.sort {
         let Some((ty, sortable)) = schema.resolve(&key.key.0) else {
             return Err(unknown_field("sort", &schema, &key.key.0));
@@ -921,47 +1157,46 @@ fn effective_sort(
             ty,
         });
     }
-    let (defaults, identity): (Vec<(String, Order)>, Vec<String>) = match aggregate {
-        Some(plan) => {
-            let groups: Vec<String> = plan
-                .spec
-                .group_by
-                .iter()
-                .map(|field| field.0.clone())
-                .collect();
-            (
-                groups
-                    .iter()
-                    .map(|name| (name.clone(), Order::Asc))
-                    .collect(),
-                groups,
-            )
-        }
-        None => (
-            spec.default_sort
-                .iter()
-                .map(|(name, order)| ((*name).to_owned(), *order))
-                .collect(),
-            spec.identity
-                .iter()
-                .map(|name| (*name).to_owned())
-                .collect(),
-        ),
-    };
     if fields.is_empty() {
-        for (name, order) in defaults {
-            let ty = schema.resolve(&name).map_or(FieldType::Json, |(ty, _)| ty);
-            fields.push(SortField { name, order, ty });
+        if let Some(plan) = aggregate {
+            for field in &plan.spec.group_by {
+                let ty = schema
+                    .resolve(&field.0)
+                    .map_or(FieldType::Json, |(ty, _)| ty);
+                fields.push(SortField {
+                    name: field.0.clone(),
+                    order: Order::Asc,
+                    ty,
+                });
+            }
+        } else {
+            for (name, order) in spec.default_sort {
+                let ty = schema.resolve(name).map_or(FieldType::Json, |(ty, _)| ty);
+                fields.push(SortField {
+                    name: (*name).to_owned(),
+                    order: *order,
+                    ty,
+                });
+            }
         }
     }
-    for name in identity {
+    let mut append_identity = |name: &str| {
         if !fields.iter().any(|field| field.name == name) {
-            let ty = schema.resolve(&name).map_or(FieldType::Json, |(ty, _)| ty);
+            let ty = schema.resolve(name).map_or(FieldType::Json, |(ty, _)| ty);
             fields.push(SortField {
-                name,
+                name: name.to_owned(),
                 order: Order::Asc,
                 ty,
             });
+        }
+    };
+    if let Some(plan) = aggregate {
+        for field in &plan.spec.group_by {
+            append_identity(&field.0);
+        }
+    } else {
+        for name in spec.identity {
+            append_identity(name);
         }
     }
     Ok(fields)
@@ -1072,15 +1307,55 @@ fn plan_aggregate(
     })
 }
 
-fn key_from_values(sort: &[SortField], values: &[Value]) -> RowKey {
-    RowKey {
-        values: sort
-            .iter()
-            .zip(values)
-            .map(|(field, value)| SortValue::from_value(value, field.ty))
-            .collect(),
-        orders: sort.iter().map(|field| field.order).collect(),
+fn key_from_values(
+    sort: &[SortField],
+    values: &[Value],
+    bytes: BytePolicy,
+) -> Result<RowKey, CollectionError> {
+    let mut charge = memory::add(
+        memory::slots::<SortValue>(sort.len())?,
+        memory::slots::<Order>(sort.len())?,
+    )?;
+    memory::ensure(charge, bytes.scratch_bytes, "ordering key containers")?;
+    let mut keys = memory::vector(sort.len(), bytes.scratch_bytes, "ordering key containers")?;
+    let mut orders = memory::vector(sort.len(), bytes.scratch_bytes, "ordering key containers")?;
+    for (field, value) in sort.iter().zip(values) {
+        let remaining = bytes.scratch_bytes - charge;
+        let key = SortValue::from_value(
+            value,
+            field.ty,
+            BytePolicy {
+                scratch_bytes: remaining,
+                ..bytes
+            },
+        )?;
+        charge = memory::add(charge, sort_value_bytes(&key))?;
+        memory::ensure(charge, bytes.scratch_bytes, "ordering keys")?;
+        keys.push(key);
+        orders.push(field.order);
     }
+    Ok(RowKey {
+        values: keys,
+        orders,
+    })
+}
+
+fn sort_value_bytes(value: &SortValue) -> usize {
+    match value {
+        SortValue::Text(v) | SortValue::Other(v) => v.capacity(),
+        SortValue::Number(_) => 256,
+        _ => 0,
+    }
+}
+
+fn row_key_bytes(key: &RowKey) -> Result<usize, CollectionError> {
+    let containers = memory::add(
+        memory::slots::<SortValue>(key.values.capacity())?,
+        memory::slots::<Order>(key.orders.capacity())?,
+    )?;
+    key.values.iter().try_fold(containers, |sum, value| {
+        memory::add(sum, sort_value_bytes(value))
+    })
 }
 
 fn field_value<'r>(row: &'r Map, name: &str) -> Option<&'r Value> {
@@ -1117,6 +1392,10 @@ fn insert_path(target: &mut Map, name: &str, value: Value) {
 }
 
 impl Prepared<'_> {
+    /// Remaining phase ceilings after the persistent plan and cursor are charged.
+    pub(crate) const fn runtime_bytes(&self) -> BytePolicy {
+        self.bytes
+    }
     /// Rows per page.
     pub(crate) fn limit(&self) -> usize {
         self.limit
@@ -1141,22 +1420,25 @@ impl Prepared<'_> {
         &self,
         items: Vec<Map>,
         resume: Option<(u64, u64, u64)>,
-    ) -> RowPage {
-        RowPage {
+    ) -> Result<RowPage, CollectionError> {
+        Ok(RowPage {
             items,
-            next_cursor: resume.map(|(height, index, movement)| {
-                cursor::encode(
-                    self.spec.tag,
-                    &self.digest,
-                    &[
-                        Value::from(height),
-                        Value::from(index),
-                        Value::from(movement),
-                    ],
-                )
-            }),
+            next_cursor: resume
+                .map(|(height, index, movement)| {
+                    cursor::encode(
+                        self.spec.tag,
+                        &self.digest,
+                        &[
+                            Value::from(height),
+                            Value::from(index),
+                            Value::from(movement),
+                        ],
+                        self.bytes.scratch_bytes,
+                    )
+                })
+                .transpose()?,
             total: None,
-        }
+        })
     }
 
     /// Inclusive `block_height` range implied by the filter's top-level
@@ -1175,12 +1457,29 @@ impl Prepared<'_> {
     /// Rejects sort values too large to fit in a cursor: issuing one would
     /// only make the next request fail.
     fn cursor_after(&self, row: &Map) -> Result<String, CollectionError> {
-        self.cursor_from_values(&self.key_values(row))
+        let values = self.key_values(row)?;
+        self.cursor_from_values(&values, memory::slots::<&Value>(values.capacity())?)
     }
 
     /// Encode a cursor from sort values, refusing ones too large to accept.
-    fn cursor_from_values(&self, values: &[Value]) -> Result<String, CollectionError> {
-        let token = cursor::encode(self.spec.tag, &self.digest, values);
+    fn cursor_from_values<T: norito::json::JsonSerialize>(
+        &self,
+        values: &[T],
+        retained_scratch_bytes: usize,
+    ) -> Result<String, CollectionError> {
+        // Count and refuse the borrowed key before the cursor encoder owns text
+        // or base64 storage; encoding cannot copy a large metadata graph.
+        memory::ensure(
+            retained_scratch_bytes,
+            self.bytes.scratch_bytes,
+            "retained cursor source",
+        )?;
+        let token = cursor::encode(
+            self.spec.tag,
+            &self.digest,
+            values,
+            self.bytes.scratch_bytes - retained_scratch_bytes,
+        )?;
         if token.len() > CURSOR_MAX_BYTES {
             return Err(CollectionError::new(
                 "invalid_sort",
@@ -1197,18 +1496,25 @@ impl Prepared<'_> {
 
     /// A page of a positioned read; `resume` is where the next page starts
     /// (exclusive), `None` once history is exhausted.
-    pub(crate) fn positioned_page(&self, items: Vec<Map>, resume: Option<Position>) -> RowPage {
-        RowPage {
+    pub(crate) fn positioned_page(
+        &self,
+        items: Vec<Map>,
+        resume: Option<Position>,
+    ) -> Result<RowPage, CollectionError> {
+        Ok(RowPage {
             items,
-            next_cursor: resume.map(|(height, index)| {
-                cursor::encode(
-                    self.spec.tag,
-                    &self.digest,
-                    &[Value::from(height), Value::from(index)],
-                )
-            }),
+            next_cursor: resume
+                .map(|(height, index)| {
+                    cursor::encode(
+                        self.spec.tag,
+                        &self.digest,
+                        &[Value::from(height), Value::from(index)],
+                        self.bytes.scratch_bytes,
+                    )
+                })
+                .transpose()?,
             total: None,
-        }
+        })
     }
 
     /// Whether `row` passes the filter.
@@ -1218,30 +1524,52 @@ impl Prepared<'_> {
             .is_none_or(|filter| filter.matches(row))
     }
 
-    fn key_values(&self, row: &Map) -> Vec<Value> {
-        self.sort
-            .iter()
-            .map(|field| {
-                field_value(row, &field.name)
-                    .cloned()
-                    .unwrap_or(Value::Null)
-            })
-            .collect()
+    fn key_values<'r>(&self, row: &'r Map) -> Result<Vec<&'r Value>, CollectionError> {
+        let mut values = memory::vector(
+            self.sort.len(),
+            self.bytes.scratch_bytes,
+            "cursor key references",
+        )?;
+        for field in &self.sort {
+            values.push(field_value(row, &field.name).unwrap_or(&Value::Null));
+        }
+        Ok(values)
     }
 
-    fn key_of(&self, row: &Map) -> RowKey {
-        RowKey {
-            values: self
-                .sort
-                .iter()
-                .map(|field| {
-                    field_value(row, &field.name).map_or(SortValue::Null, |value| {
-                        SortValue::from_value(value, field.ty)
-                    })
-                })
-                .collect(),
-            orders: self.sort.iter().map(|field| field.order).collect(),
+    fn key_of(&self, row: &Map) -> Result<RowKey, CollectionError> {
+        let mut charge = memory::add(
+            memory::slots::<SortValue>(self.sort.len())?,
+            memory::slots::<Order>(self.sort.len())?,
+        )?;
+        memory::ensure(charge, self.bytes.scratch_bytes, "ordering key containers")?;
+        let mut values = memory::vector(
+            self.sort.len(),
+            self.bytes.scratch_bytes,
+            "ordering key containers",
+        )?;
+        let mut orders = memory::vector(
+            self.sort.len(),
+            self.bytes.scratch_bytes,
+            "ordering key containers",
+        )?;
+        for field in &self.sort {
+            let remaining = self.bytes.scratch_bytes - charge;
+            let key = field_value(row, &field.name).map_or(Ok(SortValue::Null), |v| {
+                SortValue::from_value(
+                    v,
+                    field.ty,
+                    BytePolicy {
+                        scratch_bytes: remaining,
+                        ..self.bytes
+                    },
+                )
+            })?;
+            charge = memory::add(charge, sort_value_bytes(&key))?;
+            memory::ensure(charge, self.bytes.scratch_bytes, "ordering keys")?;
+            values.push(key);
+            orders.push(field.order);
         }
+        Ok(RowKey { values, orders })
     }
 
     fn after_cursor(&self, key: &RowKey) -> bool {
@@ -1283,7 +1611,9 @@ impl Prepared<'_> {
         I: IntoIterator<Item = (bool, Option<Map>)>,
     {
         debug_assert!(self.ordered.is_some(), "only identity-ordered reads stream");
-        let mut items = Vec::new();
+        let mut items =
+            memory::vector(self.limit, self.bytes.retained_bytes, "ordered page slots")?;
+        let mut retained = memory::slots::<Map>(items.capacity())?;
         let mut scanned = 0usize;
         let mut total = 0u64;
         let mut has_more = false;
@@ -1302,17 +1632,27 @@ impl Prepared<'_> {
                 ));
             }
             if let Some(row) = row {
-                let id = row
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        CollectionError::new("invalid_query", "query", "a row has no `id`")
-                    })?
-                    .to_owned();
+                let row_charge = memory::map_heap_bytes(&row)?;
+                memory::ensure(row_charge, self.bytes.row_bytes, "current row")?;
+                let id = row.get("id").and_then(Value::as_str).ok_or_else(|| {
+                    CollectionError::new("invalid_query", "query", "a row has no `id`")
+                })?;
+                memory::ensure(
+                    memory::add(last_examined.as_ref().map_or(0, String::capacity), id.len())?,
+                    self.bytes.scratch_bytes,
+                    "overlapping continuation keys",
+                )?;
+                let id = id.to_owned();
                 if self.matches(&row) {
                     total += 1;
                     if after_cursor {
                         if items.len() < self.limit {
+                            retained = memory::add(retained, row_charge)?;
+                            memory::ensure(
+                                retained,
+                                self.bytes.retained_bytes,
+                                "ordered page rows",
+                            )?;
                             items.push(row);
                         } else {
                             has_more = true;
@@ -1339,6 +1679,9 @@ impl Prepared<'_> {
             }
         }
         let resume_id = if has_more {
+            // The selected page already owns its final identity. Release the
+            // previous scan key before copying that identity for the cursor.
+            drop(last_examined);
             items
                 .last()
                 .and_then(|row| row.get("id"))
@@ -1350,7 +1693,10 @@ impl Prepared<'_> {
             None
         };
         let next_cursor = resume_id
-            .map(|id| self.cursor_from_values(&[Value::from(id)]))
+            .map(|id| {
+                let charge = id.capacity();
+                self.cursor_from_values(&[Value::from(id)], charge)
+            })
             .transpose()?;
         Ok(RowPage {
             items,
@@ -1397,11 +1743,19 @@ impl Prepared<'_> {
                     ),
                 ));
             }
+            if let Some(row) = row {
+                memory::ensure(
+                    memory::map_heap_bytes(row)?,
+                    self.bytes.row_bytes,
+                    "current row",
+                )?;
+            }
             Ok(row.as_ref().is_some_and(|row| self.matches(row)))
         };
         match &self.aggregate {
             None => {
-                let mut kept = BinaryHeap::with_capacity(self.limit.saturating_add(2));
+                let mut kept = self.heap()?;
+                let mut retained = memory::slots::<Entry>(kept.capacity())?;
                 let mut total = 0u64;
                 let mut seq = 0u64;
                 for row in rows {
@@ -1410,61 +1764,86 @@ impl Prepared<'_> {
                     }
                     if let Some(row) = row {
                         total += 1;
-                        self.keep(&mut kept, &mut seq, row);
+                        self.keep(&mut kept, &mut retained, &mut seq, row)?;
                     }
                 }
                 self.finish(kept, self.query.include_total.then_some(total))
             }
             Some(plan) => {
-                let mut groups = Vec::new();
-                let grouped = aggregate_rows(
+                let mut kept = self.heap()?;
+                let mut retained = memory::slots::<Entry>(kept.capacity())?;
+                let mut total = 0u64;
+                let mut seq = 0u64;
+                aggregate_rows(
                     plan,
                     rows.into_iter()
                         .map(|row| admit(&row).map(|keep| if keep { row } else { None })),
                     limits.max_groups,
-                    &mut groups,
-                );
-                grouped?;
-                let mut kept = BinaryHeap::with_capacity(self.limit.saturating_add(2));
-                let mut total = 0u64;
-                let mut seq = 0u64;
-                for row in groups {
-                    if plan
-                        .having
-                        .as_ref()
-                        .is_some_and(|having| !having.matches(&row))
-                    {
-                        continue;
-                    }
-                    total += 1;
-                    self.keep(&mut kept, &mut seq, row);
-                }
+                    self.bytes,
+                    |row| {
+                        if plan
+                            .having
+                            .as_ref()
+                            .is_some_and(|having| !having.matches(&row))
+                        {
+                            return Ok(());
+                        }
+                        total += 1;
+                        self.keep(&mut kept, &mut retained, &mut seq, row)
+                    },
+                )?;
                 self.finish(kept, self.query.include_total.then_some(total))
             }
         }
     }
 
-    fn keep(&self, kept: &mut BinaryHeap<Entry>, seq: &mut u64, row: Map) {
-        let key = self.key_of(&row);
+    fn heap(&self) -> Result<BinaryHeap<Entry>, CollectionError> {
+        Ok(BinaryHeap::from(memory::vector(
+            self.limit.saturating_add(2),
+            self.bytes.retained_bytes,
+            "page ordering slots",
+        )?))
+    }
+
+    fn keep(
+        &self,
+        kept: &mut BinaryHeap<Entry>,
+        retained: &mut usize,
+        seq: &mut u64,
+        row: Map,
+    ) -> Result<(), CollectionError> {
+        let key = self.key_of(&row)?;
         if !self.after_cursor(&key) {
-            return;
+            return Ok(());
         }
         if kept.len() > self.limit
             && kept
                 .peek()
                 .is_some_and(|largest| key.cmp(&largest.key) != Ordering::Less)
         {
-            return;
+            return Ok(());
         }
+        let charge = memory::add(memory::map_heap_bytes(&row)?, row_key_bytes(&key)?)?;
+        let next = memory::add(*retained, charge)?;
+        memory::ensure(
+            next,
+            self.bytes.retained_bytes,
+            "retained page and ordering keys",
+        )?;
+        *retained = next;
         kept.push(Entry {
             key,
             seq: *seq,
             row,
+            charge,
         });
         *seq += 1;
         if kept.len() > self.limit + 1 {
-            kept.pop();
+            if let Some(evicted) = kept.pop() {
+                *retained -= evicted.charge;
+            }
         }
+        Ok(())
     }
 
     fn finish(
@@ -1480,30 +1859,60 @@ impl Prepared<'_> {
             .flatten()
             .map(|last| self.cursor_after(&last.row))
             .transpose()?;
+        let cursor_charge = next_cursor.as_ref().map_or(0, String::capacity);
+        memory::ensure(
+            cursor_charge,
+            self.bytes.scratch_bytes,
+            "retained next cursor",
+        )?;
+        let mut items = memory::vector(
+            entries.len(),
+            self.bytes.scratch_bytes - cursor_charge,
+            "page output slots",
+        )?;
+        for entry in entries {
+            items.push(entry.row);
+        }
         Ok(RowPage {
-            items: entries.into_iter().map(|entry| entry.row).collect(),
+            items,
             next_cursor,
             total,
         })
     }
 
     /// Apply `select` to a page of full rows.
-    pub(crate) fn project(&self, mut page: RowPage) -> RowPage {
+    pub(crate) fn project(&self, mut page: RowPage) -> Result<RowPage, CollectionError> {
         if let Some(select) = &self.query.select {
-            page.items = page
-                .items
-                .into_iter()
-                .map(|row| {
-                    let mut projected = Map::new();
-                    for field in select {
-                        let value = field_value(&row, &field.0).cloned().unwrap_or(Value::Null);
-                        insert_path(&mut projected, &field.0, value);
-                    }
-                    projected
-                })
-                .collect();
+            let cursor_charge = page.next_cursor.as_ref().map_or(0, String::capacity);
+            memory::ensure(
+                cursor_charge,
+                self.bytes.scratch_bytes,
+                "retained next cursor",
+            )?;
+            let scratch_bytes = self.bytes.scratch_bytes - cursor_charge;
+            let mut projected_rows =
+                memory::vector(page.items.len(), scratch_bytes, "projection slots")?;
+            let mut retained = memory::slots::<Map>(projected_rows.capacity())?;
+            for row in page.items {
+                let mut row_charge = 0;
+                for field in select {
+                    row_charge = memory::add(
+                        row_charge,
+                        memory::path_copy_bytes(&field.0, field_value(&row, &field.0))?,
+                    )?;
+                }
+                retained = memory::add(retained, row_charge)?;
+                memory::ensure(retained, scratch_bytes, "projected page")?;
+                let mut projected = Map::new();
+                for field in select {
+                    let value = field_value(&row, &field.0).cloned().unwrap_or(Value::Null);
+                    insert_path(&mut projected, &field.0, value);
+                }
+                projected_rows.push(projected);
+            }
+            page.items = projected_rows;
         }
-        page
+        Ok(page)
     }
 }
 
@@ -1537,6 +1946,8 @@ impl MetricState {
         row: &Map,
         metric: &AggregateMetric,
         max_distinct: usize,
+        bytes: BytePolicy,
+        retained: &mut usize,
     ) -> Result<(), CollectionError> {
         let value = metric
             .field
@@ -1553,7 +1964,7 @@ impl MetricState {
             Self::Count(total) => *total += 1,
             Self::DistinctCount(values, ty) => {
                 if let Some(value) = value {
-                    let key = group_key_text(value, *ty);
+                    let key = group_key_text(value, *ty, bytes)?;
                     if !values.contains(&key) && values.len() >= max_distinct {
                         return Err(CollectionError::new(
                             "query_scan_limit_exceeded",
@@ -1564,7 +1975,24 @@ impl MetricState {
                             ),
                         ));
                     }
-                    values.insert(key);
+                    if !values.contains(&key) {
+                        let previous =
+                            norito::core::owned_btree_allocation_bytes::<String, ()>(values.len())
+                                .map_err(|_| memory::capacity("distinct set"))?;
+                        let next = norito::core::owned_btree_allocation_bytes::<String, ()>(
+                            values.len() + 1,
+                        )
+                        .map_err(|_| memory::capacity("distinct set"))?;
+                        let charge = memory::add(next - previous, key.capacity())?;
+                        let admitted = memory::add(*retained, charge)?;
+                        memory::ensure(
+                            admitted,
+                            bytes.retained_bytes,
+                            "aggregate distinct values",
+                        )?;
+                        *retained = admitted;
+                        values.insert(key);
+                    }
                 }
             }
             Self::Sum(total) => {
@@ -1602,12 +2030,20 @@ impl MetricState {
         Ok(())
     }
 
-    fn finish(self) -> Value {
-        match self {
+    fn finish(self, bytes: BytePolicy) -> Result<Value, CollectionError> {
+        let render = |value: Numeric| {
+            BytePolicy {
+                scratch_bytes: MAX_DECIMAL_TEXT_BYTES,
+                ..bytes
+            }
+            .display(&value)
+            .map(Value::from)
+        };
+        Ok(match self {
             Self::Count(total) => Value::from(total),
             Self::DistinctCount(values, _) => Value::from(values.len() as u64),
             Self::Sum(value) | Self::Min(value) | Self::Max(value) => {
-                value.map_or(Value::Null, |value| Value::from(value.to_string()))
+                value.map(render).transpose()?.unwrap_or(Value::Null)
             }
             Self::Avg { sum, count } => match sum {
                 Some(sum) if count > 0 => {
@@ -1617,63 +2053,99 @@ impl MetricState {
                         scale,
                         RoundingMode::TowardZero,
                     )
-                    .map_or(Value::Null, |avg| Value::from(avg.to_string()))
+                    .ok()
+                    .map(render)
+                    .transpose()?
+                    .unwrap_or(Value::Null)
                 }
                 _ => Value::Null,
             },
-        }
+        })
     }
 }
 
 /// Identity of a group or distinct value. It follows filter equality: on
 /// numeric and metadata fields a number and its decimal string are one value.
-fn group_key_text(value: &Value, ty: FieldType) -> String {
-    match value {
-        Value::Null => "null".to_owned(),
-        Value::Bool(flag) => flag.to_string(),
+fn numeric_may_allocate(value: &Value) -> bool {
+    value.is_number()
+        || value
+            .as_str()
+            .is_some_and(|text| text.len() <= MAX_DECIMAL_TEXT_BYTES && is_decimal_text(text))
+}
+
+fn group_key_text(
+    value: &Value,
+    ty: FieldType,
+    bytes: BytePolicy,
+) -> Result<String, CollectionError> {
+    let numeric_scratch = if numeric_may_allocate(value) { 256 } else { 0 };
+    memory::ensure(numeric_scratch, bytes.scratch_bytes, "numeric group key")?;
+    Ok(match value {
+        Value::Null | Value::Bool(_) => bytes.key(value)?,
         _ => match numeric(value) {
             Some(number)
                 if value.is_number() || matches!(ty, FieldType::Number | FieldType::Json) =>
             {
-                number.to_string()
+                BytePolicy {
+                    scratch_bytes: bytes.scratch_bytes - numeric_scratch,
+                    ..bytes
+                }
+                .display(&number)?
             }
-            _ => norito::json::to_json(value).unwrap_or_default(),
+            _ => bytes.key(value)?,
         },
-    }
+    })
+}
+
+struct Group {
+    values: Vec<(String, Value)>,
+    metrics: Vec<MetricState>,
 }
 
 fn aggregate_rows<I>(
     plan: &AggregatePlan,
     rows: I,
     max_groups: usize,
-    out: &mut Vec<Map>,
+    bytes: BytePolicy,
+    mut emit: impl FnMut(Map) -> Result<(), CollectionError>,
 ) -> Result<(), CollectionError>
 where
     I: Iterator<Item = Result<Option<Map>, CollectionError>>,
 {
-    struct Group {
-        values: Vec<(String, Value)>,
-        metrics: Vec<MetricState>,
-    }
     let mut groups: BTreeMap<Vec<String>, Group> = BTreeMap::new();
+    let mut retained = 0usize;
     for row in rows {
         let Some(row) = row? else {
             continue;
         };
-        let key: Vec<String> = plan
-            .spec
-            .group_by
-            .iter()
-            .map(|field| {
-                let ty = plan
-                    .outputs
-                    .get(&field.0)
-                    .copied()
-                    .unwrap_or(FieldType::Json);
-                field_value(&row, &field.0)
-                    .map_or_else(|| "null".to_owned(), |value| group_key_text(value, ty))
-            })
-            .collect();
+        let mut key = memory::vector(
+            plan.spec.group_by.len(),
+            bytes.scratch_bytes,
+            "group key slots",
+        )?;
+        let mut key_charge = memory::slots::<String>(key.capacity())?;
+        for field in &plan.spec.group_by {
+            let ty = plan
+                .outputs
+                .get(&field.0)
+                .copied()
+                .unwrap_or(FieldType::Json);
+            let remaining = bytes
+                .scratch_bytes
+                .checked_sub(key_charge)
+                .ok_or_else(|| memory::capacity("group keys"))?;
+            let key_part = group_key_text(
+                field_value(&row, &field.0).unwrap_or(&Value::Null),
+                ty,
+                BytePolicy {
+                    scratch_bytes: remaining,
+                    ..bytes
+                },
+            )?;
+            key_charge = memory::add(key_charge, key_part.capacity())?;
+            memory::ensure(key_charge, bytes.scratch_bytes, "group keys")?;
+            key.push(key_part);
+        }
         if !groups.contains_key(&key) && groups.len() >= max_groups {
             return Err(CollectionError::new(
                 "query_scan_limit_exceeded",
@@ -1681,39 +2153,96 @@ where
                 format!("the aggregate would produce more than {max_groups} groups; add a filter"),
             ));
         }
-        let group = groups.entry(key).or_insert_with(|| Group {
-            values: plan
-                .spec
-                .group_by
-                .iter()
-                .map(|field| {
-                    (
-                        field.0.clone(),
-                        field_value(&row, &field.0).cloned().unwrap_or(Value::Null),
-                    )
-                })
-                .collect(),
-            metrics: plan
-                .spec
-                .metrics
-                .iter()
-                .zip(&plan.metric_types)
-                .map(|(metric, ty)| MetricState::new(metric, *ty))
-                .collect(),
-        });
+        let new_group = if !groups.contains_key(&key) {
+            let previous =
+                norito::core::owned_btree_allocation_bytes::<Vec<String>, Group>(groups.len())
+                    .map_err(|_| memory::capacity("group tree"))?;
+            let next =
+                norito::core::owned_btree_allocation_bytes::<Vec<String>, Group>(groups.len() + 1)
+                    .map_err(|_| memory::capacity("group tree"))?;
+            let mut charge = memory::add(key_charge, next - previous)?;
+            charge = memory::add(
+                charge,
+                memory::slots::<(String, Value)>(plan.spec.group_by.len())?,
+            )?;
+            charge = memory::add(
+                charge,
+                memory::slots::<MetricState>(plan.spec.metrics.len())?,
+            )?;
+            // Numeric permits a 512-bit mantissa. Reserve its arithmetic result
+            // and replacement overlap for every metric before processing rows.
+            charge = memory::add(
+                charge,
+                plan.spec
+                    .metrics
+                    .len()
+                    .checked_mul(512)
+                    .ok_or_else(|| memory::capacity("metric state"))?,
+            )?;
+            for field in &plan.spec.group_by {
+                charge = memory::add(charge, field.0.len())?;
+                charge = memory::add(
+                    charge,
+                    field_value(&row, &field.0)
+                        .map(memory::value_heap_bytes)
+                        .transpose()?
+                        .unwrap_or(0),
+                )?;
+            }
+            let admitted = memory::add(retained, charge)?;
+            memory::ensure(admitted, bytes.retained_bytes, "aggregate groups")?;
+            let mut values = memory::vector(
+                plan.spec.group_by.len(),
+                bytes.retained_bytes,
+                "group value slots",
+            )?;
+            for field in &plan.spec.group_by {
+                values.push((
+                    field.0.clone(),
+                    field_value(&row, &field.0).cloned().unwrap_or(Value::Null),
+                ));
+            }
+            let mut metrics = memory::vector(
+                plan.spec.metrics.len(),
+                bytes.retained_bytes,
+                "metric slots",
+            )?;
+            for (metric, ty) in plan.spec.metrics.iter().zip(&plan.metric_types) {
+                metrics.push(MetricState::new(metric, *ty));
+            }
+            retained = admitted;
+            Some(Group { values, metrics })
+        } else {
+            None
+        };
+        let group = match groups.entry(key) {
+            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(new_group.expect("new group admitted above"))
+            }
+        };
         for (state, metric) in group.metrics.iter_mut().zip(&plan.spec.metrics) {
-            state.update(&row, metric, max_groups)?;
+            state.update(&row, metric, max_groups, bytes, &mut retained)?;
         }
     }
     for group in groups.into_values() {
+        let mut charge = 0;
+        for (name, value) in &group.values {
+            charge = memory::add(charge, memory::path_copy_bytes(name, Some(value))?)?;
+        }
+        for metric in &plan.spec.metrics {
+            charge = memory::add(charge, memory::path_copy_bytes(&metric.alias, None)?)?;
+            charge = memory::add(charge, MAX_DECIMAL_TEXT_BYTES)?;
+        }
+        memory::ensure(charge, bytes.row_bytes, "aggregate output row")?;
         let mut row = Map::new();
         for (name, value) in group.values {
             insert_path(&mut row, &name, value);
         }
         for (metric, state) in plan.spec.metrics.iter().zip(group.metrics) {
-            row.insert(metric.alias.clone(), state.finish());
+            row.insert(metric.alias.clone(), state.finish(bytes)?);
         }
-        out.push(row);
+        emit(row)?;
     }
     Ok(())
 }
@@ -1730,6 +2259,13 @@ mod tests {
         max_scanned_rows: 1000,
         ordered_page_scan_budget: 1000,
         max_groups: 100,
+        bytes: BytePolicy {
+            source_frame_bytes: 1 << 20,
+            row_bytes: 1 << 20,
+            retained_bytes: 1 << 20,
+            scratch_bytes: 1 << 20,
+            response_bytes: 1 << 20,
+        },
     };
 
     fn domain(id: &str, owner: &str, tier: u64) -> Map {
@@ -1763,7 +2299,233 @@ mod tests {
     fn run(query: &ListQuery) -> Result<RowPage, CollectionError> {
         let prepared = prepare(&DOMAINS, "", query, &LIMITS)?;
         let page = prepared.execute(domains(), &LIMITS)?;
-        Ok(prepared.project(page))
+        prepared.project(page)
+    }
+
+    #[test]
+    fn tiny_byte_policy_keeps_default_sort_digest_and_cursor_walk_functional() {
+        let mut limits = LIMITS;
+        limits.bytes = BytePolicy {
+            source_frame_bytes: 4096,
+            row_bytes: 4096,
+            retained_bytes: 4096,
+            scratch_bytes: 4096,
+            response_bytes: 4096,
+        };
+        let rows = [
+            domain("alpha", "alice", 1),
+            domain("bravo", "bob", 2),
+            domain("charlie", "alice", 3),
+        ];
+        let query = ListQuery::new().limit(1);
+        let mut current = query.clone();
+        let mut visited = Vec::new();
+        loop {
+            let prepared = prepare(&DOMAINS, "tiny-world", &current, &limits).unwrap();
+            let after = prepared.ordered_scan().unwrap().after;
+            let page = prepared
+                .execute_ordered(
+                    rows.iter().map(|row| {
+                        let id = row["id"].as_str().unwrap();
+                        (after.is_none_or(|after| id > after), Some(row.clone()))
+                    }),
+                    &limits,
+                )
+                .unwrap();
+            let page = prepared.project(page).unwrap();
+            visited.extend(ids(&page));
+            let next_cursor = page.next_cursor.clone();
+            let public = Page {
+                items: page.items,
+                next_cursor: page.next_cursor,
+                total: page.total,
+            };
+            norito::json::to_json_bounded_boxed(&public, limits.bytes.response_bytes).unwrap();
+            match next_cursor {
+                Some(cursor) => current = query.clone().cursor(cursor),
+                None => break,
+            }
+        }
+        assert_eq!(visited, ["alpha", "bravo", "charlie"]);
+    }
+
+    #[test]
+    fn compiled_plan_and_retained_cursor_reduce_source_and_runtime_scratch() {
+        let mut limits = LIMITS;
+        limits.bytes = BytePolicy {
+            source_frame_bytes: 4096,
+            row_bytes: 4096,
+            retained_bytes: 4096,
+            scratch_bytes: 4096,
+            response_bytes: 4096,
+        };
+        let query = ListQuery::new()
+            .filter(field("owned_by").eq("alice"))
+            .limit(1);
+        let prepared = prepare(&DOMAINS, "", &query, &limits).unwrap();
+        let plan_charge = admit_query_plan(&DOMAINS, &query, limits.bytes).unwrap();
+        assert_eq!(prepared.runtime_bytes().scratch_bytes, 4096 - plan_charge);
+        let cursor = prepared.cursor_after(&domain("alpha", "alice", 1)).unwrap();
+        let resumed_query = query.clone().cursor(cursor);
+        let resumed = prepare(&DOMAINS, "", &resumed_query, &limits).unwrap();
+        let retained = memory::add(
+            admit_query_plan(&DOMAINS, &resumed_query, limits.bytes).unwrap(),
+            memory::add(
+                row_key_bytes(resumed.after.as_ref().unwrap()).unwrap(),
+                resumed.after_id.as_ref().unwrap().capacity(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(resumed.runtime_bytes().scratch_bytes, 4096 - retained);
+        let text = "x".repeat(resumed.runtime_bytes().scratch_bytes);
+        let row = domain(&text, "alice", 1);
+        assert!(
+            resumed.key_of(&row).is_err(),
+            "container bytes must coexist with the retained plan and cursor"
+        );
+        assert!(SortValue::from_value(&Value::from(text), FieldType::String, limits.bytes).is_ok());
+    }
+
+    #[test]
+    fn ordered_continuation_copies_and_next_cursor_share_remaining_scratch() {
+        let query = ListQuery::new().limit(3);
+        let mut prepared = prepare(&DOMAINS, "", &query, &LIMITS).unwrap();
+        prepared.bytes.scratch_bytes = 1500;
+        let rows = [
+            domain(&"a".repeat(1000), "alice", 1),
+            domain(&"b".repeat(1000), "alice", 2),
+        ];
+        let error = prepared
+            .execute_ordered(rows.into_iter().map(|row| (true, Some(row))), &LIMITS)
+            .unwrap_err();
+        assert_eq!(error.code, "query_capacity_exceeded");
+        assert!(error.message.contains("overlapping continuation keys"));
+        let query = ListQuery::new().select(["id"]);
+        let mut prepared = prepare(&DOMAINS, "", &query, &LIMITS).unwrap();
+        let row = domain("alpha", "alice", 1);
+        let token = prepared.cursor_after(&row).unwrap();
+        let projected_charge = memory::add(
+            memory::slots::<Map>(1).unwrap(),
+            memory::path_copy_bytes("id", row.get("id")).unwrap(),
+        )
+        .unwrap();
+        prepared.bytes.scratch_bytes = projected_charge + token.capacity() - 1;
+        assert!(
+            prepared
+                .project(RowPage {
+                    items: vec![row.clone()],
+                    next_cursor: None,
+                    total: None,
+                })
+                .is_ok()
+        );
+        let page = RowPage {
+            items: vec![row],
+            next_cursor: Some(token),
+            total: None,
+        };
+        assert_eq!(
+            prepared.project(page).unwrap_err().code,
+            "query_capacity_exceeded"
+        );
+    }
+
+    #[test]
+    fn ordered_page_checks_the_complete_retained_graph_at_exact_boundary() {
+        let rows = vec![
+            domain("alpha", "alice", 1),
+            domain("bravo", "bob", 2),
+            domain("charlie", "alice", 3),
+        ];
+        let charge = memory::slots::<Map>(2).unwrap()
+            + memory::map_heap_bytes(&rows[0]).unwrap()
+            + memory::map_heap_bytes(&rows[1]).unwrap();
+        let query = ListQuery::new();
+        let mut limits = LIMITS;
+        limits.bytes.retained_bytes = charge;
+        let prepared = prepare(&DOMAINS, "", &query, &limits).unwrap();
+        let page = prepared
+            .execute_ordered(
+                rows.clone().into_iter().map(|row| (true, Some(row))),
+                &limits,
+            )
+            .unwrap();
+        assert_eq!(ids(&page), ["alpha", "bravo"]);
+        assert!(page.next_cursor.is_some());
+        limits.bytes.retained_bytes -= 1;
+        let prepared = prepare(&DOMAINS, "", &query, &limits).unwrap();
+        assert_eq!(
+            prepared
+                .execute_ordered(rows.into_iter().map(|row| (true, Some(row))), &limits)
+                .unwrap_err()
+                .code,
+            "query_capacity_exceeded"
+        );
+    }
+
+    #[test]
+    fn custom_sort_cannot_retain_unadmitted_row_and_key_graphs() {
+        let query = ListQuery::new()
+            .limit(1)
+            .sort_by(SortKey::asc("metadata.tier"));
+        let mut limits = LIMITS;
+        let prepared = prepare(&DOMAINS, "", &query, &limits).unwrap();
+        let row = domain("alpha", "alice", 1);
+        let single = memory::map_heap_bytes(&row).unwrap()
+            + row_key_bytes(&prepared.key_of(&row).unwrap()).unwrap();
+        limits.bytes.retained_bytes = memory::slots::<Entry>(3).unwrap() + single;
+        let prepared = prepare(&DOMAINS, "", &query, &limits).unwrap();
+        assert_eq!(
+            prepared
+                .execute(vec![row, domain("bravo", "bob", 2)], &limits)
+                .unwrap_err()
+                .code,
+            "query_capacity_exceeded"
+        );
+    }
+
+    #[test]
+    fn overlapping_projection_is_admitted_before_copying_nested_metadata() {
+        let query = ListQuery::new().select(["metadata", "metadata.payload"]);
+        let mut prepared = prepare(&DOMAINS, "", &query, &LIMITS).unwrap();
+        let row = domain_with_metadata("alpha", norito::json!({"payload": ("x".repeat(2048))}));
+        prepared.bytes.scratch_bytes = 3 * 1024;
+        let page = RowPage {
+            items: vec![row],
+            next_cursor: None,
+            total: None,
+        };
+        assert_eq!(
+            prepared.project(page).unwrap_err().code,
+            "query_capacity_exceeded"
+        );
+    }
+
+    #[test]
+    fn aggregate_distinct_set_has_a_byte_bound_in_addition_to_its_count_bound() {
+        let query = ListQuery::new().aggregate(AggregateSpec {
+            group_by: Vec::new(),
+            metrics: vec![AggregateMetric {
+                alias: "owners".to_owned(),
+                r#fn: AggregateFn::DistinctCount,
+                field: Some(FieldPath("metadata.payload".to_owned())),
+            }],
+            having: None,
+        });
+        let mut limits = LIMITS;
+        limits.bytes.retained_bytes = 16 * 1024;
+        let prepared = prepare(&DOMAINS, "", &query, &limits).unwrap();
+        let rows = (0..20).map(|index| {
+            domain_with_metadata(
+                "alpha",
+                norito::json!({"payload": (format!("{index}{}", "x".repeat(1024)))}),
+            )
+        });
+        assert_eq!(
+            prepared.execute(rows, &limits).unwrap_err().code,
+            "query_capacity_exceeded"
+        );
     }
 
     #[test]
@@ -1962,7 +2724,7 @@ mod tests {
                 continue;
             }
             if visited == budget {
-                return prepared.positioned_page(items, last_visited);
+                return prepared.positioned_page(items, last_visited).unwrap();
             }
             visited += 1;
             last_visited = Some(position);
@@ -1970,12 +2732,12 @@ mod tests {
                 continue;
             }
             if items.len() == prepared.limit() {
-                return prepared.positioned_page(items, last_kept);
+                return prepared.positioned_page(items, last_kept).unwrap();
             }
             items.push(row.clone());
             last_kept = Some(position);
         }
-        prepared.positioned_page(items, None)
+        prepared.positioned_page(items, None).unwrap()
     }
 
     #[test]
@@ -2035,7 +2797,9 @@ mod tests {
             &LIMITS,
         )
         .unwrap();
-        let page = prepared.movement_page(Vec::new(), Some((70, 2, 8)));
+        let page = prepared
+            .movement_page(Vec::new(), Some((70, 2, 8)))
+            .unwrap();
         let next = query.clone().cursor(page.next_cursor.unwrap());
         let resumed = prepare(
             &super::super::specs::ACCOUNT_HISTORY,
@@ -2046,7 +2810,10 @@ mod tests {
         .unwrap();
         assert_eq!(resumed.resume_position(), Some((70, 2)));
         assert_eq!(resumed.resume_movement_position(), Some((70, 2, 8)));
-        assert_eq!(resumed.movement_page(Vec::new(), None).next_cursor, None);
+        assert_eq!(
+            resumed.movement_page(Vec::new(), None).unwrap().next_cursor,
+            None
+        );
         assert_eq!(
             prepare(&super::super::specs::ACCOUNT_HISTORY, "bob", &next, &LIMITS)
                 .err()
@@ -2064,6 +2831,7 @@ mod tests {
         let zero_height = query.clone().cursor(
             prepared
                 .movement_page(Vec::new(), Some((0, 2, 8)))
+                .unwrap()
                 .next_cursor
                 .unwrap(),
         );
@@ -2140,7 +2908,8 @@ mod tests {
         assert_eq!(err.map(|err| err.code), Some("invalid_cursor"));
         let page = prepare(&ACCOUNT_TRANSACTIONS, "", &ListQuery::new(), &LIMITS)
             .unwrap()
-            .positioned_page(Vec::new(), Some((7, 1)));
+            .positioned_page(Vec::new(), Some((7, 1)))
+            .unwrap();
         let err = prepare(
             &DOMAINS,
             "",

@@ -205,7 +205,7 @@ fn poisoned_publication_is_a_local_failure_instead_of_endless_busy_retry() {
 #[test]
 fn busy_identity_wait_is_signaled_after_the_actual_metadata_guard_releases() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 

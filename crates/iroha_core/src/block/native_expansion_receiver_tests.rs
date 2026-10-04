@@ -39,7 +39,8 @@ fn native_validation_retains_original_proposal_when_expansion_generation_advance
     let generation = original_state.state_view_generation();
     let expansion = expand(&original_state, &proposal, &NoLanes, Duration::ZERO).unwrap();
     fixture.chain.commit_at(3_000, Vec::new());
-    assert_ne!(original_state.state_view_generation(), generation);
+    let observed_generation = original_state.state_view_generation();
+    assert_ne!(observed_generation, generation);
     let mut events = Vec::new();
     let (retained, error) = fixture
         .validate_expanded(proposal, &header, &bytes, expansion)
@@ -48,7 +49,10 @@ fn native_validation_retains_original_proposal_when_expansion_generation_advance
         .unwrap();
     assert!(matches!(
         *error,
-        BlockValidationError::LocalStorageRecoveryRequired { .. }
+        BlockValidationError::NativeSourceChanged {
+            authenticated_generation,
+            observed_generation: actual_generation,
+        } if authenticated_generation == generation && actual_generation == observed_generation
     ));
     assert_eq!(retained.encode_wire().unwrap(), bytes);
     assert!(

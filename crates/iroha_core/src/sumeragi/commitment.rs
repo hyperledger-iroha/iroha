@@ -173,14 +173,14 @@ pub fn execution_commitment(
 /// See [`CommitmentError`].
 #[allow(unsafe_code)]
 pub(crate) fn execution_result(
-    witness: &ExecWitness,
+    witness: &mut crate::state::CapturedExecWitness,
     executed: &SignedBlock,
     transition: &WorldStateTransition,
     inputs: RetainedPayload<NativeExecutionInputs>,
     native_lanes: NativeLaneStateProof,
 ) -> Result<RetainedPayload<ExecutionResultCommitment>, CommitmentError> {
     let height = executed.header().height().get();
-    let execution = execution_commitment(witness, executed, transition)?;
+    let execution = witness.prepare_native_execution(executed, transition)?;
     // SAFETY: only the two original canonical fields move, without clone, growth, sharing or
     // extraction. The new height, slim execution commitment and fixed context proof contain
     // no owned allocations.

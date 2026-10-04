@@ -2911,8 +2911,17 @@ fn collection_tools_advertise_the_shared_collection_query_controls() {
         for (control, property) in &controls {
             assert_eq!(&properties[control], property, "{name} `{control}`");
         }
-        let (effect, method, _) = tool.route_backing().expect("route-backed collection tool");
+        let (effect, method, path) = tool.route_backing().expect("route-backed collection tool");
         assert_eq!(effect, ToolEffect::Read, "{name}");
+        let route = route_catalog::CATALOGED_ROUTES
+            .iter()
+            .find(|route| route.path() == path && Some(route.method()) == catalog_method(method))
+            .unwrap_or_else(|| panic!("collection tool `{name}` has a catalog descriptor"));
+        assert_eq!(
+            route.effect(),
+            RouteEffect::ReadOnly,
+            "{name} catalog effect"
+        );
         let expected_method = match shape {
             CollectionQueryShape::Get | CollectionQueryShape::HistoryGet => Method::GET,
             CollectionQueryShape::Post | CollectionQueryShape::HistoryPost => Method::POST,

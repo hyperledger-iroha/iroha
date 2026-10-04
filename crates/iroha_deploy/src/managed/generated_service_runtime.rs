@@ -21,6 +21,7 @@ use std::{
     sync::Arc,
     time::Instant,
 };
+use zeroize::Zeroizing;
 mod carriers;
 mod components;
 mod config;
@@ -443,7 +444,7 @@ impl GeneratedServiceRuntime {
     fn publication_intent(
         &self,
         selection: &RuntimeSelection,
-        originals: &[impl AsRef<[u8]>],
+        originals: &[Zeroizing<Vec<u8>>],
         components: Option<[[u8; 32]; 3]>,
         required: Option<&RequiredTransactions>,
     ) -> Result<Intent> {
@@ -458,7 +459,7 @@ impl GeneratedServiceRuntime {
             network: self.authority.config.network_id,
             genesis: *self.authority.genesis.genesis.hash().as_ref(),
             originals: std::array::from_fn(|index| {
-                *blake3::hash(originals[index].as_ref()).as_bytes()
+                *blake3::hash(originals[index].as_slice()).as_bytes()
             }),
             policies: *Hash::new(encode(&selection.policies, MAX_POLICY_BYTES)?).as_ref(),
             providers: identities

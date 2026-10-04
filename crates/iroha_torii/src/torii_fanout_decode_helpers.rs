@@ -702,6 +702,7 @@ struct QueryMemoryGeometry {
 }
 fn query_memory_geometry(
     aggregate_bytes: usize,
+    max_working_set_bytes: usize,
     max_content_bytes: usize,
     max_concurrent_fanouts: usize,
 ) -> Option<QueryMemoryGeometry> {
@@ -711,9 +712,10 @@ fn query_memory_geometry(
     // every simultaneously live representation of the admitted body. A small
     // listener limit therefore reduces the slot weight (and can increase safe
     // concurrency); it must not make the slot smaller than its fixed state.
-    // When the configured body is larger than the aggregate pool can cover,
-    // the phase-derived query-body limit shrinks while the general Torii body
-    // limit remains unchanged.
+    // The per-query ceiling is independent of aggregate concurrency. When the
+    // configured body exceeds that ceiling or the pool, the phase-derived
+    // query-body limit shrinks while the general Torii body limit remains
+    // unchanged. Raising aggregate capacity never raises one request's limits.
     // Even a one-byte ingress limit needs the canonical encoder's minimum
     // allocation and its retained candidate overhead. Only the ingress cap
     // follows max_content_bytes; a complete response phase cannot shrink below
@@ -726,8 +728,11 @@ fn query_memory_geometry(
         .max(minimum_candidate_phase_bytes)
         .checked_mul(QUERY_FANOUT_PREBODY_UNITS)
         .and_then(|bytes| bytes.checked_add(query_fanout_fixed_overhead_bytes()?));
+    let available_working_set_bytes = fanout_pool_bytes.min(max_working_set_bytes);
     let fanout_working_set_bytes = desired_fanout_working_set
-        .map_or(fanout_pool_bytes, |desired| desired.min(fanout_pool_bytes));
+        .map_or(available_working_set_bytes, |desired| {
+            desired.min(available_working_set_bytes)
+        });
     let provisional_fanout =
         QueryFanoutMemoryEnvelope::for_body_admission(fanout_working_set_bytes).ok()?;
     let ingress_slots = NonZeroUsize::new(QUERY_INGRESS_SLOT_COUNT)?;
@@ -1138,7 +1143,9 @@ fn try_acquire_query_fanout_memory(
     app: &SharedAppState,
 ) -> Result<QueryFanoutMemoryReservation, Response> {
     #[cfg(feature = "app_api")]
-    if let Some(reservation) = current_app_routed_read_fanout_reservation() {
+    if let Some(reservation) = current_collection_read_memory_reservation(app)
+        .or_else(|| current_app_routed_read_fanout_reservation(app))
+    {
         return Ok(reservation);
     }
     try_acquire_new_query_fanout_memory(app)
@@ -1146,6 +1153,8 @@ fn try_acquire_query_fanout_memory(
 fn try_acquire_new_query_fanout_memory(
     app: &SharedAppState,
 ) -> Result<QueryFanoutMemoryReservation, Response> {
+    let envelope =
+        QueryFanoutMemoryEnvelope::for_body_admission(app.query_fanout_working_set_bytes)?;
     app.query_fanout_inflight
         .try_acquire_parts([
             u64::try_from(app.query_fanout_working_set_bytes).map_err(|_| {
@@ -1156,7 +1165,13 @@ fn try_acquire_new_query_fanout_memory(
                 )
             })?,
         ])
-        .map(QueryFanoutMemoryReservation::new)
+        .map(|permit| {
+            QueryFanoutMemoryReservation::from_admitted_fanout(
+                permit,
+                envelope,
+                app.query_fanout_inflight.generation(),
+            )
+        })
         .ok_or_else(|| {
             torii_proxy_error_response(
                 StatusCode::TOO_MANY_REQUESTS,
@@ -1204,7 +1219,11 @@ async fn acquire_app_routed_read_http_memory(
     .await
     .map_err(|_| unavailable())?
     .map_err(|_| unavailable())?;
-    Ok(QueryFanoutMemoryReservation::new(acquired))
+    Ok(QueryFanoutMemoryReservation::from_admitted_fanout(
+        acquired,
+        QueryFanoutMemoryEnvelope::for_body_admission(app.query_fanout_working_set_bytes)?,
+        app.query_fanout_inflight.generation(),
+    ))
 }
 fn hold_query_fanout_memory_in_response_body(
     response: Response,
@@ -1218,12 +1237,62 @@ fn hold_query_fanout_memory_in_response_body(
 struct QueryFanoutMemoryReservation {
     /// Held only so the fanout permit is released when the last clone drops.
     _permit: Arc<tokio::sync::OwnedSemaphorePermit>,
+    /// Only acquisition from the query pool grants routed-read admission.
+    /// Other native response owners use this token solely for body custody.
+    admission: Option<AdmittedQueryFanoutMemory>,
 }
+
+#[derive(Clone, Copy)]
+struct AdmittedQueryFanoutMemory {
+    /// Exact admitted geometry; consumers must not reconstruct larger limits.
+    envelope: QueryFanoutMemoryEnvelope,
+    /// Prevent task-local ownership from being borrowed by another app's pool.
+    pool_generation: u64,
+}
+
 impl QueryFanoutMemoryReservation {
+    /// Retain response custody without granting query-pool admission.
     fn new(permit: tokio::sync::OwnedSemaphorePermit) -> Self {
         Self {
             _permit: Arc::new(permit),
+            admission: None,
         }
+    }
+
+    fn from_admitted_fanout(
+        permit: tokio::sync::OwnedSemaphorePermit,
+        envelope: QueryFanoutMemoryEnvelope,
+        pool_generation: u64,
+    ) -> Self {
+        Self {
+            _permit: Arc::new(permit),
+            admission: Some(AdmittedQueryFanoutMemory {
+                envelope,
+                pool_generation,
+            }),
+        }
+    }
+
+    fn belongs_to(&self, app: &SharedAppState) -> bool {
+        self.admission.is_some_and(|admission| {
+            admission.pool_generation == app.query_fanout_inflight.generation()
+        })
+    }
+
+    fn admitted_envelope(
+        &self,
+        app: &SharedAppState,
+    ) -> Result<QueryFanoutMemoryEnvelope, Response> {
+        self.admission
+            .filter(|admission| admission.pool_generation == app.query_fanout_inflight.generation())
+            .map(|admission| admission.envelope)
+            .ok_or_else(|| {
+                torii_proxy_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_server_error",
+                    "The routed-read memory owner has no matching admission geometry.",
+                )
+            })
     }
 }
 /// Cloneable response-only owner for a move-only ordinary-query lease.

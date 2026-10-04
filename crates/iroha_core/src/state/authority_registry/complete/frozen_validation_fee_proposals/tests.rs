@@ -333,7 +333,9 @@ fn original_pool_refusal_retry_and_final_snapshot_reclamation_preserve_bytes_and
         .world
         .validation_fee_proposal_index
         .publication_identity();
-    let pointer = std::ptr::from_ref(block.world.governance_proposals.get(&[0; 32]).unwrap());
+    let pointer = std::ptr::from_ref::<GovernanceProposalRecord>(
+        block.world.governance_proposals.get(&[0; 32]).unwrap(),
+    );
     freeze(&mut block);
     let baseline = budget.reserved_bytes();
     assert_eq!(
@@ -383,7 +385,9 @@ fn original_pool_refusal_retry_and_final_snapshot_reclamation_preserve_bytes_and
         index_identity
     );
     assert_eq!(
-        std::ptr::from_ref(block.world.governance_proposals.get(&[0; 32]).unwrap()),
+        std::ptr::from_ref::<GovernanceProposalRecord>(
+            block.world.governance_proposals.get(&[0; 32]).unwrap()
+        ),
         pointer
     );
     let retained = snapshot.clone();

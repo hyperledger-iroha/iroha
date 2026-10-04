@@ -17,7 +17,7 @@ use iroha_core::{
         begin_stream_token_gateway_check_v1,
     },
     smartcontracts::ValidSingularQuery,
-    state::{StateReadOnly, WorldReadOnly},
+    state::{StorageReadOnly as _, WorldReadOnly},
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{

@@ -187,10 +187,10 @@ STAGES = (
         "taira::tests::doctor_mock_required_tool_missing_reports_failure",
         "taira::tests::doctor_readiness_requires_exact_plain_text_ready_in_both_scopes",
     )),
-    ("complete effective account permission reads", (
-        "tests::account_permission_list_reads_complete_effective_fanout_before_global_pagination",
-        "tests::account_permission_list_rejects_partial_or_non_effective_pages_without_output",
-        "tests::account_permission_list_rejects_zero_pagination_before_http",
+    ("complete account permission cursor reads", (
+        "tests::account_permission_list_uses_shared_cursor_pages",
+        "tests::account_permission_list_rejects_failed_or_non_effective_pages_without_output",
+        "tests::account_permission_list_rejects_zero_limit_before_http",
         "tests::account_permission_list_propagates_server_page_cap_rejection",
     )),
     ("public account key conversion", (
@@ -612,6 +612,7 @@ DAEMON_SNAPSHOT_STAGES = (("snapshot refusal and native identity classification"
     "snapshot_restore_policy::tests::native_identity_mismatch_halts_but_execution_replay_requires_strict_mode",
     "snapshot_restore_policy::tests::snapshot_local_refusal_never_authorizes_empty_state_fallback",
     "snapshot_restore_policy::tests::classification_borrows_raw_failure_and_preserves_original_release_observation",
+    "snapshot_restore_policy::tests::snapshot_busy_reader_preserves_actual_publication_wait_without_empty_fallback",
 )),)
 DAEMON_STAGES += DAEMON_SNAPSHOT_STAGES
 
@@ -677,8 +678,9 @@ TORII_UNIT_STAGES += (("current prepared and public transaction admission", (
     "tests_runtime_handlers::prepared_current_admission_rejects_actual_multiroute_payload_before_custody",
 )),)
 
-TORII_UNIT_STAGES += (("signed account permission query preservation", (
-    "torii_routed_read_tests::account_permissions_handler_query_preserves_signed_pagination_and_count_mode",
+TORII_UNIT_STAGES += (("canonical account permission query preservation", (
+    "torii_routed_read_tests::permission_collection_counts_deduplicated_grants_once_across_routes",
+    "torii_routed_read_tests::permission_collection_rejects_retired_or_missing_continuation_evidence",
 )),)
 
 DISPATCHER_TRANSITION_STAGES = (("reversible dispatcher upgrade and native plan preparation", (
@@ -1009,8 +1011,8 @@ NETWORK_OBSERVATION_STAGES = (("signed genesis paid authority and public failure
 )), ("inherited native deployment deadline", (
     "dataspace_deploy_cli::remaining_cli_budget_keeps_original_deadline_and_never_rounds_up",
 )), ("complete bounded effective permission observation", (
-    "runtime_catalog_transition::permission_page_tests::permission_page_requires_complete_short_fanout",
-    "runtime_catalog_transition::permission_page_tests::permission_page_rejects_saturation_and_duplicate_items",
+    "runtime_catalog_transition::permission_page_tests::permission_page_requires_cursor_exhaustion",
+    "runtime_catalog_transition::permission_page_tests::permission_page_accepts_exhausted_limit_and_rejects_oversized_or_duplicate_items",
     "runtime_catalog_transition::permission_page_tests::permission_page_preserves_failure_context_and_rejects_invalid_metadata",
 )), ("bounded validator status observation", (
     "status_observation_tests::status_observation_retries_typed_busy_json_and_norito_with_remaining_budget",
@@ -1443,7 +1445,7 @@ TORII_UNIT_STAGES += (("actual current-node public finality boundary", (
     'openapi::tests::compact_finality_app_contracts::generated_spec_documents_exact_current_sumeragi_status',
 )),)
 DAEMON_STAGES += (("current certificate beacon admission before custody", (
-    'beacon_bootstrap::tests::current_phase_pipe_accepts_real_work_and_rejects_replay',
+    'beacon_bootstrap::seat_attempt::finality::tests::current_phase_pipe_accepts_real_work_and_rejects_replay',
 )),)
 
 # Production beacon setup must fail before unrelated tests and network fixtures.
@@ -1475,13 +1477,15 @@ DAEMON_BEACON_STAGES = (('native beacon bootstrap, broker and consumed credentia
     'taira_runtime_signer::tests::descriptor_loader_accepts_only_canonical_owner_only_ed25519',
     'beacon_bootstrap::tests::each_seat_credential_binds_exact_public_session_and_private_share',
     'beacon_bootstrap::tests::genesis_session_rejects_mutated_identity_under_same_attempt',
-    'beacon_bootstrap::tests::rotation_phase_pipe_rejects_truncated_oversized_and_noncanonical_proofs',
-    'beacon_bootstrap::tests::one_shot_attempt_directory_cannot_reroll_after_restart',
+    'beacon_bootstrap::seat_attempt::finality::tests::rotation_phase_pipe_rejects_truncated_oversized_and_noncanonical_proofs',
+    'beacon_bootstrap::seat_attempt::claim::tests::one_shot_attempt_directory_cannot_reroll_after_restart',
     'beacon_bootstrap::tests::rotation_config_descriptor_uses_only_exact_native_consensus_identity',
-    'beacon_bootstrap::tests::bounded_phase_reader_consumes_exact_frame_without_advancing_next_frame',
+    'beacon_bootstrap::seat_attempt::input::tests::bounded_phase_reader_consumes_exact_frame_without_advancing_next_frame',
     'beacon_bootstrap::tests::rotation_seat_parser_requires_independent_pins_and_private_identity',
     'beacon_bootstrap::tests::genesis_seat_parser_requires_signed_anchor_and_one_private_identity',
     'beacon_bootstrap::tests::genesis_public_assembly_requires_exact_proof_and_provider_inputs',
+    'beacon_bootstrap::tests::every_bootstrap_command_requires_one_explicit_positive_credential_limit',
+    'beacon_bootstrap::tests::bootstrap_session_refusal_retains_operation_source_and_last_credential_reader',
 )), )
 TORII_BEACON_STAGES = (('current consensus readiness leaves setup ingress open', (
     'tests_runtime_handlers::readyz_tracks_live_consensus_without_gating_beacon_setup',

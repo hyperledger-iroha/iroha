@@ -211,6 +211,23 @@ SOURCE_SEAL_RUSTC_BINARY=""
 SOURCE_SEAL_RUSTDOC_BINARY=""
 SOURCE_SEAL_RUSTUP_BINARY=""
 SOURCE_SEAL_CARGO_HOME="$CHECK_USER_HOME_DIR/.cargo"
+SOURCE_SEAL_CARGO_INVOCATION_DIR="$ROOT_DIR"
+if [[ "${MOBILE_SDK_CARGO_INVOCATION_DIR+x}" == "x" \
+    && "$MOBILE_SDK_CARGO_INVOCATION_DIR" != "$ROOT_DIR" ]]; then
+  SOURCE_SEAL_CARGO_INVOCATION_DIR="$(run_isolated_checker_python \
+    "$ROOT_DIR/scripts/norito_bridge_local_integration.py" --root "$ROOT_DIR" \
+    --path "$MOBILE_SDK_CARGO_INVOCATION_DIR" --role cargo-invocation)" || exit 69
+fi
+if [[ "${MOBILE_SDK_CARGO_HOME+x}" == "x" ]]; then
+  cargo_home_scope=()
+  if [[ "$LOCAL_INTEGRATION" == "1" ]]; then
+    cargo_home_scope=(--local-integration)
+  fi
+  SOURCE_SEAL_CARGO_HOME="$(run_isolated_checker_python \
+    "$ROOT_DIR/scripts/norito_bridge_local_integration.py" --root "$ROOT_DIR" \
+    --path "$MOBILE_SDK_CARGO_HOME" --role cargo-home \
+    "${cargo_home_scope[@]+"${cargo_home_scope[@]}"}")" || exit 69
+fi
 SOURCE_SEAL_RUSTUP_HOME="$CHECK_USER_HOME_DIR/.rustup"
 SOURCE_SEAL_CARGO_TARGET_DIR=""
 SOURCE_SEAL_DEVELOPER_DIR=""
@@ -386,6 +403,7 @@ run_source_authenticated_python() {
     LC_ALL=C.UTF-8 \
     NORITO_BRIDGE_SEAL_HOME="$CHECK_USER_HOME_DIR" \
     NORITO_BRIDGE_SEAL_CARGO_HOME="$SOURCE_SEAL_CARGO_HOME" \
+    NORITO_BRIDGE_SEAL_CARGO_INVOCATION_DIR="$SOURCE_SEAL_CARGO_INVOCATION_DIR" \
     NORITO_BRIDGE_SEAL_RUSTUP_HOME="$SOURCE_SEAL_RUSTUP_HOME" \
     NORITO_BRIDGE_SEAL_TMPDIR="$CHECK_TMPDIR" \
     NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR="$SOURCE_SEAL_CARGO_TARGET_DIR" \

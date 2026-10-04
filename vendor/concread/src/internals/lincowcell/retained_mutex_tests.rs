@@ -199,7 +199,7 @@ fn successful_retained_publish_then_outer_unwind_preserves_complete_generation()
 #[test]
 fn retained_reader_wait_tracks_actual_release_without_fabricated_poison() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 
@@ -266,7 +266,7 @@ fn retained_busy_and_stale_refusals_return_same_original_work() {
 #[test]
 fn deferred_observed_notice_freezes_actual_poison_after_original_unlock() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 
@@ -315,7 +315,7 @@ fn deferred_observed_notice_freezes_actual_poison_after_original_unlock() {
 #[test]
 fn chained_retirement_preserves_original_recorded_poison_verdict() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 

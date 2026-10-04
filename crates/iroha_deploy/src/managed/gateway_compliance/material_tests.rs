@@ -96,9 +96,10 @@ fn acknowledgement_binds_original_gateway_key_catalog_network_policy_and_live_in
                 .is_err()
         );
         let mut changed = observation(&plan, &catalog, now);
-        changed.network = NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped(
-            iroha_crypto::Hash::new(b"another generated genesis"),
-        ));
+        changed.network =
+            NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::new(b"another generated genesis"),
+            ));
         assert!(
             prepared
                 .sign_observed_gateway_catalog(provider, &changed, &catalog)

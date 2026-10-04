@@ -94,6 +94,17 @@ impl BigInt {
     pub fn bit_len(&self) -> usize {
         usize::try_from(self.inner.bits()).unwrap_or(usize::MAX)
     }
+    /// Borrow the absolute magnitude as little-endian 32-bit digits.
+    ///
+    /// This iterator never allocates or copies the backing magnitude. Zero has
+    /// no digits; negative values expose their absolute magnitude, so callers
+    /// interpreting an unsigned value must check its sign separately.
+    pub fn magnitude_u32_digits(
+        &self,
+    ) -> impl ExactSizeIterator<Item = u32> + DoubleEndedIterator + '_ {
+        self.inner.iter_u32_digits()
+    }
+
     /// Exact native-digit allocation layout of a cloned magnitude.
     ///
     /// Zero has a zero-byte layout. This describes the physical `num-bigint`
@@ -1133,6 +1144,32 @@ mod tests {
                 matches!(error, json::Error::InvalidField { ref field, .. } if field == "bigint"),
                 "source={source} error={error:?}"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod borrowed_magnitude_tests {
+    use super::*;
+
+    #[test]
+    fn magnitude_digits_borrow_unsigned_limbs_for_both_signs() {
+        for value in [0_i128, 1, -1, i128::MAX, i128::MIN, 1_i128 << 96] {
+            let source = BigInt::from(value);
+            let (_, expected) = source.inner.to_u32_digits();
+            let mut digits = source.magnitude_u32_digits();
+            assert_eq!(digits.len(), expected.len());
+            assert_eq!(digits.next(), expected.first().copied());
+            assert_eq!(source.magnitude_u32_digits().collect::<Vec<_>>(), expected);
+            assert_eq!(
+                source.magnitude_u32_digits().rev().collect::<Vec<_>>(),
+                expected.iter().rev().copied().collect::<Vec<_>>()
+            );
+        }
+        for sign in [1_i32, -1] {
+            let value = BigInt::from_inner((InnerBigInt::one() << 4094) * sign).unwrap();
+            let (_, expected) = value.inner.to_u32_digits();
+            assert_eq!(value.magnitude_u32_digits().collect::<Vec<_>>(), expected);
         }
     }
 }

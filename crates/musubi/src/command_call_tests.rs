@@ -1,5 +1,6 @@
 //! Public call grammar and caller-owned artifact/schema binding.
 use super::*;
+use iroha_primitives::json::Json;
 fn fixture() -> (Vec<u8>, ContractAddress) {
     let artifact = kotodama_lang::compiler::Compiler::new().compile_source(
         "seiyaku Example { kotoage fn write(int value) authorize(\"CanInvokeContractEntrypoint\") {} kotoage fn ping() authorize(\"CanInvokeContractEntrypoint\") {} view fn read() -> int { return 1; } }",

@@ -138,7 +138,7 @@ fn assert_complete(probe: &Probe, mut future: ReleaseFuture<'_>, waker: &Waker) 
 #[test]
 fn attached_publication_preserves_both_modes_and_retains_success_cleanup() {
     let helper_release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut helper_release_registration_1 =
         crate::release_test_support::registration(&helper_release_budget);
@@ -186,7 +186,7 @@ fn attached_publication_preserves_both_modes_and_retains_success_cleanup() {
 #[test]
 fn attached_publication_abandonment_retains_every_prepared_original_until_joint_release() {
     let helper_release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut helper_release_registration_1 =
         crate::release_test_support::registration(&helper_release_budget);
@@ -215,7 +215,7 @@ fn attached_publication_abandonment_retains_every_prepared_original_until_joint_
 #[test]
 fn attached_publication_late_identity_poison_keeps_original_pair_and_rejects_retry() {
     let helper_release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut helper_release_registration_1 =
         crate::release_test_support::registration(&helper_release_budget);
@@ -256,7 +256,7 @@ fn attached_publication_late_identity_poison_keeps_original_pair_and_rejects_ret
 #[test]
 fn attached_publication_unwind_releases_all_raw_owners_before_original_wake() {
     let helper_release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut helper_release_registration_1 =
         crate::release_test_support::registration(&helper_release_budget);

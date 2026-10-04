@@ -90,10 +90,14 @@ fn candidate(bundle: &Path, copied_bin: &Path) -> TestResult<Candidate> {
                 .runtime_directory(&bundle)
                 .join(&filename),
         )?;
-        ensure!(
-            digest(&copied_bin.join(&filename))? == hash,
-            "timed runtime differs from bundle"
-        );
+        // The explicit desktop campaign inventories its full source bundle. Only the two CLI
+        // programs execute in this fixture, so an unused UI is never copied or required there.
+        if name != "mochi" {
+            ensure!(
+                digest(&copied_bin.join(&filename))? == hash,
+                "timed CLI runtime differs from bundle"
+            );
+        }
         binaries.insert(name.into(), hash);
     }
     Ok(Candidate {

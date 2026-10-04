@@ -1,9 +1,20 @@
 import Foundation
 import CryptoKit
+#if IROHASWIFT_LOCAL_UNIT_ARTIFACT
+#if !os(macOS)
+#error("A local-unit NoritoBridge artifact is restricted to macOS Swift tests.")
+#endif
+#if !IROHASWIFT_LOCAL_UNIT_DEBUG
+#error("A local-unit NoritoBridge artifact cannot enter a Release build.")
+#endif
+#endif
 #if canImport(Darwin)
 import Darwin
 #if IROHASWIFT_BRIDGE_PRESENT
 import NoritoBridge
+#endif
+#if SWIFT_PACKAGE
+import NoritoBridgeRetention
 #endif
 
 enum BridgePolicyHint {
@@ -198,6 +209,11 @@ enum NoritoBridgeLoader {
     }
 
     static func openHandle() -> (UnsafeMutableRawPointer?, ValidationStatus) {
+        #if SWIFT_PACKAGE
+        // The direct C call roots every dynamically resolved native export;
+        // the loader still authenticates the exact symbols and ABI below.
+        _ = iroha_norito_bridge_retain_exports()
+        #endif
         // Xcode 26 debug-dylib: app code lives in <name>.debug.dylib, not the main executable.
         // dlopen(nil) returns a handle to the 57 KB launcher image. It may re-export a few symbols
         // (e.g. connect_norito_free) so the dlsym probe succeeds, but calling heavier functions

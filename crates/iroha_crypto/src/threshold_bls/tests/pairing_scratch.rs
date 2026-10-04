@@ -52,7 +52,9 @@ fn fixed_pairing_matches_prepared_reference_for_both_roles_and_canonical_failure
     fn check<P: ThresholdBlsPurpose>() {
         let session = session::<P>();
         for length in [0, 1, 64, THRESHOLD_BLS_MAX_MESSAGE_PAYLOAD_BYTES_V1] {
-            let payload: Vec<_> = (0..length).map(|i| (i % 251) as u8).collect();
+            let payload: Vec<_> = (0..length)
+                .map(|i| u8::try_from(i % 251).unwrap())
+                .collect();
             for scalar in [1, 19, 0xffff_ffff] {
                 let public_key = key(&session, scalar);
                 let signature = sign(&session, scalar, &payload);
@@ -208,28 +210,6 @@ fn complete_threshold_verification_and_combination_allocate_no_heap_for_either_r
 
 #[test]
 fn verified_beacon_seed_and_pairing_error_precedence_use_fixed_scratch() {
-    let payload = b"verified seed with fixed final pairing scratch";
-    let (transcript, partials) = transcript_and_partials::<BeaconPurpose>(payload);
-    let expected_signature = sign(transcript.session(), 36, payload);
-    let expected_seed = derive_beacon_seed(
-        transcript.session(),
-        transcript.transcript_hash(),
-        payload,
-        &expected_signature,
-    )
-    .unwrap();
-    let actual = without_allocations(|| {
-        let signature = transcript
-            .combine_partial_signatures(payload, &partials[..2])
-            .unwrap();
-        transcript.finalized_seed(payload, &signature).unwrap()
-    });
-    assert_eq!(actual, expected_seed);
-    assert_eq!(
-        without_allocations(|| transcript.finalized_seed(b"wrong", &expected_signature)),
-        Err(ThresholdBlsError::SignatureMismatch)
-    );
-
     fn check<P: ThresholdBlsPurpose>() {
         let session = session::<P>();
         let mut public_key = key(&session, 7);
@@ -283,6 +263,28 @@ fn verified_beacon_seed_and_pairing_error_precedence_use_fixed_scratch() {
             Err(ThresholdBlsError::InvalidSignature)
         );
     }
+    let payload = b"verified seed with fixed final pairing scratch";
+    let (transcript, partials) = transcript_and_partials::<BeaconPurpose>(payload);
+    let expected_signature = sign(transcript.session(), 36, payload);
+    let expected_seed = derive_beacon_seed(
+        transcript.session(),
+        transcript.transcript_hash(),
+        payload,
+        &expected_signature,
+    )
+    .unwrap();
+    let actual = without_allocations(|| {
+        let signature = transcript
+            .combine_partial_signatures(payload, &partials[..2])
+            .unwrap();
+        transcript.finalized_seed(payload, &signature).unwrap()
+    });
+    assert_eq!(actual, expected_seed);
+    assert_eq!(
+        without_allocations(|| transcript.finalized_seed(b"wrong", &expected_signature)),
+        Err(ThresholdBlsError::SignatureMismatch)
+    );
+
     check::<BeaconPurpose>();
     check::<TleReleasePurpose>();
 }

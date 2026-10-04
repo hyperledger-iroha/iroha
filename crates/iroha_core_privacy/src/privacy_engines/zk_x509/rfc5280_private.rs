@@ -125,12 +125,6 @@ impl Drop for ZkX509Rfc5280SemanticWitnessV1 {
         zeroize_source_cells_v1(&mut self.decimal_cells);
         zeroize_words_v1(&mut self.calendar_values);
         zeroize_numeric_relations_v1(&mut self.numeric_relations);
-        for (purpose, instance, actual, expected) in &mut self.bit_flags {
-            zeroize_words_v1(core::slice::from_mut(purpose));
-            zeroize_words_v1(core::slice::from_mut(instance));
-            zeroize_words_v1(core::slice::from_mut(actual));
-            zeroize_words_v1(core::slice::from_mut(expected));
-        }
         // Serial vectors own their nested cells through each element's Drop.
     }
 }

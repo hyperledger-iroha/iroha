@@ -40,6 +40,69 @@ mod tests {
         assert!(CATALOGED_ROUTES.contains(&route));
     }
     #[test]
+    fn collection_query_posts_are_read_only_without_relaxing_principal_policy() {
+        let visible = [
+            telemetry::ASSET_HOLDERS_QUERY,
+            application_api::DOMAINS_QUERY_POST,
+            application_api::ACCOUNTS_QUERY_POST,
+            application_api::ASSETS_DEFINITIONS_QUERY_POST,
+            application_api::NFTS_QUERY_POST,
+            application_api::RWAS_QUERY_POST,
+            application_api::ACCOUNTS_BY_ACCOUNT_ID_ASSETS_QUERY_POST,
+            application_api::ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_QUERY_POST,
+            application_api::TRANSACTIONS_QUERY_POST,
+            application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST,
+            application_api::ACCOUNTS_BY_ACCOUNT_ID_HISTORY_QUERY_POST,
+            application_api::CONTRACTS_ACTIVITY_QUERY_POST,
+            application_api::CONTRACTS_EVENTS_QUERY_POST,
+            application_api::SPACE_DIRECTORY_UAIDS_BY_UAID_MANIFESTS_QUERY_POST,
+            application_api::EXPLORER_ACCOUNTS_QUERY_POST,
+            application_api::EXPLORER_DOMAINS_QUERY_POST,
+            application_api::EXPLORER_ASSET_DEFINITIONS_QUERY_POST,
+            application_api::EXPLORER_ASSETS_QUERY_POST,
+            application_api::EXPLORER_NFTS_QUERY_POST,
+            application_api::EXPLORER_RWAS_QUERY_POST,
+            application_api::EXPLORER_BLOCKS_QUERY_POST,
+            application_api::EXPLORER_TRANSACTIONS_QUERY_POST,
+            application_api::EXPLORER_TRANSACTIONS_LATEST_QUERY_POST,
+            application_api::EXPLORER_INSTRUCTIONS_QUERY_POST,
+            application_api::EXPLORER_INSTRUCTIONS_LATEST_QUERY_POST,
+        ];
+        for route in visible {
+            assert_eq!(route.method(), HttpMethod::Post, "{}", route.path());
+            assert_eq!(route.effect(), RouteEffect::ReadOnly, "{}", route.path());
+            assert_eq!(
+                route.admission(),
+                AdmissionPolicy::DataspaceVisible,
+                "{}",
+                route.path()
+            );
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::OptionalCanonicalAccountSignature,
+                "{}",
+                route.path()
+            );
+            assert!(CATALOGED_ROUTES.contains(&route));
+        }
+        let repo = application_api::REPO_AGREEMENTS_QUERY_POST;
+        assert_eq!(repo.effect(), RouteEffect::ReadOnly);
+        assert_eq!(repo.admission(), AdmissionPolicy::AuthenticatedAccount);
+        assert_eq!(
+            repo.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        for route in [
+            application_api::SUBSCRIPTIONS_PLANS_QUERY_POST,
+            application_api::SUBSCRIPTIONS_QUERY_POST,
+        ] {
+            assert_eq!(route.method(), HttpMethod::Post);
+            assert_eq!(route.effect(), RouteEffect::ReadOnly);
+            assert_eq!(route.admission(), AdmissionPolicy::Public);
+            assert_eq!(route.authentication(), AuthenticationPolicy::ToriiDefault);
+        }
+    }
+    #[test]
     fn diagnostic_status_routes_are_explicit() {
         let routes = [
             diagnostic::STATUS,
@@ -1520,9 +1583,9 @@ mod tests {
         }
     }
     #[test]
-    fn transaction_queries_distinguish_optional_visible_and_required_account_scopes() {
+    fn transaction_collection_queries_preserve_optional_visible_scope() {
         let visible_fanout = application_api::TRANSACTIONS_QUERY_POST;
-        assert_eq!(visible_fanout.effect(), RouteEffect::ExpensiveCompute);
+        assert_eq!(visible_fanout.effect(), RouteEffect::ReadOnly);
         assert_eq!(
             visible_fanout.admission(),
             AdmissionPolicy::DataspaceVisible
@@ -1601,7 +1664,8 @@ mod tests {
     #[test]
     fn contract_and_application_route_policies_are_projection_safe() {
         assert!(
-            contract_and_application_routes().iter()
+            contract_and_application_routes()
+                .iter()
                 .all(|route| route.path() != "/v1/transactions/history"),
             "the retired offset history route must not be exposed",
         );

@@ -401,10 +401,6 @@ fn routed_read_source_status(endpoint: ToriiReadEndpointV1) -> RoutedReadSourceS
         AccountGet
         | ProofRecordGet
         | AssetDefinitionGet
-        | AssetHoldersGet
-        | AssetHoldersQuery
-        | DomainsList
-        | DomainsQuery
         | SpaceDirectoryBindingsGet
         | NexusPublicLaneValidators
         | AliasResolve
@@ -418,6 +414,10 @@ fn routed_read_source_status(endpoint: ToriiReadEndpointV1) -> RoutedReadSourceS
         | ContractDeploymentState
         | AccountOnboardingCurrentState => Proven,
         ExplorerAccountDetail
+        | AssetHoldersGet
+        | AssetHoldersQuery
+        | DomainsList
+        | DomainsQuery
         | AccountAssetsGet
         | AccountAssetsQuery
         | AccountPermissionsGet
@@ -509,8 +509,11 @@ fn routed_read_source_inventory_classifies_all_49_endpoints() {
         .filter(|endpoint| routed_read_source_status(*endpoint) == RoutedReadSourceStatus::Proven)
         .count();
     assert_eq!(endpoints.len(), 49);
-    assert_eq!(proven, 19);
-    assert_eq!(endpoints.len() - proven, 30);
+    // These collection paths now execute through collection_sources, rather
+    // than the older DTO helpers whose isolated parity tests appear above.
+    // Source certification requires the actual canonical engine path.
+    assert_eq!(proven, 15);
+    assert_eq!(endpoints.len() - proven, 34);
 }
 #[test]
 fn routed_read_blanket_rejection_is_absent_repo_wide() {

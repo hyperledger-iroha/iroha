@@ -33,7 +33,7 @@ pub(super) struct OrdinarySendTerminalForTestingV1 {
     pub(super) approval: KagemushaAppOperationApprovalV1,
     pub(super) admission_clock_original: Vec<u8>,
     // Retain the genuine purpose-1 Guard pair with the complete outgoing proof owner.
-    pub(super) _terminal_guard: super::ordinary_guard_generation::GeneratedOrdinaryGuardPairV1,
+    pub(super) terminal_guard: super::ordinary_guard_generation::GeneratedOrdinaryGuardPairV1,
     pub(super) inner: OrdinaryCashProofForTestingV1,
     pub(super) wrapper: OrdinaryCashProofForTestingV1,
 }
@@ -673,7 +673,7 @@ pub(super) fn prove_ordinary_send_terminal_for_testing_v1(
         record,
         approval,
         admission_clock_original,
-        _terminal_guard: terminal_guard,
+        terminal_guard,
         inner,
         wrapper,
     }

@@ -4,6 +4,7 @@ use super::super::{
     decode_quantity_units_v1, prepare_public_transfers,
     quantity_tests::{delta, fixture, maximum, tiny},
 };
+use super::test_funding::{derive, funded_build, materialize_quantity_public_transfers};
 use super::*;
 use crate::gadgets::{compact_smt_air::PublicUpdate, transfer};
 use iroha_primitives::numeric::Quantity;
@@ -188,11 +189,13 @@ fn full_domain_materialization_preserves_claims_and_authenticates_every_private_
         assert_eq!(prepared.ordering_hash(), built.ordering_hash());
         verify_paths(&prepared, built.witnesses());
         assert_eq!(
-            prepared.build_smt_witnesses(limits(2)).unwrap(),
+            funded_build(&prepared, limits(2)).unwrap(),
             *built.witnesses()
         );
         assert_eq!(norito::encode_canonical(&claims).unwrap(), before);
-        let expected = built.witnesses().clone();
+        let expected_roots = built.witnesses().roots();
+        let expected_pairs = built.witnesses().pairs().to_vec();
+        let expected_work = built.witnesses().work();
         let expected_rows = prepared.transitions().to_vec();
         let expected_ordering = prepared.ordering_hash();
         drop(prepared);
@@ -200,7 +203,9 @@ fn full_domain_materialization_preserves_claims_and_authenticates_every_private_
         assert_eq!(rows, expected_rows);
         assert_eq!(returned_inputs, actual);
         assert_eq!(ordering, expected_ordering);
-        assert_eq!(paths, expected);
+        assert_eq!(paths.roots(), expected_roots);
+        assert_eq!(paths.pairs(), expected_pairs);
+        assert_eq!(paths.work(), expected_work);
     }
 }
 
@@ -240,7 +245,7 @@ fn shared_private_tree_matches_existing_narrow_native_paths_exactly() {
         PublicTransferLimits::default(),
     )
     .unwrap();
-    let generated = prepared.build_smt_witnesses(limits(2)).unwrap();
+    let generated = funded_build(&prepared, limits(2)).unwrap();
     assert_eq!(generated.pairs(), &[[native_from, native_to]]);
 }
 
@@ -271,7 +276,7 @@ fn exact_private_work_bounds_pass_and_one_less_rejects() {
         max_sibling_hashes: work.sibling_hashes,
         max_node_hashes: work.node_hashes,
     };
-    assert!(prepared.build_smt_witnesses(exact).is_ok());
+    assert!(funded_build(&prepared, exact).is_ok());
     for limited in [
         TransferSmtBuildLimits {
             max_updates: exact.max_updates - 1,
@@ -294,7 +299,7 @@ fn exact_private_work_bounds_pass_and_one_less_rejects() {
             ..exact
         },
     ] {
-        assert!(prepared.build_smt_witnesses(limited).is_err());
+        assert!(funded_build(&prepared, limited).is_err());
     }
     assert!(TransferSmtBuildLimits::for_update_limit(usize::MAX).is_none());
 }
@@ -311,7 +316,7 @@ fn rooted_builder_rejects_wrong_expected_roots() {
     )
     .unwrap();
     assert!(
-        matches!(prepared.build_smt_witnesses(limits(2)), Err(crate::Error::TransferInvariant { details }) if details.contains("roots differ"))
+        matches!(funded_build(&prepared, limits(2)), Err(crate::Error::TransferInvariant { details }) if details.contains("roots differ"))
     );
 }
 

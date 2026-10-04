@@ -628,7 +628,17 @@ from pathlib import Path
 import pwd
 print(Path(pwd.getpwuid(os.getuid()).pw_dir).resolve(strict=True))
 ')}"
-  cargo_home="${NORITO_BRIDGE_SEAL_CARGO_HOME:-$user_home/.cargo}"
+  cargo_home="${NORITO_BRIDGE_SEAL_CARGO_HOME:-${MOBILE_SDK_CARGO_HOME:-$user_home/.cargo}}"
+  if [[ -n "${MOBILE_SDK_CARGO_HOME+x}" ]]; then
+    cargo_home="$(run_isolated_python "$ROOT_DIR/scripts/norito_bridge_local_integration.py" \
+      --root "$ROOT_DIR" --path "$cargo_home" --role cargo-home)" || exit 66
+  fi
+  ARCHIVE_SEAL_CARGO_INVOCATION_DIR="${NORITO_BRIDGE_SEAL_CARGO_INVOCATION_DIR:-${MOBILE_SDK_CARGO_INVOCATION_DIR:-$ROOT_DIR}}"
+  if [[ "$ARCHIVE_SEAL_CARGO_INVOCATION_DIR" != "$ROOT_DIR" ]]; then
+    ARCHIVE_SEAL_CARGO_INVOCATION_DIR="$(run_isolated_python \
+      "$ROOT_DIR/scripts/norito_bridge_local_integration.py" --root "$ROOT_DIR" \
+      --path "$ARCHIVE_SEAL_CARGO_INVOCATION_DIR" --role cargo-invocation)" || exit 66
+  fi
   rustup_home="${NORITO_BRIDGE_SEAL_RUSTUP_HOME:-$user_home/.rustup}"
   temporary_dir="${NORITO_BRIDGE_SEAL_TMPDIR:-/tmp}"
   cargo_target="${NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR:-${CARGO_TARGET_DIR:-}}"
@@ -798,6 +808,8 @@ package_apple() {
 
   MOBILE_SDK_APPLE_ARTIFACT_DIR="$artifact_root" \
     MOBILE_SDK_RUSTUP_BINARY="$ARCHIVE_SEAL_RUSTUP" \
+    MOBILE_SDK_CARGO_HOME="$ARCHIVE_SEAL_CARGO_HOME" \
+    MOBILE_SDK_CARGO_INVOCATION_DIR="$ARCHIVE_SEAL_CARGO_INVOCATION_DIR" \
     bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --lockfile-path "$CARGO_LOCKFILE" --apple-only
   require_dir "$xcframework" "NoritoBridge XCFramework"
   require_file "$bridge_manifest" "NoritoBridge artifact manifest"
@@ -812,6 +824,7 @@ package_apple() {
     NORITO_BRIDGE_OUTPUT_LOCK_FD="$APPLE_SOURCE_LOCK_FD" \
     NORITO_BRIDGE_SEAL_HOME="$ARCHIVE_SEAL_HOME" \
     NORITO_BRIDGE_SEAL_CARGO_HOME="$ARCHIVE_SEAL_CARGO_HOME" \
+    NORITO_BRIDGE_SEAL_CARGO_INVOCATION_DIR="$ARCHIVE_SEAL_CARGO_INVOCATION_DIR" \
     NORITO_BRIDGE_SEAL_RUSTUP_HOME="$ARCHIVE_SEAL_RUSTUP_HOME" \
     NORITO_BRIDGE_SEAL_TMPDIR="$ARCHIVE_SEAL_TMPDIR" \
     NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR="$ARCHIVE_SEAL_CARGO_TARGET_DIR" \

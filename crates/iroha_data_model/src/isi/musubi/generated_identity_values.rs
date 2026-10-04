@@ -15,11 +15,11 @@ use super::{
 use norito::json::Value;
 
 /// Capture the signed provider-bundle record with the current completion authority.
-pub(super) fn provider_attestation_value() -> Value {
+pub(in crate::isi) fn provider_attestation_value() -> Value {
     let value = fixture_values::generated_identity_values().register_provider_attestation;
     value
         .attestation
-        .validate()
+        .verify(&value.attestation.payload.binding)
         .expect("canonical signed provider-bundle fixture");
     capture(value)
 }
@@ -84,6 +84,16 @@ fn provider_attestation_capture_retains_the_verified_completion_signer() {
     let frame = hex::decode(row.get("frame").and_then(Value::as_str).unwrap()).unwrap();
     let value: super::RegisterMusubiProviderBundleAttestationV1 =
         norito::decode_from_bytes(&frame).unwrap();
-    value.attestation.validate().unwrap();
-    assert!(value.attestation.completion_authority.is_valid());
+    value
+        .attestation
+        .verify(&value.attestation.payload.binding)
+        .unwrap();
+    assert!(
+        value
+            .attestation
+            .payload
+            .binding
+            .completion_authority
+            .is_valid()
+    );
 }

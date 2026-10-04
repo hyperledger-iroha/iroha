@@ -428,40 +428,64 @@ pub struct StreamTokenAuthorityManifest {
     /// One network-wide inventory, pricing/council and reserve account selection.
     pub network: NetworkServiceInventory,
     /// Exactly three provider inventories in fixed original peer order.
-    #[norito(json = "provider_inventories_json")]
+    #[norito(json = "provider_inventory_json")]
     pub providers: [ProviderServiceInventory; PROVIDER_COUNT],
 }
-/// JSON array form of the fixed provider inventory array; any other length is refused.
-mod provider_inventories_json {
+
+/// The manifest owns the exact three-provider JSON array while retaining its fixed public type.
+mod provider_inventory_json {
     use super::{PROVIDER_COUNT, ProviderServiceInventory};
-    use norito::json::{self, JsonDeserialize as _, JsonSerialize as _};
+    use norito::json::{BoundedJsonError, Error, JsonSerialize, JsonWriteSink, Parser, SeqVisitor};
 
     pub(super) fn serialize(
-        value: &[ProviderServiceInventory; PROVIDER_COUNT],
+        providers: &[ProviderServiceInventory; PROVIDER_COUNT],
         output: &mut String,
     ) {
-        value.to_vec().json_serialize(output);
+        output.push('[');
+        for (index, provider) in providers.iter().enumerate() {
+            if index != 0 {
+                output.push(',');
+            }
+            provider.json_serialize(output);
+        }
+        output.push(']');
     }
 
     pub(super) fn serialize_bounded(
-        value: &[ProviderServiceInventory; PROVIDER_COUNT],
-        output: &mut dyn json::JsonWriteSink,
-    ) -> Result<(), json::BoundedJsonError> {
-        value.to_vec().json_serialize_to(output)
+        providers: &[ProviderServiceInventory; PROVIDER_COUNT],
+        output: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        output.begin_container()?;
+        output.push('[')?;
+        for (index, provider) in providers.iter().enumerate() {
+            if index != 0 {
+                output.push(',')?;
+            }
+            provider.json_serialize_to(output)?;
+        }
+        output.push(']')?;
+        output.end_container();
+        Ok(())
     }
 
     pub(super) fn deserialize(
-        parser: &mut json::Parser<'_>,
-    ) -> Result<[ProviderServiceInventory; PROVIDER_COUNT], json::Error> {
-        Vec::<ProviderServiceInventory>::json_deserialize(parser)?
-            .try_into()
-            .map_err(|_: Vec<ProviderServiceInventory>| {
-                json::Error::Message(format!(
-                    "expected exactly {PROVIDER_COUNT} provider inventories"
-                ))
-            })
+        parser: &mut Parser<'_>,
+    ) -> Result<[ProviderServiceInventory; PROVIDER_COUNT], Error> {
+        let cardinality = || Error::Message("expected exactly three provider inventories".into());
+        let mut sequence = SeqVisitor::new(parser)?;
+        let mut next = || {
+            sequence
+                .next_element::<ProviderServiceInventory>()?
+                .ok_or_else(cardinality)
+        };
+        let providers = [next()?, next()?, next()?];
+        if !sequence.is_finished() {
+            return Err(cardinality());
+        }
+        Ok(providers)
     }
 }
+
 impl StreamTokenAuthorityManifest {
     /// Select exact public original provider intent, without manufacturing native authority.
     /// # Errors

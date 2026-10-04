@@ -7,8 +7,9 @@ use crate::{
     managed::{
         ManagedInitialGatewaySetup, ManagedInitialProviderIngestAuthority,
         ManagedInitialReputationPolicy, ManagedInitialReservePolicy,
-        ManagedReserveAccountRegistration, ProviderFundingBootstrap, ProviderFundingProgress,
+        ManagedReserveAccountRegistration,
         native_operation::test_support::native_fixture::{NativeFixture, quote_instructions},
+        provider_funding::{ProviderFundingBootstrap, ProviderFundingProgress},
     },
 };
 use iroha_data_model::{

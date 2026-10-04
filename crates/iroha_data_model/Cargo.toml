@@ -201,3 +201,8 @@ path = "tests/manual_frame_identity.rs"
 [[test]]
 name = "validator_staking_sdk_fixtures"
 path = "tests/validator_staking_sdk_fixtures.rs"
+
+# Standalone allocator observer for the canonical fixed-limb quantity kernel.
+[[test]]
+name = "fastpq_quantity_units_allocations"
+path = "tests/fastpq_quantity_units_allocations.rs"

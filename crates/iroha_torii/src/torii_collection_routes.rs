@@ -10,6 +10,39 @@
 #[cfg(feature = "app_api")]
 use iroha_torii_shared::list_query::ListQuery;
 
+#[cfg(feature = "app_api")]
+tokio::task_local! {
+    /// The same owner follows a collection coordinator into its local worker.
+    static COLLECTION_READ_MEMORY_RESERVATION: QueryFanoutMemoryReservation;
+}
+
+#[cfg(feature = "app_api")]
+fn current_collection_read_memory_reservation(
+    app: &SharedAppState,
+) -> Option<QueryFanoutMemoryReservation> {
+    COLLECTION_READ_MEMORY_RESERVATION
+        .try_with(Clone::clone)
+        .ok()
+        .filter(|reservation| reservation.belongs_to(app))
+}
+
+#[cfg(feature = "app_api")]
+fn current_routed_read_memory_envelope(
+    app: &SharedAppState,
+) -> Result<QueryFanoutMemoryEnvelope, Response> {
+    if let Ok(envelope) = COLLECTION_READ_MEMORY_RESERVATION
+        .try_with(|reservation| reservation.admitted_envelope(app))
+    {
+        return envelope;
+    }
+    if let Ok(envelope) = APP_ROUTED_READ_HTTP_ADMISSION
+        .try_with(|admission| admission.reservation.admitted_envelope(app))
+    {
+        return envelope;
+    }
+    QueryFanoutMemoryEnvelope::for_body_admission(app.query_fanout_working_set_bytes)
+}
+
 /// Largest accepted `GET` collection query string.
 #[cfg(feature = "app_api")]
 const COLLECTION_QUERY_MAX_RAW_BYTES: usize = 64 * 1024;
@@ -97,12 +130,13 @@ fn list_query_from_json(body: norito::json::Value) -> Result<ListQuery, Error> {
 
 /// Canonical forwarded body for a validated query.
 #[cfg(feature = "app_api")]
-fn collection_query_body(query: &ListQuery) -> Result<Vec<u8>, Error> {
-    norito::json::to_vec(&query.to_json_value()).map_err(|err| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-            "failed to encode collection query: {err}"
-        )))
-    })
+fn collection_query_body(
+    query: &ListQuery,
+    bytes: collections::memory::BytePolicy,
+) -> Result<Vec<u8>, Error> {
+    norito::json::to_json_bounded_boxed(query, bytes.source_frame_bytes)
+        .map(|boxed| boxed.into_vec())
+        .map_err(|_| collections::memory::capacity("forwarded query").into())
 }
 
 /// Validate and canonicalise a collection query at the ingress node.
@@ -119,9 +153,9 @@ fn prepare_collection_forward(
         &mut query,
         &telemetry,
     )?;
-    let limits = routing::collection_sources::collection_limits();
+    let limits = routing::collection_sources::collection_execution_limits(Some(app))?;
     collections::prepare(target.spec(), target.scope(), &query, &limits)?;
-    let body = collection_query_body(&query)?;
+    let body = collection_query_body(&query, limits.bytes)?;
     Ok((query, body))
 }
 
@@ -185,13 +219,15 @@ async fn execute_collection_on_route(
         Ok(reservation) => reservation,
         Err(response) => return response,
     };
-    let mut budget = match ToriiRoutedReadMemoryBudget::new(
-        app.query_fanout_working_set_bytes,
+    let mut budget = ToriiRoutedReadMemoryBudget::from_envelope(
+        match reservation.admitted_envelope(app) {
+            Ok(envelope) => envelope,
+            Err(response) => {
+                return hold_query_fanout_memory_in_response_body(response, reservation);
+            }
+        },
         app.torii_proxy_max_response_bytes,
-    ) {
-        Ok(budget) => budget,
-        Err(response) => return hold_query_fanout_memory_in_response_body(response, reservation),
-    };
+    );
     let request_bytes = match torii_routed_read_request_bytes(
         &path_args,
         path_args.capacity(),
@@ -205,7 +241,12 @@ async fn execute_collection_on_route(
         return hold_query_fanout_memory_in_response_body(response, reservation);
     }
     let request = torii_read_request(endpoint, scope, route, path_args, None, body);
-    let response = execute_torii_read_for_route(app, route, request, None).await;
+    let response = COLLECTION_READ_MEMORY_RESERVATION
+        .scope(
+            reservation.clone(),
+            execute_torii_read_for_route(app, route, request, None),
+        )
+        .await;
     let response = match bound_torii_single_route_response(
         response,
         ToriiProxyResponseFormatV1::Json,
@@ -318,15 +359,27 @@ async fn execute_direct_collection_read(
     target: routing::collection_sources::CollectionTarget,
     query: ListQuery,
 ) -> Result<Response, Error> {
+    let reservation = match try_acquire_query_fanout_memory(app) {
+        Ok(reservation) => reservation,
+        Err(response) => return Ok(response),
+    };
     let telemetry = app.telemetry_handle();
-    routing::collection_sources::execute_collection_response(
-        Some(app),
-        &app.state,
-        &target,
-        query,
-        &telemetry,
-        // Directly served collections are public and carry no dataspace scoping.
-        &routing::DataspaceReadVisibility::new(std::collections::BTreeSet::new(), true),
-    )
-    .await
+    let result = COLLECTION_READ_MEMORY_RESERVATION
+        .scope(reservation.clone(), async {
+            routing::collection_sources::execute_collection_response(
+                Some(app),
+                &app.state,
+                &target,
+                query,
+                &telemetry,
+                // Directly served collections are public and carry no dataspace scoping.
+                &routing::DataspaceReadVisibility::new(std::collections::BTreeSet::new(), true),
+            )
+            .await
+        })
+        .await;
+    Ok(hold_query_fanout_memory_in_response_body(
+        result.unwrap_or_else(IntoResponse::into_response),
+        reservation,
+    ))
 }

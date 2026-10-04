@@ -24,12 +24,24 @@ pub(super) fn validate(config: &Torii, emitter: &mut Emitter<ParseError>) {
     }
     let route_body = defaults::torii::app_api_routed_read_route_body_phase_bytes(
         config.query_fanout_max_retained_bytes.get(),
+        config.query_fanout_max_working_set_bytes.get(),
         config.max_content_len.get(),
     );
     if route_body.is_none_or(|phase| defaults::torii::HTTP_READ_CHUNK_BYTES_V1 > phase) {
         emit_torii_config_error(
             emitter,
-            "Torii's fixed HTTP read chunk exceeds the App API routed-read transport-frame phase derived from torii.query_fanout_max_retained_bytes and torii.max_content_len",
+            "Torii's fixed HTTP read chunk exceeds the App API routed-read transport-frame phase derived from torii.query_fanout_max_retained_bytes, torii.query_fanout_max_working_set_bytes and torii.max_content_len",
+        );
+    }
+    let ingress_body = defaults::torii::query_ingress_body_phase_bytes(
+        config.query_fanout_max_retained_bytes.get(),
+        config.query_fanout_max_working_set_bytes.get(),
+        config.max_content_len.get(),
+    );
+    if ingress_body.is_none_or(|phase| defaults::torii::HTTP_READ_CHUNK_BYTES_V1 > phase) {
+        emit_torii_config_error(
+            emitter,
+            "Torii's fixed HTTP read chunk exceeds the independently reserved query-ingress phase derived from torii.query_fanout_max_retained_bytes, torii.query_fanout_max_working_set_bytes and torii.max_content_len",
         );
     }
 }

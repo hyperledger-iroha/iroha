@@ -46,7 +46,7 @@ pub use filter::{
 pub use sort::{Order, SortKey, sort_to_string};
 pub use text::{FILTER_TEXT_MAX_BYTES, FilterSyntaxError, SORT_MAX_KEYS, parse_sort};
 
-use norito::json::{self, JsonDeserialize, JsonSerialize, Map, Value};
+use norito::json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize, Map, Value};
 use std::fmt;
 
 /// Maximum number of fields in one projection.
@@ -647,9 +647,52 @@ fn validate_cursor(cursor: &str) -> Result<(), ListQueryError> {
     Ok(())
 }
 
-impl JsonSerialize for ListQuery {
-    fn json_serialize(&self, out: &mut String) {
-        self.to_json_value().json_serialize(out);
+impl FastJsonWrite for ListQuery {
+    fn write_json(&self, out: &mut String) {
+        json::write_json_unbounded(self, out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push('{')?;
+        let mut first = true;
+        let mut field =
+            |name: &str, value: &dyn JsonSerialize| -> Result<(), json::BoundedJsonError> {
+                if !first {
+                    out.push(',')?;
+                }
+                first = false;
+                name.json_serialize_to(out)?;
+                out.push(':')?;
+                value.json_serialize_to(out)
+            };
+        if let Some(value) = &self.aggregate {
+            field("aggregate", value)?;
+        }
+        if let Some(value) = &self.cursor {
+            field("cursor", value)?;
+        }
+        if let Some(value) = &self.filter {
+            field("filter", value)?;
+        }
+        if self.include_total {
+            field("include_total", &true)?;
+        }
+        if let Some(value) = self.limit {
+            field("limit", &value)?;
+        }
+        if let Some(value) = &self.select {
+            field("select", value)?;
+        }
+        if !self.sort.is_empty() {
+            field("sort", &self.sort)?;
+        }
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -696,25 +739,27 @@ impl<T> Page<T> {
     }
 }
 
-impl<T: JsonSerialize> JsonSerialize for Page<T> {
-    fn json_serialize(&self, out: &mut String) {
-        out.push_str("{\"items\":[");
-        for (index, item) in self.items.iter().enumerate() {
-            if index > 0 {
-                out.push(',');
-            }
-            item.json_serialize(out);
-        }
-        out.push_str("],\"next_cursor\":");
-        match &self.next_cursor {
-            Some(cursor) => json::write_json_string(cursor, out),
-            None => out.push_str("null"),
-        }
+impl<T: JsonSerialize> FastJsonWrite for Page<T> {
+    fn write_json(&self, out: &mut String) {
+        json::write_json_unbounded(self, out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"items\":")?;
+        self.items.json_serialize_to(out)?;
+        out.push_str(",\"next_cursor\":")?;
+        self.next_cursor.json_serialize_to(out)?;
         if let Some(total) = self.total {
-            out.push_str(",\"total\":");
-            out.push_str(&total.to_string());
+            out.push_str(",\"total\":")?;
+            total.json_serialize_to(out)?;
         }
-        out.push('}');
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -769,6 +814,59 @@ impl<T: JsonDeserialize> JsonDeserialize for Page<T> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn checked_query_and_page_writers_preserve_semantics_at_exact_boundary() {
+        use super::*;
+        let query = ListQuery::from_json_value(norito::json!({
+            "filter": {"op":"and", "args":[
+                {"op":"eq", "args":["metadata.label", "quoted \\\" text"]},
+                {"op":"not", "args":[{"op":"in", "args":["id", ["a","b"]]}]}
+            ]},
+            "sort":["-id"],
+            "include_total":true, "limit":2,
+            "aggregate":{"group_by":["id"],"metrics":[{"alias":"count","fn":"count"}],"having":{"op":"gt","args":["count",0]}}
+        })).unwrap();
+        let expected = query.to_json_value();
+        let body = json::to_json_bounded_boxed(&query, 16 * 1024).unwrap();
+        assert_eq!(body.as_ref(), json::to_json(&query).unwrap().as_bytes());
+        assert_eq!(json::from_slice::<Value>(&body).unwrap(), expected);
+        assert_eq!(
+            json::to_json_bounded_boxed(&query, body.len()).unwrap(),
+            body
+        );
+        assert_eq!(
+            json::to_json_bounded_boxed(&query, body.len() - 1),
+            Err(json::BoundedJsonError::BodyTooLarge)
+        );
+        let page = Page {
+            items: vec![expected],
+            next_cursor: Some("position".to_owned()),
+            total: Some(1),
+        };
+        let legacy = json::to_json(&page).unwrap();
+        let body = json::to_json_bounded_boxed(&page, legacy.len()).unwrap();
+        assert_eq!(body.as_ref(), legacy.as_bytes());
+        assert_eq!(
+            json::to_json_bounded_boxed(&page, body.len() - 1),
+            Err(json::BoundedJsonError::BodyTooLarge)
+        );
+        let query = ListQuery::new()
+            .select(["id", "metadata.label"])
+            .cursor("position".to_owned())
+            .limit(2);
+        let ordinary = json::to_json(&query).unwrap();
+        let body = json::to_json_bounded_boxed(&query, ordinary.len()).unwrap();
+        assert_eq!(body.as_ref(), ordinary.as_bytes());
+        assert_eq!(
+            json::from_slice::<Value>(&body).unwrap(),
+            query.to_json_value()
+        );
+        assert_eq!(
+            json::to_json_bounded_boxed(&query, body.len() - 1),
+            Err(json::BoundedJsonError::BodyTooLarge)
+        );
+    }
+
     use super::*;
 
     #[test]

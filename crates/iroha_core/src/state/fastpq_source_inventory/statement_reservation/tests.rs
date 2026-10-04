@@ -6,7 +6,7 @@ use crate::{
     exec_witness,
     fastpq::{
         FastpqPublicInputsTemplate, quantity_materializer_invocations_for_testing,
-        quantity_statement_from_finalized_transcripts,
+        quantity_statement_from_finalized_transcripts_for_testing,
     },
 };
 use fastpq_prover::gadgets::public_transfer_statement::{
@@ -74,7 +74,7 @@ fn encoded_bundle(bundle: &[TransferTranscript]) -> usize {
         max_unique_keys: 32,
         max_allocation_steps: 128,
     };
-    let produced = quantity_statement_from_finalized_transcripts(
+    let produced = quantity_statement_from_finalized_transcripts_for_testing(
         FastpqPublicInputsTemplate {
             dsid: [0; 16],
             slot: 0,
@@ -132,7 +132,7 @@ fn complete_same_entry_measurement_matches_actual_frames_and_retry_replaces_usag
     );
     let inventory = block.fastpq_source_inventory().unwrap().unwrap().clone();
     let expected = inventory
-        .derive_manifest(
+        .prepare_transfer_diagnostic(
             block._curr_block.creation_time_ms.saturating_mul(1_000_000),
             crate::fastpq::permission_table_root(block.world.roles.iter()),
             &archive,
@@ -144,7 +144,7 @@ fn complete_same_entry_measurement_matches_actual_frames_and_retry_replaces_usag
         let actual = budget
             .prepare(&block, &archive)
             .unwrap()
-            .materialize(&block)
+            .materialize_diagnostic(&block)
             .unwrap();
         assert_eq!(actual, expected);
         assert_eq!(budget.committed_usage(), Some(usage));
@@ -210,7 +210,11 @@ fn all_six_inclusive_caps_precede_private_work_and_preserve_state() {
         };
         let result = block
             .fastpq_source_statement_budget(low)
-            .and_then(|mut owner| owner.prepare(&block, &archive)?.materialize(&block));
+            .and_then(|mut owner| {
+                owner
+                    .prepare(&block, &archive)?
+                    .materialize_diagnostic(&block)
+            });
         let error = result.unwrap_err();
         assert!(error.contains(label), "dimension {dimension}: {error}");
         assert_eq!(quantity_materializer_invocations_for_testing(), calls);
@@ -223,7 +227,7 @@ fn all_six_inclusive_caps_precede_private_work_and_preserve_state() {
     exact_owner
         .prepare(&block, &archive)
         .unwrap()
-        .materialize(&block)
+        .materialize_diagnostic(&block)
         .unwrap();
     assert_eq!(exact_owner.committed_usage(), Some(usage));
 }
@@ -261,7 +265,7 @@ fn empty_archives_count_owned_nontransfer_entries_with_zero_transcript_caps() {
             )
         );
         let calls = quantity_materializer_invocations_for_testing();
-        let (manifest, leaves) = attempt.materialize(&block).unwrap();
+        let (manifest, leaves) = attempt.materialize_diagnostic(&block).unwrap();
         assert_eq!(manifest.executed_entry_count, entries);
         assert_eq!(manifest.statement_count, 0);
         assert!(leaves.is_empty());
@@ -291,7 +295,7 @@ fn aborted_failed_and_retried_attempts_preserve_the_previous_complete_reservatio
     let mut owner = block.fastpq_source_statement_budget(limits()).unwrap();
     let first = owner.prepare(&block, &archive).unwrap();
     let usage = first.usage();
-    first.materialize(&block).unwrap();
+    first.materialize_diagnostic(&block).unwrap();
     let calls = quantity_materializer_invocations_for_testing();
     drop(owner.prepare(&block, &archive).unwrap());
     assert_eq!(owner.committed_usage(), Some(usage));
@@ -313,7 +317,7 @@ fn aborted_failed_and_retried_attempts_preserve_the_previous_complete_reservatio
     owner
         .prepare(&block, &archive)
         .unwrap()
-        .materialize(&block)
+        .materialize_diagnostic(&block)
         .unwrap();
     assert_eq!(owner.committed_usage(), Some(usage));
 }
@@ -332,7 +336,7 @@ fn changed_private_paths_are_remeasured_and_failed_growth_keeps_prior_usage() {
     let original_output = owner
         .prepare(&block, &archive)
         .unwrap()
-        .materialize(&block)
+        .materialize_diagnostic(&block)
         .unwrap();
     let mut grown = archive.clone();
     grown.get_mut(&hash).unwrap()[0].deltas[0]
@@ -351,7 +355,10 @@ fn changed_private_paths_are_remeasured_and_failed_growth_keeps_prior_usage() {
         usage.total_statement_bytes
     );
     assert_eq!(quantity_materializer_invocations_for_testing(), calls);
-    assert_eq!(attempt.materialize(&block).unwrap(), original_output);
+    assert_eq!(
+        attempt.materialize_diagnostic(&block).unwrap(),
+        original_output
+    );
     assert_eq!(broad.committed_usage(), Some(grown_usage));
     let retry = broad.prepare(&block, &archive).unwrap();
     assert_eq!(retry.usage(), usage);
@@ -407,7 +414,7 @@ fn foreign_equal_inventory_and_late_owner_replacement_fail_before_materializatio
     successful
         .prepare(&block, &archive)
         .unwrap()
-        .materialize(&block)
+        .materialize_diagnostic(&block)
         .unwrap();
     assert!(successful.committed_usage().is_some());
     let mut owner = block.fastpq_source_statement_budget(limits()).unwrap();
@@ -431,7 +438,7 @@ fn foreign_equal_inventory_and_late_owner_replacement_fail_before_materializatio
     // owner. Its quota seal rejects before materialization and fails closed.
     block.fastpq_source_inventory = Some(Ok(replacement));
     assert_eq!(
-        attempt.materialize(&block).unwrap_err(),
+        attempt.materialize_diagnostic(&block).unwrap_err(),
         "FASTPQ source quota ownership changed after inventory finalization"
     );
     assert_eq!(owner.committed_usage(), None);
@@ -535,7 +542,7 @@ fn strict_producer_failure_after_successful_preparation_does_not_commit_usage() 
     let calls = quantity_materializer_invocations_for_testing();
     let attempt = owner.prepare(&block, &archive).unwrap();
     assert_eq!(attempt.usage().executed_entries, 0);
-    let error = attempt.materialize(&block).unwrap_err();
+    let error = attempt.materialize_diagnostic(&block).unwrap_err();
     assert_eq!(error, "FASTPQ source tree limits overflow");
     assert_eq!(owner.committed_usage(), None);
     assert_eq!(quantity_materializer_invocations_for_testing(), calls);

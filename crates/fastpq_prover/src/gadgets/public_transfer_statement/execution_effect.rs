@@ -9,20 +9,21 @@
 //! TODO: replace the ordinary transfer-only source capture and artifact format
 //! coherently before enabling this relation in any production proof dispatcher.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use iroha_allocation::{AllocationBudget, AllocationReservation, ChargedBuffer};
 
+mod funded_paths;
+mod funded_preparation;
 use iroha_crypto::Hash;
 use iroha_data_model::fastpq::{
     FastpqExecutionAssetV1, FastpqExecutionEffectKindV1, FastpqExecutionEffectStatementV1,
-    FastpqExecutionEffectsV1, FastpqExecutionQuantityKeyV1, FastpqOperationKind,
+    FastpqExecutionEffectsV1, FastpqOperationKind, FastpqOrdinarySourceStatementLeafV1,
     FastpqPublicInputs, FastpqQuantityUnits, FastpqSourceRouteV1, FastpqStateTransition,
-    execution_quantity_key_v1,
 };
 use iroha_primitives::numeric::Quantity;
 
 use super::{
-    PublicKeyAllocation, PublicPreparationWork, PublicTransferLimits, TransferValue, allocate_path,
-    check_limit, checked_u32, digest_limbs, encode_quantity_units_v1, invariant,
+    PublicKeyAllocation, PublicPreparationWork, PublicTransferLimits, check_limit, checked_u32,
+    digest_limbs, invariant,
     materialize::{
         CheckedUpdatePair, CheckedUpdateRow, CheckedUpdateTable, DerivedTransferSmtWitnesses,
         TransferSmtBuildLimits, derive_two_update_smt,
@@ -34,7 +35,6 @@ use crate::{PublicInputs, Result};
 
 const KEY_DOMAIN: &[u8] = b"fastpq:execution-effects:v1:key|";
 const ORDERING_DOMAIN: &[u8] = b"fastpq:execution-effects:v1:ordering|";
-const FACTS_DOMAIN: &[u8] = b"fastpq:execution-effects:v1:source|";
 const STATEMENT_DOMAIN: &[u8] = b"fastpq:execution-effects:v1:statement|";
 
 /// Explicit complete-entry public preparation limits; no private path work is included.
@@ -102,25 +102,36 @@ pub struct ExecutionEffectRow {
 }
 
 /// Private-field public table after complete statement/expectation and semantic checks.
-#[derive(Debug)]
 pub struct PreparedExecutionEffects {
     public_inputs: PublicInputs,
-    keys: Vec<PublicKeyAllocation>,
-    rows: Vec<ExecutionEffectRow>,
-    pairs: Vec<[usize; 2]>,
+    keys: funded_preparation::KeyAllocations,
+    rows: ChargedBuffer<ExecutionEffectRow>,
+    pairs: ChargedBuffer<[usize; 2]>,
     ordering_hash: Hash,
     work: PublicPreparationWork,
+}
+impl std::fmt::Debug for PreparedExecutionEffects {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedExecutionEffects")
+            .field("public_inputs", &self.public_inputs)
+            .field("keys", &self.keys)
+            .field("rows", &self.rows.as_slice())
+            .field("pairs", &self.pairs.as_slice())
+            .field("ordering_hash", &self.ordering_hash)
+            .field("work", &self.work)
+            .finish()
+    }
 }
 impl PreparedExecutionEffects {
     /// Participant bindings in the canonical key/operation row order.
     #[must_use]
     pub fn rows(&self) -> &[ExecutionEffectRow] {
-        &self.rows
+        self.rows.as_slice()
     }
     /// Complete sorted typed quantity keys and paths.
     #[must_use]
     pub fn keys(&self) -> &[PublicKeyAllocation] {
-        &self.keys
+        self.keys.as_slice()
     }
     /// Exact public preparation work; no SMT node hashes are included.
     #[must_use]
@@ -130,8 +141,16 @@ impl PreparedExecutionEffects {
     /// Bind each chronological effect to independently committed intermediate roots.
     /// # Errors
     /// Rejects an incorrect root count or noncanonical hash marker.
-    pub fn compact_statements(&self, intermediate: &[[u8; 32]]) -> Result<Vec<PublicStatement>> {
-        if intermediate.len() != self.pairs.len().saturating_sub(1) {
+    pub fn compact_statements(
+        &self,
+        intermediate: &[[u8; 32]],
+        budget: &AllocationBudget,
+        reservation: &mut AllocationReservation,
+    ) -> Result<ChargedBuffer<PublicStatement>> {
+        if !reservation.belongs_to(budget) {
+            return Err(crate::Error::AllocationForeignPool);
+        }
+        if intermediate.len() != self.pairs.as_slice().len().saturating_sub(1) {
             return Err(invariant(
                 "execution effect intermediate-root count mismatch",
             ));
@@ -139,24 +158,25 @@ impl PreparedExecutionEffects {
         for root in intermediate {
             require_marked(root)?;
         }
+        let mut statements =
+            ChargedBuffer::from_reservation(self.pairs.as_slice().len(), reservation)?;
         let mut current = self.public_inputs.old_root;
-        self.pairs
-            .iter()
-            .enumerate()
-            .map(|(index, ports)| {
-                let next = intermediate
-                    .get(index)
-                    .copied()
-                    .unwrap_or(self.public_inputs.new_root);
-                let result = PublicStatement {
-                    updates: [self.rows[ports[0]].update, self.rows[ports[1]].update],
-                    old_root: digest_limbs(current),
-                    new_root: digest_limbs(next),
-                };
-                current = next;
-                Ok(result)
-            })
-            .collect()
+        for (index, ports) in self.pairs.as_slice().iter().enumerate() {
+            let next = intermediate
+                .get(index)
+                .copied()
+                .unwrap_or(self.public_inputs.new_root);
+            statements.push_reserved(PublicStatement {
+                updates: [
+                    self.rows.as_slice()[ports[0]].update,
+                    self.rows.as_slice()[ports[1]].update,
+                ],
+                old_root: digest_limbs(current),
+                new_root: digest_limbs(next),
+            });
+            current = next;
+        }
+        Ok(statements)
     }
     /// Materialize private paths and require exact independently expected old/new roots.
     /// # Errors
@@ -164,8 +184,10 @@ impl PreparedExecutionEffects {
     pub fn build_smt_witnesses(
         &self,
         limits: TransferSmtBuildLimits,
+        budget: &AllocationBudget,
+        reservation: &mut AllocationReservation,
     ) -> Result<DerivedTransferSmtWitnesses> {
-        let built = derive_two_update_smt(self, limits)?;
+        let built = derive_two_update_smt(self, limits, budget, reservation)?;
         if built.roots() != (self.public_inputs.old_root, self.public_inputs.new_root) {
             return Err(invariant(
                 "execution effect derived roots differ from public inputs",
@@ -179,16 +201,16 @@ impl CheckedUpdateTable for PreparedExecutionEffects {
         self.public_inputs
     }
     fn keys(&self) -> &[PublicKeyAllocation] {
-        &self.keys
+        self.keys.as_slice()
     }
     fn row_count(&self) -> usize {
-        self.rows.len()
+        self.rows.as_slice().len()
     }
     fn pair_count(&self) -> usize {
-        self.pairs.len()
+        self.pairs.as_slice().len()
     }
     fn row(&self, index: usize) -> Option<CheckedUpdateRow> {
-        self.rows.get(index).map(|row| CheckedUpdateRow {
+        self.rows.as_slice().get(index).map(|row| CheckedUpdateRow {
             key_index: row.key_index,
             occurrence: [0, row.effect_ordinal, row.effect_ordinal],
             leg: row.leg,
@@ -197,25 +219,285 @@ impl CheckedUpdateTable for PreparedExecutionEffects {
     }
     fn pair(&self, index: usize) -> Option<CheckedUpdatePair> {
         let ordinal = u32::try_from(index).ok()?;
-        let ports = *self.pairs.get(index)?;
+        let ports = *self.pairs.as_slice().get(index)?;
         Some(CheckedUpdatePair {
             occurrence: [0, ordinal, ordinal],
             row_indices: ports,
             updates: [
-                self.rows.get(ports[0])?.update,
-                self.rows.get(ports[1])?.update,
+                self.rows.as_slice().get(ports[0])?.update,
+                self.rows.as_slice().get(ports[1])?.update,
             ],
         })
     }
 }
 
 /// Producer-owned local statement and paths; these do not certify execution or finality.
+#[cfg(test)]
 #[derive(Debug)]
 pub struct ExecutionEffectMaterialization {
     /// Complete canonical statement retaining every original fact and occurrence.
     pub statement: FastpqExecutionEffectStatementV1,
     /// Exact private paths from the existing two-update SMT constructor.
     pub witnesses: DerivedTransferSmtWitnesses,
+}
+
+/// Borrowing source view of the one canonical complete-effect statement frame.
+/// This projection never clones the original source tape or transition backing.
+#[derive(Debug, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover.execution_effect.SourceExecutionEffectStatement",
+    frame = "iroha_data_model::fastpq::FastpqExecutionEffectStatementV1"
+)]
+pub struct SourceExecutionEffectStatement<'a> {
+    public_inputs: FastpqPublicInputs,
+    ordering_hash: [u8; 32],
+    transitions: &'a [FastpqStateTransition],
+    effects: &'a FastpqExecutionEffectsV1,
+}
+
+impl<'a> SourceExecutionEffectStatement<'a> {
+    /// Borrow the canonical fields of an offered owned statement without granting authority.
+    #[must_use]
+    pub fn from_owned(statement: &'a FastpqExecutionEffectStatementV1) -> Self {
+        Self {
+            public_inputs: statement.public_inputs,
+            ordering_hash: statement.ordering_hash,
+            transitions: &statement.transitions,
+            effects: &statement.effects,
+        }
+    }
+
+    /// Exact public fields, still requiring independently authenticated expectations.
+    #[must_use]
+    pub const fn public_inputs(&self) -> FastpqPublicInputs {
+        self.public_inputs
+    }
+
+    /// Canonical complete operation-tagged row ordering commitment.
+    #[must_use]
+    pub const fn ordering_hash(&self) -> [u8; 32] {
+        self.ordering_hash
+    }
+
+    /// Complete original effect tape retained by the statement owner.
+    #[must_use]
+    pub const fn effects(&self) -> &FastpqExecutionEffectsV1 {
+        self.effects
+    }
+
+    /// Canonical statement commitment under the fixed complete-effect domain.
+    /// # Errors
+    /// Rejects canonical frame lengths beyond the explicit limit or encoding failures.
+    pub fn digest(&self, max_bytes: usize) -> Result<Hash> {
+        bounded_canonical_digest(STATEMENT_DOMAIN, self, max_bytes).map(|(digest, _)| digest)
+    }
+}
+
+// Use the existing canonical sequence kernel; Norito deliberately does not
+// implement SerializePayload for arbitrary references or typed slices.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover.execution_effect.TransitionSequence",
+    frame = "alloc::vec::Vec<iroha_data_model::fastpq::FastpqStateTransition>"
+)]
+struct TransitionSequence<'a>(&'a [FastpqStateTransition]);
+impl norito::SerializePayload for TransitionSequence<'_> {
+    fn serialize(
+        &self,
+        writer: &mut norito::core::Encoder<'_>,
+    ) -> std::result::Result<(), norito::Error> {
+        norito::core::write_element_sequence::<FastpqStateTransition, _>(writer, self.0.iter())
+    }
+}
+impl norito::SerializePayload for SourceExecutionEffectStatement<'_> {
+    fn serialize(
+        &self,
+        writer: &mut norito::core::Encoder<'_>,
+    ) -> std::result::Result<(), norito::Error> {
+        norito::core::write_len_prefixed(writer, &self.public_inputs)?;
+        // Derive treats this fixed byte array as a raw-byte field, not a Vec.
+        norito::core::write_len(writer, 32)?;
+        writer.write_all(&self.ordering_hash)?;
+        norito::core::write_len_prefixed(writer, &TransitionSequence(self.transitions))?;
+        norito::core::write_len_prefixed(writer, self.effects)
+    }
+}
+
+/// Local materialization retaining a borrow of the original source-owned tape.
+/// The caller must keep its original source owner alive for this result's lifetime.
+/// Generated rows and their nested bytes retain original-pool charges.
+#[derive(Debug)]
+pub struct SourceExecutionEffectMaterialization<'a> {
+    public_inputs: FastpqPublicInputs,
+    ordering_hash: [u8; 32],
+    transitions: funded_preparation::Transitions,
+    effects: &'a FastpqExecutionEffectsV1,
+    witnesses: DerivedTransferSmtWitnesses,
+}
+impl SourceExecutionEffectMaterialization<'_> {
+    /// Borrow the exact original effects without materialization or a new owner.
+    #[must_use]
+    pub const fn effects(&self) -> &FastpqExecutionEffectsV1 {
+        self.effects
+    }
+
+    /// Borrow private paths; no extraction can separate future original credit custody.
+    #[must_use]
+    pub const fn witnesses(&self) -> &DerivedTransferSmtWitnesses {
+        &self.witnesses
+    }
+
+    /// Borrow one canonical statement serialization view of retained output and source.
+    #[must_use]
+    pub fn statement(&self) -> SourceExecutionEffectStatement<'_> {
+        SourceExecutionEffectStatement {
+            public_inputs: self.public_inputs,
+            ordering_hash: self.ordering_hash,
+            transitions: self.transitions.as_slice(),
+            effects: self.effects,
+        }
+    }
+}
+
+/// Materialize an exact nonempty source leaf whose finality the caller already owns.
+///
+/// The original tape is checked against every representable source field before
+/// materialization. Slot, permission context and transaction commitment are taken
+/// from the independent leaf; old/new touched roots are derived locally. The leaf's
+/// manifest position must be authenticated by its caller, since tape context does
+/// not itself carry an inventory index. This helper creates no finality authority.
+/// TODO: finish original source-tape dispatch and finalized source authentication
+/// before exposing this private candidate module through a production dispatcher.
+/// # Errors
+/// Refuses empty/mismatched source tapes and all existing semantic/resource failures.
+pub fn materialize_source_execution_effect_statement<'a>(
+    effects: &'a FastpqExecutionEffectsV1,
+    source: &FastpqOrdinarySourceStatementLeafV1,
+    limits: ExecutionEffectLimits,
+    tree_limits: TransferSmtBuildLimits,
+    budget: &AllocationBudget,
+    reservation: &mut AllocationReservation,
+) -> Result<SourceExecutionEffectMaterialization<'a>> {
+    let root = Hash::new(b"execution effect local root placeholder").into();
+    let mut dsid = [0; 16];
+    dsid[..8].copy_from_slice(&source.dataspace_id.as_u64().to_le_bytes());
+    let inputs = FastpqPublicInputs {
+        dsid,
+        slot: source.slot,
+        old_root: root,
+        new_root: root,
+        perm_root: source.perm_root,
+        tx_set_hash: source.tx_set_hash,
+    };
+    check_source_leaf(effects, &inputs, source)?;
+    let MaterializedEffectComponents {
+        public_inputs,
+        ordering_hash,
+        transitions,
+        witnesses,
+    } = materialize_effect_components(
+        effects,
+        Hash::from_marked_bytes(source.effects_digest)
+            .ok_or_else(|| invariant("execution effect source digest is noncanonical"))?,
+        inputs,
+        limits,
+        tree_limits,
+        budget,
+        reservation,
+    )?;
+    let built = SourceExecutionEffectMaterialization {
+        public_inputs,
+        ordering_hash,
+        transitions,
+        effects,
+        witnesses,
+    };
+    bounded_canonical_digest(
+        STATEMENT_DOMAIN,
+        &built.statement(),
+        limits.max_public_bytes,
+    )?;
+    Ok(built)
+}
+
+/// Check the exact source leaf in addition to independent statement/root expectations.
+///
+/// Authenticating the supplied leaf and its ordered manifest position remains the
+/// caller's responsibility. Existing complete statement, public-input, arithmetic,
+/// row-order and root checks are retained without deriving authority from the offer.
+/// # Errors
+/// Refuses source/public-context substitution before any preparation allocation.
+pub fn prepare_source_execution_effect_statement(
+    statement: &FastpqExecutionEffectStatementV1,
+    source: &FastpqOrdinarySourceStatementLeafV1,
+    expected: ExecutionEffectExpectations,
+    limits: ExecutionEffectLimits,
+    budget: &AllocationBudget,
+    reservation: &mut AllocationReservation,
+) -> Result<PreparedExecutionEffects> {
+    prepare_source_execution_effect_view(
+        &SourceExecutionEffectStatement::from_owned(statement),
+        source,
+        expected,
+        limits,
+        budget,
+        reservation,
+    )
+}
+
+/// Prepare the original borrowed source statement without cloning its tape or rows.
+/// # Errors
+/// Rejects foreign credit, source/expectation substitution and all semantic limits.
+pub fn prepare_source_execution_effect_view(
+    statement: &SourceExecutionEffectStatement<'_>,
+    source: &FastpqOrdinarySourceStatementLeafV1,
+    expected: ExecutionEffectExpectations,
+    limits: ExecutionEffectLimits,
+    budget: &AllocationBudget,
+    reservation: &mut AllocationReservation,
+) -> Result<PreparedExecutionEffects> {
+    if !reservation.belongs_to(budget) {
+        return Err(crate::Error::AllocationForeignPool);
+    }
+    check_source_leaf(statement.effects, &statement.public_inputs, source)?;
+    if expected.effects_digest.as_ref() != &source.effects_digest {
+        return Err(invariant(
+            "execution effect source digest expectation mismatch",
+        ));
+    }
+    prepare_execution_effect_view(statement, expected, limits, budget, reservation)
+}
+
+/// Compare fixed source fields before normalization/tree allocation. Complete
+/// effect hashing follows under the shared path's public size limits; diagnostic
+/// errors retain the existing error representation.
+fn check_source_leaf(
+    effects: &FastpqExecutionEffectsV1,
+    inputs: &FastpqPublicInputs,
+    source: &FastpqOrdinarySourceStatementLeafV1,
+) -> Result<()> {
+    let mut dsid = [0; 16];
+    dsid[..8].copy_from_slice(&source.dataspace_id.as_u64().to_le_bytes());
+    require_marked(&source.effects_digest)?;
+    if source.source.height == 0
+        || source.effect_count == 0
+        || usize::try_from(source.effect_count).ok() != Some(effects.effects.len())
+        || source.statement_index > source.entry_index
+        || effects.context.source != source.source
+        || effects.context.entry.entry_hash != source.entry_hash
+        || effects.context.entry.execution_kind != source.execution_kind
+        || effects.context.entry.route != source.route
+        || effects.context.entry.dataspace_id != source.dataspace_id
+        || inputs.dsid != dsid
+        || inputs.slot != source.slot
+        || inputs.perm_root != source.perm_root
+        || inputs.tx_set_hash != source.tx_set_hash
+    {
+        return Err(invariant(
+            "execution effect independent source leaf mismatch",
+        ));
+    }
+    Ok(())
 }
 
 /// Prepare the complete offered statement against independent expectations without SMT work.
@@ -226,10 +508,32 @@ pub fn prepare_execution_effect_statement(
     statement: &FastpqExecutionEffectStatementV1,
     expected: ExecutionEffectExpectations,
     limits: ExecutionEffectLimits,
+    budget: &AllocationBudget,
+    reservation: &mut AllocationReservation,
 ) -> Result<PreparedExecutionEffects> {
-    preflight(&statement.effects, Some(&statement.transitions), limits)?;
-    let frame = bounded_frame(statement, limits.max_public_bytes)?;
-    if Hash::new_from_chunks(&[STATEMENT_DOMAIN, &frame]) != expected.statement_digest
+    prepare_execution_effect_view(
+        &SourceExecutionEffectStatement::from_owned(statement),
+        expected,
+        limits,
+        budget,
+        reservation,
+    )
+}
+
+fn prepare_execution_effect_view(
+    statement: &SourceExecutionEffectStatement<'_>,
+    expected: ExecutionEffectExpectations,
+    limits: ExecutionEffectLimits,
+    budget: &AllocationBudget,
+    reservation: &mut AllocationReservation,
+) -> Result<PreparedExecutionEffects> {
+    if !reservation.belongs_to(budget) {
+        return Err(crate::Error::AllocationForeignPool);
+    }
+    preflight(statement.effects, Some(statement.transitions), limits)?;
+    let (statement_digest, frame_bytes) =
+        bounded_canonical_digest(STATEMENT_DOMAIN, statement, limits.max_public_bytes)?;
+    if statement_digest != expected.statement_digest
         || statement.public_inputs != expected.public_inputs
     {
         return Err(invariant(
@@ -237,16 +541,21 @@ pub fn prepare_execution_effect_statement(
         ));
     }
     check_effects_digest(&statement.effects, expected.effects_digest, limits)?;
-    let (canonical, mut prepared) =
-        prepare_facts(&statement.effects, statement.public_inputs, limits)?;
-    if canonical != statement.transitions
+    let (canonical, mut prepared) = funded_preparation::prepare(
+        &statement.effects,
+        statement.public_inputs,
+        limits,
+        budget,
+        reservation,
+    )?;
+    if canonical.as_slice() != statement.transitions
         || prepared.ordering_hash.as_ref() != &statement.ordering_hash
     {
         return Err(invariant(
             "execution effect canonical row/ordering mismatch",
         ));
     }
-    prepared.work.public_bytes = frame.len();
+    prepared.work.public_bytes = frame_bytes;
     Ok(prepared)
 }
 
@@ -257,13 +566,103 @@ pub fn prepare_execution_effect_statement(
 /// complete typed keys touched by this entry, not the global world state.
 /// # Errors
 /// Rejects count/byte/tree limits, facts commitment mismatch or any strict semantic failure.
-pub fn materialize_execution_effect_statement(
+#[cfg(test)]
+fn materialize_execution_effect_statement(
+    effects: &FastpqExecutionEffectsV1,
+    expected_effects_digest: Hash,
+    public_inputs: FastpqPublicInputs,
+    limits: ExecutionEffectLimits,
+    tree_limits: TransferSmtBuildLimits,
+) -> Result<ExecutionEffectMaterialization> {
+    // The owned fixture is a diagnostic oracle only. The source consumer below
+    // borrows original tapes and never uses this test-only clone path.
+    let bytes = materialization_allocation_bytes(effects, limits, tree_limits)?;
+    let budget = AllocationBudget::new(bytes);
+    let mut reservation = budget.try_reserve_bytes(bytes)?;
+    let MaterializedEffectComponents {
+        public_inputs,
+        ordering_hash,
+        transitions,
+        witnesses,
+    } = materialize_effect_components(
+        effects,
+        expected_effects_digest,
+        public_inputs,
+        limits,
+        tree_limits,
+        &budget,
+        &mut reservation,
+    )?;
+    let statement = FastpqExecutionEffectStatementV1 {
+        public_inputs,
+        ordering_hash,
+        transitions: transitions.fixture_copy(),
+        effects: effects.clone(),
+    };
+    bounded_canonical_digest(STATEMENT_DOMAIN, &statement, limits.max_public_bytes)?;
+    Ok(ExecutionEffectMaterialization {
+        statement,
+        witnesses,
+    })
+}
+
+/// Conservative complete preparation/tree demand from the original input sizes.
+/// No pool is created or acquired by this preflight; the caller funds it once.
+/// # Errors
+/// Rejects malformed sizes, public/tree limits and checked arithmetic overflow.
+pub fn materialization_allocation_bytes(
+    effects: &FastpqExecutionEffectsV1,
+    limits: ExecutionEffectLimits,
+    tree_limits: TransferSmtBuildLimits,
+) -> Result<usize> {
+    let public = funded_preparation::allocation_bytes(effects, limits)?;
+    let rows = effects
+        .effects
+        .len()
+        .checked_mul(2)
+        .ok_or(iroha_allocation::AllocationRefusal::DemandOverflow)?;
+    let keys = rows
+        .min(limits.max_unique_keys)
+        .min(tree_limits.max_unique_keys);
+    let tree = tree_limits.allocation_bytes(rows, keys)?;
+    public
+        .checked_add(tree)
+        .ok_or_else(|| iroha_allocation::AllocationRefusal::DemandOverflow.into())
+}
+
+/// Exact conservative backing demand for complete public preparation only.
+/// # Errors
+/// Rejects malformed input sizes, configured ceilings and checked arithmetic overflow.
+pub fn preparation_allocation_bytes(
+    effects: &FastpqExecutionEffectsV1,
+    limits: ExecutionEffectLimits,
+) -> Result<usize> {
+    funded_preparation::allocation_bytes(effects, limits)
+}
+
+/// Owned generated fields; the original source tape is never part of this scratch.
+struct MaterializedEffectComponents {
+    public_inputs: FastpqPublicInputs,
+    ordering_hash: [u8; 32],
+    transitions: funded_preparation::Transitions,
+    witnesses: DerivedTransferSmtWitnesses,
+}
+
+/// The single semantic/tree constructor shared by the source view and test oracle.
+fn materialize_effect_components(
     effects: &FastpqExecutionEffectsV1,
     expected_effects_digest: Hash,
     mut public_inputs: FastpqPublicInputs,
     limits: ExecutionEffectLimits,
     tree_limits: TransferSmtBuildLimits,
-) -> Result<ExecutionEffectMaterialization> {
+    budget: &AllocationBudget,
+    reservation: &mut AllocationReservation,
+) -> Result<MaterializedEffectComponents> {
+    if !reservation.belongs_to(budget) {
+        return Err(crate::Error::AllocationForeignPool);
+    }
+    let demand = materialization_allocation_bytes(effects, limits, tree_limits)?;
+    let mut reservation = reservation.try_partition_bytes(demand)?;
     preflight(effects, None, limits)?;
     check_limit(
         "max_execution_effect_tree_updates",
@@ -281,38 +680,94 @@ pub fn materialize_execution_effect_statement(
         scratch.old_root = placeholder;
         scratch.new_root = placeholder;
     }
-    let (transitions, prepared) = prepare_facts(effects, scratch, limits)?;
-    let witnesses = derive_two_update_smt(&prepared, tree_limits)?;
+    let (transitions, prepared) =
+        funded_preparation::prepare(effects, scratch, limits, budget, &mut reservation)?;
+    let witnesses = derive_two_update_smt(&prepared, tree_limits, budget, &mut reservation)?;
     (public_inputs.old_root, public_inputs.new_root) = witnesses.roots();
-    let statement = FastpqExecutionEffectStatementV1 {
+    Ok(MaterializedEffectComponents {
         public_inputs,
         ordering_hash: prepared.ordering_hash.into(),
         transitions,
-        effects: effects.clone(),
-    };
-    // Bound the complete final nominal frame before exposing a candidate to a caller.
-    bounded_frame(&statement, limits.max_public_bytes)?;
-    Ok(ExecutionEffectMaterialization {
-        statement,
         witnesses,
     })
 }
 
-fn bounded_frame<T: norito::NoritoSerialize>(value: &T, max: usize) -> Result<Vec<u8>> {
-    let _canonical = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    norito::core::to_bytes_bounded(value, max).map_err(|error| {
-        invariant(&format!(
-            "execution effect bounded encoding failed: {error}"
-        ))
-    })
+/// Hash one complete canonical frame without an output-sized allocation.
+/// The measured public bound precedes streaming; the writer also enforces that
+/// exact byte count, and no partial hash survives any encoder or writer refusal.
+/// Nested serializer scratch remains a separate allocation obligation.
+fn bounded_canonical_digest<T: norito::NoritoSerialize>(
+    domain: &[u8],
+    value: &T,
+    max: usize,
+) -> Result<(Hash, usize)> {
+    use std::io::Write;
+
+    struct ExactFrameWriter<'a> {
+        inner: &'a mut dyn Write,
+        expected: usize,
+        written: usize,
+    }
+    impl Write for ExactFrameWriter<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let next = self.written.checked_add(bytes.len()).ok_or_else(|| {
+                std::io::Error::other("execution effect canonical frame length overflow")
+            })?;
+            if next > self.expected {
+                return Err(std::io::Error::other(
+                    "execution effect canonical frame exceeded measured bound",
+                ));
+            }
+            self.inner.write_all(bytes)?;
+            self.written = next;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.inner.flush()
+        }
+    }
+
+    let length = norito::canonical_frame_len(value)?;
+    check_limit("max_execution_effect_bytes", length, max)?;
+    let mut encoding_error = None;
+    let digest = Hash::new_from_writer(|writer| {
+        writer.write_all(domain)?;
+        let mut bounded = ExactFrameWriter {
+            inner: writer,
+            expected: length,
+            written: 0,
+        };
+        norito::core::write_canonical_to_writer(value, &mut bounded).map_err(|error| {
+            encoding_error = Some(error);
+            std::io::Error::other("execution effect canonical encoding failed")
+        })?;
+        if bounded.written != length {
+            return Err(std::io::Error::other(
+                "execution effect canonical frame differs from measured bound",
+            ));
+        }
+        Ok(())
+    });
+    if let Some(error) = encoding_error {
+        return Err(error.into());
+    }
+    digest
+        .map(|hash| (hash, length))
+        .map_err(|_| invariant("execution effect bounded canonical streaming failed"))
 }
 fn check_effects_digest(
     effects: &FastpqExecutionEffectsV1,
     expected: Hash,
     limits: ExecutionEffectLimits,
 ) -> Result<()> {
-    let bytes = bounded_frame(effects, limits.max_public_bytes)?;
-    if Hash::new_from_chunks(&[FACTS_DOMAIN, &bytes]) != expected {
+    let length = norito::canonical_frame_len(effects)?;
+    check_limit(
+        "max_execution_effect_bytes",
+        length,
+        limits.max_public_bytes,
+    )?;
+    let digest = iroha_data_model::fastpq::execution_effects_digest_v1(effects)?;
+    if digest != expected {
         return Err(invariant(
             "execution effect independent facts expectation mismatch",
         ));
@@ -361,15 +816,6 @@ fn preflight(
     Ok(())
 }
 
-struct NormalizedRow {
-    transition: FastpqStateTransition,
-    ordinal: u32,
-    leg: usize,
-    scale: u32,
-    before: FastpqQuantityUnits,
-    after: FastpqQuantityUnits,
-    amount: FastpqQuantityUnits,
-}
 fn quantities(
     kind: &FastpqExecutionEffectKindV1,
 ) -> (&FastpqExecutionAssetV1, Option<[&Quantity; 5]>) {
@@ -417,75 +863,6 @@ fn inputs(value: FastpqPublicInputs) -> PublicInputs {
     }
 }
 
-fn prepare_facts(
-    effects: &FastpqExecutionEffectsV1,
-    public_inputs: FastpqPublicInputs,
-    limits: ExecutionEffectLimits,
-) -> Result<(Vec<FastpqStateTransition>, PreparedExecutionEffects)> {
-    preflight(effects, None, limits)?;
-    check_context(effects, &public_inputs)?;
-    let scales = asset_scales(effects)?;
-    let (mut normalized, unique_keys) = normalize_effects(effects, &scales, limits)?;
-    // Stable sorting retains original same-key/same-operation occurrence order.
-    // Ports record chronology explicitly even when operation sorting moves mint/burn rows.
-    normalized.sort_by(|a, b| {
-        (&a.transition.key, operation_rank(a.transition.operation))
-            .cmp(&(&b.transition.key, operation_rank(b.transition.operation)))
-    });
-    let (keys, allocation_steps) = allocate_keys(&normalized, unique_keys, limits)?;
-    let unique_count = keys.len();
-    let mut rows = Vec::with_capacity(normalized.len());
-    let mut transitions = Vec::with_capacity(normalized.len());
-    let mut pairs = vec![[usize::MAX; 2]; effects.effects.len()];
-    let mut key_index = 0;
-    for row in normalized {
-        while keys[key_index].key != row.transition.key {
-            key_index += 1;
-        }
-        let key = &keys[key_index];
-        let update = PublicUpdate {
-            old_leaf: digest_limbs(FastpqQuantityUnits::leaf(&key.key_hash, row.before)?),
-            new_leaf: digest_limbs(FastpqQuantityUnits::leaf(&key.key_hash, row.after)?),
-            path: key.path,
-        };
-        pairs[row.ordinal as usize][row.leg] = rows.len();
-        transitions.push(row.transition);
-        rows.push(ExecutionEffectRow {
-            effect_ordinal: row.ordinal,
-            leg: row.leg,
-            key_index,
-            scale: row.scale,
-            before: row.before,
-            after: row.after,
-            amount: row.amount,
-            update,
-        });
-    }
-    let ordering_bytes = bounded_frame(&transitions, limits.max_public_bytes)?;
-    let ordering_hash = Hash::new_from_chunks(&[ORDERING_DOMAIN, &ordering_bytes]);
-    let hashes = rows
-        .len()
-        .checked_mul(2)
-        .ok_or_else(|| invariant("execution effect hash work overflows"))?;
-    Ok((
-        transitions,
-        PreparedExecutionEffects {
-            public_inputs: inputs(public_inputs),
-            keys,
-            rows,
-            pairs,
-            ordering_hash,
-            work: PublicPreparationWork {
-                public_bytes: 0,
-                key_hashes: unique_count,
-                value_hashes: hashes,
-                leaf_hashes: hashes,
-                allocation_steps,
-            },
-        },
-    ))
-}
-
 /// Check marked roots, source height, lane incarnation and empty-entry root equality.
 fn check_context(
     effects: &FastpqExecutionEffectsV1,
@@ -507,176 +884,25 @@ fn check_context(
     Ok(())
 }
 
-/// Common scale per asset incarnation: the maximum over every original quantity.
-fn asset_scales(
-    effects: &FastpqExecutionEffectsV1,
-) -> Result<BTreeMap<FastpqExecutionAssetV1, u32>> {
-    let mut scales = BTreeMap::<FastpqExecutionAssetV1, u32>::new();
-    for effect in &effects.effects {
-        let (asset, values) = quantities(&effect.kind);
-        asset
-            .incarnation
-            .validate()
-            .map_err(|_| invariant("execution effect asset incarnation is invalid"))?;
-        let scale = scales.entry(asset.clone()).or_default();
-        for value in values.into_iter().flatten() {
-            *scale = (*scale).max(value.scale());
-        }
-    }
-    Ok(scales)
-}
-
-/// Normalize every effect into its two chained participant rows, in original order.
-///
-/// Also returns the number of distinct complete quantity keys.
-fn normalize_effects(
-    effects: &FastpqExecutionEffectsV1,
-    scales: &BTreeMap<FastpqExecutionAssetV1, u32>,
-    limits: ExecutionEffectLimits,
-) -> Result<(Vec<NormalizedRow>, usize)> {
-    let mut normalized = Vec::with_capacity(effects.effects.len() * 2);
-    let mut last = HashMap::<Vec<u8>, FastpqQuantityUnits>::new();
-    let mut retired = BTreeSet::<FastpqExecutionAssetV1>::new();
-    let mut nonzero_balances = BTreeMap::<FastpqExecutionAssetV1, usize>::new();
-    for (index, effect) in effects.effects.iter().enumerate() {
-        if effect.ordinal != checked_u32(index)? {
-            return Err(invariant("execution effect ordinals are not contiguous"));
-        }
-        let (asset, values) = quantities(&effect.kind);
-        let scale = scales[asset];
-        // Closed retirement has no caller-supplied numeric presence fields. Supply
-        // is exactly zero at the asset scale; lifecycle presence uses its own fixed
-        // Boolean scale, never a supply/balance key or decimal quantity substitute.
-        let [
-            amount,
-            first_before,
-            first_after,
-            second_before,
-            second_after,
-        ] = if let Some(values) = values {
-            let [
-                amount,
-                first_before,
-                first_after,
-                second_before,
-                second_after,
-            ] = values.map(|q| {
-                FastpqQuantityUnits::from_quantity(q, scale)
-                    .ok_or_else(|| invariant("execution effect normalization failed"))
-            });
-            [
-                amount?,
-                first_before?,
-                first_after?,
-                second_before?,
-                second_after?,
-            ]
-        } else {
-            let zero = FastpqQuantityUnits::from_quantity(&Quantity::zero(), scale)
-                .ok_or_else(|| invariant("retirement supply scale is invalid"))?;
-            let absent = FastpqQuantityUnits::from_quantity(&Quantity::zero(), 0)
-                .ok_or_else(|| invariant("retirement lifecycle zero is invalid"))?;
-            let present = FastpqQuantityUnits::from_quantity(&Quantity::from(1_u32), 0)
-                .ok_or_else(|| invariant("retirement lifecycle one is invalid"))?;
-            [zero, zero, zero, present, absent]
-        };
-        // Original chronology is checked independently of key/operation sorting.
-        // A lifecycle end cannot be duplicated or followed by any use of that same
-        // incarnation, even if a later operation supplies coherent zero quantities.
-        if retired.contains(asset) {
-            return Err(invariant("execution effect uses a retired incarnation"));
-        }
-        if matches!(&effect.kind, FastpqExecutionEffectKindV1::Retire(_)) {
-            if nonzero_balances.get(asset).copied().unwrap_or(0) != 0 {
-                return Err(invariant(
-                    "execution effect retires a nonzero observed balance",
-                ));
-            }
-            retired.insert(asset.clone());
-        }
-
-        let (keys, operation) = effect_ports(
-            &effect.kind,
-            amount,
-            &[first_before, first_after, second_before, second_after],
-        )?;
-        for (leg, (key, before, after)) in keys
-            .into_iter()
-            .zip([(first_before, first_after), (second_before, second_after)])
-            .map(|(key, (before, after))| (key, before, after))
-            .enumerate()
-        {
-            let balance_asset = match &key {
-                FastpqExecutionQuantityKeyV1::Balance(balance) => Some(&balance.asset),
-                _ => None,
-            };
-            let encoded_key = execution_quantity_key_v1(&key)?;
-            if let Some(asset) = balance_asset {
-                let count = nonzero_balances.entry(asset.clone()).or_default();
-                if last
-                    .get(&encoded_key)
-                    .is_some_and(|previous| previous.limbs().iter().any(|limb| *limb != 0))
-                {
-                    *count = count
-                        .checked_sub(1)
-                        .ok_or_else(|| invariant("execution balance census underflow"))?;
-                }
-                if after.limbs().iter().any(|limb| *limb != 0) {
-                    *count = count
-                        .checked_add(1)
-                        .ok_or_else(|| invariant("execution balance census overflow"))?;
-                }
-            }
-            let key = encoded_key;
-            if last.get(&key).is_some_and(|previous| *previous != before) {
-                return Err(invariant(
-                    "execution effect repeated-key quantities do not chain",
-                ));
-            }
-            if !last.contains_key(&key) {
-                check_limit(
-                    "max_execution_effect_keys",
-                    last.len() + 1,
-                    limits.max_unique_keys,
-                )?;
-            }
-            last.insert(key.clone(), after);
-            normalized.push(NormalizedRow {
-                transition: FastpqStateTransition {
-                    key,
-                    pre_value: encode_quantity_units_v1(&before)?,
-                    post_value: encode_quantity_units_v1(&after)?,
-                    operation,
-                },
-                ordinal: effect.ordinal,
-                leg,
-                scale: before.scale(),
-                before,
-                after,
-                amount,
-            });
-        }
-    }
-    Ok((normalized, last.len()))
-}
-
 /// Check one effect's typed arithmetic and return its two port keys and operation.
 ///
 /// Transfers use source/destination balance ports; mint and burn use balance and
 /// supply ports, where supply never falls below the balance.
-fn effect_ports(
+fn check_effect_arithmetic(
     kind: &FastpqExecutionEffectKindV1,
     amount: FastpqQuantityUnits,
     port_values: &[FastpqQuantityUnits; 4],
-) -> Result<([FastpqExecutionQuantityKeyV1; 2], FastpqOperationKind)> {
+) -> Result<FastpqOperationKind> {
     let [first_before, first_after, second_before, second_after] = *port_values;
     match kind {
-        FastpqExecutionEffectKindV1::Retire(asset) => {
-            let zero = Quantity::zero();
-            if first_before.to_quantity() != Some(zero.clone())
+        FastpqExecutionEffectKindV1::Retire(_) => {
+            // The closed retirement operation uses fixed zero supply and exact
+            // Boolean presence; validating these units needs no owned Quantity.
+            if first_before.limbs().iter().any(|limb| *limb != 0)
                 || first_after != first_before
-                || second_before.to_quantity() != Some(Quantity::from(1_u32))
-                || second_after.to_quantity() != Some(zero)
+                || second_before.limbs()[0] != 1
+                || second_before.limbs()[1..].iter().any(|limb| *limb != 0)
+                || second_after.limbs().iter().any(|limb| *limb != 0)
                 || second_before.scale() != 0
                 || second_after.scale() != 0
             {
@@ -684,17 +910,8 @@ fn effect_ports(
                     "execution effect retirement presence/supply mismatch",
                 ));
             }
-            Ok((
-                [
-                    FastpqExecutionQuantityKeyV1::Supply(asset.clone()),
-                    FastpqExecutionQuantityKeyV1::Lifecycle(asset.clone()),
-                ],
-                // The shared transition carrier already reserves MetaSet for semantics
-                // authenticated by its outer statement. Here the closed Retire variant
-                // determines BOTH exact keys/values; no arbitrary metadata row is accepted.
-                // Ordinary/AXT dispatch remains unchanged and does not accept this candidate.
-                FastpqOperationKind::MetaSet,
-            ))
+            // The closed Retire variant determines exact supply/lifecycle ports.
+            Ok(FastpqOperationKind::MetaSet)
         }
         FastpqExecutionEffectKindV1::Transfer(t) => {
             if t.source.asset != t.destination.asset {
@@ -707,13 +924,7 @@ fn effect_ports(
             {
                 return Err(invariant("execution effect transfer arithmetic mismatch"));
             }
-            Ok((
-                [
-                    FastpqExecutionQuantityKeyV1::Balance(t.source.clone()),
-                    FastpqExecutionQuantityKeyV1::Balance(t.destination.clone()),
-                ],
-                FastpqOperationKind::Transfer,
-            ))
+            Ok(FastpqOperationKind::Transfer)
         }
         FastpqExecutionEffectKindV1::Mint(t) | FastpqExecutionEffectKindV1::Burn(t) => {
             let mint = matches!(kind, FastpqExecutionEffectKindV1::Mint(_));
@@ -735,54 +946,13 @@ fn effect_ports(
                     "execution effect balance/supply arithmetic mismatch",
                 ));
             }
-            Ok((
-                [
-                    FastpqExecutionQuantityKeyV1::Balance(t.balance.clone()),
-                    FastpqExecutionQuantityKeyV1::Supply(t.balance.asset.clone()),
-                ],
-                if mint {
-                    FastpqOperationKind::Mint
-                } else {
-                    FastpqOperationKind::Burn
-                },
-            ))
+            Ok(if mint {
+                FastpqOperationKind::Mint
+            } else {
+                FastpqOperationKind::Burn
+            })
         }
     }
-}
-
-/// Hash and allocate one collision-resolved path per distinct sorted key.
-///
-/// Returns the allocations in key order and the occupied-interval lookups used.
-fn allocate_keys(
-    normalized: &[NormalizedRow],
-    unique_keys: usize,
-    limits: ExecutionEffectLimits,
-) -> Result<(Vec<PublicKeyAllocation>, usize)> {
-    let mut keys: Vec<PublicKeyAllocation> = Vec::with_capacity(unique_keys);
-    for row in normalized {
-        if keys.last().is_none_or(|key| key.key != row.transition.key) {
-            keys.push(PublicKeyAllocation {
-                key: row.transition.key.clone(),
-                key_hash: [0; 32],
-                path: 0,
-            });
-        }
-    }
-    let unique_count = keys.len();
-    let mut occupied = BTreeMap::new();
-    let mut allocation_steps = 0;
-    for key in &mut keys {
-        key.key_hash = Hash::new_from_chunks(&[KEY_DOMAIN, &key.key]).into();
-        let base = u32::from_le_bytes(key.key_hash[..4].try_into().expect("four key-hash bytes"));
-        key.path = allocate_path(
-            &mut occupied,
-            base,
-            unique_count,
-            &mut allocation_steps,
-            limits.max_allocation_steps,
-        )?;
-    }
-    Ok((keys, allocation_steps))
 }
 
 #[cfg(test)]

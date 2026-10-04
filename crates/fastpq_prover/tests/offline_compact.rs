@@ -1,5 +1,15 @@
 //! Public-consumer coverage for the normal offline quantity artifact library.
 
+use fastpq_prover as test_prover;
+use fastpq_prover as prover;
+#[path = "support/complete_effect_fixture.rs"]
+mod effect_fixture;
+use effect_fixture::EffectFixture;
+use fastpq_prover::offline_compact::{ExpectedExecutionEffects, execution_effect_profile_id};
+#[path = "support/producer_funding.rs"]
+mod producer_funding;
+use producer_funding::prove_quantity_axt_artifact;
+
 use fastpq_prover::{
     AXT_DEFAULT_PARAMETER, Error, ProofSemantics, PublicInputs, VerifyLimits,
     gadgets::public_transfer_statement::{
@@ -8,9 +18,8 @@ use fastpq_prover::{
     },
     offline_compact::{
         BundleVerificationLimits, ExpectedAxtContext, ExpectedStatement, ProvingError,
-        ProvingLimits, VerificationError, VerificationLimits, prove_quantity_axt_artifact,
-        prove_quantity_ordinary_artifact, quantity_artifact_resources, quantity_profile_id,
-        verify_quantity_axt_artifact, verify_quantity_ordinary_artifact,
+        ProvingLimits, VerificationError, VerificationLimits, quantity_artifact_resources,
+        quantity_profile_id, verify_quantity_axt_artifact,
     },
     verify_axt_proof_envelope,
 };
@@ -169,12 +178,11 @@ fn fixture() -> (FastpqPublicTransferStatementV1, ExpectedStatement) {
 }
 
 fn ordinary(statement: FastpqPublicTransferStatementV1, bundle_frame: Vec<u8>) -> Vec<u8> {
-    norito::encode_canonical(&FastpqOrdinaryCompactArtifactV1 {
-        profile_id: quantity_profile_id(),
-        statement,
-        bundle_frame,
-    })
-    .unwrap()
+    norito::encode_canonical(&EffectFixture::from_transfer_facts(&statement).artifact(bundle_frame))
+        .unwrap()
+}
+fn effects() -> EffectFixture {
+    EffectFixture::from_transfer_facts(&fixture().0)
 }
 
 #[test]
@@ -264,7 +272,7 @@ fn mirrors() -> FastpqAxtPreProofMirrorsV1 {
 #[derive(NoritoSerialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "offline_compact::CandidateCarrier",
-    frame = "fastpq_prover::compact_v1::OrdinaryTransferBundleV1"
+    frame = "fastpq_prover::compact_v1::ExecutionEffectBundleV1"
 )]
 struct CandidateCarrier {
     version: u16,
@@ -282,27 +290,88 @@ fn carrier(segments: Vec<Vec<u8>>) -> Vec<u8> {
 }
 
 #[test]
-fn public_quantity_verifier_requires_all_seven_independent_expected_inputs() {
-    let (statement, expected) = fixture();
-    let bytes = ordinary(statement, vec![0]);
-    for index in 0..7 {
-        let mut wrong = expected;
-        match index {
-            0 => wrong.inputs.dsid[0] ^= 1,
-            1 => wrong.inputs.slot ^= 1,
-            2 => wrong.inputs.old_root[0] ^= 1,
-            3 => wrong.inputs.new_root[0] ^= 1,
-            4 => wrong.inputs.perm_root[0] ^= 1,
-            5 => wrong.inputs.tx_set_hash[0] ^= 1,
-            _ => wrong.ordering_hash[0] ^= 1,
-        }
-        assert!(matches!(
-            verify_quantity_ordinary_artifact(&bytes, wrong, policy()),
-            Err(VerificationError::Verify(Error::PublicIoMismatch {
-                field: "compact_model_public_io"
-            }))
-        ));
+fn complete_effect_fixture_preserves_quantities_and_derives_typed_key_roots() {
+    use iroha_data_model::fastpq::FastpqExecutionEffectKindV1;
+    let (transfer, _) = fixture();
+    let effect = EffectFixture::from_transfer_facts(&transfer);
+    let expected_count: usize = transfer
+        .transcripts
+        .iter()
+        .map(|claim| claim.deltas.len())
+        .sum();
+    assert_eq!(effect.statement.effects.effects.len(), expected_count);
+    assert_eq!(effect.source.effect_count as usize, expected_count);
+    assert_eq!(effect.statement.transitions.len(), 2 * expected_count);
+    assert_ne!(
+        effect.statement.public_inputs.old_root,
+        transfer.public_inputs.old_root
+    );
+    assert_ne!(
+        effect.statement.public_inputs.new_root,
+        transfer.public_inputs.new_root
+    );
+    for (ordinal, ((claim, delta), actual)) in transfer
+        .transcripts
+        .iter()
+        .flat_map(|claim| claim.deltas.iter().map(move |delta| (claim, delta)))
+        .zip(&effect.statement.effects.effects)
+        .enumerate()
+    {
+        assert_eq!(actual.ordinal as usize, ordinal);
+        assert_eq!(actual.authority_digest, claim.authority_digest);
+        let FastpqExecutionEffectKindV1::Transfer(actual) = &actual.kind else {
+            panic!("this fixture must preserve each transfer occurrence");
+        };
+        assert_eq!(actual.source.asset.definition, delta.asset_definition);
+        assert_eq!(actual.destination.asset, actual.source.asset);
+        assert_eq!(actual.source.account, delta.from_account);
+        assert_eq!(actual.destination.account, delta.to_account);
+        assert_eq!(actual.amount, delta.amount);
+        assert_eq!(actual.source_before, delta.from_balance_before);
+        assert_eq!(actual.source_after, delta.from_balance_after);
+        assert_eq!(actual.destination_before, delta.to_balance_before);
+        assert_eq!(actual.destination_after, delta.to_balance_after);
     }
+    let facts = effect.facts();
+    assert_eq!(
+        Into::<[u8; 32]>::into(facts.effects_digest),
+        effect.source.effects_digest
+    );
+    assert_eq!(facts.public_inputs, effect.statement.public_inputs);
+    assert_eq!(
+        effect.expected().statement.statement_digest,
+        facts.statement_digest
+    );
+}
+
+#[test]
+fn public_quantity_verifier_requires_all_seven_independent_expected_inputs() {
+    let independent = effects();
+    let bytes = norito::encode_canonical(&independent.artifact(carrier(vec![vec![0]; 2]))).unwrap();
+    for index in 0..6 {
+        let mut wrong = independent.facts();
+        match index {
+            0 => wrong.public_inputs.dsid[0] ^= 1,
+            1 => wrong.public_inputs.slot ^= 1,
+            2 => wrong.public_inputs.old_root[0] ^= 1,
+            3 => wrong.public_inputs.new_root[0] ^= 1,
+            4 => wrong.public_inputs.perm_root[0] ^= 1,
+            _ => wrong.public_inputs.tx_set_hash[0] ^= 1,
+        }
+        assert!(matches!(independent.verify_expected(&bytes,
+            ExpectedExecutionEffects { source: &independent.source, statement: wrong }, policy()),
+            Err(VerificationError::Verify(Error::TransferInvariant { details }))
+                if details == "execution effect independent statement expectation mismatch"));
+    }
+    // Ordering belongs to the full canonical statement, not a redundant expectation field.
+    let mut altered = independent.artifact(vec![0]);
+    altered.statement.ordering_hash[0] ^= 1;
+    assert!(matches!(
+        independent.verify(&norito::encode_canonical(&altered).unwrap(), policy()),
+        Err(VerificationError::Verify(Error::PublicIoMismatch {
+            field: "compact_artifact_public_statement_digest"
+        }))
+    ));
 }
 
 #[test]
@@ -316,7 +385,24 @@ fn public_quantity_verifier_rejects_header_drift_before_malformed_child_decode()
         }
         assert_eq!(statement.public_inputs, expected.inputs);
         assert_eq!(statement.ordering_hash, expected.ordering_hash);
-        let ordinary_bytes = ordinary(statement.clone(), vec![0]);
+        let independent = effects();
+        let mut effect = independent.artifact(vec![0]);
+        if authority_header {
+            effect.statement.effects.effects[0].authority_digest =
+                Hash::new(b"substituted authority header");
+        } else {
+            effect.statement.effects.context.entry.entry_hash =
+                Hash::new(b"substituted call header");
+        }
+        assert_eq!(
+            effect.statement.public_inputs,
+            independent.statement.public_inputs
+        );
+        assert_eq!(
+            effect.statement.ordering_hash,
+            independent.statement.ordering_hash
+        );
+        let ordinary_bytes = norito::encode_canonical(&effect).unwrap();
         let binding = binding();
         let metadata = metadata();
         let mirrors = mirrors();
@@ -331,7 +417,7 @@ fn public_quantity_verifier_rejects_header_drift_before_malformed_child_decode()
         })
         .unwrap();
         for result in [
-            verify_quantity_ordinary_artifact(&ordinary_bytes, expected, policy()),
+            independent.verify(&ordinary_bytes, policy()),
             verify_quantity_axt_artifact(
                 &axt_bytes,
                 expected,
@@ -394,7 +480,8 @@ fn public_axt_verifier_compares_independent_metadata_mirrors_and_remote_presence
 
 #[test]
 fn public_verifier_enforces_cumulative_queries_frames_and_statement_caps_before_children() {
-    let (statement, expected) = fixture();
+    let (statement, _) = fixture();
+    let independent = EffectFixture::from_transfer_facts(&statement);
     let bytes = ordinary(statement, carrier(vec![vec![0, 0], vec![0, 0]]));
     for (label, limits) in [
         (
@@ -419,7 +506,7 @@ fn public_verifier_enforces_cumulative_queries_frames_and_statement_caps_before_
         ),
     ] {
         assert!(matches!(
-            verify_quantity_ordinary_artifact(&bytes, expected, limits),
+            independent.verify(&bytes, limits),
             Err(VerificationError::Verify(Error::VerifierLimitExceeded { limit, .. })) if limit == label
         ));
     }
@@ -428,7 +515,7 @@ fn public_verifier_enforces_cumulative_queries_frames_and_statement_caps_before_
     let mut limits = policy();
     limits.bundle.max_total_segment_bytes = 3;
     assert!(matches!(
-        verify_quantity_ordinary_artifact(&bytes, expected, limits),
+        independent.verify(&bytes, limits),
         Err(VerificationError::Verify(Error::Encode(
             norito::Error::TotalElementsExceeded { .. }
         )))
@@ -436,7 +523,7 @@ fn public_verifier_enforces_cumulative_queries_frames_and_statement_caps_before_
     let mut limits = policy();
     limits.bundle.max_total_statement_bytes = 0;
     assert!(matches!(
-        verify_quantity_ordinary_artifact(&bytes, expected, limits),
+        independent.verify(&bytes, limits),
         Err(VerificationError::Verify(
             Error::VerifierLimitExceeded { .. }
         ))
@@ -445,14 +532,14 @@ fn public_verifier_enforces_cumulative_queries_frames_and_statement_caps_before_
 
 #[test]
 fn public_verifier_preserves_raw_and_enclosing_decode_limits() {
-    let (statement, expected) = fixture();
+    let (statement, _) = fixture();
+    let independent = EffectFixture::from_transfer_facts(&statement);
     let bytes = ordinary(statement, vec![0, 0]);
     let zero = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 32);
     let mut limits = policy();
     limits.transport.max_wire_bytes = bytes.len() - 1;
-    let (result, usage) = norito::core::with_decode_limits_measured(zero, || {
-        verify_quantity_ordinary_artifact(&bytes, expected, limits)
-    });
+    let (result, usage) =
+        norito::core::with_decode_limits_measured(zero, || independent.verify(&bytes, limits));
     assert!(matches!(
         result,
         Err(VerificationError::Transport(
@@ -461,11 +548,7 @@ fn public_verifier_preserves_raw_and_enclosing_decode_limits() {
     ));
     assert_eq!(usage.total_allocated_bytes(), 0);
     assert!(matches!(
-        norito::core::with_decode_limits_scope(zero, || verify_quantity_ordinary_artifact(
-            &bytes,
-            expected,
-            policy()
-        )),
+        norito::core::with_decode_limits_scope(zero, || independent.verify(&bytes, policy())),
         Err(VerificationError::Transport(
             FastpqCompactArtifactDecodeError::Norito(norito::Error::TotalAllocationExceeded { .. })
         ))
@@ -473,7 +556,7 @@ fn public_verifier_preserves_raw_and_enclosing_decode_limits() {
     let mut limits = policy();
     limits.transport.max_bundle_frame_bytes = 1;
     assert!(matches!(
-        verify_quantity_ordinary_artifact(&bytes, expected, limits),
+        independent.verify(&bytes, limits),
         Err(VerificationError::Transport(
             FastpqCompactArtifactDecodeError::BundleBytes { actual: 2, max: 1 }
         ))
@@ -482,25 +565,21 @@ fn public_verifier_preserves_raw_and_enclosing_decode_limits() {
 
 #[test]
 fn public_quantity_profile_and_route_are_fixed_and_codec_context_is_restored() {
-    let expected_profile = quantity_profile_id();
+    let expected_profile = execution_effect_profile_id();
+    let expected_axt_profile = quantity_profile_id();
     for flags in [0, norito::core::header_flags::COMPACT_LEN] {
         let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
-        assert_eq!(quantity_profile_id(), expected_profile);
+        assert_eq!(execution_effect_profile_id(), expected_profile);
+        assert_eq!(quantity_profile_id(), expected_axt_profile);
+        assert_ne!(quantity_profile_id(), expected_profile);
         assert_eq!(norito::core::effective_decode_flags(), Some(flags));
     }
     let (statement, expected) = fixture();
-    let mut artifact = FastpqOrdinaryCompactArtifactV1 {
-        profile_id: expected_profile,
-        statement,
-        bundle_frame: vec![0],
-    };
+    let independent = EffectFixture::from_transfer_facts(&statement);
+    let mut artifact = independent.artifact(vec![0]);
     artifact.profile_id.0[0] ^= 1;
     assert!(matches!(
-        verify_quantity_ordinary_artifact(
-            &norito::encode_canonical(&artifact).unwrap(),
-            expected,
-            policy()
-        ),
+        independent.verify(&norito::encode_canonical(&artifact).unwrap(), policy()),
         Err(VerificationError::Transport(
             FastpqCompactArtifactDecodeError::ProfileMismatch
         ))
@@ -529,11 +608,12 @@ fn public_quantity_profile_and_route_are_fixed_and_codec_context_is_restored() {
 
 #[test]
 fn public_verifier_never_accepts_missing_or_empty_child_occurrences() {
-    let (statement, expected) = fixture();
+    let (statement, _) = fixture();
+    let independent = EffectFixture::from_transfer_facts(&statement);
     for children in [Vec::new(), vec![vec![0]], vec![vec![0], Vec::new()]] {
         let bytes = ordinary(statement.clone(), carrier(children));
         assert!(matches!(
-            verify_quantity_ordinary_artifact(&bytes, expected, policy()),
+            independent.verify(&bytes, policy()),
             Err(VerificationError::Verify(Error::TransferInvariant { .. }))
         ));
     }
@@ -638,10 +718,34 @@ fn assert_producer_limits_reject(
             "max_compact_producer_statement_bytes" => limits.public_statement.max_public_bytes = 0,
             _ => unreachable!(),
         }
+        let effect = EffectFixture::from_transfer_facts(statement);
+        let actual_name = match name {
+            "max_public_transfer_rows" => "max_execution_effect_rows",
+            "max_public_transfer_deltas" => "max_execution_effects",
+            other => other,
+        };
+        let binding = binding();
+        let metadata = metadata();
+        let result = if name == "max_public_transfer_transcripts" {
+            prove_quantity_axt_artifact(
+                statement,
+                expected,
+                ExpectedAxtContext {
+                    binding: &binding,
+                    metadata: &metadata,
+                    mirrors: mirrors(),
+                    remote_spend_claims: None,
+                },
+                work,
+                limits,
+            )
+        } else {
+            effect.prove(work, limits)
+        };
         assert!(
             matches!(
-                prove_quantity_ordinary_artifact(statement, expected, work, limits),
-                Err(ProvingError::Prove(Error::VerifierLimitExceeded { limit, .. })) if limit == name
+                result,
+                Err(ProvingError::Prove(Error::VerifierLimitExceeded { limit, .. })) if limit == actual_name
             ),
             "expected public producer limit {name}"
         );
@@ -651,7 +755,6 @@ fn assert_producer_limits_reject(
 /// Each decoder budget below the mandatory row payload rejects before a trace.
 fn assert_producer_decode_limits_reject(
     statement: &FastpqPublicTransferStatementV1,
-    expected: ExpectedStatement,
     proving: ProvingLimits,
     verification: &VerificationLimits,
 ) {
@@ -667,7 +770,7 @@ fn assert_producer_decode_limits_reject(
         }
         assert!(
             matches!(
-                prove_quantity_ordinary_artifact(statement, expected, proving, limited),
+                EffectFixture::from_transfer_facts(statement).prove(proving, limited),
                 Err(ProvingError::Prove(Error::VerifierLimitExceeded { limit, max: 0, .. }))
                     if limit == name
             ),
@@ -719,7 +822,7 @@ fn assert_producer_decode_limits_reject(
             }
             assert!(
                 matches!(
-                    prove_quantity_ordinary_artifact(statement, expected, proving, limited),
+                    EffectFixture::from_transfer_facts(statement).prove(proving, limited),
                     Err(ProvingError::Prove(Error::VerifierLimitExceeded { limit, max: 0, .. }))
                         if limit == name
                 ),
@@ -804,40 +907,45 @@ fn public_producer_rejects_limits_expectation_drift_and_false_roots_without_a_tr
     };
     let verification = producer_policy();
     assert_producer_limits_reject(&statement, expected, proving, &verification);
-    assert_producer_decode_limits_reject(&statement, expected, proving, &verification);
-    for index in 0..7 {
-        let mut wrong = expected;
+    assert_producer_decode_limits_reject(&statement, proving, &verification);
+    let independent = EffectFixture::from_transfer_facts(&statement);
+    for index in 0..6 {
+        let mut wrong = independent.facts();
         match index {
-            0 => wrong.inputs.dsid[0] ^= 1,
-            1 => wrong.inputs.slot ^= 1,
-            2 => wrong.inputs.old_root[0] ^= 1,
-            3 => wrong.inputs.new_root[0] ^= 1,
-            4 => wrong.inputs.perm_root[0] ^= 1,
-            5 => wrong.inputs.tx_set_hash[0] ^= 1,
-            _ => wrong.ordering_hash[0] ^= 1,
+            0 => wrong.public_inputs.dsid[0] ^= 1,
+            1 => wrong.public_inputs.slot ^= 1,
+            2 => wrong.public_inputs.old_root[0] ^= 1,
+            3 => wrong.public_inputs.new_root[0] ^= 1,
+            4 => wrong.public_inputs.perm_root[0] ^= 1,
+            _ => wrong.public_inputs.tx_set_hash[0] ^= 1,
         }
-        assert!(matches!(
-            prove_quantity_ordinary_artifact(&statement, wrong, proving, verification),
-            Err(ProvingError::Prove(Error::PublicIoMismatch {
-                field: "compact_model_public_io"
-            }))
-        ));
+        assert!(matches!(independent.prove_offered(&independent.statement,
+            ExpectedExecutionEffects { source: &independent.source, statement: wrong },
+            proving, verification), Err(ProvingError::Prove(Error::TransferInvariant { details }))
+                if details == "execution effect independent statement expectation mismatch"));
     }
-    let mut changed = statement.clone();
-    changed.transcripts[0].authority_digest = Hash::new(b"changed producer authority");
+    let mut wrong_order = independent.statement.clone();
+    wrong_order.ordering_hash[0] ^= 1;
     assert!(matches!(
-        prove_quantity_ordinary_artifact(&changed, expected, proving, verification),
+        independent.prove_offered(&wrong_order, independent.expected(), proving, verification),
         Err(ProvingError::Prove(Error::PublicIoMismatch {
             field: "compact_public_statement_digest"
         }))
     ));
-    // The fixture's independent endpoints intentionally do not describe its
-    // touched tree. A producer must reject them, not silently replace them.
+    let mut changed = independent.statement.clone();
+    changed.effects.effects[0].authority_digest = Hash::new(b"changed producer authority");
     assert!(matches!(
-        prove_quantity_ordinary_artifact(&statement, expected, proving, verification),
-        Err(ProvingError::Prove(Error::TransferInvariant { details }))
-            if details.contains("derived transfer SMT roots differ from public inputs")
+        independent.prove_offered(&changed, independent.expected(), proving, verification),
+        Err(ProvingError::Prove(Error::PublicIoMismatch {
+            field: "compact_public_statement_digest"
+        }))
     ));
+    // An independently expected but false touched-tree endpoint is never replaced.
+    let mut false_roots = independent.clone();
+    false_roots.statement.public_inputs.old_root = Hash::new(b"false expected touched root").into();
+    assert!(
+        matches!(false_roots.prove(proving,verification),Err(ProvingError::Prove(Error::TransferInvariant{details})) if details.contains("execution effect derived roots differ from public inputs"))
+    );
     assert_producer_axt_context_rejects(&statement, expected, proving, &verification);
     // Keep public-producer admission negatives under this single serial owner.
     maximum::assert_maximum_context_preflight();
@@ -861,7 +969,7 @@ fn captured_deep_artifacts_verify_with_normal_library_and_independent_context() 
     // An integration target links fastpq_prover without its backend cfg(test) helpers.
     // Reconstruct all expectations before reading either untrusted artifact.
     let fixture = capture::CaptureFixture::new();
-    let expected = fixture.expected;
+    let effect = EffectFixture::from_transfer_facts(&fixture.statement);
     let context = fixture.context();
     let limits = capture::capture_policy();
     for (is_axt, variable, label) in [
@@ -869,18 +977,41 @@ fn captured_deep_artifacts_verify_with_normal_library_and_independent_context() 
         (true, "FASTPQ_TEST_AXT_ARTIFACT", "axt"),
     ] {
         let bytes = capture::read_capture(variable, label);
-        let verify = |bytes: &[u8], expected| {
+        let expected = if is_axt {
+            fixture.expected
+        } else {
+            effect.public_expectation()
+        };
+        let verify = |bytes: &[u8], expected: ExpectedStatement| {
             if is_axt {
                 verify_quantity_axt_artifact(bytes, expected, context, limits)
             } else {
-                verify_quantity_ordinary_artifact(bytes, expected, limits)
+                let mut facts = effect.facts();
+                facts.public_inputs = expected.inputs;
+                facts.statement_digest =
+                    Hash::from_marked_bytes(expected.public_statement_digest).unwrap();
+                effect.verify_expected(
+                    bytes,
+                    ExpectedExecutionEffects {
+                        source: &effect.source,
+                        statement: facts,
+                    },
+                    limits,
+                )
             }
         };
         let accepted = verify(&bytes, expected).unwrap();
         assert_eq!(accepted.expected_statement(), expected);
         assert_eq!(accepted.segments(), 2);
         assert_eq!(accepted.air_row_roots().len(), 2);
-        assert_eq!(accepted.identity().profile_id, quantity_profile_id());
+        assert_eq!(
+            accepted.identity().profile_id,
+            if is_axt {
+                quantity_profile_id()
+            } else {
+                execution_effect_profile_id()
+            }
+        );
         assert_eq!(
             accepted.identity().artifact_bytes,
             u64::try_from(bytes.len()).unwrap()
@@ -897,12 +1028,19 @@ fn captured_deep_artifacts_verify_with_normal_library_and_independent_context() 
         ));
         let mut wrong = expected;
         wrong.inputs.slot ^= 1;
-        assert!(matches!(
-            verify(&bytes, wrong),
-            Err(VerificationError::Verify(Error::PublicIoMismatch {
-                field: "compact_model_public_io"
-            }))
-        ));
+        if is_axt {
+            assert!(matches!(
+                verify(&bytes, wrong),
+                Err(VerificationError::Verify(Error::PublicIoMismatch {
+                    field: "compact_model_public_io"
+                }))
+            ));
+        } else {
+            // Preserve an independent public-input mismatch under the original digest.
+            assert!(matches!(verify(&bytes, wrong),
+                Err(VerificationError::Verify(Error::TransferInvariant { details }))
+                    if details == "execution effect independent statement expectation mismatch"));
+        }
         assert!(verify(&[], expected).is_err());
         assert!(verify(&bytes[..bytes.len() - 1], expected).is_err());
         let mut malformed = bytes.clone();
@@ -930,19 +1068,19 @@ fn canonical_axt_batch_producer_preflights_without_a_replay_prover() {
     let binding = binding();
     let mut batch = fastpq_prover::TransitionBatch::new("unknown-profile", PublicInputs::default());
     assert!(matches!(
-        fastpq_prover::prove_axt_bound_batch(&batch, &binding),
+        producer_funding::prove_axt_bound_batch(&batch, &binding),
         Err(Error::ParameterMismatch { expected, actual })
             if expected == AXT_DEFAULT_PARAMETER && actual == "unknown-profile"
     ));
     batch.parameter = AXT_DEFAULT_PARAMETER.into();
     assert!(matches!(
-        fastpq_prover::prove_axt_bound_batch(&batch, &binding),
+        producer_funding::prove_axt_bound_batch(&batch, &binding),
         Err(Error::InvalidProofSemantics { .. })
     ));
     let mut noncanonical = binding;
     noncanonical.parameter = format!(" {AXT_DEFAULT_PARAMETER} ");
     assert!(matches!(
-        fastpq_prover::prove_axt_bound_batch(&batch, &noncanonical),
+        producer_funding::prove_axt_bound_batch(&batch, &noncanonical),
         Err(Error::InvalidAxtBinding { .. })
     ));
 }

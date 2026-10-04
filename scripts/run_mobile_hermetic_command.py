@@ -125,6 +125,7 @@ def parse_assignment(raw: str) -> tuple[str, str]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--profile", choices=sorted(PROFILES), required=True)
+    parser.add_argument("--working-directory", type=pathlib.Path)
     parser.add_argument(
         "--set",
         dest="assignments",
@@ -505,6 +506,36 @@ def recheck_build_cargo_configuration(
             raise RuntimeError(f"Native Cargo configuration changed during invocation: {candidate}")
 
 
+def authenticate_cargo_invocation_directory(
+    root: pathlib.Path, directory: pathlib.Path,
+) -> tuple[pathlib.Path, tuple[int, ...]]:
+    """Pin an explicit private Cargo cwd outside the authenticated source tree."""
+    if not directory.is_absolute() or directory != pathlib.Path(os.path.abspath(directory)):
+        raise RuntimeError("MOBILE_SDK_CARGO_INVOCATION_DIR must be an absolute canonical directory")
+    try:
+        metadata = directory.lstat()
+        resolved = directory.resolve(strict=True)
+    except OSError as error:
+        raise RuntimeError("MOBILE_SDK_CARGO_INVOCATION_DIR must already exist") from error
+    if (resolved != directory or not stat.S_ISDIR(metadata.st_mode)
+            or stat.S_ISLNK(metadata.st_mode) or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+            or not os.access(directory, os.R_OK | os.W_OK | os.X_OK)
+            or directory == root or root in directory.parents or directory in root.parents):
+        raise RuntimeError("MOBILE_SDK_CARGO_INVOCATION_DIR must be an owned writable non-symbolic canonical mode-0700 directory disjoint from source")
+    return directory, (
+        metadata.st_dev, metadata.st_ino, metadata.st_mode, metadata.st_uid, metadata.st_gid,
+    )
+
+
+def recheck_cargo_invocation_directory(
+    root: pathlib.Path, observation: tuple[pathlib.Path, tuple[int, ...]],
+) -> None:
+    """Refuse replacement or custody changes to the actual Cargo working directory."""
+    if authenticate_cargo_invocation_directory(root, observation[0]) != observation:
+        raise RuntimeError("Native Cargo invocation directory changed during invocation")
+
+
 def main() -> int:
     args = parse_args()
     expected = PROFILES[args.profile]
@@ -521,6 +552,16 @@ def main() -> int:
             f"{args.profile} environment inventory is not exact "
             f"(missing={missing}, unexpected={unexpected})"
         )
+    source_root = pathlib.Path.cwd()
+    invocation_directory = source_root
+    invocation_observation = None
+    if args.working_directory is not None:
+        if not args.profile.startswith("apple-"):
+            raise RuntimeError("an explicit Cargo working directory requires an Apple Cargo profile")
+        invocation_observation = authenticate_cargo_invocation_directory(
+            source_root, args.working_directory
+        )
+        invocation_directory = invocation_observation[0]
 
     with contextlib.ExitStack() as original_custody:
         bindings = []
@@ -538,7 +579,7 @@ def main() -> int:
         build_configuration = {}
         if args.profile in AUTHENTICATED_CARGO_PROFILES:
             build_configuration = authenticate_build_cargo_configuration(
-                pathlib.Path.cwd(), pathlib.Path(environment["CARGO_HOME"])
+                invocation_directory, pathlib.Path(environment["CARGO_HOME"])
             )
         if args.profile in AUTHENTICATED_CARGO_PROFILES:
             authenticated_tools = authenticate_cargo_environment(environment)
@@ -563,13 +604,18 @@ def main() -> int:
 
         for binding in bindings:
             binding.recheck()
+        if invocation_observation is not None:
+            recheck_cargo_invocation_directory(source_root, invocation_observation)
 
         completed = subprocess.run(
             [str(resolved), *args.command[1:]],
             env=environment,
             close_fds=True,
             check=False,
+            cwd=invocation_directory,
         )
+        if invocation_observation is not None:
+            recheck_cargo_invocation_directory(source_root, invocation_observation)
         recheck_build_cargo_configuration(build_configuration)
         for name, (path, expected_identity) in authenticated_tools.items():
             _, current_identity = authenticate_regular_executable(name, str(path))

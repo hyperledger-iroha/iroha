@@ -3,7 +3,8 @@
 use super::*;
 use crate::fastpq::{
     FastpqPublicInputsTemplate, measure_fastpq_source_statement_usage, poseidon_preimage_digest,
-    quantity_materializer_invocations_for_testing, quantity_statement_from_finalized_transcripts,
+    quantity_materializer_invocations_for_testing,
+    quantity_statement_from_finalized_transcripts_for_testing,
 };
 use fastpq_prover::gadgets::public_transfer_statement::{
     PublicTransferLimits, TransferSmtBuildLimits,
@@ -138,7 +139,7 @@ fn complete_entry_replaces_the_frame_and_preserves_every_occurrence() {
     assert_eq!(tx.commit(), expected);
     assert_eq!(ledger.usage(), expected);
 
-    let statement = quantity_statement_from_finalized_transcripts(
+    let statement = quantity_statement_from_finalized_transcripts_for_testing(
         FastpqPublicInputsTemplate {
             dsid: [3; 16],
             slot: 81,

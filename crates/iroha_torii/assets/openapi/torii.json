@@ -59862,7 +59862,7 @@
           "schemaVersion": 1,
           "stableRouteId": "application.accounts_by_account_id_assets_query_post"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/accounts/{account_id}/history": {
@@ -60033,7 +60033,7 @@
           "schemaVersion": 1,
           "stableRouteId": "application.accounts_by_account_id_history_query_post"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/accounts/{account_id}/identifiers/claim-receipt": {
@@ -60463,7 +60463,7 @@
           "schemaVersion": 1,
           "stableRouteId": "application.accounts_by_account_id_transactions_query_post"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/accounts/{uaid}/portfolio": {
@@ -61566,7 +61566,7 @@
     },
     "/v1/aliases/resolve-index": {
       "post": {
-        "description": "Fans out the alias-index lookup across public dataspaces and, when canonical authentication is supplied, exactly authorized restricted dataspaces. Invisible entries are removed before totals and cursors are computed.",
+        "description": "Requires canonical account authentication before decoding the index or selecting visible dataspace routes. Looks up the index only on authorized routes and rejects conflicting bindings.",
         "operationId": "aliasResolveIndex",
         "parameters": [
           {
@@ -61765,7 +61765,6 @@
           }
         },
         "security": [
-          {},
           {
             "IrohaCanonicalAccount": [],
             "IrohaCanonicalNonce": [],
@@ -61782,7 +61781,7 @@
         ],
         "x-iroha-route-auth": {
           "admission": "dataspace_visible",
-          "authentication": "optional_canonical_account_signature",
+          "authentication": "canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "aliases.resolve_index"
         },
@@ -62719,7 +62718,7 @@
           "schemaVersion": 1,
           "stableRouteId": "asset.holder.query"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/blocks/stream": {
@@ -64475,7 +64474,7 @@
           "schemaVersion": 1,
           "stableRouteId": "application.contracts_activity_query_post"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/contracts/aliases": {
@@ -66190,7 +66189,7 @@
           "schemaVersion": 1,
           "stableRouteId": "application.contracts_events_query_post"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/contracts/events/sse": {
@@ -93010,7 +93009,7 @@
           "schemaVersion": 1,
           "stableRouteId": "application.repo_agreements_query_post"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/retail/recipients/lookup": {
@@ -122447,7 +122446,7 @@
           "schemaVersion": 1,
           "stableRouteId": "application.transactions_query_post"
         },
-        "x-iroha-tool-effect": "write"
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/triggers/completed": {

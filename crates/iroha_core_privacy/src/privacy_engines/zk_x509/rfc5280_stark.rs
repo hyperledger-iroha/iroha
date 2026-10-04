@@ -87,12 +87,18 @@ use thiserror::Error;
 mod binding;
 #[path = "rfc5280_calendar.rs"]
 mod calendar;
+#[path = "rfc5280_copy_census.rs"]
+mod copy_census;
 #[path = "rfc5280_name_policy.rs"]
 mod name_policy;
 #[path = "rfc5280_name_values.rs"]
 mod name_values;
 #[path = "rfc5280_numeric.rs"]
 mod numeric;
+#[path = "rfc5280_path_len.rs"]
+mod path_len;
+#[path = "rfc5280_profile_identity.rs"]
+mod profile_identity;
 #[path = "rfc5280_projection_disclosure.rs"]
 mod projection_disclosure;
 #[path = "rfc5280_projection_serial.rs"]
@@ -104,12 +110,12 @@ mod variable_output;
 use binding::numeric_lookup_event_v1;
 /// Stable identity of the native RFC adapter integrated only through MAIN.
 #[cfg(test)]
-pub(crate) const ZK_X509_RFC5280_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-rfc5280-stark-v1-incompatible:native-log19:base285:aux280:fixed147:constraints1941:degree4:output-metadata-six-verifier-fixed-equations:five-key-and-five-complete-spki-outputs-der-node-byte-lookups-key-length66-offset1-spki-content89-total91-offset0-nine-variable-tbs-crl-signature-byte-and-canonical-u16-in-eight-byte-big-endian-length-pairs-live-prefix-count-node-continuity-source-start-helper:projection-leaf-serial-magnitude-sign-octet-nonzero-first-byte-big-endian-length-selected-original-subject-oid-value-provenance-with-complete-name-oid-census-three-original-classes-disjoint-document-stride12-keys1through48-six-bit-positive-gaps-uniqueness-nonempty-bounded-rdns-and-complete-original-value-census-country-printable-utf8-dfa:max-private-active-rows246673:fixed-public-nonpadding-rows292206:four-copy-lanes:zero-sized-public-shape:constant-registration-transcript:no-private-depth-length-count-or-family-boundary-disclosure:committed-family-active-prefixes-except-verifier-fixed-temporal-slot-census:inactive-rows-canonical-zero:four-fixed-top-document-slots:top-document-max4096:optional-certificate-slot2-boolean-provenance-bound:depth2-slot2-zero-byte-zero-node-dummy:certificate-slot-active-output-channel:source-byte-and-node-private-joined-der-endpoints:canonical-parent-child-tag-ordinal-grammar:closed-four-or-five-certificate-extension-cardinality:no-host-role-labels:extension-embedded-exact-copy:algorithm-and-profile-fixed-byte-rows:decimal-calendar-to-unix-arithmetic:gregorian-euclidean-year-quotients-and-exact-leap-bit:utc1970-2049-generalized2050-9999-actual-der-tag-and-raw-year-bound:fixed72-authenticated-document-role-instance-time-slots:complete-der-time-node-census:fixed15-decimal-byte-rows-including-z-and-zero-utc-padding:fixed73-two-phase-relations-with-verifier-public-operands-and-only-next-update-strict:entry-count-equals64-boolean-entry-census:38-bit-nonwrapping-timestamp-and-slack:range-byte-before-after-transition-bound:four-lane-affine-one-plus-tuple-logarithmic-lookup-domains100-101:singular-inverse-zero-and-exact-singular-count:bounded-public-presentation-window:private-certificate-validity-covers-window:private-crl-interval-covers-window:pathlen-and-ca-state:ku-eku-bc:serial-positive-max20:complete-crl-max64:fixed-two-phase-serial-comparator-layout:fixed-seven-phase-calendar-copy-layout:max-serial-comparisons127:max-serial-comparator-logical-rows2667:max-serial-comparator-physical-rows5334:max-serial-source-rows5334:leaf-vs-every-entry-nonmembership:adjacent-revoked-serial-strict-increasing-unsigned-magnitude:length-then-byte-lexicographic:active-prefix-count-and-zero-padding:first-magnitude-byte-nonzero:first-difference-range-checked:der-integer-optional-sign-octet-bound:serial-source-node-and-byte-zero-safe-log-lookups-with-singular-count-equality:serial-decimal-relation-to-comparator-calendar-range-four-lane-grand-product:one-compressed-factor-per-physical-row:zero-product-factors-total-no-prover-abort:full-input-affine-degree-audit:issuer-name-and-aki-ski-byte-equality:fixed-five-document-sha-call-sources:fixed-three-certificate-signature-key-slots:depth2-third-tbs-signature-key-canonical-dummy:full-signed-crl-commitment-and-tbs-p256-message-distinct:producer-and-consumer-terminals-enumerated:thirty-nine-relation-four-lane-union-bound-at-least170-bits:canonical-base-fixed-aux-column-provider:eighteen-verifier-fixed-output-role-endpoint-selectors:nine-independent-normalized-producer-and-nine-actual-consumer-four-lane-products:governed-root-spki-and-certificate-slot-active-products-air-bound:four-private-governed-root-consumer-to-original-CA-polynomial-links:private-normalized-producer-to-consumer36-final-equalities:16-native-constant-private-sha-bridge-columns:16-sha-quartic-endpoint-plus4-rfc-quartic-union-main-joins:endpoint-map6,2,2,2,3,3,2,4,3:direction0:instance0:typed-family-role-endpoint-lane-addresses:no-der-public-claim-slots:der-rfc8-private-linear-quotients:verifier-original-polynomial-private-link-replay:no-public-terminal-products:sha-terminal-ca-call-family-lane-addresses-fixed:compact-ca-call-role-and-order-fixed:verifier-committed-sha-terminal-replay:five-p256-witnesses-native-rust-fixed-certificate-crl-wallet-order:p256348-private-products-no-public-codec:p256184-private-linear-links:four-certificate-or-crl-then-wallet-role-order:p256-bus-cross-start-terminal-and-sink-addresses-fixed:canonical-goldilocks-big-endian:verifier-authenticated-p256-private-oods-link-equations:compact-ca-subproof-dedicated-x5c1-x5c2-complete:ca-claim-free-frame10bytes-main-frame1002-joint132-Fp4-openings4224:ca-single-log12-trace4096-base695-aux128-fixed80-constraints1363-degree3-4chunks:ca-local-lde-log16-mask2100-deep52800-fri136-rounds6-terminal1024-degree143-grinding20:shared-x5b1-single-joined-main-base-root-plus-ca-base-root-challenge-schedule:ca-public-profile-and-root-bound:ca-prover-self-verifies-independent-verifier-and-resource-gates:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
+pub(crate) const ZK_X509_RFC5280_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-rfc5280-stark-v1-incompatible:native-log19:base285:aux280:fixed147:constraints2145:degree4:source-node-root-kind-active-gated-helper-fixed-eight-equality-and-fifteen-embedded-endpoint-slots-complete-nonempty-original-node-spans-live-prefix-count-typed-copy-domains103-104-optional-slot-canonical-zero-exact-extension-oid-ordinal-ku-document-and-critical-cardinality-eku-canonical-profile-uuid-oids:output-metadata-six-verifier-fixed-equations:five-key-and-five-complete-spki-outputs-der-node-byte-lookups-key-length66-offset1-spki-content89-total91-offset0-nine-variable-tbs-crl-signature-byte-and-canonical-u16-in-eight-byte-big-endian-length-pairs-live-prefix-count-node-continuity-source-start-helper:projection-leaf-serial-magnitude-sign-octet-nonzero-first-byte-big-endian-length-selected-original-subject-oid-value-provenance-with-complete-name-oid-census-three-original-classes-disjoint-document-stride12-keys1through48-six-bit-positive-gaps-uniqueness-nonempty-bounded-rdns-and-complete-original-value-census-country-printable-utf8-dfa:max-private-active-rows246673:fixed-public-nonpadding-rows292206:four-copy-lanes:zero-sized-public-shape:constant-registration-transcript:no-private-depth-length-count-or-family-boundary-disclosure:committed-family-active-prefixes-except-verifier-fixed-temporal-basic-constraints-and-complete-copy-slot-census:inactive-rows-canonical-zero:four-fixed-top-document-slots:top-document-max4096:optional-certificate-slot2-boolean-provenance-bound:depth2-slot2-zero-byte-zero-node-dummy:certificate-slot-active-output-channel:source-byte-and-node-private-joined-der-endpoints:canonical-parent-child-tag-ordinal-grammar:closed-leaf-five-ca-four-extension-cardinality-and-ordinal-bound-critical-positions:no-host-role-labels:extension-embedded-exact-copy:algorithm-and-profile-fixed-byte-rows:decimal-calendar-to-unix-arithmetic:gregorian-euclidean-year-quotients-and-exact-leap-bit:utc1970-2049-generalized2050-9999-actual-der-tag-and-raw-year-bound:fixed72-authenticated-document-role-instance-time-slots:complete-der-time-node-census:fixed15-decimal-byte-rows-including-z-and-zero-utc-padding:fixed73-two-phase-relations-with-verifier-public-operands-and-only-next-update-strict:entry-count-equals64-boolean-entry-census:38-bit-nonwrapping-timestamp-and-slack:range-byte-before-after-transition-bound:four-lane-affine-one-plus-tuple-logarithmic-lookup-domains100-101:singular-inverse-zero-and-exact-singular-count:bounded-public-presentation-window:private-certificate-validity-covers-window:private-crl-interval-covers-window:basic-constraints-fixed-three-slots-twelve-rows-original-signed-extension-ordinal3-complete-bytes-eight-canonical-u32-integer-variants-32bit-pathlen-and-nonwrapping-slack-at-least-subordinate-count:ku-eku-bc:serial-positive-max20:complete-crl-max64:fixed-two-phase-serial-comparator-layout:fixed-seven-phase-calendar-copy-layout:max-serial-comparisons127:max-serial-comparator-logical-rows2667:max-serial-comparator-physical-rows5334:max-serial-source-rows5334:leaf-vs-every-entry-nonmembership:adjacent-revoked-serial-strict-increasing-unsigned-magnitude:length-then-byte-lexicographic:active-prefix-count-and-zero-padding:first-magnitude-byte-nonzero:first-difference-range-checked:der-integer-optional-sign-octet-bound:serial-source-node-and-byte-zero-safe-log-lookups-with-singular-count-equality:serial-decimal-relation-to-comparator-calendar-range-four-lane-grand-product:one-compressed-factor-per-physical-row:zero-product-factors-total-no-prover-abort:full-input-affine-degree-audit:issuer-name-and-aki-ski-byte-equality:fixed-five-document-sha-call-sources:fixed-three-certificate-signature-key-slots:depth2-third-tbs-signature-key-canonical-dummy:full-signed-crl-commitment-and-tbs-p256-message-distinct:producer-and-consumer-terminals-enumerated:thirty-nine-relation-four-lane-union-bound-at-least170-bits:canonical-base-fixed-aux-column-provider:eighteen-verifier-fixed-output-role-endpoint-selectors:nine-independent-normalized-producer-and-nine-actual-consumer-four-lane-products:governed-root-spki-and-certificate-slot-active-products-air-bound:four-private-governed-root-consumer-to-original-CA-polynomial-links:private-normalized-producer-to-consumer36-final-equalities:16-native-constant-private-sha-bridge-columns:16-sha-quartic-endpoint-plus4-rfc-quartic-union-main-joins:endpoint-map6,2,2,2,3,3,2,4,3:direction0:instance0:typed-family-role-endpoint-lane-addresses:no-der-public-claim-slots:der-rfc8-private-linear-quotients:verifier-original-polynomial-private-link-replay:no-public-terminal-products:sha-terminal-ca-call-family-lane-addresses-fixed:compact-ca-call-role-and-order-fixed:verifier-committed-sha-terminal-replay:five-p256-witnesses-native-rust-fixed-certificate-crl-wallet-order:p256348-private-products-no-public-codec:p256184-private-linear-links:four-certificate-or-crl-then-wallet-role-order:p256-bus-cross-start-terminal-and-sink-addresses-fixed:canonical-goldilocks-big-endian:verifier-authenticated-p256-private-oods-link-equations:compact-ca-subproof-dedicated-x5c1-x5c2-complete:ca-claim-free-frame10bytes-main-frame1002-joint132-Fp4-openings4224:ca-single-log12-trace4096-base695-aux128-fixed80-constraints1363-degree3-4chunks:ca-local-lde-log16-mask2100-deep52800-fri136-rounds6-terminal1024-degree143-grinding20:shared-x5b1-single-joined-main-base-root-plus-ca-base-root-challenge-schedule:ca-public-profile-and-root-bound:ca-prover-self-verifies-independent-verifier-and-resource-gates:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
 /// SHA-256 of [`ZK_X509_RFC5280_STARK_DESCRIPTOR_V1`].
 #[cfg(test)]
 pub(crate) const ZK_X509_RFC5280_STARK_DESCRIPTOR_SHA256_V1: [u8; 32] = [
-    0xb7, 0x36, 0x18, 0x2a, 0x4b, 0x94, 0xbc, 0x8d, 0xd6, 0x8c, 0xf8, 0x08, 0xba, 0xec, 0x58, 0x57,
-    0xd3, 0xbf, 0xce, 0x62, 0xc0, 0x41, 0x8d, 0x56, 0x1f, 0xbc, 0x26, 0x59, 0xcb, 0xc1, 0x80, 0x77,
+    0x34, 0x1c, 0x8f, 0x9f, 0x2a, 0xb8, 0x46, 0xc1, 0x81, 0x68, 0x73, 0x90, 0x8c, 0x39, 0x68, 0x41,
+    0x3a, 0x76, 0x1e, 0x55, 0x82, 0x38, 0x1a, 0xd3, 0x2e, 0xd7, 0x21, 0x5b, 0x6e, 0x86, 0x75, 0x60,
 ];
 /// Native trace logarithm after the 4 KiB X.509 admission cap.
 pub(crate) const ZK_X509_RFC5280_STARK_TRACE_LOG2_V1: u8 = 19;
@@ -139,18 +145,18 @@ pub(crate) const ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1: usize = {
 const RFC5280_RESIDUE_SECTIONS_V1: [(&str, usize); 20] = [
     ("common", 13),
     ("degree-normalization-helpers", 19),
-    ("source-families", 7),
+    ("source-families", 4 + copy_census::RESIDUES),
     ("source-node-grammar", 74),
     ("grammar-ordinal-local", 34),
     (
         "fixed-equal-decimal-and-name-uniqueness",
-        57 + name_policy::RESIDUES + name_values::RESIDUES,
+        56 + name_policy::RESIDUES + name_values::RESIDUES + profile_identity::RESIDUES,
     ),
     (
         "calendar",
         11 + calendar::RESIDUES_V1 + binding::RESIDUES_V1,
     ),
-    ("relation-bit-flags", 4),
+    ("relation-basic-constraints", 3 + path_len::RESIDUES),
     ("serial-source", 29),
     ("serial-compare", 82),
     ("range-profile", 12),
@@ -250,7 +256,7 @@ const FIXED_EQUAL_BYTE_ROWS_V1: usize = 16_384;
 const FIXED_DECIMAL_ROWS_V1: usize = numeric::TEMPORAL_SLOTS_V1 * numeric::DECIMAL_ROWS_PER_TIME_V1;
 const FIXED_CALENDAR_ROWS_V1: usize = numeric::TEMPORAL_SLOTS_V1 * CALENDAR_COPY_PHASES_V1;
 const FIXED_RELATION_ROWS_V1: usize = numeric::RELATION_SLOTS_V1 * numeric::RELATION_PHASES_V1;
-const FIXED_BIT_FLAG_ROWS_V1: usize = 256;
+const FIXED_BASIC_CONSTRAINTS_ROWS_V1: usize = 256;
 const FIXED_RANGE_ROWS_V1: usize =
     numeric::RELATION_SLOTS_V1 * numeric::RANGE_BYTES_PER_RELATION_V1;
 const FIXED_SEMANTIC_SOURCE_ROWS_V1: usize = 32_768;
@@ -266,7 +272,7 @@ const FIXED_NON_PADDING_ROWS_V1: usize = FIXED_SOURCE_BYTE_ROWS_V1
     + FIXED_DECIMAL_ROWS_V1
     + FIXED_CALENDAR_ROWS_V1
     + FIXED_RELATION_ROWS_V1
-    + FIXED_BIT_FLAG_ROWS_V1
+    + FIXED_BASIC_CONSTRAINTS_ROWS_V1
     + MAX_SERIAL_SOURCE_ROWS_V1
     + MAX_SERIAL_COMPARISON_PHYSICAL_ROWS_V1
     + FIXED_RANGE_ROWS_V1
@@ -365,7 +371,7 @@ pub(crate) enum ZkX509Rfc5280StarkFamilyV1 {
     Decimal = 6,
     Calendar = 7,
     Relation = 8,
-    BitFlags = 9,
+    BasicConstraints = 9,
     SerialSource = 10,
     SerialCompare = 11,
     RangeByte = 12,
@@ -432,7 +438,7 @@ pub(crate) struct ZkX509Rfc5280StarkPrivateShapeV1 {
     pub(crate) decimal_rows: u32,
     pub(crate) calendar_rows: u32,
     pub(crate) relation_rows: u32,
-    pub(crate) bit_flag_rows: u32,
+    pub(crate) basic_constraints_rows: u32,
     pub(crate) serial_source_rows: u32,
     pub(crate) serial_rows: u32,
     pub(crate) range_rows: u32,
@@ -495,8 +501,9 @@ impl ZkX509Rfc5280StarkPrivateShapeV1 {
             usize::try_from(self.calendar_rows).map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
         counts[ZkX509Rfc5280StarkFamilyV1::Relation as usize] =
             usize::try_from(self.relation_rows).map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
-        counts[ZkX509Rfc5280StarkFamilyV1::BitFlags as usize] =
-            usize::try_from(self.bit_flag_rows).map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
+        counts[ZkX509Rfc5280StarkFamilyV1::BasicConstraints as usize] =
+            usize::try_from(self.basic_constraints_rows)
+                .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
         counts[ZkX509Rfc5280StarkFamilyV1::SerialSource as usize] =
             usize::try_from(self.serial_source_rows)
                 .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
@@ -546,6 +553,7 @@ impl ZkX509Rfc5280StarkPrivateShapeV1 {
             || top_count != usize::from(self.chain_depth) + 1
             || top_count > ZK_X509_DER_AIR_MAX_DOCUMENTS_V1
             || embedded_count > ZK_X509_DER_AIR_MAX_EMBEDDED_DOCUMENTS_V1
+            || embedded_count != 4 * usize::from(self.chain_depth) + 3
             || usize::from(self.crl_entries) > ZK_X509_MAX_CRL_ENTRIES_V1
             || self.disclosed_attributes > 4
             || self
@@ -586,12 +594,20 @@ impl ZkX509Rfc5280StarkPrivateShapeV1 {
             || self.embedded_node_counts[embedded_count..]
                 .iter()
                 .any(|count| *count != 0)
-            || usize::try_from(self.embedded_copy_rows).ok()
-                != Some(
-                    self.embedded_document_lengths[..embedded_count]
-                        .iter()
-                        .map(|length| usize::from(*length))
-                        .sum(),
+            || self.embedded_copy_rows as usize
+                != copy_census::active_rows(
+                    ZkX509Rfc5280StarkFamilyV1::EmbeddedCopy,
+                    self.chain_depth == 3,
+                )
+            || self.equality_rows as usize
+                != copy_census::active_rows(
+                    ZkX509Rfc5280StarkFamilyV1::EqualByte,
+                    self.chain_depth == 3,
+                )
+            || self.semantic_consumer_rows as usize
+                != copy_census::active_rows(
+                    ZkX509Rfc5280StarkFamilyV1::SemanticConsumer,
+                    self.chain_depth == 3,
                 )
             || self.grammar_rows as usize
                 != self
@@ -619,7 +635,7 @@ impl ZkX509Rfc5280StarkPrivateShapeV1 {
             || self.decimal_rows as usize > FIXED_DECIMAL_ROWS_V1
             || self.calendar_rows as usize > FIXED_CALENDAR_ROWS_V1
             || self.relation_rows as usize > FIXED_RELATION_ROWS_V1
-            || self.bit_flag_rows as usize > FIXED_BIT_FLAG_ROWS_V1
+            || self.basic_constraints_rows as usize > FIXED_BASIC_CONSTRAINTS_ROWS_V1
             || self.serial_source_rows as usize > MAX_SERIAL_SOURCE_ROWS_V1
             || self.serial_rows as usize > MAX_SERIAL_COMPARISON_PHYSICAL_ROWS_V1
             || self.range_rows as usize > FIXED_RANGE_ROWS_V1
@@ -632,7 +648,7 @@ impl ZkX509Rfc5280StarkPrivateShapeV1 {
                 .saturating_add(self.decimal_rows as usize)
                 .saturating_add(self.calendar_rows as usize)
                 .saturating_add(self.relation_rows as usize)
-                .saturating_add(self.bit_flag_rows as usize)
+                .saturating_add(self.basic_constraints_rows as usize)
                 .saturating_add(self.range_rows as usize)
                 .saturating_add(self.semantic_source_rows as usize)
                 .saturating_add(self.semantic_consumer_rows as usize)
@@ -739,7 +755,7 @@ impl ZkX509Rfc5280StarkShapeV1 {
             FIXED_DECIMAL_ROWS_V1,
             FIXED_CALENDAR_ROWS_V1,
             FIXED_RELATION_ROWS_V1,
-            FIXED_BIT_FLAG_ROWS_V1,
+            FIXED_BASIC_CONSTRAINTS_ROWS_V1,
             MAX_SERIAL_SOURCE_ROWS_V1,
             MAX_SERIAL_COMPARISON_PHYSICAL_ROWS_V1,
             FIXED_RANGE_ROWS_V1,
@@ -1268,7 +1284,6 @@ const fn profile_role_required_v1(role: u16) -> bool {
         || role == ZkX509Rfc5280GrammarRoleV1::NameAttributeOid as u16
         || role == ZkX509Rfc5280GrammarRoleV1::NameAttributeValue as u16
         || role == ZkX509Rfc5280GrammarRoleV1::EmbeddedKeyUsage as u16
-        || role == ZkX509Rfc5280GrammarRoleV1::EmbeddedBasicConstraints as u16
         || role == ZkX509Rfc5280GrammarRoleV1::EmbeddedEku as u16
         || role == ZkX509Rfc5280GrammarRoleV1::EmbeddedCrlNumber as u16
 }
@@ -1874,8 +1889,8 @@ const NAME_OIDS_V1: [&[u8]; 4] = [
 ];
 const EKU_OIDS_V1: [&[u8]; 3] = [
     &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x02],
-    &[0x2b, 0x06, 0x01, 0x04, 0x01, 0x83, 0xb2, 0x03, 0x01, 0x01],
-    &[0x2b, 0x06, 0x01, 0x04, 0x01, 0x83, 0xb2, 0x03, 0x01, 0x02],
+    super::profile::ZK_X509_DOCUMENT_SIGNING_EKU_DER_VALUE_V1,
+    super::profile::ZK_X509_WALLET_IDENTITY_EKU_DER_VALUE_V1,
 ];
 const KEY_USAGE_KEY_CERT_SIGN_V1: u16 = 1 << 5;
 const KEY_USAGE_CRL_SIGN_V1: u16 = 1 << 6;
@@ -1963,7 +1978,6 @@ pub(crate) struct ZkX509Rfc5280SemanticWitnessV1 {
     pub(crate) decimal_cells: Vec<ZkX509Rfc5280SourceCellV1>,
     pub(crate) calendar_values: Vec<u64>,
     pub(crate) numeric_relations: Vec<ZkX509Rfc5280NumericRelationV1>,
-    pub(crate) bit_flags: Vec<(u16, u16, u64, u64)>,
     pub(crate) serial_sources: Vec<ZkX509Rfc5280SerialSourceV1>,
     pub(crate) serial_comparisons: Vec<ZkX509Rfc5280SerialComparisonV1>,
 }
@@ -2523,6 +2537,7 @@ fn encode_key_usage_v1(flags: u16) -> Result<Vec<u8>, ZkX509Rfc5280StarkErrorV1>
     encoded.extend_from_slice(&value);
     Ok(encoded)
 }
+#[cfg(test)]
 fn encode_basic_constraints_v1(
     ca: bool,
     path_len: Option<u32>,
@@ -2648,7 +2663,6 @@ pub(crate) fn build_zk_x509_rfc5280_semantic_witness_v1(
         decimal_cells: Vec::new(),
         calendar_values: Vec::new(),
         numeric_relations: Vec::new(),
-        bit_flags: Vec::new(),
         serial_sources: Vec::new(),
         serial_comparisons: Vec::new(),
     };
@@ -2827,20 +2841,6 @@ pub(crate) fn build_zk_x509_rfc5280_semantic_witness_v1(
             u16::try_from(index).map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
             u16::from(index != 0),
         )?;
-        let basic_root =
-            embedded_role_node_v1(trace, index, ZkX509Rfc5280DocumentKindV1::BasicConstraints)?;
-        push_fixed_slice_v1(
-            &mut witness.fixed_bytes,
-            basic_root,
-            &source_slice_v1(trace, basic_root, false)?,
-            &encode_basic_constraints_v1(
-                certificate.extensions.basic_constraints_ca,
-                certificate.extensions.basic_constraints_path_len,
-            )?,
-            11,
-            u16::try_from(index).map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
-            u16::try_from(index).map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
-        )?;
         if let Some(ekus) = certificate.extensions.extended_key_usages.as_deref() {
             let eku_root =
                 embedded_role_node_v1(trace, index, ZkX509Rfc5280DocumentKindV1::ExtendedKeyUsage)?;
@@ -2925,11 +2925,7 @@ pub(crate) fn build_zk_x509_rfc5280_semantic_witness_v1(
                 .extensions
                 .basic_constraints_path_len
                 .ok_or(ZkX509Rfc5280StarkErrorV1::Semantic)?;
-            // The closed first-release profile has one canonical path-length
-            // encoding per CA slot.  Allowing a larger, semantically
-            // equivalent value would require a private-value lookup table and
-            // creates needless proof malleability.
-            if path_len != subordinate {
+            if path_len < subordinate {
                 return Err(ZkX509Rfc5280StarkErrorV1::Semantic);
             }
             if certificate.extensions.extended_key_usages.is_some() {
@@ -3089,10 +3085,6 @@ pub(crate) fn build_zk_x509_rfc5280_semantic_witness_v1(
         || witness.numeric_relations.iter().any(|row| {
             row.left != row.right.saturating_add(row.slack) || (row.strict && row.slack == 0)
         })
-        || witness
-            .bit_flags
-            .iter()
-            .any(|(_, _, actual, expected)| actual != expected)
     {
         return Err(ZkX509Rfc5280StarkErrorV1::Semantic);
     }
@@ -3192,8 +3184,11 @@ pub(crate) fn build_zk_x509_rfc5280_stark_private_shape_v1(
             .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
         disclosed_attributes: u8::try_from(trace.statement.disclosed_attribute_indices.len())
             .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
-        embedded_copy_rows: u32::try_from(trace.embedded_byte_rows.len())
-            .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
+        embedded_copy_rows: u32::try_from(copy_census::active_rows(
+            ZkX509Rfc5280StarkFamilyV1::EmbeddedCopy,
+            trace.certificates.len() == 3,
+        ))
+        .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
         // One verifier-owned rule row plus one canonical ordinal row for
         // every non-root DER node.
         grammar_rows: u32::try_from(
@@ -3211,8 +3206,11 @@ pub(crate) fn build_zk_x509_rfc5280_stark_private_shape_v1(
             .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
         fixed_byte_rows: u32::try_from(semantic.fixed_bytes.len())
             .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
-        equality_rows: u32::try_from(semantic.equal_bytes.len())
-            .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
+        equality_rows: u32::try_from(copy_census::active_rows(
+            ZkX509Rfc5280StarkFamilyV1::EqualByte,
+            trace.certificates.len() == 3,
+        ))
+        .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
         decimal_rows: u32::try_from(
             semantic.calendar_values.len() * numeric::DECIMAL_ROWS_PER_TIME_V1,
         )
@@ -3229,7 +3227,7 @@ pub(crate) fn build_zk_x509_rfc5280_stark_private_shape_v1(
             semantic.numeric_relations.len() * numeric::RELATION_PHASES_V1,
         )
         .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
-        bit_flag_rows: u32::try_from(semantic.bit_flags.len())
+        basic_constraints_rows: u32::try_from(trace.certificates.len() * path_len::ROWS_PER_SLOT)
             .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
         serial_source_rows: u32::try_from(
             semantic
@@ -3258,13 +3256,10 @@ pub(crate) fn build_zk_x509_rfc5280_stark_private_shape_v1(
         .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
         semantic_source_rows: u32::try_from(profile_byte_table.len())
             .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
-        semantic_consumer_rows: u32::try_from(
-            semantic
-                .equal_bytes
-                .len()
-                .checked_add(trace.embedded_byte_rows.len())
-                .ok_or(ZkX509Rfc5280StarkErrorV1::Resource)?,
-        )
+        semantic_consumer_rows: u32::try_from(copy_census::active_rows(
+            ZkX509Rfc5280StarkFamilyV1::SemanticConsumer,
+            trace.certificates.len() == 3,
+        ))
         .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
         output_producer_rows: u32::try_from(output_rows)
             .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
@@ -3456,33 +3451,6 @@ fn compile_profile_byte_table_v1(
         1,
         ZkX509Rfc5280GrammarRoleV1::EmbeddedKeyUsage,
         &encode_key_usage_v1(KEY_USAGE_KEY_CERT_SIGN_V1 | KEY_USAGE_CRL_SIGN_V1)?,
-        false,
-        true,
-    )?;
-    append_profile_pattern_v1(
-        &mut entries,
-        11,
-        0,
-        ZkX509Rfc5280GrammarRoleV1::EmbeddedBasicConstraints,
-        &encode_basic_constraints_v1(false, None)?,
-        false,
-        true,
-    )?;
-    append_profile_pattern_v1(
-        &mut entries,
-        11,
-        1,
-        ZkX509Rfc5280GrammarRoleV1::EmbeddedBasicConstraints,
-        &encode_basic_constraints_v1(true, Some(0))?,
-        false,
-        true,
-    )?;
-    append_profile_pattern_v1(
-        &mut entries,
-        11,
-        2,
-        ZkX509Rfc5280GrammarRoleV1::EmbeddedBasicConstraints,
-        &encode_basic_constraints_v1(true, Some(1))?,
         false,
         true,
     )?;
@@ -3814,7 +3782,7 @@ impl ZkX509Rfc5280StarkFixedScheduleV1 {
             ZkX509Rfc5280StarkFamilyV1::Decimal,
             ZkX509Rfc5280StarkFamilyV1::Calendar,
             ZkX509Rfc5280StarkFamilyV1::Relation,
-            ZkX509Rfc5280StarkFamilyV1::BitFlags,
+            ZkX509Rfc5280StarkFamilyV1::BasicConstraints,
             ZkX509Rfc5280StarkFamilyV1::SerialSource,
             ZkX509Rfc5280StarkFamilyV1::SerialCompare,
             ZkX509Rfc5280StarkFamilyV1::RangeByte,
@@ -3899,6 +3867,10 @@ impl ZkX509Rfc5280StarkFixedScheduleV1 {
             // present exactly for a depth-three chain (it carries the CRL).
             // A depth-two chain has only documents 0, 1, and 2.
             fixed[FIX_CERT2_SLOT_FIRST] = F(u64::from(document == 3 && address == 0));
+        }
+        copy_census::populate_fixed(&mut fixed, family, ordinal);
+        if family == ZkX509Rfc5280StarkFamilyV1::BasicConstraints {
+            path_len::populate_fixed(&mut fixed, ordinal);
         }
         if family == ZkX509Rfc5280StarkFamilyV1::FixedByte {
             fixed[FIX_EXPECTED] = F(u64::from(ordinal == 0));
@@ -5696,7 +5668,9 @@ impl ZkX509Rfc5280StarkBaseMaterialV1 {
         zeroize_words_v1(core::slice::from_mut(&mut self.private_shape.decimal_rows));
         zeroize_words_v1(core::slice::from_mut(&mut self.private_shape.calendar_rows));
         zeroize_words_v1(core::slice::from_mut(&mut self.private_shape.relation_rows));
-        zeroize_words_v1(core::slice::from_mut(&mut self.private_shape.bit_flag_rows));
+        zeroize_words_v1(core::slice::from_mut(
+            &mut self.private_shape.basic_constraints_rows,
+        ));
         zeroize_words_v1(core::slice::from_mut(
             &mut self.private_shape.serial_source_rows,
         ));
@@ -5743,7 +5717,7 @@ impl ZkX509Rfc5280StarkBaseMaterialV1 {
             && shape.decimal_rows == 0
             && shape.calendar_rows == 0
             && shape.relation_rows == 0
-            && shape.bit_flag_rows == 0
+            && shape.basic_constraints_rows == 0
             && shape.serial_source_rows == 0
             && shape.serial_rows == 0
             && shape.range_rows == 0
@@ -6129,6 +6103,8 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
     let spki_nodes = spki_output_nodes_v1(trace)?;
     let variable_nodes = variable_output::nodes(trace)?;
     let projection_serial_source = projection_serial::source(trace)?;
+    let basic_constraints_sources = path_len::sources(trace)?;
+    let copy_sources = copy_census::Sources::new(trace)?;
     let projection_disclosure_sources = projection_disclosure::sources(trace)?;
     let byte_lookup_count = serial_byte_multiplicities
         .iter()
@@ -6199,6 +6175,7 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
                 })
                 .count()
                 + name_values::byte_multiplicity(trace, document, address)
+                + path_len::byte_multiplicity(&basic_constraints_sources, document, address)
                 + key_nodes
                     .iter()
                     .flatten()
@@ -6232,7 +6209,7 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
         .expect("bounded RFC lookup multiplicity fits u64")
     };
     let serial_node_multiplicity = |document: usize, node: usize| {
-        serial_node_multiplicities
+        let multiplicity = serial_node_multiplicities
             .iter()
             .find(|entry| {
                 usize::from(entry.document) == document && usize::from(entry.node) == node
@@ -6260,7 +6237,15 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
                 &projection_disclosure_sources,
                 document,
                 node,
-            )
+            );
+        multiplicity
+            .checked_add(path_len::node_multiplicity(
+                &basic_constraints_sources,
+                document,
+                node,
+            ))
+            .and_then(|value| value.checked_add(copy_sources.node_multiplicity(document, node)))
+            .ok_or(ZkX509Rfc5280StarkErrorV1::Resource)
     };
     let source_byte_family = ZkX509Rfc5280StarkFamilyV1::SourceByte as usize;
     for (document, source) in trace.documents.iter().enumerate() {
@@ -6371,7 +6356,7 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
             row[BASE_D] = F(u64::from(child_count));
             row[BASE_E] = F(u64::from(rule.root_kind));
             row[SERIAL_NODE_TABLE_MULTIPLICITY] =
-                F(u64::from(serial_node_multiplicity(document, node_index)));
+                F(u64::from(serial_node_multiplicity(document, node_index)?));
             row[BASE_G] = F(u64::from(parent_child_count));
             row[BASE_H] = F(u64::from(rule.constant));
             row[BASE_DOCUMENT] = F(u64::from(node.document));
@@ -6418,6 +6403,7 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
             write_u16_bits_v1(&mut row, GRAMMAR_CHILD_COUNT_BITS, child_count);
             binding::populate_node_classification_v1(&mut row);
             name_policy::populate_source_node(&mut row)?;
+            profile_identity::populate_source_node(&mut row);
             family_rows[source_node_family][ordinal] = row;
         }
     }
@@ -6488,26 +6474,17 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
         row[BASE_ORDINAL_EQUAL_CONTINUE] = row[BASE_ORDINAL_NEXT_ACTIVE].mul(row[BASE_EQUAL]);
         push_family_row_v1(&mut family_rows[grammar_family], row)?;
     }
-    let embedded_family = ZkX509Rfc5280StarkFamilyV1::EmbeddedCopy as usize;
-    for source in &trace.embedded_byte_rows {
-        let value =
-            u8::try_from(source.value.value.0).map_err(|_| ZkX509Rfc5280StarkErrorV1::Source)?;
-        let mut row = active_zero_row_v1();
-        row[BASE_VALUE] = F(u64::from(value));
-        write_u8_bits_v1(&mut row, BASE_BYTE_BITS, value);
-        row[BASE_A] = F(u64::from(value));
-        row[BASE_B] = F(u64::from(value));
-        let embedded_document = F(u64::try_from(trace.documents.len())
-            .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?
-            .checked_add(source.embedded_document.value.0)
-            .ok_or(ZkX509Rfc5280StarkErrorV1::Resource)?);
-        row[BASE_C] = embedded_document;
-        row[BASE_DOCUMENT] = source.parent_document.value;
-        row[BASE_ADDRESS] = source.parent_offset.value;
-        row[BASE_CONTENT_START] = source.parent_content_start.value;
-        row[BASE_OFFSET] = source.embedded_offset.value;
-        row[BASE_ENDPOINT_INSTANCE] = embedded_document;
-        push_family_row_v1(&mut family_rows[embedded_family], row)?;
+    for family in [
+        ZkX509Rfc5280StarkFamilyV1::EqualByte,
+        ZkX509Rfc5280StarkFamilyV1::EmbeddedCopy,
+        ZkX509Rfc5280StarkFamilyV1::SemanticConsumer,
+    ] {
+        copy_census::populate_rows(
+            trace,
+            &copy_sources,
+            family,
+            &mut family_rows[family as usize],
+        )?;
     }
     let fixed_family = ZkX509Rfc5280StarkFamilyV1::FixedByte as usize;
     let mut previous_name_key = 0;
@@ -6557,33 +6534,16 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
         // admitted remaining count is also a canonical u16 field value.
         row[BASE_G] = F(u64::from(remaining)).inverse_or_zero_canonical_v1();
         name_policy::populate_fixed_byte(&mut row, &mut previous_name_key)?;
+        profile_identity::populate_fixed_byte(&mut row, private_shape.certificate_slot_2_active);
         push_family_row_v1(&mut family_rows[fixed_family], row)?;
-    }
-    let equal_family = ZkX509Rfc5280StarkFamilyV1::EqualByte as usize;
-    for source in &semantic.equal_bytes {
-        let mut row = active_zero_row_v1();
-        row[BASE_A] = F(u64::from(source.left.value));
-        row[BASE_B] = F(u64::from(source.right.value));
-        row[BASE_DOCUMENT] = F(u64::from(source.left.document));
-        row[BASE_ADDRESS] = F(u64::from(source.left.address));
-        row[BASE_ENDPOINT_ROLE] = F(u64::from(source.right.document));
-        row[BASE_ENDPOINT_INSTANCE] = F(u64::from(source.right.address));
-        row[BASE_ROLE] = F(u64::from(source.purpose));
-        row[BASE_INSTANCE] = F(u64::from(source.instance));
-        row[BASE_OFFSET] = F(u64::from(source.offset));
-        push_family_row_v1(&mut family_rows[equal_family], row)?;
     }
     binding::append_temporal_rows_v1(trace, &mut family_rows)?;
     binding::append_relation_rows_v1(trace, &semantic, &mut family_rows)?;
-    let bit_family = ZkX509Rfc5280StarkFamilyV1::BitFlags as usize;
-    for (purpose, instance, actual, expected_value) in &semantic.bit_flags {
-        let mut row = active_zero_row_v1();
-        row[BASE_A] = F(*actual);
-        row[BASE_B] = F(*expected_value);
-        row[BASE_ROLE] = F(u64::from(*purpose));
-        row[BASE_INSTANCE] = F(u64::from(*instance));
-        push_family_row_v1(&mut family_rows[bit_family], row)?;
-    }
+    path_len::append_rows(
+        trace,
+        &basic_constraints_sources,
+        &mut family_rows[ZkX509Rfc5280StarkFamilyV1::BasicConstraints as usize],
+    )?;
     let serial_source_family = ZkX509Rfc5280StarkFamilyV1::SerialSource as usize;
     for source in &semantic.serial_sources {
         for row in build_zk_x509_rfc5280_serial_source_rows_v1(source)?
@@ -6635,33 +6595,6 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
         row[BASE_ENDPOINT_ROLE] = F(u64::from(entry.variant));
         row[BASE_ENDPOINT_INSTANCE] = F(u64::from(entry.contents_only));
         push_family_row_v1(&mut family_rows[semantic_source_family], row)?;
-    }
-    let semantic_consumer_family = ZkX509Rfc5280StarkFamilyV1::SemanticConsumer as usize;
-    for source in semantic.equal_bytes.iter().map(|row| row.right) {
-        let row = byte_row_v1(
-            u64::from(source.document),
-            u64::from(source.address),
-            source.value,
-        );
-        push_family_row_v1(&mut family_rows[semantic_consumer_family], row)?;
-    }
-    for source in &trace.embedded_byte_rows {
-        let document = trace
-            .documents
-            .len()
-            .checked_add(
-                usize::try_from(source.embedded_document.value.0)
-                    .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
-            )
-            .ok_or(ZkX509Rfc5280StarkErrorV1::Resource)?;
-        let value =
-            u8::try_from(source.value.value.0).map_err(|_| ZkX509Rfc5280StarkErrorV1::Source)?;
-        let row = byte_row_v1(
-            u64::try_from(document).map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?,
-            source.embedded_offset.value.0,
-            value,
-        );
-        push_family_row_v1(&mut family_rows[semantic_consumer_family], row)?;
     }
     let output_producer_family = ZkX509Rfc5280StarkFamilyV1::OutputProducer as usize;
     let output_consumer_family = ZkX509Rfc5280StarkFamilyV1::OutputConsumer as usize;
@@ -6794,7 +6727,7 @@ fn populate_degree_normalization_helpers_v1<A: PolynomialAirFieldV1>(
         root.mul(row[BASE_DOCUMENT])
             .add(A::ONE.sub(root).mul(row[BASE_CHILD])),
     );
-    row[BASE_EXPECTED_ROOT_KIND] = source_node.mul(
+    row[BASE_EXPECTED_ROOT_KIND] = source_node.mul(active).mul(
         fixed[FIX_EXPECTED + 3]
             .add(
                 fixed[FIX_EXPECTED + 4].mul(
@@ -6822,44 +6755,32 @@ fn populate_degree_normalization_helpers_v1<A: PolynomialAirFieldV1>(
     let serial_query = family(ZkX509Rfc5280StarkFamilyV1::SerialSource)
         .mul(active)
         .mul(row[BASE_IS_WRITE]);
-    let direct_query = [
-        ZkX509Rfc5280StarkFamilyV1::EmbeddedCopy,
-        ZkX509Rfc5280StarkFamilyV1::FixedByte,
-        ZkX509Rfc5280StarkFamilyV1::NameValue,
-        ZkX509Rfc5280StarkFamilyV1::EqualByte,
-        ZkX509Rfc5280StarkFamilyV1::SemanticConsumer,
-    ]
-    .into_iter()
-    .fold(A::ZERO, |sum, candidate| sum.add(family(candidate)))
-    .mul(active);
+    let direct_query = family(ZkX509Rfc5280StarkFamilyV1::FixedByte)
+        .add(family(ZkX509Rfc5280StarkFamilyV1::NameValue))
+        .mul(active);
     let key_query = output_source_query_gate_v1(row, fixed);
-    row[BASE_SERIAL_BYTE_QUERY_ACTIVE] = key_query.add(serial_query).add(direct_query).add(
-        family(ZkX509Rfc5280StarkFamilyV1::Decimal)
-            .mul(active)
-            .mul(row[BASE_EQUAL]),
-    );
+    let basic_constraints_query = path_len::byte_query_gate(row, fixed);
+    row[BASE_SERIAL_BYTE_QUERY_ACTIVE] = key_query
+        .add(basic_constraints_query)
+        .add(serial_query)
+        .add(direct_query)
+        .add(
+            family(ZkX509Rfc5280StarkFamilyV1::Decimal)
+                .mul(active)
+                .mul(row[BASE_EQUAL]),
+        );
     row[BASE_SERIAL_BYTE_QUERY_VALUE] = key_query
+        .add(basic_constraints_query)
         .mul(row[BASE_VALUE])
         .add(fixed[projection_disclosure::FIX_OID_VALUE])
         .sub(fixed[projection_disclosure::FIX_OID_QUERY].mul(row[BASE_VALUE]))
         .add(serial_query.mul(row[SERIAL_SOURCE_QUERY_VALUE]))
         .add(
-            family(ZkX509Rfc5280StarkFamilyV1::EmbeddedCopy)
-                .mul(active)
-                .mul(row[BASE_A]),
-        )
-        .add(
             family(ZkX509Rfc5280StarkFamilyV1::FixedByte)
                 .add(family(ZkX509Rfc5280StarkFamilyV1::NameValue))
                 .add(family(ZkX509Rfc5280StarkFamilyV1::Decimal))
-                .add(family(ZkX509Rfc5280StarkFamilyV1::SemanticConsumer))
                 .mul(active)
                 .mul(row[BASE_VALUE]),
-        )
-        .add(
-            family(ZkX509Rfc5280StarkFamilyV1::EqualByte)
-                .mul(active)
-                .mul(row[BASE_A]),
         );
     let serial_source = family(ZkX509Rfc5280StarkFamilyV1::SerialSource).mul(active);
     let decimal_source = family(ZkX509Rfc5280StarkFamilyV1::Decimal)
@@ -6953,6 +6874,7 @@ fn populate_degree_normalization_helpers_v1<A: PolynomialAirFieldV1>(
         .add(name_oid_source.mul(row[BASE_ENDPOINT_ROLE]))
         .add(name_value_consumer.mul(row[BASE_G]));
     binding::normalize_v1(row, fixed);
+    copy_census::normalize(row, fixed);
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509Rfc5280StarkBaseMaterialV1 {
@@ -7849,13 +7771,7 @@ fn evaluate_rfc5280_relation_v1<A: PolynomialAirFieldV1>(
             .mul(fixed[FIX_ADDRESS_FIXED])
             .mul(current[BASE_NODE].sub(fixed[FIX_EXPECTED + 1])),
     );
-    let embedded = active_family_gate_v1(current, fixed, ZkX509Rfc5280StarkFamilyV1::EmbeddedCopy);
-    residues.push(embedded.mul(current[BASE_A].sub(current[BASE_B])));
-    residues.push(
-        embedded
-            .mul(current[BASE_ADDRESS].sub(current[BASE_CONTENT_START].add(current[BASE_OFFSET]))),
-    );
-    residues.push(embedded.mul(current[BASE_C].sub(current[BASE_ENDPOINT_INSTANCE])));
+    residues.extend(copy_census::residues(current, next, fixed));
     assert_residue_section_v1(
         residues.len(),
         &mut residue_section_start,
@@ -8103,8 +8019,7 @@ fn evaluate_rfc5280_relation_v1<A: PolynomialAirFieldV1>(
         .push(fixed_byte_continue.mul(next[BASE_ADDRESS].sub(current[BASE_ADDRESS]).sub(A::ONE)));
     residues.extend(name_policy::residues(current, next, fixed));
     residues.extend(name_values::residues(current, next, fixed));
-    let equal_byte = active_family_gate_v1(current, fixed, ZkX509Rfc5280StarkFamilyV1::EqualByte);
-    residues.push(equal_byte.mul(current[BASE_A].sub(current[BASE_B])));
+    residues.extend(profile_identity::residues(current, fixed));
     let decimal = current[BASE_DECIMAL_DIGIT_ACTIVE];
     for bit in &current[BASE_SMALL_BITS..BASE_SMALL_BITS + 4] {
         push_boolean_v1(&mut residues, decimal, *bit);
@@ -8221,8 +8136,7 @@ fn evaluate_rfc5280_relation_v1<A: PolynomialAirFieldV1>(
             .mul(A::ONE.sub(current[BASE_STRICT]))
             .mul(current[BASE_INVERSE]),
     );
-    let bit_flags = active_family_gate_v1(current, fixed, ZkX509Rfc5280StarkFamilyV1::BitFlags);
-    residues.push(bit_flags.mul(current[BASE_A].sub(current[BASE_B])));
+    path_len::append_residues(current, next, fixed, &mut residues);
     assert_residue_section_v1(
         residues.len(),
         &mut residue_section_start,
@@ -8918,7 +8832,10 @@ fn evaluate_rfc5280_relation_v1<A: PolynomialAirFieldV1>(
                 AUX_SERIAL_NODE_TABLE_ZERO + lane,
                 AUX_SERIAL_NODE_QUERY_ZERO + lane,
                 source_node,
-                serial_source.add(output_source_node_query_gate_v1(current, fixed)),
+                serial_source
+                    .add(output_source_node_query_gate_v1(current, fixed))
+                    .add(path_len::node_query_gate(current, fixed))
+                    .add(copy_census::node_query_gate(current, fixed)),
                 serial_node_lookup_factor_v1(current, lane, challenges),
                 node_query_factor_v1(current, fixed, lane, challenges),
                 current[SERIAL_NODE_TABLE_MULTIPLICITY],
@@ -9560,7 +9477,7 @@ mod tests {
             embedded_node_counts: [2_048; ZK_X509_DER_AIR_MAX_EMBEDDED_DOCUMENTS_V1],
             crl_entries: 64,
             disclosed_attributes: 4,
-            embedded_copy_rows: 16_384,
+            embedded_copy_rows: copy_census::EMBEDDED_ROWS as u32,
             grammar_rows: u32::try_from(
                 ZK_X509_RFC5280_GRAMMAR_RULE_COUNT_V1 + MAX_SOURCE_NODES_V1
                     - MAX_SOURCE_DOCUMENTS_V1,
@@ -9568,18 +9485,18 @@ mod tests {
             .expect("grammar row bound fits u32"),
             name_value_rows: name_values::ROWS as u32,
             fixed_byte_rows: 16_384,
-            equality_rows: 0,
+            equality_rows: copy_census::EQUALITY_ROWS as u32,
             decimal_rows: FIXED_DECIMAL_ROWS_V1 as u32,
             calendar_rows: 72 * CALENDAR_COPY_PHASES_V1 as u32,
             relation_rows: FIXED_RELATION_ROWS_V1 as u32,
-            bit_flag_rows: 256,
+            basic_constraints_rows: 256,
             serial_source_rows: u32::try_from(MAX_SERIAL_SOURCE_ROWS_V1)
                 .expect("serial source bound fits u32"),
             serial_rows: u32::try_from(MAX_SERIAL_COMPARISON_PHYSICAL_ROWS_V1)
                 .expect("serial bound fits u32"),
             range_rows: FIXED_RANGE_ROWS_V1 as u32,
             semantic_source_rows: 18_203,
-            semantic_consumer_rows: 18_203,
+            semantic_consumer_rows: copy_census::CONSUMER_ROWS as u32,
             output_producer_rows: 22_705,
             output_consumer_rows: 22_705,
             io_channels: 1,
@@ -9588,6 +9505,18 @@ mod tests {
     fn refresh_private_shape_derived_rows_v1(shape: &mut ZkX509Rfc5280StarkPrivateShapeV1) {
         let top_count = usize::from(shape.top_document_count);
         let embedded_count = usize::from(shape.embedded_document_count);
+        shape.embedded_copy_rows = copy_census::active_rows(
+            ZkX509Rfc5280StarkFamilyV1::EmbeddedCopy,
+            shape.chain_depth == 3,
+        ) as u32;
+        shape.equality_rows = copy_census::active_rows(
+            ZkX509Rfc5280StarkFamilyV1::EqualByte,
+            shape.chain_depth == 3,
+        ) as u32;
+        shape.semantic_consumer_rows = copy_census::active_rows(
+            ZkX509Rfc5280StarkFamilyV1::SemanticConsumer,
+            shape.chain_depth == 3,
+        ) as u32;
         shape.grammar_rows = u32::try_from(
             shape
                 .source_nodes()
@@ -9621,7 +9550,9 @@ mod tests {
         assert_eq!(MAX_ACTIVE_ROWS_V1, 246_673);
         assert_eq!(FIXED_NON_PADDING_ROWS_V1, 292_206);
         assert_eq!(
-            shape.active_rows().expect("active rows"),
+            shape.active_rows().expect("active rows")
+                + (FIXED_EMBEDDED_COPY_ROWS_V1 - copy_census::EMBEDDED_ROWS)
+                + (18_203 - copy_census::CONSUMER_ROWS - copy_census::EQUALITY_ROWS),
             MAX_ACTIVE_ROWS_V1
         );
         assert!(MAX_ACTIVE_ROWS_V1 < ZK_X509_RFC5280_STARK_TRACE_SIZE_V1);
@@ -10571,10 +10502,6 @@ mod tests {
         depth_two.embedded_document_count = 11;
         depth_two.embedded_document_lengths[11..].fill(0);
         depth_two.embedded_node_counts[11..].fill(0);
-        depth_two.embedded_copy_rows = depth_two.embedded_document_lengths[..11]
-            .iter()
-            .map(|length| u32::from(*length))
-            .sum();
         refresh_private_shape_derived_rows_v1(&mut depth_two);
         depth_two.validate().expect("canonical depth-two geometry");
         let mut flipped = depth_two.clone();
@@ -10834,10 +10761,10 @@ mod tests {
                 .count()
         });
         // Native finite differences vary every opened base, auxiliary and fixed
-        // input at nine points for each of the three seeds above. This pin records
-        // the complete 1,945-residue inventory after DER output provenance and
-        // complete certificate/CRL Name uniqueness and string-policy constraints.
-        const EXPECTED_AFFINE_DEGREE_INVENTORY_V1: [usize; 5] = [0, 1, 903, 391, 650];
+        // input at nine points for each of the three seeds above. The expected
+        // inventory includes BasicConstraints126 plus copy40 and identity43,
+        // replacing five old cubic equations. Native execution must confirm it.
+        const EXPECTED_AFFINE_DEGREE_INVENTORY_V1: [usize; 5] = [0, 1, 916, 577, 655];
         assert_eq!(
             inventory, EXPECTED_AFFINE_DEGREE_INVENTORY_V1,
             "the full-input interpolation is a proof-shape pin, independent of evaluator sections"
@@ -11117,7 +11044,6 @@ mod tests {
             decimal_cells: vec![cell_b],
             calendar_values: Vec::new(),
             numeric_relations: Vec::new(),
-            bit_flags: Vec::new(),
             serial_sources: Vec::new(),
             serial_comparisons: Vec::new(),
         };
@@ -12050,7 +11976,7 @@ mod tests {
                 3
             );
         }
-        assert_eq!(ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1, 1_945);
+        assert_eq!(ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1, 2_149);
         assert_eq!(
             (
                 ZK_X509_RFC5280_STARK_BASE_WIDTH_V1,

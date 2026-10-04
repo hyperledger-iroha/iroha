@@ -177,9 +177,10 @@ await foreach (var holder in client.Torii.AssetHolders(assetDefinitionId)
   `GroupBy` and filter JSON arguments use raw dotted paths (`"metadata.ui-order"`).
 - Projections (`Select`) and aggregates (`Aggregate`) return partial or computed rows;
   read them as `JsonObject` through `.Rows`, for example
-  `client.Torii.AssetHolders(id).Rows.GetPageAsync(aggregateQuery)`. A read whose visible
-  rows span several dataspace routes cannot be aggregated exactly and fails with
-  `invalid_aggregate`; page through the rows instead.
+  `client.Torii.AssetHolders(id).Rows.GetPageAsync(aggregateQuery)`. Torii executes
+  each collection query once over the caller-visible global state. For collections
+  that support totals and `POST` aggregates, visible rows contribute exactly once
+  even when they span several dataspace routes.
 - `Cursor` resumes after a page (`query with { Cursor = page.NextCursor }`);
   `IncludeTotal = true` adds `Page<T>.Total`.
 

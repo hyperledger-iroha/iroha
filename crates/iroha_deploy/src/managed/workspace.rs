@@ -34,8 +34,9 @@ impl InstalledRuntime {
 
     /// Resolve matching programs in a canonical package or an explicit loose development directory.
     ///
-    /// macOS applications use only their `.app/Contents/MacOS` directory; resources belong in
-    /// `Contents/Resources`. Loose developer binaries load profiles from their own directory.
+    /// macOS desktop applications use only `.app/Contents/MacOS` and `Contents/Resources`.
+    /// The native CLI package and explicit loose developer binaries load profiles beside their
+    /// two matching programs. A desktop UI is never a CLI runtime prerequisite.
     ///
     /// # Errors
     /// Missing binaries and indirect or nonregular program files are rejected.

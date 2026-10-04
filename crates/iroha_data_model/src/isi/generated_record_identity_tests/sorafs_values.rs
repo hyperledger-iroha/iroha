@@ -118,7 +118,9 @@ fn completion_instruction_captures_keep_owner_and_signer_distinct() {
         CompleteReplicationOrder, RevokeProviderIngestCompletionAuthority,
         SetProviderIngestCompletionAuthority,
     };
-    fn decode<T: for<'de> norito::NoritoDeserialize<'de>>(row: &Value) -> T {
+    fn decode<T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>>(
+        row: &Value,
+    ) -> T {
         let frame = hex::decode(row.get("frame").and_then(Value::as_str).unwrap()).unwrap();
         norito::decode_from_bytes(&frame).unwrap()
     }

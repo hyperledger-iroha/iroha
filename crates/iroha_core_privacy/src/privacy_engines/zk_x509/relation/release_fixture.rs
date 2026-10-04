@@ -304,11 +304,80 @@ fn build_zk_x509_fixture_v1(
     wallet_account: AccountId,
     crl_lineage: &ZkX509ReleaseCrlLineageV1,
 ) -> Result<ZkX509ReleaseFixtureV1, &'static str> {
+    build_zk_x509_fixture_with_copy_capacity_v1(
+        context,
+        maximum_shape,
+        revoked_serials,
+        times,
+        wallet_account,
+        crl_lineage,
+        false,
+    )
+}
+
+/// Genuine signed boundary fixture for both normalized copy-document layouts.
+///
+/// Issuer/root Names reach 836 encoded bytes, all identifiers reach 64 bytes,
+/// every CA uses u32::MAX pathLen, the CRL number is u64::MAX and the leaf has
+/// all three admitted EKUs. The maximum variant also keeps all original maximum
+/// CRL, serial, disclosure and membership dimensions. Existing release fixtures
+/// continue through the identical canonical inputs with this option false.
+#[cfg(test)]
+pub(crate) fn build_zk_x509_copy_capacity_fixture_v1(
+    maximum_shape: bool,
+) -> Result<ZkX509ReleaseFixtureV1, &'static str> {
+    let revoked_serials = if maximum_shape {
+        (0..ZK_X509_MAX_CRL_ENTRIES_V1)
+            .map(maximum_crl_serial_v1)
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
+    build_zk_x509_fixture_with_copy_capacity_v1(
+        reference_statement_context_v1(),
+        maximum_shape,
+        &revoked_serials,
+        ZkX509ReleaseTimesV1::FIXED_V1,
+        fixed_release_wallet_account_v1()?,
+        &ZkX509ReleaseCrlLineageV1::Origin,
+        true,
+    )
+}
+
+fn copy_capacity_name_v1(seed: u8) -> Vec<u8> {
+    let organization = [seed; ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1];
+    let unit = [seed + 1; ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1];
+    let common = [seed + 2; ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1];
+    name(&[
+        (OID_COUNTRY_NAME, 0x13, b"IL"),
+        (OID_ORGANIZATION_NAME, 0x0c, &organization),
+        (OID_ORGANIZATIONAL_UNIT_NAME, 0x0c, &unit),
+        (OID_COMMON_NAME, 0x0c, &common),
+    ])
+}
+
+fn build_zk_x509_fixture_with_copy_capacity_v1(
+    context: PrivacyStatementContextV1,
+    maximum_shape: bool,
+    revoked_serials: &[Vec<u8>],
+    times: ZkX509ReleaseTimesV1,
+    wallet_account: AccountId,
+    crl_lineage: &ZkX509ReleaseCrlLineageV1,
+    maximum_copy_shape: bool,
+) -> Result<ZkX509ReleaseFixtureV1, &'static str> {
     let root_key = p256_key(1)?;
     let intermediate_key = p256_key(3)?;
     let leaf_key = p256_key(2)?;
-    let root_name = name(&[(OID_COMMON_NAME, 0x0c, b"Iroha Test Root")]);
-    let intermediate_name = name(&[(OID_COMMON_NAME, 0x0c, b"Iroha Test Intermediate")]);
+    let root_name = if maximum_copy_shape {
+        copy_capacity_name_v1(b'R')
+    } else {
+        name(&[(OID_COMMON_NAME, 0x0c, b"Iroha Test Root")])
+    };
+    let intermediate_name = if maximum_copy_shape {
+        copy_capacity_name_v1(b'I')
+    } else {
+        name(&[(OID_COMMON_NAME, 0x0c, b"Iroha Test Intermediate")])
+    };
     let maximum_organization = vec![b'O'; ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1];
     let maximum_organizational_unit = vec![b'U'; ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1];
     let maximum_common_name = vec![b'N'; ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1];
@@ -330,10 +399,15 @@ fn build_zk_x509_fixture_v1(
             (OID_COMMON_NAME, 0x0c, b"Alice"),
         ])
     };
-    let root_ski = [0x31; 20];
-    let intermediate_ski = [0x32; 20];
-    let leaf_ski = [0x42; 20];
-    let root_path_len = u32::from(maximum_shape);
+    let identifier_length = if maximum_copy_shape { 64 } else { 20 };
+    let root_ski = vec![0x31; identifier_length];
+    let intermediate_ski = vec![0x32; identifier_length];
+    let leaf_ski = vec![0x42; identifier_length];
+    let root_path_len = if maximum_copy_shape {
+        u32::MAX
+    } else {
+        u32::from(maximum_shape)
+    };
     let root_der = certificate(
         &[1],
         &root_name,
@@ -353,7 +427,7 @@ fn build_zk_x509_fixture_v1(
             &root_key,
             &intermediate_ski,
             &root_ski,
-            Some(0),
+            Some(if maximum_copy_shape { u32::MAX } else { 0 }),
         )
     });
     let (leaf_issuer_name, leaf_issuer_key, leaf_issuer_ski) = if maximum_shape {
@@ -368,18 +442,32 @@ fn build_zk_x509_fixture_v1(
     let leaf_serial = maximum_shape
         .then_some(MAXIMUM_LEAF_SERIAL_V1.as_slice())
         .unwrap_or(CANONICAL_LEAF_SERIAL_V1.as_slice());
-    let leaf_der = certificate(
+    let extended_key_usages = if maximum_copy_shape {
+        vec![
+            PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
+            PrivacyX509ExtendedKeyUsageV1::DocumentSigning,
+            PrivacyX509ExtendedKeyUsageV1::WalletIdentity,
+        ]
+    } else {
+        vec![PrivacyX509ExtendedKeyUsageV1::ClientAuthentication]
+    };
+    let leaf_der = certificate_with_extension_profile_v1(
         leaf_serial,
         leaf_issuer_name,
         &leaf_name,
         &leaf_key,
         leaf_issuer_key,
-        &leaf_ski,
-        leaf_issuer_ski,
-        None,
+        FixtureCertificateExtensionsV1 {
+            subject_key_identifier: &leaf_ski,
+            authority_key_identifier: leaf_issuer_ski,
+            ca_path_len: None,
+            extended_key_usages: &extended_key_usages,
+        },
     );
     let (crl_record_epoch, crl_number, previous_crl_record_digest) = match crl_lineage {
-        ZkX509ReleaseCrlLineageV1::Origin => (1, 7, None),
+        ZkX509ReleaseCrlLineageV1::Origin => {
+            (1, if maximum_copy_shape { u64::MAX } else { 7 }, None)
+        }
         ZkX509ReleaseCrlLineageV1::Successor(current) => (
             current
                 .record_epoch
@@ -449,7 +537,6 @@ fn build_zk_x509_fixture_v1(
         key_encipherment: PrivacyX509KeyUsageRequirementV1::new(false),
         key_agreement: PrivacyX509KeyUsageRequirementV1::new(false),
     };
-    let extended_key_usages = vec![PrivacyX509ExtendedKeyUsageV1::ClientAuthentication];
     let disclosed_indices = if maximum_shape {
         vec![0, 1, 2, 3]
     } else {
@@ -785,6 +872,42 @@ fn certificate(
     authority_key_identifier: &[u8],
     ca_path_len: Option<u32>,
 ) -> Vec<u8> {
+    certificate_with_extension_profile_v1(
+        serial,
+        issuer,
+        subject,
+        subject_key,
+        issuer_key,
+        FixtureCertificateExtensionsV1 {
+            subject_key_identifier,
+            authority_key_identifier,
+            ca_path_len,
+            extended_key_usages: &[PrivacyX509ExtendedKeyUsageV1::ClientAuthentication],
+        },
+    )
+}
+
+struct FixtureCertificateExtensionsV1<'a> {
+    subject_key_identifier: &'a [u8],
+    authority_key_identifier: &'a [u8],
+    ca_path_len: Option<u32>,
+    extended_key_usages: &'a [PrivacyX509ExtendedKeyUsageV1],
+}
+
+fn certificate_with_extension_profile_v1(
+    serial: &[u8],
+    issuer: &[u8],
+    subject: &[u8],
+    subject_key: &P256SigningKey,
+    issuer_key: &P256SigningKey,
+    extensions: FixtureCertificateExtensionsV1<'_>,
+) -> Vec<u8> {
+    let FixtureCertificateExtensionsV1 {
+        subject_key_identifier,
+        authority_key_identifier,
+        ca_path_len,
+        extended_key_usages,
+    } = extensions;
     let spki = spki(subject_key);
     let basic_constraints = ca_path_len.map_or_else(
         || sequence(&[]),
@@ -813,7 +936,24 @@ fn certificate(
         extensions.push(extension(
             OID_EXTENDED_KEY_USAGE,
             true,
-            &sequence(&[object_identifier(OID_CLIENT_AUTHENTICATION)]),
+            &sequence(
+                &extended_key_usages
+                    .iter()
+                    .map(|usage| {
+                        object_identifier(match usage {
+                            PrivacyX509ExtendedKeyUsageV1::ClientAuthentication => {
+                                OID_CLIENT_AUTHENTICATION
+                            }
+                            PrivacyX509ExtendedKeyUsageV1::DocumentSigning => {
+                                ZK_X509_DOCUMENT_SIGNING_EKU_DER_VALUE_V1
+                            }
+                            PrivacyX509ExtendedKeyUsageV1::WalletIdentity => {
+                                ZK_X509_WALLET_IDENTITY_EKU_DER_VALUE_V1
+                            }
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            ),
         ));
     }
     let tbs = sequence(&[
@@ -993,6 +1133,186 @@ mod tests {
         engine::{ZkX509EngineErrorV1, prepare_zk_x509_prover_input_v1},
         merkle::ZkX509MerkleErrorV1,
     };
+    #[test]
+    fn signed_reference_path_len_slack_reaches_native_rfc_for_u32_boundaries() {
+        use crate::privacy_engines::zk_x509::{
+            der_air::build_zk_x509_rfc5280_trace_v1,
+            rfc5280_stark::build_zk_x509_rfc5280_stark_base_material_v1,
+            verifier_profile::rfc_statement_with_crl_number_v1,
+        };
+
+        // Re-sign the root with its original private key. Its SPKI, trust
+        // anchor, leaf/CRL signatures and public statement remain identical.
+        // This is a real reference-valid witness, not a parsed-field edit.
+        let root_key = p256_key(1).expect("deterministic root key");
+        let root_name = name(&[(OID_COMMON_NAME, 0x0c, b"Iroha Test Root")]);
+        let root_ski = [0x31; 20];
+        let mut failures = Vec::new();
+        for maximum_shape in [false, true] {
+            let fixture =
+                build_zk_x509_release_fixture_v1(reference_statement_context_v1(), maximum_shape)
+                    .expect("genuine signed release fixture");
+            let depth = fixture.witness.certificate_chain_der.len();
+            let required = u32::try_from(depth - 2).expect("bounded path depth");
+            let mut values = vec![
+                required,
+                required + 1,
+                127,
+                128,
+                255,
+                256,
+                32_767,
+                32_768,
+                65_535,
+                65_536,
+                0x007f_ffff,
+                0x0080_0000,
+                0x00ff_ffff,
+                0x0100_0000,
+                0x7fff_ffff,
+                0x8000_0000,
+                u32::MAX,
+            ];
+            values.sort_unstable();
+            values.dedup();
+            for path_len in values {
+                let mut witness = fixture.witness.clone();
+                witness.certificate_chain_der[depth - 1] = certificate(
+                    &[1],
+                    &root_name,
+                    &root_name,
+                    &root_key,
+                    &root_key,
+                    &root_ski,
+                    &root_ski,
+                    Some(path_len),
+                );
+                let root_der = &witness.certificate_chain_der[depth - 1];
+                assert!(
+                    root_der.len()
+                        <= usize::try_from(ZK_X509_MAX_CERTIFICATE_BYTES_V1)
+                            .expect("certificate byte cap fits usize")
+                );
+                let parsed_root = parse_certificate_v1(root_der).expect("canonical signed root");
+                assert_eq!(
+                    parsed_root.extensions.basic_constraints.path_len,
+                    Some(path_len)
+                );
+                assert_eq!(
+                    parsed_root.spki_der,
+                    parse_certificate_v1(&fixture.witness.certificate_chain_der[depth - 1])
+                        .expect("original root")
+                        .spki_der,
+                );
+                let trust_anchor = fixture.authoritative_state.trust_anchor();
+                let crl = fixture.authoritative_state.crl_record();
+                validate_reference_relation_v1(
+                    &fixture.statement,
+                    ZkX509GovernanceV1 {
+                        trust_anchor: &trust_anchor,
+                        certificate_policy: fixture.authoritative_state.certificate_policy(),
+                        crl: &crl,
+                    },
+                    &witness,
+                )
+                .expect("complete reference relation accepts signed pathLen slack");
+                prepare_zk_x509_prover_input_v1(
+                    &fixture.statement,
+                    &fixture.authoritative_state,
+                    VALIDATION_TIME * 1_000,
+                    &PrivacyConsensusLimitsV1::taira_default(),
+                    &witness.encode_v1().expect("signed witness encoding"),
+                )
+                .expect("actual production preflight accepts signed pathLen slack");
+                let trace = build_zk_x509_rfc5280_trace_v1(
+                    &witness.certificate_chain_der,
+                    &witness.crl_der,
+                    rfc_statement_with_crl_number_v1(&fixture.statement, crl.crl_number),
+                )
+                .expect("independent DER/RFC trace admits signed pathLen slack");
+                assert_eq!(trace.certificates.len(), depth);
+                assert_eq!(trace.documents.len(), depth + 1);
+                assert_eq!(trace.embedded_documents.len(), 4 * depth + 3);
+                let result = build_zk_x509_rfc5280_stark_base_material_v1(&trace);
+                eprintln!(
+                    "SIGNED_PATHLEN depth={depth} required={required} path_len={path_len} reference=PASS production_preflight=PASS der_trace=PASS native_rfc={:?}",
+                    result.as_ref().err(),
+                );
+                if let Err(error) = result {
+                    failures.push((depth, path_len, error));
+                }
+            }
+        }
+        // Keep all per-case evidence before failing. This assertion is the
+        // before-fix regression; it must pass with the complete private-u32 AIR.
+        assert!(
+            failures.is_empty(),
+            "reference-valid signed pathLen values rejected by native RFC: {failures:?}",
+        );
+    }
+    #[test]
+    fn signed_copy_capacity_fixtures_reach_all_endpoint_boundaries() {
+        use crate::privacy_engines::zk_x509::{
+            der_air::build_zk_x509_rfc5280_trace_v1,
+            rfc5280_stark::build_zk_x509_rfc5280_stark_base_material_v1,
+            verifier_profile::rfc_statement_with_crl_number_v1,
+        };
+        for maximum_shape in [false, true] {
+            let fixture = build_zk_x509_copy_capacity_fixture_v1(maximum_shape)
+                .expect("full reference relation accepts genuine signed copy ceilings");
+            let depth = fixture.witness.certificate_chain_der.len();
+            assert_eq!(depth, if maximum_shape { 3 } else { 2 });
+            for (slot, der) in fixture.witness.certificate_chain_der.iter().enumerate() {
+                assert!(der.len() <= usize::try_from(ZK_X509_MAX_CERTIFICATE_BYTES_V1).unwrap());
+                let parsed = parse_certificate_v1(der).unwrap();
+                assert_eq!(parsed.issuer.encoded.len(), 836);
+                assert_eq!(parsed.extensions.authority_key_identifier.len(), 64);
+                assert_eq!(parsed.extensions.subject_key_identifier.len(), 64);
+                if slot == 0 {
+                    assert_eq!(
+                        parsed
+                            .extensions
+                            .extended_key_usages
+                            .as_ref()
+                            .unwrap()
+                            .len(),
+                        3
+                    );
+                    assert_eq!(parsed.extensions.basic_constraints.path_len, None);
+                } else {
+                    assert_eq!(parsed.subject.encoded.len(), 836);
+                    assert_eq!(parsed.extensions.basic_constraints.path_len, Some(u32::MAX));
+                }
+            }
+            let parsed_crl = parse_crl_v1(&fixture.witness.crl_der).unwrap();
+            assert_eq!(parsed_crl.issuer.encoded.len(), 836);
+            assert_eq!(parsed_crl.authority_key_identifier.len(), 64);
+            assert_eq!(parsed_crl.crl_number, u64::MAX);
+            assert_eq!(
+                parsed_crl.revoked_serials.len(),
+                if maximum_shape { 64 } else { 0 }
+            );
+            let crl = fixture.authoritative_state.crl_record();
+            assert_eq!(crl.crl_number, u64::MAX);
+            prepare_zk_x509_prover_input_v1(
+                &fixture.statement,
+                &fixture.authoritative_state,
+                VALIDATION_TIME * 1_000,
+                &PrivacyConsensusLimitsV1::taira_default(),
+                &fixture.witness.encode_v1().unwrap(),
+            )
+            .expect("actual production preflight admits signed capacity fixture");
+            let trace = build_zk_x509_rfc5280_trace_v1(
+                &fixture.witness.certificate_chain_der,
+                &fixture.witness.crl_der,
+                rfc_statement_with_crl_number_v1(&fixture.statement, crl.crl_number),
+            )
+            .expect("independent DER/RFC trace accepts all signed ceilings");
+            assert_eq!(trace.semantic_provenance.len(), 5 * depth + 4);
+            build_zk_x509_rfc5280_stark_base_material_v1(&trace)
+                .expect("complete native constructor admits both maximum-copy layouts");
+        }
+    }
     #[test]
     fn canonical_release_fixture_is_exact_round_trippable_and_state_joined() {
         let fixture = build_zk_x509_reference_fixture_v1().expect("canonical release fixture");

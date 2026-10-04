@@ -8,10 +8,13 @@ struct AppRoutedReadHttpAdmission {
 tokio::task_local! {
     static APP_ROUTED_READ_HTTP_ADMISSION: AppRoutedReadHttpAdmission;
 }
-fn current_app_routed_read_fanout_reservation() -> Option<QueryFanoutMemoryReservation> {
+fn current_app_routed_read_fanout_reservation(
+    app: &SharedAppState,
+) -> Option<QueryFanoutMemoryReservation> {
     APP_ROUTED_READ_HTTP_ADMISSION
         .try_with(|admission| admission.reservation.clone())
         .ok()
+        .filter(|reservation| reservation.belongs_to(app))
 }
 fn current_app_routed_read_decode_plan() -> Option<ToriiRoutedReadRequestDecodePlan> {
     APP_ROUTED_READ_HTTP_ADMISSION
@@ -183,7 +186,7 @@ async fn enforce_app_routed_read_http_admission(
     } else {
         0
     };
-    let declared_body_bytes = match if accepts_body {
+    let _preflight_declared_body_bytes = match if accepts_body {
         preflight_app_routed_read_content_length(request.headers(), body_limit)
     } else {
         preflight_bodyless_app_routed_read(request.headers())
@@ -199,6 +202,44 @@ async fn enforce_app_routed_read_http_admission(
     let reservation = match acquire_app_routed_read_http_memory(&app, accepts_body).await {
         Ok(reservation) => reservation,
         Err(response) => return response,
+    };
+    // From admission onward, every decoder uses the geometry owned by this
+    // permit. The earlier configuration-derived plan only preflights framing
+    // before acquisition; it cannot authorize a larger retained decode graph.
+    let decode_plan = match ToriiRoutedReadMemoryBudget::from_envelope(
+        match reservation.admitted_envelope(&app) {
+            Ok(envelope) => envelope,
+            Err(response) => {
+                return hold_query_fanout_memory_in_response_body(response, reservation);
+            }
+        },
+        app.torii_proxy_max_response_bytes,
+    )
+    .request_decode_plan()
+    {
+        Ok(plan) => plan,
+        Err(response) => return hold_query_fanout_memory_in_response_body(response, reservation),
+    };
+    if let Err(response) = decode_plan.admit_raw_input(target_bytes) {
+        return hold_query_fanout_memory_in_response_body(
+            map_app_routed_read_request_response(response),
+            reservation,
+        );
+    }
+    let body_limit = if accepts_body {
+        decode_plan
+            .raw_input_limit_bytes
+            .saturating_sub(target_bytes)
+    } else {
+        0
+    };
+    let declared_body_bytes = match if accepts_body {
+        preflight_app_routed_read_content_length(request.headers(), body_limit)
+    } else {
+        preflight_bodyless_app_routed_read(request.headers())
+    } {
+        Ok(declared) => declared,
+        Err(response) => return hold_query_fanout_memory_in_response_body(response, reservation),
     };
     let (parts, body) = request.into_parts();
     let body = match tokio::time::timeout(

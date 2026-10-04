@@ -114,13 +114,35 @@ impl QuantityFixture {
             .collect();
         axt.occurrences = crate::axt_binding::source_occurrence::test_occurrences(&claims, remote);
         // The scalar metadata is an exact outer mirror, not the transfer quantity.
-        let built = materialize_quantity_public_transfers(
-            &claims,
-            inputs,
-            ProofSemantics::AxtTransferClaim,
-            PublicTransferLimits::default(),
-            TransferSmtBuildLimits::for_update_limit(count * 2).unwrap(),
-        )
+        let built = {
+            // This test fixture owns its finite tree pool; production supplies its original owner.
+            let tree_claims = &claims;
+            let tree_limits = TransferSmtBuildLimits::for_update_limit(count * 2).unwrap();
+            let tree_updates = tree_claims
+                .iter()
+                .try_fold(0_usize, |count, claim| {
+                    count.checked_add(claim.deltas.len())
+                })
+                .expect("fixture effect count fits")
+                .checked_mul(2)
+                .expect("fixture row count fits");
+            let tree_bytes = tree_limits
+                .allocation_bytes(tree_updates, tree_updates)
+                .expect("fixture tree allocation demand fits");
+            let tree_budget = iroha_allocation::AllocationBudget::new(tree_bytes);
+            let mut tree_reservation = tree_budget
+                .try_reserve_bytes(tree_bytes)
+                .expect("fixture owns complete tree credit");
+            materialize_quantity_public_transfers(
+                tree_claims,
+                inputs,
+                ProofSemantics::AxtTransferClaim,
+                PublicTransferLimits::default(),
+                tree_limits,
+                &tree_budget,
+                &mut tree_reservation,
+            )
+        }
         .unwrap();
         let (rows, inputs, _, private) = built.into_parts();
         (

@@ -325,6 +325,23 @@ fn torii_max_content_len_defaults_to_sixty_four_megabytes() {
         defaults::torii::MAX_CONTENT_LEN.0,
         "minimal configs should inherit the runtime Torii body-cap default"
     );
+    assert_eq!(
+        config.torii.query_fanout_max_retained_bytes.get(),
+        512_000_000
+    );
+    assert_eq!(
+        config.torii.query_fanout_max_working_set_bytes.get(),
+        48_000_000
+    );
+    assert_eq!(
+        defaults::torii::app_api_routed_read_route_body_phase_bytes(
+            config.torii.query_fanout_max_retained_bytes.get(),
+            config.torii.query_fanout_max_working_set_bytes.get(),
+            config.torii.max_content_len.get(),
+        ),
+        Some(2_562_487),
+        "minimal configs must retain the per-query phase when aggregate concurrency increases"
+    );
 }
 #[test]
 fn portable_production_capabilities_default_to_enabled() {

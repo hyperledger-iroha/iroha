@@ -230,10 +230,9 @@ strictly (`id`; `account_id`, `asset`, `scope` and `quantity` for balances;
 `entrypoint_hash`, `block_height` and `block_index` for transactions); every
 other field may be null or absent and decodes as `None`.
 
-Aggregates are `POST`-only and computed where the rows live: Torii rejects a
-read whose visible rows span several dataspace routes with
-`400 invalid_aggregate`, because overlapping routes cannot be summed exactly;
-page through the rows without `aggregate` instead.
+Torii executes each collection query once over the caller-visible global state.
+For collections that support totals and `POST` aggregates, visible rows contribute
+exactly once even when they span several dataspace routes.
 
 ### Transaction history
 

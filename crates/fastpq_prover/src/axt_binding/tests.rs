@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::proof::VerifyLimits;
+use crate::test_producer_funding::prove_axt_bound_batch;
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
@@ -424,14 +425,37 @@ fn real_transfer_claim_batch(binding: &AxtFastpqBinding) -> TransitionBatch {
         crate::gadgets::public_transfer_statement::PublicTransferLimits::default(),
     )
     .unwrap();
-    let built = crate::gadgets::public_transfer_statement::materialize_quantity_public_transfers(
-        &public,
-        batch.public_inputs,
-        ProofSemantics::AxtTransferClaim,
-        crate::gadgets::public_transfer_statement::PublicTransferLimits::default(),
-        crate::gadgets::public_transfer_statement::TransferSmtBuildLimits::for_update_limit(2)
-            .unwrap(),
-    )
+    let built = {
+        // This test fixture owns its finite tree pool; production supplies its original owner.
+        let tree_claims = &public;
+        let tree_limits =
+            crate::gadgets::public_transfer_statement::TransferSmtBuildLimits::for_update_limit(2)
+                .unwrap();
+        let tree_updates = tree_claims
+            .iter()
+            .try_fold(0_usize, |count, claim| {
+                count.checked_add(claim.deltas.len())
+            })
+            .expect("fixture effect count fits")
+            .checked_mul(2)
+            .expect("fixture row count fits");
+        let tree_bytes = tree_limits
+            .allocation_bytes(tree_updates, tree_updates)
+            .expect("fixture tree allocation demand fits");
+        let tree_budget = iroha_allocation::AllocationBudget::new(tree_bytes);
+        let mut tree_reservation = tree_budget
+            .try_reserve_bytes(tree_bytes)
+            .expect("fixture owns complete tree credit");
+        crate::gadgets::public_transfer_statement::materialize_quantity_public_transfers(
+            tree_claims,
+            batch.public_inputs,
+            ProofSemantics::AxtTransferClaim,
+            crate::gadgets::public_transfer_statement::PublicTransferLimits::default(),
+            tree_limits,
+            &tree_budget,
+            &mut tree_reservation,
+        )
+    }
     .unwrap();
     let (rows, inputs, _, private) = built.into_parts();
     let witnesses = private.pairs();
@@ -2182,8 +2206,8 @@ mod anchored;
 fn canonical_bound_producer_reports_typed_contention_and_preserves_original_retry() {
     use crate::offline_compact::{
         ExpectedAxtContext, ExpectedStatement, ProvingError, ProvingLimits, VerificationLimits,
-        prove_quantity_axt_artifact,
     };
+    use crate::test_producer_funding::prove_quantity_axt_artifact;
 
     let binding = transfer_binding();
     let batch = real_transfer_claim_batch(&binding);

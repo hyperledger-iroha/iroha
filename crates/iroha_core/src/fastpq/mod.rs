@@ -1,10 +1,15 @@
 //! FASTPQ-specific transcript helpers shared across the host.
+pub(crate) mod finalized_source;
 pub mod lane;
+pub(crate) mod permission_context;
 #[cfg(test)]
 pub(crate) mod quantity_fixture;
 mod quantity_statement;
 #[cfg(test)]
-pub(crate) use quantity_statement::quantity_materializer_invocations_for_testing;
+pub(crate) use quantity_statement::{
+    quantity_materializer_invocations_for_testing,
+    quantity_statement_from_finalized_transcripts_for_testing,
+};
 mod source_capture;
 pub(crate) mod source_prefix_lengths;
 pub(crate) mod source_reservation;
@@ -16,9 +21,10 @@ mod source_context;
 pub use quantity_statement::{
     FastpqQuantityStatement, quantity_statement_from_finalized_transcripts,
 };
-pub use source_capture::{
-    FastpqSourceExecutionEntryV1, FastpqSourceStatementBuildLimits,
-    derive_fastpq_ordinary_source_manifest_v1,
+pub use source_capture::{FastpqSourceExecutionEntryV1, FastpqSourceStatementBuildLimits};
+#[cfg(test)]
+pub(crate) use source_capture::{
+    TransferArchiveDiagnostic, TransferEntryDiagnostic, prepare_transfer_archive_diagnostic,
 };
 pub(crate) use source_context::{FastpqBlockStartSourceContext, FastpqSourceCaptureAccumulator};
 pub use source_context::{

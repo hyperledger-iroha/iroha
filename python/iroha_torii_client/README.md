@@ -49,10 +49,10 @@ decode the fields that identify them strictly (`id`; `account_id`, `asset`,
 `block_index` for transactions); every other field may be null or absent and
 decodes as `None`.
 
-Aggregates (`rows(aggregate=AggregateSpec(...))`, `POST` only) are computed
-where the rows live: Torii rejects a read whose visible rows span several
-dataspace routes with `400 invalid_aggregate`, because overlapping routes
-cannot be summed exactly. Page through the rows without `aggregate` instead.
+Torii executes each collection query once over the caller-visible global state.
+For collections that support totals and aggregates
+(`rows(aggregate=AggregateSpec(...))`, `POST` only), visible rows contribute
+exactly once even when they span several dataspace routes.
 
 `subscription_plans` and `subscriptions` return flat rows keyed by `id`.
 Manifest pages contain the manifest records in `items`; projections use `rows`.

@@ -1,5 +1,6 @@
 //! Candidate model transport, independent-context and cumulative-budget regressions.
 
+use super::effect_test_support::{EffectFixture, verify as verify_effect};
 use super::*;
 use crate::backend::compact_axt_context::tests::Fixture;
 use iroha_data_model::fastpq::{FastpqAxtPreProofMirrorsV1, FastpqAxtPublicMetadataV1};
@@ -54,17 +55,10 @@ fn limits() -> ArtifactLimits {
 fn ordinary(
     fixture: &Fixture,
     bundle_frame: Vec<u8>,
-) -> (FastpqOrdinaryCompactArtifactV1, PublicIO) {
+) -> (FastpqOrdinaryCompactArtifactV1, EffectFixture) {
     let prepared = fixture.prepare(ProofSemantics::StateTransition);
-    let expected = fixture.expected(&prepared);
-    (
-        FastpqOrdinaryCompactArtifactV1 {
-            profile_id: diagnostic_profile_id(),
-            statement: super::super::tests::model(&prepared),
-            bundle_frame,
-        },
-        expected,
-    )
+    let source = EffectFixture::from_transfer_facts(&super::super::tests::model(&prepared));
+    (source.artifact(bundle_frame), source)
 }
 
 fn axt(fixture: &Fixture, bundle_frame: Vec<u8>) -> (FastpqAxtCompactArtifactV1, PublicIO) {
@@ -111,7 +105,7 @@ fn fixed_profile_and_nominal_route_cannot_be_chosen_by_artifact() {
     let mut wrong = ordinary.clone();
     wrong.profile_id.0[0] ^= 1;
     assert!(matches!(
-        verify_ordinary_artifact(
+        verify_effect(
             &norito::encode_canonical(&wrong).unwrap(),
             &expected,
             limits()
@@ -121,7 +115,7 @@ fn fixed_profile_and_nominal_route_cannot_be_chosen_by_artifact() {
         ))
     ));
     assert!(matches!(
-        verify_ordinary_artifact(
+        verify_effect(
             &norito::encode_canonical(&axt).unwrap(),
             &expected,
             limits()
@@ -133,7 +127,7 @@ fn fixed_profile_and_nominal_route_cannot_be_chosen_by_artifact() {
     assert!(matches!(
         verify_axt_artifact(
             &norito::encode_canonical(&ordinary).unwrap(),
-            &expected,
+            &fixture.expected(&fixture.prepare(ProofSemantics::AxtTransferClaim)),
             context(&fixture),
             limits()
         ),
@@ -152,7 +146,7 @@ fn raw_cap_precedes_decode_and_outer_budget_cannot_be_relaxed() {
     policy.transport.max_wire_bytes = bytes.len() - 1;
     let zero = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 32);
     let (result, usage) = norito::core::with_decode_limits_measured(zero, || {
-        verify_ordinary_artifact(&bytes, &expected, policy)
+        verify_effect(&bytes, &expected, policy)
     });
     assert!(matches!(
         result,
@@ -162,11 +156,7 @@ fn raw_cap_precedes_decode_and_outer_budget_cannot_be_relaxed() {
     ));
     assert_eq!(usage.total_allocated_bytes(), 0);
     assert!(matches!(
-        norito::core::with_decode_limits_scope(zero, || verify_ordinary_artifact(
-            &bytes,
-            &expected,
-            limits()
-        )),
+        norito::core::with_decode_limits_scope(zero, || verify_effect(&bytes, &expected, limits())),
         Err(ArtifactError::Transport(
             FastpqCompactArtifactDecodeError::Norito(norito::Error::TotalAllocationExceeded { .. })
         ))
@@ -174,7 +164,7 @@ fn raw_cap_precedes_decode_and_outer_budget_cannot_be_relaxed() {
     let mut policy = limits();
     policy.total_decode = zero;
     assert!(matches!(
-        verify_ordinary_artifact(&bytes, &expected, policy),
+        verify_effect(&bytes, &expected, policy),
         Err(ArtifactError::Transport(
             FastpqCompactArtifactDecodeError::Norito(norito::Error::TotalAllocationExceeded { .. })
         ))
@@ -198,26 +188,26 @@ fn all_public_expectations_are_checked_before_child_decoding() {
             _ => altered.statement.ordering_hash[0] ^= 1,
         }
         assert!(matches!(
-            verify_ordinary_artifact(
+            verify_effect(
                 &norito::encode_canonical(&altered).unwrap(),
                 &expected,
                 limits()
             ),
             Err(ArtifactError::Verify(Error::PublicIoMismatch {
-                field: "compact_model_public_io"
+                field: "compact_artifact_public_statement_digest"
             }))
         ));
     }
     let mut policy = limits();
     policy.public_statement.max_rows = 0;
     assert!(matches!(
-        verify_ordinary_artifact(
+        verify_effect(
             &norito::encode_canonical(&artifact).unwrap(),
             &expected,
             policy
         ),
         Err(ArtifactError::Verify(Error::VerifierLimitExceeded {
-            limit: "max_public_transfer_rows",
+            limit: "max_execution_effect_rows",
             ..
         }))
     ));
@@ -322,7 +312,7 @@ fn canonical_model_transport_is_independent_of_ambient_flags() {
     for flags in (u8::MIN..=u8::MAX).filter(|&f| norito::core::validate_header_flags(f).is_ok()) {
         let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
         assert_eq!(norito::encode_canonical(&artifact).unwrap(), bytes);
-        let result = verify_ordinary_artifact(&bytes, &expected, limits());
+        let result = verify_effect(&bytes, &expected, limits());
         // Valid model facts reach the intentionally absent child carrier.
         assert!(
             matches!(result, Err(ArtifactError::Verify(Error::Encode(_)))),
@@ -335,7 +325,15 @@ fn canonical_model_transport_is_independent_of_ambient_flags() {
 #[test]
 fn identity_statement_digest_is_canonical_and_bounded_before_output_allocation() {
     let fixture = Fixture::new(false);
-    let (artifact, _) = ordinary(&fixture, Vec::new());
+    let (effect, _) = ordinary(&fixture, Vec::new());
+    let view=crate::gadgets::public_transfer_statement::execution_effect::SourceExecutionEffectStatement::from_owned(&effect.statement);
+    let effect_bytes = norito::encode_canonical(&effect.statement).unwrap();
+    assert_eq!(
+        view.digest(effect_bytes.len()).unwrap(),
+        iroha_data_model::fastpq::execution_effect_statement_digest_v1(&effect.statement).unwrap()
+    );
+    assert!(view.digest(effect_bytes.len() - 1).is_err());
+    let (artifact, _) = axt(&fixture, Vec::new());
     let canonical = norito::encode_canonical(&artifact.statement).unwrap();
     let expected: [u8; 32] = Hash::new(&canonical).into();
     for flags in (u8::MIN..=u8::MAX).filter(|&f| norito::core::validate_header_flags(f).is_ok()) {

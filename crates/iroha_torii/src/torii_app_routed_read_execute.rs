@@ -595,15 +595,15 @@ async fn execute_incoming_torii_read_request_locally_bounded(
         Ok(reservation) => reservation,
         Err(response) => return response,
     };
-    let mut budget = match ToriiRoutedReadMemoryBudget::new(
-        app.query_fanout_working_set_bytes,
+    let mut budget = ToriiRoutedReadMemoryBudget::from_envelope(
+        match reservation.admitted_envelope(app) {
+            Ok(envelope) => envelope,
+            Err(response) => {
+                return hold_query_fanout_memory_in_response_body(response, reservation);
+            }
+        },
         app.torii_proxy_max_response_bytes,
-    ) {
-        Ok(budget) => budget,
-        Err(response) => {
-            return hold_query_fanout_memory_in_response_body(response, reservation);
-        }
-    };
+    );
     let request_bytes = match torii_routed_read_request_bytes(
         &read_request.path_args,
         read_request.path_args.capacity(),
@@ -619,8 +619,12 @@ async fn execute_incoming_torii_read_request_locally_bounded(
         return hold_query_fanout_memory_in_response_body(response, reservation);
     }
     let response_format = read_request.response_format;
-    let response =
-        execute_torii_read_request_locally(app, read_request, routing_decision, "proxy").await;
+    let response = COLLECTION_READ_MEMORY_RESERVATION
+        .scope(
+            reservation.clone(),
+            execute_torii_read_request_locally(app, read_request, routing_decision, "proxy"),
+        )
+        .await;
     let response =
         match bound_torii_single_route_response(response, response_format, &mut budget).await {
             Ok(response) | Err(response) => response,

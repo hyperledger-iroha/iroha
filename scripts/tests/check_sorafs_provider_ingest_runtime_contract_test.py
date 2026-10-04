@@ -500,7 +500,7 @@ def test_completion_signer_binding_is_public_exact_and_rechecked() -> None:
         "Algorithm::Ed25519 | Algorithm::MlDsa",
         "fn runtime_handle(&self) -> &str;",
         "fn qualification(",
-        "qualification.matches_authority(expected_owner)",
+        "qualification.matches_authority(&expected.completion_signer)",
     ):
         assert contract in node
 
@@ -645,10 +645,17 @@ def test_provider_ingest_uses_one_canonical_owned_completion_codec() -> None:
     )[0]
     assert "norito::decode_canonical_with_limits(bytes, limits)" in checkpoint_decoder
     norito_source = _read(REPO_ROOT / "crates/norito/src/lib.rs")
-    canonical_decoder = norito_source.split("pub fn decode_canonical_with_limits<T>(", 1)[1].split(
-        'include!("canonical_codec_tests.rs");', 1
-    )[0]
-    assert "core::validate_header_flags(header.flags).is_err()" in canonical_decoder
+    canonical_decoder = _body(
+        norito_source,
+        r"\bpub\s+fn\s+decode_canonical_with_limits\s*<\s*T\s*>\s*\(",
+    )
+    canonical_header = _body(
+        norito_source, r"\bfn\s+checked_canonical_header\s*\("
+    )
+    assert _code(canonical_decoder).startswith("checked_canonical_header(bytes)?;")
+    assert "header.compression != Compression::None" in canonical_header
+    assert "core::validate_header_flags(header.flags).is_err()" in canonical_header
+    assert "returnErr(Error::NonCanonicalEncoding);" in _code(canonical_header)
     assert "core::write_canonical_to_writer(&value, &mut exact)" in canonical_decoder
     assert "!exact.is_complete()" in canonical_decoder
     assert "pub type FinalizedProviderIngestRuntimeResultV1<" in node_lib
@@ -667,10 +674,50 @@ def test_completion_guard_rejects_shared_canonical_decoder_bypasses(
     path = REPO_ROOT / "crates/norito/src/lib.rs"
     original_read = _read
     source = original_read(path)
-    start = source.index("pub fn decode_canonical_with_limits<T>(")
+    declaration = (
+        "fn checked_canonical_header("
+        if contract == "core::validate_header_flags(header.flags).is_err()"
+        else "pub fn decode_canonical_with_limits<T>("
+    )
+    start = source.index(declaration)
     mutated = source[:start] + source[start:].replace(contract, "REMOVED_CANONICAL_CONTRACT", 1)
     assert mutated != source
     monkeypatch.setitem(globals(), "_read", lambda value: mutated if value == path else original_read(value))
+    with pytest.raises(AssertionError):
+        test_provider_ingest_uses_one_canonical_owned_completion_codec()
+
+
+@pytest.mark.parametrize("contract", (
+    "checked_canonical_header(bytes)?;",
+    "fn checked_canonical_header(",
+    "header.compression != Compression::None",
+))
+def test_completion_guard_rejects_disconnected_canonical_header(
+    monkeypatch: pytest.MonkeyPatch, contract: str,
+) -> None:
+    """The actual decoder must invoke its real header refusal before decoding."""
+    test_provider_ingest_uses_one_canonical_owned_completion_codec()
+    path = REPO_ROOT / "crates/norito/src/lib.rs"
+    original_read = _read
+    original = original_read(path)
+    declaration = (
+        "pub fn decode_canonical_with_limits<T>("
+        if contract == "checked_canonical_header(bytes)?;"
+        else "fn checked_canonical_header("
+    )
+    start = original.index(declaration)
+    end = original.index('include!("canonical_codec_tests.rs");', start)
+    target = original[start:end]
+    assert target.count(contract) == 1
+    mutated = (
+        original[:start]
+        + target.replace(contract, "REMOVED_HEADER_CONTRACT", 1)
+        + original[end:]
+    )
+    assert mutated != original
+    monkeypatch.setitem(
+        globals(), "_read", lambda value: mutated if value == path else original_read(value)
+    )
     with pytest.raises(AssertionError):
         test_provider_ingest_uses_one_canonical_owned_completion_codec()
 

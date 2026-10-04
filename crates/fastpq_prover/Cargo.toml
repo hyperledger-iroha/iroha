@@ -19,6 +19,7 @@ fastpq-gpu = ["dep:block", "dep:metal"]
 iroha_model_base = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 fastpq_isi = { path = "../fastpq_isi" }
+iroha_allocation = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["application"] }
 iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }
 iroha_primitives = { workspace = true }

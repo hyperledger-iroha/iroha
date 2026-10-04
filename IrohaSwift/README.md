@@ -105,9 +105,9 @@ for try await message in torii.streamTransactionStatusEvents(hashHex: envelope.h
   top-level `&&` also bound Torii's history scan. `assetIds` and
   `assetDefinitionIds` are lists that match element-wise: `==`/`in` keep rows
   where any element matches, `!=`/`notIn` rows where none does.
-- Aggregates are `POST`-only and computed where the rows live: a read whose visible
-  rows span several dataspace routes is rejected with `invalid_aggregate`; page
-  through the rows without `aggregate` instead.
+- Torii executes each collection query once over caller-visible global state.
+  For collections supporting totals and `POST` aggregates, visible rows contribute
+  exactly once even when they span several dataspace routes.
 - Filters: `ToriiField` operators (`==`, `!=`, `<`, `<=`, `>`, `>=`), `in`, `notIn`,
   `exists`, `isNull`, `isNotNull`, combined with `&&`, `||`, `!` or
   `ToriiFilter.all { ... }`; or pass text verbatim with `ToriiListQuery(filterText:)`.
@@ -461,6 +461,14 @@ scripts/build_norito_xcframework.sh \
   --lockfile-path "$PWD/Cargo.lock" --local-integration --allow-dirty-source
 export MOBILE_SDK_APPLE_ARTIFACT_DIR="$NORITO_BRIDGE_OUT_DIR"
 ```
+
+A separate `MOBILE_SDK_LOCAL_UNIT_ARTIFACT_DIR` input may select a producer-validated
+single-host macOS archive for debug unit tests. It requires genuine current-source
+static capture, normalization, complete-archive native consumer checks, and the
+explicit `local-unit` artifact schema. It retains every package test and exact
+ABI-25 admission. It cannot be selected together with the external/release input;
+iOS and Release compilation reject it. It is never accepted by the canonical
+three-slice validator, pin owner, archive owner, or release publication.
 
 The KAGEMUSHA V1 pull-request lane preserves that build envelope while avoiding a
 hosted-runner timeout: five isolated macOS jobs each build one attested target
@@ -2481,8 +2489,11 @@ and publishes normalized ZIP bytes atomically; CI compiles a fresh SwiftPM consu
 from that exact archive.
 
 ### NoritoBridge policy and troubleshooting
-- Builds require `dist/NoritoBridge.xcframework`; package resolution fails when the
-  artifact is missing or malformed.
+- Builds require the authenticated `NoritoBridge.xcframework`, selected through
+  `MOBILE_SDK_APPLE_ARTIFACT_DIR` or the default `dist/` directory; package resolution
+  fails when the artifact is missing or malformed.
+- SwiftPM retains the native exports through ordinary C references. Downstream
+  packages inherit the required native links without additional linker flags.
 - Broken bridge symbols surface `bridgeUnavailable`/`nativeBridgeUnavailable` errors
   that include the expected xcframework location.
 - Example: `swift test --package-path IrohaSwift --disable-automatic-resolution`

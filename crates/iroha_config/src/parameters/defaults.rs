@@ -2387,7 +2387,9 @@ pub mod torii {
     /// Maximum concurrent heavy query executions admitted by Torii.
     pub const QUERY_HEAVY_MAX_INFLIGHT: NonZeroUsize = nonzero!(64usize);
     /// Aggregate bytes split between bounded signed-query ingress and fanout working sets.
-    pub const QUERY_FANOUT_MAX_RETAINED_BYTES: Bytes = Bytes(64_000_000);
+    pub const QUERY_FANOUT_MAX_RETAINED_BYTES: Bytes = Bytes(512_000_000);
+    /// Maximum complete working set owned by one query, independent of aggregate concurrency.
+    pub const QUERY_FANOUT_MAX_WORKING_SET_BYTES: Bytes = Bytes(48_000_000);
     /// Minimum aggregate V1 query-memory pool for four ingress slots plus one fanout.
     pub const QUERY_FANOUT_MIN_POOL_BYTES_V1: u64 = 20_000_000;
     /// Source-derived route/catalogue/key/candidate bytes in one V1 fanout.
@@ -2396,6 +2398,12 @@ pub mod torii {
     pub const QUERY_FANOUT_PREBODY_UNITS_V1: u64 = 15;
     /// Divisor reserving one quarter of aggregate query memory for ingress.
     pub const QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1: u64 = 4;
+    /// Independently admitted signed-query ingress bodies.
+    pub const QUERY_MEMORY_INGRESS_SLOTS_V1: u64 = 4;
+    /// Source-derived routing catalogue and key-validation scratch for one ingress body.
+    pub const QUERY_INGRESS_FIXED_OVERHEAD_BYTES_V1: u64 = 1_122_370;
+    /// Simultaneously retained variable-size ingress representations.
+    pub const QUERY_INGRESS_PHASE_UNITS_V1: u64 = 5;
     /// Source-proven maximum bytes exposed to Hyper by one socket read.
     pub const HTTP_READ_CHUNK_BYTES_V1: u64 = 8 * 1024;
     /// Reserved address-space headroom for fixed internal proxy decode state.
@@ -2408,10 +2416,11 @@ pub mod torii {
     pub const QUERY_QUEUE_TIMEOUT_MS: u64 = 30_000;
     /// Absolute deadline for one admitted App routed-read body.
     pub const APP_API_ROUTED_READ_BODY_READ_TIMEOUT_MS: u64 = 10_000;
-    /// Derive the V1 routed-read route-body phase during configuration parsing.
+    /// Derive one complete V1 query working set without increasing its configured ceiling.
     #[must_use]
-    pub fn app_api_routed_read_route_body_phase_bytes(
+    pub fn query_fanout_working_set_bytes(
         aggregate_bytes: u64,
+        max_working_set_bytes: u64,
         max_content_bytes: u64,
     ) -> Option<u64> {
         let ingress_pool = aggregate_bytes / QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1;
@@ -2419,11 +2428,43 @@ pub mod torii {
         let desired = max_content_bytes
             .checked_mul(QUERY_FANOUT_PREBODY_UNITS_V1)?
             .checked_add(QUERY_FANOUT_FIXED_OVERHEAD_BYTES_V1)?;
-        let working_set = desired.min(fanout_pool);
-        working_set
+        let working_set = desired.min(max_working_set_bytes).min(fanout_pool);
+        (working_set > QUERY_FANOUT_FIXED_OVERHEAD_BYTES_V1).then_some(working_set)
+    }
+    /// Derive the V1 routed-read route-body phase during configuration parsing.
+    #[must_use]
+    pub fn app_api_routed_read_route_body_phase_bytes(
+        aggregate_bytes: u64,
+        max_working_set_bytes: u64,
+        max_content_bytes: u64,
+    ) -> Option<u64> {
+        query_fanout_working_set_bytes(aggregate_bytes, max_working_set_bytes, max_content_bytes)?
             .checked_sub(QUERY_FANOUT_FIXED_OVERHEAD_BYTES_V1)
             .map(|remaining| remaining / QUERY_FANOUT_PREBODY_UNITS_V1)
             .filter(|phase| *phase > 1)
+    }
+    /// Derive the complete independently reserved V1 ingress phase.
+    #[must_use]
+    pub fn query_ingress_body_phase_bytes(
+        aggregate_bytes: u64,
+        max_working_set_bytes: u64,
+        max_content_bytes: u64,
+    ) -> Option<u64> {
+        let fanout_phase = app_api_routed_read_route_body_phase_bytes(
+            aggregate_bytes,
+            max_working_set_bytes,
+            max_content_bytes,
+        )?;
+        let ingress_slot_bytes =
+            aggregate_bytes / QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1 / QUERY_MEMORY_INGRESS_SLOTS_V1;
+        ingress_slot_bytes
+            .checked_sub(QUERY_INGRESS_FIXED_OVERHEAD_BYTES_V1)
+            .map(|remaining| {
+                (remaining / QUERY_INGRESS_PHASE_UNITS_V1)
+                    .min(max_content_bytes)
+                    .min(fanout_phase)
+            })
+            .filter(|phase| *phase > 0)
     }
     // Request-rate budgets accommodate sustained application traffic and large
     // deployment/proof walks. Actual work is bounded separately by admission,

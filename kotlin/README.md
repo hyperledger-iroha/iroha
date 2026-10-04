@@ -168,10 +168,10 @@ aggregate, and exact-total controls. Empty pages can still carry `nextCursor`.
 - Typed rows keep the complete JSON in `row.json`; only the identity fields
   (`id`; `account_id`, `asset`, `scope` and `quantity` for balances) are
   non-null. Use `collection.json()` for `select` projections and aggregates
-  (`AggregateSpec`), whose items are plain JSON objects. Aggregates are
-  computed where the rows live: a read whose visible rows span several
-  dataspace routes is rejected with `invalid_aggregate`; page through the rows
-  instead.
+  (`AggregateSpec`), whose items are plain JSON objects. Torii executes each
+  collection query once over the caller-visible global state. For collections
+  that support totals and `POST` aggregates, visible rows contribute exactly once
+  even when they span several dataspace routes.
 - Object and array literals (only valid against `metadata.<key>`) exist only
   in the JSON form. `POST` bodies always carry tree filters as JSON; GET
   parameters (`toQueryPairs()`) and event-stream filters reject them.

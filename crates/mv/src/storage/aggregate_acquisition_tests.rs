@@ -190,7 +190,7 @@ fn caller_owned_storage_slots_retain_replacement_prefix_until_all_writers_releas
 #[test]
 fn completed_storage_slots_release_physical_writers_before_retirement_and_refuse_reuse() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 

@@ -8,6 +8,9 @@
 mod bootstrap_failure;
 mod build_registry;
 mod bundle;
+mod contracts;
+mod program;
+pub use program::admit_native_program;
 mod deployment_report;
 pub(crate) mod gateway_compliance;
 mod generated_service_runtime;
@@ -40,7 +43,11 @@ use std::{path::PathBuf, time::Duration};
 use norito::json::{JsonDeserialize, JsonSerialize};
 
 pub use bootstrap_failure::ManagedBootstrapFailure;
-pub use bundle::{MOCHI_APPLICATION_ID, NativeBundleLayout, macos_info_plist};
+pub use bundle::{KagamiBundleLayout, MOCHI_APPLICATION_ID, NativeBundleLayout, macos_info_plist};
+pub use contracts::{
+    ManagedContractCallOptions, ManagedContractCallReport, ManagedContractView,
+    ManagedContractViewRequest,
+};
 pub use deployment_report::{
     ManagedDeploymentExecution, ManagedDeploymentReport, ManagedDeploymentTarget,
     ManagedParentObservation, ManagedParentReport,
@@ -99,6 +106,15 @@ pub enum Error {
     /// Stored metadata or caller input is invalid.
     #[error("{0}")]
     Invalid(String),
+    /// Native call work failed or remains unresolved; its original journal and cause survive.
+    #[error("{source}\nCall journal: {journal:?}")]
+    ContractCall {
+        /// Exact original owner-private recovery location.
+        journal: PathBuf,
+        /// Unmodified native call or journal error, including exact pending hashes.
+        #[source]
+        source: color_eyre::eyre::Report,
+    },
     /// Another operation or process still owns this network.
     #[error("managed network `{0}` is already owned; inspect its status before retrying")]
     Busy(String),

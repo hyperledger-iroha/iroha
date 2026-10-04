@@ -46,3 +46,12 @@ caller's scope and fee review before execution. Execution failures show their pu
 exact recovery journal together, while preserving the native error type for callers.
 
 Focused validation: `cargo test -p musubi --lib deployment_runtime`.
+
+Mutable calls require finite aggregate fee authorization. Use the selected network's
+configured maxima or supply `musubi call --entrypoint SELECTOR --max-fee-asset ASSET
+--max-fee AMOUNT`. The shared native owner quotes, signs and retains the optional
+exact self-grant and call before either is sent. Both expire within the original
+sixty-second authorization; `--resume JOURNAL` reconciles those exact hashes without
+rebuilding, quoting or signing replacements. `DeploymentRuntime::current_deployment`
+provides the verified current artifact and receipt for native alias-selected view/call
+adapters and never creates a missing slot or repairs its records.

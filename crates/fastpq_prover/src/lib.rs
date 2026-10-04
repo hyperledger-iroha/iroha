@@ -201,3 +201,9 @@ pub use poseidon_manifest::{
     PoseidonManifest, poseidon_manifest, poseidon_manifest_sha256, poseidon_profile_id,
     poseidon_profile_sha256,
 };
+
+#[cfg(test)]
+use crate as test_prover;
+#[cfg(test)]
+#[path = "../tests/support/producer_funding.rs"]
+mod test_producer_funding;

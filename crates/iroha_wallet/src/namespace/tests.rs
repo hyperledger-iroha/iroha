@@ -164,8 +164,106 @@ fn dataspace_policy() -> SuffixPolicyV1 {
     value
 }
 
+fn account_policy() -> SuffixPolicyV1 {
+    let mut value = default_policy();
+    value.suffix_id = ACCOUNT_ALIAS_SUFFIX_ID;
+    value.suffix = "account-alias".into();
+    value.pricing[0].label_regex = "^[a-z]+@[a-z]+$".into();
+    value
+}
+
 #[test]
-fn private_dataspace_quote_is_one_paid_dynamic_lease_with_no_parent_catalog_changes() {
+fn private_owner_alias_binds_exact_dpn_name_hash_and_rejects_another_scope() {
+    let alias = resolve_private_owner_alias("dpn", "admin").unwrap();
+    assert_eq!(alias.canonical_text(), "admin@dpn");
+    assert_eq!(
+        alias.dataspace_id,
+        DataSpaceId::from_hash(&private_dataspace_selector("dpn").unwrap().name_hash(),)
+    );
+    for label in ["", "Admin", " admin", "admin ", "admin@dpn", "admin@other"] {
+        assert!(
+            resolve_private_owner_alias("dpn", label).is_err(),
+            "{label:?}"
+        );
+    }
+    assert!(resolve_private_owner_alias("universal", "admin").is_err());
+}
+
+#[test]
+fn private_dpn_quote_refuses_changed_account_scope_owner_expiry_and_policy() {
+    let owner = steward_account();
+    let alias = resolve_private_owner_alias("dpn", "admin").unwrap();
+    let selector = NameSelectorV1 {
+        version: NameSelectorV1::VERSION,
+        suffix_id: ACCOUNT_ALIAS_SUFFIX_ID,
+        label: alias.canonical_text(),
+    };
+    let record = NameRecordV1::new(
+        selector,
+        owner.clone(),
+        vec![],
+        0,
+        1,
+        10_000,
+        20_000,
+        30_000,
+        Metadata::default(),
+    );
+    let quote = |account_alias, record: Option<&NameRecordV1>, policy: &SuffixPolicyV1| {
+        quote_private_dataspace(
+            &dataspace_policy(),
+            private_dataspace_selector("dpn").unwrap(),
+            owner.clone(),
+            1_000,
+            Duration::from_secs(60),
+            &[],
+            None,
+            policy,
+            account_alias,
+            record,
+        )
+    };
+    let paid = quote(alias.clone(), Some(&record), &account_policy()).unwrap();
+    assert_eq!(paid.dataspace.canonical_name.as_ref(), "dpn");
+    assert_eq!(paid.account_alias.canonical_text(), "admin@dpn");
+    assert_eq!(paid.request.intents.len(), 2);
+    assert_eq!(paid.rent, "1".parse().unwrap());
+    assert!(
+        quote(
+            resolve_private_owner_alias("other", "admin").unwrap(),
+            None,
+            &account_policy()
+        )
+        .is_err()
+    );
+    for mutation in 0..4 {
+        let mut changed = record.clone();
+        match mutation {
+            0 => changed.owner = iroha_test_samples::gen_account_in("foreign").0,
+            1 => changed.expires_at_ms = 1_000,
+            2 => changed.ownership_generation = 0,
+            _ => changed.name_hash = [0; 32],
+        }
+        assert!(quote(alias.clone(), Some(&changed), &account_policy()).is_err());
+    }
+    let mut wrong = account_policy();
+    wrong.suffix_id = DATASPACE_ALIAS_SUFFIX_ID;
+    assert!(quote(alias.clone(), None, &wrong).is_err());
+    wrong = account_policy();
+    wrong.min_term_years = 2;
+    assert!(quote(alias.clone(), None, &wrong).is_err());
+    wrong = account_policy();
+    let mut currency = [41; 16];
+    currency[6] = 0x49;
+    currency[8] = 0x89;
+    wrong.payment_asset_id = AssetDefinitionId::from_uuid_bytes(currency)
+        .unwrap()
+        .to_string();
+    assert!(quote(alias, None, &wrong).is_err());
+}
+
+#[test]
+fn private_dataspace_quote_pays_dataspace_and_owner_alias_without_parent_catalog_changes() {
     let policy = dataspace_policy();
     let selector = private_dataspace_selector("builders").unwrap();
     let owner = steward_account();
@@ -177,6 +275,9 @@ fn private_dataspace_quote_is_one_paid_dynamic_lease_with_no_parent_catalog_chan
         Duration::from_secs(60),
         &[],
         None,
+        &account_policy(),
+        resolve_private_owner_alias("builders", "admin").unwrap(),
+        None,
     )
     .unwrap();
     assert_eq!(
@@ -185,8 +286,13 @@ fn private_dataspace_quote_is_one_paid_dynamic_lease_with_no_parent_catalog_chan
     );
     assert_eq!(quote.dataspace.canonical_name.as_ref(), "builders");
     assert_eq!(quote.valid_until_ms, 61_000);
-    assert_eq!(quote.rent, "0.5".parse().unwrap());
-    assert_eq!(quote.request.intents.len(), 1);
+    assert_eq!(quote.rent, "1".parse().unwrap());
+    assert_eq!(quote.account_alias.canonical_text(), "admin@builders");
+    assert_eq!(
+        quote.account_alias.dataspace_id,
+        quote.dataspace.dataspace_id
+    );
+    assert_eq!(quote.request.intents.len(), 2);
     let intent = &quote.request.intents[0];
     assert!(
         matches!(&intent.intent, AliasIntentV1::Dataspace(value) if value.owner == owner && value.dataspace == quote.dataspace)
@@ -196,12 +302,32 @@ fn private_dataspace_quote_is_one_paid_dynamic_lease_with_no_parent_catalog_chan
         intent.quote_guard.expected_payment_asset,
         quote.payment_asset
     );
-    assert_eq!(intent.quote_guard.max_amount, quote.rent);
+    assert_eq!(intent.quote_guard.max_amount, "0.5".parse().unwrap());
     assert_eq!(
         intent.quote_guard.expected_policy_version,
         policy.policy_version
     );
     assert_eq!(intent.quote_guard.valid_until_ms, quote.valid_until_ms);
+    let account_intent = &quote.request.intents[1];
+    assert!(
+        matches!(&account_intent.intent, AliasIntentV1::AccountAlias(value)
+        if value.alias == quote.account_alias && value.target_account == owner
+        && value.provision == AccountProvisionV1::Existing
+        && value.role == AccountAliasRoleV1::Additional)
+    );
+    assert_eq!(account_intent.acquisition.term_years, 1);
+    assert_eq!(
+        account_intent.quote_guard.expected_payment_asset,
+        quote.payment_asset
+    );
+    assert_eq!(
+        account_intent.quote_guard.max_amount,
+        "0.5".parse().unwrap()
+    );
+    assert_eq!(
+        account_intent.quote_guard.valid_until_ms,
+        quote.valid_until_ms
+    );
     let wire = norito::json::to_vec(&quote.request).unwrap();
     assert_eq!(
         norito::json::from_slice::<AliasSetupPlanRequestV1>(&wire).unwrap(),
@@ -226,7 +352,10 @@ fn private_dataspace_quote_is_one_paid_dynamic_lease_with_no_parent_catalog_chan
             1_000,
             Duration::from_secs(60),
             &[],
-            Some(&existing)
+            Some(&existing),
+            &account_policy(),
+            resolve_private_owner_alias("builders", "admin").unwrap(),
+            None,
         )
         .is_ok()
     );
@@ -262,6 +391,9 @@ fn private_dataspace_quote_refuses_reserved_aliases_physical_scopes_and_changed_
             ttl,
             catalog,
             record,
+            &account_policy(),
+            resolve_private_owner_alias("builders", "admin").unwrap(),
+            None,
         )
     };
     for catalog in [
@@ -339,12 +471,14 @@ fn private_dataspace_preparation_does_not_dispatch_after_deadline_or_for_invalid
     };
     let config = Config::load_table("namespace-tests.toml", table).unwrap();
     assert_eq!(config.account, account);
-    let error = prepare_private_dataspace_request(&config, "builders", Instant::now()).unwrap_err();
+    let error = prepare_private_dataspace_request(&config, "builders", "admin", Instant::now())
+        .unwrap_err();
     assert!(error.to_string().contains("deadline expired"));
     assert!(
         prepare_private_dataspace_request(
             &config,
             "universal",
+            "admin",
             Instant::now() + Duration::from_secs(1)
         )
         .is_err()

@@ -855,7 +855,16 @@ fn reversible_publication_refusal_retains_original_overlay_capture_and_certified
     with_worker(|chain, worker, blocks, events| {
         let (block, qc) = executed(chain, worker);
         let overlay = original_overlay(worker);
-        let witness = iroha_crypto::HashOf::new(&worker.live.as_ref().unwrap().witness);
+        let witness = iroha_crypto::HashOf::new(
+            worker
+                .live
+                .as_ref()
+                .unwrap()
+                .witness
+                .as_ref()
+                .unwrap()
+                .wire(),
+        );
         let context = worker
             .live
             .as_ref()
@@ -901,7 +910,16 @@ fn reversible_publication_refusal_retains_original_overlay_capture_and_certified
                 "publication retry retains the original canonical authority allocation"
             );
             assert_eq!(
-                iroha_crypto::HashOf::new(&worker.live.as_ref().unwrap().witness),
+                iroha_crypto::HashOf::new(
+                    worker
+                        .live
+                        .as_ref()
+                        .unwrap()
+                        .witness
+                        .as_ref()
+                        .unwrap()
+                        .wire()
+                ),
                 witness
             );
             assert_eq!(worker.live.as_ref().unwrap().events.len(), pending_events);
@@ -1304,7 +1322,16 @@ fn state_busy_retry_retains_original_metadata_snapshot_certificate_and_pool_cust
     with_worker(|chain, worker, blocks, events| {
         let (block, qc) = executed(chain, worker);
         let overlay = original_overlay(worker);
-        let witness = iroha_crypto::HashOf::new(&worker.live.as_ref().unwrap().witness);
+        let witness = iroha_crypto::HashOf::new(
+            worker
+                .live
+                .as_ref()
+                .unwrap()
+                .witness
+                .as_ref()
+                .unwrap()
+                .wire(),
+        );
         worker.prepare(&block, &qc).unwrap();
         blocks.append(&block, &qc).unwrap();
         let staged = worker.context.staging.get(&qc.block_hash).unwrap();
@@ -1346,7 +1373,10 @@ fn state_busy_retry_retains_original_metadata_snapshot_certificate_and_pool_cust
                 );
                 assert!(events.try_recv().is_err());
                 let live = worker.live.as_ref().unwrap();
-                assert_eq!(iroha_crypto::HashOf::new(&live.witness), witness);
+                assert_eq!(
+                    iroha_crypto::HashOf::new(live.witness.as_ref().unwrap().wire()),
+                    witness
+                );
                 let PublicationPhase::Prepared {
                     state_events: Some(tail),
                     ..
@@ -1450,7 +1480,7 @@ fn context_proof_capacity_retry_retains_original_witness_inputs_and_execution() 
         let overlay = std::ptr::from_ref(pending.overlay.as_ref());
         let authority = inputs.get().schedule.current.committee.as_ptr();
         let writes = pending.witness.writes.as_ptr();
-        let witness = iroha_crypto::HashOf::new(&pending.witness);
+        let witness = iroha_crypto::HashOf::new(pending.witness.wire());
         let event_count = pending.events.len();
         let budget = worker.state.ivm_execution_budget();
         let retained_bytes = budget.reserved_bytes();
@@ -1467,7 +1497,7 @@ fn context_proof_capacity_retry_retains_original_witness_inputs_and_execution() 
             assert_eq!(std::ptr::from_ref(pending.overlay.as_ref()), overlay);
             assert_eq!(inputs.get().schedule.current.committee.as_ptr(), authority);
             assert_eq!(pending.witness.writes.as_ptr(), writes);
-            assert_eq!(iroha_crypto::HashOf::new(&pending.witness), witness);
+            assert_eq!(iroha_crypto::HashOf::new(pending.witness.wire()), witness);
             assert_eq!(pending.events.len(), event_count);
             assert_eq!(budget.reserved_bytes(), retained_bytes);
             assert!(!worker.results.contains_key(&block_hash));
@@ -1487,8 +1517,11 @@ fn context_proof_capacity_retry_retains_original_witness_inputs_and_execution() 
             live.commitment.get().schedule.current.committee.as_ptr(),
             authority
         );
-        assert_eq!(live.witness.writes.as_ptr(), writes);
-        assert_eq!(iroha_crypto::HashOf::new(&live.witness), witness);
+        assert_eq!(live.witness.as_ref().unwrap().writes.as_ptr(), writes);
+        assert_eq!(
+            iroha_crypto::HashOf::new(live.witness.as_ref().unwrap().wire()),
+            witness
+        );
         assert_eq!(live.events.len(), event_count);
         let qc = chain.commit_qc(2, block_hash, result, false, Signers::Quorum);
         assert_eq!(worker.prepare(&block, &qc).unwrap(), Some(result));
@@ -1544,7 +1577,7 @@ fn result_encoding_capacity_retry_keeps_original_execution_and_allocation_custod
             .current
             .committee
             .as_ptr();
-        let witness = iroha_crypto::HashOf::new(&pending.witness);
+        let witness = iroha_crypto::HashOf::new(pending.witness.wire());
         let event_count = pending.events.len();
         for _ in 0..2 {
             assert!(matches!(
@@ -1565,7 +1598,7 @@ fn result_encoding_capacity_retry_keeps_original_execution_and_allocation_custod
                     .as_ptr(),
                 authority
             );
-            assert_eq!(iroha_crypto::HashOf::new(&pending.witness), witness);
+            assert_eq!(iroha_crypto::HashOf::new(pending.witness.wire()), witness);
             assert_eq!(pending.events.len(), event_count);
             assert!(!worker.results.contains_key(&block_hash));
         }
@@ -1584,7 +1617,10 @@ fn result_encoding_capacity_retry_keeps_original_execution_and_allocation_custod
             live.commitment.get().schedule.current.committee.as_ptr(),
             authority
         );
-        assert_eq!(iroha_crypto::HashOf::new(&live.witness), witness);
+        assert_eq!(
+            iroha_crypto::HashOf::new(live.witness.as_ref().unwrap().wire()),
+            witness
+        );
         assert_eq!(live.events.len(), event_count);
         let qc = chain.commit_qc(2, block_hash, result, false, Signers::Quorum);
         assert_eq!(worker.prepare(&block, &qc).unwrap(), Some(result));
@@ -1632,7 +1668,7 @@ fn assert_certificate_allocation_retry(occupy_after_part: usize) {
         let (block, qc) = executed(chain, worker);
         let overlay = original_overlay(worker);
         let live = worker.live.as_ref().unwrap();
-        let witness = iroha_crypto::HashOf::new(&live.witness);
+        let witness = iroha_crypto::HashOf::new(live.witness.as_ref().unwrap().wire());
         let authority = live.commitment.get().schedule.current.committee.as_ptr();
         let preimage = match &live.phase {
             PublicationPhase::Executed { preimage, .. } => preimage.as_slice().as_ptr(),
@@ -1694,7 +1730,10 @@ fn assert_certificate_allocation_retry(occupy_after_part: usize) {
             assert!(worker.recovery.is_none());
             assert_eq!(original_overlay(worker), overlay);
             let live = worker.live.as_ref().unwrap();
-            assert_eq!(iroha_crypto::HashOf::new(&live.witness), witness);
+            assert_eq!(
+                iroha_crypto::HashOf::new(live.witness.as_ref().unwrap().wire()),
+                witness
+            );
             assert_eq!(
                 live.commitment.get().schedule.current.committee.as_ptr(),
                 authority
@@ -2490,7 +2529,7 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
             .map(|member| member.proof_of_possession.as_ptr())
             .collect();
         let canonical_result = norito::encode_canonical(commitment).unwrap();
-        let witness = iroha_crypto::HashOf::new(&original.witness);
+        let witness = iroha_crypto::HashOf::new(original.witness.wire());
         let budget = worker.state.ivm_execution_budget();
         assert!(original.phase.ready().unwrap().belongs_to(&budget));
         let held = budget.reserved_bytes();
@@ -2528,7 +2567,7 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
                 norito::encode_canonical(commitment).unwrap(),
                 canonical_result
             );
-            assert_eq!(iroha_crypto::HashOf::new(&retained.witness), witness);
+            assert_eq!(iroha_crypto::HashOf::new(retained.witness.wire()), witness);
             assert!(
                 retained
                     .archive_refusal
@@ -2574,7 +2613,10 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
             canonical_result
         );
         assert!(live.commitment.belongs_to(&budget));
-        assert_eq!(iroha_crypto::HashOf::new(&live.witness), witness);
+        assert_eq!(
+            iroha_crypto::HashOf::new(live.witness.as_ref().unwrap().wire()),
+            witness
+        );
         let source = live.native_contexts.as_ref().unwrap();
         let bytes = source.canonical_bytes().to_vec();
         let carrier_hash = source.carrier_hash();
@@ -2595,7 +2637,8 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
                 .unwrap()
         );
         assert_eq!(
-            projection.ordinary_writes, live.witness.writes,
+            projection.ordinary_writes,
+            live.witness.as_ref().unwrap().writes,
             "archive retains the exact original execution write order"
         );
         assert!(

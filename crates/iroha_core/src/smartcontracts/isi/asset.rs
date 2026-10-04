@@ -2191,7 +2191,8 @@ pub mod isi {
         destination_admission: NumericAssetDestinationAdmissionPolicy,
     }
     /// Measure before output allocation and debit the logical frame quota, including its delimiter.
-    /// TODO: retain original physical funding for the remaining retail-policy binding frames.
+    /// Independent owned-frame oracle; production contexts stream borrowed values.
+    #[cfg(test)]
     fn bounded_quantity_frame<T: norito::NoritoSerialize>(
         value: &T,
         remaining: &mut u64,
@@ -2592,6 +2593,14 @@ pub mod isi {
         fn quantity_authorization_context_inputs(
             &self,
             bindings: &quantity_authorization::BindingFrame<'_>,
+        ) -> Option<Hash> {
+            self.quantity_authorization_context_stream(bindings, u64::MAX)
+        }
+        // One canonical byte stream; tests retain independent small-cap oracles.
+        // The production entry above is independent of optional proof limits.
+        fn quantity_authorization_context_stream(
+            &self,
+            bindings: &quantity_authorization::BindingFrame<'_>,
             limit: u64,
         ) -> Option<Hash> {
             use quantity_authorization::{
@@ -2738,7 +2747,7 @@ pub mod isi {
             bindings: &[(AssetId, AssetId, Quantity)],
             limit: u64,
         ) -> Option<Hash> {
-            self.quantity_authorization_context_inputs(
+            self.quantity_authorization_context_stream(
                 &quantity_authorization::BindingFrame::Owned(bindings),
                 limit,
             )
@@ -2884,27 +2893,8 @@ pub mod isi {
             legs: &[(AssetId, AssetId, TransferDeltaTranscript)],
             apply: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<T, Error>,
         ) -> Result<T, Error> {
-            let limit = state.quantity_candidate_preimage_limit();
-            let measured = legs
-                .iter()
-                .try_fold(0u64, |sum, (source, destination, delta)| {
-                    let source = u64::try_from(norito::canonical_frame_len(source).ok()?).ok()?;
-                    let destination =
-                        u64::try_from(norito::canonical_frame_len(destination).ok()?).ok()?;
-                    let amount =
-                        u64::try_from(norito::canonical_frame_len(&delta.amount).ok()?).ok()?;
-                    sum.checked_add(source)?
-                        .checked_add(destination)?
-                        .checked_add(amount)?
-                        .checked_add(32)
-                });
-            if measured.is_none_or(|bytes| bytes > limit) {
-                state.poison_quantity_candidate_owner();
-                return apply(state);
-            }
             let Some(context) = self.quantity_authorization_context_inputs(
                 &quantity_authorization::BindingFrame::Transfers(legs),
-                limit,
             ) else {
                 state.poison_quantity_candidate_owner();
                 return apply(state);
@@ -3485,7 +3475,10 @@ pub mod isi {
                     &captured_source,
                     &captured_amount,
                     false,
-                    ("account-admission-fee-burn", Some(&[])),
+                    (
+                        "account-admission-fee-burn",
+                        Some(quantity_authorization::SupplyBinding::Bytes(&[])),
+                    ),
                     apply,
                 )
             }
@@ -3498,7 +3491,10 @@ pub mod isi {
                     &captured_source,
                     &captured_amount,
                     false,
-                    ("verified-fee-sponsor-burn", Some(&owner.binding)),
+                    (
+                        "verified-fee-sponsor-burn",
+                        Some(quantity_authorization::SupplyBinding::Bytes(&owner.binding)),
+                    ),
                     apply,
                 )
             }
@@ -6693,33 +6689,19 @@ pub mod isi {
             NumericAssetTransferControlPolicy::Enforce,
             NumericAssetDestinationAdmissionPolicy::ExistingAccount,
         )?;
-        let mut remaining = state_transaction.quantity_candidate_preimage_limit();
-        let quantity_authorization_context = (|| {
-            if u64::try_from(norito::canonical_frame_len(policy).ok()?).ok()? > remaining {
-                return None;
-            }
-            bounded_quantity_frame(
-                &(
-                    "iroha:fastpq:native-fx-authorization:v1".to_owned(),
-                    submitting_authority.clone(),
-                    policy.clone(),
-                    vec![
-                        (
-                            source.source_id.clone(),
-                            source.destination_id.clone(),
-                            source.amount.clone(),
-                        ),
-                        (
-                            destination.source_id.clone(),
-                            destination.destination_id.clone(),
-                            destination.amount.clone(),
-                        ),
-                    ],
-                ),
-                &mut remaining,
-            )
-            .map(Hash::new)
-        })();
+        let quantity_authorization_context =
+            quantity_authorization::fx_context(&quantity_authorization::FxFrame {
+                authority: submitting_authority,
+                policy,
+                legs: [
+                    (&source.source_id, &source.destination_id, &source.amount),
+                    (
+                        &destination.source_id,
+                        &destination.destination_id,
+                        &destination.amount,
+                    ),
+                ],
+            });
         Ok(PreparedNumericTransferPair {
             source,
             destination,
@@ -7519,7 +7501,6 @@ pub mod isi {
                 incarnation,
                 domain,
                 balance,
-                state.quantity_candidate_preimage_limit(),
             )
             .ok_or(QuantityCaptureIssue::Capacity)?;
             Ok((hash, context))
@@ -7579,17 +7560,15 @@ pub mod isi {
         let binding = if let Some(owner) = retirement {
             owner.context(state, asset_id.definition(), Some((asset_id, &amount)))
         } else {
-            let context = quantity_authorization::supply_context(
-                &quantity_authorization::SupplyFrame {
+            let context =
+                quantity_authorization::supply_context(&quantity_authorization::SupplyFrame {
                     mint: false,
                     purpose: "account-unregister-burn",
-                    binding: &[],
+                    binding: quantity_authorization::SupplyBinding::Bytes(&[]),
                     authority,
                     id: asset_id,
                     amount: &amount,
-                },
-                state.quantity_candidate_preimage_limit(),
-            );
+                });
             state
                 .tx_call_hash
                 .zip(context)
@@ -7699,24 +7678,21 @@ pub mod isi {
         id: &AssetId,
         amount: &Quantity,
         mint: bool,
-        purpose: (&str, Option<&[u8]>),
+        purpose: (&str, Option<quantity_authorization::SupplyBinding<'_>>),
         apply: impl FnOnce(
             &mut StateTransaction<'_, '_>,
             PreparedNumericSupplyChange,
         ) -> Result<T, Error>,
     ) -> Result<T, Error> {
         let context = purpose.1.and_then(|binding| {
-            quantity_authorization::supply_context(
-                &quantity_authorization::SupplyFrame {
-                    mint,
-                    purpose: purpose.0,
-                    binding,
-                    authority,
-                    id,
-                    amount,
-                },
-                state.quantity_candidate_preimage_limit(),
-            )
+            quantity_authorization::supply_context(&quantity_authorization::SupplyFrame {
+                mint,
+                purpose: purpose.0,
+                binding,
+                authority,
+                id,
+                amount,
+            })
         });
         let original = PreparedNumericSupplyChange::prepare(state, id, amount, mint);
         let prepared = match (state.tx_call_hash, context, &original) {
@@ -7805,7 +7781,10 @@ pub mod isi {
                 &resolved_asset_id,
                 &captured_quantity,
                 true,
-                ("ordinary-mint", Some(&[])),
+                (
+                    "ordinary-mint",
+                    Some(quantity_authorization::SupplyBinding::Bytes(&[])),
+                ),
                 |state_transaction, original| {
                     // Deposit into destination asset balance, creating if needed
                     #[cfg(feature = "telemetry")]
@@ -7886,7 +7865,10 @@ pub mod isi {
                 &resolved_asset_id,
                 &captured_quantity,
                 false,
-                ("ordinary-burn", Some(&[])),
+                (
+                    "ordinary-burn",
+                    Some(quantity_authorization::SupplyBinding::Bytes(&[])),
+                ),
                 |state_transaction, original| {
                     // Withdraw from source asset balance and remove if it reaches zero
                     let total = original.apply_balance(&mut state_transaction.world)?;
@@ -7997,17 +7979,18 @@ pub mod isi {
         let flipped = assert_can_mint_cached(state_transaction, asset_id.definition())?;
         let captured_quantity = quantity.clone();
         let captured_id = asset_id.clone();
-        let policy_binding = bounded_quantity_frame(
-            &authorized_policy,
-            &mut state_transaction.quantity_candidate_preimage_limit(),
-        );
         apply_with_supply_quantity_candidate(
             state_transaction,
             authority,
             &captured_id,
             &captured_quantity,
             true,
-            ("retail-reserve-mint", policy_binding.as_deref()),
+            (
+                "retail-reserve-mint",
+                Some(quantity_authorization::SupplyBinding::RetailPolicy(
+                    &authorized_policy,
+                )),
+            ),
             |state_transaction, original| {
                 original
                     .apply_balance(&mut state_transaction.world)?
@@ -8088,17 +8071,18 @@ pub mod isi {
         ensure_not_sccp_escrow_source(state_transaction, &asset_id)?;
         let captured_quantity = quantity.clone();
         let captured_id = asset_id.clone();
-        let policy_binding = bounded_quantity_frame(
-            &authorized_policy,
-            &mut state_transaction.quantity_candidate_preimage_limit(),
-        );
         apply_with_supply_quantity_candidate(
             state_transaction,
             authority,
             &captured_id,
             &captured_quantity,
             false,
-            ("retail-reserve-burn", policy_binding.as_deref()),
+            (
+                "retail-reserve-burn",
+                Some(quantity_authorization::SupplyBinding::RetailPolicy(
+                    &authorized_policy,
+                )),
+            ),
             |state_transaction, original| {
                 original
                     .apply_balance(&mut state_transaction.world)?

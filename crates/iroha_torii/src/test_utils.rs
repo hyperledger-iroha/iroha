@@ -731,6 +731,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             query_burst_per_authority: None,
             query_max_inflight: defaults::torii::QUERY_MAX_INFLIGHT,
             query_heavy_max_inflight: defaults::torii::QUERY_HEAVY_MAX_INFLIGHT,
+            query_fanout_max_working_set_bytes:
+                defaults::torii::QUERY_FANOUT_MAX_WORKING_SET_BYTES,
             query_fanout_max_retained_bytes:
                 defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES,
             query_queue_timeout: Duration::from_millis(defaults::torii::QUERY_QUEUE_TIMEOUT_MS),

@@ -532,3 +532,170 @@ fn batched_individual_endpoint_checks_reject_zero_alpha_and_cancelling_mutations
         assert!(erased.iter().all(|record| record.nonzero_after == 0));
     }
 }
+
+#[test]
+#[ignore = "maximum bound native sources; all exact terminal families at width one/four; optimized qualification"]
+fn native_terminal_family_batches_match_scalar_production_sources() {
+    use crate::privacy_engines::zk_x509::{
+        main_assembly::build_zk_x509_main_trace_assembly_v1,
+        relation::{
+            ZkX509GovernanceV1,
+            release_fixture::{build_zk_x509_release_fixture_v1, reference_statement_context_v1},
+        },
+    };
+    // The same real maximum signed fixture and bound capability used by the
+    // existing native dispatch/commitment tests. No replacement source closure
+    // or test-only arithmetic implements the production column recurrence.
+    let fixture = build_zk_x509_release_fixture_v1(reference_statement_context_v1(), true).unwrap();
+    let trust_anchor = fixture.authoritative_state.trust_anchor();
+    let crl = fixture.authoritative_state.crl_record();
+    let assembly = build_zk_x509_main_trace_assembly_v1(
+        &fixture.statement,
+        ZkX509GovernanceV1 {
+            trust_anchor: &trust_anchor,
+            certificate_policy: fixture.authoritative_state.certificate_policy(),
+            crl: &crl,
+        },
+        &fixture.witness,
+    )
+    .unwrap();
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let digest = |seed| PrivacyOuterDigestV1::from_bytes([seed; 48]);
+    let binding = derive_zk_x509_credential_pre_aux_binding_v1(
+        ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
+            [0x81; 32],
+            assembly.verifier_profile.compiled_profile_digest,
+            core::array::from_fn(|index| digest(index as u8 + 1)),
+        ),
+        digest(0x91),
+        digest(0xa1),
+        digest(0xb1),
+    )
+    .unwrap();
+    let sha =
+        main_log19_sha_base_sources_v1(&assembly.sha_schedule, &assembly.sha_witnesses).unwrap();
+    let p256 = P256MainBaseSourceV1::new_v1(&assembly).unwrap();
+    let bound = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
+        &layout, &assembly, sha, p256, binding,
+    )
+    .unwrap();
+    let mut projection = MainProjectionTraceGroupSourceV1::for_main_v1(
+        &layout,
+        &fixture.statement,
+        &assembly.projection_trace,
+    )
+    .unwrap();
+    let mut io =
+        MainIoTraceGroupSourceV1::for_main_v1(&layout, &fixture.statement, &assembly.io).unwrap();
+    projection
+        .bind_challenges_v1(binding.main_post_base())
+        .unwrap();
+    io.bind_challenges_v1(binding.main_post_base()).unwrap();
+    let sources = MainTraceReplaySourcesV1::Bound {
+        log19: &bound,
+        projection: &projection,
+        io: &io,
+    };
+    let plan = MainTerminalLinkPlanV1::new_v1(&layout).unwrap();
+    let widths = family_widths_v1(&plan, &layout).unwrap();
+    let retained_p256 = bound.p256.allocated_payload_bytes_v1();
+    let retained_bound = bound.allocated_payload_bytes_v1();
+    let mut groups = [0; 3];
+    let mut per_signature = [0; P256_SIGNATURE_COUNT_V1];
+    let mut batch_calls = 0;
+    let mut scalar_calls = 0;
+    let mut sink_columns = 0;
+    for (index, link) in plan.links.iter().enumerate() {
+        for (side, column) in [Some(link.left), link.right].into_iter().enumerate() {
+            let Some(column) = column else { continue };
+            let (registration, _) = registered_main_group_column_v1(
+                &layout,
+                column.group,
+                MainTraceColumnKindV1::Aux,
+                column.column,
+            )
+            .unwrap();
+            let identity = p256_main_registration_from_main_layout_v1(registration);
+            if identity
+                .as_ref()
+                .is_ok_and(|identity| identity.adapter_v1() == P256MainAdapterV1::BindingSink)
+            {
+                sink_columns += 1;
+                assert_eq!(widths[2 * index + side], 1, "binding sink remains scalar");
+            }
+            if widths[2 * index + side] != 4 {
+                continue;
+            }
+            let identity = identity.unwrap();
+            let group = match (identity.adapter_v1(), identity.local_instance_v1()) {
+                (P256MainAdapterV1::Arithmetic, 0) => 0,
+                (P256MainAdapterV1::ValueBus, 0) => 1,
+                (P256MainAdapterV1::ValueBus, 1) => 2,
+                _ => panic!("terminal batch selected a scalar-only source"),
+            };
+            groups[group] += 1;
+            per_signature[identity.signature_v1()] += 1;
+            let rows = 1_usize << column.native_log2;
+            assert_eq!(rows, registration.segment.trace_size());
+            // Source construction stays outside inspection: its per-row clearing
+            // guards must not produce an unbounded observation collection.
+            let batch = sources
+                .native_columns_v1(
+                    &layout,
+                    MainTraceColumnKindV1::Aux,
+                    column.group,
+                    column.column..column.column + 4,
+                )
+                .unwrap();
+            batch_calls += 1;
+            assert_eq!((batch.len(), batch.capacity()), (4, 4));
+            for (lane, values) in batch.iter().enumerate() {
+                assert_eq!((values.len(), values.0.capacity()), (rows, rows));
+                assert!(values.iter().all(|value| value.is_canonical()));
+                let scalar = sources
+                    .native_columns_v1(
+                        &layout,
+                        MainTraceColumnKindV1::Aux,
+                        column.group,
+                        column.column + lane..column.column + lane + 1,
+                    )
+                    .unwrap();
+                scalar_calls += 1;
+                assert_eq!((scalar.len(), scalar.capacity()), (1, 1));
+                assert_eq!((scalar[0].len(), scalar[0].0.capacity()), (rows, rows));
+                assert!(
+                    values.iter().eq(scalar[0].iter()),
+                    "native family mismatch at public link {index}, side {side}, lane {lane}"
+                );
+                assert_eq!(bound.p256.allocated_payload_bytes_v1(), retained_p256);
+                assert_eq!(bound.allocated_payload_bytes_v1(), retained_bound);
+                let ((), erased) = observe_v1(|| drop(scalar));
+                assert_eq!(erased.len(), 1);
+                assert!(
+                    erased
+                        .iter()
+                        .all(|record| record.cells == rows && record.nonzero_after == 0)
+                );
+            }
+            // Only four final column drops are observed; the row streams above
+            // have completed. Batch4 plus scalar1 is the maximum test payload.
+            let ((), erased) = observe_v1(|| drop(batch));
+            assert_eq!(erased.len(), 4);
+            assert!(
+                erased
+                    .iter()
+                    .all(|record| record.cells == rows && record.nonzero_after == 0)
+            );
+        }
+    }
+    assert_eq!(groups, [10, 20, 5]);
+    assert_eq!(per_signature, [7; P256_SIGNATURE_COUNT_V1]);
+    assert_eq!(sink_columns, 20);
+    assert_eq!((batch_calls, scalar_calls), (35, 140));
+    assert_eq!(bound.p256.allocated_payload_bytes_v1(), retained_p256);
+    assert_eq!(bound.allocated_payload_bytes_v1(), retained_bound);
+    eprintln!(
+        "terminal native family parity: batches={batch_calls}, scalar_columns={scalar_calls}, production_source_calls={}, retained_source_payload_delta=0",
+        batch_calls + scalar_calls
+    );
+}

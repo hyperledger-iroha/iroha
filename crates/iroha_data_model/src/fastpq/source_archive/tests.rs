@@ -1,4 +1,5 @@
 //! Complete archive transport, source/root binding and cumulative decoding budgets.
+//! Synthetic source leaves exercise codec/membership binding; no native execution or finality is claimed.
 
 use super::*;
 use crate::{
@@ -75,7 +76,7 @@ fn fixture(count: u32) -> FastpqOrdinarySourceStatementArchiveV1 {
             source: source(),
             statement_index: index,
             entry_index: index * 2,
-            entry_transcript_count: match index {
+            effect_count: match index {
                 0 => 2,
                 1 => 4,
                 _ => 1,
@@ -88,7 +89,10 @@ fn fixture(count: u32) -> FastpqOrdinarySourceStatementArchiveV1 {
             execution_kind: FastpqSourceExecutionKindV1::ExecutionCall,
             route: FastpqSourceRouteV1::Unrouted,
             dataspace_id: DataSpaceId::new(4),
-            statement_digest: [u8::try_from(index).expect("fixture value fits u8") + 9; 32],
+            effects_digest: [u8::try_from(index).expect("fixture value fits u8") + 9; 32],
+            slot: 19_000_000,
+            perm_root: Hash::new(b"synthetic source permission root").into(),
+            tx_set_hash: Hash::new(b"synthetic ordered source transactions").into(),
         })
         .collect::<Vec<_>>();
     let manifest = build_fastpq_ordinary_source_statement_manifest_v1(
@@ -150,11 +154,8 @@ fn complete_empty_and_ragged_archives_roundtrip_at_exact_caps() {
         assert!(verify_archive(&archive, source(), root, 5, count));
         if count > 0 {
             assert!(
-                archive
-                    .leaves
-                    .iter()
-                    .any(|leaf| leaf.entry_transcript_count > count),
-                "transcript cardinality must remain independent of the leaf cap"
+                archive.leaves.iter().any(|leaf| leaf.effect_count > count),
+                "effect cardinality must remain independent of the leaf cap"
             );
         }
         assert_eq!(
@@ -187,7 +188,7 @@ fn complete_empty_and_ragged_archives_roundtrip_at_exact_caps() {
 fn archive_verification_binds_complete_contents_source_root_and_version() {
     let original = fixture(3);
     let root = expected_root(&original);
-    for mutation in 0..13 {
+    for mutation in 0..17 {
         let mut changed = original.clone();
         match mutation {
             0 => changed.version = 0,
@@ -196,8 +197,8 @@ fn archive_verification_binds_complete_contents_source_root_and_version() {
                 changed.leaves.pop();
             }
             3 => changed.leaves.swap(0, 1),
-            4 => changed.leaves[0].statement_digest[0] ^= 1,
-            5 => changed.leaves[1].entry_transcript_count = 1,
+            4 => changed.leaves[0].effects_digest[0] ^= 1,
+            5 => changed.leaves[1].effect_count = 1,
             6 => changed.manifest.statement_count -= 1,
             7 => changed.manifest.statement_root = Hash::new(b"substituted root"),
             8 => changed.manifest_siblings[128] = Hash::new(b"substituted sibling"),
@@ -206,12 +207,18 @@ fn archive_verification_binds_complete_contents_source_root_and_version() {
                 changed.leaves[1] = changed.leaves[0];
                 changed.leaves[1].statement_index = 1;
             }
-            11 => changed.leaves[1].entry_transcript_count = 0,
+            11 => changed.leaves[1].effect_count = 0,
             12 => {
                 changed.leaves.remove(0);
                 for (index, leaf) in changed.leaves.iter_mut().enumerate() {
                     leaf.statement_index = u32::try_from(index).unwrap();
                 }
+            }
+            13 => changed.leaves[0].slot += 1,
+            14 => changed.leaves[0].perm_root[0] ^= 1,
+            15 => changed.leaves[0].tx_set_hash[0] ^= 1,
+            16 => {
+                changed.manifest.coverage = crate::fastpq::FastpqSourceEffectCoverageV1::Unsupported
             }
             _ => unreachable!(),
         }
@@ -690,5 +697,22 @@ fn canonical_archive_bytes_and_caller_flags_remain_stable() {
             archive
         );
         assert_eq!(norito::core::effective_decode_flags(), Some(flags));
+    }
+}
+
+#[test]
+fn unsupported_coverage_archive_refuses_even_its_matching_manifest_root() {
+    for count in [0, 3] {
+        let mut archive = fixture(count);
+        archive.manifest.coverage = crate::fastpq::FastpqSourceEffectCoverageV1::Unsupported;
+        let root = expected_root(&archive);
+        let frame = norito::encode_canonical(&archive).unwrap();
+        // Unsupported is valid protocol data, but cannot authorize an ordinary effect proof.
+        assert_eq!(
+            norito::decode_canonical::<FastpqOrdinarySourceStatementArchiveV1>(&frame).unwrap(),
+            archive
+        );
+        assert!(!verify_archive(&archive, source(), root, 5, count));
+        assert!(decode_archive(&frame, source(), root, limits(frame.len(), count)).is_err());
     }
 }

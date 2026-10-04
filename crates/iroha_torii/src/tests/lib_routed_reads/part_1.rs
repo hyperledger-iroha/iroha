@@ -622,7 +622,13 @@ async fn collection_coordinator_counts_global_rows_once_across_routes() {
             ToriiReadEndpointV1::AccountsQuery,
             vec![],
             None,
-            collection_query_body(&query).unwrap(),
+            collection_query_body(
+                &query,
+                routing::collection_sources::collection_execution_limits(Some(&app))
+                    .expect("test collection limits")
+                    .bytes,
+            )
+            .unwrap(),
             ToriiProxyResponseFormatV1::Json,
             None,
         )
@@ -645,7 +651,13 @@ async fn collection_coordinator_counts_global_rows_once_across_routes() {
         ToriiReadEndpointV1::AccountsQuery,
         vec![],
         None,
-        collection_query_body(&base.include_total()).unwrap(),
+        collection_query_body(
+            &base.include_total(),
+            routing::collection_sources::collection_execution_limits(Some(&app))
+                .expect("test collection limits")
+                .bytes,
+        )
+        .unwrap(),
         ToriiProxyResponseFormatV1::Json,
         None,
     )
@@ -691,7 +703,13 @@ async fn execute_account_history_single_route_returns_shared_page() {
         ToriiFanoutRouteScopeV1::AllDataspaces,
         ToriiReadEndpointV1::AccountHistoryQuery,
         vec![authority.to_string()],
-        collection_query_body(&ListQuery::new().limit(10)).expect("query body"),
+        collection_query_body(
+            &ListQuery::new().limit(10),
+            routing::collection_sources::collection_execution_limits(Some(&app))
+                .expect("test collection limits")
+                .bytes,
+        )
+        .expect("query body"),
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -2937,7 +2955,8 @@ async fn permission_collection_counts_deduplicated_grants_once_across_routes() {
     use iroha_data_model::{account::Account, permission::Permission, role::Role};
     for has_second_permission in [false, true] {
         let authority = routed_read_test_account(0xa0);
-        let permission = |name: &str| Permission::new(name.to_owned(), iroha_primitives::json::Json::new(()));
+        let permission =
+            |name: &str| Permission::new(name.to_owned(), iroha_primitives::json::Json::new(()));
         let first_id: iroha_data_model::role::RoleId = "first_permission_role".parse().unwrap();
         let second_id: iroha_data_model::role::RoleId = "second_permission_role".parse().unwrap();
         let first = Role::new(first_id.clone(), authority.clone())
@@ -2949,21 +2968,38 @@ async fn permission_collection_counts_deduplicated_grants_once_across_routes() {
             second = second.add_permission(permission("CanRegisterDomain"));
         }
         let mut world = World::with_assets_and_roles(
-            [], [Account::new(authority.clone()).build(&authority)], [], [], [],
+            [],
+            [Account::new(authority.clone()).build(&authority)],
+            [],
+            [],
+            [],
             [first, second.build(&authority)],
         );
         world.grant_role_for_tests(authority.clone(), first_id);
         world.grant_role_for_tests(authority.clone(), second_id);
-        let app = crate::tests_runtime_handlers::native_ingress_with_offline_foreign_app_for_test(world);
+        let app =
+            crate::tests_runtime_handlers::native_ingress_with_offline_foreign_app_for_test(world);
         let routes = torii_all_dataspace_routes(app.as_ref());
         assert!(routes.len() > 1);
         let response = execute_torii_read_fanout_for_resolved_routes(
-            &app, routes, ToriiFanoutRouteScopeV1::AllDataspaces,
-            ToriiReadFanoutMergeV1::List, ToriiReadEndpointV1::AccountPermissionsQuery,
-            vec![authority.to_string()], None,
-            collection_query_body(&ListQuery::new().limit(1).include_total()).unwrap(),
-            ToriiProxyResponseFormatV1::Json, None,
-        ).await;
+            &app,
+            routes,
+            ToriiFanoutRouteScopeV1::AllDataspaces,
+            ToriiReadFanoutMergeV1::List,
+            ToriiReadEndpointV1::AccountPermissionsQuery,
+            vec![authority.to_string()],
+            None,
+            collection_query_body(
+                &ListQuery::new().limit(1).include_total(),
+                routing::collection_sources::collection_execution_limits(Some(&app))
+                    .expect("test collection limits")
+                    .bytes,
+            )
+            .unwrap(),
+            ToriiProxyResponseFormatV1::Json,
+            None,
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
         let json = response_json(response).await;
         let page: iroha_torii_shared::list_query::Page<Value> =
@@ -2984,7 +3020,10 @@ fn permission_collection_rejects_retired_or_missing_continuation_evidence() {
         norito::json!({"items": [], "total": 1, "has_more": true}),
         norito::json!({"items": [], "total": 0, "next_cursor": null, "has_more": false}),
     ] {
-        assert!(norito::json::from_value::<iroha_torii_shared::list_query::Page<Value>>(payload).is_err());
+        assert!(
+            norito::json::from_value::<iroha_torii_shared::list_query::Page<Value>>(payload)
+                .is_err()
+        );
     }
 }
 

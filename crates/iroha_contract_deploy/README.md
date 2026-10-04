@@ -27,11 +27,19 @@ or Parliament identity does not gain this account-owner authority. Existing
 exact-token holders and code managers retain their separate delegation rights;
 transferring ownership does not implicitly revoke previously issued tokens.
 
-An owner calling a guarded entrypoint first submits the exact self-grant and
-waits for `Applied`, then prepares and signs the call. Invocation always requires
-the exact token. It does not grant additional permissions to the contract body:
+An owner calling a guarded entrypoint quotes and signs the exact self-grant and
+call, then persists both before submitting either. The call waits for the grant's
+exact `Applied` evidence before dispatch. Required aggregate fee caps and the
+original finite deadline bind both stages; transaction expiry never exceeds that
+deadline. Recovery reconciles the original signed hashes without renewing either
+authorization. Invocation always requires the exact token. It does not grant additional permissions to the contract body:
 address-scoped contract state is distinct from the caller's account metadata,
 which remains protected by its normal authorization rules.
+
+`current_completed_contract` verifies the retained deployment, current alias and
+artifact readback and returns an opaque artifact/receipt pair. Native consumers
+encode view or mutable-call arguments against that verified local interface with
+`trusted_contract_intent`; no endpoint-provided draft selects executable trust.
 
 `execute` and `resume` receive one explicit typed progress observer. It sees the
 authenticated plan before dispatch, durable submitting/recovering stages by exact

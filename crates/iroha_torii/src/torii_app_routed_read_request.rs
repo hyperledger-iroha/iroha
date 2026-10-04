@@ -49,10 +49,10 @@ impl ToriiRoutedReadMemoryBudget {
 fn torii_routed_read_request_decode_plan(
     app: &SharedAppState,
 ) -> Result<ToriiRoutedReadRequestDecodePlan, Response> {
-    ToriiRoutedReadMemoryBudget::new(
-        app.query_fanout_working_set_bytes,
+    ToriiRoutedReadMemoryBudget::from_envelope(
+        current_routed_read_memory_envelope(app)?,
         app.torii_proxy_max_response_bytes,
-    )?
+    )
     .request_decode_plan()
 }
 impl ToriiRoutedReadRequestDecodePlan {

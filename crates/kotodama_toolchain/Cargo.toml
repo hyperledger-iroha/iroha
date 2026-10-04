@@ -9,9 +9,8 @@ license = "Apache-2.0"
 repository = "https://github.com/hyperledger-iroha/iroha"
 documentation = "https://docs.rs/kotodama_toolchain"
 
-# TODO: adopt [lints] workspace = true once the moved koto CLI/test-driver
-# sources satisfy the workspace lints (kept without [lints] for parity with ivm
-# and kotodama_lang).
+[lints]
+workspace = true
 
 [lib]
 path = "src/lib.rs"

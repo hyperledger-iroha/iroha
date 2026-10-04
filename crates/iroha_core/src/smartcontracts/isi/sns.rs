@@ -1164,7 +1164,6 @@ mod tests {
         let now_ms = state_transaction.block_unix_timestamp_ms();
         let record = crate::sns::get_name_record(
             state_transaction.world(),
-            &state_transaction.nexus.dataspace_catalog,
             SnsNamespace::AccountAlias,
             &alias
                 .to_literal(&state_transaction.nexus.dataspace_catalog)
@@ -2946,7 +2945,6 @@ mod tests {
         let view = state.view();
         let acquired = get_name_record(
             view.world(),
-            &view.nexus.dataspace_catalog,
             SnsNamespace::AccountAlias,
             "merchant@universal",
             0,
@@ -2971,7 +2969,6 @@ mod tests {
         let view = state.view();
         let renewed = get_name_record(
             view.world(),
-            &view.nexus.dataspace_catalog,
             SnsNamespace::AccountAlias,
             "merchant@universal",
             0,
@@ -3049,7 +3046,6 @@ mod tests {
             let view = state.view();
             let record = get_name_record(
                 view.world(),
-                &view.nexus.dataspace_catalog,
                 SnsNamespace::AccountAlias,
                 "stale-renew@universal",
                 0,
@@ -3086,7 +3082,6 @@ mod tests {
         );
         let record = get_name_record(
             transaction.world(),
-            &transaction.nexus.dataspace_catalog,
             SnsNamespace::AccountAlias,
             "stale-renew@universal",
             0,
@@ -3185,7 +3180,6 @@ mod tests {
         );
         let lease = get_name_record(
             view.world(),
-            &view.nexus.dataspace_catalog,
             SnsNamespace::AccountAlias,
             "clearorbit3941@universal",
             0,
@@ -3312,7 +3306,6 @@ mod tests {
         let view = state.view();
         let lease = get_name_record(
             view.world(),
-            &view.nexus.dataspace_catalog,
             SnsNamespace::AccountAlias,
             "clear-orbit-3941@hbl.sbp",
             0,
@@ -3432,7 +3425,6 @@ mod tests {
         let view = state.view();
         let lease = get_name_record(
             view.world(),
-            &view.nexus.dataspace_catalog,
             SnsNamespace::AccountAlias,
             "shared3941@leumi.is",
             0,
@@ -3500,7 +3492,6 @@ mod tests {
         let view = state.view();
         let leumi_lease = get_name_record(
             view.world(),
-            &view.nexus.dataspace_catalog,
             SnsNamespace::AccountAlias,
             "shared3941@leumi.is",
             0,
@@ -3508,7 +3499,6 @@ mod tests {
         .expect("Leumi alias lease");
         let hapoalim_lease = get_name_record(
             view.world(),
-            &view.nexus.dataspace_catalog,
             SnsNamespace::AccountAlias,
             "shared3941@hapoalim.is",
             0,
@@ -3599,7 +3589,6 @@ mod tests {
         assert!(
             get_name_record(
                 view.world(),
-                &view.nexus.dataspace_catalog,
                 SnsNamespace::AccountAlias,
                 "retail@universal",
                 0,
@@ -3685,14 +3674,7 @@ mod tests {
         drop(block);
         let view = state.view();
         assert!(
-            get_name_record(
-                view.world(),
-                &view.nexus.dataspace_catalog,
-                SnsNamespace::AccountAlias,
-                "retail@paynet",
-                0,
-            )
-            .is_err(),
+            get_name_record(view.world(), SnsNamespace::AccountAlias, "retail@paynet", 0,).is_err(),
             "rejected acquisition must not persist an alias lease"
         );
         drop(view);
@@ -3797,7 +3779,6 @@ mod tests {
         assert!(
             get_name_record(
                 view.world(),
-                &view.nexus.dataspace_catalog,
                 SnsNamespace::AccountAlias,
                 "merchant@universal",
                 0,

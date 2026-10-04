@@ -167,9 +167,11 @@ collections (`Collection::is_history`): rows arrive newest first by
 are rejected. A page may hold fewer rows than `limit`, or none, and still carry
 a `next_cursor`; `list` keeps following it until it is absent. Bounds on
 `block_height` in the filter's top-level `and` also bound Torii's scan, as in
-`field("block_height").gte(1_200) & field("result_ok").eq(true)`. Aggregates
-over rows that span several dataspace routes are rejected with
-`invalid_aggregate`; page through the rows instead. Object and array literals
+`field("block_height").gte(1_200) & field("result_ok").eq(true)`.
+
+Torii executes each collection query once over the caller-visible global state.
+For collections that support totals and `POST` aggregates, visible rows contribute
+exactly once even when they span several dataspace routes. Object and array literals
 (only valid against `metadata.<key>`) exist only in the JSON form that the SDK
 sends.
 

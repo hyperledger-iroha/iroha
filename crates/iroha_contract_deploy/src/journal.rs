@@ -68,15 +68,45 @@ impl Journal {
         norito::json::from_slice(&self.directory.read(name, MAX_RECORD_BYTES)?)
             .wrap_err("decode closed deployment journal record")
     }
+    pub(super) fn read_limited<T: JsonDeserialize>(
+        &self,
+        name: &str,
+        max_bytes: usize,
+        limits: norito::DecodeLimits,
+    ) -> Result<T> {
+        validate_name(name)?;
+        let bytes = self.directory.read(name, max_bytes)?;
+        norito::json::preflight_slice(
+            &bytes,
+            norito::json::JsonPreflightLimits::from_decode_limits(max_bytes, limits),
+        )?;
+        norito::with_decode_limits_scope(limits, || norito::json::from_slice(&bytes))
+            .wrap_err("decode bounded closed contract journal record")
+    }
 
     pub(super) fn put_exact<T: JsonSerialize>(&self, name: &str, record: &T) -> Result<()> {
         validate_name(name)?;
         let bytes = norito::json::to_vec(record)?;
-        if bytes.len() > MAX_RECORD_BYTES {
+        self.put_exact_bytes(name, &bytes, MAX_RECORD_BYTES)
+    }
+
+    pub(super) fn put_exact_limited<T: JsonSerialize>(
+        &self,
+        name: &str,
+        record: &T,
+        maximum: usize,
+    ) -> Result<()> {
+        validate_name(name)?;
+        let encoded = norito::json::to_json_bounded(record, maximum)?;
+        self.put_exact_bytes(name, encoded.as_bytes(), maximum)
+    }
+
+    fn put_exact_bytes(&self, name: &str, bytes: &[u8], maximum: usize) -> Result<()> {
+        if maximum > MAX_RECORD_BYTES || bytes.len() > maximum {
             return Err(eyre!("deployment journal record exceeds fixed byte bound"));
         }
         if self.exists(name)? {
-            if self.directory.read(name, MAX_RECORD_BYTES)?.as_slice() != bytes.as_slice() {
+            if self.directory.read(name, maximum)?.as_slice() != bytes {
                 return Err(eyre!(
                     "immutable deployment journal record {name} disagrees with this operation"
                 ));
@@ -86,7 +116,7 @@ impl Journal {
         // Native create-new publication cannot overwrite partial or uncertain evidence. Dispatch
         // follows only after the complete record and directory-publication durability boundary.
         self.directory
-            .write_atomic(name, &bytes, PublishMode::CreateNew)?;
+            .write_atomic(name, bytes, PublishMode::CreateNew)?;
         Ok(())
     }
 }

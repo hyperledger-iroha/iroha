@@ -412,8 +412,10 @@ pub(super) fn constrain_ordinary_receiver_request_opening_v1<F: KagemushaPoseido
     };
     let encryption_key = select(ctx, &range, enabled, as_digest("recipient_encryption_key")?);
     let recipient_lane = select(ctx, &range, enabled, as_digest("recipient_lane_id")?);
-    // Retain the request ID's gated constraints and fallible width check in the same synthesis order.
-    let _request_id = select(ctx, &range, enabled, as_digest("request_id")?);
+    // Preserve this existing selected projection's exact constraint construction
+    // and position in the fixed graph. The complete signed request digest already
+    // binds request_id; no consumer needs another exported copy of its cells.
+    select(ctx, &range, enabled, as_digest("request_id")?);
     Ok(OrdinaryReceiverRequestOpeningV1 {
         request_digest,
         credential_digest,

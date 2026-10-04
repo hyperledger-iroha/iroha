@@ -9,7 +9,7 @@ use crate::managed::native_operation::{
     },
     verify_carrier,
 };
-use iroha_core::state::{StateReadOnly, WorldReadOnly};
+use iroha_core::state::{StorageReadOnly as _, WorldReadOnly};
 use iroha_data_model::{
     asset::{AssetDefinitionId, AssetId},
     isi::{InstructionBox, Log, sorafs::SetProviderIngestCompletionAuthority},

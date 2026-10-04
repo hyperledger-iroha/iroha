@@ -9,6 +9,7 @@
 //! depth.
 mod cursor;
 mod engine;
+pub(crate) mod memory;
 pub(crate) mod specs;
 
 pub(crate) use engine::{Limits, Prepared, RowPage, prepare};

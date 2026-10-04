@@ -343,7 +343,7 @@ fn check_full_quantity_ledger() {
             max_statement_bytes: 1_000_000,
             max_total_statement_bytes: 1_000_000,
         };
-        let produced = crate::fastpq::quantity_statement_from_finalized_transcripts(
+        let produced = crate::fastpq::quantity_statement_from_finalized_transcripts_for_testing(
             crate::fastpq::FastpqPublicInputsTemplate {
                 dsid: crate::fastpq::dataspace_id_bytes(DataSpaceId::UNIVERSAL),
                 slot: 7,
@@ -369,7 +369,7 @@ fn check_full_quantity_ledger() {
         );
         assert_eq!(produced.witnesses().pairs().len(), 1);
         let (manifest, leaves) = inventory
-            .derive_manifest(7, [0; 32], &transcripts, limits)
+            .prepare_transfer_diagnostic(7, [0; 32], &transcripts, limits)
             .unwrap();
         assert_eq!(manifest.statement_count, 1);
         assert_eq!(leaves.len(), 1);
@@ -531,7 +531,7 @@ fn check_supply_changes_between_transfers() {
         // splitting the original operations into separately valid source leaves.
         let calls = crate::fastpq::quantity_materializer_invocations_for_testing();
         let manifest_error = inventory
-            .derive_manifest(7, [0; 32], &transcripts, limits)
+            .prepare_transfer_diagnostic(7, [0; 32], &transcripts, limits)
             .unwrap_err();
         assert!(
             manifest_error.contains("public repeated-key balances do not chain"),
@@ -554,7 +554,7 @@ fn check_supply_changes_between_transfers() {
         let public_limits =
             fastpq_prover::gadgets::public_transfer_statement::PublicTransferLimits::default();
         let tree_limits = fastpq_prover::gadgets::public_transfer_statement::TransferSmtBuildLimits::for_update_limit(4).unwrap();
-        let error = crate::fastpq::quantity_statement_from_finalized_transcripts(
+        let error = crate::fastpq::quantity_statement_from_finalized_transcripts_for_testing(
             inputs.clone(),
             bundle,
             public_limits,
@@ -571,13 +571,14 @@ fn check_supply_changes_between_transfers() {
         // independent arithmetic controls, never a manifest fallback producer.
         for (index, transcript) in bundle.iter().enumerate() {
             assert_eq!(transcript.batch_hash, call);
-            let produced = crate::fastpq::quantity_statement_from_finalized_transcripts(
-                inputs.clone(),
-                std::slice::from_ref(&bundle[index]),
-                public_limits,
-                tree_limits,
-            )
-            .unwrap();
+            let produced =
+                crate::fastpq::quantity_statement_from_finalized_transcripts_for_testing(
+                    inputs.clone(),
+                    std::slice::from_ref(&bundle[index]),
+                    public_limits,
+                    tree_limits,
+                )
+                .unwrap();
             assert_eq!(
                 produced.statement().transcripts,
                 vec![

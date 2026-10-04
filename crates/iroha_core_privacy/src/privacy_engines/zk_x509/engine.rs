@@ -98,8 +98,8 @@ const SHA_DISCLOSURE_SHAPE_COUNT_V1: usize = 5;
 // Native diagnostics and independent framing bind the required proof-instance nonce.
 // TODO: complete native credential, hiding and resource qualification before activating this profile.
 const ZK_X509_COMPILED_PROFILE_DIGEST_V1: Option<[u8; 32]> = Some([
-    0x29, 0x46, 0x49, 0x84, 0x2d, 0xa2, 0xb5, 0x65, 0xe9, 0x4b, 0x02, 0x2c, 0xe5, 0x9c, 0x7a, 0x7c,
-    0x66, 0x2a, 0xa2, 0xbf, 0x70, 0x50, 0x2d, 0x8a, 0x55, 0x4a, 0xbb, 0x51, 0x0d, 0x48, 0x78, 0x52,
+    0xfb, 0x4d, 0xc4, 0xd0, 0xb2, 0xce, 0x27, 0x7e, 0x23, 0xd3, 0xde, 0x9d, 0x4c, 0xcd, 0x6c, 0x32,
+    0xc9, 0xa9, 0xb0, 0xef, 0x5b, 0x39, 0xf7, 0xc9, 0x63, 0xf8, 0xb9, 0x14, 0xcf, 0x15, 0x86, 0x0b,
 ]);
 /// Exact algebraic-schedule-bearing profile required by MAIN.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -938,6 +938,86 @@ mod tests {
             let mut supplied = super::super::stark::construct_zk_x509_main_verifier_profile_v1()
                 .expect("current verifier profile");
             supplied.compiled_profile_digest = old_digest;
+            assert!(
+                super::super::stark::validate_zk_x509_main_verifier_profile_v1(supplied).is_err()
+            );
+        }
+    }
+    #[test]
+    fn compiled_profile_rejects_retired_enterprise_eku_identifiers() {
+        let (sha, p256) = compiled_profile_schedule_digests_v1().unwrap();
+        let fields = compiled_profile_fields_v1(&sha, &p256);
+        let mut predecessor = fields
+            .iter()
+            .map(|field| field.to_vec())
+            .collect::<Vec<_>>();
+        let descriptor = core::str::from_utf8(&predecessor[9]).unwrap();
+        let marker = "-eku-canonical-profile-uuid-oids";
+        assert_eq!(descriptor.matches(marker).count(), 1);
+        predecessor[9] = descriptor.replace(marker, "").into_bytes();
+        let borrowed = predecessor.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let old_digest = independent_compiled_profile_digest_v1(&borrowed);
+        // All 29 predecessor fields were emitted by the frozen fd0a8 native
+        // constructor; this is its authentic profile, not a fabricated pin.
+        assert_eq!(
+            hex::encode(old_digest),
+            "c095101f36ac92550ae15df711d2a1fff126b7540e65922ab18a34d5691ae688"
+        );
+        assert_ne!(
+            old_digest,
+            recompute_zk_x509_compiled_profile_digest_v1().unwrap()
+        );
+        assert_ne!(Some(old_digest), ZK_X509_COMPILED_PROFILE_DIGEST_V1);
+        let mut supplied = super::super::stark::construct_zk_x509_main_verifier_profile_v1()
+            .expect("current verifier profile");
+        supplied.compiled_profile_digest = old_digest;
+        assert!(super::super::stark::validate_zk_x509_main_verifier_profile_v1(supplied).is_err());
+    }
+    #[test]
+    fn compiled_profile_rejects_ungated_rfc_root_helper_descriptor() {
+        let (sha, p256) = compiled_profile_schedule_digests_v1().unwrap();
+        let fields = compiled_profile_fields_v1(&sha, &p256);
+        let mut predecessor = fields
+            .iter()
+            .map(|field| field.to_vec())
+            .collect::<Vec<_>>();
+        let descriptor = core::str::from_utf8(&predecessor[9]).unwrap();
+        let marker = "source-node-root-kind-active-gated-helper-";
+        assert_eq!(descriptor.matches(marker).count(), 1);
+        let current_without_gate = descriptor.replace(marker, "").into_bytes();
+        // Freeze the exact native predecessor descriptor. Stripping only this
+        // marker from later RFC closures would manufacture a different profile.
+        predecessor[9] = b"proof-instance=required-public32-after-version-count-before-consensus-context:checked-disjoint-entropy-before-first-commitment:all-zero-canonical|dynamic-hash-profile-suffix=00-X5I1-family-u8-nonce32:joint0-main1-ca2:all-commitments-and-transcript-operations:fixed-compiler-metadata-unscoped|field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-main24-ca108-joint-original-openings-and-exactly-one-X5M1-and-one-X5C1-v1|x5m1=version1+31-original-key-DEEP-values+length-delimited-aggregate-no-fixed-sidecar|main-public-terminal-records=0|ca-public-terminal-records=0|main-frame-bytes=1002-includes992-key-DEEP-values|ca-frame-bytes=10|joint-openings=132-canonical-Fp4-values4224|ca-private-endpoint-links=108-original-polynomial-quotients-MAIN-composition|private-der-rfc-source-and-p256-terminal-scalars=364-committed-air-only|main-private-endpoint-links=192-linear-quotients-original-masks-shared-native-points|main-key-byte-joins=12-blocks647-equalities-rfc-to-io-and-real-p256-root-powers2,8-max-quotient-degree538744|main-sha-digest-joins=5-blocks40-u32-equalities-unreduced-be-four-byte-real-p256-root-power32-max-quotient-degree2155224|main-sha-rfc-private-union=16-constant-native-bridges+16-segment-quartic-links+4-role-quartic-links-original-masks-existing-aux-DEEP-no-extra-openings-degree2104411|main-link-alpha-order=local-component-history+both-original-aux-roots+fresh-local-alphas+192-ordered-private-endpoint-link-descriptors+endpoint-link-alphas+17-key-and-digest-join-descriptors+key-and-digest-alphas+20-private-sha-union-descriptors+sha-union-alphas+108-ordered-CA-private-link-descriptors+CA-link-alphas|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-roots=one-joined-base-and-one-joined-aux|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log12-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|p256-binding-sink-degree=3-including-fixed-selectors|sha-capacity-and-call-degree=6-including-fixed-selectors|sha-digest-address=polynomial-select|sha-fixed-algebraic-width=472-verifier-derived-no-proof-bytes|p256-log19-fixed-algebraic-width=404-six-role-schedules-alias-fifteen-registrations-verifier-derived-no-proof-bytes|fixed-polynomials=verifier-derived-at-deep-and-native-translates|shared-x5b1-challenges=single-joined-main-base-root+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=1816|ca-trace-hiding-coefficients=2100|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=9over64|main-fri-blowup=8|ca-lde-log2=16|fri-queries=136-distinct-without-replacement|composition-fp4-lanes=1|quotient-chunk-stride=fri-degree-cap-minus137|quotient-chunk-masks=137-independent-fp4-coefficients-adjacent-cancellation|main-quotient-mask-order=all-local-and-private-link-contributions-then-blind-before-root|fri-batching-m=3|binary-fold-arity=2|fri-folding=2|fri-leaves=ordered-low-high-pairs|main-fri-terminal-length=1024-degree143|ca-fri-terminal-length=1024-degree143|deep-points=one-joint-point-after-both-original-aux-composition-and-FRI-mask-roots:both-local-checkpoints-bound:current+next+MAIN31-key-and-digest:5-power8+6-power2+20-power32+MAIN24-translated-aux+CA108-translated-aux:combined-domain-admission:both-local-DEEP-and-MAIN31-then-ordered132-values-bound-before-independent-local-mixes|ca-deep-constraints=all1363-fp4-verifier-fixed-polynomials-current-only-query-rows|main-deep-constraints=all49-fp4-native-vanishing-six-chunk-recomposition-verifier-fixed-polynomials-current-only-query-rows|grinding-bits=20|target-soundness-bits=128|rfc5280-temporal-air=base285-aux280-fixed147-constraints1941-degree4-five-key-and-five-complete-spki-outputs-der-node-byte-lookups-key-length66-offset1-spki-content89-total91-offset0-nine-variable-tbs-crl-signature-byte-and-canonical-u16-in-eight-byte-big-endian-length-pairs-live-prefix-count-node-continuity-source-start-helper-projection-leaf-serial-magnitude-sign-octet-nonzero-first-byte-big-endian-length-selected-original-subject-oid-value-provenance-with-complete-name-oid-census-three-original-classes-disjoint-document-stride12-keys1through48-six-bit-positive-gaps-uniqueness-nonempty-bounded-rdns-and-complete-original-value-census-country-printable-utf8-dfa-output-metadata-six-verifier-fixed-equations-authenticated72-times-73-relations-38bit-slack-affine-loglookup-39-relations|rbr-budget-bits=157|joint-configuration-bound=8-per-domain,64-paired|joint-point-exclusion-bound=3277643777|joint-cleared-degree-bounds=19398656,40960|joint-algebraic-error-bits=219|base-collision-configuration-factor=64|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=9412944|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|address-space-ceiling-bytes=34359738368|prover-target-seconds=300|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|shared-stark-v1=q136-blowup8-digest384-fp4-blocked-pending-independent-qualification|activation=unavailable".to_vec();
+        let borrowed = predecessor.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let old_digest = independent_compiled_profile_digest_v1(&borrowed);
+        assert_eq!(
+            hex::encode(old_digest),
+            "294649842da2b565e94b022ce59c7a7c662aa2bf70502d8a554abb510d487852"
+        );
+        assert_ne!(
+            old_digest,
+            recompute_zk_x509_compiled_profile_digest_v1().unwrap()
+        );
+        // Also reject the current relation with just its activity-gate marker
+        // removed; this distinct mutation must not replace the historical pin.
+        let mut ungated_current = fields
+            .iter()
+            .map(|field| field.to_vec())
+            .collect::<Vec<_>>();
+        ungated_current[9] = current_without_gate;
+        let current_fields = ungated_current
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        let current_mutation_digest = independent_compiled_profile_digest_v1(&current_fields);
+        assert_ne!(
+            current_mutation_digest,
+            recompute_zk_x509_compiled_profile_digest_v1().unwrap()
+        );
+        for rejected_digest in [old_digest, current_mutation_digest] {
+            let mut supplied = super::super::stark::construct_zk_x509_main_verifier_profile_v1()
+                .expect("current verifier profile");
+            supplied.compiled_profile_digest = rejected_digest;
             assert!(
                 super::super::stark::validate_zk_x509_main_verifier_profile_v1(supplied).is_err()
             );

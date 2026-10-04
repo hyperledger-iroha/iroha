@@ -3,6 +3,20 @@
 use std::cell::Cell;
 
 use super::*;
+use crate::backend::{
+    compact_bundle::execution_effect::{
+        self as effect_bundle, EffectBundleWire as BundleWire, EffectVerificationInputs,
+        EffectVerificationLimits,
+    },
+    compact_execution_effect_batch::{EffectBatchLimits, ExecutionEffectBatch},
+    compact_model_statement::candidate_artifact::effect_test_support::{
+        self as effect_support, EffectFixture,
+    },
+};
+use crate::gadgets::public_transfer_statement::execution_effect::{
+    SourceExecutionEffectStatement, prepare_source_execution_effect_view,
+};
+use crate::test_producer_funding::{funding, prove_quantity_axt_artifact};
 use crate::{
     VerifyLimits,
     backend::deep_geometry::QUERY_COUNT,
@@ -15,14 +29,15 @@ use crate::{
         public_transfer_statement::{PublicTransferLimits, TransferSmtBuildLimits},
     },
     offline_compact::{
-        BundleVerificationLimits, prove_quantity_axt_artifact, prove_quantity_ordinary_artifact,
-        verify_quantity_axt_artifact, verify_quantity_ordinary_artifact,
+        BundleVerificationLimits, execution_effect_profile_id, quantity_ordinary_allocation_bytes,
+        verify_quantity_axt_artifact,
     },
 };
+use iroha_allocation::{AllocationBudget, AllocationReservation};
 use iroha_data_model::fastpq::{
     FastpqArtifactIdentityDescriptionV1, FastpqAxtPreProofMirrorsV1, FastpqAxtPublicMetadataV1,
     FastpqCommitmentDescriptionV1, FastpqCompactArtifactDecodeLimits, FastpqCompactProfileIdV1,
-    FastpqProofKindV1,
+    FastpqOrdinaryCompactArtifactV1, FastpqProofKindV1,
 };
 use norito::core::DecodeLimits;
 use sha2::{Digest as _, Sha256};
@@ -87,6 +102,132 @@ fn expected(statement: &FastpqPublicTransferStatementV1) -> ExpectedStatement {
         ordering_hash: statement.ordering_hash,
         public_statement_digest: Hash::new(norito::encode_canonical(statement).unwrap()).into(),
     }
+}
+
+/// Finite synthetic fixture funding only; returned verification summaries retain no
+/// charged preparation backing. Production always receives its original owner.
+fn with_effect_credit<T>(
+    fixture: &EffectFixture,
+    consume: impl FnOnce(&AllocationBudget, &mut AllocationReservation) -> T,
+) -> T {
+    let demand = quantity_ordinary_allocation_bytes(
+        &fixture.statement.effects,
+        proving(),
+        effect_support::fixture::limits(policy()),
+    )
+    .unwrap();
+    let budget = AllocationBudget::new(demand);
+    let mut reservation = budget.try_reserve_bytes(demand).unwrap();
+    let result = consume(&budget, &mut reservation);
+    drop(reservation);
+    assert_eq!(budget.reserved_bytes(), 0);
+    result
+}
+
+fn verify_effect_public(
+    fixture: &EffectFixture,
+    bytes: &[u8],
+    public: ExpectedStatement,
+    limits: &VerificationLimits,
+) -> std::result::Result<
+    crate::offline_compact::VerifiedArtifact,
+    crate::offline_compact::VerificationError,
+> {
+    let mut expected = fixture.expected();
+    expected.statement.public_inputs = public.inputs;
+    expected.statement.statement_digest =
+        Hash::from_marked_bytes(public.public_statement_digest).unwrap();
+    fixture.verify_expected(bytes, expected, *limits)
+}
+
+/// Test dispatch calls each actual producer's preflight and final encoder. No
+/// accepted wire, constraint or admission calculation is reimplemented here.
+enum TestArtifact<'a> {
+    Axt(&'a FastpqPublicTransferStatementV1, ExpectedAxtContext<'a>),
+    Effect(&'a EffectFixture),
+}
+impl<'a> TestArtifact<'a> {
+    fn new(
+        statement: &'a FastpqPublicTransferStatementV1,
+        effect: &'a EffectFixture,
+        context: Option<ExpectedAxtContext<'a>>,
+    ) -> Self {
+        context.map_or(Self::Effect(effect), |context| {
+            Self::Axt(statement, context)
+        })
+    }
+    fn preflight(&self, count: usize, limits: &VerificationLimits) -> Result<()> {
+        match self {
+            Self::Axt(statement, context) => {
+                Artifact::new(statement, *context).preflight(count, limits)
+            }
+            Self::Effect(effect) => {
+                let mut empty;
+                let effect = if count == 0 {
+                    // The new producer derives its count from the original tape.
+                    // Exercise its actual empty-tape preflight, not a modeled error.
+                    empty = EffectFixture::clone(effect);
+                    empty.statement.effects.effects.clear();
+                    &empty
+                } else {
+                    effect
+                };
+                execution_effect::preflight_for_test(
+                    &SourceExecutionEffectStatement::from_owned(&effect.statement),
+                    effect.expected(),
+                    proving(),
+                    effect_support::fixture::limits(*limits),
+                )
+                .map(|_| ())
+            }
+        }
+    }
+    fn empty_frame_len(&self) -> usize {
+        match self {
+            Self::Axt(statement, context) => {
+                norito::core::encoded_frame_len(&Artifact::new(statement, *context).0).unwrap()
+            }
+            Self::Effect(effect) => {
+                norito::core::encoded_frame_len(&effect.artifact(Vec::new())).unwrap()
+            }
+        }
+    }
+    fn finish(&self, frame: Vec<u8>, limits: &VerificationLimits) -> Result<Vec<u8>> {
+        match self {
+            Self::Axt(statement, context) => {
+                Artifact::new(statement, *context).finish(frame, limits)
+            }
+            Self::Effect(effect) => execution_effect::encode_artifact(
+                &SourceExecutionEffectStatement::from_owned(&effect.statement),
+                &effect.source,
+                &frame,
+                effect_support::fixture::limits(*limits),
+            ),
+        }
+    }
+}
+
+fn assert_valid_effect_context(effect: &EffectFixture, roots: &[[u8; 32]]) {
+    with_effect_credit(effect, |budget, credit| {
+        let limits = effect_support::fixture::limits(policy());
+        let batch = ExecutionEffectBatch::new(
+            &SourceExecutionEffectStatement::from_owned(&effect.statement),
+            &effect.source,
+            effect.facts(),
+            roots,
+            EffectBatchLimits {
+                public: limits.public_policy(),
+                context: BatchContextLimits {
+                    max_segments: 2,
+                    max_total_statement_bytes: limits.bundle.max_total_statement_bytes,
+                },
+            },
+            budget,
+            credit,
+        )
+        .unwrap();
+        drop(batch);
+    });
 }
 
 fn axt_fields(
@@ -164,6 +305,8 @@ fn byte_and_work_arithmetic_rejects_overflow_without_saturating() {
 
 #[test]
 fn complete_statement_caps_are_inclusive_and_fail_before_public_preparation() {
+    // This shared transfer preflight now belongs exclusively to the AXT producer.
+    // Complete-effect ordinary preflight is exercised through its actual child hook below.
     let statement = fixture().model();
     let expected = expected(&statement);
     let mut exact = policy();
@@ -366,23 +509,21 @@ fn artifact_byte_preflight_and_final_encoding_keep_inclusive_bounds() {
         mirrors,
         remote_spend_claims: f.axt.remote.as_deref(),
     };
+    let effect = EffectFixture::from_transfer_facts(&statement);
     for axt in [None, Some(context)] {
-        let artifact = Artifact::new(&statement, axt);
+        let artifact = TestArtifact::new(&statement, &effect, axt);
         assert!(matches!(
-            artifact.preflight(0, policy()),
+            artifact.preflight(0, &policy()),
             Err(Error::TransferInvariant { .. })
         ));
         let carrier = 1024 + 64 + 2 * (SHARED_FRAME_BOUND + 32);
-        let empty = match &artifact {
-            Artifact::Ordinary(value) => norito::core::encoded_frame_len(value).unwrap(),
-            Artifact::Axt(value) => norito::core::encoded_frame_len(value).unwrap(),
-        };
+        let empty = artifact.empty_frame_len();
         let total = empty + carrier + 32;
         let mut exact = policy();
         exact.bundle.max_wire_bytes = carrier;
         exact.transport.max_bundle_frame_bytes = carrier;
         exact.transport.max_wire_bytes = total;
-        artifact.preflight(2, exact).unwrap();
+        artifact.preflight(2, &exact).unwrap();
         for (name, actual) in [
             ("max_bundle_wire_bytes", carrier),
             ("max_compact_producer_bundle_bytes", carrier),
@@ -396,23 +537,23 @@ fn artifact_byte_preflight_and_final_encoding_keep_inclusive_bounds() {
                 }
                 _ => limited.transport.max_wire_bytes -= 1,
             }
-            assert_limit(&artifact.preflight(2, limited), name, actual, actual - 1);
+            assert_limit(&artifact.preflight(2, &limited), name, actual, actual - 1);
         }
-        let bytes = Artifact::new(&statement, axt)
-            .finish(vec![1, 2, 3], policy())
+        let bytes = TestArtifact::new(&statement, &effect, axt)
+            .finish(vec![1, 2, 3], &policy())
             .unwrap();
         let mut exact = policy();
         exact.transport.max_bundle_frame_bytes = 3;
         exact.transport.max_wire_bytes = bytes.len();
         assert_eq!(
-            Artifact::new(&statement, axt)
-                .finish(vec![1, 2, 3], exact)
+            TestArtifact::new(&statement, &effect, axt)
+                .finish(vec![1, 2, 3], &exact)
                 .unwrap(),
             bytes
         );
         exact.transport.max_wire_bytes -= 1;
         assert_limit(
-            &Artifact::new(&statement, axt).finish(vec![1, 2, 3], exact),
+            &TestArtifact::new(&statement, &effect, axt).finish(vec![1, 2, 3], &exact),
             "max_compact_producer_artifact_bytes",
             bytes.len(),
             bytes.len() - 1,
@@ -424,23 +565,27 @@ fn artifact_byte_preflight_and_final_encoding_keep_inclusive_bounds() {
 fn supplied_root_mismatch_is_not_replaced_with_locally_derived_roots() {
     let f = fixture();
     for old in [true, false] {
-        let mut statement = f.model();
+        let mut effect = EffectFixture::from_transfer_facts(&f.model());
         if old {
-            statement.public_inputs.old_root = Hash::prehashed([17; 32]).into();
+            effect.statement.public_inputs.old_root = Hash::prehashed([17; 32]).into();
         } else {
-            statement.public_inputs.new_root = Hash::prehashed([19; 32]).into();
+            effect.statement.public_inputs.new_root = Hash::prehashed([19; 32]).into();
         }
-        let expected = expected(&statement);
-        let result = with_prepared_quantity_statement(
-            &statement,
-            &expected.internal(),
-            ProofSemantics::StateTransition,
-            policy().public_statement,
-            |prepared| prepare_and_prove(prepared, &statement, expected, None, proving(), policy()),
-        );
+        // Invoke the same original preparation/tree-root check as the producer,
+        // before any global producer lock or physical trace expansion.
+        let result = with_effect_credit(&effect, |budget, credit| {
+            let prepared = prepare_source_execution_effect_view(
+                &SourceExecutionEffectStatement::from_owned(&effect.statement),
+                &effect.source,
+                effect.facts(),
+                effect_support::fixture::limits(policy()).public_policy(),
+                budget,
+                credit,
+            )?;
+            prepared.build_smt_witnesses(proving().private_smt, budget, credit)
+        });
         assert!(
-            matches!(result, Err(Error::TransferInvariant { details })
-            if details.contains("root")),
+            matches!(result, Err(Error::TransferInvariant { details }) if details.contains("root")),
             "producer must reject the supplied endpoint"
         );
     }
@@ -461,13 +606,16 @@ fn axt_context_mismatch_precedes_even_private_tree_work() {
     };
     let mut work = proving();
     work.private_smt = TransferSmtBuildLimits::for_update_limit(0).unwrap();
+    let (budget, mut reservation) = funding(statement.transitions.len());
     let result = prepare_and_prove(
         &f.prepare(ProofSemantics::AxtTransferClaim),
         &statement,
         expected,
-        Some(context),
+        context,
         work,
         policy(),
+        &budget,
+        &mut reservation,
     );
     assert!(matches!(result, Err(Error::InvalidAxtBinding { details })
         if details.contains("manifest_root")));
@@ -476,12 +624,13 @@ fn axt_context_mismatch_precedes_even_private_tree_work() {
 #[test]
 fn all_segment_contexts_are_checked_before_the_first_physical_witness() {
     let (f, private) = QuantityFixture::new(QuantityCase::MixedScale, 2);
-    let prepared = f.prepare(ProofSemantics::StateTransition);
+    let prepared = f.prepare(ProofSemantics::AxtTransferClaim);
     let roots = [private.pairs()[0][1].root_after];
-    let batch = PublicTransferBatch::new(
+    let batch = AxtTransferBatch::new(
         &prepared,
         &f.expected(),
         &roots,
+        f.context(),
         BatchContextLimits {
             max_segments: 2,
             max_total_statement_bytes: 512 * 1024,
@@ -527,7 +676,7 @@ fn all_segment_contexts_are_checked_before_the_first_physical_witness() {
 #[test]
 fn malformed_private_paths_fail_before_physical_column_allocation() {
     let (f, private) = QuantityFixture::new(QuantityCase::MixedScale, 1);
-    let prepared = f.prepare(ProofSemantics::StateTransition);
+    let prepared = f.prepare(ProofSemantics::AxtTransferClaim);
     let statement = prepared.compact_statements(&[]).unwrap().remove(0);
     for wrong_path in [true, false] {
         let mut pair = private.pairs()[0].clone();
@@ -578,12 +727,18 @@ fn public_producer_with_execution(execution: crate::DigestExecutionV1) {
         digest_execution: execution,
         ..proving()
     };
+    let effect = EffectFixture::from_transfer_facts(&statement);
     for is_axt in [false, true] {
+        let route_expected = if is_axt {
+            expected
+        } else {
+            effect.public_expectation()
+        };
         let started = std::time::Instant::now();
         let bytes = if is_axt {
             prove_quantity_axt_artifact(&statement, expected, context, proving, policy())
         } else {
-            prove_quantity_ordinary_artifact(&statement, expected, proving, policy())
+            effect.prove(proving, policy())
         }
         .unwrap();
         let prove_elapsed = started.elapsed();
@@ -596,11 +751,11 @@ fn public_producer_with_execution(execution: crate::DigestExecutionV1) {
         let verified = if is_axt {
             verify_quantity_axt_artifact(&bytes, expected, context, policy())
         } else {
-            verify_quantity_ordinary_artifact(&bytes, expected, policy())
+            effect.verify(&bytes, policy())
         }
         .unwrap();
         let verify_elapsed = started.elapsed();
-        assert_eq!(verified.expected_statement(), expected);
+        assert_eq!(verified.expected_statement(), route_expected);
         assert_eq!(verified.segments(), 2);
         assert_eq!(verified.work().air_evaluations, 2);
         assert_eq!(verified.work().terminal_degree_checks, 2);
@@ -622,11 +777,12 @@ fn assert_internal_artifact_matches_public(
     is_axt: bool,
     expected: ExpectedStatement,
     context: ExpectedAxtContext<'_>,
+    effect: &EffectFixture,
     public: &crate::offline_compact::VerifiedArtifact,
     raw_bundle: &crate::backend::compact_bundle::VerifiedBundle,
 ) {
     use crate::backend::compact_model_statement::candidate_artifact::{
-        ArtifactLimits, verify_bound_quantity_axt_artifact, verify_bound_quantity_ordinary_artifact,
+        ArtifactLimits, verify_bound_quantity_axt_artifact,
     };
     let limits = policy();
     let internal_limits = ArtifactLimits {
@@ -645,12 +801,7 @@ fn assert_internal_artifact_matches_public(
             internal_limits,
         )
     } else {
-        verify_bound_quantity_ordinary_artifact(
-            bytes,
-            &expected.internal(),
-            expected.public_statement_digest,
-            internal_limits,
-        )
+        effect_support::verify(bytes, effect, internal_limits)
     }
     .unwrap();
     // Preserve artifact-level equality independently of the existing direct
@@ -746,35 +897,25 @@ fn assert_deep_context_rejected(error: &crate::offline_compact::VerificationErro
 fn assert_valid_public_context(
     statement: &FastpqPublicTransferStatementV1,
     expected: ExpectedStatement,
-    context: Option<ExpectedAxtContext<'_>>,
+    context: ExpectedAxtContext<'_>,
     roots: &[[u8; 32]],
 ) {
-    let semantics = if context.is_some() {
-        ProofSemantics::AxtTransferClaim
-    } else {
-        ProofSemantics::StateTransition
-    };
     with_prepared_quantity_statement(
         statement,
         &expected.internal(),
-        semantics,
+        ProofSemantics::AxtTransferClaim,
         policy().public_statement,
         |prepared| {
-            let limits = BatchContextLimits {
-                max_segments: 2,
-                max_total_statement_bytes: policy().bundle.max_total_statement_bytes,
-            };
-            if let Some(context) = context {
-                AxtTransferBatch::new(
-                    prepared,
-                    &expected.internal(),
-                    roots,
-                    context.internal(),
-                    limits,
-                )?;
-            } else {
-                PublicTransferBatch::new(prepared, &expected.internal(), roots, limits)?;
-            }
+            AxtTransferBatch::new(
+                prepared,
+                &expected.internal(),
+                roots,
+                context.internal(),
+                BatchContextLimits {
+                    max_segments: 2,
+                    max_total_statement_bytes: policy().bundle.max_total_statement_bytes,
+                },
+            )?;
             Ok(())
         },
     )
@@ -785,6 +926,7 @@ fn assert_valid_public_context(
 struct CapturedArtifact<'a> {
     is_axt: bool,
     statement: &'a FastpqPublicTransferStatementV1,
+    effect: &'a EffectFixture,
     expected: ExpectedStatement,
     context: ExpectedAxtContext<'a>,
     bytes: Vec<u8>,
@@ -793,6 +935,22 @@ struct CapturedArtifact<'a> {
 }
 
 impl CapturedArtifact<'_> {
+    fn wrap(&self, frame: Vec<u8>) -> Vec<u8> {
+        TestArtifact::new(
+            self.statement,
+            self.effect,
+            self.is_axt.then_some(self.context),
+        )
+        .finish(frame, &policy())
+        .unwrap()
+    }
+    fn valid_context(&self, roots: &[[u8; 32]]) {
+        if self.is_axt {
+            assert_valid_public_context(self.statement, self.expected, self.context, roots);
+        } else {
+            assert_valid_effect_context(self.effect, roots);
+        }
+    }
     /// Verify `raw` against `expected` through the matching public entry point.
     fn verify(
         &self,
@@ -805,7 +963,7 @@ impl CapturedArtifact<'_> {
         if self.is_axt {
             verify_quantity_axt_artifact(raw, expected, self.context, policy())
         } else {
-            verify_quantity_ordinary_artifact(raw, expected, policy())
+            verify_effect_public(self.effect, raw, expected, &policy())
         }
     }
 
@@ -821,7 +979,7 @@ impl CapturedArtifact<'_> {
         if self.is_axt {
             verify_quantity_axt_artifact(raw, self.expected, self.context, *limits)
         } else {
-            verify_quantity_ordinary_artifact(raw, self.expected, *limits)
+            self.effect.verify(raw, *limits)
         }
     }
 }
@@ -831,6 +989,7 @@ fn decode_captured_bundle(
     bytes: &[u8],
     is_axt: bool,
     statement: &FastpqPublicTransferStatementV1,
+    effect: &EffectFixture,
     profile: FastpqCompactProfileIdV1,
 ) -> (Vec<u8>, BundleWire) {
     let frame = if is_axt {
@@ -849,7 +1008,8 @@ fn decode_captured_bundle(
             policy().transport,
         )
         .unwrap();
-        assert_eq!(&artifact.statement, statement);
+        assert_eq!(&artifact.statement, &effect.statement);
+        assert_eq!(&artifact.source, &effect.source);
         artifact.bundle_frame
     };
     let wire: BundleWire = if is_axt {
@@ -932,14 +1092,20 @@ fn assert_captured_identity(
     ));
     wrong = expected;
     wrong.inputs.old_root[0] ^= 1;
-    assert!(matches!(
-        captured.verify(bytes, wrong),
-        Err(crate::offline_compact::VerificationError::Verify(
-            Error::PublicIoMismatch {
-                field: "compact_model_public_io"
-            }
-        ))
-    ));
+    if captured.is_axt {
+        assert!(matches!(
+            captured.verify(bytes, wrong),
+            Err(crate::offline_compact::VerificationError::Verify(
+                Error::PublicIoMismatch {
+                    field: "compact_model_public_io"
+                }
+            ))
+        ));
+    } else {
+        assert!(matches!(captured.verify(bytes, wrong),
+            Err(crate::offline_compact::VerificationError::Verify(Error::TransferInvariant { details }))
+                if details == "execution effect independent statement expectation mismatch"));
+    }
 }
 
 /// Every decoded child contributes exactly its leaves and parent hashes.
@@ -994,12 +1160,7 @@ fn assert_captured_child_work(
         wire.intermediate_roots[0],
         captured.expected.inputs.new_root
     );
-    assert_valid_public_context(
-        captured.statement,
-        captured.expected,
-        captured.is_axt.then_some(captured.context),
-        &wire.intermediate_roots,
-    );
+    captured.valid_context(&wire.intermediate_roots);
 }
 
 /// Inclusive cumulative outer/child charges and elements remain in force
@@ -1047,20 +1208,16 @@ fn assert_captured_raw_bundle(
 ) {
     let (is_axt, expected, context) = (captured.is_axt, captured.expected, captured.context);
     let (bytes, frame) = (&captured.bytes, &captured.frame);
-    let (raw_result, bundle_usage) = with_prepared_quantity_statement(
-        captured.statement,
-        &expected.internal(),
-        if is_axt {
-            ProofSemantics::AxtTransferClaim
-        } else {
-            ProofSemantics::StateTransition
-        },
-        policy().public_statement,
-        |prepared| {
-            Ok(norito::core::with_decode_limits_measured(
-                policy().total_decode,
-                || {
-                    if is_axt {
+    let (raw_result, bundle_usage) = if is_axt {
+        with_prepared_quantity_statement(
+            captured.statement,
+            &expected.internal(),
+            ProofSemantics::AxtTransferClaim,
+            policy().public_statement,
+            |prepared| {
+                Ok(norito::core::with_decode_limits_measured(
+                    policy().total_decode,
+                    || {
                         compact_bundle::verify_axt_transfer_bundle_with_allocation(
                             prepared,
                             &expected.internal(),
@@ -1069,26 +1226,43 @@ fn assert_captured_raw_bundle(
                             policy().bundle.internal(),
                             policy().max_segment_decode_allocation_charges,
                         )
-                    } else {
-                        compact_bundle::verify_transfer_bundle_with_allocation(
-                            prepared,
-                            &expected.internal(),
-                            frame,
-                            policy().bundle.internal(),
-                            policy().max_segment_decode_allocation_charges,
-                        )
-                    }
-                },
-            ))
-        },
-    )
-    .unwrap();
+                    },
+                ))
+            },
+        )
+        .unwrap()
+    } else {
+        with_effect_credit(captured.effect, |budget, credit| {
+            let limits = effect_support::fixture::limits(policy());
+            norito::core::with_decode_limits_measured(policy().total_decode, || {
+                effect_bundle::verify(
+                    EffectVerificationInputs {
+                        statement: &SourceExecutionEffectStatement::from_owned(
+                            &captured.effect.statement,
+                        ),
+                        source: &captured.effect.source,
+                        expected: captured.effect.facts(),
+                    },
+                    frame,
+                    EffectVerificationLimits {
+                        public: limits.public_policy(),
+                        bundle: limits.bundle.internal(),
+                        max_segment_decode_allocation_charges: limits
+                            .max_segment_decode_allocation_charges,
+                    },
+                    budget,
+                    credit,
+                )
+            })
+        })
+    };
     let raw_result = raw_result.unwrap();
     assert_internal_artifact_matches_public(
         bytes,
         is_axt,
         expected,
         context,
+        captured.effect,
         verified,
         &raw_result,
     );
@@ -1180,16 +1354,9 @@ fn assert_captured_bundle_mutations_rejected(captured: &CapturedArtifact<'_>) {
             _ => unreachable!(),
         }
         if mutation == 4 {
-            assert_valid_public_context(
-                captured.statement,
-                expected,
-                is_axt.then_some(captured.context),
-                &changed.intermediate_roots,
-            );
+            captured.valid_context(&changed.intermediate_roots);
         }
-        let changed = Artifact::new(captured.statement, is_axt.then_some(captured.context))
-            .finish(raw_bundle_frame(&changed, is_axt), policy())
-            .unwrap();
+        let changed = captured.wrap(raw_bundle_frame(&changed, is_axt));
         let error = captured.verify(&changed, expected).unwrap_err();
         if matches!(mutation, 0 | 1 | 4) {
             assert_deep_context_rejected(&error);
@@ -1214,9 +1381,7 @@ fn assert_captured_bundle_mutations_rejected(captured: &CapturedArtifact<'_>) {
     assert!(captured.verify(&trailing, expected).is_err());
     let mut trailing_bundle = frame.clone();
     trailing_bundle.push(0);
-    let trailing = Artifact::new(captured.statement, is_axt.then_some(captured.context))
-        .finish(trailing_bundle, policy())
-        .unwrap();
+    let trailing = captured.wrap(trailing_bundle);
     assert!(captured.verify(&trailing, expected).is_err());
 }
 
@@ -1224,27 +1389,52 @@ fn assert_captured_bundle_mutations_rejected(captured: &CapturedArtifact<'_>) {
 /// these remain valid public statements and must fail proof binding.
 fn assert_captured_changed_statements_rejected(captured: &CapturedArtifact<'_>) {
     for change_authority in [false, true] {
-        let mut changed_statement = captured.statement.clone();
-        if change_authority {
-            changed_statement.transcripts[1].authority_digest =
-                Hash::new(b"different second occurrence authority");
+        if captured.is_axt {
+            let mut changed_statement = captured.statement.clone();
+            if change_authority {
+                changed_statement.transcripts[1].authority_digest =
+                    Hash::new(b"different second occurrence authority");
+            } else {
+                changed_statement.public_inputs.perm_root[0] ^= 1;
+            }
+            let changed_expected = self::expected(&changed_statement);
+            assert_valid_public_context(
+                &changed_statement,
+                changed_expected,
+                captured.context,
+                &captured.wire.intermediate_roots,
+            );
+            let changed = Artifact::new(&changed_statement, captured.context)
+                .finish(captured.frame.clone(), &policy())
+                .unwrap();
+            assert_deep_context_rejected(&captured.verify(&changed, changed_expected).unwrap_err());
         } else {
-            changed_statement.public_inputs.perm_root[0] ^= 1;
+            let mut changed = captured.effect.clone();
+            if change_authority {
+                changed.statement.effects.effects[1].authority_digest =
+                    Hash::new(b"different second occurrence authority");
+                changed.source.effects_digest =
+                    iroha_data_model::fastpq::execution_effects_digest_v1(
+                        &changed.statement.effects,
+                    )
+                    .unwrap()
+                    .into();
+            } else {
+                changed.statement.public_inputs.perm_root[0] ^= 1;
+                changed.source.perm_root = changed.statement.public_inputs.perm_root;
+            }
+            assert_valid_effect_context(&changed, &captured.wire.intermediate_roots);
+            let bytes = execution_effect::encode_artifact(
+                &SourceExecutionEffectStatement::from_owned(&changed.statement),
+                &changed.source,
+                &captured.frame,
+                effect_support::fixture::limits(policy()),
+            )
+            .unwrap();
+            // Independently recomputed complete source/effect/statement expectations
+            // agree. Only the authentic original child context now differs.
+            assert_deep_context_rejected(&changed.verify(&bytes, policy()).unwrap_err());
         }
-        let changed_expected = self::expected(&changed_statement);
-        assert_valid_public_context(
-            &changed_statement,
-            changed_expected,
-            captured.is_axt.then_some(captured.context),
-            &captured.wire.intermediate_roots,
-        );
-        let changed = Artifact::new(
-            &changed_statement,
-            captured.is_axt.then_some(captured.context),
-        )
-        .finish(captured.frame.clone(), policy())
-        .unwrap();
-        assert_deep_context_rejected(&captured.verify(&changed, changed_expected).unwrap_err());
     }
 }
 
@@ -1289,11 +1479,11 @@ fn assert_captured_axt_contexts_rejected(
         assert_valid_public_context(
             statement,
             expected,
-            Some(changed_context),
+            changed_context,
             &captured.wire.intermediate_roots,
         );
-        let changed = Artifact::new(statement, Some(changed_context))
-            .finish(captured.frame.clone(), policy())
+        let changed = Artifact::new(statement, changed_context)
+            .finish(captured.frame.clone(), &policy())
             .unwrap();
         assert_deep_context_rejected(
             &verify_quantity_axt_artifact(&changed, expected, changed_context, policy())
@@ -1312,8 +1502,8 @@ fn assert_captured_axt_contexts_rejected(
         remote_spend_claims: Some(&omitted_remote),
         ..context
     };
-    let changed = Artifact::new(statement, Some(omitted))
-        .finish(captured.frame.clone(), policy())
+    let changed = Artifact::new(statement, omitted)
+        .finish(captured.frame.clone(), &policy())
         .unwrap();
     assert!(
         matches!(verify_quantity_axt_artifact(&changed, expected, omitted, policy()),
@@ -1324,8 +1514,8 @@ fn assert_captured_axt_contexts_rejected(
         remote_spend_claims: None,
         ..context
     };
-    let changed = Artifact::new(statement, Some(missing))
-        .finish(captured.frame.clone(), policy())
+    let changed = Artifact::new(statement, missing)
+        .finish(captured.frame.clone(), &policy())
         .unwrap();
     assert!(matches!(
         verify_quantity_axt_artifact(&changed, expected, missing, policy()),
@@ -1339,8 +1529,8 @@ fn assert_captured_axt_contexts_rejected(
         mirrors: wrong_mirrors,
         ..context
     };
-    let changed = Artifact::new(statement, Some(wrong))
-        .finish(captured.frame.clone(), policy())
+    let changed = Artifact::new(statement, wrong)
+        .finish(captured.frame.clone(), &policy())
         .unwrap();
     assert!(matches!(
         verify_quantity_axt_artifact(&changed, expected, wrong, policy()),
@@ -1353,26 +1543,35 @@ fn assert_captured_axt_contexts_rejected(
 /// Retag both enclosing transports while leaving authenticated children
 /// intact: the distinct ordinary/AXT relation identity still rejects.
 fn assert_captured_retag_rejected(captured: &CapturedArtifact<'_>) {
-    let (statement, expected, context) = (captured.statement, captured.expected, captured.context);
+    let (statement, context) = (captured.statement, captured.context);
     let opposite = !captured.is_axt;
-    assert_valid_public_context(
-        statement,
-        expected,
-        opposite.then_some(context),
-        &captured.wire.intermediate_roots,
-    );
-    let retagged = Artifact::new(statement, opposite.then_some(context))
-        .finish(raw_bundle_frame(&captured.wire, opposite), policy())
+    let expected = if opposite {
+        self::expected(statement)
+    } else {
+        captured.effect.public_expectation()
+    };
+    if opposite {
+        assert_valid_public_context(
+            statement,
+            expected,
+            context,
+            &captured.wire.intermediate_roots,
+        );
+    } else {
+        assert_valid_effect_context(captured.effect, &captured.wire.intermediate_roots);
+    }
+    let retagged = TestArtifact::new(statement, captured.effect, opposite.then_some(context))
+        .finish(raw_bundle_frame(&captured.wire, opposite), &policy())
         .unwrap();
     let error = if opposite {
         verify_quantity_axt_artifact(&retagged, expected, context, policy())
     } else {
-        verify_quantity_ordinary_artifact(&retagged, expected, policy())
+        captured.effect.verify(&retagged, policy())
     }
     .unwrap_err();
     assert_deep_context_rejected(&error);
     if captured.is_axt {
-        assert!(verify_quantity_ordinary_artifact(&captured.bytes, expected, policy()).is_err());
+        assert!(captured.effect.verify(&captured.bytes, policy()).is_err());
     } else {
         assert!(
             verify_quantity_axt_artifact(&captured.bytes, expected, context, policy()).is_err()
@@ -1395,17 +1594,27 @@ fn captured_public_producer_artifacts_verify_against_independent_fixture() {
         mirrors,
         remote_spend_claims: f.axt.remote.as_deref(),
     };
-    let profile = crate::offline_compact::quantity_profile_id();
+    let effect = EffectFixture::from_transfer_facts(&statement);
     for (is_axt, variable) in [
         (false, "FASTPQ_TEST_ORDINARY_ARTIFACT"),
         (true, "FASTPQ_TEST_AXT_ARTIFACT"),
     ] {
+        let profile = if is_axt {
+            crate::offline_compact::quantity_profile_id()
+        } else {
+            execution_effect_profile_id()
+        };
+        let expected = if is_axt {
+            expected
+        } else {
+            effect.public_expectation()
+        };
         let bytes = read_public_artifact(variable, if is_axt { "axt" } else { "ordinary" });
         let verify = |bytes: &[u8], expected| {
             if is_axt {
                 verify_quantity_axt_artifact(bytes, expected, context, policy())
             } else {
-                verify_quantity_ordinary_artifact(bytes, expected, policy())
+                verify_effect_public(&effect, bytes, expected, &policy())
             }
         };
         let started = std::time::Instant::now();
@@ -1418,10 +1627,11 @@ fn captured_public_producer_artifacts_verify_against_independent_fixture() {
             verified
         };
         let elapsed = started.elapsed();
-        let (frame, wire) = decode_captured_bundle(&bytes, is_axt, &statement, profile);
+        let (frame, wire) = decode_captured_bundle(&bytes, is_axt, &statement, &effect, profile);
         let captured = CapturedArtifact {
             is_axt,
             statement: &statement,
+            effect: &effect,
             expected,
             context,
             bytes,
@@ -1456,4 +1666,272 @@ fn captured_public_producer_artifacts_verify_against_independent_fixture() {
             verified.work()
         );
     }
+}
+
+#[test]
+fn original_tree_pool_identity_precedes_producer_admission_and_preparation() {
+    let f = fixture();
+    let statement = f.model();
+    let expected = expected(&statement);
+    let effect = EffectFixture::from_transfer_facts(&statement);
+    let (metadata, mirrors) = axt_fields(&f);
+    let context = ExpectedAxtContext {
+        binding: &f.axt.binding,
+        metadata: &metadata,
+        mirrors,
+        remote_spend_claims: f.axt.remote.as_deref(),
+    };
+    let (budget, reservation) = funding(statement.transitions.len());
+    let equal_limit_foreign = AllocationBudget::new(budget.limit_bytes());
+    let mut foreign = equal_limit_foreign
+        .try_reserve_bytes(budget.limit_bytes())
+        .unwrap();
+    let before = foreign.remaining_bytes();
+    // Foreign identity wins even when normal production is currently busy.
+    let _permit = PRODUCER.lock().unwrap();
+    assert!(matches!(
+        crate::offline_compact::prove_quantity_ordinary_artifact(
+            &SourceExecutionEffectStatement::from_owned(&effect.statement),
+            effect.expected(),
+            proving(),
+            effect_support::fixture::limits(policy()),
+            &budget,
+            &mut foreign,
+        ),
+        Err(ProvingError::Prove(Error::AllocationForeignPool))
+    ));
+    assert!(matches!(
+        crate::offline_compact::prove_quantity_axt_artifact(
+            &statement,
+            expected,
+            context,
+            proving(),
+            policy(),
+            &budget,
+            &mut foreign,
+        ),
+        Err(ProvingError::Prove(Error::AllocationForeignPool))
+    ));
+    let invalid_batch = crate::TransitionBatch::new("invalid before preparation", f.inputs);
+    assert!(matches!(
+        crate::prove_axt_bound_batch(&invalid_batch, &f.axt.binding, &budget, &mut foreign,),
+        Err(Error::AllocationForeignPool)
+    ));
+    assert_eq!(foreign.remaining_bytes(), before);
+    assert_eq!(equal_limit_foreign.reserved_bytes(), before);
+    assert_eq!(reservation.remaining_bytes(), budget.limit_bytes());
+    drop(foreign);
+    drop(reservation);
+    assert_eq!(equal_limit_foreign.reserved_bytes(), 0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn exact_prepared_tree_demand_refuses_short_reservations_without_consuming_credit() {
+    let f = fixture();
+    let statement = f.model();
+    let expected = expected(&statement);
+    let (metadata, mirrors) = axt_fields(&f);
+    let context = ExpectedAxtContext {
+        binding: &f.axt.binding,
+        metadata: &metadata,
+        mirrors,
+        remote_spend_claims: f.axt.remote.as_deref(),
+    };
+    let prepared = f.prepare(ProofSemantics::AxtTransferClaim);
+    let demand = proving()
+        .private_smt
+        .allocation_bytes(prepared.transitions().len(), prepared.keys().len())
+        .unwrap();
+    for available in [0, demand - 1] {
+        let budget = AllocationBudget::new(demand);
+        let mut reservation = budget.try_reserve_bytes(available).unwrap();
+        assert!(matches!(prepare_and_prove(
+            &prepared, &statement, expected, context, proving(), policy(), &budget, &mut reservation,
+        ), Err(Error::AllocationReservation(iroha_allocation::InsufficientReservation {
+            requested_bytes, remaining_bytes,
+        })) if requested_bytes == demand && remaining_bytes == available));
+        assert_eq!(reservation.remaining_bytes(), available);
+        assert_eq!(budget.reserved_bytes(), available);
+        drop(reservation);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+}
+
+#[test]
+fn original_pool_refunds_tree_backing_after_late_root_refusal() {
+    let mut f = fixture();
+    f.inputs.new_root[0] ^= 1;
+    let statement = f.model();
+    let expected = expected(&statement);
+    let (metadata, mirrors) = axt_fields(&f);
+    let context = ExpectedAxtContext {
+        binding: &f.axt.binding,
+        metadata: &metadata,
+        mirrors,
+        remote_spend_claims: f.axt.remote.as_deref(),
+    };
+    let prepared = f.prepare(ProofSemantics::AxtTransferClaim);
+    let demand = proving()
+        .private_smt
+        .allocation_bytes(prepared.transitions().len(), prepared.keys().len())
+        .unwrap();
+    let budget = AllocationBudget::new(demand);
+    for _ in 0..2 {
+        let mut reservation = budget.try_reserve_bytes(demand).unwrap();
+        assert!(matches!(prepare_and_prove(
+            &prepared, &statement, expected, context, proving(), policy(), &budget, &mut reservation,
+        ), Err(Error::TransferInvariant { details }) if details.contains("root")));
+        assert_eq!(reservation.remaining_bytes(), 0);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+}
+
+#[test]
+fn complete_effect_statement_caps_and_original_headers_use_actual_preflight() {
+    let effect = EffectFixture::from_transfer_facts(&fixture().model());
+    let view = SourceExecutionEffectStatement::from_owned(&effect.statement);
+    let mut limits = effect_support::fixture::limits(policy());
+    limits.public_statement.max_effects = 2;
+    limits.public_statement.max_rows = 4;
+    limits.public_statement.max_public_bytes = norito::canonical_frame_len(&view).unwrap();
+    assert_eq!(
+        execution_effect::preflight_for_test(&view, effect.expected(), proving(), limits).unwrap(),
+        2
+    );
+    for (field, actual, name) in [
+        (0, 2, "max_execution_effects"),
+        (1, 4, "max_execution_effect_rows"),
+        (
+            2,
+            limits.public_statement.max_public_bytes,
+            "max_compact_producer_statement_bytes",
+        ),
+    ] {
+        let mut short = limits;
+        match field {
+            0 => short.public_statement.max_effects = actual - 1,
+            1 => short.public_statement.max_rows = actual - 1,
+            _ => short.public_statement.max_public_bytes = actual - 1,
+        }
+        assert_limit(
+            &execution_effect::preflight_for_test(&view, effect.expected(), proving(), short),
+            name,
+            actual,
+            actual - 1,
+        );
+    }
+    for authority in [true, false] {
+        let mut changed = effect.statement.clone();
+        if authority {
+            changed.effects.effects[0].authority_digest =
+                Hash::new(b"different original authority");
+        } else {
+            changed.effects.context.entry.entry_hash = Hash::new(b"different original batch");
+        }
+        assert!(matches!(
+            execution_effect::preflight_for_test(
+                &SourceExecutionEffectStatement::from_owned(&changed),
+                effect.expected(),
+                proving(),
+                limits
+            ),
+            Err(Error::PublicIoMismatch {
+                field: "compact_public_statement_digest"
+            })
+        ));
+    }
+    let mut empty = effect.statement.clone();
+    empty.effects.effects.clear();
+    assert!(matches!(
+        execution_effect::preflight_for_test(
+            &SourceExecutionEffectStatement::from_owned(&empty),
+            effect.expected(),
+            proving(),
+            limits
+        ),
+        Err(Error::TransferInvariant { .. })
+    ));
+}
+
+#[test]
+fn complete_effect_contexts_and_private_paths_preflight_before_physical_columns() {
+    let effect = EffectFixture::from_transfer_facts(&fixture().model());
+    with_effect_credit(&effect, |budget, credit| {
+        let view = SourceExecutionEffectStatement::from_owned(&effect.statement);
+        let limits = effect_support::fixture::limits(policy());
+        let prepared = prepare_source_execution_effect_view(
+            &view,
+            &effect.source,
+            effect.facts(),
+            limits.public_policy(),
+            budget,
+            credit,
+        )
+        .unwrap();
+        let private = prepared
+            .build_smt_witnesses(proving().private_smt, budget, credit)
+            .unwrap();
+        let roots = [private.pairs()[0][1].root_after];
+        drop(prepared);
+        let batch = ExecutionEffectBatch::new(
+            &view,
+            &effect.source,
+            effect.facts(),
+            &roots,
+            EffectBatchLimits {
+                public: limits.public_policy(),
+                context: BatchContextLimits {
+                    max_segments: 2,
+                    max_total_statement_bytes: policy().bundle.max_total_statement_bytes,
+                },
+            },
+            budget,
+            credit,
+        )
+        .unwrap();
+        let mut bad_private = private.pairs().to_vec();
+        bad_private[0][0].path_bits[0] ^= 1;
+        let calls = Cell::new(0);
+        let result = segments(
+            batch.statements(),
+            &bad_private,
+            |ordinal| {
+                calls.set(calls.get() + 1);
+                if ordinal == 1 {
+                    return Err(invalid("second segment rejected before any witness"));
+                }
+                batch.segment(ordinal)
+            },
+            proving(),
+            policy(),
+        );
+        assert!(matches!(result, Err(Error::TransferInvariant { details })
+            if details == "second segment rejected before any witness"));
+        assert_eq!(calls.get(), 2);
+        calls.set(0);
+        let result = segments(
+            batch.statements(),
+            &bad_private[..1],
+            |ordinal| {
+                calls.set(calls.get() + 1);
+                batch.segment(ordinal)
+            },
+            proving(),
+            policy(),
+        );
+        assert!(matches!(result, Err(Error::TransferInvariant { details })
+            if details.contains("pair count differs")));
+        assert_eq!(calls.get(), 0);
+        for wrong_path in [true, false] {
+            let mut pair = private.pairs()[0].clone();
+            if wrong_path {
+                pair[0].path_bits[0] ^= 1;
+            } else {
+                pair[1].siblings.pop();
+            }
+            assert!(matches!(columns(&batch.statements()[0], &pair),
+                Err(Error::TransferInvariant { details }) if details.contains("private path differs")));
+        }
+    });
 }

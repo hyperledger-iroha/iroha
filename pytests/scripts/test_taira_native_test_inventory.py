@@ -63,10 +63,19 @@ class NativeInventoryTests(unittest.TestCase):
     def test_real_checkout_matches_every_reviewed_owner(self):
         names = inventory.validate_native_source_inventory(ROOT)
         self.assertEqual(len(names), sum(len(row[-1]) for row in inventory.NATIVE_CORE_TEST_OWNERS))
-        self.assertEqual(len(names), 315)
+        self.assertEqual(len(names), 318)
 
     def test_current_native_owner_additions_reject_same_count_selector_replacement(self):
         expected = {
+            'native preparation refusal identity': (
+                ('sumeragi/executor/preparation.rs', 'sumeragi/executor/preparation/tests.rs', 'tests', 'sumeragi::executor::preparation::tests'),
+                (
+                    'original_local_custody_invariant_halts_worker_without_fee_result_or_quarantine',
+                    'native_source_publication_change_retries_without_recovery_or_quarantine',
+                )),
+            'native original execution and undo': (
+                ('state/native_execution_tip.rs', 'state/native_execution_tip/tests.rs', 'tests', 'state::native_execution_tip::tests'),
+                ('restore_rebuilds_sparse_history_checkpoints_from_verified_snapshot_prefix',)),
             'native beacon reporting control': (
                 ('sumeragi/epoch_beacon/producer.rs', 'sumeragi/epoch_beacon/producer/readiness.rs', 'readiness', 'sumeragi::epoch_beacon::producer::readiness::tests'),
                 (

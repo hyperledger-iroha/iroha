@@ -195,6 +195,10 @@ pub fn set_axt_remote_spend_claims(
 /// The binding independently selects the transfer claim. Metadata-only carriers
 /// are rejected before private construction. This entry point uses the default
 /// CPU proving and verification limits and self-verifies before returning.
+/// The original caller pool and prepaid reservation fund touched-tree backing
+/// only. Foreign reservations fail before preparation; other public/frame/proof
+/// allocations are separate. The checked demand is given by
+/// [`crate::gadgets::public_transfer_statement::TransferSmtBuildLimits::allocation_bytes`].
 /// Use [`crate::offline_compact::prove_quantity_axt_artifact`] with an independently
 /// authenticated public statement/context for explicit work or device policies.
 /// Successful consistency verification does not grant source finality or spend authority.
@@ -207,8 +211,10 @@ pub fn set_axt_remote_spend_claims(
 pub fn prove_axt_bound_batch(
     batch: &TransitionBatch,
     binding: &AxtFastpqBinding,
+    budget: &iroha_allocation::AllocationBudget,
+    reservation: &mut iroha_allocation::AllocationReservation,
 ) -> Result<Vec<u8>> {
-    compact::prove(batch, binding)
+    compact::prove(batch, binding, budget, reservation)
 }
 
 /// Require a canonical AXT binding to select the witnessed transfer profile.

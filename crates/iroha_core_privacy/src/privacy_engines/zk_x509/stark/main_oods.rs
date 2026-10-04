@@ -572,3 +572,93 @@ pub(super) fn verify_main_deep_constraints_with_ca_v1(
 #[cfg(test)]
 #[path = "main_oods_tests.rs"]
 mod tests;
+
+/// Check the complete standalone DER AIR, including all eight public endpoints.
+/// The reduced wire authenticates both z and omega*z through the unchanged DEEP
+/// quotient; no caller-supplied fixed values or omitted query callback is trusted.
+#[cfg(test)]
+pub(in super::super) fn verify_standalone_der_oods_v1(
+    layout: &AggregateProofLayoutV1,
+    deep: &aggregate::AggregateDeepProofV1,
+    point: E,
+    challenges: ZkX509DerStarkChallengesV1,
+    public: ZkX509DerStarkPublicTerminalsV1,
+    claims: ZkX509DerStarkTerminalClaimsV1,
+    alphas: &[Vec<E>],
+) -> Result<(), ZkX509StarkErrorV1> {
+    let segment = SegmentLayoutV1::for_der(ZkX509DerStarkShapeV1.active_rows())?;
+    if layout.registered_segments.len() != 1
+        || layout.trace_groups.len() != 1
+        || layout.registered_segments[0].segment != segment
+        || alphas.len() != SECURITY_LANES
+        || alphas
+            .iter()
+            .any(|lane| lane.len() != segment.constraint_count)
+    {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    layout.validate()?;
+    let shared = layout.as_shared()?;
+    if !point.is_canonical()
+        || !aggregate::deep_point_is_admissible_v1(point, layout.parameters_v1(), &shared)
+            .map_err(map_aggregate_error_v1)?
+    {
+        return Err(ZkX509StarkErrorV1::ConstraintOpening);
+    }
+    let (groups, compositions) = canonical_deep_values_v1(deep, layout)?;
+    if groups.len() != 1 || compositions.len() != SECURITY_LANES {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    let opening = &groups[0];
+    let weights = lagrange_weights_v1(segment.trace_log2, point)?;
+    let (prefix, _) = main_log19_weight_prefixes_v1(&weights)?;
+    let fixed = main_log19_der_fixed_opening_from_prefix_v1(&weights, &prefix, 0)?;
+    let next_fixed = main_log19_der_fixed_opening_from_prefix_v1(&weights, &prefix, 1)?;
+    DER_FIXED_OPENING_EVALUATIONS_V1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let residues = evaluate_zk_x509_der_stark_residues_v1(
+        opening
+            .base_current
+            .as_slice()
+            .try_into()
+            .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+        opening
+            .base_next
+            .as_slice()
+            .try_into()
+            .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+        opening
+            .aux_current
+            .as_slice()
+            .try_into()
+            .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+        opening
+            .aux_next
+            .as_slice()
+            .try_into()
+            .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+        &fixed,
+        &next_fixed,
+        challenges,
+        public,
+        claims,
+    )
+    .map_err(|_| ZkX509StarkErrorV1::ConstraintOpening)?;
+    // Standalone DER uses the original unmasked coefficient chunks, whose
+    // stride is the full exclusive FRI cap. MAIN's masked chunk stride differs.
+    let chunk_power = point.pow(
+        shared
+            .fri_degree_cap(AGGREGATE_PARAMETERS_V1)
+            .map_err(map_aggregate_error_v1)? as u128,
+    );
+    for (values, lane_alphas) in compositions.iter().zip(alphas) {
+        let expected = quotient_v1(segment, point, &residues, lane_alphas)?;
+        let actual = values
+            .iter()
+            .rev()
+            .fold(E::ZERO, |sum, value| sum.mul(chunk_power).add(*value));
+        if actual != expected {
+            return Err(ZkX509StarkErrorV1::ConstraintOpening);
+        }
+    }
+    Ok(())
+}
