@@ -179,6 +179,7 @@ rand = { workspace = true }
 blake3 = { workspace = true }
 
 [dev-dependencies]
+iroha_deploy = { workspace = true }
 iroha_musubi_service = { workspace = true, features = ["test-fixtures"] }
 iroha_executor_data_model = { workspace = true }
 iroha_torii = { workspace = true, default-features = false, features = ["test-fixtures"] }
@@ -190,6 +191,7 @@ assertables = { workspace = true }
 iroha_test_samples = { workspace = true }
 sorafs_chunker = { path = "../sorafs_chunker" }
 rcgen = "0.14.5"
+time = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.4", features = ["event", "fs", "net", "pipe", "process"] }

@@ -212,6 +212,8 @@ pub(super) fn prepare_build(
         previous,
         None,
         WorkspaceResolutionOptionsV1 {
+            cache_root: None,
+            archive_transport: None,
             config_image: network.config_image.clone(),
             expected_network_id: network.network_id,
             mode: args.mode,
@@ -253,6 +255,7 @@ pub(super) fn prepare_build(
 
 pub(super) fn build_runtime_package(
     config: &iroha::config::Config,
+    cache_root: &Path,
     registry_config: Option<&iroha::config::Config>,
     registry_resolver: Option<&crate::deployment_runtime::BuildRegistryResolver>,
     manifest: &Path,
@@ -317,9 +320,7 @@ pub(super) fn build_runtime_package(
             }
             archive_transport = Some(transport.clone());
         }
-        let cache_root =
-            platform_cache_root_v1().map_err(|error| cache_maintenance_diagnostic(&error))?;
-        let resolver_cache = ResolverIndexCacheV1::open(&cache_root)
+        let resolver_cache = ResolverIndexCacheV1::open(cache_root)
             .map_err(|error| Diagnostic::new(ErrorCode::CacheCorrupt, error.to_string()))?;
         let cached = if previous.is_some() {
             match resolve_workspace_offline_cached(
@@ -345,7 +346,7 @@ pub(super) fn build_runtime_package(
             None
         };
         let warm = if let Some(cached) = cached {
-            let cache = open_user_cache()?;
+            let cache = open_cache_at(cache_root)?;
             if !cached.outcome.changed
                 && cached
                     .outcome
@@ -411,7 +412,7 @@ pub(super) fn build_runtime_package(
     let cache = if graph.lock.nodes.is_empty() {
         None
     } else {
-        Some(open_user_cache()?)
+        Some(open_cache_at(cache_root)?)
     };
     if let Some(cache) = &cache {
         ensure_graph_archives(cache, &graph, mode)?;

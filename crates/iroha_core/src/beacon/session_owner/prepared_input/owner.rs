@@ -136,6 +136,196 @@ impl<D: Destination> Bank<D> {
     }
 }
 
+/// One original-pool canonical publication graph for checkpoint restoration.
+///
+/// Each phase has its own exact row storage and canonical decode controls,
+/// prepared before the durable claim. Generation owns one recipient/dealer,
+/// delivery owns the full roster and one dealer's `n` edges, and acceptance owns
+/// all `n²` incoming edges plus one recipient's `n` acknowledgments. The original
+/// session always binds the full ordered committee and its threshold. No reduced
+/// committee, source replacement or phase-bank reset is permitted.
+pub struct PreparedGlobalThresholdBeaconDkgPublicationV1 {
+    publication: Bank<Snapshot>,
+    workspace: PreparedDecodeWorkspace,
+    session: GlobalThresholdBeaconDkgSessionV1,
+    seat: u16,
+    phase: SnapshotPhase,
+    budget: AllocationBudget,
+    bound: bool,
+}
+impl PreparedGlobalThresholdBeaconDkgPublicationV1 {
+    /// Prepare exact singleton nested storage and original canonical controls.
+    ///
+    /// # Errors
+    /// Returns the original geometry, admission or physical refusal before claim.
+    pub fn new(
+        session: GlobalThresholdBeaconDkgSessionV1,
+        roster: &[PeerId],
+        seat: u16,
+        budget: &AllocationBudget,
+    ) -> Result<Self, GlobalThresholdBeaconInputErrorV1> {
+        Self::for_phase(
+            session,
+            roster,
+            seat,
+            SnapshotPhase::SinglePublication { seat },
+            budget,
+        )
+    }
+
+    /// Prepare the complete roster and exactly this dealer's `n` original delivery rows.
+    ///
+    /// # Errors
+    /// Preserves invalid geometry and original pool/allocator refusal before claim.
+    pub fn new_delivery(
+        session: GlobalThresholdBeaconDkgSessionV1,
+        roster: &[PeerId],
+        seat: u16,
+        budget: &AllocationBudget,
+    ) -> Result<Self, GlobalThresholdBeaconInputErrorV1> {
+        Self::for_phase(
+            session,
+            roster,
+            seat,
+            SnapshotPhase::LocalDeliveries { seat },
+            budget,
+        )
+    }
+
+    /// Prepare all `n²` original inbound edges and this recipient's `n` acknowledgments.
+    ///
+    /// # Errors
+    /// Preserves invalid geometry and original pool/allocator refusal before claim.
+    pub fn new_acceptance(
+        session: GlobalThresholdBeaconDkgSessionV1,
+        roster: &[PeerId],
+        seat: u16,
+        budget: &AllocationBudget,
+    ) -> Result<Self, GlobalThresholdBeaconInputErrorV1> {
+        Self::for_phase(
+            session,
+            roster,
+            seat,
+            SnapshotPhase::LocalAcceptances { seat },
+            budget,
+        )
+    }
+
+    fn for_phase(
+        session: GlobalThresholdBeaconDkgSessionV1,
+        roster: &[PeerId],
+        seat: u16,
+        phase: SnapshotPhase,
+        budget: &AllocationBudget,
+    ) -> Result<Self, GlobalThresholdBeaconInputErrorV1> {
+        let publication = Bank::new(Snapshot::new(session, roster, phase, budget)?);
+        let mut reservation = budget
+            .try_reserve_layouts(PreparedDecodeWorkspace::allocation_layouts())
+            .map_err(crate::beacon::GlobalThresholdBeaconSessionError::from)?;
+        let workspace = PreparedDecodeWorkspace::from_reservation(budget, &mut reservation)?;
+        Ok(Self {
+            publication,
+            workspace,
+            session,
+            seat,
+            phase,
+            budget: budget.clone(),
+            bound: false,
+        })
+    }
+
+    /// Whether every retained publication and decode-control owner uses this pool.
+    #[must_use]
+    pub fn belongs_to(&self, budget: &AllocationBudget) -> bool {
+        self.budget.same_pool(budget)
+            && self.workspace.belongs_to(budget)
+            && self
+                .publication
+                .retained
+                .as_ref()
+                .is_none_or(|row| row.belongs_to(budget))
+    }
+
+    /// Exact original prepared storage retired by the first successful extraction.
+    #[cfg(test)]
+    pub(in crate::beacon) fn decode_retirement_bytes(&self) -> Option<usize> {
+        self.publication
+            .prepared
+            .as_ref()
+            .map(Snapshot::extraction_scaffolding_bytes)
+    }
+
+    /// Fill the original bank once through the existing generated canonical walk.
+    ///
+    /// Signature/proof authentication remains the local restore owner's duty.
+    ///
+    /// # Errors
+    /// Keeps source identity and every prepared prefix on the original decoder
+    /// refusal; rejects changed source, wrong local row geometry, seat or phase.
+    pub fn decode(
+        &mut self,
+        bytes: &[u8],
+        limits: norito::DecodeLimits,
+    ) -> Result<(), GlobalThresholdBeaconInputErrorV1> {
+        self.bound = false;
+        let record = self
+            .publication
+            .decode(&mut self.workspace, bytes, limits)?;
+        let n = usize::from(self.session.committee_size);
+        let phase_matches = match self.phase {
+            SnapshotPhase::SinglePublication { .. } => {
+                record.last_updated_height == self.session.start_height
+                    && record.recipient_keys.len() == 1
+                    && record.dealer_commitments.len() == 1
+                    && record.recipient_keys[0].recipient_index == self.seat
+                    && record.dealer_commitments[0].dealer_index == self.seat
+                    && record.encrypted_shares.is_empty()
+                    && record.share_acceptances.is_empty()
+            }
+            SnapshotPhase::LocalDeliveries { .. } => {
+                record.last_updated_height >= self.session.commitments_end_height
+                    && record.last_updated_height < self.session.deliveries_end_height
+                    && record.recipient_keys.len() == n
+                    && record.dealer_commitments.len() == n
+                    && record.encrypted_shares.len() == n
+                    && record.share_acceptances.is_empty()
+                    && record.encrypted_shares.iter().enumerate().all(|(i, edge)| {
+                        edge.dealer_index == self.seat
+                            && usize::from(edge.recipient_index) == i + 1
+                            && edge.delivery_height == record.last_updated_height
+                    })
+            }
+            SnapshotPhase::LocalAcceptances { .. } => {
+                record.last_updated_height >= self.session.deliveries_end_height
+                    && record.last_updated_height < self.session.acceptances_end_height
+                    && record.recipient_keys.len() == n
+                    && record.dealer_commitments.len() == n
+                    && record.encrypted_shares.len() == n * n
+                    && record.share_acceptances.len() == n
+                    && record.share_acceptances.iter().enumerate().all(|(i, row)| {
+                        row.recipient_index == self.seat
+                            && usize::from(row.dealer_index) == i + 1
+                            && row.accepted_height == record.last_updated_height
+                    })
+            }
+            SnapshotPhase::Commitments | SnapshotPhase::Deliveries => false,
+        };
+        if record.session != self.session || !phase_matches {
+            return Err(GlobalThresholdBeaconInputErrorV1::Binding);
+        }
+        self.bound = true;
+        Ok(())
+    }
+
+    /// Borrow the complete canonical original publication without copying its rows.
+    #[must_use]
+    pub fn publication(&self) -> Option<&crate::beacon::GlobalThresholdBeaconDkgSnapshotV1> {
+        self.bound
+            .then(|| self.publication.retained.as_ref().map(RetainedPayload::get))
+            .flatten()
+    }
+}
+
 /// Complete original-pool input storage for one authenticated local DKG attempt.
 ///
 /// The three banks are independently initialized before the durable attempt claim.

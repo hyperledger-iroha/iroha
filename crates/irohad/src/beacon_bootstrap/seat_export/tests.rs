@@ -186,7 +186,10 @@ fn export_refuses_replaced_completed_name_without_reopening_or_overwriting_it() 
         .unwrap_or_else(|(_, error)| panic!("accept failed: {error}"));
     encode_global_beacon_partial_signer_credential_v1(
         &mut owner.outputs.credential,
-        owner.source.iter(),
+        owner
+            .source
+            .iter()
+            .map(RuntimeGlobalBeaconShareProvisioningV1::credential_source),
     )
     .unwrap();
     publish_file(
@@ -287,4 +290,137 @@ fn export_preparation_refusal_keeps_original_directory_and_rejects_foreign_publi
     ));
     assert_eq!(directory.file.metadata().unwrap().ino(), original_inode);
     assert_eq!(fs::read_dir(foreign.path).unwrap().count(), 0);
+}
+
+#[test]
+fn restore_visible_complete_file_executes_sync_and_keeps_same_descriptor_on_retry() {
+    use std::os::fd::AsRawFd as _;
+    let (_temporary, directory) = private_directory();
+    let bytes = b"complete original output interrupted immediately before fsync";
+    let mut writer = FileProgress::default();
+    prepare_file_bytes(&directory, "restore-source", true, bytes, &mut writer).unwrap();
+    assert_eq!(writer.offset, bytes.len());
+    assert!(!writer.synced);
+    assert!(!writer.complete());
+    let inode = writer
+        .descriptor
+        .as_ref()
+        .unwrap()
+        .metadata()
+        .unwrap()
+        .ino();
+    drop(writer);
+    let mut restored = FileProgress::default();
+    restore_published_file(&directory, "restore-source", true, bytes, &mut restored).unwrap();
+    assert!(restored.synced);
+    assert!(restored.complete());
+    let fd = restored.descriptor.as_ref().unwrap().as_raw_fd();
+    assert_eq!(
+        restored
+            .descriptor
+            .as_ref()
+            .unwrap()
+            .metadata()
+            .unwrap()
+            .ino(),
+        inode
+    );
+    restore_published_file(&directory, "restore-source", true, bytes, &mut restored).unwrap();
+    assert_eq!(restored.descriptor.as_ref().unwrap().as_raw_fd(), fd);
+    assert_eq!(
+        fs::read(directory.path.join("restore-source")).unwrap(),
+        bytes
+    );
+    fs::rename(
+        directory.path.join("restore-source"),
+        directory.path.join("held-source"),
+    )
+    .unwrap();
+    fs::write(directory.path.join("restore-source"), bytes).unwrap();
+    fs::set_permissions(
+        directory.path.join("restore-source"),
+        fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    assert!(matches!(
+        restore_published_file(&directory, "restore-source", true, bytes, &mut restored),
+        Err(ExportError::Custody)
+    ));
+    assert_eq!(restored.descriptor.as_ref().unwrap().as_raw_fd(), fd);
+    assert_eq!(
+        restored
+            .descriptor
+            .as_ref()
+            .unwrap()
+            .metadata()
+            .unwrap()
+            .ino(),
+        inode
+    );
+}
+
+#[test]
+fn restore_rejects_equal_named_replacement_during_actual_sync_without_losing_original_descriptor() {
+    use std::os::fd::AsRawFd as _;
+    let (_temporary, directory) = private_directory();
+    let bytes = b"original completed producer bytes with a fixed retained inode";
+    let mut writer = FileProgress::default();
+    prepare_file_bytes(&directory, "sync-source", true, bytes, &mut writer).unwrap();
+    assert!(!writer.is_synced());
+    assert!(!writer.complete());
+    let original_inode = writer
+        .descriptor
+        .as_ref()
+        .unwrap()
+        .metadata()
+        .unwrap()
+        .ino();
+    drop(writer);
+    let path = directory.path.join("sync-source");
+    let retained_path = directory.path.join("original-held-source");
+    let mut progress = FileProgress::default();
+    let mut replaced = false;
+    let error = restore_published_file_with(
+        &directory,
+        "sync-source",
+        true,
+        bytes,
+        &mut progress,
+        |held| {
+            held.sync_all()?;
+            if !replaced {
+                // The same original sync syscall executes, then the real name is
+                // replaced before completion. Equal bytes must not substitute custody.
+                fs::rename(&path, &retained_path)?;
+                fs::write(&path, bytes)?;
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+                replaced = true;
+            }
+            Ok(())
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(error, ExportError::Custody));
+    assert!(progress.is_synced());
+    assert!(!progress.complete());
+    let fd = progress.descriptor.as_ref().unwrap().as_raw_fd();
+    assert_eq!(
+        progress
+            .descriptor
+            .as_ref()
+            .unwrap()
+            .metadata()
+            .unwrap()
+            .ino(),
+        original_inode
+    );
+    assert_ne!(fs::metadata(&path).unwrap().ino(), original_inode);
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+    assert_eq!(fs::read(&retained_path).unwrap(), bytes);
+    assert!(matches!(
+        restore_published_file(&directory, "sync-source", true, bytes, &mut progress),
+        Err(ExportError::Custody)
+    ));
+    assert_eq!(progress.descriptor.as_ref().unwrap().as_raw_fd(), fd);
+    assert!(!progress.complete());
 }

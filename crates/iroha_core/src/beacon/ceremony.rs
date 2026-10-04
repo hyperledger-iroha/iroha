@@ -330,7 +330,12 @@ impl GlobalBeaconCeremonyPlanV1 {
                 .map(|share| (share.authenticated_session(), share.signer_index())),
             budget,
         )?;
-        encode_global_beacon_partial_signer_credential_v1(&mut prepared, &inventory)?;
+        encode_global_beacon_partial_signer_credential_v1(
+            &mut prepared,
+            inventory
+                .iter()
+                .map(RuntimeGlobalBeaconShareProvisioningV1::credential_source),
+        )?;
         let credential = prepared.into_credential().map_err(|(_, error)| error)?;
         Ok(GlobalBeaconSeatCredentialV1 {
             binding: GlobalBeaconSeatBindingV1 {
@@ -440,8 +445,10 @@ pub struct DealtGlobalBeaconV1 {
 /// signed recipient key and dealer commitment at `start_height`, delivers its
 /// signed encrypted edges at `commitments_end_height`, accepts its inbound
 /// edges at `deliveries_end_height`, and the transcript finalizes at
-/// `acceptances_end_height`. Every dealer polynomial is erased once its edges
-/// are sealed; every seat aggregates only its own accepted contributions.
+/// `acceptances_end_height`. This test-only logical-clock fixture retires every
+/// dealer polynomial after all original edges enter the public reducer; every
+/// seat aggregates only its own accepted contributions. Filesystem durability
+/// and daemon restart qualification are separate requirements.
 ///
 /// # Errors
 ///
@@ -516,6 +523,11 @@ pub fn deal_global_beacon_at_logical_clock_v1(
         )? {
             public.record_encrypted_share(delivery_height, edge)?;
         }
+    }
+    // This fixture mirrors the complete public publication boundary. It does
+    // not establish the production publisher's file/directory durability.
+    for seat in &mut seats {
+        seat.retire_durably_published_dealer()?;
     }
     let delivered = public.public_snapshot()?;
     let accepted_height = session.deliveries_end_height;

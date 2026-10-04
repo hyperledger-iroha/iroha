@@ -2665,6 +2665,7 @@ where
             }
             let output = output.unwrap_or_else(default_mochi_bundle_path);
             mochi::validate_bundle_profile(&profile)?;
+            mochi::validate_network_profile_input(&profile, network_profiles.as_deref())?;
             Ok(CommandKind::MochiBundle {
                 output,
                 profile,

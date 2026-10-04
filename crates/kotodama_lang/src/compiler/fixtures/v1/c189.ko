@@ -20,13 +20,16 @@
 
             hajimari() {
                 initialize();
+                initialize();
             }
 
             kaizen() {
                 improve();
+                improve();
             }
 
             kotoage fn run() authorize("Entry") {
+                handle_trigger();
                 handle_trigger();
             }
 

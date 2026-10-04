@@ -121,7 +121,7 @@ fn captured(nominal: &str) -> &'static Value {
             );
             assert_eq!(
                 hex(&Sha256::digest(source.as_bytes())),
-                "ef890f3b93fd5513340656ee5057495484046be7c01808b154ecc163b0085d89",
+                "795133f0e6ff99078aa7820d74c6c140fc1547b1ba8153002b26731cbfcb7522",
                 "instruction record capture digest drift"
             );
             let capture: Value =

@@ -1107,6 +1107,7 @@ fn client_config_selects_the_generated_identity_file_only() {
         DEFAULT_CHAIN_ID,
         None,
         &localnet_client_identity(None, false).expect("default client"),
+        None,
     )
     .expect("write client config");
     let contents = fs::read_to_string(root.join("client.toml")).expect("read client config");
@@ -1154,6 +1155,7 @@ fn client_config_records_chain_discriminant_when_known() {
         DEFAULT_CHAIN_ID,
         Some(369),
         &localnet_client_identity(None, false).expect("default client"),
+        None,
     )
     .expect("write client config");
     let contents = fs::read_to_string(root.join("client.toml")).expect("read client config");
@@ -1796,6 +1798,7 @@ fn client_config_renders_ipv6_torii_url() {
         DEFAULT_CHAIN_ID,
         None,
         &localnet_client_identity(None, false).expect("default client"),
+        None,
     )
     .expect("write client config");
     let contents = fs::read_to_string(root.join("client.toml")).expect("read client config");

@@ -1,10 +1,11 @@
 """Native preparation-frame parity and bounded one-dispatch observation transport."""
 from dataclasses import replace
 from pathlib import Path
+import logging
 
 import pytest
 import requests
-from requests.structures import CaseInsensitiveDict
+from staking_transport_server import observation_server
 from norito.errors import (
     ChecksumMismatchError, LengthMismatchError, SchemaMismatchError, UnsupportedVersionError,
 )
@@ -28,41 +29,13 @@ def fixture(name="registration"):
     return decode(StakingPreparationRequestV1, request_bytes), decode(StakingPreparationV1, response_bytes), request_bytes, response_bytes
 
 
-class Response(requests.Response):
-    """A real Requests surface with controlled streamed chunks and close evidence."""
-    def __init__(self, body, status=200, headers=None):
-        super().__init__()
-        self.status_code = status
-        self.headers = CaseInsensitiveDict({"Content-Type": "application/x-norito", **(headers or {})})
-        self.body = body
-        self.closed = False
-        self.reads = 0
-
-    def iter_content(self, chunk_size=8192, decode_unicode=False):
-        assert decode_unicode is False
-        for offset in range(0, len(self.body), chunk_size):
-            self.reads += 1
-            yield self.body[offset:offset + chunk_size]
-
-    def close(self):
-        self.closed = True
-
-
-class Session(requests.Session):
-    """No socket access; record exactly one outgoing native request."""
-    def __init__(self, response):
-        super().__init__()
-        self.response = response
-        self.calls = []
-
-    def request(self, method, url, **kwargs):
-        self.calls.append((method, url, kwargs))
-        if isinstance(self.response, Exception): raise self.response
-        return self.response
-
-
-def client(session, network):
-    return ToriiClient("https://staking.invalid", session=session,
+def client(url, network, *, timeout=3):
+    session = requests.Session()
+    session.trust_env = False
+    logger = logging.Logger("staking.preparation.tests")
+    logger.propagate = False
+    logger.addHandler(logging.NullHandler())
+    return ToriiClient(url, session=session, timeout=timeout, sorafs_alias_logger=logger,
         local_signing_context=LocalSigningContext(network), max_retries=3, retry_on_methods=["POST"])
 
 
@@ -138,40 +111,52 @@ def test_reward_preparation_retains_selected_accruals_epoch_cut_and_recipient():
 
 def test_transport_sends_one_unsigned_exact_canonical_request_and_closes_stream():
     request, prepared, request_bytes, response_bytes = fixture()
-    response = Response(response_bytes); session = Session(response)
-    actual = client(session, prepared.network_id).prepare_public_lane_plan(request, prepared.xor_asset_definition_id)
-    assert actual.to_norito() == prepared.to_norito()
-    assert len(session.calls) == 1 and response.closed
-    method, url, args = session.calls[0]
-    assert method == "POST" and url == "https://staking.invalid/v1/nexus/staking/prepare"
-    assert args["data"] == request_bytes and args["stream"] is True and args["allow_redirects"] is False
-    assert args["headers"]["Content-Type"] == "application/x-norito"
-    assert not any(key.lower() == "x-iroha-signature" for key in args["headers"])
+    with observation_server(response_bytes) as server:
+        actual = client(server["url"], prepared.network_id).prepare_public_lane_plan(request, prepared.xor_asset_definition_id)
+        assert actual.to_norito() == prepared.to_norito()
+        assert len(server["calls"]) == 1 and server["finished"].wait(1)
+        method, path, headers, body = server["calls"][0]
+        assert method == "POST" and path == "/v1/nexus/staking/prepare"
+        assert body == request_bytes
+        assert headers["Content-Type"] == "application/x-norito"
+        assert not any(key.lower() == "x-iroha-signature" for key in headers)
 
 
 @pytest.mark.parametrize("kind", ["media", "declared_oversize", "stream_oversize", "error", "redirect", "length_mismatch"])
 def test_transport_rejections_are_bounded_closed_and_never_replayed(kind):
     request, prepared, _, body = fixture()
-    response = Response(body)
-    if kind == "media": response.headers["Content-Type"] = "application/json"
-    if kind == "declared_oversize": response.headers["Content-Length"] = str(256 * 1024 + 1)
-    if kind == "stream_oversize": response.body = bytes(256 * 1024 + 1); response.status_code = 503
-    if kind == "error": response.body = b"unavailable"; response.status_code = 503
-    if kind == "redirect": response.status_code = 302
-    if kind == "length_mismatch": response.headers["Content-Length"] = str(len(body) + 1)
-    session = Session(response)
-    with pytest.raises((ValueError, requests.HTTPError)):
-        client(session, prepared.network_id).prepare_public_lane_plan(request, prepared.xor_asset_definition_id)
-    assert len(session.calls) == 1 and response.closed
-    if kind in ("media", "declared_oversize"): assert response.reads == 0
+    headers = {}; status = 200
+    if kind == "media": headers["Content-Type"] = "application/json"
+    if kind == "declared_oversize": headers["Content-Length"] = str(256 * 1024 + 1)
+    if kind == "stream_oversize": body = bytes(256 * 1024 + 1); status = 503
+    if kind == "error": body = b"unavailable"; status = 503
+    if kind == "redirect": status = 302; headers["Location"] = "/must-not-follow"
+    if kind == "length_mismatch": headers["Content-Length"] = str(len(body) + 1)
+    early = kind in ("media", "declared_oversize")
+    with observation_server(body, status=status, headers=headers, probe_before_body=early) as server:
+        expected = requests.ConnectionError if kind == "length_mismatch" else (ValueError, requests.HTTPError)
+        with pytest.raises(expected):
+            client(server["url"], prepared.network_id).prepare_public_lane_plan(request, prepared.xor_asset_definition_id)
+        assert len(server["calls"]) == 1 and server["finished"].wait(1)
+        if early: assert server["peer_closed"] and server["body_writes"] == 0
 
 
 def test_transport_refuses_missing_pin_before_dispatch_and_does_not_retry_transport_error():
     request, prepared, _, body = fixture()
-    session = Session(Response(body))
-    with pytest.raises((ValueError, TypeError)):
-        ToriiClient("https://staking.invalid", session=session).prepare_public_lane_plan(request, prepared.xor_asset_definition_id)
-    assert session.calls == []
-    session = Session(requests.ConnectionError("unavailable"))
-    with pytest.raises(requests.ConnectionError): client(session, prepared.network_id).prepare_public_lane_plan(request, prepared.xor_asset_definition_id)
-    assert len(session.calls) == 1
+    with observation_server(body) as server:
+        with pytest.raises((ValueError, TypeError)):
+            ToriiClient(server["url"]).prepare_public_lane_plan(request, prepared.xor_asset_definition_id)
+        assert server["calls"] == []
+    with observation_server(disconnect=True) as server:
+        with pytest.raises(requests.ConnectionError):
+            client(server["url"], prepared.network_id).prepare_public_lane_plan(request, prepared.xor_asset_definition_id)
+        assert len(server["calls"]) == 1 and server["finished"].wait(1)
+
+
+def test_transport_original_operation_deadline_covers_late_headers_and_slow_body():
+    request, prepared, _, body = fixture()
+    with observation_server(body, header_delay=0.3, chunk_delay=0.03, chunk_size=1) as server:
+        with pytest.raises(requests.Timeout):
+            client(server["url"], prepared.network_id, timeout=0.7).prepare_public_lane_plan(request, prepared.xor_asset_definition_id)
+        assert len(server["calls"]) == 1 and server["finished"].wait(1)
+        assert server["peer_closed"] and 0 < server["body_writes"] < len(body)

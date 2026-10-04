@@ -11,7 +11,15 @@ use sorafs_manifest::provider_advert::{
 const REFRESH_SECONDS: u64 = MAX_ADVERT_TTL_SECS / 2;
 
 impl PreparedLocalnet {
-    pub(crate) fn provider_advert(
+    /// Sign the current finite refresh slot for one exact original generated provider.
+    ///
+    /// The original signed profile selects the provider key, body, network and expiry ceiling.
+    /// This produces transport material only; native current admission and custody verification
+    /// remain required before the provider can serve account reads.
+    /// # Errors
+    /// Refuses foreign providers, expired original admission, unsafe or changed key custody,
+    /// malformed original material, and a profile that changes during signing.
+    pub fn provider_advert(
         &self,
         provider: ProviderId,
         now_seconds: u64,

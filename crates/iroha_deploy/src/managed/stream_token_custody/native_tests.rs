@@ -128,83 +128,84 @@ fn selected_custody_recovery_keeps_unprepared_wallets_absent_and_exact_carriers_
     for (name, height) in [("configure", 3), ("enroll", 4)] {
         let checkpoint = native.observe(&owner.authority);
         let state = current(&native, &owner, &policy, &checkpoint);
-        let selection = owner.selection(&policy.binding, &state).unwrap();
-        let checkpoint = checkpoint_bytes(&checkpoint).unwrap();
         let now = now_ms().unwrap();
-        let (action, utc) = if name == "configure" {
+        let (original, utc, body) = if name == "configure" {
             assert!(state.current().is_none());
-            (Action::Configure(policy.clone()), now + 600_000)
+            let original = Original {
+                selection: owner.selection(&policy.binding, &state).unwrap(),
+                action: Action::Configure(policy.clone()),
+                checkpoint: checkpoint_bytes(&checkpoint).unwrap(),
+            };
+            let directory = owner.authority.directory.ensure_child(name).unwrap();
+            journal::publish_intent(&directory, &original).unwrap();
+            (original, now + 600_000, None)
         } else {
-            let state = state.current().unwrap();
-            assert_eq!(state.control().policy, policy);
-            assert_eq!(state.record().execution_height, 3);
-            assert!(state.control().active_head.is_none());
+            let selected_state = state.current().unwrap();
+            assert_eq!(selected_state.control().policy, policy);
+            assert_eq!(selected_state.record().execution_height, 3);
+            assert!(selected_state.control().active_head.is_none());
             let interval = ManagedCustodyEnrollmentInterval {
                 issued_at_unix_ms: now,
                 expires_at_unix_ms: now + 600_000,
                 deadline_unix_ms: now + 600_000,
             };
-            let statement = SignerCustodyStatementV1 {
-                magic: SIGNER_CUSTODY_MAGIC_V1,
-                version: SIGNER_CUSTODY_VERSION_V1,
-                binding: policy.binding.clone(),
-                authority: policy.attester_authority.clone(),
-                anchor: state.anchor(),
-                sequence: state.control().next_sequence,
-                predecessor_digest: state.control().predecessor_digest,
-                issued_at_unix_ms: interval.issued_at_unix_ms,
-                expires_at_unix_ms: interval.expires_at_unix_ms,
-                evidence_digest: owner
-                    .evidence_digest(&policy, &selection, &checkpoint)
-                    .unwrap(),
-                revoked: false,
-            };
-            let key = owner.attester().unwrap();
-            let attestation =
-                Signature::new(key.private_key(), &statement.signing_payload().unwrap())
-                    .payload()
-                    .try_into()
-                    .unwrap();
-            (
-                Action::Enroll {
-                    anchor: state.anchor(),
-                    selected_at_unix_ms: now,
-                    validity: journal::EnrollmentValidity::from_interval(interval),
-                    enrollment: encode(
-                        &SignerCustodyRecordV1 {
-                            statement,
-                            attestation,
-                        },
-                        16 * 1024,
-                    )
-                    .unwrap(),
-                },
+            let unsigned = owner
+                .unsigned_enrollment(&policy, &state, &checkpoint, interval, now)
+                .unwrap();
+            let history = owner.bootstrap_native_body(
+                &native,
+                CustodyPurpose::InitialEnroll,
+                unsigned,
                 interval.deadline_unix_ms,
-            )
-        };
-        let original = Original {
-            selection,
-            action,
-            checkpoint,
+                &options,
+            );
+            let original = history.dispatch().unwrap().1.clone();
+            (original, interval.deadline_unix_ms, Some(history))
         };
         owner
             .validate_original(&original, CustodyPurpose::initial(&original.action))
             .unwrap();
-        let directory = owner.authority.directory.ensure_child(name).unwrap();
-        journal::publish_intent(&directory, &original).unwrap();
+        let directory = match &body {
+            Some(history) => {
+                PrivateDirectory::open_exact(history.dispatch().unwrap().0.path()).unwrap()
+            }
+            None => owner.authority.directory.open_child(name).unwrap(),
+        };
+        let outer = owner.authority.directory.open_child(name).unwrap();
+        let outer_bytes = outer
+            .read("original.nrt", journal::MAX_ORIGINAL_BYTES)
+            .unwrap();
         let mut peers = UnavailablePeers::start(&prepared);
-        assert!(matches!(
-            selected(&mut owner, &policy, &original, &options),
-            Err(crate::managed::Error::Bootstrap(
-                ManagedBootstrapFailure::TransitionPending
-            ))
-        ));
+        if name == "configure" {
+            assert!(matches!(
+                selected(&mut owner, &policy, &original, &options),
+                Err(crate::managed::Error::Bootstrap(
+                    ManagedBootstrapFailure::TransitionPending
+                ))
+            ));
+        } else {
+            // The anchored body is retained local intent; no wallet dispatch exists yet.
+            let progress = selected(&mut owner, &policy, &original, &options)
+                .unwrap()
+                .unwrap();
+            assert_eq!(progress.transaction_status, OperationStatus::Absent);
+            assert!(progress.finalized.is_none() && progress.current.is_none());
+        }
         assert!(!directory.path().join("attempts").exists());
         assert!(peers.requests.lock().unwrap().is_empty());
         peers.finish();
         let account = AccountService::new(manager.clone()).unwrap();
-        journal::explicit(&directory, &original, utc, &options, &account).unwrap();
-        let original = journal::required_original(&directory).unwrap();
+        let fixed_scope = HistoryScope::FixedBody;
+        let scope = body
+            .as_ref()
+            .map_or(&fixed_scope, |history| history.dispatch().unwrap().2);
+        journal::explicit(&directory, &original, utc, &options, &account, scope).unwrap();
+        let original = match &body {
+            Some(_) => owner
+                .required_enrollment(CustodyPurpose::InitialEnroll)
+                .unwrap(),
+            None => journal::required_original(&directory).unwrap(),
+        };
         let original_bytes = std::fs::read(directory.path().join("original.nrt")).unwrap();
         let path = original.directory().path().join("transaction");
         let mut peers = UnavailablePeers::start(&prepared);
@@ -364,7 +365,16 @@ fn selected_custody_recovery_keeps_unprepared_wallets_absent_and_exact_carriers_
                 PublishMode::CreateNew,
             )
             .unwrap();
-        retained.push((name, original, original_bytes, wire, operation, finalized));
+        retained.push((
+            name,
+            directory.path().join("original.nrt"),
+            outer_bytes,
+            original,
+            original_bytes,
+            wire,
+            operation,
+            finalized,
+        ));
     }
     drop(owner);
     let mut peers = UnavailablePeers::start(&prepared);
@@ -374,7 +384,9 @@ fn selected_custody_recovery_keeps_unprepared_wallets_absent_and_exact_carriers_
             crate::managed::native_operation::test_support::provider_id(&prepared, 0),
         )
         .unwrap();
-        for (name, original, original_bytes, wire, operation, finalized) in &retained {
+        for (name, body_path, outer_bytes, original, original_bytes, wire, operation, finalized) in
+            &retained
+        {
             let options = original
                 .terms
                 .options(Instant::now() + Duration::from_secs(30));
@@ -386,9 +398,12 @@ fn selected_custody_recovery_keeps_unprepared_wallets_absent_and_exact_carriers_
             assert!(report.current.is_none());
             let directory = owner.authority.directory.open_child(name).unwrap();
             assert_eq!(
-                &std::fs::read(directory.path().join("original.nrt")).unwrap(),
-                original_bytes
+                &directory
+                    .read("original.nrt", journal::MAX_ORIGINAL_BYTES)
+                    .unwrap(),
+                outer_bytes
             );
+            assert_eq!(&std::fs::read(body_path).unwrap(), original_bytes);
             let path = original.directory().path().join("transaction");
             assert_eq!(
                 &std::fs::read(path.join("operation.json")).unwrap(),

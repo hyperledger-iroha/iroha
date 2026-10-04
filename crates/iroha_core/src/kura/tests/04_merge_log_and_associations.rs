@@ -55,7 +55,17 @@ fn native_frame_metadata_requires_durable_marker_and_does_not_grant_authority() 
         .expect("exact durable frame");
     let wire = block.encode_wire().unwrap();
     assert_eq!(metadata.wire_len(), wire.len() as u64);
-    assert_eq!(metadata.read(wire.len() as u64).unwrap().unwrap(), wire);
+    assert_eq!(
+        metadata
+            .read(
+                wire.len() as u64,
+                &crate::state::AllocationBudget::new(64 * 1024 * 1024)
+            )
+            .unwrap()
+            .unwrap()
+            .as_slice(),
+        wire
+    );
     let hashes = vec![block_hash];
     let chain_id = ChainId::from("sumeragi-certified-test-chain");
     let network = native_storage_network_id();

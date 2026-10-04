@@ -260,6 +260,7 @@ impl ManagedReserveTopUpRequest {
             &directory,
             purpose,
             original.digest()?,
+            &crate::managed::native_operation::attempts::HistoryScope::FixedBody,
             authorization,
             deadline,
             None,
@@ -361,6 +362,7 @@ impl ManagedReserveTopUpRequest {
             &directory,
             Purpose::FundingRequest(original.selection.provider_id),
             original.digest()?,
+            &crate::managed::native_operation::attempts::HistoryScope::FixedBody,
         )?;
         attempts.require_fees(fees)?;
         self.advance_original(deadline, mode, false).map(Some)

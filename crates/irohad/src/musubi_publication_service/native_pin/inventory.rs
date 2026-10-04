@@ -33,6 +33,8 @@ const MAX_OPERATION_FILES: usize = 3 + 3 + 16;
 pub(super) struct Operation {
     pub(super) id: [u8; 32],
     pub(super) ordinal: u32,
+    /// Exact complete caller intent digest; local claims only.
+    pub(super) context_digest: [u8; 32],
     /// Existing canonical finalized archive query frame; this record grants no finality.
     pub(super) source: String,
     pub(super) authorization: NativePinAuthorizationV1,
@@ -40,7 +42,9 @@ pub(super) struct Operation {
 impl Operation {
     fn validate(&self, original: &NativeMusubiPinSessionV1) -> Result<()> {
         ensure!(
-            self.id != [0; 32] && (1..=MAX_OPERATIONS as u32).contains(&self.ordinal),
+            self.id != [0; 32]
+                && self.context_digest != [0; 32]
+                && (1..=MAX_OPERATIONS as u32).contains(&self.ordinal),
             "native pin operation coordinates are invalid"
         );
         self.authorization.validate()?;
@@ -121,6 +125,13 @@ impl Store {
     /// possibly pending pin. Exclusion reconstructs only the exact selected predecessor digest;
     /// the excluded operation's entire custody and authorization is still audited.
     pub(super) fn inventory(&self, excluding: Option<[u8; 32]>) -> Result<Inventory> {
+        self.inventory_with_held(excluding, None)
+    }
+    fn inventory_with_held(
+        &self,
+        excluding: Option<[u8; 32]>,
+        held: Option<&Slot>,
+    ) -> Result<Inventory> {
         self.directory.revalidate()?;
         ensure!(
             self.journal.read_operation::<NativeMusubiPinSessionV1>()? == self.original,
@@ -135,6 +146,7 @@ impl Store {
         let mut reserved_bytes = ROOT_BYTES;
         let mut ordinals = [false; MAX_OPERATIONS];
         let mut excluded = false;
+        let mut found_held = false;
         for name in self.directory.entries(MAX_OPERATIONS + 2)? {
             if name == "lock" || name == "operation.json" {
                 account_file(&self.directory, &name, &mut bytes)?;
@@ -152,7 +164,8 @@ impl Store {
             ordinals[(operation.ordinal - 1) as usize] = true;
             operations += 1;
             drop(journal);
-            let audit = self.audit_operation(&directory, &operation, &mut bytes)?;
+            let audit = self.audit_operation(&directory, &operation, &mut bytes, held)?;
+            found_held |= audit.held;
             reserved_bytes = reserved_bytes
                 .checked_add(OPERATION_BYTES)
                 .and_then(|bytes| bytes.checked_add(u64::from(audit.slots) * SLOT_BYTES))
@@ -182,6 +195,10 @@ impl Store {
         ensure!(
             excluding.is_none() || excluded,
             "excluded native operation is missing"
+        );
+        ensure!(
+            held.is_none() || found_held,
+            "held native slot is absent from original inventory"
         );
         self.directory.revalidate()?;
         Ok(Inventory {
@@ -216,7 +233,14 @@ impl Store {
         Ok(())
     }
     pub(super) fn find_operation(&self, id: [u8; 32]) -> Result<Option<Operation>> {
-        self.inventory(None)?;
+        self.find_operation_with_held(id, None)
+    }
+    pub(super) fn find_operation_with_held(
+        &self,
+        id: [u8; 32],
+        held: Option<&Slot>,
+    ) -> Result<Option<Operation>> {
+        self.inventory_with_held(None, held)?;
         let name = format!("op-{}", hex::encode(id));
         if !self
             .directory
@@ -226,7 +250,14 @@ impl Store {
         {
             return Ok(None);
         }
-        self.operation(id).map(Some)
+        let directory = self
+            .directory
+            .open_child(format!("op-{}", hex::encode(id)))?;
+        let journal = Journal::open(directory.path())?;
+        let operation: Operation = journal.read_operation()?;
+        operation.validate(&self.original)?;
+        ensure!(operation.id == id, "native original operation differs");
+        Ok(Some(operation))
     }
     pub(super) fn retire_operation(&self, operation: &Operation) -> Result<()> {
         self.inventory(None)?;
@@ -428,6 +459,7 @@ impl Store {
         directory: &PrivateDirectory,
         operation: &Operation,
         bytes: &mut u64,
+        held: Option<&Slot>,
     ) -> Result<OperationAudit> {
         let journal = Journal::open(directory.path())?;
         if let Some(retired) = journal.read_native::<Retirement>(NativeRecord::Retired)? {
@@ -441,6 +473,7 @@ impl Store {
         let mut signed = None;
         let mut slots = 0u32;
         let mut rounds = [false; 16];
+        let mut found_held = false;
         for name in directory.entries(MAX_OPERATION_FILES)? {
             if name == "lock" || name == "operation.json" || name == "retired.json" {
                 account_file(directory, &name, bytes)?;
@@ -452,7 +485,17 @@ impl Store {
             for file in selected.entries(7)? {
                 account_file(&selected, &file, bytes)?;
             }
-            let slot = Slot::open_retained(selected.path())?;
+            let opened;
+            let slot = if let Some(held) = held.filter(|slot| {
+                slot.request().operation == operation.id && slot.request().kind == kind
+            }) {
+                held.require_path(selected.path())?;
+                found_held = true;
+                held
+            } else {
+                opened = Slot::open_retained(selected.path())?;
+                &opened
+            };
             self.validate_slot(operation, slot.request())?;
             ensure!(
                 slot.request().kind == kind,
@@ -479,10 +522,15 @@ impl Store {
             );
         }
         directory.revalidate()?;
-        Ok(OperationAudit { signed, slots })
+        Ok(OperationAudit {
+            signed,
+            slots,
+            held: found_held,
+        })
     }
 }
 struct OperationAudit {
+    held: bool,
     signed: Option<[u8; 32]>,
     slots: u32,
 }

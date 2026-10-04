@@ -608,7 +608,7 @@ fn incompatible_submission_surface_preserves_an_unattempted_operation() {
     assert_eq!(transport.dispatch_count.load(Ordering::SeqCst), 0);
 }
 
-fn private_root_fixture() -> (
+pub(super) fn private_root_fixture() -> (
     iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture,
     PrivateDataspaceRegistration,
 ) {
@@ -642,7 +642,7 @@ fn private_root_fixture() -> (
     (fixture, registration)
 }
 
-fn private_options() -> BoundedTransactionOptions {
+pub(super) fn private_options() -> BoundedTransactionOptions {
     BoundedTransactionOptions {
         fee_payment: FeePaymentIntent::authority(Vec::new(), None),
         max_total_fees: BTreeMap::from([(

@@ -226,6 +226,21 @@ fn native_checkpoint_fifo_refuses_without_a_writer() {
     let store = Arc::new(checkpoint(temporary.path()));
     assert_eq!(store.load_latest().unwrap(), None);
     let fifo = store.root.join("checkpoint.to");
+    // rustix has no mkfifoat on Apple; the exact POSIX call creates only this
+    // test-owned FIFO without a child inheriting parallel tests' file locks.
+    #[cfg(target_vendor = "apple")]
+    #[allow(unsafe_code)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        unsafe extern "C" {
+            fn mkfifo(path: *const std::ffi::c_char, mode: u16) -> std::ffi::c_int;
+        }
+        let path = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: Apple mode_t is u16; the owned NUL-terminated path lives
+        // through this call, which creates only the fixture's FIFO.
+        assert_eq!(unsafe { mkfifo(path.as_ptr(), 0o600) }, 0);
+    }
+    #[cfg(not(target_vendor = "apple"))]
     rustix::fs::mkfifoat(
         rustix::fs::CWD,
         &fifo,

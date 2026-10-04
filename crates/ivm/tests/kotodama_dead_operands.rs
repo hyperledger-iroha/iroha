@@ -121,3 +121,12 @@ fn host_operands_live_in_tuples_survive_numeric_state_and_nested_calls() {
         }
     }
 }
+
+#[path = "kotodama_private_single_use.rs"]
+mod private_single_use;
+
+#[path = "kotodama_frame_emission.rs"]
+mod frame_emission;
+
+#[path = "kotodama_compact_emission.rs"]
+mod compact_emission;

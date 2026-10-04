@@ -29,7 +29,8 @@ cargo build --bin kagami --features "gost,sm"
 ## Help
 
 - Full generated CLI reference: [CommandLineHelp.md](CommandLineHelp.md)
-- Regenerate the help snapshot: `cargo run -p iroha_kagami -- advanced markdown-help > crates/iroha_kagami/CommandLineHelp.md`
+- Regenerate CLI help from the repository root with `scripts/tests/consistency.sh --update cli-help`.
+  Its guarded producer stages successful output before replacing each snapshot.
 
 ## Quickstart
 
@@ -47,6 +48,17 @@ store. `down` retains the ledger; `localnet reset local` deliberately retires it
 `contract deploy` also accepts `.to` or a Musubi package directory and starts the
 default localnet when no context has been selected. Use `context list`,
 `context show`, or `context use NAME` to inspect or select retained environments.
+
+`kagami package publish .` explicitly publishes a Musubi package using the retained generated
+developer client and its `dev.universal` namespace intent. Begin may start the default localnet;
+`--resume OPERATION_ID` and `--recover OPERATION_ID` require its existing selected context.
+`--package dev.universal/NAME` selects a workspace member; `--detach` returns at the canonical
+durable seed-ingress boundary. Manifest namespaces are never rewritten. Original namespace
+custody, generation-bound publication/cache roots and the prepared native archive transport are
+shared with `mochi_core::developer::DeveloperWorkspace::publish_package`. Neither frontend accepts
+a replacement client TOML, copies a manager key into a daemon, or changes contract deployment.
+The canonical publication outcome supplies human/JSON rendering and process status. Complete
+three-provider publication and cold-package runtime qualification remain acceptance gates.
 
 Private dataspaces use an independently pinned network profile installed with the
 native bundle. `kagami dataspace networks` lists the available names. With a

@@ -523,3 +523,22 @@ async fn unfinished_tls_keeps_the_actual_socket_permit_until_bounded_refusal() {
     assert!(admission.try_acquire(remote.ip()).is_some());
     closed(client).await;
 }
+
+#[test]
+fn shared_native_identity_requires_exact_der_and_matching_key() {
+    let identity = Identity::new();
+    let admitted = native_https_server_identity_v1(&[&identity.leaf], &identity.key).unwrap();
+    assert_eq!(admitted.alpn_protocols, [b"http/1.1".to_vec()]);
+    assert_eq!(admitted.max_early_data_size, 0);
+    let foreign = Identity::new();
+    assert!(native_https_server_identity_v1(&[&identity.leaf], &foreign.key).is_err());
+    assert!(native_https_server_identity_v1(&[], &identity.key).is_err());
+    assert!(native_https_server_identity_v1(&[&identity.leaf], &[]).is_err());
+    let mut trailing = identity.leaf.clone();
+    trailing.push(0);
+    assert!(native_https_server_identity_v1(&[&trailing], &identity.key).is_err());
+    assert!(
+        native_https_server_identity_v1(&[&identity.leaf], &vec![0; https::MAX_DER_BYTES + 1])
+            .is_err()
+    );
+}

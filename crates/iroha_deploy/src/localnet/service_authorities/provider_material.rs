@@ -544,7 +544,7 @@ pub(super) fn retained(
 // Node-local listener selection is derived from the exact signed original admission material.
 // Each original selected peer serves only its provider. Preparation starts no listener.
 struct PeerHttps {
-    address: String,
+    address: SocketAddr,
     certificate: PathBuf,
     private_key: PathBuf,
     timeout_ms: u64,
@@ -554,7 +554,7 @@ impl PeerHttps {
         let port = policy(&plan.material.proposal.capabilities)?.https_port;
         let directory = provider_directory(root, slot)?;
         Ok(Self {
-            address: format!("127.0.0.1:{port}"),
+            address: SocketAddr::from(([127, 0, 0, 1], port)),
             certificate: directory.join(tls_identity::LEAF_CERT),
             private_key: directory.join(tls_identity::LEAF_KEY),
             timeout_ms:
@@ -563,7 +563,10 @@ impl PeerHttps {
     }
     fn table(&self) -> Result<toml::Table> {
         Ok(toml::Table::from_iter([
-            ("address".into(), toml::Value::String(self.address.clone())),
+            (
+                "address".into(),
+                toml::Value::String(self.address.to_literal()),
+            ),
             (
                 "certificate_chain".into(),
                 toml::Value::Array(vec![toml::Value::String(
@@ -651,7 +654,7 @@ pub(super) fn validate_peer_https(
     let original = PeerHttps::original(&decode(&selected.provider_plan)?, root, selected.slot)?;
     let actual = actual.ok_or_else(|| eyre!("original provider HTTPS listener is absent"))?;
     ensure!(
-        actual.address.value().to_string() == original.address
+        actual.address.value() == &original.address
             && actual.certificate_chain.as_slice() == [original.certificate]
             && actual.private_key == original.private_key
             && actual.handshake_timeout == std::time::Duration::from_millis(original.timeout_ms),

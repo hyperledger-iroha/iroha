@@ -381,6 +381,14 @@ impl Signature {
         Ok(Self::from_bytes(payload))
     }
 
+    /// Check the canonical raw payload without copying or granting signature authority.
+    ///
+    /// # Errors
+    /// Rejects the same empty or all-zero payload as the canonical owned constructor.
+    pub fn validate_payload(payload: &[u8]) -> Result<(), SignaturePayloadError> {
+        validate_signature_payload(payload)
+    }
+
     /// Fallibly retain exact signature bytes at an admission boundary.
     ///
     /// # Errors
@@ -1254,6 +1262,16 @@ mod tests {
             "unexpected all-zero bare signature error: {err}"
         );
     }
+    #[test]
+    fn borrowed_signature_validation_has_the_same_exact_payload_policy() {
+        for bytes in [Vec::new(), vec![0; 64], vec![7; 64], vec![0, 0, 1]] {
+            assert_eq!(
+                Signature::validate_payload(&bytes).is_ok(),
+                Signature::try_from_bytes(&bytes).is_ok()
+            );
+        }
+    }
+
     #[test]
     fn signature_try_from_bytes_accepts_nonzero_payload() {
         let signature =

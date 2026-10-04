@@ -4698,7 +4698,7 @@ impl Kura {
         path: &Path,
         expected_directory: &Path,
         byte_limit: usize,
-    ) -> Result<Option<StableSidecarRead>> {
+    ) -> Result<Option<StableSidecarRead<Vec<u8>>>> {
         Self::read_regular_sidecar_snapshot_for_with_admission_hook(
             store_root,
             path,
@@ -4718,9 +4718,43 @@ impl Kura {
         expected_directory: &Path,
         byte_limit: usize,
         after_admission: F,
-    ) -> Result<Option<StableSidecarRead>>
+    ) -> Result<Option<StableSidecarRead<Vec<u8>>>>
     where
         F: FnOnce(),
+    {
+        Self::read_regular_sidecar_snapshot_into(
+            store_root,
+            path,
+            expected_directory,
+            byte_limit,
+            after_admission,
+            |expected_len| {
+                let mut bytes = Vec::new();
+                bytes.try_reserve_exact(expected_len).map_err(|_| {
+                    Error::NoritoFrame(norito::Error::AllocationFailed {
+                        bytes: expected_len as u64,
+                    })
+                })?;
+                bytes.resize(expected_len, 0);
+                Ok(bytes)
+            },
+        )
+    }
+
+    // Both physical owners use this sole stable no-follow read and metadata walk.
+    // The allocator supplies exactly one initialized fixed extent before body I/O.
+    fn read_regular_sidecar_snapshot_into<F, A, B>(
+        store_root: &Path,
+        path: &Path,
+        expected_directory: &Path,
+        byte_limit: usize,
+        after_admission: F,
+        allocate: A,
+    ) -> Result<Option<StableSidecarRead<B>>>
+    where
+        F: FnOnce(),
+        A: FnOnce(usize) -> Result<B>,
+        B: AsRef<[u8]> + AsMut<[u8]>,
     {
         let directory_before =
             Self::canonical_sidecar_directory_for(store_root, expected_directory)?;
@@ -4769,18 +4803,14 @@ impl Kura {
                 path.to_path_buf(),
             ));
         }
-        let mut bytes = Vec::new();
         let expected_len = usize::try_from(metadata.file.len())?;
-        // This is the sole owner of the retained raw sidecar buffer, including durable
-        // commit markers. Preserve any caller's cumulative allowance before allocating.
+        // The cumulative decode allowance and physical pool are separate obligations.
         norito::core::reserve_decode_allocation(expected_len).map_err(Error::NoritoFrame)?;
-        bytes.try_reserve_exact(expected_len).map_err(|_| {
-            Error::NoritoFrame(norito::Error::AllocationFailed {
-                bytes: metadata.file.len(),
-            })
-        })?;
-        bytes.resize(expected_len, 0);
-        file.read_exact(&mut bytes)
+        let mut bytes = allocate(expected_len)?;
+        if bytes.as_ref().len() != expected_len || bytes.as_mut().len() != expected_len {
+            return Err(Error::CanonicalBlockWireMismatch { height: 0 });
+        }
+        file.read_exact(bytes.as_mut())
             .map_err(|err| Error::IO(err, path.to_path_buf()))?;
         let mut growth_probe = [0_u8; 1];
         if file
@@ -4799,8 +4829,8 @@ impl Kura {
         let opened_after = secure_file_metadata::from_file(&file)
             .map_err(|err| Error::IO(err, path.to_path_buf()))?;
         let path_after = Self::regular_sidecar_metadata_for(store_root, path, expected_directory)?;
-        if bytes.len() > byte_limit
-            || u64::try_from(bytes.len())? != metadata.file.len()
+        if bytes.as_ref().len() > byte_limit
+            || u64::try_from(bytes.as_ref().len())? != metadata.file.len()
             || !Self::sidecar_file_metadata_unchanged(&metadata.file, &opened_after)
             || !path_after.as_ref().is_some_and(|after| {
                 Self::stable_sidecar_file_binding_unchanged(&metadata, after)
@@ -4816,7 +4846,7 @@ impl Kura {
             ));
         }
         Ok(Some(StableSidecarRead {
-            bytes_hash: Hash::new(&bytes),
+            bytes_hash: Hash::new(bytes.as_ref()),
             bytes,
             metadata: path_after.expect("validated stable sidecar metadata exists"),
         }))
@@ -4826,7 +4856,7 @@ impl Kura {
         path: &Path,
         expected_directory: &Path,
         byte_limit: usize,
-    ) -> Result<Option<StableSidecarRead>> {
+    ) -> Result<Option<StableSidecarRead<Vec<u8>>>> {
         Self::read_regular_sidecar_snapshot_for(
             &self.store_root,
             path,
@@ -5945,7 +5975,12 @@ impl Kura {
     fn decode_kagemusha_mint_authority_checkpoint_v1(
         &self,
         path: &Path,
-    ) -> Result<Option<(KagemushaMintAuthorityCheckpointEntryV1, StableSidecarRead)>> {
+    ) -> Result<
+        Option<(
+            KagemushaMintAuthorityCheckpointEntryV1,
+            StableSidecarRead<Vec<u8>>,
+        )>,
+    > {
         let directory = self.kagemusha_mint_authority_dir();
         let Some(snapshot) = self.read_regular_sidecar_snapshot(
             path,
@@ -6092,7 +6127,7 @@ impl Kura {
     fn decode_kagemusha_mint_outbox_entry_v1(
         &self,
         path: &Path,
-    ) -> Result<Option<(KagemushaMintOutboxEntryV1, StableSidecarRead)>> {
+    ) -> Result<Option<(KagemushaMintOutboxEntryV1, StableSidecarRead<Vec<u8>>)>> {
         let directory = self.kagemusha_mint_outbox_dir();
         let Some(snapshot) = self.read_regular_sidecar_snapshot(
             path,

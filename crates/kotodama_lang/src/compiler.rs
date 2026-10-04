@@ -10,11 +10,17 @@
 //! module emit the canonical wide encoding introduced for the first release; no
 //! alternate instruction layouts are generated.
 mod access_hint_normalization;
+mod compact_emission;
 #[cfg(test)]
 mod emission_profile;
 mod entrypoint_descriptors;
+mod frame_emission;
 #[cfg(test)]
 mod numeric_operands;
+#[cfg(test)]
+mod single_use_fixtures;
+#[cfg(test)]
+mod single_use_private;
 #[cfg(test)]
 mod state_operands;
 use access_hint_normalization::canonical_state_hint_keys;
@@ -2592,8 +2598,8 @@ mod test_mode_tests {
             .count();
         assert_eq!(
             (loads, stores),
-            (5, 7),
-            "table traffic includes no additional value spills: {words:08x?}"
+            (6, 8),
+            "one swap and two retained relay calls add only exact table traffic, with no value spills: {words:08x?}"
         );
     }
     #[test]
@@ -3347,6 +3353,17 @@ impl Compiler {
                     message,
                 )
             })?;
+        ssa_program
+            .inline_single_use_private_calls(&executable_roots, &private_inline_candidates(&typed))
+            .map_err(|message| {
+                native_diagnostic_bundle(
+                    "K3004",
+                    DiagnosticPhase::Lowering,
+                    source_name.as_deref(),
+                    None,
+                    message,
+                )
+            })?;
         Ok(PreparedCompilation {
             typed,
             state_descriptors,
@@ -4036,6 +4053,12 @@ impl Compiler {
         let mut uses_vector_global = false;
         let mut call_fixups: Vec<(usize, String, String)> = Vec::new();
         let mut deferred_transfers: Vec<DeferredTransfer> = Vec::new();
+        // Each branch evaluates and stages its original descriptor/code first.
+        // The terminal body belongs to the first emitting function's complete
+        // byte range, and every other site reaches it with a normal relaxed jump.
+        let share_nominal_abort = compact_emission::share_nominal_abort(&ir_prog);
+        let mut nominal_abort_sites = Vec::new();
+        let mut nominal_abort_tail = None;
         let mut func_start_offsets: HashMap<String, usize> = HashMap::new();
         let mut function_debug_seeds: Vec<FunctionDebugSeed> = Vec::new();
         let signatures = typed
@@ -4072,6 +4095,7 @@ impl Compiler {
             // Record start offset for call patching
             func_start_offsets.insert(func.name.clone(), code.len());
             let func_base = *func_start_offsets.get(&func.name).unwrap();
+            let initial_nominal_abort_sites = nominal_abort_sites.len();
             // Every retained function has one table ABI and an authenticated callable root.
             let is_entry = false;
             let saves_return_address = !is_entry && regalloc::has_internal_calls(func);
@@ -4397,6 +4421,7 @@ impl Compiler {
                     push_word(code, encode_addi(rd, 10, 0)?);
                     spill_back(dest, rd, spilled, offset, code)
                 };
+            let shared_epilogue = frame_emission::shared_epilogue_label(func, saved_regs.len());
             let mut block_offsets: HashMap<usize, usize> = HashMap::new();
             let mut jump_fixups: Vec<JumpFixup> = Vec::new();
             let mut branch_fixups: Vec<BranchFixup> = Vec::new();
@@ -4440,10 +4465,13 @@ impl Compiler {
                         frame.result_base_slot as i64,
                         scratch_base,
                     )?;
-                    for (idx, reg) in saved_regs.iter().copied().enumerate() {
-                        let offset = (save_base + idx * 8) as i64;
-                        emit_store64(&mut code, &fixups, sp, reg, offset, scratch_base)?;
-                    }
+                    frame_emission::emit_saved_registers(
+                        &mut code,
+                        &fixups,
+                        &saved_regs,
+                        save_base,
+                        false,
+                    )?;
                 }
                 let fused_relational = match (&bb.terminator, bb.instrs.last()) {
                     (
@@ -6555,11 +6583,11 @@ impl Compiler {
                                 &[*descriptor, *error_code],
                                 &mut code,
                             )?;
-                            code.extend_from_slice(&publish_tlv);
-                            for reserved in 12..=15 {
-                                push_word(&mut code, encode_addi(reserved, 0, 0)?);
+                            if share_nominal_abort {
+                                nominal_abort_sites.push(reserve_word(&mut code));
+                            } else {
+                                compact_emission::emit_nominal_abort_tail(&mut code)?;
                             }
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_CONTRACT_ABORT);
                             let distance = i16::try_from(code.len() - branch_offset)
                                 .map_err(|_| "nominal abort branch exceeds encoding range")?;
                             let branch = encode_branch_rv(0x0, rs, 0, distance)?;
@@ -7495,14 +7523,19 @@ impl Compiler {
                                     &[*dividend, *multiplier, *divisor, *scale, *mode],
                                     &mut code,
                                 )?;
-                                code.extend_from_slice(&publish_tlv);
-                                push_word(&mut code, encode_addi(scratch2, 10, 0)?);
-                                for register in 11..=13 {
-                                    push_word(&mut code, encode_addi(10, register, 0)?);
+                                #[cfg(test)]
+                                if compact_emission::retain_scalar() {
                                     code.extend_from_slice(&publish_tlv);
-                                    push_word(&mut code, encode_addi(register, 10, 0)?);
+                                    push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                                    for register in 11..=13 {
+                                        push_word(&mut code, encode_addi(10, register, 0)?);
+                                        code.extend_from_slice(&publish_tlv);
+                                        push_word(&mut code, encode_addi(register, 10, 0)?);
+                                    }
+                                    push_word(&mut code, encode_addi(10, scratch2, 0)?);
                                 }
-                                push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                                // The original numeric consumer snapshots, authenticates and
+                                // meters each owned public envelope, including the scale Int.
                                 push_word(&mut code, encode_addi(15, 0, 0)?);
                                 let syscall = match op {
                                     ir::NumericRoundOp::DecimalMulDiv => {
@@ -7520,41 +7553,55 @@ impl Compiler {
                                 push_syscall(&mut code, syscall);
                                 spill_syscall_result(dest, &mut code)?;
                             } else {
-                                let load_ptr =
-                                    |temp: &ir::Temp,
-                                     target: u8,
-                                     scratch: u8,
-                                     code: &mut Vec<u8>|
-                                     -> Result<(), String> {
-                                        if let Some(kind) =
-                                            dataref_kind_map.get(&(func_idx, *temp)).copied()
-                                            && let Some(lit) =
-                                                string_map.get(&(func_idx, *temp)).cloned()
-                                        {
-                                            emit_literal_load(
-                                                code,
-                                                &fixups,
-                                                target,
-                                                literal_data_key(temp, kind, &lit),
-                                            );
-                                        } else {
-                                            let rs = src_reg(temp, scratch, code)?;
-                                            push_word(code, encode_addi(target, rs, 0)?);
-                                        }
-                                        Ok(())
-                                    };
-                                load_ptr(dividend, 10, scratch1, &mut code)?;
-                                code.extend_from_slice(&publish_tlv);
-                                push_word(&mut code, encode_addi(scratch2, 10, 0)?);
-                                load_ptr(divisor, 10, scratch1, &mut code)?;
-                                code.extend_from_slice(&publish_tlv);
-                                push_word(&mut code, encode_addi(11, 10, 0)?);
-                                load_ptr(scale, 10, scratch1, &mut code)?;
-                                code.extend_from_slice(&publish_tlv);
-                                push_word(&mut code, encode_addi(12, 10, 0)?);
-                                push_word(&mut code, encode_addi(10, scratch2, 0)?);
-                                let rounding = src_reg(mode, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(13, rounding, 0)?);
+                                #[cfg(test)]
+                                let scalar_arguments = if compact_emission::retain_scalar() {
+                                    let load_ptr =
+                                        |temp: &ir::Temp,
+                                         target: u8,
+                                         scratch: u8,
+                                         code: &mut Vec<u8>|
+                                         -> Result<(), String> {
+                                            if let Some(kind) =
+                                                dataref_kind_map.get(&(func_idx, *temp)).copied()
+                                                && let Some(lit) =
+                                                    string_map.get(&(func_idx, *temp)).cloned()
+                                            {
+                                                emit_literal_load(
+                                                    code,
+                                                    &fixups,
+                                                    target,
+                                                    literal_data_key(temp, kind, &lit),
+                                                );
+                                            } else {
+                                                let rs = src_reg(temp, scratch, code)?;
+                                                push_word(code, encode_addi(target, rs, 0)?);
+                                            }
+                                            Ok(())
+                                        };
+                                    load_ptr(dividend, 10, scratch1, &mut code)?;
+                                    code.extend_from_slice(&publish_tlv);
+                                    push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                                    load_ptr(divisor, 10, scratch1, &mut code)?;
+                                    code.extend_from_slice(&publish_tlv);
+                                    push_word(&mut code, encode_addi(11, 10, 0)?);
+                                    load_ptr(scale, 10, scratch1, &mut code)?;
+                                    code.extend_from_slice(&publish_tlv);
+                                    push_word(&mut code, encode_addi(12, 10, 0)?);
+                                    push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                                    let rounding = src_reg(mode, scratch1, &mut code)?;
+                                    push_word(&mut code, encode_addi(13, rounding, 0)?);
+                                    true
+                                } else {
+                                    false
+                                };
+                                #[cfg(not(test))]
+                                let scalar_arguments = false;
+                                if !scalar_arguments {
+                                    emit_values_to_syscall_registers(
+                                        &[*dividend, *divisor, *scale, *mode],
+                                        &mut code,
+                                    )?;
+                                }
                                 push_word(&mut code, encode_addi(14, 0, 0)?);
                                 let syscall = match op {
                                     ir::NumericRoundOp::DecimalMulDiv
@@ -7698,35 +7745,47 @@ impl Compiler {
                             syscall,
                             args,
                         } => {
-                            // Typed integer helpers publish each canonical operand before
-                            // invoking the shared, staged full-width implementation.
+                            // Typed integer helpers use the existing synchronous metered
+                            // snapshots. Stage every register source in parallel before
+                            // materializing literals/spills; no pointer survives the call.
                             if matches!(
                                 *syscall,
                                 syscalls::SYSCALL_INT_ISQRT..=syscalls::SYSCALL_INT_MEAN
                             ) {
-                                for (index, arg) in args.iter().enumerate() {
-                                    if let Some(kind) =
-                                        dataref_kind_map.get(&(func_idx, *arg)).copied()
-                                        && let Some(lit) =
-                                            string_map.get(&(func_idx, *arg)).cloned()
-                                    {
-                                        emit_literal_load(
-                                            &mut code,
-                                            &fixups,
-                                            10,
-                                            literal_data_key(arg, kind, &lit),
-                                        );
-                                    } else {
-                                        let source = src_reg(arg, scratch1, &mut code)?;
-                                        push_word(&mut code, encode_addi(10, source, 0)?);
+                                #[cfg(test)]
+                                let scalar_arguments = if compact_emission::retain_scalar() {
+                                    for (index, arg) in args.iter().enumerate() {
+                                        if let Some(kind) =
+                                            dataref_kind_map.get(&(func_idx, *arg)).copied()
+                                            && let Some(lit) =
+                                                string_map.get(&(func_idx, *arg)).cloned()
+                                        {
+                                            emit_literal_load(
+                                                &mut code,
+                                                &fixups,
+                                                10,
+                                                literal_data_key(arg, kind, &lit),
+                                            );
+                                        } else {
+                                            let source = src_reg(arg, scratch1, &mut code)?;
+                                            push_word(&mut code, encode_addi(10, source, 0)?);
+                                        }
+                                        code.extend_from_slice(&publish_tlv);
+                                        if index == 0 && args.len() == 2 {
+                                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                                        } else if index == 1 {
+                                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                                        }
                                     }
-                                    code.extend_from_slice(&publish_tlv);
-                                    if index == 0 && args.len() == 2 {
-                                        push_word(&mut code, encode_addi(scratch2, 10, 0)?);
-                                    } else if index == 1 {
-                                        push_word(&mut code, encode_addi(11, 10, 0)?);
-                                        push_word(&mut code, encode_addi(10, scratch2, 0)?);
-                                    }
+                                    true
+                                } else {
+                                    false
+                                };
+                                #[cfg(not(test))]
+                                let scalar_arguments = false;
+                                if !scalar_arguments {
+                                    emit_values_to_syscall_registers(args, &mut code)?;
                                 }
                                 for register in (10 + args.len() as u8)..=14 {
                                     push_word(&mut code, encode_addi(register, 0, 0)?);
@@ -8169,31 +8228,22 @@ impl Compiler {
                         // validation independently checks ownership, coverage, and role tags.
                         push_word(&mut code, encode_addi(10, scratchd, 0)?);
                         emit_i64_literal_load(&mut code, &fixups, 11, result_count as i64);
-                        for (index, register) in saved_regs.iter().copied().enumerate() {
-                            emit_load64(
+                        if let Some(label) = shared_epilogue {
+                            let at = reserve_word(&mut code);
+                            jump_fixups.push(JumpFixup {
+                                at,
+                                target_label: label,
+                            });
+                        } else {
+                            frame_emission::emit_epilogue(
                                 &mut code,
                                 &fixups,
-                                register,
-                                sp,
-                                (save_base + index * 8) as i64,
-                                Some(scratch1),
+                                &saved_regs,
+                                save_base,
+                                saves_return_address,
+                                local_frame,
                             )?;
                         }
-                        if saves_return_address {
-                            emit_load64(&mut code, &fixups, 1, sp, 0, Some(scratch1))?;
-                        }
-                        emit_bounded_add(
-                            &mut code,
-                            &fixups,
-                            sp,
-                            sp,
-                            local_frame as i64,
-                            LITERAL_SHIFT_REG,
-                        )?;
-                        push_word(
-                            &mut code,
-                            encoding::wide::encode_rr(instruction::wide::control::JALR, 0, 1, 0),
-                        );
                     }
                     Terminator::Jump(target) => {
                         if next_label != Some(*target) {
@@ -8255,6 +8305,17 @@ impl Compiler {
                     .sum::<usize>(),
                 "code generation and live-interval positions diverged"
             );
+            if let Some(label) = shared_epilogue {
+                block_offsets.insert(label, code.len() - func_base);
+                frame_emission::emit_epilogue(
+                    &mut code,
+                    &fixups,
+                    &saved_regs,
+                    save_base,
+                    saves_return_address,
+                    local_frame,
+                )?;
+            }
             for fix in jump_fixups {
                 let target_off = *block_offsets.get(&fix.target_label).ok_or_else(|| {
                     format!(
@@ -8293,10 +8354,31 @@ impl Compiler {
                     }
                 }
             }
+            if share_nominal_abort
+                && nominal_abort_tail.is_none()
+                && nominal_abort_sites.len() > initial_nominal_abort_sites
+            {
+                // Every source terminator above already returns or transfers.
+                // Only a taken nominal-abort edge reaches this compiler-owned
+                // tail; the canonical syscall marks the VM halted before return.
+                nominal_abort_tail = Some(code.len());
+                compact_emission::emit_nominal_abort_tail(&mut code)?;
+            }
             let function_end = code.len() as u64;
             let debug_seed = &mut function_debug_seeds[debug_seed_index];
             debug_seed.pc_end = function_end;
             uses_zk_global |= uses_zk;
+        }
+        if let Some(target) = nominal_abort_tail {
+            for at in nominal_abort_sites {
+                patch_or_defer_transfer(
+                    &mut code,
+                    at,
+                    target,
+                    TransferKind::Jump,
+                    &mut deferred_transfers,
+                )?;
+            }
         }
         // Patch call sites now that function offsets are known.
         for (at, callee, _caller) in &call_fixups {
@@ -9524,6 +9606,52 @@ fn private_literal_candidates(typed: &TypedProgram) -> BTreeMap<String, ir::Data
                 _ => return None,
             };
             Some((function.name.clone(), kind))
+        })
+        .collect()
+}
+/// Private declarations whose exact body can be moved once into one caller.
+///
+/// Eligibility comes from validated HIR, rather than guessing source authority
+/// from SSA. Keep public roots, attributes, secrets and aggregate/state handles
+/// out of this pass; the complete original source validation precedes it.
+fn private_inline_candidates(typed: &TypedProgram) -> BTreeMap<String, bool> {
+    fn scalar(ty: &semantic::Type) -> bool {
+        matches!(
+            ty,
+            semantic::Type::Int
+                | semantic::Type::Decimal
+                | semantic::Type::Quantity
+                | semantic::Type::Bool
+                | semantic::Type::String
+                | semantic::Type::Bytes
+                | semantic::Type::DataSpaceId
+                | semantic::Type::AccountId
+                | semantic::Type::AssetDefinitionId
+                | semantic::Type::AssetId
+                | semantic::Type::NftId
+                | semantic::Type::DomainId
+                | semantic::Type::Name
+                | semantic::Type::Json
+                | semantic::Type::Unit
+        )
+    }
+    typed
+        .items
+        .iter()
+        .filter_map(|item| {
+            let TypedItem::Function(function) = item;
+            let modifiers = &function.modifiers;
+            let result = function.ret_ty.as_ref().unwrap_or(&semantic::Type::Unit);
+            (modifiers.kind == FunctionKind::Private
+                && modifiers.permission.is_none()
+                && !modifiers.is_test
+                && modifiers.test_fixture.is_none()
+                && function
+                    .param_types
+                    .iter()
+                    .all(|param| !param.is_state && scalar(&param.ty))
+                && scalar(result))
+            .then(|| (function.name.clone(), *result == semantic::Type::Unit))
         })
         .collect()
 }

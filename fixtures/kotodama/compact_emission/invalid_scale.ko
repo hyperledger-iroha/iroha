@@ -1,0 +1,15 @@
+seiyaku CompactInvalidScale {
+    error enum Failure { Low = 3, High = 9 }
+    state int trace;
+    hajimari() { trace = 0; }
+    kotoage fn main() -> quantity authorize("WriteState") {
+        trace = 43;
+        require(true, Failure::Low);
+        let quantity value = 3;
+        let scale = math::abs(-29);
+        let result = value.div_round(divisor: 2.0, scale: scale, mode: Rounding::floor);
+        require(true, Failure::High);
+        trace = 99;
+        return result;
+    }
+}

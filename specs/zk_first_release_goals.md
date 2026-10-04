@@ -465,7 +465,7 @@ fault outcomes remain outside this native source's coverage.
 
 Public-root LOAD64/STORE64 consume the original compact memory and initialization
 packets. Checked 64-bit address/end arithmetic and comparisons prove containment
-in the immutable public root stack frame or Unit result region; native preflight
+in the immutable public root stack frame or public-leaf result region; native preflight
 acceptance is not a permission premise. The shared scalar payload selection and
 initialization OR arithmetic bind the selected half-cell, preserve the other
 half, and require public payloads and the original generation. Its 64 additional
@@ -484,18 +484,28 @@ atomic destination remain in the same dispatcher and history. Neither operation
 increases packet or witness geometry. Memory equations have maximum degree three;
 the composed instruction relation retains the existing maximum degree four.
 
-The Unit root return consumes its actual public-entrypoint callable, original
+The artifact-selected public Unit/Bool root return consumes its actual public-entrypoint callable, original
 operands and every one of the 4,097 initialization-scan cells through the existing
 return equations. Its additional 9,308,384-byte workspace is reserved before
 private construction and erased before the original allocation is refunded;
 scan packets remain solely owned by the native capture. The original NODE and
 WORD debits are constrained separately to 1 and 8 gas with bounded subtraction,
-and the original typed memory read must contain a public zero Unit word.
+and the original typed memory read must contain a public zero Unit word or a public Bool0/1. The retained artifact selects the exact one-node kind; no value or packet flag selects it. All four original u16 limbs are constrained, rejecting complete field-modulus aliases rather than reducing the word to one proof field.
 The three occupied typed-work slots are consumed directly, with the other return
 gaps constrained to zero; the callable-window diagnostic's zero-gap
 schedule is not used for this native composition.
+The sole `NativeInvocation::run_public_leaf_root` constructs a fresh ordinary VM
+and retains its admitted artifact. Unsupported aggregate, pointer, private,
+argument, child-call and syscall profiles still refuse this local component;
+ordinary transaction validity is unchanged. Both leaves share the original
+packet/scan/private workspace geometry. Unit equations and controls are retained;
+Bool adds a degree-two low-limb Boolean equation with all upper limbs zero.
+Authentic cross-crate Bool controls use this same producer, never raw packet or
+clock inputs. General faults, jointly committed masked invocation/typed-output
+columns, FRI registration, private/AXT admission and finalized-State authority
+remain open. Local equation evaluation is not a native invocation proof.
 
-The successful terminal bank consumes original return cycles and final Unit gas,
+The successful terminal bank consumes original return cycles and final public-leaf gas,
 then constrains optional native padding at clocks 10,409 and 10,410. One 96-byte
 zeroizing witness is admitted before private construction. Bounded delta bits and
 an inverse require padding exactly when the public artifact's cycle horizon has
@@ -509,7 +519,7 @@ is derived from the constrained original gas packets; no external output or
 statement-authority constructor is added.
 
 This closes bounded initializer, fetch/control/public scalar arithmetic and bit operations, admitted scalar literals,
-public-root LOAD64/STORE64, Unit return, compact scheduling, successful padding and
+public-root LOAD64/STORE64, public Unit/Bool return, compact scheduling, successful padding and
 original-source history joins only. The successful private LOAD bank and native invocation both consume atomic
 destinations; diagnostic setter logs are compared to that completed native
 transition only in tests. General private/wide memory, pointer literals and other

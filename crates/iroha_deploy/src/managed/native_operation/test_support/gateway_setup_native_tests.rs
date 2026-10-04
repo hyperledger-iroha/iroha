@@ -17,7 +17,7 @@ use iroha_core::{
         begin_stream_token_gateway_check_v1,
     },
     smartcontracts::ValidSingularQuery,
-    state::{StateReadOnly, WorldReadOnly},
+    state::WorldReadOnly,
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
@@ -57,6 +57,8 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+
+use mv::storage::StorageReadOnly as _;
 
 fn only_original(verifier: &FinalityVerifier, signed: &SignedTransaction, height: u64) {
     let tip = verifier.verified_tip().unwrap();

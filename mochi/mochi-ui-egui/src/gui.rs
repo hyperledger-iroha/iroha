@@ -5,8 +5,9 @@ use mochi_core::{
     DashboardAccountInput, DashboardSnapshot, InstructionDraft, ManagedBlockStream,
     ManagedEventStream, StatePage, StateQueryKind, TransactionPreview,
     developer::{
-        ContractInput, DeveloperWorkspace, ManagedAttachmentPhase, ManagedAttachmentStatus,
-        ManagedDataspaceStatus, ManagedNetwork, ManagedPhase,
+        ContractInput, DeveloperWorkspace, GeneratedPublishAction, GeneratedPublishOutcome,
+        ManagedAttachmentPhase, ManagedAttachmentStatus, ManagedDataspaceStatus, ManagedNetwork,
+        ManagedPhase,
     },
     drafts_from_json_str, drafts_to_pretty_json, fetch_dashboard_snapshot, run_state_query,
 };
@@ -38,14 +39,16 @@ enum View {
     Activity,
     Composer,
     Contracts,
+    Packages,
 }
 impl View {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Dashboard,
         Self::State,
         Self::Activity,
         Self::Composer,
         Self::Contracts,
+        Self::Packages,
     ];
     fn label(self) -> &'static str {
         match self {
@@ -54,6 +57,7 @@ impl View {
             Self::Activity => "Activity",
             Self::Composer => "Compose",
             Self::Contracts => "Contracts",
+            Self::Packages => "Packages",
         }
     }
 }
@@ -141,6 +145,10 @@ enum Message {
         result: UiResult<String>,
         refreshed: UiResult<Opened>,
     },
+    Published {
+        result: UiResult<PublicationOutput>,
+        refreshed: UiResult<Opened>,
+    },
     Attached {
         result: UiResult<String>,
         refreshed: UiResult<Opened>,
@@ -217,6 +225,150 @@ impl LocalnetDialog {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PublicationAction {
+    Begin,
+    Resume,
+    Recover,
+}
+
+struct PublicationForm {
+    manifest: String,
+    package: String,
+    detach: bool,
+    operation_id: String,
+}
+
+impl Default for PublicationForm {
+    fn default() -> Self {
+        Self {
+            manifest: ".".into(),
+            package: String::new(),
+            detach: false,
+            operation_id: String::new(),
+        }
+    }
+}
+
+impl PublicationForm {
+    fn action(&self, action: PublicationAction) -> UiResult<GeneratedPublishAction> {
+        match action {
+            PublicationAction::Begin => Ok(GeneratedPublishAction::Begin {
+                package: optional_selector(&self.package)
+                    .map(|value| value.parse())
+                    .transpose()
+                    .map_err(|error| format!("Invalid package selector: {error}"))?,
+                detach: self.detach,
+            }),
+            PublicationAction::Resume | PublicationAction::Recover => {
+                let operation_id = self
+                    .operation_id
+                    .trim()
+                    .parse()
+                    .map_err(|error| format!("Invalid publication operation ID: {error}"))?;
+                Ok(if action == PublicationAction::Resume {
+                    GeneratedPublishAction::Resume { operation_id }
+                } else {
+                    GeneratedPublishAction::Recover { operation_id }
+                })
+            }
+        }
+    }
+
+    fn show(&mut self, ui: &mut egui::Ui, available: bool) -> Option<PublicationAction> {
+        let mut action = None;
+        ui.heading("Publish a package");
+        ui.label("Publish to the selected generated localnet. Publish starts a default localnet when none is selected.");
+        ui.label("Publication can register the package namespace and pay transaction fees.");
+        ui.add(
+            egui::TextEdit::singleline(&mut self.manifest)
+                .hint_text("Manifest or workspace path")
+                .desired_width(700.0),
+        );
+        ui.add(
+            egui::TextEdit::singleline(&mut self.package)
+                .hint_text("Package selector (optional)")
+                .desired_width(700.0),
+        );
+        ui.checkbox(&mut self.detach, "Return after durable seed staging");
+        if ui
+            .add_enabled(available, egui::Button::new("Publish package"))
+            .clicked()
+        {
+            action = Some(PublicationAction::Begin);
+        }
+        ui.separator();
+        ui.label("Use the original operation ID from publication output. Resume uses its retained package; Recover package files requires the original workspace.");
+        ui.add(
+            egui::TextEdit::singleline(&mut self.operation_id)
+                .hint_text("Publication operation ID")
+                .desired_width(700.0),
+        );
+        ui.horizontal_wrapped(|ui| {
+            let enabled = available && !self.operation_id.trim().is_empty();
+            if ui
+                .add_enabled(enabled, egui::Button::new("Resume publication"))
+                .clicked()
+            {
+                action = Some(PublicationAction::Resume);
+            }
+            if ui
+                .add_enabled(enabled, egui::Button::new("Recover package files"))
+                .clicked()
+            {
+                action = Some(PublicationAction::Recover);
+            }
+        });
+        action
+    }
+}
+
+// Presentation only. The canonical outcome owns all publication status and diagnostics.
+struct PublicationOutput {
+    exit_code: i32,
+    stdout: String,
+    stderr: String,
+}
+
+impl PublicationOutput {
+    fn from_outcome(outcome: GeneratedPublishOutcome) -> UiResult<Self> {
+        let rendered = outcome
+            .render(Default::default())
+            .map_err(|error| error.to_string())?;
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        rendered
+            .write_to(&mut stdout, &mut stderr)
+            .map_err(|error| error.to_string())?;
+        Ok(Self {
+            exit_code: rendered.exit_code(),
+            stdout: String::from_utf8(stdout).map_err(|error| error.to_string())?,
+            stderr: String::from_utf8(stderr).map_err(|error| error.to_string())?,
+        })
+    }
+
+    fn show(&self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.strong(format!(
+            "Publication output · exit status {}",
+            self.exit_code
+        ));
+        if !self.stdout.is_empty() {
+            ui.label("Output");
+            if ui.button("Copy publication output").clicked() {
+                ui.ctx().copy_text(self.stdout.clone());
+            }
+            ui.add(egui::Label::new(egui::RichText::new(&self.stdout).monospace()).wrap());
+        }
+        if !self.stderr.is_empty() {
+            ui.label("Diagnostics");
+            if ui.button("Copy publication diagnostics").clicked() {
+                ui.ctx().copy_text(self.stderr.clone());
+            }
+            ui.add(egui::Label::new(egui::RichText::new(&self.stderr).monospace()).wrap());
+        }
+    }
+}
+
 struct Desktop {
     runtime: Option<tokio::runtime::Runtime>,
     sender: Sender<(u64, Message)>,
@@ -271,6 +423,8 @@ struct Desktop {
     journal_path: String,
     review: Option<Review>,
     receipt: Option<String>,
+    publication: PublicationForm,
+    publication_output: Option<PublicationOutput>,
 }
 
 impl Desktop {
@@ -343,6 +497,8 @@ impl Desktop {
             journal_path: String::new(),
             review: None,
             receipt: None,
+            publication: PublicationForm::default(),
+            publication_output: None,
         }
     }
 
@@ -372,6 +528,8 @@ impl Desktop {
         self.preview = None;
         self.submitted_hash = None;
         self.receipt = None;
+        self.publication_output = None;
+        self.publication.operation_id.clear();
         self.notice = None;
         self.reset_intent = false;
     }
@@ -665,6 +823,18 @@ impl Desktop {
                     }
                     match result {
                         Ok(receipt) => self.receipt = Some(receipt),
+                        Err(error) => self.error = Some(error),
+                    }
+                }
+                Message::Published { result, refreshed } => {
+                    match refreshed {
+                        Ok(opened) => self.install_opened(opened),
+                        Err(error) => {
+                            self.error = Some(format!("Workspace refresh failed: {error}."))
+                        }
+                    }
+                    match result {
+                        Ok(output) => self.publication_output = Some(output),
                         Err(error) => self.error = Some(error),
                     }
                 }
@@ -1314,6 +1484,55 @@ impl Desktop {
         });
     }
 
+    fn packages(&mut self, ui: &mut egui::Ui) {
+        if let Some(action) = self
+            .publication
+            .show(ui, !self.busy && self.workspace.is_some())
+        {
+            self.publish_package(action);
+        }
+        if let Some(output) = &self.publication_output {
+            output.show(ui);
+        }
+    }
+
+    fn publish_package(&mut self, action: PublicationAction) {
+        if self.busy {
+            return;
+        }
+        let action = match self.publication.action(action) {
+            Ok(action) => action,
+            Err(error) => {
+                self.error = Some(error);
+                return;
+            }
+        };
+        let Some(workspace) = self.workspace.clone() else {
+            return;
+        };
+        let context = self
+            .selected
+            .as_ref()
+            .map(|selected| selected.network.prepared().context.name.clone());
+        let manifest = PathBuf::from(if self.publication.manifest.is_empty() {
+            "."
+        } else {
+            &self.publication.manifest
+        });
+        self.publication_output = None;
+        self.notice = None;
+        self.spawn(move || {
+            let result = workspace
+                .publish_package(&manifest, context.as_deref(), action)
+                .map_err(|error| error.to_string())
+                .and_then(PublicationOutput::from_outcome);
+            Message::Published {
+                result,
+                refreshed: inspect_workspace(workspace),
+            }
+        });
+    }
+
     fn ready(&self) -> bool {
         self.selected
             .as_ref()
@@ -1433,6 +1652,7 @@ impl Desktop {
                 View::Activity => self.activity(ui),
                 View::Composer => self.composer(ui),
                 View::Contracts => self.contracts(ui),
+                View::Packages => self.packages(ui),
             });
         });
         if self.reset_intent {
@@ -1608,7 +1828,7 @@ fn drain_stream<T: Clone>(
 mod tests {
     use super::*;
 
-    fn render_frame(
+    pub(super) fn render_frame(
         context: &egui::Context,
         events: Vec<egui::Event>,
         draw: &mut impl FnMut(&egui::Context),
@@ -1632,7 +1852,7 @@ mod tests {
         )
     }
 
-    fn text_position(output: &egui::FullOutput, expected: &str) -> Option<egui::Pos2> {
+    pub(super) fn text_position(output: &egui::FullOutput, expected: &str) -> Option<egui::Pos2> {
         fn find(shape: &egui::Shape, expected: &str) -> Option<egui::Pos2> {
             match shape {
                 egui::Shape::Text(text) if text.galley.text() == expected => {
@@ -1648,7 +1868,11 @@ mod tests {
             .find_map(|shape| find(&shape.shape, expected))
     }
 
-    fn click_label(context: &egui::Context, label: &str, mut draw: impl FnMut(&egui::Context)) {
+    pub(super) fn click_label(
+        context: &egui::Context,
+        label: &str,
+        mut draw: impl FnMut(&egui::Context),
+    ) {
         // A window needs its measured previous frame before testing pointer hit regions.
         let _ = render_frame(context, Vec::new(), &mut draw);
         let output = render_frame(context, Vec::new(), &mut draw);
@@ -2110,6 +2334,7 @@ mod tests {
                     View::Activity => desktop.activity(ui),
                     View::Composer => desktop.composer(ui),
                     View::Contracts => desktop.contracts(ui),
+                    View::Packages => desktop.packages(ui),
                 });
             });
             assert!(!output.shapes.is_empty());
@@ -2131,3 +2356,7 @@ mod tests {
         assert_eq!(activity.back().unwrap(), "9");
     }
 }
+
+#[cfg(test)]
+#[path = "gui/publication_tests.rs"]
+mod publication_tests;

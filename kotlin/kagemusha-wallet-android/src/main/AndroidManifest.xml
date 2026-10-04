@@ -2,9 +2,11 @@
 <!--
   KAGEMUSHA wallet custody requires an empty backup and device-transfer set
   (spec §4.2; G2 design rev 2). These attributes merge into the host
-  application. The host app must not override them with tools:replace and must
-  not declare android:backupAgent: KagemushaWalletAndroidPlatformV1 refuses to
-  create a wallet adapter when FLAG_ALLOW_BACKUP is set or a backup agent exists.
+  application. KagemushaWalletAndroidPlatformV1.create refuses custody when
+  FLAG_ALLOW_BACKUP is set, a backup agent exists, or either rule resource as
+  resolved in the host app is not exclude-only. Replacing the rule attributes
+  with tools:replace or tools:remove cannot be detected at runtime, so the host
+  app must not do it (kotlin/README.md).
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">

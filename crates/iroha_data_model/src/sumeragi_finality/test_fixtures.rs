@@ -397,7 +397,7 @@ impl NativeFinalityFixture {
             .sign(signer.private_key());
         let mut builder = BlockBuilder::new(header);
         builder.push_transaction(tx);
-        let mut block = builder.build(BTreeSet::new());
+        let mut block = builder.build(crate::block::BlockSignatures::default());
         Self::install_network_results(&mut block, vec![Ok(Vec::new())]);
         block
     }

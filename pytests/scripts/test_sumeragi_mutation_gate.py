@@ -1493,3 +1493,38 @@ def test_daemon_build_script_has_no_shipping_fault_control(
     assert "cargo:rustc-cfg=sumeragi_core_mutation=" not in result.stdout
     if not feature and mutation:
         assert "ignored" in result.stdout
+
+def test_nightly_runs_every_actual_daemon_mutation_and_retains_its_report():
+    workflow = (ROOT / ".github/workflows/nightly_sumeragi.yml").read_text()
+    match = re.search(r"(?ms)^  daemon_mutation_gate:\n(.*?)(?=^  [a-z_]+:|\Z)", workflow)
+    assert match is not None, "daemon rules need their own maintained nightly owner"
+    job = match.group(1)
+    command = "python3 scripts/sumeragi_mutation_gate.py --daemon --jobs 1 --strict --fast"
+    assert f"run: {command}\n" in job
+    assert "--only" not in job, "nightly qualification must cover the complete owner table"
+    assert "if: always()" in job
+    assert "target/sumeragi-daemon-mutants/report.json" in job
+    assert "target/sumeragi-daemon-mutants/logs" in job
+    assert "sumeragi-daemon-mutation-gate-${{ github.run_id }}" in job
+
+
+def test_committee_boundary_mutations_use_their_exact_production_source_owners():
+    registered = gate.index_mutations(gate.CORE_MUTATIONS)
+    expected = {
+        "HC100": "genuine_candidate_pools_choose_largest_equal_vote_committee",
+        "HC101": "prepared_boundary_readiness_requires_every_frozen_seat_custody",
+        "HC102": "prepared_boundary_readiness_requires_every_frozen_seat_custody",
+        "HC103": "frozen_boundary_refusal_returns_original_pool_and_does_not_need_fresh_incumbent_keys",
+    }
+    for identifier, test in expected.items():
+        rule = registered[identifier]
+        assert rule.tests == (f"sumeragi::epoch_election::tests::{test}",)
+        assert not rule.scenarios
+        assert gate.has_switch(identifier, core=True)
+        assert not gate.has_switch(identifier)
+        assert not gate.has_switch(identifier, daemon=True)
+    plan = (gate.REPO / "crates/iroha_core/src/sumeragi/epoch_election/plan.rs").read_text()
+    assert "let ready = prepared_committee_ready(&source, transition);" in plan
+    assert 'cfg!(all(test, sumeragi_core_mutation = "HC102"))' in plan
+    assert '#[cfg(all(test, sumeragi_core_mutation = "HC101"))]' in plan
+    assert '#[cfg(all(test, sumeragi_core_mutation = "HC103"))]' in plan

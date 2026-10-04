@@ -63,7 +63,8 @@ impl RuntimeProviderBrokerDeploymentV1 {
     ///
     /// Returns [`RuntimeProviderBrokerLauncherErrorV1::EmptyCatalog`] when a
     /// broker process was enabled without any provider roles, or preserves the
-    /// registry's payload-free failure category when resolution fails.
+    /// registry's payload-free failure category when resolution fails. A
+    /// differing credential-memory policy is rejected before backend discovery.
     pub fn try_new(
         bindings: IrohaRuntimeProviderBindingsV1,
         policy: RuntimeProviderBroker,
@@ -72,6 +73,9 @@ impl RuntimeProviderBrokerDeploymentV1 {
         if bindings.is_empty() {
             return Err(RuntimeProviderBrokerLauncherErrorV1::EmptyCatalog);
         }
+        bindings
+            .validate_credential_memory_policy_v1(&policy)
+            .map_err(RuntimeProviderBrokerLauncherErrorV1::BackendRegistry)?;
         let backends = registry
             .resolve(&bindings)
             .map_err(RuntimeProviderBrokerLauncherErrorV1::BackendRegistry)?;
@@ -266,21 +270,19 @@ impl RuntimeProviderBrokerExecutableV1 {
         let policy = load_runtime_provider_broker_policy_file_v1(args.broker_policy_path())?;
         Self::try_from_catalog_file(args.catalog_path(), policy, registry)
     }
-    /// Assemble the feature-isolated disposable broker from a canonically
-    /// decoded owner-private catalog and the stock backend registry.
+    /// Assemble from the original public catalog already loaded by the caller.
     ///
-    /// The caller must obtain `bindings` with
-    /// [`load_owner_private_runtime_provider_broker_catalog_file_v1`]. This
-    /// path is unavailable in every shipping build.
+    /// This retains the same catalog used for credential imports and performs
+    /// no filesystem access. Its canonical public metadata and matching local
+    /// policy describe the requested assembly; they do not attest to current
+    /// backend qualification or grant credential authority. The serving boundary
+    /// still checks the exact backend set and live qualification before readiness.
     ///
     /// # Errors
     ///
-    /// Preserves exact backend resolution and deployment errors.
-    #[cfg(all(
-        feature = "test-network-disposable-broker",
-        any(target_os = "linux", target_os = "macos")
-    ))]
-    pub fn try_from_owner_private_catalog_v1(
+    /// Rejects an empty catalog or differing credential-memory policy before
+    /// backend discovery, and preserves exact resolution and deployment errors.
+    pub fn try_from_catalog_v1(
         bindings: IrohaRuntimeProviderBindingsV1,
         policy: RuntimeProviderBroker,
         registry: &dyn RuntimeProviderBrokerBackendRegistryV1,
@@ -303,12 +305,7 @@ impl RuntimeProviderBrokerExecutableV1 {
         registry: &dyn RuntimeProviderBrokerBackendRegistryV1,
     ) -> Result<Self, RuntimeProviderBrokerExecutableErrorV1> {
         let bindings = load_runtime_provider_broker_catalog_file_v1(catalog_path)?;
-        let deployment = RuntimeProviderBrokerDeploymentV1::try_new(bindings, policy, registry)
-            .map_err(RuntimeProviderBrokerExecutableErrorV1::Launcher)?;
-        Ok(Self {
-            deployment,
-            lifecycle: Arc::new(RuntimeProviderBrokerLifecycleV1::new()),
-        })
+        Self::try_from_catalog_v1(bindings, policy, registry)
     }
     /// Return the number of exact public bindings selected for this process.
     #[must_use]
@@ -954,6 +951,40 @@ mod tests {
         assert_eq!(registry.calls.load(Ordering::Relaxed), 0);
     }
     #[test]
+    fn credential_policy_mismatch_rejects_assembly_before_backend_discovery() {
+        let registry = RecordingRegistry::available();
+        let catalog = qualified_catalog();
+        let limit = catalog.credential_max_memory_bytes();
+        for supplied in [1, limit - 1, limit + 1] {
+            let mut supplied_policy = policy();
+            supplied_policy.credential_max_memory_bytes =
+                std::num::NonZeroUsize::new(supplied).expect("nonzero test policy");
+            let expected = RuntimeProviderBrokerLauncherErrorV1::BackendRegistry(
+                IrohaRuntimeProviderRegistryErrorV1::BindingMismatch,
+            );
+            assert_eq!(
+                RuntimeProviderBrokerDeploymentV1::try_new(
+                    catalog.clone(),
+                    supplied_policy.clone(),
+                    &registry,
+                )
+                .expect_err("mismatched bound must fail before discovery"),
+                expected
+            );
+            assert_eq!(
+                RuntimeProviderBrokerExecutableV1::try_from_catalog_v1(
+                    catalog.clone(),
+                    supplied_policy,
+                    &registry,
+                )
+                .expect_err("in-memory assembly uses the same policy validation"),
+                RuntimeProviderBrokerExecutableErrorV1::Launcher(expected)
+            );
+        }
+        assert_eq!(registry.calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
     fn backend_registry_failure_category_is_preserved() {
         let registry =
             RecordingRegistry::failing(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
@@ -1048,6 +1079,61 @@ mod tests {
             bytes
         );
     }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn executable_retains_original_catalog_without_reopening_its_file() {
+        let catalog = qualified_catalog();
+        let (_directory, path) = write_catalog_file(
+            &catalog
+                .export_canonical_v1()
+                .expect("encode original catalog"),
+        );
+        let loaded = load_runtime_provider_broker_catalog_file_v1(&path)
+            .expect("one secure canonical catalog read");
+        fs::remove_file(&path).expect("remove public fixture after its owner is loaded");
+        let registry = RecordingRegistry::available();
+        let supplied_policy = policy();
+        let executable = RuntimeProviderBrokerExecutableV1::try_from_catalog_v1(
+            loaded,
+            supplied_policy.clone(),
+            &registry,
+        )
+        .expect("assembly must not reopen or replace the original catalog");
+        assert_eq!(executable.deployment.bindings, catalog);
+        assert_eq!(executable.deployment.policy, supplied_policy);
+        assert_eq!(registry.calls.load(Ordering::Relaxed), 1);
+        assert!(!executable.lifecycle.shutdown_requested());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn executable_file_policy_mismatch_precedes_backend_discovery() {
+        let catalog = qualified_catalog();
+        let (_directory, path) = write_catalog_file(
+            &catalog
+                .export_canonical_v1()
+                .expect("encode original catalog"),
+        );
+        let registry = RecordingRegistry::available();
+        let mut supplied_policy = policy();
+        supplied_policy.credential_max_memory_bytes =
+            std::num::NonZeroUsize::new(512).expect("nonzero test policy");
+        assert_eq!(
+            RuntimeProviderBrokerExecutableV1::try_from_catalog_file(
+                &path,
+                supplied_policy,
+                &registry,
+            )
+            .expect_err("secure file assembly preserves the policy rejection"),
+            RuntimeProviderBrokerExecutableErrorV1::Launcher(
+                RuntimeProviderBrokerLauncherErrorV1::BackendRegistry(
+                    IrohaRuntimeProviderRegistryErrorV1::BindingMismatch,
+                ),
+            )
+        );
+        assert_eq!(registry.calls.load(Ordering::Relaxed), 0);
+    }
+
     #[cfg(all(
         feature = "test-network-disposable-broker",
         any(target_os = "linux", target_os = "macos")
@@ -1064,7 +1150,7 @@ mod tests {
             write_catalog_file(b"observer_operation_timeout_ms = 4000\n");
         let owner_policy = load_owner_private_runtime_provider_broker_policy_file_v1(&policy_path)
             .expect("load owner-private public policy");
-        let executable = RuntimeProviderBrokerExecutableV1::try_from_owner_private_catalog_v1(
+        let executable = RuntimeProviderBrokerExecutableV1::try_from_catalog_v1(
             loaded,
             owner_policy.clone(),
             &RecordingRegistry::available(),

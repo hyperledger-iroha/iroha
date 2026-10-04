@@ -532,12 +532,11 @@ fn genesis_signature_is_verified_even_when_its_header_hash_matches_the_view() {
     let mut forged = original.as_ref().clone();
     forged
         .replace_signatures(
-            [BlockSignature::new(
+            iroha_data_model::block::BlockSignatures::try_from_iter([BlockSignature::new(
                 0,
                 SignatureOf::from_hash(foreign.private_key(), original.hash()),
-            )]
-            .into_iter()
-            .collect(),
+            )])
+            .expect("at most 31 block signatures"),
         )
         .unwrap();
     assert_eq!(forged.hash(), original.hash());

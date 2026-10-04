@@ -593,7 +593,7 @@ def require_block_start_construction(state: str) -> None:
             raise RuntimeError(f"{path}: start construction has duplicate or invalid original fields")
         bindings[name] = value if separator else name
     expected = {name: name for name in (
-        "world", "da_rewind_releases",
+        "world",
     )}
     expected.update({
         "canonical_runtime": "block_field::BlockField::new(canonical_runtime)",
@@ -603,6 +603,8 @@ def require_block_start_construction(state: str) -> None:
         "commit_topology": "block_field::BlockField::new(commit_topology)",
         "prev_commit_topology": "block_field::BlockField::new(prev_commit_topology)",
         "local_storage_refusal": "None",
+        "_da_rewind_releases": "da_rewind_releases",
+        "_read_releases": "StateViewReleases::new(self)",
         "state_ref": "self", "_curr_block": "curr_block",
         "nexus": "projection.nexus", "start_of_block_effects_applied": "false",
         "pending_parliament_telemetry_events":
@@ -833,6 +835,53 @@ def require_parliament_event_capture(state: str) -> None:
         )
 
 
+def require_completed_replay_source(source: str) -> None:
+    """Retire the graph while preserving its exact configuration and committee identity."""
+    path = "crates/iroha_core/src/sumeragi/executor/replay.rs"
+    identity = compact_rust(mask_rust(rust_item(source, "struct ReplaySource {", path)))
+    expected = (
+        "structReplaySource{instance:Hash32,height:u64,block_hash:Hash32,"
+        "epoch:EpochConfig,params:ChainParams,committee_digest:Hash,}"
+    )
+    if identity != expected:
+        raise RuntimeError(f"{path}: completed replay must retain the complete original source identity")
+    capture = compact_rust(mask_rust(rust_item(source, "    fn capture(", path)))
+    expected_capture = (
+        "fncapture(source:&AvailabilitySource)->Self{"
+        "letHeightConfig{epoch,committee,params,}=source.config();Self{"
+        "instance:source.instance(),height:source.height(),block_hash:source.block_hash(),"
+        "epoch:**epoch,params:*params,committee_digest:committee_digest(committee),}}"
+    )
+    if capture != expected_capture:
+        raise RuntimeError(f"{path}: completed replay must capture the complete original source configuration")
+    digest = compact_rust(mask_rust(rust_item(source, "fn committee_digest(", path)))
+    expected_digest = compact_rust(mask_rust("""
+        fn committee_digest(committee: &Committee) -> Hash {
+            Hash::new_from_writer(|writer| {
+                writer.write_all(iroha_sumeragi::preimage::TAG_COMMITTEE)?;
+                writer.write_all(
+                    &u32::try_from(committee.n())
+                        .expect("validated committee size fits u32")
+                        .to_be_bytes(),
+                )?;
+                for key in committee.members() {
+                    let bytes = key.as_bytes();
+                    writer.write_all(
+                        &u16::try_from(bytes.len())
+                            .expect("validated public key length fits u16")
+                            .to_be_bytes(),
+                    )?;
+                    writer.write_all(bytes)?;
+                }
+                Ok(())
+            })
+            .expect("incremental hash writer cannot fail")
+        }
+    """))
+    if digest != expected_digest:
+        raise RuntimeError(f"{path}: completed replay must stream the complete canonical committee preimage")
+
+
 def require_parliament_commit_publication(state: str) -> None:
     """Publish Parliament metrics only from the retained State owner, once, after publication."""
     state_path = "crates/iroha_core/src/state.rs"
@@ -878,6 +927,7 @@ def require_parliament_commit_publication(state: str) -> None:
     ))
     replay_path = "crates/iroha_core/src/sumeragi/executor/replay.rs"
     replay_source = read(replay_path)
+    require_completed_replay_source(replay_source)
     worker_replay = compact_rust(mask_rust(rust_item(
         replay_source, "    pub(super) fn replay(", replay_path,
     )))
@@ -890,7 +940,9 @@ def require_parliament_commit_publication(state: str) -> None:
         "returncompleted.acknowledge(block,qc,&budget,&mutencode);",
         "matchself.prepare_with_origin(block,qc,CommitTelemetryOrigin::HistoricalReplay)?{Some(result)ifresult==qc.result=>{}",
         "self.commit(block,qc)?;",
-        "ifletErr(reason)=self.retire_completed_replay(block,qc)",
+        "ifletErr(error)=self.retire_completed_replay(block,qc){"
+        "ifletPublicationError::RecoveryRequired(reason)=&error{"
+        "self.recovery=Some(reason.clone());}returnErr(error);}",
     ))
     retirement = compact_rust(mask_rust(rust_item(
         replay_source, "    fn retire_completed_replay(", replay_path,
@@ -899,7 +951,11 @@ def require_parliament_commit_publication(state: str) -> None:
         "iforiginal!=qc||live.header!=*block.header()||live.availability!=*block.availability()||live.source!=*block.source()||live.telemetry_origin!=Some(CommitTelemetryOrigin::HistoricalReplay)",
         "letqc=Hash::new(certificate.commit_qc());",
         "letpayload=Hash::new(block.payload().as_slice());",
-        "self.completed_replay=Some(CompletedReplay{source:live.source,tip,header,qc,availability,payload,});",
+        "->Result<(),PublicationError>{",
+        "letinvalid=|reason:&str|PublicationError::RecoveryRequired(reason.to_owned());",
+        "letview=self.state.try_view_once()?;",
+        "self.completed_replay=Some(CompletedReplay{"
+        "source:ReplaySource::capture(&live.source),tip,header,qc,availability,payload,});",
     ))
     acknowledgement = compact_rust(mask_rust(rust_item(
         replay_source, "    fn acknowledge(", replay_path,
@@ -909,7 +965,12 @@ def require_parliament_commit_publication(state: str) -> None:
         "letheader=digest(CertificatePart::Header(block.header()))?;",
         "letqc=digest(CertificatePart::Qc(qc))?;",
         "letavailability=digest(CertificatePart::Availability(block.availability()))?;",
-        "self.source!=*block.source()||self.payload!=Hash::new(block.payload().as_slice())||self.header!=header||self.qc!=qc||self.availability!=availability",
+        compact_rust(mask_rust(
+            'if !cfg!(all(test, sumeragi_core_mutation = "HC94")) '
+            '&& self.source != ReplaySource::capture(block.source())'
+        )),
+        "self.payload!=Hash::new(block.payload().as_slice())"
+        "||self.header!=header||self.qc!=qc||self.availability!=availability",
     ))
     startup_path = "crates/iroha_core/src/sumeragi/startup.rs"
     require_all(startup_path, compact_rust(read(startup_path)), (

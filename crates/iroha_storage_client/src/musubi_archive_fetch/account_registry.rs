@@ -29,9 +29,12 @@ pub type MusubiArchiveProviderDiscoveryV1 = dyn Fn(ProviderId) -> Result<Verifie
 
 #[derive(Clone)]
 pub(super) struct AccountRegistryV1 {
-    pub(super) config: iroha::config::Config,
-    pub(super) discovery: Arc<MusubiArchiveProviderDiscoveryV1>,
+    pub(super) account: AccountId,
+    pub(super) key_pair: KeyPair,
+    pub(super) chain_id: String,
     pub(super) local_transports: Option<[GeneratedLocalProviderTransportV1; 3]>,
+    // Drop selections before the callback and any original allocation custody it retains.
+    pub(super) discovery: Arc<MusubiArchiveProviderDiscoveryV1>,
 }
 #[derive(Clone)]
 pub(super) enum ProviderCredentialV1 {
@@ -45,6 +48,15 @@ pub(super) enum ProviderCredentialV1 {
 }
 
 impl PreparedMusubiArchiveFetchConfigV1 {
+    /// Borrow the original ordinary account signer only for the exact three-provider local selection.
+    /// This reads retained intent only, performs no discovery and grants no current authority.
+    #[must_use]
+    pub fn generated_local_registry_identity(&self) -> Option<(&str, &AccountId)> {
+        let registry = self.account_registry.as_ref()?;
+        registry.local_transports.as_ref()?;
+        Some((&registry.chain_id, &registry.account))
+    }
+
     /// Bind account reads to a separately resolved registry signer and authenticated discovery.
     ///
     /// This opens no keys, resolves no DNS and sends no requests. The callback must use an
@@ -57,7 +69,15 @@ impl PreparedMusubiArchiveFetchConfigV1 {
         discovery: Arc<MusubiArchiveProviderDiscoveryV1>,
         request_timeout: Duration,
     ) -> Result<Self, MusubiArchiveRuntimeErrorV1> {
-        Self::prepare_account_registry(config, discovery, None, request_timeout)
+        Self::prepare_account_registry(
+            config.network_id,
+            config.chain.to_string(),
+            config.account,
+            config.key_pair,
+            discovery,
+            None,
+            request_timeout,
+        )
     }
 
     /// Prepare account reads for exactly three original generated-local provider transports.
@@ -73,38 +93,80 @@ impl PreparedMusubiArchiveFetchConfigV1 {
         originals: [GeneratedLocalProviderTransportV1; 3],
         request_timeout: Duration,
     ) -> Result<Self, MusubiArchiveRuntimeErrorV1> {
-        if originals.iter().any(|original| {
-            original.network_id() != config.network_id
-                || original.chain_id() != config.chain.as_str()
-        }) || originals.iter().enumerate().any(|(index, original)| {
-            originals[..index]
-                .iter()
-                .any(|other| other.provider_id() == original.provider_id())
-        }) {
+        Self::from_generated_local_account_signer(
+            config.network_id,
+            config.chain.as_str(),
+            config.account,
+            config.key_pair,
+            discovery,
+            originals,
+            request_timeout,
+        )
+    }
+
+    /// Prepare cold generated-local reads with the exact ordinary account signer.
+    ///
+    /// This performs no I/O and retains no management client configuration. Original TLS
+    /// selection grants transport intent only; every access still requires fresh native
+    /// discovery and an ordinary account-read token from the selected provider.
+    /// # Errors
+    /// Refuses duplicate or foreign original providers, a mismatched account key, or an
+    /// unbounded timeout. No arbitrary HTTP client or verified proof can be injected.
+    pub fn from_generated_local_account_signer(
+        network: NetworkId,
+        chain: &str,
+        account: AccountId,
+        key_pair: KeyPair,
+        discovery: Arc<MusubiArchiveProviderDiscoveryV1>,
+        originals: [GeneratedLocalProviderTransportV1; 3],
+        request_timeout: Duration,
+    ) -> Result<Self, MusubiArchiveRuntimeErrorV1> {
+        if originals
+            .iter()
+            .any(|original| original.network_id() != network || original.chain_id() != chain)
+            || originals.iter().enumerate().any(|(index, original)| {
+                originals[..index]
+                    .iter()
+                    .any(|other| other.provider_id() == original.provider_id())
+            })
+        {
             return Err(permanent("MUSUBI_ARCHIVE_LOCAL_TRANSPORT_MISMATCH"));
         }
-        Self::prepare_account_registry(config, discovery, Some(originals), request_timeout)
+        Self::prepare_account_registry(
+            network,
+            chain.to_owned(),
+            account,
+            key_pair,
+            discovery,
+            Some(originals),
+            request_timeout,
+        )
     }
 
     fn prepare_account_registry(
-        config: iroha::config::Config,
+        network_id: NetworkId,
+        chain_id: String,
+        account: AccountId,
+        key_pair: KeyPair,
         discovery: Arc<MusubiArchiveProviderDiscoveryV1>,
         local_transports: Option<[GeneratedLocalProviderTransportV1; 3]>,
         request_timeout: Duration,
     ) -> Result<Self, MusubiArchiveRuntimeErrorV1> {
         if request_timeout.is_zero()
             || request_timeout > Duration::from_millis(MAX_REQUEST_TIMEOUT_MS)
-            || config.account != AccountId::new(config.key_pair.public_key().clone())
+            || account != AccountId::new(key_pair.public_key().clone())
         {
             return Err(permanent("MUSUBI_ARCHIVE_REGISTRY_ACCOUNT_INVALID"));
         }
         Ok(Self {
             providers: Vec::new(),
-            network_id: config.network_id,
+            network_id,
             client_id: "musubi-v1".into(),
             request_timeout,
             account_registry: Some(Arc::new(AccountRegistryV1 {
-                config,
+                account,
+                key_pair,
+                chain_id,
                 discovery,
                 local_transports,
             })),
@@ -140,7 +202,7 @@ impl AccountRegistryV1 {
         let authority = discover_authority(self.discovery.as_ref(), provider)?;
         if authority.discovery().network_id() != network
             || authority.discovery().advert().body.provider_id != *provider.as_bytes()
-            || authority.chain_id() != self.config.chain.as_str()
+            || authority.chain_id() != self.chain_id.as_str()
         {
             return Err(control_integrity(
                 "MUSUBI_ARCHIVE_PROVIDER_DISCOVERY_SCOPE_MISMATCH",
@@ -195,8 +257,8 @@ impl AuthenticatedMusubiArchiveFetchClientV1 {
                 http,
                 local_transport: selected.original,
                 credential: ProviderCredentialV1::Account {
-                    account: registry.config.account.clone(),
-                    key_pair: registry.config.key_pair.clone(),
+                    account: registry.account.clone(),
+                    key_pair: registry.key_pair.clone(),
                     chain_id: selected.authority.chain_id().to_owned(),
                     discovery: registry.discovery.clone(),
                 },
@@ -410,6 +472,72 @@ mod tests {
             &material,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn direct_generated_account_signer_stays_cold_and_rejects_foreign_keys_without_discovery() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let config = config();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
+        let discovery: Arc<MusubiArchiveProviderDiscoveryV1> = Arc::new(move |_| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            Err(MusubiArchiveDiscoveryErrorV1::Unavailable)
+        });
+        let select = |account, timeout| {
+            PreparedMusubiArchiveFetchConfigV1::from_generated_local_account_signer(
+                config.network_id,
+                config.chain.as_str(),
+                account,
+                config.key_pair.clone(),
+                discovery.clone(),
+                std::array::from_fn(|slot| local_intent(&config, slot as u8)),
+                timeout,
+            )
+        };
+        let foreign = KeyPair::from_seed(vec![0xB3; 32], iroha_crypto::Algorithm::Ed25519);
+        assert!(
+            select(
+                AccountId::new(foreign.public_key().clone()),
+                Duration::from_secs(1)
+            )
+            .is_err()
+        );
+        assert!(select(config.account.clone(), Duration::ZERO).is_err());
+        assert!(
+            select(
+                config.account.clone(),
+                Duration::from_millis(MAX_REQUEST_TIMEOUT_MS + 1)
+            )
+            .is_err()
+        );
+        let selected = select(config.account.clone(), Duration::from_secs(1)).unwrap();
+        assert_eq!(
+            selected.generated_local_registry_identity(),
+            Some((config.chain.as_str(), &config.account))
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        let mut client = selected.build_client().unwrap();
+        assert!(client.providers.is_empty());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(
+            client
+                .resolve_provider_gateway_origin(ProviderId::new([0; 32]))
+                .is_err()
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        for slot in 0..3 {
+            let provider = local_intent(&config, slot).provider_id();
+            assert_eq!(
+                client
+                    .resolve_provider_gateway_origin(provider)
+                    .unwrap_err()
+                    .code(),
+                "MUSUBI_ARCHIVE_PROVIDER_DISCOVERY_UNAVAILABLE"
+            );
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        assert!(client.providers.is_empty());
     }
 
     #[test]
@@ -781,6 +909,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(prepared.network_id(), config().network_id);
+        assert!(prepared.generated_local_registry_identity().is_none());
         let mut client = prepared.build_client().unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         assert_eq!(

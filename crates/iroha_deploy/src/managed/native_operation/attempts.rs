@@ -17,6 +17,16 @@ use std::ffi::OsStr;
 #[path = "attempts/selection.rs"]
 mod selection;
 pub(in crate::managed) use selection::{generated, initial};
+#[path = "attempts/closure.rs"]
+mod closure;
+#[path = "attempts/scope.rs"]
+mod scope;
+use closure::{ClosurePlan, ClosureRecord};
+pub(in crate::managed) use closure::{PendingUnsignedClosure, VerifiedUnsignedClosure};
+pub(in crate::managed) use scope::{
+    BodyDispatchScope, BodyReplacementTarget, EnrollmentScopeBinding, EnrollmentScopeEvidence,
+    HistoryScope, SemanticSuccessor,
+};
 
 pub(in crate::managed) const MAX_ATTEMPTS: usize = 64;
 pub(in crate::managed) const MAX_RECORD_BYTES: usize = 16 * 1024;
@@ -132,6 +142,26 @@ struct Dispatch {
     purpose: Purpose,
     semantic: [u8; 32],
     first: [u8; 32],
+    scope: DispatchScope,
+    highest: Authorization,
+    state: ReservationState,
+}
+#[derive(Clone, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_deploy::managed::native_operation::attempts::DispatchScope")]
+enum DispatchScope {
+    FixedBody,
+    Enrollment {
+        outer_intent: [u8; 32],
+        body_selection: [u8; 32],
+        predecessor_closure: Option<[u8; 32]>,
+        prior_total: u8,
+    },
+}
+#[derive(Clone, Copy, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_deploy::managed::native_operation::attempts::ReservationState")]
+enum ReservationState {
+    Reserved,
+    Published,
 }
 
 /// A locally validated attempt, not a native proof. Its concrete owner verifies the exact wallet.
@@ -206,6 +236,10 @@ pub(in crate::managed) struct History {
     root: Option<PrivateDirectory>,
     attempts: Vec<Attempt>,
     empty_tail: bool,
+    scope: HistoryScope,
+    closing: Option<ClosurePlan>,
+    closed: Option<ClosureRecord>,
+    cumulative_reserved: usize,
     purpose: Purpose,
     semantic: [u8; 32],
 }
@@ -264,13 +298,21 @@ impl History {
         operation: &PrivateDirectory,
         purpose: Purpose,
         semantic: [u8; 32],
+        scope: &HistoryScope,
     ) -> Result<Self> {
+        scope.validate(operation, purpose, semantic)?;
         operation.revalidate()?;
-        let names = operation.entries(3)?;
-        if names
-            .iter()
-            .any(|name| name != "original.nrt" && name != "dispatch.nrt" && name != "attempts")
-        {
+        let enrollment = scope::is_enrollment(purpose);
+        let names = operation.entries(6)?;
+        if names.iter().any(|name| {
+            name != "original.nrt"
+                && name != "dispatch.nrt"
+                && name != "attempts"
+                && !(enrollment
+                    && ["reserved.nrt", "closing.nrt", "closed.nrt"]
+                        .iter()
+                        .any(|allowed| name == *allowed))
+        }) {
             return Err(invalid("dispatch operation contains unknown material"));
         }
         let intent = read_optional(
@@ -287,25 +329,71 @@ impl History {
             return Err(invalid("dispatch operation custody changed"));
         }
         let dispatch: Option<Dispatch> = read_record(operation, "dispatch.nrt")?;
+        if let Some(value) = &dispatch {
+            value.highest.terms.validate()?;
+            validate_origin(&value.highest.origin)?;
+            scope.require_fees(&value.highest.terms.fees)?;
+            if value.purpose != purpose
+                || value.semantic != semantic
+                || value.scope != scope.commitment()?
+                || value.highest.purpose != purpose
+                || value.highest.semantic != semantic
+                || value.highest.ordinal == 0
+                || scope
+                    .prior_total()
+                    .checked_add(usize::from(value.highest.ordinal))
+                    .is_none_or(|n| n > MAX_ATTEMPTS)
+                || value.first == [0; 32]
+                || (value.highest.ordinal == 1
+                    && (value.highest.previous.is_some() || value.first != digest(&value.highest)?))
+            {
+                return Err(invalid(
+                    "dispatch high-water differs from its original scope",
+                ));
+            }
+        }
+        let cumulative_reserved = scope
+            .prior_total()
+            .checked_add(
+                dispatch
+                    .as_ref()
+                    .map_or(0, |value| usize::from(value.highest.ordinal)),
+            )
+            .filter(|count| *count <= MAX_ATTEMPTS)
+            .ok_or_else(|| invalid("body dispatch count exceeds its cumulative bound"))?;
+        let closing: Option<ClosurePlan> = read_record(operation, "closing.nrt")?;
+        let closed: Option<ClosureRecord> = read_record(operation, "closed.nrt")?;
         let root = match operation.open_child("attempts") {
             Ok(value) => value,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                if dispatch.is_some() {
+                if dispatch.as_ref().is_some_and(|value| {
+                    value.state != ReservationState::Reserved || value.highest.ordinal != 1
+                }) {
                     return Err(invalid("retained dispatch lost its attempts custody"));
                 }
-                return Ok(Self {
+                let empty_tail = dispatch.is_some();
+                let value = Self {
                     operation: retained_operation,
                     dispatch,
                     root: None,
                     attempts: Vec::new(),
-                    empty_tail: false,
+                    empty_tail,
+                    scope: scope.retained_copy(),
+                    closing,
+                    closed,
+                    cumulative_reserved,
                     purpose,
                     semantic,
-                });
+                };
+                value.validate_closure_records()?;
+                return Ok(value);
             }
             Err(error) => return Err(error.into()),
         };
         let names = root.entries(MAX_ATTEMPTS)?;
+        if dispatch.is_none() {
+            return Err(invalid("attempt custody lost its dispatch high-water"));
+        }
         let mut attempts: Vec<Attempt> = Vec::with_capacity(names.len());
         let mut empty_tail = false;
         for (index, name) in names.iter().enumerate() {
@@ -334,7 +422,13 @@ impl History {
             let Some(authorization): Option<Authorization> =
                 read_record(&directory, "authorization.nrt")?
             else {
-                if index + 1 != names.len() || !inventory.is_empty() {
+                if index + 1 != names.len()
+                    || !inventory.is_empty()
+                    || !dispatch.as_ref().is_some_and(|value| {
+                        value.state == ReservationState::Reserved
+                            && usize::from(value.highest.ordinal) == index + 1
+                    })
+                {
                     return Err(invalid(
                         "dispatch material exists without its authorization",
                     ));
@@ -343,6 +437,7 @@ impl History {
                 continue;
             };
             authorization.terms.validate()?;
+            scope.require_fees(&authorization.terms.fees)?;
             validate_origin(&authorization.origin)?;
             let previous = attempts.last().map(Attempt::digest).transpose()?;
             if usize::from(authorization.ordinal) != index + 1
@@ -356,6 +451,18 @@ impl History {
             }
             if let Some(prior) = attempts.last() {
                 validate_successor(&prior.authorization, &authorization)?;
+            }
+            if dispatch.as_ref().is_some_and(|value| {
+                value.state == ReservationState::Reserved
+                    && usize::from(value.highest.ordinal) == index + 1
+            }) && (inventory.len() != 1
+                || inventory
+                    .first()
+                    .is_none_or(|name| name != "authorization.nrt"))
+            {
+                return Err(invalid(
+                    "reserved dispatch contains effects before publication",
+                ));
             }
             let observation: Option<Observation> = read_record(&directory, "observation.nrt")?;
             if let Some(observation) = observation {
@@ -428,62 +535,93 @@ impl History {
             attempts.push(attempt);
         }
         if let Some(last) = attempts.last() {
-            if last.retirement.is_some() {
-                return Err(invalid("unsigned retirement lost its reserved successor"));
+            if let Some(retirement) = &last.retirement {
+                if !dispatch.as_ref().is_some_and(|value| {
+                    value.state == ReservationState::Reserved
+                        && value.highest.previous == last.digest().ok()
+                        && digest(&value.highest).ok() == Some(retirement.successor)
+                }) {
+                    return Err(invalid("unsigned retirement lost its reserved successor"));
+                }
             }
         }
         if root.entries(MAX_ATTEMPTS)? != names {
             return Err(invalid("dispatch inventory changed during inspection"));
         }
-        match &dispatch {
-            Some(dispatch) => {
-                if dispatch.purpose != purpose
-                    || dispatch.semantic != semantic
-                    || attempts.first().map(Attempt::digest).transpose()? != Some(dispatch.first)
-                {
-                    return Err(invalid(
-                        "dispatch root differs from its first retained authorization",
-                    ));
-                }
+        let retained = dispatch
+            .as_ref()
+            .ok_or_else(|| invalid("dispatch anchor absent"))?;
+        let count = usize::from(retained.highest.ordinal);
+        if names.len() > count
+            || attempts.len() > count
+            || attempts
+                .first()
+                .map(Attempt::digest)
+                .transpose()?
+                .unwrap_or(digest(&retained.highest)?)
+                != retained.first
+        {
+            return Err(invalid(
+                "dispatch root differs from its retained authorization chain",
+            ));
+        }
+        if attempts.len() == count {
+            if attempts.last().map(|a| &a.authorization) != Some(&retained.highest) {
+                return Err(invalid("highest dispatch authorization changed"));
             }
-            None => {
-                if attempts.len() > 1
-                    || attempts.first().is_some_and(|first| {
-                        first.observation.is_some()
-                            || first.commit.is_some()
-                            || first.retirement.is_some()
-                    })
-                    || attempts
-                        .first()
-                        .map(|first| first.directory.entries(7))
-                        .transpose()?
-                        .is_some_and(|names| names.len() != 1)
-                {
-                    return Err(invalid(
-                        "dispatch material lost its original root commitment",
-                    ));
-                }
+        } else {
+            if retained.state != ReservationState::Reserved
+                || attempts.len() + 1 != count
+                || retained.highest.previous != attempts.last().map(Attempt::digest).transpose()?
+            {
+                return Err(invalid("published dispatch suffix was lost"));
             }
+            if let Some(prior) = attempts.last() {
+                validate_successor(&prior.authorization, &retained.highest)?;
+            }
+            empty_tail = true;
+        }
+        if retained.state == ReservationState::Published && (empty_tail || names.len() != count) {
+            return Err(invalid("published dispatch custody is incomplete"));
         }
         operation.revalidate()?;
-        Ok(Self {
+        let value = Self {
             operation: retained_operation,
             dispatch,
             root: Some(root),
             attempts,
             empty_tail,
+            scope: scope.retained_copy(),
+            closing,
+            closed,
+            cumulative_reserved,
             purpose,
             semantic,
-        })
+        };
+        value.validate_closure_records()?;
+        Ok(value)
     }
 
     /// Inspect every retained wallet through the concrete canonical purpose owner. The closure
     /// cannot substitute a decoded DTO for the opaque wallet result.
     pub(in crate::managed) fn verify_wallets(
         &self,
+        inspect: impl FnMut(&Attempt) -> Result<VerifiedNativePreparation>,
+    ) -> Result<()> {
+        if self.closing.is_some() || self.closed.is_some() {
+            return Err(ManagedBootstrapFailure::TransitionPending.into());
+        }
+        self.verify_wallets_inner(inspect, None)
+    }
+    fn verify_wallets_inner(
+        &self,
         mut inspect: impl FnMut(&Attempt) -> Result<VerifiedNativePreparation>,
+        closing: Option<&ClosurePlan>,
     ) -> Result<()> {
         self.require_current()?;
+        if closing != self.closing.as_ref() {
+            return Err(invalid("wallet verifier has another unsigned closing plan"));
+        }
         for (index, attempt) in self.attempts.iter().enumerate() {
             if attempt.observation.is_none() {
                 if attempt
@@ -529,6 +667,11 @@ impl History {
                     "uncommitted dispatch contains a paid payload or signature",
                 ));
             }
+            if index + 1 == self.attempts.len() {
+                if let Some(plan) = closing {
+                    plan.validate_tail_wallet(attempt, &preparation)?;
+                }
+            }
             match (&attempt.retirement, preparation.phase()) {
                 (
                     Some(Retirement {
@@ -549,6 +692,12 @@ impl History {
                         "retired dispatch wallet no longer proves its exact unsigned retirement",
                     ));
                 }
+                (None, NativePreparationPhase::Retired)
+                    if index + 1 == self.attempts.len()
+                        && closing
+                            .map(|plan| plan.permits_retired_tail(attempt, &preparation))
+                            .transpose()?
+                            .unwrap_or(false) => {}
                 (None, NativePreparationPhase::Retired)
                     if index + 1 == self.attempts.len() - 1
                         && self
@@ -578,8 +727,10 @@ impl History {
 
     fn require_current(&self) -> Result<()> {
         self.operation.revalidate()?;
-        let current = Self::read(&self.operation, self.purpose, self.semantic)?;
+        let current = Self::read(&self.operation, self.purpose, self.semantic, &self.scope)?;
         if self.dispatch != current.dispatch
+            || self.closing != current.closing
+            || self.closed != current.closed
             || self.empty_tail != current.empty_tail
             || self.attempts.len() != current.attempts.len()
             || self
@@ -614,28 +765,30 @@ impl History {
 
     fn retain_root(&self, operation: &PrivateDirectory) -> Result<()> {
         self.require_current()?;
-        let first = self
-            .attempts
-            .first()
-            .ok_or_else(|| invalid("dispatch root has no first authorization"))?;
-        write_record(
-            operation,
-            "dispatch.nrt",
-            &Dispatch {
-                purpose: self.purpose,
-                semantic: self.semantic,
-                first: first.digest()?,
-            },
-        )
+        self.scope.require_active()?;
+        if operation.identity()? != self.operation.identity()?
+            || self
+                .dispatch
+                .as_ref()
+                .is_none_or(|value| value.state != ReservationState::Published)
+        {
+            return Err(invalid("dispatch root was not fully published"));
+        }
+        Ok(())
     }
 
     /// Compare every retained authorization before wallet inspection or native HTTP.
     pub(in crate::managed) fn require_fees(&self, fees: &super::Fees) -> Result<()> {
         fees.validate()?;
+        self.scope.require_fees(fees)?;
         if self
-            .attempts
-            .iter()
-            .any(|attempt| &attempt.terms().fees != fees)
+            .dispatch
+            .as_ref()
+            .is_some_and(|value| &value.highest.terms.fees != fees)
+            || self
+                .attempts
+                .iter()
+                .any(|attempt| &attempt.terms().fees != fees)
         {
             return Err(invalid(
                 "retained dispatch differs from the full original fee authorization",
@@ -645,7 +798,12 @@ impl History {
     }
 
     pub(in crate::managed) fn selected(&self) -> Result<Option<&Attempt>> {
-        if self.empty_tail {
+        self.scope.require_active()?;
+        if self.closing.is_some()
+            || self.closed.is_some()
+            || self.reservation_pending()
+            || self.empty_tail
+        {
             return Err(ManagedBootstrapFailure::TransitionPending.into());
         }
         let Some(last) = self.attempts.last() else {
@@ -653,6 +811,15 @@ impl History {
         };
         last.require_selected()?;
         Ok(Some(last))
+    }
+    /// Local epoch references only; callers must join them to the actual closed issuer custody.
+    pub(in crate::managed) fn origins(&self) -> impl Iterator<Item = &Origin> {
+        self.attempts.iter().map(Attempt::origin).chain(
+            self.dispatch
+                .iter()
+                .filter(|value| usize::from(value.highest.ordinal) > self.attempts.len())
+                .map(|value| &value.highest.origin),
+        )
     }
     pub(in crate::managed) fn last(&self) -> Option<&Attempt> {
         self.attempts.last()
@@ -664,19 +831,108 @@ impl History {
             .and_then(|index| self.attempts.get(index))
     }
 
-    /// Called only after the concrete owner validates its live authorization. This reserves
-    /// exact terms; it neither retires its predecessor nor grants dispatch permission.
+    /// Original terms remain available even before the exact anchored child is published.
+    pub(in crate::managed) fn retained_terms(&self) -> Option<&Terms> {
+        self.dispatch.as_ref().map(|value| &value.highest.terms)
+    }
+
+    pub(in crate::managed) fn reserved_attempt_count(&self) -> usize {
+        self.dispatch
+            .as_ref()
+            .map_or(0, |value| usize::from(value.highest.ordinal))
+    }
+    pub(in crate::managed) fn cumulative_reserved_count(&self) -> usize {
+        // History::read checked the sum once against the sole shared finite bound.
+        self.cumulative_reserved
+    }
+    fn reservation_pending(&self) -> bool {
+        self.dispatch
+            .as_ref()
+            .is_some_and(|value| value.state == ReservationState::Reserved)
+    }
+    fn finish_reserved(
+        &self,
+        operation: &PrivateDirectory,
+        closing: bool,
+    ) -> Result<Option<Attempt>> {
+        self.require_current()?;
+        if !closing {
+            self.scope.require_active()?;
+        }
+        if operation.identity()? != self.operation.identity()? {
+            return Err(invalid("dispatch selected another operation custody"));
+        }
+        let Some(old) = self
+            .dispatch
+            .as_ref()
+            .filter(|value| value.state == ReservationState::Reserved)
+        else {
+            return Ok(None);
+        };
+        let root = match &self.root {
+            Some(root) => PrivateDirectory::open_exact(root.path())?,
+            None => operation.create_child("attempts")?,
+        };
+        let name = format!("{:04}", old.highest.ordinal);
+        let directory = match root.open_child(&name) {
+            Ok(value) => value,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                root.create_child(&name)?
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let names = directory.entries(1)?;
+        if names.iter().any(|name| name != "authorization.nrt") {
+            return Err(invalid("reserved attempt contains unexpected material"));
+        }
+        write_record(&directory, "authorization.nrt", &old.highest)?;
+        let mut published = old.clone();
+        published.state = ReservationState::Published;
+        replace_dispatch(operation, Some(old), &published)?;
+        Ok(Some(Attempt {
+            directory,
+            authorization: old.highest.clone(),
+            observation: None,
+            commit: None,
+            retirement: None,
+        }))
+    }
+    /// Reserve exact original terms before publishing their child, without any wallet effect.
     pub(in crate::managed) fn reserve(
         &self,
         operation: &PrivateDirectory,
         origin: Origin,
         terms: Terms,
     ) -> Result<Attempt> {
+        self.reserve_pending(operation, origin, terms)?;
+        Self::read(operation, self.purpose, self.semantic, &self.scope)?
+            .finish_reserved(operation, false)?
+            .ok_or_else(|| invalid("new dispatch reservation was not retained"))
+    }
+    fn reserve_pending(
+        &self,
+        operation: &PrivateDirectory,
+        origin: Origin,
+        terms: Terms,
+    ) -> Result<()> {
         self.require_current()?;
+        self.scope.require_active()?;
+        if self.closing.is_some() || self.closed.is_some() || self.reservation_pending() {
+            return Err(ManagedBootstrapFailure::TransitionPending.into());
+        }
         terms.validate()?;
+        self.scope.require_fees(&terms.fees)?;
         validate_origin(&origin)?;
-        let index = self.attempts.len() + 1;
-        if index > MAX_ATTEMPTS {
+        let index = self
+            .reserved_attempt_count()
+            .checked_add(1)
+            .ok_or_else(|| invalid("dispatch count overflow"))?;
+        if self
+            .scope
+            .prior_total()
+            .checked_add(index)
+            .is_none_or(|total| total > MAX_ATTEMPTS)
+        {
             return Err(ManagedBootstrapFailure::EpochLimit.into());
         }
         let authorization = Authorization {
@@ -693,46 +949,76 @@ impl History {
         if operation.identity()? != self.operation.identity()? {
             return Err(invalid("dispatch selected another operation custody"));
         }
-        let root = match &self.root {
-            Some(old) => {
-                let root = operation.open_child("attempts")?;
-                if old.identity()? != root.identity()? {
-                    return Err(invalid("dispatch attempt custody changed"));
-                }
-                root
-            }
-            None => operation.create_child("attempts")?,
+        let reserved = Dispatch {
+            purpose: self.purpose,
+            semantic: self.semantic,
+            first: self
+                .dispatch
+                .as_ref()
+                .map(|value| value.first)
+                .unwrap_or(digest(&authorization)?),
+            scope: self.scope.commitment()?,
+            highest: authorization,
+            state: ReservationState::Reserved,
         };
-        let directory = if self.empty_tail {
-            root.open_child(format!("{index:04}"))?
-        } else {
-            root.create_child(format!("{index:04}"))?
-        };
-        require_empty(&directory)?;
-        write_record(&directory, "authorization.nrt", &authorization)?;
-        let first = self
-            .attempts
-            .first()
-            .map(Attempt::digest)
-            .transpose()?
-            .unwrap_or(digest(&authorization)?);
-        write_record(
-            operation,
-            "dispatch.nrt",
-            &Dispatch {
-                purpose: self.purpose,
-                semantic: self.semantic,
-                first,
-            },
-        )?;
-        Ok(Attempt {
-            directory,
-            authorization,
-            observation: None,
-            commit: None,
-            retirement: None,
-        })
+        replace_dispatch(operation, self.dispatch.as_ref(), &reserved)
     }
+}
+
+fn replace_dispatch(
+    operation: &PrivateDirectory,
+    expected: Option<&Dispatch>,
+    next: &Dispatch,
+) -> Result<()> {
+    operation.revalidate()?;
+    let identity = operation.identity()?;
+    if read_record::<Dispatch>(operation, "dispatch.nrt")?.as_ref() != expected {
+        return Err(invalid("dispatch high-water changed before publication"));
+    }
+    let valid = match expected {
+        None => {
+            next.state == ReservationState::Reserved
+                && next.highest.ordinal == 1
+                && next.highest.previous.is_none()
+                && next.first == digest(&next.highest)?
+        }
+        Some(old) => {
+            let same = old.purpose == next.purpose
+                && old.semantic == next.semantic
+                && old.first == next.first
+                && old.scope == next.scope;
+            same && match (old.state, next.state) {
+                (ReservationState::Reserved, ReservationState::Published) => {
+                    old.highest == next.highest
+                }
+                (ReservationState::Published, ReservationState::Reserved) => {
+                    usize::from(next.highest.ordinal) == usize::from(old.highest.ordinal) + 1
+                        && next.highest.previous == Some(digest(&old.highest)?)
+                }
+                _ => false,
+            }
+        }
+    };
+    if !valid {
+        return Err(invalid("illegal dispatch high-water transition"));
+    }
+    let bytes = encode(next, MAX_RECORD_BYTES)?;
+    operation.write_atomic(
+        "dispatch.nrt",
+        &bytes,
+        if expected.is_some() {
+            PublishMode::Replace
+        } else {
+            PublishMode::CreateNew
+        },
+    )?;
+    if operation.identity()? != identity
+        || read_record::<Dispatch>(operation, "dispatch.nrt")?.as_ref() != Some(next)
+    {
+        return Err(invalid("dispatch high-water changed during publication"));
+    }
+    operation.revalidate()?;
+    Ok(())
 }
 
 /// Retain exact no-wallet retirement under the purpose lock; no decoded marker supplies proof.

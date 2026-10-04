@@ -412,8 +412,14 @@ fn native_delayed_finish_uses_original_batch_and_preserves_every_original_packet
         let mut parent =
             ExecutionMemoryLease::reserve(&original, NativeInvocation::allocation_plan().unwrap())
                 .unwrap();
-        NativeInvocation::run_unit_root(contract.clone(), "main", GAS, &mut parent, &original)
-            .unwrap()
+        NativeInvocation::run_public_leaf_root(
+            contract.clone(),
+            "main",
+            GAS,
+            &mut parent,
+            &original,
+        )
+        .unwrap()
     };
     let plain = run();
     assert!(!IVM::native_register_trace_enabled_for_test());

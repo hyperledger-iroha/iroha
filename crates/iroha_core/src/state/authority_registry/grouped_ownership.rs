@@ -17,16 +17,28 @@ use mv::{PublicationPreparationError, storage::CommittedStorageView};
 use std::{collections::BTreeSet, convert::Infallible};
 
 mod escrows;
-pub(super) use escrows::CheckedEscrows;
+#[cfg(test)]
+pub(in crate::state) use escrows::test_support as escrow_test_support;
+pub(in crate::state) use escrows::validate_original_escrows;
+pub(super) use escrows::{CheckedEscrows, ESCROW_WORK_PER_ROW};
 mod repo_agreements;
 pub(super) use repo_agreements::CheckedRepoAgreements;
 mod asset_definitions;
-pub(super) use asset_definitions::CheckedAssetDefinitions;
+#[cfg(test)]
+pub(in crate::state) use asset_definitions::test_support as asset_definition_test_support;
+pub(in crate::state) use asset_definitions::validate_original_asset_definitions;
+pub(super) use asset_definitions::{ASSET_DEFINITION_WORK_PER_ROW, CheckedAssetDefinitions};
 mod assets;
 mod confidential_policies;
-pub(super) use assets::CheckedAssets;
+#[cfg(test)]
+pub(in crate::state) use assets::test_support as asset_balance_test_support;
+pub(in crate::state) use assets::validate_original_assets;
+pub(super) use assets::{ASSET_BALANCE_WORK_PER_ROW, CheckedAssets};
 mod contract_aliases;
-pub(super) use contract_aliases::CheckedContractAliases;
+#[cfg(test)]
+pub(in crate::state) use contract_aliases::test_support as contract_alias_test_support;
+pub(in crate::state) use contract_aliases::validate_original_contract_aliases;
+pub(super) use contract_aliases::{CONTRACT_ALIAS_WORK_PER_ROW, CheckedContractAliases};
 mod account_rekeys;
 pub(super) use account_rekeys::CheckedAccountRekeys;
 mod validation_fee_proposals;
@@ -41,6 +53,7 @@ pub(super) use proof_status::CheckedProofRecords;
 pub(in crate::state) use proof_status::validate_original_proofs;
 mod contract_subjects;
 pub(super) use contract_subjects::CheckedContractSubjects;
+pub(in crate::state) use contract_subjects::validate_original_contract_subjects;
 mod verifying_keys;
 pub(super) use verifying_keys::CheckedVerifyingKeys;
 

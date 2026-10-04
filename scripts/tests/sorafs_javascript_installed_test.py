@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import sorafs_javascript_installed as installed
 import sorafs_javascript_installed_custody as custody
 from sorafs_javascript_archive import ArchiveError, MAX_NAME_BYTES
-from sorafs_javascript_package_fixtures import CHECKSUM, archive_bytes, expected_files, source_inputs
+from sorafs_javascript_package_fixtures import CHECKSUM, INSTALLED_MEMBERS, archive_bytes, expected_files, source_inputs
 from sorafs_javascript_dependencies_test import _originals
 
 
@@ -68,7 +68,7 @@ def tree(tmp_path, projection):
 
 
 def test_exact_global_projection_preserves_original_bytes_modes_and_nested_owners(projection):
-    assert len(projection.members) == 228
+    assert len(projection.members) == INSTALLED_MEMBERS
     rows = {row.path: row for row in projection.members}
     ordinary = rows["@iroha/iroha-js/dist/crc64Xz.js"]
     assert ordinary.owner == "node_modules/@iroha/iroha-js"

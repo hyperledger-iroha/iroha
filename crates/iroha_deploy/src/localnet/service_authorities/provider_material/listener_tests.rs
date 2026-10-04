@@ -18,6 +18,34 @@ fn fixture() -> (tempfile::TempDir, PreparedLocalnet) {
 }
 
 #[test]
+fn peer_https_table_uses_receiver_accepted_canonical_address() {
+    let address = SocketAddr::from(([127, 0, 0, 1], 3030));
+    let selected = PeerHttps {
+        address: address.clone(),
+        certificate: PathBuf::from("identity/leaf.der"),
+        private_key: PathBuf::from("identity/key.der"),
+        timeout_ms: 10_000,
+    };
+    let table = selected.table().unwrap();
+    let literal = table["address"].as_str().unwrap();
+    let decoded: SocketAddr =
+        norito::json::from_value(norito::json::Value::String(literal.into())).unwrap();
+    assert_eq!(decoded, address);
+    assert!(
+        norito::json::from_value::<SocketAddr>(norito::json::Value::String(
+            "127.0.0.1:3030".into(),
+        ))
+        .is_err()
+    );
+    assert_eq!(
+        table["certificate_chain"][0].as_str(),
+        Some("identity/leaf.der")
+    );
+    assert_eq!(table["private_key"].as_str(), Some("identity/key.der"));
+    assert_eq!(table["handshake_timeout_ms"].as_integer(), Some(10_000));
+}
+
+#[test]
 fn three_original_provider_peers_render_distinct_exact_https_identities() {
     let _resources = crate::managed::native_test_guard();
     let (_temporary, prepared) = fixture();
@@ -120,7 +148,10 @@ fn retained_profile_refuses_missing_moved_or_retargeted_https_without_reissuing_
             let https = transport["https"].as_table_mut().unwrap();
             match which {
                 1 => {
-                    https.insert("address".into(), toml::Value::String("127.0.0.1:1".into()));
+                    https.insert(
+                        "address".into(),
+                        toml::Value::String(SocketAddr::from(([127, 0, 0, 1], 1)).to_literal()),
+                    );
                 }
                 2 => {
                     https.insert(
@@ -154,6 +185,7 @@ fn retained_profile_refuses_missing_moved_or_retargeted_https_without_reissuing_
             }
         }
         let changed = Zeroizing::new(toml::to_string(&*table).unwrap());
+        parse_localnet_peer_config(&changed, Some(&prepared.peers[0].config_path)).unwrap();
         directory
             .write_atomic("peer0.toml", changed.as_bytes(), PublishMode::Replace)
             .unwrap();

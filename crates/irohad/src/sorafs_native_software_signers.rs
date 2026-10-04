@@ -5,7 +5,7 @@
 //! checks before claiming work. Every signature additionally requires exact current durable
 //! same-State finality, a live account, and the configured network, role and authority.
 
-use crate::{IrohaRuntimeDeps, runtime_credential::load_bounded_runtime_credential_v1};
+use crate::{IrohaRuntimeDeps, runtime_credential::load_bound_software_key_v1};
 use iroha_config::parameters::actual::{
     SorafsNativeTransactionSignerBinding as ConfiguredBinding,
     SorafsNativeTransactionSignerBindings,
@@ -14,7 +14,7 @@ use iroha_core::{
     query::signer_finality::verify_signer_finality_v1,
     state::{State, WorldReadOnly},
 };
-use iroha_crypto::{ExposedPrivateKey, KeyPair, PublicKey};
+use iroha_crypto::{KeyPair, PublicKey};
 use iroha_data_model::{
     account::AccountId,
     transaction::{SignedTransaction, TransactionBuilder, TransactionPayload},
@@ -28,7 +28,6 @@ use iroha_torii::{
 };
 use mv::storage::StorageReadOnly;
 use std::sync::Arc;
-use zeroize::Zeroizing;
 
 struct NativeSoftwareSigner {
     binding: Binding,
@@ -59,28 +58,8 @@ impl NativeSoftwareSigner {
             .software_credential
             .as_ref()
             .ok_or("native signer credential is absent")?;
-        let bytes = load_bounded_runtime_credential_v1(path, 2, 16 * 1024 + 256)
-            .map_err(|_| "native signer credential is unavailable or unsafe")?;
-        let text = bytes
-            .strip_suffix(b"\n")
-            .and_then(|value| std::str::from_utf8(value).ok())
-            .ok_or("native signer credential is not canonical")?;
-        let private: ExposedPrivateKey = text
-            .parse()
-            .map_err(|_| "native signer credential is not canonical")?;
-        let canonical = Zeroizing::new(
-            private
-                .try_to_multihash_string()
-                .map_err(|_| "native signer credential is not canonical")?,
-        );
-        if canonical.as_str() != text {
-            return Err("native signer credential is not canonical");
-        }
-        let key = KeyPair::from_private_key(private.0)
-            .map_err(|_| "native signer credential is invalid")?;
-        if key.public_key() != binding.public_key() {
-            return Err("native signer credential does not match its public binding");
-        }
+        let key = load_bound_software_key_v1(path, binding.public_key())
+            .map_err(|_| "native signer credential is unavailable, unsafe or mismatched")?;
         Ok(Self {
             binding,
             state,

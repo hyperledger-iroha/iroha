@@ -37,6 +37,8 @@ use std::time::Instant;
 #[cfg(test)]
 use std::{num::NonZeroU64, time::Duration};
 
+#[path = "stream_token_custody/body_history.rs"]
+pub(in crate::managed) mod body_history;
 #[path = "stream_token_custody/identity.rs"]
 mod identity;
 #[path = "stream_token_custody/journal.rs"]
@@ -45,10 +47,12 @@ use super::{
     ManagedBootstrapFailure,
     native_operation::{
         Fees,
-        attempts::{self, Observation, Purpose, Selected},
+        attempts::{self, HistoryScope, Observation, Purpose, Selected},
+        authorization::DispatchAuthorization,
     },
     service_bootstrap::authorization::BootstrapChildAuthorization,
 };
+use body_history::{BodyHistory, SigningTurn};
 use journal::{Action, Original};
 #[path = "stream_token_custody/enrollment.rs"]
 mod enrollment;
@@ -96,7 +100,7 @@ pub struct ManagedStreamTokenCustody {
 enum Mode<'a> {
     ObserveLocal,
     SubmitOriginal,
-    SubmitAuthorized(&'a BootstrapChildAuthorization<'a>),
+    SubmitAuthorized(&'a dyn DispatchAuthorization),
     ObserveOnly,
 }
 impl Mode<'_> {
@@ -185,7 +189,14 @@ impl ManagedStreamTokenCustody {
         self.validate_policy(policy)?;
         let directory = self.authority.directory.ensure_child("configure")?;
         let original = self.select_configuration(&directory, policy, options.deadline)?;
-        journal::explicit(&directory, &original, utc, options, &self.wallet()?)?;
+        journal::explicit(
+            &directory,
+            &original,
+            utc,
+            options,
+            &self.wallet()?,
+            &HistoryScope::FixedBody,
+        )?;
         self.advance_configure(options.deadline)
     }
     fn select_configuration(
@@ -224,43 +235,58 @@ impl ManagedStreamTokenCustody {
     ) -> Result<ManagedCustodyProgress> {
         self.authority.validate_profile()?;
         let (policy, finalized) = self.retained_configuration(options.deadline)?;
-        let directory = self.authority.directory.ensure_child("enroll")?;
-        let original = if let Some(original) = journal::read_intent(&directory)? {
-            self.validate_original(&original, CustodyPurpose::InitialEnroll)?;
-            original.matches_enrollment_policy(&policy)?;
-            if !matches!(&original.action, Action::Enroll { validity, .. } if *validity == journal::EnrollmentValidity::from_interval(interval))
-            {
-                return Err(invalid("initial custody enrollment cannot be renewed"));
+        let existing = BodyHistory::open(self, CustodyPurpose::InitialEnroll)?;
+        if let Some(history) = &existing {
+            history.matches_policy(&policy)?;
+            history.matches_interval(interval)?;
+            if *history.fees() != Fees::from_options(options)? {
+                return Err(invalid("explicit enrollment changed original fees"));
             }
-            original
+        }
+        let history = if existing
+            .as_ref()
+            .is_some_and(|h| h.original().is_ok_and(|o| o.is_some()) && !h.has_pending())
+        {
+            existing.ok_or_else(|| invalid("selected enrollment absent"))?
         } else {
-            Terms::new(interval.deadline_unix_ms, options)?;
-            self.select_initial_enrollment(
-                &directory,
-                &policy,
-                &finalized,
-                interval,
-                options.deadline,
-            )?
+            let terms = Terms::new(interval.deadline_unix_ms, options)?;
+            let (unsigned, current) =
+                self.select_initial_unsigned(&policy, &finalized, interval, options.deadline)?;
+            let turn = SigningTurn::Explicit(&terms);
+            let history = match existing {
+                Some(history) => history,
+                None => BodyHistory::initialize(
+                    self,
+                    CustodyPurpose::InitialEnroll,
+                    unsigned,
+                    &terms.fees,
+                    &turn,
+                    options.deadline,
+                )?,
+            };
+            history.finish_pending(self, &current, &turn, options.deadline)?
         };
+        let (directory, original, scope) = history.dispatch()?;
         journal::explicit(
-            &directory,
-            &original,
+            directory,
+            original,
             interval.deadline_unix_ms,
             options,
             &self.wallet()?,
+            scope,
         )?;
         self.advance_enroll(options.deadline)
     }
-    fn select_initial_enrollment(
+    fn select_initial_unsigned(
         &mut self,
-        directory: &PrivateDirectory,
         policy: &SignerCustodyPolicyV1,
         finalized: &ManagedTransactionFinality,
         interval: ManagedCustodyEnrollmentInterval,
         deadline: Instant,
-    ) -> Result<Original> {
-        require_empty(directory)?;
+    ) -> Result<(
+        body_history::UnsignedEnrollment,
+        VerifiedStreamTokenCustodyStateV1,
+    )> {
         let (verifier, current) = self.observe(&policy.binding, deadline)?;
         let selected = current
             .current()
@@ -279,11 +305,10 @@ impl ManagedStreamTokenCustody {
         }
         let observed = now_ms()?;
         validate_interval(interval, observed)?;
-        let original = self.enrollment_original(policy, &current, &verifier, interval, observed)?;
+        let unsigned = self.unsigned_enrollment(policy, &current, &verifier, interval, observed)?;
         self.authority.validate_profile()?;
         require_deadline(deadline)?;
-        journal::publish_intent(directory, &original)?;
-        Ok(original)
+        Ok((unsigned, current))
     }
     pub(super) fn advance_configure_selected(
         &mut self,
@@ -306,7 +331,13 @@ impl ManagedStreamTokenCustody {
         self.validate_policy(policy)?;
         let directory = self.authority.directory.ensure_child("configure")?;
         let original = self.select_configuration(&directory, policy, deadline)?;
-        self.select_generated_attempt(&directory, &original, authorization, deadline)?;
+        self.select_generated_attempt(
+            &directory,
+            &original,
+            &HistoryScope::FixedBody,
+            authorization,
+            deadline,
+        )?;
         self.advance(
             CustodyPurpose::Configure,
             deadline,
@@ -333,20 +364,54 @@ impl ManagedStreamTokenCustody {
         if configured != *policy {
             return Err(invalid("original Configure policy differs from enrollment"));
         }
-        let directory = self.authority.directory.ensure_child("enroll")?;
-        let original = if let Some(original) = journal::read_intent(&directory)? {
-            self.validate_original(&original, CustodyPurpose::InitialEnroll)?;
-            original.matches_enrollment_policy(policy)?;
-            original
+        let existing = BodyHistory::open(self, CustodyPurpose::InitialEnroll)?;
+        if let Some(history) = &existing {
+            history.matches_policy(policy)?;
+            if history.fees() != authorization.fees() {
+                return Err(invalid("generated enrollment fees changed"));
+            }
+        }
+        let preserve = existing
+            .as_ref()
+            .map(|history| -> Result<bool> {
+                Ok(!history.has_pending()
+                    && history.original()?.is_some()
+                    && (history.preserve_paid_body(self)? || !history.body_expired()?))
+            })
+            .transpose()?
+            .unwrap_or(false);
+        let history = if preserve {
+            existing.ok_or_else(|| invalid("selected enrollment absent"))?
         } else {
             let terms = authorization.terms(deadline, Some(policy.active_until_unix_ms))?;
             let interval = provider_policies
                 .initial_enrollment(now_ms()?, terms.requested_deadline_unix_ms)?;
-            authorization.validate(&self.authority, purpose, deadline)?;
-            self.select_initial_enrollment(&directory, policy, &finalized, interval, deadline)?
+            let (unsigned, current) =
+                self.select_initial_unsigned(policy, &finalized, interval, deadline)?;
+            let turn = SigningTurn::Generated(authorization);
+            let history = match existing {
+                None => BodyHistory::initialize(
+                    self,
+                    CustodyPurpose::InitialEnroll,
+                    unsigned.clone(),
+                    authorization.fees(),
+                    &turn,
+                    deadline,
+                )?,
+                Some(history) => history,
+            }
+            .finish_pending(self, &current, &turn, deadline)?;
+            if history.body_expired()? {
+                history
+                    .reserve_successor(self, unsigned, &current, authorization, deadline)?
+                    .finish_pending(self, &current, &turn, deadline)?
+            } else {
+                history
+            }
         };
         authorization.validate(&self.authority, purpose, deadline)?;
-        self.select_generated_attempt(&directory, &original, authorization, deadline)?;
+        let (directory, original, scope) = history.dispatch()?;
+        self.select_generated_attempt(directory, original, scope, authorization, deadline)?;
         self.advance(
             CustodyPurpose::InitialEnroll,
             deadline,
@@ -358,7 +423,8 @@ impl ManagedStreamTokenCustody {
         &mut self,
         directory: &PrivateDirectory,
         original: &Original,
-        authorization: &BootstrapChildAuthorization<'_>,
+        scope: &HistoryScope,
+        authorization: &dyn DispatchAuthorization,
         deadline: Instant,
     ) -> Result<()> {
         let purpose = original.dispatch_purpose()?;
@@ -372,6 +438,7 @@ impl ManagedStreamTokenCustody {
             directory,
             purpose,
             original.digest()?,
+            scope,
             authorization,
             deadline,
             body_expiry,
@@ -407,7 +474,8 @@ impl ManagedStreamTokenCustody {
                 }
             },
         )?;
-        authorization.validate(&self.authority, purpose, deadline)?;
+        authorization.check(purpose, deadline)?;
+        self.authority.validate_profile()?;
         Ok(())
     }
     /// A fresh paid observation is admitted only after the original certified anchor and the
@@ -420,13 +488,33 @@ impl ManagedStreamTokenCustody {
         self.authority.validate_profile()?;
         let checkpoint = self.authority.decode_checkpoint(&original.checkpoint)?;
         let historical = self.read_current(&original.selection.binding, &checkpoint, deadline)?;
-        if !matches_predecessor(
-            &original.selection,
-            historical.current().map(|record| record.record()),
-        ) {
+        let (_, current) = self.observe(&original.selection.binding, deadline)?;
+        self.fresh_predecessor_observation(original, &historical, &current, deadline)
+    }
+
+    // Both inputs are opaque native proofs. This owns the exact predecessor/body predicate;
+    // transport and genuine native component fixtures supply proofs through the same verifier.
+    fn fresh_predecessor_observation(
+        &self,
+        original: &Original,
+        historical: &VerifiedStreamTokenCustodyStateV1,
+        current: &VerifiedStreamTokenCustodyStateV1,
+        deadline: Instant,
+    ) -> Result<Observation> {
+        self.authority.validate_profile()?;
+        let checkpoint = self.authority.decode_checkpoint(&original.checkpoint)?;
+        let tip = checkpoint
+            .verified_tip()
+            .map_err(|_| invalid("invalid custody checkpoint"))?;
+        if historical.height() != checkpoint.checkpoint().height()
+            || historical.context_id() != tip.context_id()
+            || !matches_predecessor(
+                &original.selection,
+                historical.current().map(|record| record.record()),
+            )
+        {
             return Err(ManagedBootstrapFailure::EnrollmentPredecessorChanged.into());
         }
-        let (_, current) = self.observe(&original.selection.binding, deadline)?;
         if !matches_predecessor(
             &original.selection,
             current.current().map(|record| record.record()),
@@ -564,11 +652,35 @@ impl ManagedStreamTokenCustody {
         require_deadline(deadline)?;
         self.authority.validate_profile()?;
         self.validate_policy(policy)?;
-        let directory = match self
-            .authority
-            .directory
-            .open_child(purpose.directory_name()?)
-        {
+        if purpose != CustodyPurpose::Configure {
+            if purpose != CustodyPurpose::InitialEnroll {
+                return Err(invalid("bootstrap cannot recover renewal as initial"));
+            }
+            let Some(history) = BodyHistory::open(self, purpose)? else {
+                return Ok(None);
+            };
+            history.matches_policy(policy)?;
+            if history.fees() != fees {
+                return Err(invalid("enrollment recovery fees changed"));
+            }
+            let expired = history.body_expired()?;
+            match history.into_selected() {
+                Ok(_) => return self.advance(purpose, deadline, mode, false).map(Some),
+                Err(super::Error::Bootstrap(ManagedBootstrapFailure::TransitionPending)) => {
+                    return Ok(Some(ManagedCustodyProgress {
+                        transaction_status: if expired {
+                            OperationStatus::Expired
+                        } else {
+                            OperationStatus::Absent
+                        },
+                        finalized: None,
+                        current: None,
+                    }));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        let directory = match self.authority.directory.open_child("configure") {
             Ok(directory) => directory,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error.into()),
@@ -577,17 +689,13 @@ impl ManagedStreamTokenCustody {
             return Ok(None);
         };
         self.validate_original(&original, purpose)?;
-        match purpose {
-            CustodyPurpose::Configure => original.matches_configuration(policy)?,
-            CustodyPurpose::InitialEnroll => original.matches_enrollment_policy(policy)?,
-            CustodyPurpose::Renewal(_) => {
-                return Err(invalid(
-                    "bootstrap cannot recover a renewal as initial enrollment",
-                ));
-            }
-        }
-        let history =
-            attempts::History::read(&directory, original.dispatch_purpose()?, original.digest()?)?;
+        original.matches_configuration(policy)?;
+        let history = attempts::History::read(
+            &directory,
+            original.dispatch_purpose()?,
+            original.digest()?,
+            &HistoryScope::FixedBody,
+        )?;
         history.require_fees(fees)?;
         self.advance(purpose, deadline, mode, false).map(Some)
     }
@@ -601,11 +709,12 @@ impl ManagedStreamTokenCustody {
     ) -> Result<ManagedCustodyProgress> {
         require_deadline(deadline)?;
         self.authority.validate_profile()?;
-        let operation = self
-            .authority
-            .directory
-            .open_child(&purpose.directory_name()?)?;
-        let original = journal::required_original(&operation)?;
+        let original = if purpose == CustodyPurpose::Configure {
+            let operation = self.authority.directory.open_child("configure")?;
+            journal::required_original(&operation)?
+        } else {
+            self.required_enrollment(purpose)?
+        };
         let directory = original.directory();
         self.validate_original(&original, purpose)?;
         if matches!(purpose, CustodyPurpose::Renewal(_)) {
@@ -884,6 +993,16 @@ impl ManagedStreamTokenCustody {
         }
         .map_err(|_| invalid("custody wallet differs from original request"))
     }
+}
+
+/// Reuse the held purpose lock for a complete read-only enrollment reference census.
+pub(in crate::managed) fn validate_enrollment_inventory(authority: ServiceAuthority) -> Result<()> {
+    let owner = ManagedStreamTokenCustody { authority };
+    BodyHistory::open(&owner, CustodyPurpose::InitialEnroll)?;
+    for sequence in 2..=64 {
+        BodyHistory::open(&owner, CustodyPurpose::Renewal(sequence))?;
+    }
+    Ok(())
 }
 
 fn matches_predecessor(

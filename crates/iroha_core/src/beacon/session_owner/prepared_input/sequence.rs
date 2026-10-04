@@ -31,6 +31,11 @@ impl<D: Row> Rows<D> {
             ready: false,
         })
     }
+    #[cfg(test)]
+    pub(super) fn extraction_scaffolding_bytes(&self) -> usize {
+        self.destinations.capacity() * std::mem::size_of::<D>()
+            + self.spans.capacity() * std::mem::size_of::<SequenceSpan>()
+    }
     pub(super) fn decode(&mut self, bytes: &[u8]) -> DecodeResult<()> {
         self.reset();
         exact_count(bytes, self.destinations.capacity())?;

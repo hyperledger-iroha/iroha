@@ -106,8 +106,8 @@ fn lowered_function_params(params: &[TypedParam]) -> Vec<String> {
 /// A virtual register or temporary value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Temp(pub usize);
-/// Identifier for a basic block.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Identifier for a basic block, ordered by its original numeric identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Label(pub usize);
 /// An entire lowered program.
 #[derive(Debug, PartialEq)]

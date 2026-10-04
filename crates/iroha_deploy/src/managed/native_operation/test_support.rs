@@ -173,3 +173,6 @@ pub(in crate::managed) fn provider_id(
         .providers[slot]
         .provider_id
 }
+
+#[path = "test_support/musubi_namespace_tests.rs"]
+mod musubi_namespace_tests;

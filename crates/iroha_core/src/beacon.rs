@@ -22,13 +22,14 @@ mod session_owner;
 use session_owner::{DkgMessageWorkspace, DkgRows};
 pub use session_owner::{
     GlobalThresholdBeaconInputDestinationErrorV1, GlobalThresholdBeaconInputErrorV1,
-    PreparedGlobalThresholdBeaconDkgInputsV1, RetainedGlobalThresholdBeaconDkgFinalizationV1,
-    RetainedGlobalThresholdBeaconDkgSnapshotV1,
+    PreparedGlobalThresholdBeaconDkgInputsV1, PreparedGlobalThresholdBeaconDkgPublicationV1,
+    RetainedGlobalThresholdBeaconDkgFinalizationV1, RetainedGlobalThresholdBeaconDkgSnapshotV1,
 };
 mod validation;
 pub use dkg_local_seat::{
-    LocalGlobalThresholdBeaconDkgErrorV1, LocalGlobalThresholdBeaconDkgSeatV1,
-    PreparedLocalGlobalThresholdBeaconDkgSeatV1,
+    AuthenticatedGlobalBeaconDkgAttemptV1, LocalGlobalThresholdBeaconDkgErrorV1,
+    LocalGlobalThresholdBeaconDkgSeatV1, PreparedLocalGlobalThresholdBeaconDkgSeatV1,
+    VerifiedGlobalBeaconDkgCheckpointContextV1,
 };
 
 #[cfg(any(test, feature = "iroha-core-tests"))]

@@ -62,6 +62,8 @@ use std::{
 };
 use thiserror::Error;
 mod app_routed_read_config;
+mod musubi_publication_installation;
+pub use musubi_publication_installation::MusubiPublicationInstallation;
 mod sccp;
 pub use sccp::{
     SccpAttestor, SccpLightClientKeeper, SccpLightClientKeeperEndpoints, SccpNode, SccpSecretHeader,
@@ -13471,15 +13473,15 @@ impl SnapshotResourcePolicy {
 /// User-level non-secret custody and private TLS listener settings for Musubi publication.
 #[derive(Debug, Clone, ReadConfig)]
 pub struct MusubiPublication {
+    /// Optional complete original identity, credentials and finite pin spending selection.
+    #[config(nested)]
+    pub installation: MusubiPublicationInstallation,
     /// Parent directory for the independent durable journal, seed and clock owners.
     #[config(default = "PathBuf::from(defaults::musubi_publication::CUSTODY_ROOT)")]
     pub custody_root: WithOrigin<PathBuf>,
     /// Bind address for the injected private TLS listener.
     #[config(default = "defaults::musubi_publication::PRIVATE_TLS_BIND.to_owned()")]
     pub private_tls_bind: String,
-    /// Exact prefix removed before one of the three private publication routes is matched.
-    #[config(default = "defaults::musubi_publication::PRIVATE_MOUNT_PREFIX.to_owned()")]
-    pub private_mount_prefix: String,
     /// Maximum simultaneous private TLS requests and bounded request buffers.
     #[config(default = "defaults::musubi_publication::MAX_INFLIGHT_REQUESTS")]
     pub max_inflight_requests: u16,
@@ -13560,13 +13562,6 @@ impl MusubiPublication {
                     .attach("musubi_publication.max_inflight_requests must be within 1..=4"),
             );
         }
-        if !valid_musubi_private_mount_prefix(&self.private_mount_prefix) {
-            emitter.emit(
-                Report::new(ParseError::InvalidMusubiPublicationConfig).attach(
-                    "musubi_publication.private_mount_prefix is not a canonical path prefix",
-                ),
-            );
-        }
         if self.journal_max_operations == 0 || self.journal_max_operations > 1_000_000 {
             emitter.emit(
                 Report::new(ParseError::InvalidMusubiPublicationConfig)
@@ -13634,10 +13629,17 @@ impl MusubiPublication {
                 ),
             );
         }
+        let installation = self.installation.parse(emitter);
+        if installation.is_some() && private_tls_bind.port() == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidMusubiPublicationConfig)
+                    .attach("installed publication requires a nonzero TLS port"),
+            );
+        }
         actual::MusubiPublication {
+            installation,
             custody_root: self.custody_root.resolve_relative_path(),
             private_tls_bind,
-            private_mount_prefix: self.private_mount_prefix,
             max_inflight_requests: self.max_inflight_requests,
             journal_max_operations: self.journal_max_operations,
             journal_max_authorizations: self.journal_max_authorizations,
@@ -13652,16 +13654,6 @@ impl MusubiPublication {
             pin_transaction_authority,
         }
     }
-}
-fn valid_musubi_private_mount_prefix(prefix: &str) -> bool {
-    prefix.len() <= 64
-        && prefix.starts_with('/')
-        && prefix[1..].split('/').all(|part| {
-            !part.is_empty()
-                && part
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-        })
 }
 /// User-level configuration container for the embedded Soracloud runtime manager.
 #[derive(Debug, Clone, ReadConfig)]

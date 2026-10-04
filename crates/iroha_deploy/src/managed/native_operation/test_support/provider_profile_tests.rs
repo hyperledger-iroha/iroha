@@ -11,7 +11,7 @@ use crate::{
 };
 use iroha_core::{
     query::provider_admission::read_finalized_provider_admission_v1,
-    state::{State, StateReadOnly, WorldReadOnly},
+    state::{State, WorldReadOnly},
 };
 use iroha_data_model::{
     asset::AssetId,
@@ -19,6 +19,8 @@ use iroha_data_model::{
     permission::Permission,
 };
 use iroha_executor_data_model::permission::sorafs::CanSetSorafsPricing;
+
+use mv::storage::StorageReadOnly as _;
 
 #[test]
 fn generated_provider_admission_and_price_require_original_genesis_and_real_h2() {
@@ -84,7 +86,7 @@ fn generated_provider_admission_and_price_require_original_genesis_and_real_h2()
         exact_wire
     );
     let view = native.chain.state().view();
-    let now = tip.block_time_ms() / 1_000;
+    let now = tip.header().creation_time_ms / 1_000;
     let admission = read_finalized_provider_admission_v1(&view, provider, now)
         .unwrap()
         .unwrap();

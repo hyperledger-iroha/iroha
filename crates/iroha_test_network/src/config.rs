@@ -1507,7 +1507,10 @@ fn resign_genesis(
             .expect("sign exact genesis proposal header"),
     );
     signed
-        .replace_signatures(BTreeSet::from([signature]))
+        .replace_signatures(
+            iroha_data_model::block::BlockSignatures::try_from_iter([signature])
+                .expect("at most 31 block signatures"),
+        )
         .expect("replace genesis with its one canonical signature");
     signed
 }
@@ -1611,7 +1614,7 @@ mod tests {
     #[derive(norito::NoritoSchema, norito::codec::Decode, norito::codec::Encode)]
     #[norito_schema(name = "iroha_test_network::config::tests::MutableGenesisWire")]
     struct MutableGenesisWire {
-        signatures: BTreeSet<iroha_data_model::block::BlockSignature>,
+        signatures: iroha_data_model::block::BlockSignatures,
         payload: iroha_data_model::block::BlockPayload,
         result: Option<iroha_data_model::block::BlockResult>,
         commit_certificate: Option<iroha_data_model::block::CommitCertificate>,
@@ -2143,7 +2146,10 @@ mod tests {
         );
         block
             .0
-            .replace_signatures(BTreeSet::from([wrong_signature]))
+            .replace_signatures(
+                iroha_data_model::block::BlockSignatures::try_from_iter([wrong_signature])
+                    .expect("at most 31 block signatures"),
+            )
             .unwrap();
         assert!(!super::genesis_signature_is_canonical(
             &block.0,

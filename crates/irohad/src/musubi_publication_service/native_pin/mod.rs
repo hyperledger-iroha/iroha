@@ -33,7 +33,7 @@ use iroha_core::{
         begin_musubi_pin_outbox_check_v1,
     },
     queue::Queue,
-    state::{State, StateReadOnly as _, WorldReadOnly as _},
+    state::{State, StateReadOnly as _, WorldReadOnly as _, WorldStateSnapshot as _},
     tx::AcceptedTransaction,
 };
 use iroha_crypto::KeyPair;
@@ -91,6 +91,16 @@ impl NativeMusubiFinalizedPinV1 {
     pub fn record(&self) -> &PinManifestRecord {
         &self.record
     }
+}
+
+/// Complete decoded local selection; construction and decoding confer no native evidence.
+pub struct NativeMusubiPinOriginalV1 {
+    /// Digest retained before any quote or signature.
+    pub context_digest: [u8; 32],
+    /// Original independently selected archive registration query.
+    pub source: MusubiPublicationFinalizedArchiveRegistrationQueryV1,
+    /// Original immutable spending and exclusive UTC ceiling.
+    pub authorization: NativePinAuthorizationV1,
 }
 
 /// Original retained native Check refusal, borrowed without erasing its cause or retry custody.
@@ -211,6 +221,7 @@ impl NativeMusubiPinCoordinatorV1 {
     pub fn prepare_operation(
         &mut self,
         id: [u8; 32],
+        context_digest: [u8; 32],
         source: &MusubiPublicationFinalizedArchiveRegistrationQueryV1,
         authorization: NativePinAuthorizationV1,
     ) -> Result<()> {
@@ -219,7 +230,9 @@ impl NativeMusubiPinCoordinatorV1 {
         let selected_source = slot::encode_frame(source)?;
         if let Some(original) = self.store.find_operation(id)? {
             ensure!(
-                original.source == selected_source && original.authorization == authorization,
+                original.context_digest == context_digest
+                    && original.source == selected_source
+                    && original.authorization == authorization,
                 "native pin operation changed its original source or authorization"
             );
             return Ok(());
@@ -227,6 +240,7 @@ impl NativeMusubiPinCoordinatorV1 {
         let inventory = self.store.inventory(None)?;
         let operation = Operation {
             id,
+            context_digest,
             ordinal: inventory
                 .operations
                 .checked_add(1)
@@ -236,6 +250,75 @@ impl NativeMusubiPinCoordinatorV1 {
         };
         self.store.create_operation(&operation)
     }
+    /// Recover the complete local operation selection after auditing the entire session.
+    /// Returned claims grant no native finality, current-state or signing authority.
+    /// # Errors
+    /// Refuses incomplete or substituted custody and original resource/codec failures.
+    pub fn original_operation(&self, id: [u8; 32]) -> Result<Option<NativeMusubiPinOriginalV1>> {
+        ensure!(id != [0; 32], "native pin operation ID is zero");
+        if let Some(round) = &self.round {
+            ensure!(
+                round.operation.id == id,
+                "another native operation owns the active round"
+            );
+        }
+        ensure!(
+            self.round
+                .as_ref()
+                .and_then(|round| round.slot.as_ref())
+                .is_none()
+                || self.retained.is_none(),
+            "two native slots unexpectedly hold original custody"
+        );
+        let held = self
+            .round
+            .as_ref()
+            .and_then(|round| round.slot.as_ref())
+            .or(self.retained.as_ref());
+        if let Some(slot) = held {
+            ensure!(
+                slot.request().operation == id,
+                "another native operation owns retained custody"
+            );
+        }
+        self.store
+            .find_operation_with_held(id, held)?
+            .map(|operation| {
+                let source = operation.source()?;
+                Ok(NativeMusubiPinOriginalV1 {
+                    context_digest: operation.context_digest,
+                    source,
+                    authorization: operation.authorization,
+                })
+            })
+            .transpose()
+    }
+
+    /// Read existing exact pin finality without signing, dispatching or repairing missing files.
+    /// # Errors
+    /// Refuses absent/incomplete originals and preserves the native reader's current refusal.
+    pub fn observe_operation(&self, id: [u8; 32]) -> Result<NativeMusubiPinProgressV1> {
+        // Audit the complete durable prefix even when this coordinator owns a live Check slot.
+        self.original_operation(id)?
+            .ok_or_else(|| eyre::eyre!("native operation is missing"))?;
+        let held = self
+            .round
+            .as_ref()
+            .and_then(|round| round.slot.as_ref())
+            .or(self.retained.as_ref());
+        let operation = self
+            .store
+            .find_operation_with_held(id, held)?
+            .ok_or_else(|| eyre::eyre!("native operation is missing"))?;
+        if held.is_some_and(|slot| slot.request().kind == SlotKind::Pin) {
+            // An owned, unexposed pin is pending custody; inspecting it never releases or repairs it.
+            return Ok(NativeMusubiPinProgressV1::Pending(
+                NativeMusubiPinPhaseV1::RetainedPin,
+            ));
+        }
+        self.recover_operation(&operation)
+    }
+
     /// Observe whether one complete original operation is retained. This performs no signing,
     /// creation or Queue dispatch and grants no native evidence. A caller may prepare only true
     /// absence; malformed/incomplete inventory is an error, never permission to renew terms.

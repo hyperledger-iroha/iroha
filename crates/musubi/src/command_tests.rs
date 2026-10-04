@@ -2206,6 +2206,7 @@ fn publish_recovery_is_signer_free_and_ignores_the_locked_consumer_graph() {
         operation_id,
         &state_root,
         Some(&cache),
+        None,
     )
     .expect("locked offline recovery must use only its journal graph");
     assert_eq!(
@@ -2276,6 +2277,7 @@ fn offline_publish_recovery_uses_cached_nodes_without_transport() {
         operation_id,
         &state_root,
         Some(&cache),
+        None,
     )
     .expect("offline recovery must accept an authenticated cache hit");
     let source = PublicationStagedCarSourceV1::new(
@@ -2319,6 +2321,7 @@ fn offline_publish_recovery_reports_cache_miss_before_transport() {
         operation_id,
         &state_root,
         Some(&empty_cache),
+        None,
     ) {
         Err(error) => error,
         Ok(_) => panic!("offline recovery must reject a missing exact archive"),
@@ -2357,6 +2360,7 @@ fn online_publish_recovery_uses_cached_nodes_without_loading_credentials() {
         operation_id,
         &state_root,
         Some(&cache),
+        None,
     )
     .expect("an online cache hit must not load unusable signing or provider credentials");
     let source = PublicationStagedCarSourceV1::new(
@@ -2399,6 +2403,7 @@ fn online_publish_recovery_requires_credentials_only_after_a_cache_miss() {
         operation_id,
         &state_root,
         Some(&empty_cache),
+        None,
     ) {
         Err(error) => error,
         Ok(_) => panic!("an online cache miss requires valid registry credentials"),
@@ -2448,6 +2453,7 @@ fn publish_recovery_rejects_identity_mismatches_before_sidecars() {
             operation_id,
             &state_root,
             Some(&cache),
+            None,
         ) {
             Err(error) => error,
             Ok(_) => panic!("mismatched recovery request must fail"),
@@ -2926,4 +2932,373 @@ fn publication_compiler_evidence_and_nonce_are_domain_bound() {
 
 mod local_workflows {
     include!("command_local_tests.rs");
+}
+
+#[test]
+fn generated_publication_cache_uses_the_explicit_private_root() {
+    let temporary = TempDir::new().expect("private explicit cache fixture");
+    let selected = temporary.path().join("generated-cache");
+    let cache = open_cache_at(&selected).expect("existing canonical cache owner");
+    assert_eq!(cache.root(), selected);
+    assert!(selected.join("registry-v1").is_dir());
+    assert!(selected.is_dir());
+    assert!(!temporary.path().join("publication-state").exists());
+    assert!(!temporary.path().join("namespace-parent").exists());
+}
+
+fn serve_runtime_cache_responses(responses: Vec<Vec<u8>>) -> (String, thread::JoinHandle<usize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("runtime registry listener");
+    let address = listener.local_addr().expect("runtime registry address");
+    listener
+        .set_nonblocking(true)
+        .expect("bounded runtime listener");
+    let server = thread::spawn(move || {
+        let mut completed = 0;
+        for response in responses {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "registry request was not sent"
+                        );
+                        thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(error) => panic!("runtime registry accept failed: {error}"),
+                }
+            };
+            // Keep accept bounded while the accepted request uses the existing finite timeout.
+            stream
+                .set_nonblocking(false)
+                .expect("blocking registry stream");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("bounded registry read");
+            stream
+                .set_write_timeout(Some(Duration::from_secs(2)))
+                .expect("bounded registry write");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 2_048];
+            let (body_start, content_length) = loop {
+                let read = stream.read(&mut buffer).expect("registry query headers");
+                assert_ne!(read, 0, "registry query ended early");
+                request.extend_from_slice(&buffer[..read]);
+                assert!(request.len() <= 64 * 1024, "bounded fixture query");
+                let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n")
+                else {
+                    continue;
+                };
+                let headers = std::str::from_utf8(&request[..header_end]).expect("query headers");
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().expect("query content length"))
+                    })
+                    .expect("signed registry query has a request body");
+                assert!(content_length <= 32 * 1024, "bounded fixture body");
+                break (header_end + 4, content_length);
+            };
+            while request.len() < body_start + content_length {
+                let read = stream.read(&mut buffer).expect("registry query body");
+                assert_ne!(read, 0, "registry query body ended early");
+                request.extend_from_slice(&buffer[..read]);
+                assert!(request.len() <= 64 * 1024, "bounded complete fixture query");
+            }
+            write!(stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                response.len()
+            ).expect("runtime registry response headers");
+            stream
+                .write_all(&response)
+                .expect("runtime registry response body");
+            completed += 1;
+        }
+        completed
+    });
+    (format!("http://{address}/"), server)
+}
+
+fn runtime_cache_contract_fixture(temp: &TempDir) -> (PathBuf, PathBuf) {
+    let (root, manifest) = create_test_package(temp);
+    add_dependency_to_fixture_manifest(&manifest);
+    fs::write(
+        root.join("contract.ko"),
+        "seiyaku CachedCoffee { view fn quote(int cups) -> int { return cups * 10; } }",
+    )
+    .expect("real runtime contract source");
+    let mut document = fs::read_to_string(&manifest).expect("runtime fixture manifest");
+    document.push_str("\n[[contract]]\nname = \"coffee\"\npath = \"contract.ko\"\n");
+    fs::write(&manifest, document).expect("runtime fixture contract target");
+    (root, manifest)
+}
+
+fn runtime_cache_registry_config(torii_url: &str) -> iroha::config::Config {
+    iroha::config::Config::load_bytes_with_musubi_publication(
+        Path::new("explicit-runtime-cache-client.toml"),
+        authenticated_registry_config(torii_url, 753).as_bytes(),
+    )
+    .expect("explicit registry client fixture")
+    .0
+}
+
+// These are HTTP query/cache fixtures. Their artifact commitments come from the actual package
+// compiler and CAR owner; the synthetic registry snapshot makes no native-finality claim.
+#[cfg(unix)]
+fn runtime_cache_registry_responses(
+    edge: &MusubiExactDependencyEdgeV1,
+    node: &MusubiVerificationNodeV1,
+) -> Vec<Vec<u8>> {
+    use iroha_data_model::musubi::{
+        MUSUBI_MIN_HEALTHY_REPLICAS_V1, MusubiArchiveAvailabilityV1,
+        MusubiArtifactGovernanceStateV1, MusubiReleaseSelectionStateV1, MusubiReleaseYankV1,
+        MusubiResolverIndexPageV1, MusubiResolverIndexQueryV1, MusubiResolverReleaseRowV1,
+    };
+
+    let snapshot = recovery_snapshot();
+    let selector: MusubiPackageSelectorV1 = "deps.sora/dependency".parse().expect("selector");
+    assert_eq!(edge.selected, node.release);
+    let directory = MusubiOrderedPackagePageV1 {
+        query: MusubiOrderedPrefixQueryV1 {
+            prefix: MusubiOrderedPrefixV1::new(&selector.to_string()).expect("exact prefix"),
+            page: MusubiPageRequestV1 {
+                limit: 2,
+                cursor: None,
+            },
+        },
+        network_id: test_network_id(0x31),
+        namespace_binding: MusubiNamespaceBindingV1 {
+            namespace: selector.namespace.clone(),
+            home_dataspace: node.release.package.home_dataspace,
+            scope: node.release.package.scope.clone(),
+            generation: 1,
+        },
+        items: vec![MusubiOrderedPackageEntryV1 {
+            selector,
+            package: node.release.package.clone(),
+            latest_selectable: Some(node.release.version.clone()),
+            metadata_revision: 1,
+            index_revision: snapshot.index_revision,
+        }],
+        next_cursor: None,
+        snapshot,
+    };
+    let resolver = MusubiResolverIndexPageV1 {
+        query: MusubiResolverIndexQueryV1 {
+            package: node.release.package.clone(),
+            requirement: Some(edge.requirement.clone()),
+            page: MusubiPageRequestV1 {
+                limit: u32::try_from(MUSUBI_MAX_PAGE_SIZE_V1).expect("page bound"),
+                cursor: None,
+            },
+        },
+        network_id: directory.network_id,
+        items: vec![MusubiResolverReleaseRowV1 {
+            release: node.release.clone(),
+            release_digest: node.release_digest,
+            archive_id: node.archive_id,
+            source_digest: node.source_digest,
+            interface_digest: node.interface_digest,
+            abi: node.abi,
+            dependencies: Vec::new(),
+            selection: MusubiReleaseSelectionStateV1 {
+                yank: MusubiReleaseYankV1 {
+                    release: node.release.clone(),
+                    yanked: false,
+                    reason: "fixture".parse().expect("fixture reason"),
+                    changed_by: test_account(0x5B),
+                    changed_at_height: snapshot.finalized_height,
+                    revision: 1,
+                },
+                storage: MusubiArchiveAvailabilityV1 {
+                    archive_id: node.archive_id,
+                    availability: MusubiStorageAvailabilityV1::Selectable,
+                    healthy_replicas: MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+                    active_locations: 1,
+                    finalized_height: snapshot.finalized_height,
+                    finalized_block_hash: snapshot.finalized_block_hash,
+                    index_revision: snapshot.index_revision,
+                },
+                governance: MusubiArtifactGovernanceStateV1::Available,
+            },
+            index_revision: snapshot.index_revision,
+        }],
+        next_cursor: None,
+        snapshot,
+    };
+    directory
+        .validate_for(&directory.query)
+        .expect("directory fixture");
+    resolver
+        .validate_for(&resolver.query)
+        .expect("resolver fixture");
+    let _chain_discriminant = ChainDiscriminantGuard::enter(753);
+    vec![
+        norito::json::to_vec(&directory).expect("canonical directory response"),
+        norito::json::to_vec(&resolver).expect("canonical resolver response"),
+    ]
+}
+
+#[test]
+fn runtime_package_cold_registry_failure_uses_only_selected_cache_root() {
+    let temp = TempDir::new().expect("explicit cache fixture");
+    let (root, manifest) = runtime_cache_contract_fixture(&temp);
+    let selected_cache = temp.path().join("selected-cache");
+    let unrelated_cache = temp.path().join("unrelated-cache");
+    assert!(!selected_cache.exists());
+    let (torii_url, server) = serve_runtime_cache_responses(vec![b"{}".to_vec()]);
+    let config = runtime_cache_registry_config(&torii_url);
+    let result = build_runtime_package(
+        &config,
+        &selected_cache,
+        Some(&config),
+        None,
+        &manifest,
+        None,
+        None,
+        false,
+        None,
+    );
+    assert_eq!(
+        server.join().expect("one actual failed registry response"),
+        1
+    );
+    let error = result.err().expect("malformed registry data refuses build");
+    assert!(error.to_string().contains("MUSUBI_E_REGISTRY"));
+    assert!(selected_cache.join("registry-v1").is_dir());
+    assert!(
+        !selected_cache
+            .join("registry-v1/resolver-index-v1.norito")
+            .exists()
+    );
+    assert!(!unrelated_cache.exists());
+    assert!(!root.join(LOCK_FILE_NAME).exists());
+    assert!(!root.join("target").exists());
+    assert!(!temp.path().join("journals").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn runtime_package_recorded_resolver_and_real_archive_reuse_exact_cache_root() {
+    let temp = TempDir::new().expect("runtime cache fixture");
+    let (root, manifest) = runtime_cache_contract_fixture(&temp);
+    let selected_cache = temp.path().join("selected-cache");
+    let cache = MusubiCache::open(&selected_cache).expect("explicit immutable cache");
+    let (edge, node) = build_and_install_dependency_fixture(temp.path(), &cache);
+    cache
+        .load_compiler_package(&node)
+        .expect("actual compiled CAR is cached");
+    let resolver_image = selected_cache.join("registry-v1/resolver-index-v1.norito");
+    assert!(!resolver_image.exists(), "the resolver starts cold");
+    let (torii_url, server) =
+        serve_runtime_cache_responses(runtime_cache_registry_responses(&edge, &node));
+    let config = runtime_cache_registry_config(&torii_url);
+    let result = build_runtime_package(
+        &config,
+        &selected_cache,
+        Some(&config),
+        None,
+        &manifest,
+        None,
+        None,
+        false,
+        None,
+    );
+    assert_eq!(
+        server
+            .join()
+            .expect("directory and resolver requests completed"),
+        2
+    );
+    let online = result.expect("online resolver reuses actual immutable archive");
+    assert_eq!(online.name(), "CachedCoffee");
+    let lock_path = root.join(LOCK_FILE_NAME);
+    let lock_before = fs::read(&lock_path).expect("resolved lock bytes");
+    let lock = LockfileV1::read(&lock_path).expect("authenticated registry lock");
+    assert_eq!(lock.nodes, vec![node.clone()]);
+    assert_eq!(
+        lock.registry_context().expect("registry identity").0,
+        config.network_id
+    );
+    let resolver_before = fs::read(&resolver_image).expect("sole recorder wrote resolver cache");
+
+    // A live, unserved listener makes any attempted registry HTTP observable. The only usable
+    // pages and archive are the immutable inputs retained below the explicitly selected root.
+    let observer = TcpListener::bind("127.0.0.1:0").expect("no-HTTP observer");
+    observer
+        .set_nonblocking(true)
+        .expect("nonblocking observer");
+    let offline_config = runtime_cache_registry_config(&format!(
+        "http://{}/",
+        observer.local_addr().expect("observer address")
+    ));
+    let offline = build_runtime_package(
+        &offline_config,
+        &selected_cache,
+        Some(&offline_config),
+        None,
+        &manifest,
+        None,
+        None,
+        true,
+        None,
+    )
+    .expect("locked cache reuse without registry or provider HTTP");
+    assert_eq!(offline.bytes(), online.bytes());
+    assert!(matches!(observer.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock));
+    assert_eq!(fs::read(&lock_path).expect("retained lock"), lock_before);
+    assert_eq!(
+        fs::read(&resolver_image).expect("retained resolver"),
+        resolver_before
+    );
+    cache
+        .load_compiler_package(&node)
+        .expect("original archive remains valid");
+
+    let other_cache = temp.path().join("other-cache");
+    assert!(!other_cache.exists());
+    let (refusing_url, server) = serve_runtime_cache_responses(vec![b"{}".to_vec()]);
+    let refusing_config = runtime_cache_registry_config(&refusing_url);
+    let result = build_runtime_package(
+        &refusing_config,
+        &other_cache,
+        Some(&refusing_config),
+        None,
+        &manifest,
+        None,
+        None,
+        true,
+        None,
+    );
+    assert_eq!(
+        server
+            .join()
+            .expect("new cache requires its own registry read"),
+        1
+    );
+    let error = result
+        .err()
+        .expect("another root cannot reuse the first cache");
+    assert!(error.to_string().contains("MUSUBI_E_REGISTRY"));
+    assert!(other_cache.join("registry-v1").is_dir());
+    assert!(
+        !other_cache
+            .join("registry-v1/resolver-index-v1.norito")
+            .exists()
+    );
+    assert!(
+        MusubiCache::open(&other_cache)
+            .expect("other cache")
+            .load_compiler_package(&node)
+            .is_err()
+    );
+    assert_eq!(fs::read(&lock_path).expect("unchanged lock"), lock_before);
+    assert_eq!(
+        fs::read(&resolver_image).expect("unchanged first cache"),
+        resolver_before
+    );
+    assert!(!temp.path().join("journals").exists());
 }

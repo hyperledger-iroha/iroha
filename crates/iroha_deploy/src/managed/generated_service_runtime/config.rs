@@ -149,6 +149,11 @@ pub(super) fn render(
         &authority.prepared.peers[index].config_path,
         false,
     )?;
+    if before.musubi_publication.installation.is_some() {
+        return Err(invalid(
+            "original peer already contains a publication installation",
+        ));
+    }
     let expected = crate::localnet::service_authorities::configured_execution_policy(&before)
         .map_err(|_| invalid("invalid original execution policy"))?;
     let nexus = section(&mut table, &["nexus"])?;
@@ -231,7 +236,20 @@ pub(super) fn render(
             configure_ingest(&mut table, authority, policies, plan, &selection.plans)?;
         }
     }
+    let installs_publication = intent.stage == GeneratedRuntimeStage::StreamTokens
+        && index == selection.publication.peer_index();
+    if installs_publication {
+        table.insert(
+            "musubi_publication".into(),
+            Value::Table(selection.publication.configuration_table()?),
+        );
+    }
     let after = parse(table.clone(), destination, true)?;
+    let expected_publication = if installs_publication {
+        selection.publication.installation_config()
+    } else {
+        before.musubi_publication.clone()
+    };
     if after.nexus.lane_catalog != before.nexus.lane_catalog
         || after.nexus.dataspace_catalog != before.nexus.dataspace_catalog
         || crate::localnet::service_authorities::configured_execution_policy(&after)
@@ -250,6 +268,7 @@ pub(super) fn render(
         || after.torii.sorafs_storage.provider_ingest_runtime.is_some()
             != (index < 3 && intent.stage == GeneratedRuntimeStage::StreamTokens)
         || after.torii.sorafs_gateway.compliance.is_some() != (index < 3)
+        || after.musubi_publication != expected_publication
     {
         return Err(invalid(
             "derived service configuration changed its original identity or policy",

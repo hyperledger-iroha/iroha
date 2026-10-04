@@ -305,6 +305,23 @@ and resets both counters to zero. `rotateHardwareEpoch()` does not first drain t
 remains callable with saturated counters and pending receipts. The native provider must arrange
 rollover before counter exhaustion; the managed wallet does not schedule automatic rotation.
 
+### Wallet custody backup obligations
+
+`kagemusha-wallet-android` merges `android:allowBackup="false"` and exclude-only
+`android:dataExtractionRules` / `android:fullBackupContent` resources into the host
+application. A full-data restore that reaches an app without its own backup agent
+clears its data, including `no_backup` custody files, and its Keystore keys, so the
+wallet's backup and device-transfer set must stay empty. A host that declares
+`allowBackup="true"` gets a manifest-merger conflict. Host apps must not override
+these attributes (`tools:replace` / `tools:remove`), must not ship resources named
+`kagemusha_wallet_v1_data_extraction_rules` or `kagemusha_wallet_v1_full_backup_content`,
+and must not declare a backup agent. `KagemushaWalletAndroidPlatformV1.create(context)`
+refuses below API 31 (keystore1 reports Keystore errors as absent keys), with backup
+allowed, with a backup agent, with non-exclude-only rule resources, or with a
+device-protected context. It cannot detect a replaced rules attribute. The returned
+handle has no public operation: only the Rust provider's role-checked signers reach
+the payment key through it.
+
 ### Attestation command
 
 The `tools` application verifies collected Android key evidence using the pure

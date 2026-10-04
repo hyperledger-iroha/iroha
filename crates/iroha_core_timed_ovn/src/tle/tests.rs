@@ -109,6 +109,51 @@ fn public_state_roundtrips_and_revalidates_every_proof() {
 }
 
 #[test]
+fn inline_dealer_validation_rejects_excess_without_omitting_proof_checks() {
+    let fixture = fixture();
+    let mut state = fixture.validated.public_state().clone();
+    let dealer = state.qualified_dealer_commitments.last().unwrap().clone();
+    while state.qualified_dealers.len() <= usize::from(THRESHOLD_BLS_MAX_COMMITTEE_SIZE_V1) {
+        state.qualified_dealers.push(dealer.dealer_index);
+        state.qualified_dealer_commitments.push(dealer.clone());
+    }
+    assert_eq!(
+        state.clone().validate().unwrap_err(),
+        TleReleaseAdapterError::Threshold(ThresholdBlsError::NonCanonicalQualifiedSet)
+    );
+    state
+        .qualified_dealer_commitments
+        .last_mut()
+        .unwrap()
+        .constant_pok_response = [0xFF; 32];
+    assert_eq!(
+        state.validate().unwrap_err(),
+        TleReleaseAdapterError::Threshold(ThresholdBlsError::InvalidScalar)
+    );
+}
+
+#[test]
+fn reconstructed_public_share_iterator_checks_every_value_and_exact_length() {
+    let fixture = fixture();
+    for mutation in 0..4 {
+        let mut state = fixture.validated.public_state().clone();
+        match mutation {
+            0 => {
+                state.public_shares.pop();
+            }
+            1 => state.public_shares.push(state.public_shares[0]),
+            2 => state.public_shares.reverse(),
+            3 => state.public_shares[0].participant_hash[0] ^= 1,
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            state.validate().unwrap_err(),
+            TleReleaseAdapterError::TranscriptMismatch
+        );
+    }
+}
+
+#[test]
 fn exact_identity_partials_combine_without_a_subset_bitmap() {
     let fixture = fixture();
     let identity = identity(fixture.session);

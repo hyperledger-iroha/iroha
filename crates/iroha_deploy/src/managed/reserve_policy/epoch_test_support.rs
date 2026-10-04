@@ -1,5 +1,6 @@
 //! Test-only generated selection using a real native cut, followed by the existing wallet/carrier owner.
 use super::*;
+use crate::managed::native_operation::Fees;
 use crate::managed::native_operation::test_support::native_fixture::NativeFixture;
 
 impl ManagedInitialReservePolicy {
@@ -31,6 +32,7 @@ impl ManagedInitialReservePolicy {
             &directory,
             Purpose::ReservePolicy,
             original.digest().unwrap(),
+            &crate::managed::native_operation::attempts::HistoryScope::FixedBody,
             authorization,
             deadline,
             None,

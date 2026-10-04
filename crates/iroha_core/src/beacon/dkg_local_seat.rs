@@ -13,6 +13,9 @@ use iroha_crypto::{
     hybrid::{HybridKemCiphertext, HybridKeyPair, HybridPublicKey},
     threshold_bls::{
         AdaptiveThresholdBlsSecretShare, BeaconPurpose, DasRenDealerSecret, DasRenPrivateShare,
+        checkpoint::{
+            DkgCheckpointBindingV1, DkgCheckpointErrorV1, PreparedDkgSecretsCheckpointV1,
+        },
         open_das_ren_private_share, seal_das_ren_private_share,
     },
 };
@@ -26,7 +29,12 @@ use norito::codec::Encode as _;
 use std::alloc::Layout;
 use zeroize::Zeroizing;
 
+mod checkpoint_authority;
 mod public_frames;
+mod restore;
+pub use checkpoint_authority::{
+    AuthenticatedGlobalBeaconDkgAttemptV1, VerifiedGlobalBeaconDkgCheckpointContextV1,
+};
 use public_frames::{PublicFrame, public_commitments_hash};
 
 /// Original local resource/entropy causes remain distinct from invalid public DKG messages.
@@ -35,6 +43,9 @@ pub enum LocalGlobalThresholdBeaconDkgErrorV1 {
     /// A signed protocol relation is invalid.
     #[error(transparent)]
     Invalid(#[from] GlobalThresholdBeaconError),
+    /// The original signed genesis reader failed without replacing its codec cause.
+    #[error(transparent)]
+    GenesisAuthority(#[from] iroha_data_model::sumeragi_finality::GenesisReadError),
     /// Actual caller-owned allocation or encoding failed without authenticating input.
     #[error(transparent)]
     Session(#[from] GlobalThresholdBeaconSessionError),
@@ -47,6 +58,9 @@ pub enum LocalGlobalThresholdBeaconDkgErrorV1 {
     /// The original threshold primitive failed; entropy refusal is never protocol invalidity.
     #[error(transparent)]
     Threshold(#[from] iroha_crypto::threshold_bls::ThresholdBlsError),
+    /// Original physical checkpoint custody, canonical record or binding refusal.
+    #[error(transparent)]
+    Checkpoint(#[from] DkgCheckpointErrorV1),
 }
 impl From<AllocationRefusal> for LocalGlobalThresholdBeaconDkgErrorV1 {
     fn from(error: AllocationRefusal) -> Self {
@@ -78,6 +92,7 @@ pub struct PreparedLocalGlobalThresholdBeaconDkgSeatV1 {
     outputs: LocalOutputs,
     workspace: DkgMessageWorkspace,
     public_frame: PublicFrame,
+    checkpoints: [PreparedDkgSecretsCheckpointV1<BeaconPurpose>; 3],
     budget: AllocationBudget,
 }
 struct LocalOutputs {
@@ -115,7 +130,7 @@ impl PreparedLocalGlobalThresholdBeaconDkgSeatV1 {
             return Err(GlobalThresholdBeaconError::InvalidDkgSession.into());
         }
         // Derivation and schedule checks precede both real output allocation and secret production.
-        let _ = adaptive_beacon_parameters(&session)?;
+        let parameters = adaptive_beacon_parameters(&session)?;
         let recipient = PendingRow::recipient(seat_index, signer.public_key(), budget)?;
         let dealer = PendingRow::dealer(seat_index, session.threshold, budget)?;
         let mut reservation = budget
@@ -176,6 +191,11 @@ impl PreparedLocalGlobalThresholdBeaconDkgSeatV1 {
                 .record(),
             budget,
         )?;
+        let checkpoints = [
+            PreparedDkgSecretsCheckpointV1::new(&parameters, seat_index, budget)?,
+            PreparedDkgSecretsCheckpointV1::new(&parameters, seat_index, budget)?,
+            PreparedDkgSecretsCheckpointV1::new(&parameters, seat_index, budget)?,
+        ];
         Ok(Self {
             session,
             seat_index,
@@ -190,8 +210,15 @@ impl PreparedLocalGlobalThresholdBeaconDkgSeatV1 {
             },
             workspace,
             public_frame,
+            checkpoints,
             budget: budget.clone(),
         })
+    }
+
+    /// Exact private encrypted checkpoint bound owned before this attempt is claimed.
+    #[must_use]
+    pub fn private_checkpoint_bytes(&self) -> usize {
+        self.checkpoints[0].encrypted_record_capacity()
     }
 
     /// Prepare the final input graph's verifier and shared shell before claiming this attempt.
@@ -248,6 +275,7 @@ impl PreparedLocalGlobalThresholdBeaconDkgSeatV1 {
             outputs: self.outputs,
             workspace: self.workspace,
             public_frame: self.public_frame,
+            checkpoints: self.checkpoints,
             budget: self.budget,
             delivered: false,
             accepted: false,
@@ -271,6 +299,7 @@ pub struct LocalGlobalThresholdBeaconDkgSeatV1 {
     outputs: LocalOutputs,
     workspace: DkgMessageWorkspace,
     public_frame: PublicFrame,
+    checkpoints: [PreparedDkgSecretsCheckpointV1<BeaconPurpose>; 3],
     budget: AllocationBudget,
     delivered: bool,
     accepted: bool,
@@ -290,11 +319,12 @@ impl LocalGlobalThresholdBeaconDkgSeatV1 {
         (self.recipient_key.get(), self.dealer_commitment.get())
     }
 
-    /// Fill and sign every already allocated dealer edge, then erase the polynomial.
+    /// Fill and sign every already allocated dealer edge, retaining the original polynomial.
     ///
     /// # Errors
     /// Invalid input preserves the original private attempt. Genuine producer failure
-    /// after taking the polynomial aborts the attempt; no resource admission occurs there.
+    /// after starting the producer aborts the attempt; no resource admission occurs there.
+    /// The daemon retires this polynomial only after the original output is durable.
     pub fn deliver(
         &mut self,
         recipient_keys: &[GlobalThresholdBeaconDkgRecipientKeyV1],
@@ -332,10 +362,11 @@ impl LocalGlobalThresholdBeaconDkgSeatV1 {
             let _ = super::verify_adaptive_dealer(&parameters, dealer)?;
         }
         let validated = super::verify_adaptive_dealer(&parameters, self.dealer_commitment.get())?;
-        // Every output allocation is already physically owned. No admission follows secret take.
+        // Every output allocation is already physically owned. Retain the original
+        // polynomial until durable publication of these exact original outputs.
         let secret = self
             .dealer_secret
-            .take()
+            .as_ref()
             .ok_or(GlobalThresholdBeaconError::DkgTerminal)?;
         self.aborted = true;
         for (offset, recipient) in recipient_keys.iter().enumerate() {
@@ -364,7 +395,6 @@ impl LocalGlobalThresholdBeaconDkgSeatV1 {
             let edge = pending.sign(signer, &self.session, &mut self.workspace)?;
             self.outputs.outgoing.push_reserved(edge);
         }
-        drop(secret);
         self.delivery_input = Some(public_commitments_hash(
             &self.session,
             recipient_keys,
@@ -378,6 +408,130 @@ impl LocalGlobalThresholdBeaconDkgSeatV1 {
             .as_slice()
             .iter()
             .map(RetainedPayload::get))
+    }
+
+    /// Hash the exact phase inputs using the same canonical domains as the producer.
+    /// This hash authenticates no source by itself; delivery/acceptance still verify
+    /// every original signed row before producing any effect.
+    ///
+    /// # Errors
+    /// Rejects a changed session, wrong phase or original streaming encoder failure.
+    pub fn checkpoint_input_hash(
+        &self,
+        phase: u16,
+        source: &super::GlobalThresholdBeaconDkgSnapshotV1,
+    ) -> Result<[u8; 32], LocalGlobalThresholdBeaconDkgErrorV1> {
+        if source.session != self.session {
+            return Err(GlobalThresholdBeaconError::InvalidDkgSession.into());
+        }
+        match phase {
+            2 => public_commitments_hash(
+                &self.session,
+                &source.recipient_keys,
+                &source.dealer_commitments,
+            ),
+            3 => Ok((*iroha_crypto::HashOf::try_new(source)
+                .map_err(SessionGraphError::from)?
+                .as_ref())
+            .into()),
+            _ => Err(GlobalThresholdBeaconError::InvalidDkgSession.into()),
+        }
+    }
+
+    /// Seal this complete phase's original private state in its pre-claim checkpoint bank.
+    ///
+    /// The enclosing daemon must authenticate the native-source fields, provider
+    /// revision and prior durable head from its original claim. Core additionally
+    /// checks its frozen schedule, lifecycle signer and exact signed output/input.
+    /// Retries borrow the same original encrypted bytes; no secret producer reruns.
+    ///
+    /// The daemon publishes each canonical intent before production. Complete
+    /// generation, delivery and acceptance heads restore their original signed
+    /// outputs, input/native sources and move-only private owners in sequence.
+    /// TODO: restore partial inputs/producers, aggregate/extraction and final export;
+    /// fund decoded native child graphs and qualify complete max-committee/all-seat
+    /// restart before claiming production recovery completeness.
+    ///
+    /// # Errors
+    /// Rejects an incomplete phase, changed original context or checkpoint refusal.
+    pub fn seal_private_checkpoint(
+        &mut self,
+        context: &VerifiedGlobalBeaconDkgCheckpointContextV1,
+        signer: &KeyPair,
+    ) -> Result<&[u8], LocalGlobalThresholdBeaconDkgErrorV1> {
+        let binding = context.binding();
+        if context.session() != self.session {
+            return Err(GlobalThresholdBeaconError::InvalidDkgSession.into());
+        }
+        if self.aborted
+            || self.extracted
+            || !(1..=3).contains(&binding.phase)
+            || binding.attempt_id != self.session.attempt_id
+            || binding.authority_generation != self.session.authority_generation
+            || binding.start_height != self.session.start_height
+            || binding.commitments_end_height != self.session.commitments_end_height
+            || binding.deliveries_end_height != self.session.deliveries_end_height
+            || binding.acceptances_end_height != self.session.acceptances_end_height
+            || signer.public_key() != self.recipient_key.get().validator.public_key()
+            || self.encoded_public_frame().is_empty()
+            || binding.public_output_hash
+                != <[u8; 32]>::from(Hash::new(self.encoded_public_frame()))
+            || (binding.phase == 1 && (self.delivered || self.accepted))
+            || (binding.phase == 2
+                && (!self.delivered
+                    || self.accepted
+                    || self.delivery_input != Some(binding.phase_input_hash)))
+            || (binding.phase == 3
+                && (!self.accepted || self.acceptance_input != Some(binding.phase_input_hash)))
+        {
+            return Err(GlobalThresholdBeaconError::InvalidDkgSession.into());
+        }
+        if binding.phase > 1 {
+            let previous = self.checkpoints[usize::from(binding.phase - 2)]
+                .encrypted_record()
+                .ok_or(GlobalThresholdBeaconError::DkgTerminal)?;
+            if binding.previous_checkpoint_hash != <[u8; 32]>::from(Hash::new(previous)) {
+                return Err(GlobalThresholdBeaconError::InvalidDkgSession.into());
+            }
+        }
+        let bank = &mut self.checkpoints[usize::from(binding.phase - 1)];
+        if !bank.belongs_to(&self.budget) {
+            return Err(GlobalThresholdBeaconSessionError::ForeignReservation.into());
+        }
+        if bank.encrypted_record().is_none() {
+            bank.seal(
+                binding,
+                signer,
+                &self.encryption,
+                self.dealer_secret.as_ref(),
+                self.outputs.shares.as_slice(),
+            )?;
+        }
+        Ok(bank.encrypted_record_for(binding, signer)?)
+    }
+
+    /// Retire the runtime polynomial after the original signed delivery frame is durable.
+    ///
+    /// The trusted daemon calls this only after the canonical phase publisher has
+    /// completed file and directory sync for that exact original output. This
+    /// method does not authenticate filesystem durability by itself. Repetition
+    /// is refused and no storage, signature or capsule is created.
+    ///
+    /// # Errors
+    /// Refuses an incomplete/aborted producer or repeated retirement.
+    pub fn retire_durably_published_dealer(
+        &mut self,
+    ) -> Result<(), LocalGlobalThresholdBeaconDkgErrorV1> {
+        if !self.delivered
+            || self.aborted
+            || self.delivery_input.is_none()
+            || self.outputs.outgoing.as_slice().len() != usize::from(self.session.committee_size)
+            || self.dealer_secret.is_none()
+        {
+            return Err(GlobalThresholdBeaconError::DkgTerminal.into());
+        }
+        drop(self.dealer_secret.take());
+        Ok(())
     }
 
     /// Authenticate all public edges, decrypt only this seat's shares, then sign acknowledgments.
@@ -394,7 +548,7 @@ impl LocalGlobalThresholdBeaconDkgSeatV1 {
         impl ExactSizeIterator<Item = &GlobalThresholdBeaconDkgShareAcceptanceV1> + DoubleEndedIterator,
         LocalGlobalThresholdBeaconDkgErrorV1,
     > {
-        if self.accepted || self.aborted || !self.delivered {
+        if self.accepted || self.aborted || !self.delivered || self.dealer_secret.is_some() {
             return Err(GlobalThresholdBeaconError::DkgTerminal.into());
         }
         let seats = usize::from(self.session.committee_size);
@@ -677,6 +831,17 @@ mod tests {
                         GlobalThresholdBeaconError::DkgTerminal
                     ))
                 ));
+            }
+            for owner in &mut local {
+                assert!(
+                    owner.dealer_secret.is_some(),
+                    "retained through original output publication"
+                );
+                owner
+                    .retire_durably_published_dealer()
+                    .expect("durable delivery boundary");
+                assert!(owner.dealer_secret.is_none());
+                assert!(owner.retire_durably_published_dealer().is_err());
             }
             let snapshot = public
                 .public_snapshot()

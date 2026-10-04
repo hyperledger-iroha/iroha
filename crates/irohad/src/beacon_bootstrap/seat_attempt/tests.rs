@@ -37,7 +37,7 @@ fn identities() -> (GlobalThresholdBeaconDkgSessionV1, Vec<KeyPair>, Vec<PeerId>
         roster,
     )
 }
-fn root() -> (tempfile::TempDir, PathBuf) {
+pub(super) fn root() -> (tempfile::TempDir, PathBuf) {
     let temporary = tempfile::Builder::new()
         .prefix(".retained-attempt-")
         .tempdir_in(std::env::current_dir().unwrap())
@@ -49,11 +49,61 @@ fn root() -> (tempfile::TempDir, PathBuf) {
 fn prepare(
     root: &Path,
     budget: &AllocationBudget,
-) -> std::result::Result<(SeatDkgAttempt, [File; 2]), AttemptError> {
-    let (session, keys, roster) = identities();
+) -> std::result::Result<(SeatDkgAttemptOwner, [File; 2]), AttemptError> {
+    let (attempt, writes, _inherited) = prepare_restartable(root, budget)?;
+    Ok((attempt, writes))
+}
+pub(super) fn prepare_restartable(
+    root: &Path,
+    budget: &AllocationBudget,
+) -> std::result::Result<(SeatDkgAttemptOwner, [File; 2], [File; 2]), AttemptError> {
+    let (public_read, public_write) = rustix::pipe::pipe().unwrap();
+    let (finality_read, finality_write) = rustix::pipe::pipe().unwrap();
+    let sources = [File::from(public_read), File::from(finality_read)];
+    // A supervisor retains these exact inherited kernel streams across owner drop.
+    // Reload never opens a named FIFO or creates another source.
+    let inherited = [
+        sources[0].try_clone().unwrap(),
+        sources[1].try_clone().unwrap(),
+    ];
+    let attempt = prepare_with_sources(root, budget, sources, HANDLE, 7)?;
+    Ok((
+        attempt,
+        [File::from(public_write), File::from(finality_write)],
+        inherited,
+    ))
+}
+pub(super) fn prepare_with_sources(
+    root: &Path,
+    budget: &AllocationBudget,
+    [public_read, finality_read]: [File; 2],
+    handle: &str,
+    revision: u64,
+) -> std::result::Result<SeatDkgAttemptOwner, AttemptError> {
+    let (_, keys, roster) = identities();
+    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(
+        iroha_core::state::World::default(),
+        10_000,
+    );
+    config.chain_id = ChainId::from("retained-attempt");
+    config.consensus_mode = iroha_data_model::parameter::system::SumeragiConsensusMode::Npos;
+    config
+        .genesis_parameters
+        .push(iroha_data_model::parameter::Parameter::Custom(
+            iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                .into_custom_parameter(),
+        ));
+    config.validator_keys = Some(keys.clone());
+    let genesis = iroha_core::sumeragi::test_chain::CertifiedTestChain::prepare(config).unwrap();
+    let network = NetworkId::from_genesis_hash(genesis.genesis.expected_hash());
+    let authority = AuthenticatedGlobalBeaconDkgAttemptV1::signed_genesis(
+        genesis.genesis.block(),
+        network,
+        &ChainId::from("retained-attempt"),
+    )?;
     let clock = NativeJournalCursor::new(
         ChainId::from("retained-attempt"),
-        session.network_id,
+        network,
         iroha_data_model::block::consensus::SumeragiRootScope::Global,
         NativeFinalityLimits {
             block_bytes: NATIVE_FINALITY_MAX_BLOCK_BYTES,
@@ -63,32 +113,25 @@ fn prepare(
         },
         budget,
     )?;
-    let (public_read, public_write) = rustix::pipe::pipe().unwrap();
-    let (finality_read, finality_write) = rustix::pipe::pipe().unwrap();
-    let attempt = SeatDkgAttempt::new(
-        session,
+    SeatDkgAttempt::new(
+        authority,
         &roster,
         1,
         keys[0].clone(),
-        File::from(public_read),
-        File::from(finality_read),
+        public_read,
+        finality_read,
         clock,
-        10,
-        HANDLE,
-        7,
+        handle,
+        revision,
         root,
         Instant::now() + Duration::from_secs(60),
         budget,
-    )?;
-    Ok((
-        attempt,
-        [File::from(public_write), File::from(finality_write)],
-    ))
+    )
 }
-fn through_publication_encoding(attempt: &mut SeatDkgAttempt) {
+pub(super) fn through_publication_encoding(attempt: &mut SeatDkgAttempt) {
     for expected in [
         Phase::Claimed,
-        Phase::JournalDurable,
+        Phase::GenerationIntentDurable,
         Phase::Generated,
         Phase::PublicationEncoded,
     ] {
@@ -135,7 +178,8 @@ fn local_attempt_claim_follows_complete_original_pool_preparation() {
     assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
     assert!(attempt.inputs.belongs_to(&budget));
     assert!(attempt.verifier.as_ref().unwrap().belongs_to(&budget));
-    assert!(attempt.attempt_journal.belongs_to(&budget));
+    assert!(attempt.durable.belongs_to(&budget));
+    assert!(attempt.original_publication.belongs_to(&budget));
     assert!(attempt.provider_handle.belongs_to(&budget));
     attempt.step().unwrap();
     let directory = attempt.claim.directory().unwrap();
@@ -218,10 +262,15 @@ fn pending_attempt_keeps_generated_private_owner_and_terminal_deadline_never_rer
     through_publication_encoding(&mut attempt);
     let original = attempt.local.as_ref().unwrap().publication_hash();
     let retained = budget.reserved_bytes();
+    let receiver = std::ptr::from_ref(&*attempt);
+    assert!(attempt.receiver.belongs_to(&budget));
+    assert_eq!(attempt.receiver.as_slice().len(), 1);
     // An already elapsed absolute deadline is a real pending-owner failure;
     // neither resumption nor the error carrier may reset it or generate again.
     attempt.deadline = Instant::now();
     let failure = attempt.resume().unwrap_err();
+    assert_eq!(std::ptr::from_ref(&*failure.owner), receiver);
+    assert!(failure.owner.receiver.belongs_to(&budget));
     assert_eq!(failure.owner.phase, Phase::Terminal);
     assert!(failure.owner.prepared.is_none());
     assert_eq!(
@@ -230,6 +279,8 @@ fn pending_attempt_keeps_generated_private_owner_and_terminal_deadline_never_rer
     );
     assert_eq!(budget.reserved_bytes(), retained);
     let second = failure.owner.resume().unwrap_err();
+    assert_eq!(std::ptr::from_ref(&*second.owner), receiver);
+    assert!(second.owner.receiver.belongs_to(&budget));
     assert_eq!(second.owner.phase, Phase::Terminal);
     assert_eq!(
         second.owner.local.as_ref().unwrap().publication_hash(),
@@ -239,4 +290,209 @@ fn pending_attempt_keeps_generated_private_owner_and_terminal_deadline_never_rer
     drop(second);
     assert_eq!(budget.reserved_bytes(), 0);
     assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+}
+
+#[test]
+fn bootstrap_error_carriers_keep_only_the_prepaid_receiver_handle() {
+    // Error propagation through filesystem and config helpers must fit the
+    // ordinary thread stack even while a pending receiver owns private DKG work.
+    assert!(std::mem::size_of::<SeatDkgAttempt>() > 1024);
+    assert!(std::mem::size_of::<SeatDkgAttemptOwner>() <= 128);
+    assert!(std::mem::size_of::<PendingSeatDkgAttempt>() <= 1024);
+    assert!(std::mem::size_of::<Error>() <= 1024);
+}
+
+#[test]
+fn original_dealer_retirement_waits_for_complete_durable_delivery_publication() {
+    let (_temporary, root) = root();
+    let budget = AllocationBudget::new(16 * 1024 * 1024);
+    let (mut attempt, _writes) = prepare(&root, &budget).unwrap();
+    through_publication_encoding(&mut attempt);
+    let (_, keys, roster) = identities();
+    let session = attempt.session;
+    let mut peers = keys
+        .iter()
+        .enumerate()
+        .skip(1)
+        .map(|(index, key)| {
+            PreparedLocalGlobalThresholdBeaconDkgSeatV1::new(
+                session,
+                &roster,
+                (index + 1) as u16,
+                key,
+                &budget,
+            )
+            .unwrap()
+            .generate(key)
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let mut recipients = Vec::new();
+    let mut dealers = Vec::new();
+    for seat in std::iter::once(attempt.local.as_ref().unwrap()).chain(peers.iter()) {
+        let (key, dealer) = seat.publication();
+        recipients.push(key.clone());
+        dealers.push(dealer.clone());
+    }
+    let parameters = iroha_crypto::threshold_bls::AdaptiveThresholdBlsParameters::<
+        iroha_crypto::threshold_bls::BeaconPurpose,
+    >::derive(
+        &iroha_crypto::threshold_bls::ThresholdBlsSession::new(
+            *session.network_id.as_bytes(),
+            session.session_id,
+            session.roster_hash,
+            session.committee_size,
+            session.threshold,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let commitments = iroha_core::beacon::GlobalThresholdBeaconDkgSnapshotV1 {
+        session,
+        generator_h: *parameters.h_bytes(),
+        generator_v: *parameters.v_bytes(),
+        recipient_keys: recipients,
+        dealer_commitments: dealers,
+        encrypted_shares: vec![],
+        share_acceptances: vec![],
+        last_updated_height: session.start_height,
+    };
+    let encoded = norito::encode_canonical(&commitments).unwrap();
+    attempt
+        .inputs
+        .decode_commitments(&encoded, norito::canonical_decode_limits(encoded.len()))
+        .unwrap();
+    let signer = &keys[0];
+    let _ = attempt
+        .local
+        .as_mut()
+        .unwrap()
+        .deliver(
+            &commitments.recipient_keys,
+            &commitments.dealer_commitments,
+            2,
+            signer,
+        )
+        .unwrap();
+    for (seat, key) in peers.iter_mut().zip(keys.iter().skip(1)) {
+        let _ = seat
+            .deliver(
+                &commitments.recipient_keys,
+                &commitments.dealer_commitments,
+                2,
+                key,
+            )
+            .unwrap();
+    }
+    // The actual output frame encoder owns the original seat's generated edges.
+    {
+        let attempt = &mut *attempt;
+        attempt
+            .local
+            .as_mut()
+            .unwrap()
+            .delivery_frame(attempt.inputs.commitments().unwrap())
+            .unwrap();
+    }
+    let deliveries: iroha_core::beacon::GlobalThresholdBeaconDkgSnapshotV1 =
+        norito::decode_canonical(attempt.local.as_ref().unwrap().encoded_public_frame()).unwrap();
+    // This test starts at the actual writer boundary after genuine producers;
+    // it does not replace or claim native-finality verification qualification.
+    attempt.phase = Phase::DeliveriesEncoded;
+    let frame = attempt
+        .local
+        .as_ref()
+        .unwrap()
+        .encoded_public_frame()
+        .to_vec();
+    let pointer = attempt
+        .local
+        .as_ref()
+        .unwrap()
+        .encoded_public_frame()
+        .as_ptr();
+    let public_hash = attempt.local.as_ref().unwrap().publication_hash();
+    let path = attempt
+        .claim
+        .directory()
+        .unwrap()
+        .path
+        .join("deliveries.norito");
+    fs::write(&path, b"existing unrelated output").unwrap();
+    let retained = budget.reserved_bytes();
+    assert!(matches!(
+        attempt.publish_phase(2),
+        Err(AttemptError::Export(seat_export::ExportError::Io(_)))
+    ));
+    assert_eq!(attempt.phase, Phase::DeliveriesEncoded);
+    assert_eq!(budget.reserved_bytes(), retained);
+    assert_eq!(
+        attempt
+            .local
+            .as_ref()
+            .unwrap()
+            .encoded_public_frame()
+            .as_ptr(),
+        pointer
+    );
+    assert_eq!(
+        attempt.local.as_ref().unwrap().encoded_public_frame(),
+        &frame
+    );
+    assert_eq!(
+        attempt.local.as_ref().unwrap().publication_hash(),
+        public_hash
+    );
+    assert!(
+        matches!(
+            attempt
+                .local
+                .as_mut()
+                .unwrap()
+                .accept(&deliveries, 3, signer),
+            Err(
+                iroha_core::beacon::LocalGlobalThresholdBeaconDkgErrorV1::Invalid(
+                    iroha_core::beacon::GlobalThresholdBeaconError::DkgTerminal
+                )
+            )
+        ),
+        "writer refusal retains the original runtime polynomial"
+    );
+    fs::remove_file(&path).unwrap();
+    attempt.publish_phase(2).unwrap();
+    attempt
+        .local
+        .as_mut()
+        .unwrap()
+        .retire_durably_published_dealer()
+        .unwrap();
+    attempt.phase = Phase::DeliveriesDurable;
+    assert_eq!(attempt.phase, Phase::DeliveriesDurable);
+    assert!(attempt.publications[2].complete());
+    assert_eq!(fs::read(&path).unwrap(), frame);
+    assert!(
+        attempt
+            .local
+            .as_mut()
+            .unwrap()
+            .retire_durably_published_dealer()
+            .is_err(),
+        "actual durable transition already retired the original polynomial once"
+    );
+    assert_eq!(
+        attempt
+            .local
+            .as_ref()
+            .unwrap()
+            .encoded_public_frame()
+            .as_ptr(),
+        pointer
+    );
+    assert_eq!(
+        attempt.local.as_ref().unwrap().publication_hash(),
+        public_hash
+    );
+    drop(peers);
+    drop(attempt);
+    assert_eq!(budget.reserved_bytes(), 0);
 }

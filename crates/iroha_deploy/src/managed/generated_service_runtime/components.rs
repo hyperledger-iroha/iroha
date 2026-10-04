@@ -5,7 +5,9 @@ use super::{
     carriers::RequiredTransaction, custody_name, encode, invalid, read_optional,
     retain_receipt_custody, retain_revision_file,
 };
-use crate::managed::{ManagedTransactionFinality, Result};
+use crate::managed::{
+    ManagedTransactionFinality, Result, native_operation::require_retained_material,
+};
 use iroha_crypto::Hash;
 use iroha_data_model::{NetworkId, sorafs::capacity::ProviderId};
 use iroha_fs::PrivateDirectory;
@@ -148,7 +150,7 @@ impl ProviderComponent {
                 .as_slice()
                 != self.enrollment.bytes()
         {
-            return Err(invalid("retained generated provider component changed"));
+            return Err(crate::managed::ManagedBootstrapFailure::RetainedMaterial.into());
         }
         retain_receipt_custody(&self.directory, true)?;
         self.directory.revalidate()?;
@@ -207,12 +209,16 @@ impl PreparedProviderComponent {
         // provider roots or receipts must fail before any attempted replacement publication.
         let existing = retention == Retention::ExistingMaterial || selected.sequence > 1;
         let providers = if existing {
-            runtime.open_child("providers")?
+            require_retained_material(runtime.open_child("providers").map_err(Into::into))?
         } else {
             runtime.ensure_child("providers")?
         };
         let directory = if existing {
-            providers.open_child(identity.slot.to_string())?
+            require_retained_material(
+                providers
+                    .open_child(identity.slot.to_string())
+                    .map_err(Into::into),
+            )?
         } else {
             providers.ensure_child(identity.slot.to_string())?
         };
@@ -229,25 +235,32 @@ impl PreparedProviderComponent {
         };
         let receipt_owned = existing || committed.is_some();
         if receipt_owned {
-            retain_receipt_custody(&directory, true)?;
+            require_retained_material(retain_receipt_custody(&directory, true))?;
         }
-        retain_revision_file(
-            &directory,
-            &custody_name(selected.bytes_digest),
-            enrollment.bytes(),
-            MAX_CUSTODY_BYTES,
-            retention,
-        )?;
-        retain_receipt_custody(&directory, receipt_owned)?;
-        retain_revision_file(&directory, &name, &bytes, MAX_MANIFEST_BYTES, retention)?;
-        let value = Arc::new(ProviderComponent {
-            intent,
-            digest,
-            enrollment,
-            directory,
-        });
-        value.validate()?;
-        Ok(value)
+        let result = (|| {
+            retain_revision_file(
+                &directory,
+                &custody_name(selected.bytes_digest),
+                enrollment.bytes(),
+                MAX_CUSTODY_BYTES,
+                retention,
+            )?;
+            retain_receipt_custody(&directory, receipt_owned)?;
+            retain_revision_file(&directory, &name, &bytes, MAX_MANIFEST_BYTES, retention)?;
+            let value = Arc::new(ProviderComponent {
+                intent,
+                digest,
+                enrollment,
+                directory,
+            });
+            value.validate()?;
+            Ok(value)
+        })();
+        if retention == Retention::ExistingMaterial {
+            require_retained_material(result)
+        } else {
+            result
+        }
     }
 }
 

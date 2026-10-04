@@ -324,38 +324,6 @@ fn funded(prepared: &PreparedLocalnet) -> Funded {
         .unwrap();
     assert_eq!(http.requests.lock().unwrap().len(), calls);
     http.finish();
-    let partial_request = retained.request(options.deadline);
-    let partial_account = &wallet;
-    crate::managed::native_operation::test_support::preparation::payload_retained(
-        &prepared,
-        &path,
-        || {
-            partial_account
-                .inspect_provider_capacity_declaration_preparation(&path, &partial_request)
-                .unwrap()
-        },
-        |advance| {
-            coordinator
-                .advance_original(
-                    options.deadline,
-                    if advance {
-                        Advance::SubmitOriginal
-                    } else {
-                        Advance::ObserveOnly
-                    },
-                    false,
-                )
-                .map(|value| {
-                    assert!(value.finalized.is_none() && value.current.is_none());
-                    value.transaction_status
-                })
-        },
-        || {
-            partial_account
-                .prepare_provider_capacity_declaration(&partial_request, &path)
-                .unwrap();
-        },
-    );
     let maximum = maximum_fee(&http, &policy);
     signed.verify_signature().unwrap();
     assert_eq!(signed.authority(), &operator.account);
@@ -627,6 +595,38 @@ fn generated_capacity_uses_real_economics_and_exact_replacement_carrier_during_o
         .unwrap();
     assert_eq!(http.requests.lock().unwrap().len(), calls);
     http.finish();
+    let partial_request = retained.request(options.deadline);
+    let partial_account = &wallet;
+    crate::managed::native_operation::test_support::preparation::payload_retained(
+        &prepared,
+        &path,
+        || {
+            partial_account
+                .inspect_provider_capacity_declaration_preparation(&path, &partial_request)
+                .unwrap()
+        },
+        |advance| {
+            coordinator
+                .advance_original(
+                    options.deadline,
+                    if advance {
+                        Advance::SubmitOriginal
+                    } else {
+                        Advance::ObserveOnly
+                    },
+                    false,
+                )
+                .map(|value| {
+                    assert!(value.finalized.is_none() && value.current.is_none());
+                    value.transaction_status
+                })
+        },
+        || {
+            partial_account
+                .prepare_provider_capacity_declaration(&partial_request, &path)
+                .unwrap();
+        },
+    );
     let maximum = maximum_fee(&http, &policy);
     signed.verify_signature().unwrap();
     assert_eq!(signed.authority(), &operator.account);
@@ -705,7 +705,12 @@ fn generated_capacity_uses_real_economics_and_exact_replacement_carrier_during_o
     assert_eq!(row.registered_epoch, finalized.block_time_ms / 1000);
     for metadata in &retained.declaration.metadata {
         assert_eq!(
-            row.metadata.get(&metadata.key.parse().unwrap()),
+            row.metadata.get(
+                &metadata
+                    .key
+                    .parse::<iroha_model_base::name::Name>()
+                    .unwrap()
+            ),
             Some(&iroha_primitives::json::Json::new(metadata.value.clone()))
         );
     }

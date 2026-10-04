@@ -22,14 +22,14 @@ use std::{
 };
 
 mod admission;
-pub(crate) mod bn254;
+pub(crate) mod measured;
 use admission::KernelAdmission;
 
 struct DevicePolicy {
     slot: usize,
     identity: DeviceIdentity,
     kernels: [KernelAdmission; Kernel::ALL.len()],
-    bn254_costs: [crate::cuda_bn254_cost::ProfileCell; 3],
+    measured_costs: [crate::cuda_cost::ProfileCell; crate::cuda_cost::FAMILY_COUNT],
 }
 struct Policies {
     records: Mutex<ChargedBuffer<ChargedShared<DevicePolicy>>>,
@@ -113,7 +113,7 @@ fn policy_for(device: &CudaDevice<'static>, slot: usize) -> Option<ChargedShared
             slot,
             identity: device.identity(),
             kernels: std::array::from_fn(|_| KernelAdmission::default()),
-            bn254_costs: std::array::from_fn(|_| crate::cuda_bn254_cost::ProfileCell::default()),
+            measured_costs: std::array::from_fn(|_| crate::cuda_cost::ProfileCell::default()),
         },
         &mut reservation,
     )

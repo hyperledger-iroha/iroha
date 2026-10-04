@@ -10,7 +10,7 @@ use crate::{
 /// The sole `SignedBlock` payload layout, with only execution-derived fields projected.
 #[derive(Encode)]
 pub(super) struct Proposal<'a> {
-    signatures: OutputFieldRef<'a, BTreeSet<BlockSignature>>,
+    signatures: OutputFieldRef<'a, BlockSignatures>,
     payload: Payload<'a>,
     result: Option<OutputFieldRef<'a, BlockResult>>,
     commit_certificate: Option<OutputFieldRef<'a, CommitCertificate>>,

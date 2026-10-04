@@ -57,6 +57,10 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use zeroize::{Zeroize as _, Zeroizing};
 
+#[cfg(feature = "pqc")]
+/// Opaque authenticated local DKG secret checkpoints; no public plaintext codec.
+pub mod checkpoint;
+
 /// Version of the fixed threshold-BLS transcript profile.
 pub const THRESHOLD_BLS_PROTOCOL_VERSION_V1: u16 = 1;
 const SESSION_CANONICAL_BYTES_V1: usize = SESSION_DOMAIN_V1.len() + 2 + 1 + 32 * 3 + 2 * 2;

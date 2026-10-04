@@ -1,0 +1,64 @@
+[package]
+name = "iroha_pasta"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "Iroha-native Pasta (Pallas/Vesta) field and curve arithmetic with the PLONK/IPA prover kernels"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories = ["cryptography"]
+
+[lints]
+workspace = true
+
+# Every entry below is already in the workspace lockfile; the crate adds no
+# external package. pasta_curves is a differential test oracle only and never
+# appears in this crate's public types.
+[dependencies]
+# Fp, Fq, Pallas and Vesta implement the ff 0.13 and group 0.13 traits so that
+# consumers port mechanically from the vendored halo2curves types.
+ff = "0.13.1"
+group = "0.13"
+# Caller-supplied randomness (`Field::random`, ChaCha streams) uses the
+# rand_core 0.6 traits shared with ff 0.13.
+rand_core_06 = { workspace = true }
+# Constant-time selection and equality for secret-dependent arithmetic.
+subtle = { version = "2.6.1", default-features = false }
+# MSM, fold and FFT kernels run on the caller's Rayon pool.
+rayon = { workspace = true }
+# BLAKE2b-512 expand_message_xmd for hash-to-curve (ParamsIPA generators).
+blake2 = { workspace = true }
+# Secret scalar digits and witness buffers are zeroized on drop.
+zeroize = { workspace = true }
+
+[dev-dependencies]
+# Differential oracle for encodings, field, curve and hash-to-curve results.
+pasta_curves = "0.5.2"
+# Cross-implementation encoding KATs against the second Pasta implementation
+# that production consensus key checks use (iroha_zkp_poseidon::pasta_keys).
+halo2curves = { workspace = true }
+# Deterministic seeded loops replace property-test generators.
+rand_chacha = "0.3.1"
+# Golden digests of params and key bytes.
+sha2 = "0.10.9"
+# Microbenchmarks under benches/ (field, msm, fold, fft).
+criterion = { workspace = true }
+
+[[bench]]
+name = "field"
+harness = false
+
+[[bench]]
+name = "msm"
+harness = false
+
+[[bench]]
+name = "fold"
+harness = false
+
+[[bench]]
+name = "fft"
+harness = false

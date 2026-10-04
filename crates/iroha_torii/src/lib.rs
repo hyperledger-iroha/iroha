@@ -757,6 +757,7 @@ impl ValidatedToriiHttpTransport {
 }
 
 mod public_tls;
+pub use public_tls::native_https_server_identity_v1;
 
 async fn serve_torii_http_connection<S>(
     stream: S,
@@ -34507,7 +34508,8 @@ async fn ledger_executed_block_wire_response(
         }
         Err(error) => return Err(map_block_proof_error(error)),
     };
-    let mut response = Response::new(Body::from(wire));
+    // HTTP retirement owns the original charged frame; no response byte copy or early refund.
+    let mut response = Response::new(Body::from(Bytes::from_owner(wire)));
     response.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
         HeaderValue::from_static(utils::NORITO_MIME_TYPE),

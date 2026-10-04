@@ -2791,7 +2791,35 @@ ordered balance set before returning the plan for review. There is one dispatch
 with no retry or redirect. Execution must recompute all monetary effects and
 preconditions before any signed plan changes ledger balances.
 
-Python preparation currently inherits Requests connect/read inactivity timeouts.
-A slow response can exceed the configured duration while it keeps delivering
-bytes. Absolute deadline qualification remains open in the canonical transport
-owner; the byte limit alone does not bound elapsed time.
+Python preparation uses one original absolute deadline, including request
+preparation, worker startup, headers, body and validation. On POSIX, its owned
+Requests worker prepares the request and resolves the original Session and
+ambient authentication, proxy, TLS and certificate settings exactly once, so
+NETRC reads and system proxy discovery share the same deadline. A bounded Norito
+pipe returns the exact prepared request metadata and at most
+256 KiB. Deadline expiry terminates and reaps only that worker. Cleanup allows
+up to 1.2 seconds beyond the deadline. Before starting the worker, the parent
+requires the exact ToriiClient and rejects relevant instance method overrides,
+custom client/default-header storage and altered request graphs before parent
+header copying, formatting or virtual dispatch. The original request graph is
+admitted against the existing staking schemas before its sole canonical codec
+runs. It requires exact standard Session and nested storage types and rejects custom
+adapters, hooks, cookies, authentication callbacks, non-string Session parameter
+mappings and modified pool settings without invoking their methods. Scalar and
+collection bounds, including the 512 KiB IPC envelope, are checked before the
+full encoder runs. The worker bounds the prepared URL before dispatch and rejects
+compressed responses and response cookie mutation before reading their bodies.
+The same worker runs the canonical native SoraFS alias-proof policy. Successful
+outcomes retain the exact alias evaluation and increment the current client
+counters once. Standard warning logging runs only in that worker, through owned
+duplicates of the admitted stream descriptors; the parent never writes, flushes
+or closes the original log stream. A blocked log sink shares the original
+deadline. Timed-out operations do not publish a completed alias evaluation.
+Custom warning callbacks, logger/handler/filter subclasses, nonstandard streams,
+custom formatters and custom counter storage are rejected before dispatch. The
+bounded route supports standard Logger/RootLogger chains, NullHandler and
+StreamHandler with the default message formatter, including the standard
+last-resort stderr handler. Other client routes retain their configured hooks.
+Configured ordinary request headers (including API authorization) are preserved.
+Other platforms are explicitly unsupported by this bounded owner. There are no
+redirects, retries, transport fallback or credentials in IPC files/arguments.

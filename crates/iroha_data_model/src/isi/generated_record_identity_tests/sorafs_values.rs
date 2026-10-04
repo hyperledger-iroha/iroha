@@ -49,5 +49,105 @@ pub(super) fn values() -> Vec<Value> {
         minimum_height: 9,
         minimum_block_hash: [0x65; 32],
     };
-    vec![capacity, initializer, capture(assertion)]
+    // Completion records now carry the governed signer policy directly. Capture
+    // actual current Rust values; the retired authority enum has no decoder.
+    let owner = crate::account::AccountId::new(
+        "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
+            .parse()
+            .expect("canonical completion owner"),
+    );
+    let authority = crate::sorafs::pin_registry::ProviderIngestCompletionAuthorityV1::new(
+        owner.clone(),
+        owner,
+        crate::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
+            policy_id: [0x91; 32],
+            revision: 1,
+            predecessor_digest: None,
+            policy_digest: [0x92; 32],
+        },
+    );
+    assert!(authority.is_valid());
+    let provider = crate::sorafs::capacity::ProviderId::new([0x35; 32]);
+    let attestation =
+        crate::isi::musubi::generated_identity_values::provider_attestation_registration();
+    attestation
+        .validate()
+        .expect("complete signed current attestation");
+    vec![
+        capacity,
+        initializer,
+        capture(assertion),
+        capture(crate::isi::sorafs::CompleteReplicationOrder::new(
+            crate::sorafs::pin_registry::ReplicationOrderId::new([0x44; 32]),
+            provider,
+            88,
+            authority.clone(),
+            1,
+            crate::sorafs::pin_registry::ProviderIngestFinalizedAnchorV1 {
+                height: 87,
+                block_hash: [0x93; 32],
+            },
+        )),
+        capture(
+            crate::isi::sorafs::SetProviderIngestCompletionAuthority::new(
+                provider,
+                None,
+                authority.clone(),
+            ),
+        ),
+        capture(
+            crate::isi::sorafs::RevokeProviderIngestCompletionAuthority::new(provider, authority),
+        ),
+        capture(attestation),
+    ]
+}
+
+#[test]
+fn current_completion_records_keep_full_governed_and_signed_canonical_frames() {
+    use crate::isi::musubi::RegisterMusubiProviderBundleAttestationV1;
+    let rows = values();
+    assert_eq!(rows.len(), 7);
+    let nominals: std::collections::BTreeSet<_> = rows
+        .iter()
+        .map(|row| row.get("nominal").unwrap().as_str().unwrap())
+        .collect();
+    assert_eq!(nominals.len(), rows.len());
+    for nominal in [
+        "iroha_data_model::isi::sorafs::CompleteReplicationOrder",
+        "iroha_data_model::isi::sorafs::SetProviderIngestCompletionAuthority",
+        "iroha_data_model::isi::sorafs::RevokeProviderIngestCompletionAuthority",
+        "iroha_data_model::isi::musubi::RegisterMusubiProviderBundleAttestationV1",
+    ] {
+        assert!(nominals.contains(nominal));
+    }
+    let row = rows
+        .iter()
+        .find(|row| {
+            row.get("nominal").unwrap().as_str().unwrap()
+                == "iroha_data_model::isi::musubi::RegisterMusubiProviderBundleAttestationV1"
+        })
+        .unwrap();
+    let bytes = hex::decode(row.get("frame").unwrap().as_str().unwrap()).unwrap();
+    let mut decoded: RegisterMusubiProviderBundleAttestationV1 =
+        norito::decode_from_bytes(&bytes).unwrap();
+    decoded.validate().unwrap();
+    decoded
+        .attestation
+        .verify(&decoded.attestation.payload.binding)
+        .unwrap();
+    assert_eq!(norito::to_bytes(&decoded).unwrap(), bytes);
+    decoded
+        .attestation
+        .payload
+        .binding
+        .completion_authority
+        .signer_policy
+        .revision += 1;
+    assert!(
+        decoded
+            .attestation
+            .verify(&decoded.attestation.payload.binding)
+            .is_err(),
+        "changed complete signer binding invalidates its original signature"
+    );
 }

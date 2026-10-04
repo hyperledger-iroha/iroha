@@ -4,6 +4,15 @@ use super::*;
 use iroha_data_model::sorafs::stream_token_custody::StreamTokenCustodyControlRecordV1;
 use sorafs_manifest::signer::custody_control::SignerCustodyControlStateV1;
 
+#[path = "renewal/generated.rs"]
+mod generated;
+pub(in crate::managed) use generated::{
+    GeneratedRenewalAuthorization, GeneratedRenewalTurn, Reconciliation,
+};
+
+#[cfg(test)]
+pub(in crate::managed::stream_token_custody) use generated::RenewalReads;
+
 // Local generated-profile bound, not a native protocol revision or sequence limit.
 const MAX_GENERATED_SEQUENCE: u64 = 64;
 
@@ -31,40 +40,52 @@ impl ManagedStreamTokenCustody {
         deadline_unix_ms: u64,
         options: &BoundedTransactionOptions,
     ) -> Result<ManagedCustodyProgress> {
-        let name = directory_name(sequence)?;
+        directory_name(sequence)?;
         require_deadline(options.deadline)?;
         self.authority.validate_profile()?;
-        let directory = self.authority.directory.ensure_child(&name)?;
-        let original = match journal::read_intent(&directory)? {
-            Some(original) => {
-                self.validate_original(&original, CustodyPurpose::Renewal(sequence))?;
-                original
-            }
-            None => {
-                require_empty(&directory)?;
-                let terms = Terms::new(deadline_unix_ms, options)?;
-                let (policy, _) = self.retained_configuration(options.deadline)?;
-                let (verifier, current) = self.observe(&policy.binding, options.deadline)?;
-                let original = self.select_renewal_original(
-                    sequence,
-                    &policy,
-                    &current,
-                    &verifier,
-                    terms,
+        let purpose = CustodyPurpose::Renewal(sequence);
+        let existing = BodyHistory::open(self, purpose)?;
+        let history = if existing.as_ref().is_some_and(|history| {
+            history.original().is_ok_and(|original| original.is_some()) && !history.has_pending()
+        }) {
+            existing.ok_or_else(|| invalid("renewal body absent"))?
+        } else {
+            let terms = Terms::new(deadline_unix_ms, options)?;
+            let (policy, _) = self.retained_configuration(options.deadline)?;
+            let (verifier, current) = self.observe(&policy.binding, options.deadline)?;
+            let unsigned = self.select_renewal_unsigned(
+                sequence,
+                &policy,
+                &current,
+                &verifier,
+                &terms,
+                options.deadline,
+            )?;
+            let turn = SigningTurn::Explicit(&terms);
+            let history = match existing {
+                Some(history) => history,
+                None => BodyHistory::initialize(
+                    self,
+                    purpose,
+                    unsigned,
+                    &terms.fees,
+                    &turn,
                     options.deadline,
-                )?;
-                self.authority.validate_profile()?;
-                require_deadline(options.deadline)?;
-                journal::publish_intent(&directory, &original)?;
-                original
-            }
+                )?,
+            };
+            history.finish_pending(self, &current, &turn, options.deadline)?
         };
+        if history.fees() != &Fees::from_options(options)? {
+            return Err(invalid("renewal original fee selection changed"));
+        }
+        let (directory, original, scope) = history.dispatch()?;
         journal::explicit(
-            &directory,
-            &original,
+            directory,
+            original,
             deadline_unix_ms,
             options,
             &self.wallet()?,
+            scope,
         )?;
         self.advance_renewal(sequence, options.deadline)
     }
@@ -87,7 +108,8 @@ impl ManagedStreamTokenCustody {
 
     /// Recover one explicitly selected renewal without creating a wallet or sending.
     ///
-    /// Missing/empty renewal journals return `None` without HTTP or filesystem publication.
+    /// An absent renewal root returns `None` only when its selection reference is absent too.
+    /// Existing empty or lost anchored material refuses without HTTP or filesystem publication.
     /// Exact retained successful carriers remain recoverable without current peer availability.
     /// # Errors
     /// Rejects unsafe custody or substituted profile/original/wallet/native carrier evidence.
@@ -96,17 +118,27 @@ impl ManagedStreamTokenCustody {
         sequence: u64,
         deadline: Instant,
     ) -> Result<Option<ManagedCustodyProgress>> {
-        let name = directory_name(sequence)?;
+        directory_name(sequence)?;
         require_deadline(deadline)?;
         self.authority.validate_profile()?;
-        let directory = match self.authority.directory.open_child(&name) {
-            Ok(directory) => directory,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
-        };
-        if journal::read_intent(&directory)?.is_none() {
-            require_empty(&directory)?;
+        let Some(history) = BodyHistory::open(self, CustodyPurpose::Renewal(sequence))? else {
             return Ok(None);
+        };
+        let expired = history.body_expired()?;
+        match history.into_selected() {
+            Ok(_) => {}
+            Err(super::super::Error::Bootstrap(ManagedBootstrapFailure::TransitionPending)) => {
+                return Ok(Some(ManagedCustodyProgress {
+                    transaction_status: if expired {
+                        OperationStatus::Expired
+                    } else {
+                        OperationStatus::Absent
+                    },
+                    finalized: None,
+                    current: None,
+                }));
+            }
+            Err(error) => return Err(error),
         }
         self.advance(
             CustodyPurpose::Renewal(sequence),
@@ -117,15 +149,15 @@ impl ManagedStreamTokenCustody {
         .map(Some)
     }
 
-    pub(super) fn select_renewal_original(
+    pub(super) fn select_renewal_unsigned(
         &self,
         sequence: u64,
         policy: &SignerCustodyPolicyV1,
         current: &VerifiedStreamTokenCustodyStateV1,
         verifier: &FinalityVerifier,
-        terms: Terms,
+        terms: &Terms,
         deadline: Instant,
-    ) -> Result<Original> {
+    ) -> Result<body_history::UnsignedEnrollment> {
         directory_name(sequence)?;
         self.validate_policy(policy)?;
         let selected = current
@@ -148,12 +180,30 @@ impl ManagedStreamTokenCustody {
             now,
             terms.requested_deadline_unix_ms,
         )?;
-        let original = self.enrollment_original(policy, current, verifier, interval, now)?;
-        self.validate_original(&original, CustodyPurpose::Renewal(sequence))?;
-        self.validate_renewal_context(&original, deadline)?;
-        Ok(original)
+        let unsigned = self.unsigned_enrollment(policy, current, verifier, interval, now)?;
+        unsigned.validate(self, CustodyPurpose::Renewal(sequence))?;
+        self.validate_unsigned_renewal_context(&unsigned, deadline)?;
+        Ok(unsigned)
     }
 
+    pub(super) fn validate_unsigned_renewal_context(
+        &self,
+        unsigned: &body_history::UnsignedEnrollment,
+        deadline: Instant,
+    ) -> Result<()> {
+        let (policy, _) = self.retained_configuration(deadline)?;
+        let interval = self.inspect_local_initial_interval(&policy)?;
+        let initial = self.retained_initial_enrollment(&policy, interval, deadline)?;
+        let checkpoint = self.authority.decode_checkpoint(&unsigned.checkpoint)?;
+        let selected = body_history::selected_policy(&unsigned.selection)?;
+        if selected != policy || checkpoint.checkpoint().height() < initial.finalized().height {
+            return Err(invalid(
+                "renewal predecessor differs from original initial enrollment",
+            ));
+        }
+        self.authority.validate_profile()?;
+        require_deadline(deadline)
+    }
     pub(super) fn validate_renewal_context(
         &self,
         original: &Original,
@@ -210,7 +260,7 @@ impl ManagedStreamTokenCustody {
         validate_interval(interval, observed)?;
         Ok(interval)
     }
-    fn renewal_validity(
+    pub(super) fn renewal_validity(
         &self,
         current: &StreamTokenCustodyControlRecordV1,
         control: &SignerCustodyControlStateV1,

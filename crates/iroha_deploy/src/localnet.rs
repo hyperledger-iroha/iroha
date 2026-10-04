@@ -1351,6 +1351,13 @@ fn generate_localnet_runtime<T: Write>(
         &alias_setup_request,
         append_alias_setup_to_current_transaction,
     )?;
+    if service_authorities.is_some() {
+        genesis = service_authorities::publication_client::append_namespace(
+            genesis,
+            &genesis_account_id,
+            &client_identity.account_id,
+        )?;
+    }
     genesis =
         append_localnet_onboarding_permissions(genesis, &onboarding_identity.account_id, taira)?;
     let alias_setup_intent_path =
@@ -1461,6 +1468,7 @@ fn generate_localnet_runtime<T: Write>(
     if let Some(authorities) = service_authorities.as_ref() {
         authorities.publish(&out_dir, genesis_expected_hash, &client_identity.account_id)?;
     }
+    let mut publication_client_selection = None;
     for (idx, peer) in peers.iter().enumerate() {
         let paths = LocalnetPeerStoragePaths::new(&out_dir, idx);
         custody::ensure_directory(&paths.kura)
@@ -1549,6 +1557,35 @@ fn generate_localnet_runtime<T: Write>(
                 genesis_expected_hash
             ));
         }
+        if idx == 0 {
+            if let Some(authorities) = service_authorities.as_ref() {
+                ensure!(
+                    hosts.public.url_host() == "127.0.0.1",
+                    "generated publication requires original numeric loopback Torii endpoints"
+                );
+                let signed =
+                    iroha_fs::read_private(&genesis_signed_path, SIGNED_GENESIS_MAX_BYTES_V1)?;
+                // Staging binds new consensus commitments into the published manifest. Project
+                // the exact persisted bound bytes paired with this signed block.
+                let bound_json = iroha_fs::read_private(
+                    &genesis_json_path,
+                    iroha_genesis::GENESIS_MANIFEST_JSON_MAX_BYTES_V1,
+                )?;
+                validate_genesis_manifest_json(&bound_json)?;
+                let bound_manifest = RawGenesisTransaction::from_json_slice_at_path(
+                    &bound_json,
+                    &genesis_json_path,
+                )?;
+                publication_client_selection = Some(authorities.publication_client_selection(
+                    &bound_manifest,
+                    &signed,
+                    &parsed_config,
+                    &out_dir,
+                    &client_identity.account_id,
+                    opts.base_api_port,
+                )?);
+            }
+        }
         if idx < 3 && managed {
             if let Some(authorities) = service_authorities.as_ref() {
                 authorities.initialize_native_attestation(
@@ -1557,6 +1594,13 @@ fn generate_localnet_runtime<T: Write>(
                     genesis_expected_hash,
                     idx,
                 )?;
+                if idx == 0 {
+                    authorities.initialize_publication(
+                        &out_dir,
+                        genesis_expected_hash,
+                        &client_identity.account_id,
+                    )?;
+                }
             }
         }
         let rendered = match publication_root {
@@ -1574,7 +1618,13 @@ fn generate_localnet_runtime<T: Write>(
             &chain_id,
             chain_discriminant,
             &client_identity,
+            publication_client_selection
+                .as_ref()
+                .map(|selection| &selection.table),
         )?;
+        if let Some(selection) = publication_client_selection.as_ref() {
+            selection.initialize_namespace_parent(&out_dir)?;
+        }
         crate::localnet::custody::validate_private_tree(&out_dir, &[])
             .wrap_err("validate managed localnet private artifact tree")?;
         return Ok(());
@@ -1595,6 +1645,9 @@ fn generate_localnet_runtime<T: Write>(
         &chain_id,
         chain_discriminant,
         &client_identity,
+        publication_client_selection
+            .as_ref()
+            .map(|selection| &selection.table),
     )?;
     let primary_torii_url = hosts.public.torii_url(opts.base_api_port);
     let client_config_path = out_dir.join("client.toml");
@@ -4706,8 +4759,420 @@ pub(crate) fn parse_localnet_peer_config(
         table,
         crate::secret_toml::zeroize_table,
     );
-    actual::Root::from_toml_source(source)
-        .map_err(|_| eyre!("generated peer config is invalid while deriving consensus policies"))
+    actual::Root::from_toml_source(source).map_err(|error| {
+        eyre!(
+            "generated peer config is invalid while deriving consensus policies: {}",
+            generated_config_error_categories(&error)
+        )
+    })
+}
+
+// Only typed schema/validation categories and fixed public schema names are diagnostics.
+// Report attachments, source paths and arbitrary ParameterId strings may contain private values.
+fn generated_config_error_categories<E>(error: &error_stack::Report<E>) -> String
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    use iroha_config::{base::read, parameters::user::ParseError};
+    let mut categories = Vec::new();
+    for frame in error.frames() {
+        let category = frame
+            .downcast_ref::<ParseError>()
+            .map(ToString::to_string)
+            .or_else(|| {
+                frame.downcast_ref::<read::Error>().map(|error| {
+                    match error {
+                        read::Error::ReadFile => "configuration source could not be read",
+                        read::Error::InSourceFile(_) => "configuration source is invalid",
+                        read::Error::InvalidExtends | read::Error::CannotExtend => {
+                            "configuration extension is invalid"
+                        }
+                        read::Error::ParseParameter(id) => {
+                            return generated_config_parameter_name(id).map_or_else(
+                                || "a configuration parameter could not be parsed".to_owned(),
+                                |name| {
+                                    format!("configuration parameter `{name}` could not be parsed")
+                                },
+                            );
+                        }
+                        read::Error::InEnvironment => "configuration environment is invalid",
+                        read::Error::MissingParameters => {
+                            "required configuration fields are missing"
+                        }
+                        read::Error::UnknownParameters => {
+                            "configuration contains unrecognised fields"
+                        }
+                    }
+                    .to_owned()
+                })
+            });
+        if let Some(category) = category {
+            if !categories.contains(&category) {
+                categories.push(category);
+                if categories.len() == 8 {
+                    break;
+                }
+            }
+        }
+    }
+    if categories.is_empty() {
+        "configuration validation failed".to_owned()
+    } else {
+        categories.join("; ")
+    }
+}
+
+// Compare complete typed paths, then render only these literals. ParameterId is publicly
+// constructible, so neither its Display nor a path supplied by a report is safe to print.
+fn generated_config_parameter_name(id: &iroha_config::base::ParameterId) -> Option<String> {
+    const FIELDS: &[(&[&str], &[&str])] = &[
+        (
+            &[],
+            &[
+                "chain",
+                "chain_discriminant",
+                "private_key",
+                "public_key",
+                "soranet_transport_private_key",
+                "soranet_transport_public_key",
+                "trusted_peers",
+                "trusted_peers_pop",
+                "telemetry_profile",
+            ],
+        ),
+        (&["kura"], &["store_dir", "fsync_mode"]),
+        (
+            &["soracloud_runtime"],
+            &[
+                "state_dir",
+                "production_mode",
+                "hydration_concurrency",
+                "prepared_runtime_cache_capacity",
+            ],
+        ),
+        (
+            &["soracloud_runtime", "submission"],
+            &["fee_payer", "signer"],
+        ),
+        (
+            &["soracloud_runtime", "egress"],
+            &[
+                "default_allow",
+                "allowed_hosts",
+                "rate_per_minute",
+                "max_bytes_per_minute",
+            ],
+        ),
+        (&["tiered_state"], &["cold_store_root", "da_store_root"]),
+        (
+            &["sumeragi"],
+            &[
+                "role",
+                "mint_finality_seed_fd",
+                "records_dir",
+                "installation_log",
+            ],
+        ),
+        (&["sumeragi", "keys"], &["allowed_algorithms"]),
+        (
+            &["nexus"],
+            &[
+                "lane_count",
+                "lane_catalog",
+                "dataspace_catalog",
+                "routing_policy",
+            ],
+        ),
+        (
+            &["nexus", "storage"],
+            &[
+                "local_budget_bytes",
+                "max_wsv_memory_bytes",
+                "disk_budget_weights",
+            ],
+        ),
+        (&["nexus", "fusion"], &["exit_teu"]),
+        (
+            &["nexus", "staking"],
+            &[
+                "stake_asset_id",
+                "stake_escrow_account_id",
+                "slash_sink_account_id",
+            ],
+        ),
+        (
+            &["nexus", "fees"],
+            &[
+                "fee_asset_id",
+                "base_fee",
+                "per_byte_fee",
+                "per_instruction_fee",
+                "per_gas_unit_fee",
+                "settlement_mode",
+                "fee_sink_account_id",
+                "sponsor_vault_custody_account_id",
+            ],
+        ),
+        (&["nexus", "registry"], &["manifest_directory"]),
+        (&["nexus", "governance"], &["default_module", "modules"]),
+        (
+            &["pipeline"],
+            &["signature_batch_max_ed25519", "signature_batch_max_bls"],
+        ),
+        (&["pipeline", "gas"], &["tech_account_id"]),
+        (
+            &["queue"],
+            &[
+                "capacity",
+                "capacity_per_user",
+                "transaction_time_to_live_ms",
+            ],
+        ),
+        (&["crypto"], &["allowed_signing"]),
+        (&["crypto", "curves"], &["allowed_curve_ids"]),
+        (
+            &["streaming"],
+            &[
+                "identity_public_key",
+                "identity_private_key",
+                "session_store_dir",
+            ],
+        ),
+        (
+            &["streaming", "codec"],
+            &[
+                "cabac_mode",
+                "trellis_blocks",
+                "rans_tables_path",
+                "entropy_mode",
+                "bundle_width",
+                "bundle_accel",
+            ],
+        ),
+        (
+            &["sorafs", "storage"],
+            &["enabled", "data_dir", "max_capacity_bytes"],
+        ),
+        (&["sorafs", "por"], &["state_dir"]),
+        (
+            &["gov"],
+            &[
+                "citizenship_escrow_account",
+                "bond_escrow_account",
+                "slash_receiver_account",
+                "viral_incentive_pool_account",
+                "viral_escrow_account",
+                "sorafs_pin_fee_treasury_account",
+                "sorafs_provider_owners",
+            ],
+        ),
+        (&["gov", "sorafs_telemetry"], &["submitters"]),
+        (&["confidential"], &["enabled", "assume_valid"]),
+        (&["zk", "halo2"], &["enabled"]),
+        (
+            &["genesis"],
+            &["file", "public_key", "expected_hash", "expected_hash_file"],
+        ),
+        (&["logger"], &["format", "level", "filter"]),
+        (
+            &["network"],
+            &[
+                "address",
+                "public_address",
+                "max_total_connections",
+                "p2p_subscriber_queue_cap",
+                "max_frame_bytes",
+                "max_frame_bytes_consensus",
+                "max_frame_bytes_control",
+                "max_frame_bytes_block_sync",
+                "max_frame_bytes_tx_gossip",
+                "max_frame_bytes_peer_gossip",
+                "max_frame_bytes_health",
+                "max_frame_bytes_other",
+                "consensus_ingress_rate_per_sec",
+                "consensus_ingress_burst",
+                "consensus_ingress_bytes_per_sec",
+                "consensus_ingress_bytes_burst",
+                "transaction_gossip_period_ms",
+                "transaction_gossip_resend_ticks",
+                "transaction_gossip_public_target_reshuffle_ms",
+                "transaction_gossip_restricted_target_reshuffle_ms",
+            ],
+        ),
+        (
+            &["network", "soranet_handshake", "pow"],
+            &["revocation_store_path"],
+        ),
+        (&["network", "soranet_vpn"], &["operator_account_id"]),
+        (
+            &["torii"],
+            &[
+                "address",
+                "data_dir",
+                "peer_telemetry_urls",
+                "preauth_allow_cidrs",
+                "preauth_rate_per_ip_per_sec",
+                "preauth_burst_per_ip",
+                "api_rate_limit_bypass_cidrs",
+                "internal_api_trusted_cidrs",
+                "tx_rate_per_authority_per_sec",
+                "tx_burst_per_authority",
+                "api_high_load_tx_threshold",
+                "max_content_len",
+                "zk_prover_enabled",
+            ],
+        ),
+        (
+            &["torii", "operator_signatures"],
+            &["enabled", "allowed_public_keys"],
+        ),
+        (
+            &["torii", "da_ingest"],
+            &["replay_cache_store_dir", "manifest_store_dir"],
+        ),
+        (
+            &["torii", "mcp"],
+            &[
+                "enabled",
+                "profile",
+                "expose_operator_routes",
+                "allow_tool_prefixes",
+            ],
+        ),
+        (
+            &["torii", "account_onboarding"],
+            &[
+                "authority",
+                "private_key_file",
+                "lease_term_years",
+                "additional_permissions",
+                "credentials",
+                "fee_sponsor_program_id",
+            ],
+        ),
+        (
+            &["torii", "faucet"],
+            &[
+                "enabled",
+                "authority",
+                "private_key_file",
+                "asset_definition_id",
+                "amount",
+                "pow_difficulty_bits",
+                "pow_scrypt_log_n",
+                "pow_scrypt_r",
+                "pow_scrypt_p",
+                "pow_max_anchor_age_blocks",
+                "pow_adaptive_lookback_blocks",
+                "pow_adaptive_claims_per_extra_bit",
+                "pow_adaptive_max_extra_bits",
+                "pow_beacon_seed_enabled",
+            ],
+        ),
+        (
+            &["torii", "transport", "https"],
+            &[
+                "address",
+                "certificate_chain",
+                "private_key",
+                "handshake_timeout_ms",
+            ],
+        ),
+        (
+            &["torii", "transport", "norito_rpc"],
+            &["enabled", "require_mtls", "stage", "allowed_clients"],
+        ),
+    ];
+    FIELDS.iter().find_map(|(prefix, fields)| {
+        fields.iter().find_map(|field| {
+            let candidate = iroha_config::base::ParameterId::from(
+                prefix.iter().copied().chain(std::iter::once(*field)),
+            );
+            (id == &candidate).then(|| {
+                prefix
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(*field))
+                    .collect::<Vec<_>>()
+                    .join(".")
+            })
+        })
+    })
+}
+
+#[cfg(test)]
+mod config_error_tests {
+    use super::generated_config_error_categories;
+    use error_stack::Report;
+    use iroha_config::{
+        base::read,
+        parameters::{actual, user::ParseError},
+    };
+
+    #[test]
+    fn typed_validation_category_never_renders_private_report_attachments() {
+        let report = Report::new(ParseError::InvalidStreamingConfig)
+            .attach("private-key-and-credential-value-must-remain-hidden")
+            .change_context(actual::FromTomlSourceError);
+        assert_eq!(
+            generated_config_error_categories(&report),
+            "Invalid streaming configuration"
+        );
+        let unknown = Report::new(std::io::Error::other("private source path and secret"))
+            .attach("private credential")
+            .change_context(actual::FromTomlSourceError);
+        assert_eq!(
+            generated_config_error_categories(&unknown),
+            "configuration validation failed"
+        );
+    }
+
+    #[test]
+    fn schema_read_category_is_visible_without_paths_or_values() {
+        let report = Report::new(read::Error::UnknownParameters)
+            .attach("private configuration field and value")
+            .change_context(actual::FromTomlSourceError);
+        assert_eq!(
+            generated_config_error_categories(&report),
+            "configuration contains unrecognised fields"
+        );
+        let report = Report::new(read::Error::ParseParameter(["private_key"].into()))
+            .attach("private key value")
+            .change_context(actual::FromTomlSourceError);
+        assert_eq!(
+            generated_config_error_categories(&report),
+            "configuration parameter `private_key` could not be parsed"
+        );
+    }
+
+    #[test]
+    fn only_exact_public_schema_paths_are_rendered() {
+        let report = Report::new(read::Error::ParseParameter(["network", "address"].into()))
+            .attach("private address value")
+            .change_context(read::Error::InSourceFile("/private/secret.toml".into()))
+            .change_context(actual::FromTomlSourceError);
+        assert_eq!(
+            generated_config_error_categories(&report),
+            "configuration source is invalid; configuration parameter `network.address` could not be parsed"
+        );
+        for id in [
+            ["network.address"].into(),
+            ["private-secret-value"].into(),
+            ["network", "private-secret-value"].into(),
+        ] {
+            let report = Report::new(read::Error::ParseParameter(id))
+                .attach("private key value")
+                .change_context(actual::FromTomlSourceError);
+            assert_eq!(
+                generated_config_error_categories(&report),
+                "a configuration parameter could not be parsed"
+            );
+        }
+        assert_eq!(
+            generated_config_error_categories(&Report::new(read::Error::ReadFile)),
+            "configuration source could not be read"
+        );
+    }
 }
 
 /// Validate an isolated post-DKG Taira launch without changing its initial configuration.
@@ -7433,6 +7898,22 @@ mod managed_tests {
         let prepared = prepare_localnet("local", &root, &ports).unwrap();
         assert_eq!(prepared.peers.len(), 4);
         assert_eq!(prepared.context.name, "local");
+        assert_eq!(
+            prepared.build_cache_root(),
+            root.join("runtime/build-cache")
+        );
+        assert!(!prepared.build_cache_root().exists());
+        let mut another_generation = prepared.clone();
+        another_generation.context.client_config = root.join("next/client.toml");
+        assert_ne!(
+            prepared.build_cache_root(),
+            another_generation.build_cache_root()
+        );
+        assert!(!another_generation.build_cache_root().exists());
+        assert!(
+            !root.join("next").exists(),
+            "path intent must not create a generation"
+        );
         assert_eq!(prepared.context.dataspace_alias, "universal");
         assert_eq!(prepared.context.dataspace_id, 0);
         let config = prepared.context.load_client_config().unwrap();
@@ -7441,7 +7922,11 @@ mod managed_tests {
             LocalnetServiceProfile::StreamTokenAuthorities
         );
         let authorities = prepared.stream_token_authorities().unwrap().unwrap();
-        assert_eq!(authorities.authorities.len(), 11);
+        assert_eq!(authorities.network.authorities.len(), 3);
+        assert_eq!(authorities.providers.len(), 3);
+        for provider in &authorities.providers {
+            assert_eq!(provider.authorities.len(), 10);
+        }
         assert_eq!(authorities.network_id, config.network_id);
         assert_eq!(authorities.manager, config.account);
         let operator = prepared.load_operator_key_pair().unwrap();
@@ -7605,14 +8090,34 @@ fn write_client_config(
     chain_id: &str,
     chain_discriminant: Option<u16>,
     client: &LocalnetClientIdentity,
+    publication: Option<&toml::Table>,
 ) -> Result<()> {
     let path = out_dir.join("client.toml");
+    let rendered = render_client_config(
+        base_api_port,
+        torii_host,
+        chain_id,
+        chain_discriminant,
+        client,
+        publication,
+    )?;
+    write_owner_only_localnet_file(&path, rendered.as_bytes())
+        .wrap_err_with(|| format!("write localnet client config {}", path.display()))
+}
+fn render_client_config(
+    base_api_port: u16,
+    torii_host: &CanonicalHost,
+    chain_id: &str,
+    chain_discriminant: Option<u16>,
+    client: &LocalnetClientIdentity,
+    publication: Option<&toml::Table>,
+) -> Result<Zeroizing<String>> {
     // Render explicitly to avoid pretty-printer wrapping the long keys.
     let torii_host = torii_host.url_host();
     let chain_discriminant_line = chain_discriminant.map_or_else(String::new, |value| {
         format!("chain_discriminant = {value}\n")
     });
-    let rendered = Zeroizing::new(format!(
+    let mut rendered = Zeroizing::new(format!(
         concat!(
             "chain = \"{chain}\"\n",
             "network_id_file = \"{network_id_file}\"\n",
@@ -7644,8 +8149,16 @@ fn write_client_config(
         private_key = client.private_key.as_str(),
         public_key = client.public_key,
     ));
-    write_owner_only_localnet_file(&path, rendered.as_bytes())
-        .wrap_err_with(|| format!("write localnet client config {}", path.display()))
+    if let Some(publication) = publication {
+        let musubi = toml::Table::from_iter([(
+            "publication".into(),
+            toml::Value::Table(publication.clone()),
+        )]);
+        let table = toml::Table::from_iter([("musubi".into(), toml::Value::Table(musubi))]);
+        rendered.push('\n');
+        rendered.push_str(&toml::to_string(&table)?);
+    }
+    Ok(rendered)
 }
 #[allow(clippy::too_many_arguments)]
 fn write_localnet_readme(
@@ -7867,6 +8380,19 @@ pub(crate) fn prepare_localnet_at(
 }
 
 impl crate::managed::PreparedLocalnet {
+    /// Original generation's shared resolver and archive cache for managed contract builds.
+    ///
+    /// This is path intent only: it performs no reads, creates no directories, and grants no
+    /// registry authority. Both global and private roots use the same layout. Managed callers
+    /// retain this path from their validated generation before lazy registry discovery.
+    #[must_use]
+    pub fn build_cache_root(&self) -> PathBuf {
+        self.context
+            .client_config
+            .with_file_name(LOCALNET_RUNTIME_DIRECTORY)
+            .join("build-cache")
+    }
+
     /// Load the retained HTTP operator key and verify its binding on every generated validator.
     ///
     /// This credential grants operator-route access and stays separate from the ledger signer

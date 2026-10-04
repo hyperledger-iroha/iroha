@@ -85,6 +85,8 @@ mod keccak_batch;
 mod keccak_gpu;
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 mod metal;
+#[cfg(any(test, all(feature = "fastpq-gpu", target_os = "macos")))]
+mod metal_artifact;
 mod metal_config;
 mod ordering;
 pub(crate) mod overrides;

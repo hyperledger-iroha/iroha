@@ -21,7 +21,7 @@ fn journal() -> NativeFinalityJournal {
         2,
         0,
     ))
-    .build(std::collections::BTreeSet::default());
+    .build(crate::block::BlockSignatures::default());
     let artifact = NativeFinalityArtifact::from_block(&block, limits()).unwrap();
     NativeFinalityJournal {
         blocks: vec![artifact.clone(), artifact],

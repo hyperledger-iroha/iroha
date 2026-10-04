@@ -30184,7 +30184,7 @@ impl State {
         &self,
         block_height: NonZeroU64,
         limits: BlockProofLimits,
-    ) -> Result<Vec<u8>, BlockProofError> {
+    ) -> Result<crate::kura::NativeFrameBytes, BlockProofError> {
         let expected_hash = self.committed_block_hash_for_proof(block_height)?;
         let hashes = self.block_hashes.view();
         let source = block_proofs::NativeProofSource {

@@ -1,8 +1,8 @@
 //! `list` commands for Torii collections.
 //!
 //! Every collection (domains, accounts, asset definitions, NFTs, RWA lots, account assets, asset
-//! holders, account transactions and repo agreements) is read with the same flags and printed
-//! with the same page envelope `{items, next_cursor, total?}`. The query language and the wire
+//! holders, committed and account transactions, and repo agreements) is read with the same flags
+//! and printed with the same page envelope `{items, next_cursor, total?}`. The query language and the wire
 //! contract are `specs/torii/collection_queries.md`; flag values are validated by the shared
 //! [`ListQuery`] implementation before any request is sent.
 use std::fmt::Write as _;
@@ -114,7 +114,7 @@ pub(crate) fn default_columns(collection: &Collection) -> &'static [&'static str
         Collection::Rwas => &["id", "owned_by", "quantity", "status"],
         Collection::AccountAssets(_) => &["asset", "asset_alias", "scope", "quantity"],
         Collection::AssetHolders(_) => &["account_id", "scope", "quantity"],
-        Collection::AccountTransactions(_) => {
+        Collection::Transactions | Collection::AccountTransactions(_) => {
             &["timestamp_ms", "entrypoint_hash", "result_ok", "authority"]
         }
         Collection::RepoAgreements => &["id", "status", "initiator", "counterparty"],
@@ -373,6 +373,35 @@ mod tests {
             let rendered = ListInputError(error).to_string();
             assert!(rendered.contains(flag), "{rendered}");
         }
+    }
+
+    #[test]
+    fn committed_transactions_render_shared_history_columns_and_nullable_authority() {
+        let account_history = Collection::AccountTransactions(iroha_test_samples::ALICE_ID.clone());
+        let expected = ["timestamp_ms", "entrypoint_hash", "result_ok", "authority"];
+        assert_eq!(default_columns(&Collection::Transactions), expected);
+        assert_eq!(default_columns(&account_history), expected);
+        let columns = default_columns(&Collection::Transactions)
+            .iter()
+            .map(|column| (*column).to_owned())
+            .collect::<Vec<_>>();
+        let rows = [norito::json!({
+            "timestamp_ms": 42,
+            "entrypoint_hash": "receipt",
+            "result_ok": false,
+            "authority": null
+        })];
+        let rendered = render_table(&rows, &columns);
+        let lines = rendered.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            lines[0].split_whitespace().collect::<Vec<_>>(),
+            ["TIMESTAMP_MS", "ENTRYPOINT_HASH", "RESULT_OK", "AUTHORITY"]
+        );
+        assert_eq!(
+            lines[1].split_whitespace().collect::<Vec<_>>(),
+            ["42", "receipt", "false", "-"]
+        );
     }
 
     #[test]

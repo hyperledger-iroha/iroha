@@ -348,10 +348,25 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
             .unwrap(),
         "setup",
     ));
+    let mut enrollment_roots = Vec::new();
     let retained: Vec<_> = children
         .into_iter()
         .map(|(owner, purpose)| {
-            let child = owner.open_child(purpose).unwrap();
+            let root = owner.open_child(purpose).unwrap();
+            let child = if purpose == "enroll" {
+                let selection = std::fs::read(root.path().join("original.nrt")).unwrap();
+                let anchor = std::fs::read(root.path().join("anchor.nrt")).unwrap();
+                let reference = std::fs::read(owner.path().join("enroll-selection.nrt")).unwrap();
+                let body = root
+                    .open_child("bodies")
+                    .unwrap()
+                    .open_child("0001")
+                    .unwrap();
+                enrollment_roots.push((owner, root, selection, anchor, reference));
+                body
+            } else {
+                root
+            };
             let original = std::fs::read(child.path().join("original.nrt")).unwrap();
             let transaction = child
                 .open_child("attempts")
@@ -410,6 +425,20 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
             .as_slice(),
         parent_bytes
     );
+    for (owner, root, selection, anchor, reference) in &enrollment_roots {
+        assert_eq!(
+            &std::fs::read(root.path().join("original.nrt")).unwrap(),
+            selection
+        );
+        assert_eq!(
+            &std::fs::read(root.path().join("anchor.nrt")).unwrap(),
+            anchor
+        );
+        assert_eq!(
+            &std::fs::read(owner.path().join("enroll-selection.nrt")).unwrap(),
+            reference
+        );
+    }
     for (child, original, operation) in &retained {
         assert_eq!(
             &std::fs::read(child.path().join("original.nrt")).unwrap(),
@@ -495,6 +524,20 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
             assert!(!owner.authority.directory.path().join("initial").exists());
         }
         assert!(peers.requests.lock().unwrap().is_empty());
+        for (owner, root, selection, anchor, reference) in &enrollment_roots {
+            assert_eq!(
+                &std::fs::read(root.path().join("original.nrt")).unwrap(),
+                selection
+            );
+            assert_eq!(
+                &std::fs::read(root.path().join("anchor.nrt")).unwrap(),
+                anchor
+            );
+            assert_eq!(
+                &std::fs::read(owner.path().join("enroll-selection.nrt")).unwrap(),
+                reference
+            );
+        }
         for (child, original, operation) in &retained {
             assert_eq!(
                 &std::fs::read(child.path().join("original.nrt")).unwrap(),

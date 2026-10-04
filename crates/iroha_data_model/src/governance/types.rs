@@ -118,10 +118,78 @@ impl std::error::Error for HashParseError {}
 const HASH_WIRE_VERSION_V1: u16 = 1;
 #[derive(Clone, Copy, Debug, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::HashWire32")]
+#[norito(decode_fields)]
 struct HashWire32 {
     version: u16,
     declared_len: u16,
     bytes: [u8; 32],
+}
+fn decode_prepared_hash32_field<T>(
+    field: norito::core::CanonicalField<'_, T>,
+) -> Result<[u8; 32], norito::core::DecodeIntoError<std::convert::Infallible>> {
+    use norito::core::{
+        CanonicalField, DecodeField, DecodeFromSlice, DecodeIntoError, DecodeRecordFields,
+        FieldDestination,
+    };
+    struct Fields(HashWire32);
+    impl FieldDestination for Fields {
+        type Error = std::convert::Infallible;
+    }
+    impl DecodeField<0, u16> for Fields {
+        type Value = ();
+        fn decode_field(
+            &mut self,
+            field: CanonicalField<'_, u16>,
+        ) -> Result<(), DecodeIntoError<Self::Error>> {
+            field.with_payload(|bytes| {
+                let (value, used) = u16::decode_from_slice(bytes)?;
+                if used != bytes.len() {
+                    return Err(norito::Error::LengthMismatch.into());
+                }
+                self.0.version = value;
+                Ok(())
+            })
+        }
+    }
+    impl DecodeField<1, u16> for Fields {
+        type Value = ();
+        fn decode_field(
+            &mut self,
+            field: CanonicalField<'_, u16>,
+        ) -> Result<(), DecodeIntoError<Self::Error>> {
+            field.with_payload(|bytes| {
+                let (value, used) = u16::decode_from_slice(bytes)?;
+                if used != bytes.len() {
+                    return Err(norito::Error::LengthMismatch.into());
+                }
+                self.0.declared_len = value;
+                Ok(())
+            })
+        }
+    }
+    impl DecodeField<2, [u8; 32]> for Fields {
+        type Value = ();
+        fn decode_field(
+            &mut self,
+            field: CanonicalField<'_, [u8; 32]>,
+        ) -> Result<(), DecodeIntoError<Self::Error>> {
+            // The original generated raw byte-array field has alignment one,
+            // exact length and no alignment or owned-child allocation.
+            self.0.bytes = field.decode_owned()?;
+            Ok(())
+        }
+    }
+    field.with_payload(|bytes| {
+        let mut destination = Fields(HashWire32::new([0; 32]));
+        let (_, used) = HashWire32::decode_fields(bytes, &mut destination)?;
+        if used != bytes.len() {
+            return Err(norito::Error::LengthMismatch.into());
+        }
+        destination
+            .0
+            .try_into_bytes()
+            .map_err(DecodeIntoError::Codec)
+    })
 }
 impl HashWire32 {
     const fn new(bytes: [u8; 32]) -> Self {
@@ -190,6 +258,20 @@ macro_rules! define_hash32_newtype {
         #[norito_schema(name = $schema_name)]
         pub struct $name([u8; 32]);
         impl $name {
+            /// Decode an original canonical field through the same hash-wire
+            /// walk and version/length checks using only fixed stack storage.
+            ///
+            /// This prepared leaf allocates no alignment buffer and grants no
+            /// complete-frame authority; the enclosing canonical verifier must
+            /// still authenticate the original frame and its advertised flags.
+            ///
+            /// # Errors
+            /// Returns the original field, depth, resource or hash-wire error.
+            pub fn decode_prepared_field_v1(
+                field: norito::core::CanonicalField<'_, Self>,
+            ) -> Result<Self, norito::core::DecodeIntoError<std::convert::Infallible>> {
+                decode_prepared_hash32_field(field).map(Self)
+            }
             /// Number of bytes in the encoded hash.
             pub const LENGTH: usize = 32;
             /// Construct the hash wrapper from raw bytes.
@@ -3911,3 +3993,85 @@ mod tests;
 
 #[cfg(test)]
 mod captured_types_schema_tests;
+
+#[cfg(test)]
+mod prepared_hash32_field_tests {
+    use super::*;
+
+    fn framed_payload(value: &dyn norito::core::SerializePayload) -> Vec<u8> {
+        let mut payload = Vec::new();
+        norito::core::serialize_to_writer(value, &mut payload).unwrap();
+        let mut framed = Vec::new();
+        norito::core::write_len_with_flags(
+            &mut framed,
+            payload.len() as u64,
+            norito::core::default_encode_flags(),
+        )
+        .unwrap();
+        framed.extend_from_slice(&payload);
+        framed
+    }
+
+    #[test]
+    fn every_hash32_prepared_consumer_preserves_exact_canonical_bytes_without_heap_leaf_work() {
+        macro_rules! check {
+            ($ty:ident) => {{
+                let value = $ty::new([0x63; 32]);
+                let framed = framed_payload(&value);
+                let mut offset = 0;
+                let field = norito::core::framed_field::<$ty>(&framed, &mut offset).unwrap();
+                assert_eq!(offset, framed.len());
+                let decoded = norito::with_decode_limits_scope(
+                    norito::core::DecodeLimits::new(16_384, usize::MAX, usize::MAX, 36, 64),
+                    || $ty::decode_prepared_field_v1(field),
+                )
+                .unwrap();
+                assert_eq!(decoded, value);
+                assert_eq!(
+                    norito::encode_canonical(&decoded).unwrap(),
+                    norito::encode_canonical(&value).unwrap()
+                );
+            }};
+        }
+        check!(ContractCodeHash);
+        check!(ContractAbiHash);
+        check!(AgendaItemId);
+        check!(DraftId);
+        check!(ProposalContentId);
+        check!(GovernanceAttemptId);
+        check!(BodyInstanceId);
+        check!(BodyElectionAttemptId);
+        check!(AssignmentId);
+        check!(SortitionRequestId);
+        check!(BallotAttemptId);
+        check!(BeaconSessionId);
+        check!(BeaconPulseId);
+        check!(TleSessionId);
+        check!(TleKeySessionId);
+        check!(GovernanceCertificateId);
+    }
+
+    #[test]
+    fn prepared_hash32_field_keeps_original_version_length_and_complete_consumption_checks() {
+        for mutation in 0..3 {
+            let mut wire = HashWire32::new([0x61; 32]);
+            match mutation {
+                0 => wire.version += 1,
+                1 => wire.declared_len -= 1,
+                2 => {}
+                _ => unreachable!(),
+            }
+            let mut framed = framed_payload(&wire);
+            if mutation == 2 {
+                // Rewrite only the field's canonical length prefix to include
+                // one trailing byte, preserving an otherwise exact hash body.
+                framed[0] += 1;
+                framed.push(0);
+            }
+            let mut offset = 0;
+            let field =
+                norito::core::framed_field::<TleKeySessionId>(&framed, &mut offset).unwrap();
+            assert!(TleKeySessionId::decode_prepared_field_v1(field).is_err());
+        }
+    }
+}

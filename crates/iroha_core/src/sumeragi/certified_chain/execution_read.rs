@@ -157,7 +157,7 @@ pub struct NativeExecutionRead {
     /// Execution authority from the original native quorum or real H2 anchor.
     pub authority: AuthenticatedExecutionBlock,
     /// Exact bytes decoded once and used by that verification.
-    pub wire: Vec<u8>,
+    pub wire: crate::kura::NativeFrameBytes,
     /// Number of source frames consumed by the verifier.
     pub source_blocks: u64,
     /// Aggregate canonical source frame bytes admitted before reading them.
@@ -246,8 +246,9 @@ pub fn read_authenticated_execution(
             } else {
                 wire
             };
-            // TODO: physically admit nested decoder/authority graphs and retained wire from
-            // the query owner's original pool. Only the shared block control is funded here.
+            // The original frame backing and block control retain their physical charges.
+            // TODO: retain partially decoded nested graphs and authenticated-prefix progress
+            // across decoder refusal; this source owner does not complete that obligation.
             return Ok(NativeExecutionRead {
                 authority,
                 wire,
@@ -270,7 +271,14 @@ fn read_admitted_execution_frame(
     limits: NativeExecutionReadLimits,
     total: u64,
     budget: &iroha_allocation::AllocationBudget,
-) -> Result<(iroha_data_model::block::SharedSignedBlock, Vec<u8>, u64), NativeExecutionReadError> {
+) -> Result<
+    (
+        iroha_data_model::block::SharedSignedBlock,
+        crate::kura::NativeFrameBytes,
+        u64,
+    ),
+    NativeExecutionReadError,
+> {
     let storage = |error: crate::kura::Error| {
         let rejected = |error: crate::kura::Error| NativeExecutionReadError::Storage {
             height: current,
@@ -284,6 +292,15 @@ fn read_admitted_execution_frame(
                 crate::execution_attempt::canonical_decode_attempt_error(error, |error| {
                     rejected(crate::kura::Error::BlockDecode(error))
                 })
+            }
+            crate::kura::Error::NativeFrameAllocation(error) => {
+                let deferred = match error {
+                    iroha_allocation::ChargedBufferError::Admission(original) => original.into(),
+                    iroha_allocation::ChargedBufferError::Allocator { .. } => {
+                        ivm::error::ExecutionDeferral::AllocationUnavailable.into()
+                    }
+                };
+                ExecutionAttemptError::Deferred(deferred)
             }
             completed => ExecutionAttemptError::Rejected(rejected(completed)),
         };
@@ -323,7 +340,7 @@ fn read_admitted_execution_frame(
         limits.max_source_wire_bytes,
     )?;
     let wire = source
-        .read(length)
+        .read(length, budget)
         .map_err(storage)?
         .ok_or(ChainReadError::NotInView { height: current })?;
     let shell = iroha_data_model::block::SharedSignedBlock::reserve(budget)
@@ -525,7 +542,7 @@ mod tests {
                 &chain.state().ivm_execution_budget(),
             )
             .unwrap();
-            assert_eq!(read.wire, frames[(height - 1) as usize]);
+            assert_eq!(read.wire.as_slice(), frames[(height - 1) as usize]);
             assert_eq!(read.authority.committed().height(), height);
             assert_eq!(read.source_blocks, 2);
             assert_eq!(read.source_wire_bytes, total);
@@ -662,7 +679,7 @@ mod tests {
         )
         .unwrap();
         let original = chain.committed(3);
-        assert_eq!(read.wire, frames[2]);
+        assert_eq!(read.wire.as_slice(), frames[2]);
         assert_eq!(read.authority.block().encode_wire().unwrap(), frames[2]);
         assert_eq!(
             read.authority.committed().block_hash(),

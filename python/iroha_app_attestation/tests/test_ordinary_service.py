@@ -3,9 +3,10 @@ import base64
 import hashlib
 import json
 import unittest
-from iroha_app_attestation.attestation import AttestationRejected
+from iroha_app_attestation.attestation import AttestationRejected, VerificationUnavailable
 from iroha_app_attestation.ordinary_enrollment import CHALLENGE_BODY_BYTES
 from iroha_app_attestation.ordinary_issuance import DurableOrdinaryCredentialIssuer
+from iroha_app_attestation.play_integrity import PlayIntegrityUnavailable
 from iroha_app_attestation.revocation import RevocationUnavailable
 from iroha_app_attestation.ordinary_service import SCHEMA, PATH, RAW_SCHEMA, RAW_PATH, OrdinaryCredentialService, decode_request, decode_raw_request
 from test_ordinary_enrollment import challenge
@@ -57,13 +58,17 @@ class OrdinaryServiceTests(unittest.TestCase):
         original=json.dumps(request_body()).encode()[:-1]+b',"operation":"issue"}'
         with self.assertRaises(AttestationRejected):decode_request(original)
 
-    def test_unknown_revocation_status_is_retryable_not_a_rejected_credential(self):
+    def test_unavailable_live_verification_is_retryable_not_a_rejected_credential(self):
         # A bare owner instance: these tests exercise only the HTTP mapping.
         issuer=DurableOrdinaryCredentialIssuer.__new__(DurableOrdinaryCredentialIssuer)
         service=OrdinaryCredentialService(issuer=issuer,authorize_core_call=lambda context:True)
         body=request_body();raw=dict(body);raw['schema']=RAW_SCHEMA
         raw.pop('app_possession');raw.pop('play_integrity_token')
         for error,expected in ((RevocationUnavailable('Android revocation status unavailable'),
+                                (503,b'{"error":"issuer_unavailable"}')),
+                               (PlayIntegrityUnavailable('Play Integrity decoder unavailable'),
+                                (503,b'{"error":"issuer_unavailable"}')),
+                               (VerificationUnavailable('live dependency unavailable'),
                                 (503,b'{"error":"issuer_unavailable"}')),
                                (AttestationRejected('revoked Android attestation certificate'),
                                 (409,b'{"error":"credential_rejected"}')),

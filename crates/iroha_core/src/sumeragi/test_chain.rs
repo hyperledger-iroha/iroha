@@ -2347,7 +2347,7 @@ mod tests {
             transaction::Executable,
         };
         use iroha_model_base::{domain::DomainId, topology::LaneId};
-        use iroha_primitives::numeric::Quantity;
+        use iroha_primitives::numeric::{NumericSpec, Quantity};
 
         let mut config = TestChainConfig::new(World::new(), 1_000);
         let owner = AccountId::new(config.genesis_key.public_key().clone());
@@ -2359,23 +2359,23 @@ mod tests {
         let source_asset = AssetId::new(definition.clone(), validator.clone());
         let escrow_asset = AssetId::new(definition.clone(), escrow.clone());
         let amount = Quantity::from(1_000_u32);
-        config.world =
-            World::with_assets(
-                [Domain::new(DomainId::try_new("nexus", "universal").unwrap()).build(&owner)],
-                [
-                    Account::new(validator.clone()).build(&owner),
-                    Account::new(escrow.clone()).build(&owner),
-                ],
-                [AssetDefinition::numeric(
-                    definition,
-                    "Staked XOR",
-                    AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&owner)],
-                [Asset::new(source_asset.clone(), amount.clone())],
-                [],
-            );
+        config.world = World::with_assets(
+            [Domain::new(DomainId::try_new("nexus", "universal").unwrap()).build(&owner)],
+            [
+                Account::new(validator.clone()).build(&owner),
+                Account::new(escrow.clone()).build(&owner),
+            ],
+            [AssetDefinition::new(
+                definition,
+                "Network XOR",
+                NumericSpec::fractional(9),
+                AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&owner)],
+            [Asset::new(source_asset.clone(), amount.clone())],
+            [],
+        );
         // This permissioned-chain fixture supplies the same initial staking policy
         // as its application consumers; it does not declare an NPoS consensus mode.
         let mut initial = config.world.block();

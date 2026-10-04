@@ -241,7 +241,10 @@ fn quantity_overflow_invalid_schedule_time_and_provider_refuse_before_derivation
         )
         .is_err()
     );
-    let large = amount(&"9".repeat(154));
+    // Each operand fits the signed 512-bit mantissa, while their sum does not.
+    // Parsing an out-of-range operand would fail before the economic owner is exercised.
+    let large = amount(&"4".repeat(154));
+    assert!(large.checked_add(&large).is_err());
     partition.reserve_balance = large.clone();
     partition.debt_principal = large.clone();
     partition.credit_cap = large.clone();

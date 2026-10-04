@@ -229,7 +229,7 @@ fn checked_block_signature(index: u64, keypair: &KeyPair, header: &BlockHeader) 
 fn block_with_execution_context(execution_context: BlockExecutionContextBundle) -> SignedBlock {
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 1, 0);
     SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -288,7 +288,7 @@ fn merged_lane_entrypoints_are_an_execution_suffix_of_the_proposal() {
     };
     SignedBlock::refresh_entrypoint_roots(&mut payload);
     let proposal = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload,
         result: None,
         commit_certificate: None,
@@ -376,7 +376,7 @@ fn block_payload_ordering_includes_execution_context() {
 fn signed_block_is_empty_without_entrypoints_or_artifacts() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -402,7 +402,7 @@ fn signed_block_with_empty_execution_context_is_empty() {
 fn signed_block_try_sign_adds_verifiable_signature() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -442,7 +442,7 @@ fn signed_block_wire_roundtrips_canonical_external_entrypoints() {
     let entrypoint = TransactionEntrypoint::from(tx.clone());
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: vec![entrypoint.clone()],
@@ -738,7 +738,7 @@ fn signed_block_is_not_empty_with_internal_outputs() {
 fn signed_block_is_not_empty_with_da_commitments() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -759,7 +759,7 @@ fn signed_block_is_not_empty_with_da_commitments() {
 fn signed_block_is_not_empty_with_da_pin_intents() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -897,7 +897,7 @@ fn encode_versioned_prefixes_norito_payload() {
     use nonzero_ext::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -950,7 +950,7 @@ fn versioned_block_roundtrip_preserves_instruction_order() {
     .with_instructions(ordered.clone())
     .sign(key_pair.private_key());
     let block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: vec![TransactionEntrypoint::from(tx.clone())],
@@ -990,7 +990,7 @@ fn deframe_rejects_payload_exceeding_max_len() {
     const LENGTH_OFFSET: usize = 1 + 4 + 1 + 1 + 16 + 1;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -1032,7 +1032,7 @@ fn decode_versioned_signed_block_rejects_trailing_bytes() {
     use nonzero_ext::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -1068,7 +1068,7 @@ fn frame_deframe_versioned_bytes_roundtrip() {
     use nonzero_ext::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -1111,7 +1111,7 @@ fn canonical_wire_matches_framed_payload() {
     use nonzero_ext::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -1161,7 +1161,7 @@ fn signed_block_decoders_reject_nested_instruction_type_name_alias() {
 
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: vec![TransactionEntrypoint::from(transaction)],
@@ -1264,7 +1264,7 @@ fn set_da_commitments_updates_header_hash() {
     use nonzero_ext::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -1342,7 +1342,7 @@ fn decode_versioned_signed_block_accepts_framed_payload() {
     use nonzero_ext::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -1374,7 +1374,7 @@ fn plain_block_at(height: u64) -> SignedBlock {
         1,
     );
     SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -1551,7 +1551,7 @@ fn framed_signed_block_uses_v1_layout_flags() {
     use nonzero_ext::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -1576,7 +1576,7 @@ fn signed_block_da_commitments_roundtrip() {
     use nonzero_ext::nonzero;
     let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -1607,7 +1607,7 @@ fn set_da_pin_intents_updates_header_hash() {
     use nonzero_ext::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = SignedBlock {
-        signatures: BTreeSet::new(),
+        signatures: crate::block::BlockSignatures::default(),
         payload: BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -2352,7 +2352,7 @@ fn sealed_reveal_batch_outcome_aliases_are_unique_and_single_assignment() {
     };
     let mut builder = sealed_alias_block_builder();
     builder.push_sealed_transaction_reveal(first_reveal.clone());
-    let mut positive = builder.build(BTreeSet::new());
+    let mut positive = builder.build(crate::block::BlockSignatures::default());
     let mut result = crate::transaction::TransactionResult::new(Ok(DataTriggerSequence::default()));
     result.set_batch_transfer_outcomes(vec![outcome.clone()]);
     fixture::install(&mut positive, vec![network(0, result)], 1).unwrap();
@@ -2381,7 +2381,7 @@ fn sealed_reveal_batch_outcome_aliases_are_unique_and_single_assignment() {
     let mut builder = sealed_alias_block_builder();
     builder.push_sealed_transaction_reveal(first_reveal);
     builder.push_sealed_transaction_reveal(second_reveal);
-    let mut ambiguous = builder.build(BTreeSet::new());
+    let mut ambiguous = builder.build(crate::block::BlockSignatures::default());
     assert!(
         fixture::install(
             &mut ambiguous,
@@ -2431,7 +2431,8 @@ fn canonical_block_and_journal_share_strict_header_and_version_rejections() {
     let key = checked_random_keypair();
     block
         .signatures
-        .insert(checked_block_signature(0, &key, &block.header()));
+        .try_insert(checked_block_signature(0, &key, &block.header()))
+        .unwrap();
     let wire = block.encode_wire().unwrap();
     let limits = NativeFinalityLimits {
         block_bytes: 1024 * 1024,
@@ -2498,7 +2499,8 @@ fn canonical_block_refusal_survives_outer_unwind_and_retries_identical_frame() {
     let key = checked_random_keypair();
     block
         .signatures
-        .insert(checked_block_signature(0, &key, &block.header()));
+        .try_insert(checked_block_signature(0, &key, &block.header()))
+        .unwrap();
     let wire = block.encode_wire().unwrap();
     let saved = std::cell::RefCell::new(None);
     assert!(

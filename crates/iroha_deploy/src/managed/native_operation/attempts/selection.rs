@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::managed::{
+    native_operation::authorization::DispatchAuthorization,
     native_operation::{now_ms, require_deadline},
-    service_bootstrap::authorization::BootstrapChildAuthorization,
 };
 use std::time::Instant;
 
@@ -13,6 +13,7 @@ pub(in crate::managed) fn initial(
     operation: &PrivateDirectory,
     purpose: Purpose,
     semantic: [u8; 32],
+    scope: &HistoryScope,
     terms: Terms,
     observation: Observation,
     deadline: Instant,
@@ -20,8 +21,22 @@ pub(in crate::managed) fn initial(
     mut retain_request: impl FnMut(&Attempt, Observation, Instant) -> Result<VerifiedNativePreparation>,
 ) -> Result<()> {
     require_deadline(deadline)?;
-    let history = History::read(operation, purpose, semantic)?;
+    scope.require_active()?;
+    let history = History::read(operation, purpose, semantic, scope)?;
     history.verify_wallets(&mut inspect)?;
+    if history.reservation_pending() {
+        let reserved = &history
+            .dispatch
+            .as_ref()
+            .ok_or_else(|| invalid("reserved dispatch absent"))?
+            .highest;
+        if reserved.origin != Origin::Explicit || reserved.terms != terms {
+            return Err(invalid("explicit reserved dispatch changed original terms"));
+        }
+        require_deadline(deadline)?;
+        history.finish_reserved(operation, false)?;
+    }
+    let history = History::read(operation, purpose, semantic, scope)?;
     if let Some(last) = history.last() {
         last.terms()
             .matches(terms.requested_deadline_unix_ms, &terms.options(deadline))?;
@@ -58,7 +73,8 @@ pub(in crate::managed) fn generated(
     operation: &PrivateDirectory,
     purpose: Purpose,
     semantic: [u8; 32],
-    authorization: &BootstrapChildAuthorization<'_>,
+    scope: &HistoryScope,
+    authorization: &dyn DispatchAuthorization,
     deadline: Instant,
     body_expiry: Option<u64>,
     mut inspect: impl FnMut(&Attempt) -> Result<VerifiedNativePreparation>,
@@ -68,8 +84,15 @@ pub(in crate::managed) fn generated(
     mut observation_usable: impl FnMut(&Attempt) -> Result<bool>,
 ) -> Result<()> {
     authorization.check(purpose, deadline)?;
-    let history = History::read(operation, purpose, semantic)?;
+    scope.require_active()?;
+    let history = History::read(operation, purpose, semantic, scope)?;
     history.require_fees(authorization.fees())?;
+    history.verify_wallets(&mut inspect)?;
+    if history.reservation_pending() {
+        authorization.check(purpose, deadline)?;
+        history.finish_reserved(operation, false)?;
+    }
+    let history = History::read(operation, purpose, semantic, scope)?;
     history.verify_wallets(&mut inspect)?;
     let origin = authorization.origin()?;
     if let Some(last) = history.last() {
@@ -145,7 +168,7 @@ pub(in crate::managed) fn generated(
     }
     // Retirement or root publication may have completed an interrupted local prefix. Re-read
     // all metadata and inspect all canonical wallets before adding the next authorization.
-    let history = History::read(operation, purpose, semantic)?;
+    let history = History::read(operation, purpose, semantic, scope)?;
     history.verify_wallets(&mut inspect)?;
     authorization.check(purpose, deadline)?;
     let terms = authorization.terms(deadline, body_expiry)?;
@@ -166,7 +189,7 @@ pub(in crate::managed) fn generated(
     commit(&successor, history.last(), observed, &preparation)
 }
 
-fn retire_predecessor(
+pub(super) fn retire_predecessor(
     previous: &Attempt,
     successor: &Attempt,
     inspect: &mut impl FnMut(&Attempt) -> Result<VerifiedNativePreparation>,

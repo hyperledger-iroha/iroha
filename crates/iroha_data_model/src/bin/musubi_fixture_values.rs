@@ -273,6 +273,9 @@ where
     reason = "the generator and grouped tests render JSON; library identity tests read these fields"
 )]
 pub struct MusubiGeneratedIdentityValues {
+    /// Fully signed provider-attestation registration fixture.
+    #[cfg(test)]
+    pub(crate) register_provider_attestation: RegisterMusubiProviderBundleAttestationV1,
     /// Namespace-binding registration fixture.
     pub(crate) register_namespace: RegisterMusubiNamespaceBindingV1,
     /// Archive-registration fixture with a verified seed-ingress receipt.
@@ -1461,6 +1464,8 @@ impl FixtureInstructions {
             set_policy,
         } = self;
         let generated_identity_values = MusubiGeneratedIdentityValues {
+            #[cfg(test)]
+            register_provider_attestation: register_provider_attestation.clone(),
             register_namespace: register_namespace.clone(),
             register_archive: register_archive.clone(),
             retire_archive_location: retire.clone(),

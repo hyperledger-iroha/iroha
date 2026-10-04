@@ -278,6 +278,11 @@ impl fmt::Debug for RegistryPublicConfigImageV1 {
             .finish_non_exhaustive()
     }
 }
+impl Drop for RegistryPublicConfigImageV1 {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.bytes);
+    }
+}
 impl RegistryPublicConfigImageV1 {
     /// Read one anchored, bounded configuration image without constructing a signer or transport.
     pub(crate) fn load(config: Option<&Path>) -> Result<Self, RegistryErrorV1> {
@@ -901,6 +906,22 @@ impl RegistrySigningClientV1 {
         iroha_musubi_service::AuthenticatedMusubiPublicationRuntimeClientV1::from_iroha_client(
             self.client.client(),
             timeout,
+        )
+    }
+    /// Build the sole generated publication client from original TLS intent and this exact signer.
+    /// Torii credentials and extra headers remain excluded by the lower client owner.
+    /// # Errors
+    /// Refuses changed original network, chain, endpoint, timeout or TLS material.
+    pub(crate) fn generated_publication_runtime_client(
+        &self,
+        selection: iroha_musubi_service::GeneratedLocalPublicationTransportV1,
+        timeout: Duration,
+    ) -> Result<
+        iroha_musubi_service::AuthenticatedMusubiPublicationRuntimeClientV1,
+        iroha_musubi_service::MusubiPublicationRuntimeTransportErrorV1,
+    > {
+        iroha_musubi_service::AuthenticatedMusubiPublicationRuntimeClientV1::from_generated_local_iroha_client(
+            self.client.client(), selection, timeout,
         )
     }
     /// Parse one canonical account argument under the signing client's network profile.

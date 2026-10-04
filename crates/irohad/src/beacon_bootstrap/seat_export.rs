@@ -87,6 +87,10 @@ impl FileProgress {
     pub(super) fn complete(&self) -> bool {
         self.complete
     }
+    #[cfg(test)]
+    pub(super) fn is_synced(&self) -> bool {
+        self.synced
+    }
 }
 struct Outputs {
     credential: PreparedGlobalBeaconCredentialV1,
@@ -234,7 +238,7 @@ impl PreparedSeatExport {
             let source = self.source.as_ref().ok_or(ExportError::Phase)?;
             encode_global_beacon_partial_signer_credential_v1(
                 &mut self.outputs.credential,
-                std::iter::once(source),
+                std::iter::once(source.credential_source()),
             )?;
         }
         for (index, (name, private)) in FILES.iter().copied().enumerate() {
@@ -339,7 +343,7 @@ fn validate_output(
     }
     Ok(())
 }
-pub(super) fn publish_file(
+pub(super) fn prepare_file_bytes(
     directory: &Directory,
     name: &str,
     private: bool,
@@ -370,6 +374,19 @@ pub(super) fn publish_file(
     write_remaining(file, bytes, &mut progress.offset, |file, bytes, offset| {
         std::os::unix::fs::FileExt::write_at(file, bytes, offset)
     })?;
+    Ok(())
+}
+
+pub(super) fn publish_file(
+    directory: &Directory,
+    name: &str,
+    private: bool,
+    bytes: &[u8],
+    progress: &mut FileProgress,
+) -> std::result::Result<(), ExportError> {
+    use rustix::fs::{Mode, OFlags};
+    prepare_file_bytes(directory, name, private, bytes, progress)?;
+    let file = progress.descriptor.as_mut().ok_or(ExportError::Phase)?;
     if !progress.synced {
         file.sync_all().map_err(ExportError::Io)?;
         progress.synced = true;
@@ -394,6 +411,85 @@ pub(super) fn publish_file(
     directory.file.sync_all().map_err(ExportError::Io)?;
     revalidate_directory(directory)?;
     progress.complete = true;
+    Ok(())
+}
+
+/// Retain and verify an existing output, then finish its real durability barrier.
+/// A sync refusal keeps this exact descriptor and source progress for retry.
+/// No byte is written/recreated; visibility alone never means durable completion.
+pub(super) fn restore_published_file(
+    directory: &Directory,
+    name: &str,
+    private: bool,
+    bytes: &[u8],
+    progress: &mut FileProgress,
+) -> std::result::Result<(), ExportError> {
+    restore_published_file_with(directory, name, private, bytes, progress, |file| {
+        file.sync_all()
+    })
+}
+fn restore_published_file_with(
+    directory: &Directory,
+    name: &str,
+    private: bool,
+    bytes: &[u8],
+    progress: &mut FileProgress,
+    mut sync: impl FnMut(&File) -> std::io::Result<()>,
+) -> std::result::Result<(), ExportError> {
+    revalidate_directory(directory)?;
+    if progress.descriptor.is_none() {
+        let descriptor = File::from(
+            rustix::fs::openat(
+                &directory.file,
+                name,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map_err(|e| ExportError::Io(e.into()))?,
+        );
+        // Own the original descriptor before metadata, reads or fsync may refuse.
+        progress.descriptor = Some(descriptor);
+    }
+    let descriptor = progress.descriptor.as_ref().ok_or(ExportError::Phase)?;
+    validate_output(descriptor, private, bytes.len())?;
+    verify_prefix(descriptor, bytes)?;
+    progress.offset = bytes.len();
+    validate_named_output(directory, name, descriptor)?;
+    if !progress.synced {
+        sync(descriptor).map_err(ExportError::Io)?;
+        progress.synced = true;
+    }
+    sync(&directory.file).map_err(ExportError::Io)?;
+    validate_output(descriptor, private, bytes.len())?;
+    verify_prefix(descriptor, bytes)?;
+    revalidate_directory(directory)?;
+    validate_named_output(directory, name, descriptor)?;
+    progress.complete = true;
+    Ok(())
+}
+
+fn validate_named_output(
+    directory: &Directory,
+    name: &str,
+    descriptor: &File,
+) -> std::result::Result<(), ExportError> {
+    let named = File::from(
+        rustix::fs::openat(
+            &directory.file,
+            name,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|e| ExportError::Io(e.into()))?,
+    );
+    if !same_file(
+        &descriptor.metadata().map_err(ExportError::Io)?,
+        &named.metadata().map_err(ExportError::Io)?,
+    ) {
+        return Err(ExportError::Custody);
+    }
     Ok(())
 }
 

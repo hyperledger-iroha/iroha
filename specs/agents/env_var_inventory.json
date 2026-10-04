@@ -1,9 +1,9 @@
 {
   "command": "python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md",
-  "generated_at": "2026-10-01T02:35:15Z",
+  "generated_at": "2026-10-04T07:44:17Z",
   "root": "iroha",
-  "total_refs": 893,
-  "unique_vars": 209,
+  "total_refs": 890,
+  "unique_vars": 208,
   "variables": {
     "CARGO": {
       "counts": {
@@ -304,7 +304,7 @@
       "paths": [
         {
           "context": "let target_os = env::var(\"CARGO_CFG_TARGET_OS\").unwrap_or_default();",
-          "line": 40,
+          "line": 22,
           "path": "crates/fastpq_prover/build.rs",
           "scope": "build"
         },
@@ -409,7 +409,7 @@
       "paths": [
         {
           "context": "let fastpq_gpu_feature = env::var_os(\"CARGO_FEATURE_FASTPQ_GPU\").is_some();",
-          "line": 19,
+          "line": 17,
           "path": "crates/fastpq_prover/build.rs",
           "scope": "build"
         }
@@ -3630,7 +3630,7 @@
       "paths": [
         {
           "context": "env::var_os(\"CUDA_HOME\")",
-          "line": 342,
+          "line": 90,
           "path": "crates/fastpq_prover/build.rs",
           "scope": "build"
         },
@@ -3667,7 +3667,7 @@
       "paths": [
         {
           "context": ".or_else(|| env::var_os(\"CUDA_PATH\"))",
-          "line": 343,
+          "line": 91,
           "path": "crates/fastpq_prover/build.rs",
           "scope": "build"
         },
@@ -3704,7 +3704,7 @@
       "paths": [
         {
           "context": "env::var_os(\"CXX\").is_some()",
-          "line": 386,
+          "line": 134,
           "path": "crates/fastpq_prover/build.rs",
           "scope": "build"
         },
@@ -3791,26 +3791,6 @@
         }
       ]
     },
-    "FASTPQ_METAL_LIB": {
-      "counts": {
-        "prod": 1,
-        "test": 1
-      },
-      "paths": [
-        {
-          "context": "option_env!(\"FASTPQ_METAL_LIB\")",
-          "line": 1262,
-          "path": "crates/fastpq_prover/src/backend.rs",
-          "scope": "prod"
-        },
-        {
-          "context": "option_env!(\"FASTPQ_METAL_LIB\"),",
-          "line": 3115,
-          "path": "crates/fastpq_prover/src/metal.rs",
-          "scope": "test"
-        }
-      ]
-    },
     "FASTPQ_RESOURCE_OUTPUT_DIR": {
       "counts": {
         "test": 1
@@ -3831,7 +3811,7 @@
       "paths": [
         {
           "context": "let skip_gpu_build = env::var_os(\"FASTPQ_SKIP_GPU_BUILD\").is_some();",
-          "line": 41,
+          "line": 34,
           "path": "crates/fastpq_prover/build.rs",
           "scope": "build"
         }
@@ -4046,7 +4026,7 @@
       "paths": [
         {
           "context": "|| env::var_os(\"HOST_CXX\").is_some()",
-          "line": 387,
+          "line": 135,
           "path": "crates/fastpq_prover/build.rs",
           "scope": "build"
         },
@@ -5782,17 +5762,11 @@
     },
     "OUT_DIR": {
       "counts": {
-        "build": 6,
+        "build": 5,
         "prod": 15,
         "test": 8
       },
       "paths": [
-        {
-          "context": "let out_dir = PathBuf::from(env::var(\"OUT_DIR\").map_err(|err| err.to_string())?);",
-          "line": 151,
-          "path": "crates/fastpq_prover/build.rs",
-          "scope": "build"
-        },
         {
           "context": "let out_dir = PathBuf::from(env::var_os(\"OUT_DIR\").expect(\"Cargo must provide OUT_DIR\"));",
           "line": 46,
@@ -6469,7 +6443,7 @@
       "paths": [
         {
           "context": "env::var_os(\"SystemRoot\").map(PathBuf::from)",
-          "line": 824,
+          "line": 830,
           "path": "crates/fastpq_prover/src/backend.rs",
           "scope": "prod"
         },

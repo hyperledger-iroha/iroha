@@ -1968,7 +1968,10 @@ where
 {
     encode_seq_payloads::<T, I>(writer, items)
 }
-fn sequence_encoded_len_hint<'a, T, I>(items: I) -> Option<usize>
+/// Canonical element-sequence sizing shared by immutable collection owners.
+/// Returns `None` when any original leaf has no representable length hint.
+#[doc(hidden)]
+pub fn sequence_encoded_len_hint<'a, T, I>(items: I) -> Option<usize>
 where
     T: SerializePayload + 'a,
     I: IntoIterator<Item = &'a T>,
@@ -1984,7 +1987,10 @@ where
     }
     Some(total)
 }
-fn sequence_encoded_len_exact<'a, T, I>(items: I) -> Option<usize>
+/// Exact canonical element-sequence sizing without staging a temporary byte Vec.
+/// Returns `None` when any original leaf has no representable exact length.
+#[doc(hidden)]
+pub fn sequence_encoded_len_exact<'a, T, I>(items: I) -> Option<usize>
 where
     T: SerializePayload + 'a,
     I: IntoIterator<Item = &'a T>,

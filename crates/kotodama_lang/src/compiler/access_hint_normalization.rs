@@ -197,9 +197,10 @@ mod tests {
         let source = r#"seiyaku CoveredStateHints {
             state int counter;
             state StateMap<int, int> values;
+            hajimari() { counter = 0; }
             fn touch(int _ key) { counter = counter + 1; values[key] = counter; }
             kotoage fn update(int key) authorize("Entry") { touch(key); }
-            view fn read(int key) -> int { return values[key].unwrap_or(counter); }
+            view fn read(int key) -> int { return values.get(key).unwrap_or(counter); }
         }"#;
         let before = compile(source, true);
         let after = compile(source, false);

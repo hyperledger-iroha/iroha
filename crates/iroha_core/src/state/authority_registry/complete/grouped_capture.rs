@@ -1,10 +1,11 @@
 //! Consume exact native grouping derivations before scoped canonical encoding.
 
 use super::super::grouped_ownership::{
+    ASSET_BALANCE_WORK_PER_ROW, ASSET_DEFINITION_WORK_PER_ROW, CONTRACT_ALIAS_WORK_PER_ROW,
     CheckedAccountRekeys, CheckedAssetDefinitions, CheckedAssets, CheckedContractAliases,
     CheckedContractSubjects, CheckedEscrows, CheckedNfts, CheckedProofRecords,
     CheckedRepoAgreements, CheckedRwas, CheckedValidationFeeProposals, CheckedVerifyingKeys,
-    GroupedOwnershipError, VALIDATION_FEE_PROPOSAL_WORK_PER_ROW,
+    ESCROW_WORK_PER_ROW, GroupedOwnershipError, VALIDATION_FEE_PROPOSAL_WORK_PER_ROW,
 };
 use super::*;
 use mv::{PublicationPreparationError, storage::StorageReadOnly};
@@ -93,19 +94,172 @@ grouped_capture!(
     "world.account_rekey_records",
     256
 );
-grouped_capture!(capture_assets_once, CheckedAssets, "world.assets", 128);
+/// Capture canonical balances through their eight exact native dependencies.
+pub(crate) fn capture_assets_once(
+    state: &State,
+    limits: LeafLimits,
+) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
+    let generation = state.state_view_generation();
+    if generation & 1 != 0 {
+        return Ok(None);
+    }
+    let budget = state.ivm_execution_budget();
+    let checked = CheckedAssets::capture(
+        &state.world,
+        limits.max_rows.saturating_mul(ASSET_BALANCE_WORK_PER_ROW),
+    );
+    if !is_stable_state_view_generation(generation, state.state_view_generation()) {
+        return Ok(None);
+    }
+    let checked = match checked {
+        Ok(checked) => checked,
+        Err(GroupedOwnershipError::Publication(PublicationPreparationError::Changed)) => {
+            return Ok(None);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let snapshot = CanonicalTableLeafSet::paired_table_from_rows(
+        "world.assets",
+        limits,
+        &budget,
+        checked.rows().iter(),
+    );
+    finish_assets_encoding(state, generation, checked, snapshot)
+}
+
+fn finish_assets_encoding(
+    state: &State,
+    generation: u64,
+    checked: CheckedAssets<'_>,
+    snapshot: Result<CanonicalTablePairedSnapshot, LeafError>,
+) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
+    let current = checked.matches_current();
+    drop(checked);
+    if !is_stable_state_view_generation(generation, state.state_view_generation()) {
+        return Ok(None);
+    }
+    if !current? {
+        return Ok(None);
+    }
+    Ok(Some(snapshot?))
+}
+
+#[cfg(test)]
+#[path = "grouped_capture/assets_fence_tests.rs"]
+mod assets_fence_tests;
 grouped_capture!(
     capture_contract_alias_bindings_once,
     CheckedContractAliases,
-    "world.contract_alias_bindings"
+    "world.contract_alias_bindings",
+    CONTRACT_ALIAS_WORK_PER_ROW
 );
-grouped_capture!(
-    capture_asset_definitions_once,
-    CheckedAssetDefinitions,
-    "world.asset_definitions"
-);
+/// Capture canonical definitions through their seven exact native dependencies.
+pub(crate) fn capture_asset_definitions_once(
+    state: &State,
+    limits: LeafLimits,
+) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
+    let generation = state.state_view_generation();
+    if generation & 1 != 0 {
+        return Ok(None);
+    }
+    let budget = state.ivm_execution_budget();
+    let checked = CheckedAssetDefinitions::capture(
+        &state.world,
+        limits
+            .max_rows
+            .saturating_mul(ASSET_DEFINITION_WORK_PER_ROW),
+    );
+    if !is_stable_state_view_generation(generation, state.state_view_generation()) {
+        return Ok(None);
+    }
+    let checked = match checked {
+        Ok(checked) => checked,
+        Err(GroupedOwnershipError::Publication(PublicationPreparationError::Changed)) => {
+            return Ok(None);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let snapshot = CanonicalTableLeafSet::paired_table_from_rows(
+        "world.asset_definitions",
+        limits,
+        &budget,
+        checked.rows().iter(),
+    );
+    finish_asset_definition_encoding(state, generation, checked, snapshot)
+}
+
+fn finish_asset_definition_encoding(
+    state: &State,
+    generation: u64,
+    checked: CheckedAssetDefinitions<'_>,
+    snapshot: Result<CanonicalTablePairedSnapshot, LeafError>,
+) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
+    let current = checked.matches_current();
+    drop(checked);
+    if !is_stable_state_view_generation(generation, state.state_view_generation()) {
+        return Ok(None);
+    }
+    if !current? {
+        return Ok(None);
+    }
+    Ok(Some(snapshot?))
+}
+
+#[cfg(test)]
+#[path = "grouped_capture/asset_definition_tests.rs"]
+mod asset_definition_tests;
 grouped_capture!(capture_rwas_once, CheckedRwas, "world.rwas");
-grouped_capture!(capture_escrows_once, CheckedEscrows, "world.asset_escrows");
+/// Capture canonical escrows through all four original native owners.
+pub(crate) fn capture_escrows_once(
+    state: &State,
+    limits: LeafLimits,
+) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
+    let generation = state.state_view_generation();
+    if generation & 1 != 0 {
+        return Ok(None);
+    }
+    let budget = state.ivm_execution_budget();
+    let checked = CheckedEscrows::capture(
+        &state.world,
+        limits.max_rows.saturating_mul(ESCROW_WORK_PER_ROW),
+    );
+    if !is_stable_state_view_generation(generation, state.state_view_generation()) {
+        return Ok(None);
+    }
+    let checked = match checked {
+        Ok(checked) => checked,
+        Err(GroupedOwnershipError::Publication(PublicationPreparationError::Changed)) => {
+            return Ok(None);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let snapshot = CanonicalTableLeafSet::paired_table_from_rows(
+        "world.asset_escrows",
+        limits,
+        &budget,
+        checked.rows().iter(),
+    );
+    finish_escrows_encoding(state, generation, checked, snapshot)
+}
+fn finish_escrows_encoding(
+    state: &State,
+    generation: u64,
+    checked: CheckedEscrows<'_>,
+    snapshot: Result<CanonicalTablePairedSnapshot, LeafError>,
+) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
+    let current = checked.matches_current();
+    drop(checked);
+    if !is_stable_state_view_generation(generation, state.state_view_generation()) {
+        return Ok(None);
+    }
+    if !current? {
+        return Ok(None);
+    }
+    Ok(Some(snapshot?))
+}
+#[cfg(test)]
+#[path = "grouped_capture/escrows_fence_tests.rs"]
+mod escrows_fence_tests;
 grouped_capture!(
     capture_repo_agreements_once,
     CheckedRepoAgreements,

@@ -217,6 +217,10 @@ impl PublicFrame {
         let dealers = Sequence((0..n).map(|_| norito::core::PayloadRef(&dealer)));
         let edges = Sequence((0..n * n).map(|_| norito::core::PayloadRef(&edge)));
         let acceptances = Sequence((0..n * n).map(|_| norito::core::PayloadRef(&acceptance)));
+        // A local seat emits only its own n acknowledgments, even though its
+        // authenticated acceptance input contains the complete n² deliveries.
+        // Complete final-session input bounds below retain all n² acknowledgments.
+        let local_acceptances = Sequence((0..n).map(|_| norito::core::PayloadRef(&acceptance)));
         let maximum = SnapshotView {
             session: PayloadRef(session),
             generator_h: *parameters.h_bytes(),
@@ -224,7 +228,7 @@ impl PublicFrame {
             recipients: PayloadRef(&recipients),
             dealers: PayloadRef(&dealers),
             edges: PayloadRef(&edges),
-            acceptances: PayloadRef(&acceptances),
+            acceptances: PayloadRef(&local_acceptances),
             height: session.acceptances_end_height,
         };
         let size = norito::canonical_frame_len(&maximum)?;
@@ -565,6 +569,201 @@ mod tests {
             assert_eq!(budget.reserved_bytes(), original);
             drop(prepared);
             assert_eq!(budget.reserved_bytes(), 0);
+        }
+    }
+
+    #[test]
+    fn local_output_keeps_exact_n_acknowledgments_and_complete_n_squared_input_at_four_and_thirty_one()
+     {
+        use iroha_data_model::consensus::{
+            GlobalThresholdBeaconDkgTranscriptV1, GlobalThresholdBeaconKeySessionV1,
+            GlobalThresholdBeaconPublicShareV1,
+        };
+
+        for n in [4, 31] {
+            let (session, keys, roster) = super::super::tests::signed_session(n);
+            let source_budget = crate::beacon::fixtures::fixture_budget();
+            let prepared = PreparedLocalGlobalThresholdBeaconDkgSeatV1::new(
+                session,
+                &roster,
+                1,
+                &keys[0],
+                &source_budget,
+            )
+            .unwrap();
+            // These independently materialized canonical DTOs are sizing oracles,
+            // not authenticated DKG messages. Signatures use the actual fixed BLS
+            // width; no synthetic proof or signature is admitted or published.
+            let signature = || iroha_crypto::Signature::from_bytes(&[0; 96]);
+            let mut recipient = prepared.recipient.record().clone();
+            recipient.signature = signature();
+            let mut dealer = prepared.dealer.record().clone();
+            dealer.signature = signature();
+            let mut edge = prepared.outputs.pending_edges.as_slice()[0]
+                .as_ref()
+                .unwrap()
+                .record()
+                .clone();
+            edge.signature = signature();
+            let mut acceptance = prepared.outputs.pending_acceptances.as_slice()[0]
+                .as_ref()
+                .unwrap()
+                .record()
+                .clone();
+            acceptance.signature = signature();
+            let count = usize::from(n);
+            let parameters = adaptive_beacon_parameters(&session).unwrap();
+            let output = GlobalThresholdBeaconDkgSnapshotV1 {
+                session,
+                generator_h: *parameters.h_bytes(),
+                generator_v: *parameters.v_bytes(),
+                recipient_keys: vec![recipient.clone(); count],
+                dealer_commitments: vec![dealer.clone(); count],
+                encrypted_shares: vec![edge.clone(); count * count],
+                share_acceptances: vec![acceptance.clone(); count],
+                last_updated_height: session.acceptances_end_height,
+            };
+            let encoded_output = norito::encode_canonical(&output).unwrap();
+            let mut complete = output.clone();
+            complete.share_acceptances = vec![acceptance.clone(); count * count];
+            let encoded_complete = norito::encode_canonical(&complete).unwrap();
+            assert!(encoded_complete.len() > encoded_output.len());
+            let final_session = GlobalThresholdBeaconKeySessionV1 {
+                version: session.version,
+                network_id: session.network_id,
+                session_id: session.session_id,
+                roster_hash: session.roster_hash,
+                committee_size: n,
+                threshold: session.threshold,
+                group_public_key: [0; 96],
+                public_shares: vec![
+                    GlobalThresholdBeaconPublicShareV1 {
+                        index: 1,
+                        participant_seat_binding: [0; 32],
+                        public_key_share: [0; 96],
+                    };
+                    count
+                ],
+                adaptive_dkg: GlobalThresholdBeaconDkgTranscriptV1 {
+                    session,
+                    generator_h: complete.generator_h,
+                    generator_v: complete.generator_v,
+                    dealer_commitments: complete.dealer_commitments.clone(),
+                    recipient_keys: complete.recipient_keys.clone(),
+                    encrypted_shares: complete.encrypted_shares.clone(),
+                    share_acceptances: complete.share_acceptances.clone(),
+                    qualified_dealers: (1..=n).collect(),
+                    event_hash: [0; 32],
+                    finalized_at_height: session.acceptances_end_height,
+                },
+                dkg_contribution_hash: [0; 32],
+                transcript_hash: [0; 32],
+            };
+            let encoded_final = norito::encode_canonical(&final_session).unwrap();
+            let budget = AllocationBudget::new(encoded_output.len());
+            let prepare_frame =
+                || PublicFrame::prepare(&session, &recipient, &dealer, &edge, &acceptance, &budget);
+            let mut admitted = None;
+            assert_eq!(
+                allocations_during(|| {
+                    admitted = Some(prepare_frame().unwrap());
+                }),
+                1,
+                "one exact original output allocation, no full-committee output copy"
+            );
+            let mut frame = admitted.unwrap();
+            assert_eq!(frame.backing().1, encoded_output.len());
+            assert_eq!(
+                frame.input_bounds[2],
+                encoded_final.len(),
+                "all n² input acknowledgments remain independently admitted"
+            );
+            let mut commitments = complete.clone();
+            commitments.encrypted_shares.clear();
+            commitments.share_acceptances.clear();
+            commitments.last_updated_height = session.start_height;
+            assert_eq!(
+                frame.input_bounds[0],
+                norito::canonical_frame_len(&commitments).unwrap()
+            );
+            let mut deliveries = complete.clone();
+            deliveries.share_acceptances.clear();
+            deliveries.last_updated_height = session.commitments_end_height;
+            assert_eq!(
+                frame.input_bounds[1],
+                norito::canonical_frame_len(&deliveries).unwrap()
+            );
+            let original = frame.backing();
+            assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+            let view = SnapshotView {
+                session: PayloadRef(&session),
+                generator_h: output.generator_h,
+                generator_v: output.generator_v,
+                recipients: PayloadRef(&output.recipient_keys),
+                dealers: PayloadRef(&output.dealer_commitments),
+                edges: PayloadRef(&output.encrypted_shares),
+                acceptances: PayloadRef(&output.share_acceptances),
+                height: output.last_updated_height,
+            };
+            assert_eq!(
+                allocations_during(|| {
+                    frame.write(&view).unwrap();
+                }),
+                0,
+                "the exact local maximum writes while its original pool is saturated"
+            );
+            assert_eq!(frame.bytes.as_slice(), encoded_output);
+            assert_eq!(frame.backing(), original);
+            let full_view = SnapshotView {
+                session: PayloadRef(&session),
+                generator_h: complete.generator_h,
+                generator_v: complete.generator_v,
+                recipients: PayloadRef(&complete.recipient_keys),
+                dealers: PayloadRef(&complete.dealer_commitments),
+                edges: PayloadRef(&complete.encrypted_shares),
+                acceptances: PayloadRef(&complete.share_acceptances),
+                height: complete.last_updated_height,
+            };
+            assert!(
+                matches!(frame.write(&full_view), Err(SessionGraphError::Encoding(_))),
+                "a full-committee output cannot grow the local destination"
+            );
+            assert_eq!(frame.backing(), original);
+            assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+            frame
+                .write(&view)
+                .expect("same original backing retries the actual local output");
+            assert_eq!(frame.bytes.as_slice(), encoded_output);
+            drop(frame);
+            assert_eq!(budget.reserved_bytes(), 0);
+
+            let narrow = AllocationBudget::new(encoded_output.len() - 1);
+            assert!(matches!(PublicFrame::prepare(
+                &session, &recipient, &dealer, &edge, &acceptance, &narrow,
+            ), Err(SessionGraphError::Admission(AllocationRefusal::ExceedsLimit { requested_bytes, limit_bytes }))
+                if requested_bytes == encoded_output.len() && limit_bytes == encoded_output.len() - 1));
+            assert_eq!(narrow.reserved_bytes(), 0);
+            let occupied = budget.try_reserve_bytes(1).unwrap();
+            assert!(matches!(prepare_frame(),
+                Err(SessionGraphError::Admission(AllocationRefusal::Capacity {
+                    requested_bytes, reserved_bytes: 1, limit_bytes, ..
+                })) if requested_bytes == encoded_output.len() && limit_bytes == encoded_output.len()));
+            assert_eq!(budget.reserved_bytes(), 1);
+            drop(occupied);
+            assert_eq!(budget.reserved_bytes(), 0);
+            let (refused, actual) = crate::test_allocations::refuse_one_layout_during(
+                std::alloc::Layout::array::<u8>(encoded_output.len()).unwrap(),
+                prepare_frame,
+            );
+            assert!(actual, "the allocator refused this original output layout");
+            assert!(matches!(refused, Err(SessionGraphError::Buffer(_))));
+            assert_eq!(budget.reserved_bytes(), 0);
+            let retry = prepare_frame().expect("same exact geometry after real allocator refusal");
+            assert_eq!(retry.backing().1, encoded_output.len());
+            drop(retry);
+            assert_eq!(budget.reserved_bytes(), 0);
+            drop(prepared);
+            assert_eq!(source_budget.reserved_bytes(), 0);
         }
     }
 }

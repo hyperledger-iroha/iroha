@@ -1,9 +1,14 @@
-"""Closed periodic-refresh envelope for the authenticated Native parent only."""
+"""Closed periodic-refresh envelope for the authenticated Native parent only.
+
+TODO: spec §2.2 deletes the periodic Play Integrity refresh lease. Remove this
+route with ``ordinary_refresh_issuance.py``, ``play_integrity_refresh.py`` and
+their Native consumers.
+"""
 import base64
 import hashlib
 import json
 
-from .attestation import AttestationRejected, require
+from .attestation import AttestationRejected, VerificationUnavailable, require
 from .ordinary_refresh_issuance import OrdinaryIntegrityRefreshRequest
 from .service import _decode_base64, _decode_hex32, _unique_object
 
@@ -36,6 +41,8 @@ def handle_refresh(issuer,body:bytes) -> tuple[int,bytes]:
     try:request=decode_request(body)
     except AttestationRejected:return 400,b'{"error":"invalid_request"}'
     try:original=issuer.refresh(request)
+    # An unavailable Google decoder or OAuth token is retryable, not a rejection.
+    except VerificationUnavailable:return 503,b'{"error":"issuer_unavailable"}'
     except AttestationRejected:return 409,b'{"error":"refresh_rejected"}'
     except Exception:return 503,b'{"error":"issuer_unavailable"}'
     return 200,json.dumps({'lease_base64':base64.b64encode(original).decode('ascii'),

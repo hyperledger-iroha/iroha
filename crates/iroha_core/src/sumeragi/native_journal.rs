@@ -291,6 +291,7 @@ pub fn authenticate_signed_genesis(
 
 #[cfg(test)]
 mod tests {
+    mod signature_tests;
     use super::*;
     mod index_tests;
     mod source_tests;

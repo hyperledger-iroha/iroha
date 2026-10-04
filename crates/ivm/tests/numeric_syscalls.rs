@@ -2083,3 +2083,475 @@ fn integer_helpers_cover_full_width_results_and_staged_failures() {
         }
     }
 }
+
+// The work vectors below are independently enumerated from the V1 event rules.
+// This helper never calls numeric_int or numeric_gas to derive expected charges.
+fn assert_int_helper_gas_boundaries(
+    syscall: u32,
+    left: &BigInt,
+    right: Option<&BigInt>,
+    arithmetic_steps: &[u64],
+    expected: Result<(&BigInt, u64), NumericFaultV1>,
+) {
+    for mode in [NUMERIC_FAILURE_TRAP, NUMERIC_FAILURE_STATUS] {
+        let mut vm = vm_for(syscall, u64::MAX);
+        let left_pointer = install_int(&mut vm, left);
+        vm.set_register(10, left_pointer);
+        let mut input_frames = vec![envelope_len(&vm, left_pointer) - 39];
+        if let Some(right) = right {
+            let pointer = install_int(&mut vm, right);
+            vm.set_register(11, pointer);
+            input_frames.push(envelope_len(&vm, pointer) - 39);
+        }
+        vm.set_register(14, mode);
+        let original = [10, 11, 12, 13, 14].map(|register| vm.register(register));
+        let template = vm.try_runtime_template().expect("pristine helper template");
+        let outcome = vm.run();
+        let arithmetic_work = arithmetic_steps.iter().sum::<u64>();
+        // Entry=384; each operand pays header=7, frame snapshot, digest=32+frame,
+        // full eight-byte frame scan, then the body scan after the fixed 40-byte header.
+        let decode_charge = 384
+            + input_frames
+                .iter()
+                .map(|&frame| {
+                    7 + frame
+                        + 32
+                        + frame
+                        + 4 * frame.div_ceil(8).max(1)
+                        + 4 * (frame - 40).div_ceil(8).max(1)
+                })
+                .sum::<u64>();
+        let output_charge = match expected {
+            Ok((value, output_limbs)) => {
+                assert_eq!(outcome, Ok(()));
+                assert_eq!(result_int(&vm), *value);
+                assert_eq!(vm.register(11), 0);
+                let bytes = envelope_len(&vm, vm.register(10));
+                4 * output_limbs + bytes + 2 * (bytes - 39)
+            }
+            Err(fault) => {
+                if mode == NUMERIC_FAILURE_TRAP {
+                    assert_eq!(outcome, Err(VMError::NumericFault(fault)));
+                    assert_eq!(vm.register(10), original[0]);
+                    assert_eq!(vm.register(11), original[1]);
+                } else {
+                    assert_eq!(outcome, Ok(()));
+                    assert_eq!(vm.register(10), 0);
+                    assert_eq!(vm.register(11), fault.tag());
+                }
+                0
+            }
+        };
+        let context = vm.last_staged_syscall_context().expect("helper context");
+        assert_eq!(context.phase_charge(SyscallMeteringPhase::Entry), 384);
+        assert_eq!(
+            context.phase_charge(SyscallMeteringPhase::Arithmetic),
+            4 * arithmetic_work
+        );
+        assert_eq!(context.phase_charge(SyscallMeteringPhase::Normalization), 0);
+        assert_eq!(
+            context.phase_charge(SyscallMeteringPhase::OutputSerialization),
+            output_charge
+        );
+        assert_eq!(
+            context.charged(),
+            decode_charge + 4 * arithmetic_work + output_charge
+        );
+        assert_eq!(
+            context.completion(),
+            Some(match expected {
+                Ok(_) => SyscallCompletion::Success,
+                Err(_) if mode == NUMERIC_FAILURE_STATUS => SyscallCompletion::RecoverableFailure,
+                Err(_) => SyscallCompletion::Trap,
+            })
+        );
+        assert_eq!(
+            ivm::cost_of(encoding::wide::encode_syscallx(syscall)),
+            Some(5)
+        );
+        // One gas unit short of each independently known event must trap before
+        // that event. Even Status mode cannot turn an observer refusal into a result.
+        let mut completed_work = 0;
+        for &next_work in arithmetic_steps {
+            assert!(next_work > 0);
+            let gas = 5 + decode_charge + 4 * (completed_work + next_work) - 1;
+            vm.reset_from_runtime_template(&template)
+                .expect("restore same initialized operands");
+            vm.set_gas_limit(gas);
+            assert_eq!(
+                vm.run(),
+                Err(VMError::SyscallOutOfGas {
+                    syscall,
+                    phase: SyscallMeteringPhase::Arithmetic.tag(),
+                })
+            );
+            assert_eq!(
+                [10, 11, 12, 13, 14].map(|register| vm.register(register)),
+                original,
+                "no result/status/control publication on observer refusal"
+            );
+            let stopped = vm.last_staged_syscall_context().expect("refused context");
+            assert_eq!(stopped.completion(), Some(SyscallCompletion::Trap));
+            assert_eq!(
+                stopped.phase_charge(SyscallMeteringPhase::Arithmetic),
+                4 * completed_work
+            );
+            assert_eq!(stopped.charged(), decode_charge + 4 * completed_work);
+            assert_eq!(
+                stopped.phase_charge(SyscallMeteringPhase::OutputSerialization),
+                0
+            );
+            assert_eq!(gas - vm.remaining_gas(), 5 + stopped.charged());
+            completed_work += next_work;
+        }
+    }
+}
+
+#[test]
+fn integer_helper_gas_vectors_pin_independent_steps_and_fault_prefixes() {
+    let zero = BigInt::zero();
+    let two = BigInt::from(2_u64);
+    let maximum = max_int();
+    let minimum = min_int();
+    for value in [BigInt::from(17_u64), BigInt::from(-17_i64)] {
+        assert_int_helper_gas_boundaries(
+            syscalls::SYSCALL_INT_ABS,
+            &value,
+            None,
+            &[1, 1, 1], // input Finalize, Materialize/Negate, result Finalize
+            Ok((&BigInt::from(17_u64), 1)),
+        );
+    }
+    assert_int_helper_gas_boundaries(
+        syscalls::SYSCALL_INT_ABS,
+        &minimum,
+        None,
+        &[8, 8, 8],
+        Err(NumericFaultV1::MantissaOverflow),
+    );
+    assert_int_helper_gas_boundaries(
+        syscalls::SYSCALL_INT_ISQRT,
+        &zero,
+        None,
+        &[1, 1, 1],
+        Ok((&zero, 1)),
+    );
+    assert_int_helper_gas_boundaries(
+        syscalls::SYSCALL_INT_ISQRT,
+        &BigInt::from(-1_i64),
+        None,
+        &[1],
+        Err(NumericFaultV1::NegativeSquareRoot),
+    );
+    assert_int_helper_gas_boundaries(
+        syscalls::SYSCALL_INT_ISQRT,
+        &BigInt::from(17_u64),
+        None,
+        // Seed 8; descending roots 5,4,4. Each iteration pays QR=5,
+        // Add=1, QR(/2)=5 and Compare=1; input/seed/final each cost 1.
+        &[1, 1, 5, 1, 5, 1, 5, 1, 5, 1, 5, 1, 5, 1, 1],
+        Ok((&BigInt::from(4_u64), 1)),
+    );
+    for (syscall, result, result_limbs) in [
+        (syscalls::SYSCALL_INT_MIN, &minimum, 9),
+        (syscalls::SYSCALL_INT_MAX, &maximum, 8),
+    ] {
+        assert_int_helper_gas_boundaries(
+            syscall,
+            &minimum,
+            Some(&maximum),
+            &[8, 8, 8, 8, 8], // input scans, compare, selected copy, final scan
+            Ok((result, result_limbs)),
+        );
+    }
+    for (left, right, result, steps) in [
+        (7, 2, 4, &[1, 1, 5, 1, 1][..]),
+        (-7, -2, 4, &[1, 1, 5, 1, 1][..]),
+        (-7, 2, -3, &[1, 1, 5, 1][..]),
+        (7, -2, -3, &[1, 1, 5, 1][..]),
+    ] {
+        assert_int_helper_gas_boundaries(
+            syscalls::SYSCALL_INT_DIV_CEIL,
+            &BigInt::from(left),
+            Some(&BigInt::from(right)),
+            steps,
+            Ok((&BigInt::from(result), 1)),
+        );
+    }
+    assert_int_helper_gas_boundaries(
+        syscalls::SYSCALL_INT_DIV_CEIL,
+        &maximum,
+        Some(&zero),
+        &[8, 1], // zero divisor stops before any QR work
+        Err(NumericFaultV1::DivisionByZero),
+    );
+    assert_int_helper_gas_boundaries(
+        syscalls::SYSCALL_INT_DIV_CEIL,
+        &minimum,
+        Some(&BigInt::from(-1_i64)),
+        &[8, 1, 33, 8], // QR(8,1)=17+8+8; final positive 2^511 scan refuses
+        Err(NumericFaultV1::MantissaOverflow),
+    );
+    assert_int_helper_gas_boundaries(
+        syscalls::SYSCALL_INT_GCD,
+        &minimum,
+        Some(&zero),
+        &[8, 1, 8, 1, 8],
+        Err(NumericFaultV1::MantissaOverflow),
+    );
+    assert_int_helper_gas_boundaries(
+        syscalls::SYSCALL_INT_GCD,
+        &minimum,
+        Some(&minimum),
+        &[8, 8, 8, 8, 40, 8], // QR(8,8)=24+8+8
+        Err(NumericFaultV1::MantissaOverflow),
+    );
+    assert_int_helper_gas_boundaries(
+        syscalls::SYSCALL_INT_GCD,
+        &minimum,
+        Some(&two),
+        &[8, 1, 8, 1, 33, 1],
+        Ok((&two, 1)),
+    );
+    let wide = "340282366920938463463374607431768211457"
+        .parse::<BigInt>()
+        .unwrap();
+    let divisor = "18446744073709551616".parse::<BigInt>().unwrap();
+    assert_int_helper_gas_boundaries(
+        syscalls::SYSCALL_INT_GCD,
+        &wide,
+        Some(&divisor),
+        // (2^128+1) mod 2^64 = 1, then 2^64 mod 1 = 0;
+        // QR(3,2)=9+4+3=16 and QR(2,1)=5+2+2=9.
+        &[3, 2, 3, 2, 16, 9, 1],
+        Ok((&BigInt::one(), 1)),
+    );
+    for (value, steps, output_limbs) in [
+        (&maximum, &[8, 8, 8, 33, 8][..], 8),
+        (&minimum, &[8, 8, 8, 37, 8][..], 9),
+    ] {
+        assert_int_helper_gas_boundaries(
+            syscalls::SYSCALL_INT_MEAN,
+            value,
+            Some(value),
+            // MIN+MIN has a nine-limb magnitude before division; MAX+MAX has eight.
+            steps,
+            Ok((value, output_limbs)),
+        );
+    }
+    assert_int_helper_gas_boundaries(
+        syscalls::SYSCALL_INT_MEAN,
+        &BigInt::from(-7_i64),
+        Some(&two),
+        &[1, 1, 1, 5, 1],
+        Ok((&BigInt::from(-2_i64), 1)),
+    );
+}
+
+#[test]
+fn borrowed_numeric_outputs_keep_exact_frames_and_both_output_refusal_boundaries() {
+    use ivm::PointerType;
+    let mut maximum = vec![0xff; 64];
+    maximum[63] = 0x7f;
+    let mut minimum = vec![0; 64];
+    minimum[63] = 0x80;
+    // Literal bodies and output-debit pairs come from the V1 wire/gas equations,
+    // independently of prepare_frame, numeric_gas and the candidate serializers.
+    let cases = [
+        (
+            syscalls::SYSCALL_INT_FROM_I64,
+            PointerType::Int,
+            vec![],
+            None,
+            44,
+            83,
+            4,
+            171,
+        ),
+        (
+            syscalls::SYSCALL_INT_MAX,
+            PointerType::Int,
+            maximum.clone(),
+            None,
+            108,
+            147,
+            32,
+            363,
+        ),
+        (
+            syscalls::SYSCALL_INT_MIN,
+            PointerType::Int,
+            minimum.clone(),
+            None,
+            108,
+            147,
+            36,
+            363,
+        ),
+        (
+            syscalls::SYSCALL_DECIMAL_FROM_INT,
+            PointerType::Decimal,
+            vec![],
+            Some(0),
+            45,
+            84,
+            4,
+            174,
+        ),
+        (
+            syscalls::SYSCALL_QUANTITY_TRY_FROM_INT,
+            PointerType::Quantity,
+            vec![],
+            Some(0),
+            45,
+            84,
+            4,
+            174,
+        ),
+        (
+            syscalls::SYSCALL_DECIMAL_FROM_INT,
+            PointerType::Decimal,
+            maximum.clone(),
+            Some(0),
+            109,
+            148,
+            32,
+            366,
+        ),
+        (
+            syscalls::SYSCALL_DECIMAL_FROM_INT,
+            PointerType::Decimal,
+            minimum,
+            Some(0),
+            109,
+            148,
+            36,
+            366,
+        ),
+        (
+            syscalls::SYSCALL_QUANTITY_TRY_FROM_INT,
+            PointerType::Quantity,
+            maximum,
+            Some(0),
+            109,
+            148,
+            32,
+            366,
+        ),
+        (
+            syscalls::SYSCALL_DECIMAL_NEG,
+            PointerType::Decimal,
+            vec![0xff],
+            Some(28),
+            46,
+            85,
+            4,
+            177,
+        ),
+        (
+            syscalls::SYSCALL_QUANTITY_TRY_FROM_DECIMAL,
+            PointerType::Quantity,
+            vec![1],
+            Some(28),
+            46,
+            85,
+            4,
+            177,
+        ),
+    ];
+    for (syscall, pointer_type, bytes, scale, frame_bytes, envelope_bytes, probe, byte_debit) in
+        cases
+    {
+        let mut body = (bytes.len() as u32).to_le_bytes().to_vec();
+        body.extend_from_slice(&bytes);
+        if let Some(scale) = scale {
+            body.push(scale);
+        }
+        let frame = match pointer_type {
+            PointerType::Int => norito::core::frame_bare_with_header_flags::<IntValueV1>(&body, 0),
+            PointerType::Decimal => {
+                norito::core::frame_bare_with_header_flags::<DecimalValueV1>(&body, 0)
+            }
+            PointerType::Quantity => {
+                norito::core::frame_bare_with_header_flags::<QuantityValueV1>(&body, 0)
+            }
+            _ => unreachable!("closed nominal numeric fixtures"),
+        }
+        .unwrap();
+        let expected_envelope = numeric_envelope_from_frame(pointer_type, &frame);
+        assert_eq!(frame.len() as u64, frame_bytes);
+        assert_eq!(expected_envelope.len() as u64, envelope_bytes);
+        assert_eq!(byte_debit, envelope_bytes + 2 * frame_bytes);
+        for mode in [NUMERIC_FAILURE_TRAP, NUMERIC_FAILURE_STATUS] {
+            let mut vm = vm_for(syscall, u64::MAX);
+            match syscall {
+                syscalls::SYSCALL_INT_FROM_I64 => vm.set_register(10, 0),
+                syscalls::SYSCALL_DECIMAL_NEG | syscalls::SYSCALL_QUANTITY_TRY_FROM_DECIMAL => {
+                    let source = Numeric::try_new(1, 28).unwrap();
+                    let pointer = install_decimal(&mut vm, &source);
+                    vm.set_register(10, pointer);
+                }
+                _ => {
+                    let source = BigInt::from_twos_bytes(&bytes).unwrap();
+                    let pointer = install_int(&mut vm, &source);
+                    vm.set_register(10, pointer);
+                    if matches!(
+                        syscall,
+                        syscalls::SYSCALL_INT_MIN | syscalls::SYSCALL_INT_MAX
+                    ) {
+                        let right = install_int(&mut vm, &BigInt::zero());
+                        vm.set_register(11, right);
+                    }
+                }
+            }
+            vm.set_register(14, mode);
+            let original = [10, 11, 12, 13, 14].map(|register| vm.register(register));
+            let template = vm
+                .try_runtime_template()
+                .expect("original numeric input/template owner");
+            assert_eq!(vm.run(), Ok(()));
+            assert_eq!(vm.register(11), 0);
+            assert_eq!(vm.validate_tlv(vm.register(10)).unwrap().payload, &frame);
+            assert_eq!(
+                vm.memory
+                    .load_region(vm.register(10), envelope_bytes)
+                    .unwrap(),
+                expected_envelope
+            );
+            let context = vm.last_staged_syscall_context().unwrap().clone();
+            assert_eq!(context.completion(), Some(SyscallCompletion::Success));
+            assert_eq!(
+                context.phase_charge(SyscallMeteringPhase::OutputSerialization),
+                probe + byte_debit
+            );
+            let instruction = ivm::cost_of(encoding::wide::encode_syscallx(syscall)).unwrap();
+            let prior_stages = context.charged() - probe - byte_debit;
+            for (completed_output, next_debit) in [(0, probe), (probe, byte_debit)] {
+                let gas = instruction + prior_stages + completed_output + next_debit - 1;
+                vm.reset_from_runtime_template(&template)
+                    .expect("same original input custody");
+                vm.set_gas_limit(gas);
+                assert_eq!(
+                    vm.run(),
+                    Err(VMError::SyscallOutOfGas {
+                        syscall,
+                        phase: SyscallMeteringPhase::OutputSerialization.tag()
+                    })
+                );
+                assert_eq!(
+                    [10, 11, 12, 13, 14].map(|register| vm.register(register)),
+                    original,
+                    "output observer refusal preserves result/status/control registers"
+                );
+                let stopped = vm.last_staged_syscall_context().unwrap();
+                assert_eq!(stopped.completion(), Some(SyscallCompletion::Trap));
+                assert_eq!(
+                    stopped.phase_charge(SyscallMeteringPhase::OutputSerialization),
+                    completed_output
+                );
+                assert_eq!(stopped.charged(), prior_stages + completed_output);
+                assert_eq!(gas - vm.remaining_gas(), instruction + stopped.charged());
+            }
+        }
+    }
+}

@@ -109,6 +109,7 @@ fn with_worker_from(
             );
             let mut worker = Worker {
                 payload_build: None,
+                signature_decode: None,
                 routing_refusal: None,
                 payload_refusal: None,
                 context: &context,
@@ -952,7 +953,9 @@ fn prepared_certificate_cannot_be_rebound_to_another_epoch_context() {
     with_worker(|chain, worker, blocks, _| {
         let (block, qc) = executed(chain, worker);
         let overlay = original_overlay(worker);
-        worker.prepare(&block, &qc).unwrap();
+        worker
+            .prepare_with_origin(&block, &qc, CommitTelemetryOrigin::HistoricalReplay)
+            .unwrap();
         let staged = worker.context.staging.get(&qc.block_hash).unwrap();
         let mut changed = qc.clone();
         changed.epoch.context.0[0] ^= 1;
@@ -3033,5 +3036,156 @@ fn beacon_startup_retains_original_capacity_through_worker_channel_and_node() {
         ));
         let (attestor, publisher) = channel(chain.instance(), &key, false, &budget).unwrap();
         drop((attestor, publisher));
+    });
+}
+
+#[test]
+fn original_prepared_signature_owner_survives_refusal_validation_publication_apply_and_replay() {
+    use crate::test_allocations::refuse_one_layout_during;
+    use iroha_data_model::block::BlockSignatures;
+    with_worker(|chain, worker, blocks, events| {
+        let block = proposal(chain, worker);
+        let hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
+        let source_pointer = block.payload().as_slice().as_ptr();
+        let (outcome, refused) =
+            refuse_one_layout_during(BlockSignatures::allocation_layout(), || {
+                worker.execute(&block, hash)
+            });
+        assert!(refused);
+        assert!(matches!(outcome, Some(ExecOutcome::Failed(_))));
+        assert!(worker.live.is_none());
+        assert!(worker.finishing.is_none());
+        assert!(!worker.results.contains_key(&hash));
+        let attempt = worker
+            .signature_decode
+            .as_ref()
+            .expect("same original signature decode retained");
+        assert_eq!(attempt.source.payload().as_slice().as_ptr(), source_pointer);
+        assert!(
+            attempt
+                .decoder
+                .belongs_to(&chain.state().ivm_execution_budget())
+        );
+        let (block, qc) = execute_proposal(chain, worker, block);
+        assert!(worker.signature_decode.is_none());
+        let PublicationPhase::Executed { valid, .. } = &worker.live.as_ref().unwrap().phase else {
+            panic!("same original completed validation");
+        };
+        assert!(
+            valid
+                .as_ref()
+                .signatures_admitted_to(&chain.state().ivm_execution_budget())
+        );
+        let original = valid.as_ref().clone();
+        worker
+            .prepare_with_origin(&block, &qc, CommitTelemetryOrigin::HistoricalReplay)
+            .unwrap();
+        let staged = worker.context.staging.get(&hash).unwrap();
+        assert!(staged.executed.same_signature_custody(&original));
+        blocks.append(&block, &qc).unwrap();
+        worker.replay(&block, &qc).unwrap();
+        let applied = worker.state.view().latest_block().unwrap().unwrap();
+        assert!(applied.same_signature_custody(&original));
+        assert!(applied.signatures_admitted_to(&chain.state().ivm_execution_budget()));
+        while events.try_recv().is_ok() {}
+        // Original already-applied replay retires once and never replaces its custody.
+        worker.replay(&block, &qc).unwrap();
+        assert!(
+            worker
+                .state
+                .view()
+                .latest_block()
+                .unwrap()
+                .unwrap()
+                .same_signature_custody(&original)
+        );
+        assert!(events.try_recv().is_err());
+    });
+}
+
+#[test]
+fn explicit_signature_preparation_rejection_retires_only_its_original_source() {
+    use crate::test_allocations::refuse_one_layout_during;
+    use iroha_data_model::block::BlockSignatures;
+    with_worker(|chain, worker, _blocks, _events| {
+        let block = proposal(chain, worker);
+        let hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
+        let (outcome, refused) =
+            refuse_one_layout_during(BlockSignatures::allocation_layout(), || {
+                worker.execute(&block, hash)
+            });
+        assert!(refused);
+        assert!(matches!(outcome, Some(ExecOutcome::Failed(_))));
+        let pointer = worker
+            .signature_decode
+            .as_ref()
+            .unwrap()
+            .source
+            .payload()
+            .as_slice()
+            .as_ptr();
+        worker.reject(block.header().height, block.header().origin_view + 1, hash);
+        assert_eq!(
+            worker
+                .signature_decode
+                .as_ref()
+                .unwrap()
+                .source
+                .payload()
+                .as_slice()
+                .as_ptr(),
+            pointer
+        );
+        worker.reject(block.header().height, block.header().origin_view, hash);
+        assert!(worker.signature_decode.is_none());
+        assert!(worker.routing_refusal.is_none());
+        assert!(worker.results.is_empty());
+    });
+}
+
+#[test]
+fn later_canonical_child_allocator_refusal_keeps_the_original_prepared_signature_owner() {
+    use crate::test_allocations::refuse_one_layout_during;
+    use norito::core::SequenceSpan;
+    with_worker(|chain, worker, _blocks, _events| {
+        let block = proposal(chain, worker);
+        let hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
+        let (outcome, refused) =
+            refuse_one_layout_during(std::alloc::Layout::array::<u8>(64).unwrap(), || {
+                worker.execute(&block, hash)
+            });
+        assert!(refused);
+        assert!(matches!(outcome, Some(ExecOutcome::Failed(_))));
+        assert!(!worker.results.contains_key(&hash));
+        let pool = chain.state().ivm_execution_budget();
+        let attempt = worker.signature_decode.as_mut().unwrap();
+        let source = attempt.source.payload().charged_source(&pool).unwrap();
+        assert!(
+            attempt
+                .decoder
+                .retained_signatures(source)
+                .unwrap()
+                .unwrap()
+                .admitted_to(&pool)
+        );
+        // Read the same original canonical input to observe custody identity; this does
+        // not execute any transaction or replace the existing production validator.
+        let original = attempt
+            .decoder
+            .decode(
+                source,
+                SequenceSpan {
+                    start: 0,
+                    end: source.as_slice().len(),
+                },
+                norito::canonical_decode_limits(source.as_slice().len()),
+            )
+            .unwrap();
+        let (_block, _qc) = execute_proposal(chain, worker, block);
+        let PublicationPhase::Executed { valid, .. } = &worker.live.as_ref().unwrap().phase else {
+            panic!("the original prepared signature owner completed validation");
+        };
+        assert!(valid.as_ref().same_signature_custody(&original));
+        assert!(worker.signature_decode.is_none());
     });
 }

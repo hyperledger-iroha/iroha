@@ -184,6 +184,36 @@ pub struct ContextUseArgs {
     store: StoreArgs,
 }
 
+/// Publish a package through the retained generated developer environment.
+#[derive(Debug, Subcommand)]
+pub enum PackageCommand {
+    /// Publish with original generated client/namespace intent and the canonical durable engine.
+    Publish(PackagePublishArgs),
+}
+/// Original managed publication selection and exact begin/recovery action.
+#[derive(Debug, Args)]
+pub struct PackagePublishArgs {
+    /// Package/workspace manifest or directory (defaults to the selected workspace).
+    manifest: Option<PathBuf>,
+    #[command(flatten)]
+    store: StoreArgs,
+    /// Use this exact retained environment without changing workspace selection.
+    #[arg(long)]
+    context: Option<String>,
+    /// Exact package when the workspace contains more than one selected member.
+    #[arg(long, conflicts_with_all = ["resume", "recover"])]
+    package: Option<iroha_data_model::musubi::MusubiPackageSelectorV1>,
+    /// Return at the canonical durable seed-ingress boundary.
+    #[arg(long, conflicts_with_all = ["resume", "recover"])]
+    detach: bool,
+    /// Continue one original publication operation; requires an existing selected context.
+    #[arg(long, conflicts_with = "recover")]
+    resume: Option<musubi::publish::PublicationOperationIdV1>,
+    /// Recover pristine package sidecars for one original operation; never creates a new context.
+    #[arg(long, conflicts_with = "resume")]
+    recover: Option<musubi::publish::PublicationOperationIdV1>,
+}
+
 /// Compile and deploy through the canonical native service.
 #[derive(Debug, Subcommand)]
 pub enum ContractCommand {
@@ -395,6 +425,116 @@ impl<T: Write> RunArgs<T> for DataspaceCommand {
     }
 }
 
+/// An already-rendered canonical publication outcome; main preserves its exact exit status.
+#[derive(Debug)]
+pub(crate) struct PublicationExit(pub(crate) u8);
+impl std::fmt::Display for PublicationExit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("package publication did not complete")
+    }
+}
+impl std::error::Error for PublicationExit {}
+
+impl<T: Write> RunArgs<T> for PackageCommand {
+    fn run(self, writer: &mut BufWriter<T>) -> Outcome {
+        let Self::Publish(args) = self;
+        let action = if let Some(operation_id) = args.resume {
+            musubi::generated_publication::GeneratedPublishAction::Resume { operation_id }
+        } else if let Some(operation_id) = args.recover {
+            musubi::generated_publication::GeneratedPublishAction::Recover { operation_id }
+        } else {
+            musubi::generated_publication::GeneratedPublishAction::Begin {
+                package: args.package.clone(),
+                detach: args.detach,
+            }
+        };
+        let manifest = args
+            .store
+            .resolve_path(args.manifest.as_deref().unwrap_or_else(|| Path::new(".")))?;
+        // Resume observes the retained journal/sidecars and does not reopen source manifests.
+        if !matches!(
+            &action,
+            musubi::generated_publication::GeneratedPublishAction::Resume { .. }
+        ) {
+            let workspace = musubi::workspace::load_workspace(&manifest)?;
+            if let musubi::generated_publication::GeneratedPublishAction::Begin {
+                package, ..
+            } = &action
+            {
+                let packages = package.iter().cloned().collect::<Vec<_>>();
+                ensure!(
+                    workspace.select_members(false, &packages, &[])?.len() == 1,
+                    "package publication requires exactly one selected member"
+                );
+            }
+        }
+        let store = args.store.open()?;
+        if !matches!(
+            &action,
+            musubi::generated_publication::GeneratedPublishAction::Begin { .. }
+        ) {
+            store.context(args.context.as_deref())?;
+        }
+        let runtime = InstalledRuntime::discover()?;
+        let selected = store
+            .ensure_selected(&runtime, args.context.as_deref(), Duration::from_secs(30))?
+            .context;
+        let prepared = store.prepared(&selected.name)?;
+        ensure!(
+            prepared.context == selected,
+            "selected publication generation changed"
+        );
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let original = prepared
+            .publication_client_config()?
+            .ok_or_else(|| eyre!("selected generation has no generated publication intent"))?;
+        let context =
+            musubi::publication_runtime::GeneratedPublicationContextV1::from_original_image(
+                original.client_config_path(),
+                original.client_config_image(),
+                original.publication_transport()?,
+                musubi::publication_runtime::GeneratedPublicationNamespaceIntentV1 {
+                    publisher: original.publisher().clone(),
+                    binding: original.namespace_binding().clone(),
+                    policy: original.registry_policy().clone(),
+                    fee_payment: original.namespace_fee_payment(),
+                    journal_root: original.namespace_journal_root().to_path_buf(),
+                },
+            )?;
+        let (registry, archive_transport) = store
+            .build_registry(&runtime, &selected.name, deadline)?
+            .ok_or_else(|| eyre!("selected generation has no authenticated build registry"))?;
+        ensure!(
+            registry.account == *original.publisher()
+                && registry.network_id == original.service_plan().network_id()
+                && registry.chain.as_str() == original.service_plan().chain_id()
+                && registry.torii_api_url.as_str() == prepared.context.torii_url
+                && store.prepared(&selected.name)? == prepared,
+            "generated publication registry or generation changed"
+        );
+        let request = musubi::generated_publication::GeneratedPublishRequest {
+            manifest_path: manifest,
+            state_root: original.publication_state_root(),
+            cache_root: original.publication_cache_root(),
+            archive_transport,
+            action,
+        };
+        let outcome = musubi::generated_publication::publish_generated(&context, &request);
+        let format = if args.store.json {
+            musubi::generated_publication::OutputFormat::Json
+        } else {
+            musubi::generated_publication::OutputFormat::Human
+        };
+        outcome
+            .render(format)?
+            .write_to(writer, &mut std::io::stderr().lock())?;
+        if outcome.exit_code() != 0 {
+            return Err(PublicationExit(u8::try_from(outcome.exit_code())?).into());
+        }
+        Ok(())
+    }
+}
+
 impl<T: Write> RunArgs<T> for ContractCommand {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         let Self::Deploy(args) = self;
@@ -435,17 +575,22 @@ impl<T: Write> RunArgs<T> for ContractCommand {
         let config = context.load_client_config()?;
         let _profile = ChainDiscriminantGuard::enter(config.account_chain_discriminant);
         let journal_root = store.root().join("deployments").join(&context.name);
+        let prepared = store.prepared(&context.name)?;
+        ensure!(
+            prepared.context == context,
+            "deployment generation changed before cache selection"
+        );
+        let cache_root = prepared.build_cache_root();
         let registry_root = store.root().to_path_buf();
         let registry_context = context.name.clone();
-        let runtime = DeploymentRuntime::new(config, journal_root).with_build_registry_resolver(
-            Arc::new(move || {
+        let runtime = DeploymentRuntime::new(config, journal_root, cache_root)
+            .with_build_registry_resolver(Arc::new(move || {
                 // The canonical package service calls this only when a graph needs its exact
                 // registry identity. Source, bytecode and local packages never enter it.
                 let deadline = Instant::now() + Duration::from_secs(60);
                 let store = ManagedStore::open(&registry_root)?;
                 Ok(store.build_registry(&runtime, &registry_context, deadline)?)
-            }),
-        );
+            }));
         let mut progress = deployment_progress;
         let mut review = |preflight: &DeploymentPreflight| {
             ensure!(
@@ -1178,6 +1323,191 @@ mod tests {
             assert!(cli.command.run(&mut output).is_err());
             assert!(!state.exists());
         }
+    }
+
+    #[test]
+    fn package_publication_grammar_keeps_explicit_recovery_and_contract_deployment_distinct() {
+        let begin = crate::Cli::try_parse_from([
+            "kagami",
+            "package",
+            "publish",
+            ".",
+            "--package",
+            "dev.universal/demo",
+            "--detach",
+            "--json",
+        ])
+        .unwrap();
+        let crate::Command::Package(PackageCommand::Publish(args)) = begin.command else {
+            panic!("publication command");
+        };
+        assert!(args.detach && args.store.json);
+        assert_eq!(args.package.unwrap().to_string(), "dev.universal/demo");
+        assert!(args.resume.is_none() && args.recover.is_none());
+        let id = "12".repeat(32);
+        for flag in ["--resume", "--recover"] {
+            let cli = crate::Cli::try_parse_from([
+                "kagami",
+                "package",
+                "publish",
+                "Musubi.toml",
+                flag,
+                &id,
+                "--context",
+                "retained",
+            ])
+            .unwrap();
+            let crate::Command::Package(PackageCommand::Publish(args)) = cli.command else {
+                panic!("publication recovery");
+            };
+            assert_eq!(args.context.as_deref(), Some("retained"));
+            assert!(args.resume.is_some() != args.recover.is_some());
+            assert!(
+                crate::Cli::try_parse_from(["kagami", "package", "publish", flag, &id, "--detach"])
+                    .is_err()
+            );
+            assert!(
+                crate::Cli::try_parse_from([
+                    "kagami",
+                    "package",
+                    "publish",
+                    flag,
+                    &id,
+                    "--package",
+                    "dev.universal/demo"
+                ])
+                .is_err()
+            );
+        }
+        assert!(
+            crate::Cli::try_parse_from([
+                "kagami",
+                "package",
+                "publish",
+                "--resume",
+                &id,
+                "--recover",
+                &id
+            ])
+            .is_err()
+        );
+        assert!(
+            crate::Cli::try_parse_from(["kagami", "package", "publish", "--resume", "invalid"])
+                .is_err()
+        );
+        assert!(
+            crate::Cli::try_parse_from(["kagami", "package", "publish", "--config", "client.toml"])
+                .is_err()
+        );
+        assert!(matches!(
+            crate::Cli::try_parse_from(["kagami", "contract", "deploy", "contract.ko"])
+                .unwrap()
+                .command,
+            crate::Command::Contract(ContractCommand::Deploy(_))
+        ));
+    }
+
+    #[test]
+    fn invalid_publication_manifest_never_provisions_or_selects_a_network() {
+        let temporary = tempfile::tempdir().unwrap();
+        let manifest = temporary.path().join("Musubi.toml");
+        let state = temporary.path().join("state");
+        std::fs::write(&manifest, "invalid manifest").unwrap();
+        let cli = crate::Cli::try_parse_from([
+            "kagami",
+            "package",
+            "publish",
+            manifest.to_str().unwrap(),
+            "--state",
+            state.to_str().unwrap(),
+        ])
+        .unwrap();
+        assert!(cli.command.run(&mut BufWriter::new(Vec::new())).is_err());
+        assert!(!state.exists());
+    }
+
+    #[test]
+    fn publication_recovery_requires_retained_selection_before_runtime_discovery() {
+        let temporary = tempfile::tempdir().unwrap();
+        let manifest = temporary.path().join("Musubi.toml");
+        let state = temporary.path().join("state");
+        std::fs::write(&manifest, "manifest-version = 1\n[package]\nnamespace = \"dev.universal\"\nname = \"demo\"\nversion = \"1.0.0\"\nedition = \"1\"\nabi-version = 1\n[lib]\nexports = []\n").unwrap();
+        let id = "34".repeat(32);
+        for flag in ["--resume", "--recover"] {
+            let cli = crate::Cli::try_parse_from([
+                "kagami",
+                "package",
+                "publish",
+                manifest.to_str().unwrap(),
+                flag,
+                &id,
+                "--state",
+                state.to_str().unwrap(),
+            ])
+            .unwrap();
+            let mut writer = BufWriter::new(Vec::new());
+            let error = cli.command.run(&mut writer).unwrap_err();
+            assert!(matches!(
+                error.downcast_ref::<managed::Error>(),
+                Some(managed::Error::NoSelection)
+            ));
+            assert!(writer.into_inner().unwrap().is_empty());
+            assert!(
+                ManagedStore::open(&state)
+                    .unwrap()
+                    .contexts()
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        for missing in [false, true] {
+            if missing {
+                std::fs::remove_file(&manifest).unwrap();
+            } else {
+                std::fs::write(&manifest, "invalid changed source").unwrap();
+            }
+            let cli = crate::Cli::try_parse_from([
+                "kagami",
+                "package",
+                "publish",
+                manifest.to_str().unwrap(),
+                "--resume",
+                &id,
+                "--state",
+                state.to_str().unwrap(),
+            ])
+            .unwrap();
+            let error = cli
+                .command
+                .run(&mut BufWriter::new(Vec::new()))
+                .unwrap_err();
+            assert!(
+                matches!(
+                    error.downcast_ref::<managed::Error>(),
+                    Some(managed::Error::NoSelection)
+                ),
+                "resume must reach original context without reopening source: {error}"
+            );
+            assert!(
+                ManagedStore::open(&state)
+                    .unwrap()
+                    .contexts()
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn already_rendered_publication_error_preserves_canonical_process_status() {
+        let error: color_eyre::eyre::Report = PublicationExit(42).into();
+        assert_eq!(error.downcast_ref::<PublicationExit>().unwrap().0, 42);
+        assert_eq!(error.to_string(), "package publication did not complete");
+        assert!(
+            eyre!("ordinary failure")
+                .downcast_ref::<PublicationExit>()
+                .is_none()
+        );
     }
 
     #[test]

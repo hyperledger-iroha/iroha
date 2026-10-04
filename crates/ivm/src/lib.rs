@@ -39,8 +39,8 @@ mod contract_return_stack;
 mod core_host;
 mod cuda;
 #[cfg(any(feature = "cuda", test))]
-#[path = "cuda_dispatch/bn254_cost.rs"]
-mod cuda_bn254_cost;
+#[path = "cuda_dispatch/cost.rs"]
+mod cuda_cost;
 #[cfg(feature = "cuda")]
 mod cuda_dispatch;
 // Exercise the production admission state machine without requiring PTX artifacts.

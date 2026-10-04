@@ -24,7 +24,9 @@ where
     );
     Ok(norito::decode_canonical_with_limits(
         bytes,
-        norito::DecodeLimits::new(4096, maximum, maximum, 16 * 1024 * 1024, 32),
+        // Raw byte vectors use the same sequence count as typed containers. Their admitted
+        // frame is the generic bound; each closed operation validates its typed cardinalities.
+        norito::DecodeLimits::new(maximum, maximum, maximum, 16 * 1024 * 1024, 32),
     )?)
 }
 

@@ -179,6 +179,16 @@ They do not merge defaults into an active layout: changing length formats
 after an enclosing field has been written would make the frame internally
 inconsistent. Defaults apply only when no layout context is active.
 
+### rANS table V1 checksum
+
+`RansTablesV1.checksum_sha256` is SHA-256 of the complete uncompressed Norito
+frame for `RansTablesBodyV1`, including its canonical schema identity and
+header, with fixed-width per-value lengths (`flags = 0x00`).
+`RansTablesBodyV1::checksum_sha256` owns this domain for both the native table
+producer and the runtime loader. Ambient layout guards and the default compact
+layout do not change this checksum; the loader accepts only this V1 domain.
+This checksum checks the table body, not its optional manifest signature.
+
 ## Length Prefixes
 
 Norito uses length prefixes in multiple places, with explicit flags deciding the

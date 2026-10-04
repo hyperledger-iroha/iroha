@@ -19,6 +19,14 @@ static ARTIFACT: PtxArtifact = PtxArtifact::new(
     },
 );
 
+fn kernel(operation: crate::bn254_vec::BatchOperation) -> Kernel {
+    match operation {
+        crate::bn254_vec::BatchOperation::Add => Kernel::BnAdd,
+        crate::bn254_vec::BatchOperation::Sub => Kernel::BnSub,
+        crate::bn254_vec::BatchOperation::Mul => Kernel::BnMul,
+    }
+}
+
 fn failure_quarantines(error: CudaFailure) -> bool {
     match error {
         CudaFailure::Capacity | CudaFailure::Busy | CudaFailure::Unavailable => false,
@@ -169,9 +177,9 @@ pub(crate) fn bn254_batch_auto_into(
     {
         return false;
     }
-    let kernel = crate::cuda_dispatch::bn254::kernel(operation);
-    let Some(selected) = crate::cuda_dispatch::bn254::select(
-        operation,
+    let kernel = kernel(operation);
+    let Some(selected) = crate::cuda_dispatch::measured::select(
+        kernel,
         ARTIFACT,
         left.len(),
         cpu,
@@ -262,6 +270,13 @@ pub fn bn254_mul_cuda(left: [u64; 4], right: [u64; 4]) -> Option<[u64; 4]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn batch_operation_maps_to_its_exact_measured_kernel() {
+        use crate::bn254_vec::BatchOperation;
+        assert_eq!(kernel(BatchOperation::Add), Kernel::BnAdd);
+        assert_eq!(kernel(BatchOperation::Sub), Kernel::BnSub);
+        assert_eq!(kernel(BatchOperation::Mul), Kernel::BnMul);
+    }
 
     #[test]
     fn backend_failure_quarantines_but_local_pressure_only_refuses() {

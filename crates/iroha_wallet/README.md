@@ -9,6 +9,12 @@ fee quotes, plan verification and finality observation remain native SDK respons
   Signing uses native `Config` and its bounded, no-follow `private_key_file` reader.
   Typed key-pair import binds an existing owner to a separately authenticated network
   without copying endpoint credentials from another client configuration.
+- Musubi namespace binding uses the same purpose-closed wallet preparation journal. One exact
+  owner-signed `RegisterMusubiNamespaceBinding` retains complete namespace/dataspace/scope/generation,
+  original policy revision, finite UTC and fee authorization. Native execution checks current
+  ownership and admission; the wallet selection grants neither and creates no domain or SNS lease.
+  Recovery reads all original preparation stages without renewing time or signing another payload;
+  only a fresh monotonic observation deadline may change. Missing original custody is an error.
 - `AccountService` delegates authoritative balance reads and cumulative principal/fee
   solvency checks to native SDK `blocking::Client::{balance,check_funding}` with exact
   `AssetId` principal buckets. XOR transfers and paid parent alias totals explicitly
@@ -109,3 +115,16 @@ signer and revision-one policy, exact provider/network, finite UTC and fee autho
 owner-signed native Set uses absence CAS; its wallet journal owns signing, exact-wire verification
 and at-most-once dispatch. Inputs remain structural claims. Neither identical-policy execution
 nor read-only recovery establishes current signer eligibility, ingest or serving readiness.
+
+Generated publication provisions a clock-independent namespace parent once before generation
+publication. Ordinary first use opens it, retains one finite original UTC authorization and a
+RequestOnly child marker before quotation, then uses the same wallet signed journal. Missing
+parent/marked-child custody refuses. A new invocation may authorize a bounded successor only after
+complete-census retirement of an expired absent/RequestOnly attempt; every predecessor and original
+UTC remains. At most64 attempts exist, and quoted/signed originals are always reused unchanged.
+Native execution still decides current namespace ownership.
+
+The parent atomically provisions a required custody anchor with its original selection. The anchor
+commits the selected authorization and exact child hash before effects, so loss of the latest
+original or its wallet/marker cannot reset the attempt chain. Local custody is not external rollback
+protection.

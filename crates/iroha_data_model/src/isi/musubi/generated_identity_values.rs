@@ -14,6 +14,12 @@ use super::{
 };
 use norito::json::Value;
 
+/// Reuse the complete signed provider registration from the canonical Musubi fixture.
+pub(crate) fn provider_attestation_registration() -> super::RegisterMusubiProviderBundleAttestationV1
+{
+    fixture_values::generated_identity_values().register_provider_attestation
+}
+
 /// Build the missing Musubi generated-record capture rows from canonical typed fixtures.
 pub fn values() -> Vec<Value> {
     let document = fixture_values::instruction_document();

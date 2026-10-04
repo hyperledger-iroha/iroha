@@ -796,8 +796,16 @@ struct GlobalPayloadBuild {
     job: super::driver::payload_build::PayloadBuild<GlobalPayloadSource>,
 }
 
+/// Own the exact authenticated original source throughout partial signature preparation.
+struct SignatureDecodeAttempt {
+    block_hash: Hash32,
+    source: AvailableBody,
+    decoder: iroha_data_model::block::PreparedSignedBlockSignaturesDecode,
+}
+
 struct Worker<'s> {
     payload_build: Option<GlobalPayloadBuild>,
+    signature_decode: Option<SignatureDecodeAttempt>,
     /// Exact latest unfinished local execution refusal, kept outside deterministic verdicts.
     routing_refusal: Option<crate::execution_attempt::ExecutionDeferred>,
     /// Original payload preparation refusal, including State lock and pool release observations.
@@ -836,6 +844,7 @@ fn run(context: &ExecutorContext, requests: &mpsc::Receiver<Request>) {
     let state = Arc::clone(&context.state);
     let mut worker = Worker {
         payload_build: None,
+        signature_decode: None,
         routing_refusal: None,
         payload_refusal: None,
         context,
@@ -1013,6 +1022,7 @@ impl<'s> Worker<'s> {
         }
         let (height, block_hash) = self.applied;
         if self.pending_commit.is_some()
+            || self.signature_decode.is_some()
             || self.finishing.is_some()
             || self.live.as_ref().is_some_and(|live| {
                 (live.height, live.block_hash) != (height, block_hash)
@@ -1046,7 +1056,9 @@ impl<'s> Worker<'s> {
             return None;
         }
         if let Some(reason) = &self.recovery {
-            return Some(ExecOutcome::Failed(reason.clone()));
+            return Some(execution_report(Err(PublicationError::RecoveryRequired(
+                reason.clone(),
+            ))));
         }
         if let Some(live) = &self.live {
             if live.block_hash == block_hash {
@@ -1133,9 +1145,14 @@ impl<'s> Worker<'s> {
             super::commitment::ResultPreimageError,
         >,
     ) -> Result<Option<Hash32>, PublicationError> {
-        self.run_execution_with_finisher(block, block_hash, |worker| {
+        let outcome = self.run_execution_with_finisher(block, block_hash, |worker| {
             worker.finish_execution_with_encoder(encode)
-        })
+        });
+        if matches!(outcome, Ok(None)) {
+            // Only a completed intrinsic rejection retires this original decode custody.
+            self.signature_decode = None;
+        }
+        outcome
     }
 
     /// The callback receives the sole completed original, before any proof scratch allocation.
@@ -1178,7 +1195,57 @@ impl<'s> Worker<'s> {
         // A fresh attempt explicitly abandons the prior local refusal; completed verdicts own none.
         self.routing_refusal = None;
         let height = block.header().height;
-        let iroha_block = match payload::decode(block.payload().as_slice()) {
+        let budget = self.state.ivm_execution_budget();
+        if self
+            .signature_decode
+            .as_ref()
+            .is_some_and(|attempt| attempt.block_hash != block_hash)
+        {
+            // A different authenticated candidate explicitly retires the old original owners.
+            self.signature_decode = None;
+        }
+        if let Some(attempt) = &self.signature_decode {
+            if attempt.source != *block {
+                return Err(PublicationError::RecoveryRequired(
+                    "signature preparation retry changed its original authenticated body".into(),
+                ));
+            }
+        } else {
+            let decoder = match iroha_data_model::block::PreparedSignedBlockSignaturesDecode::new(
+                &budget,
+            ) {
+                Ok(decoder) => decoder,
+                Err(error) => {
+                    return match crate::execution_attempt::prepared_signature_block_attempt_error(
+                        error,
+                        |reason| reason,
+                    ) {
+                        crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                            self.routing_refusal = Some(original.clone());
+                            Err(PublicationError::Deferred(original.into()))
+                        }
+                        crate::execution_attempt::ExecutionAttemptError::Rejected(reason) => {
+                            Err(PublicationError::RecoveryRequired(reason))
+                        }
+                    };
+                }
+            };
+            self.signature_decode = Some(SignatureDecodeAttempt {
+                block_hash,
+                source: block.clone(),
+                decoder,
+            });
+        }
+        let attempt = self
+            .signature_decode
+            .as_mut()
+            .expect("original signature decode source");
+        let Some(source) = attempt.source.payload().charged_source(&budget) else {
+            return Err(PublicationError::RecoveryRequired(
+                "signature preparation has no original State-funded payload backing".into(),
+            ));
+        };
+        let iroha_block = match payload::decode_prepared(source, &mut attempt.decoder) {
             Ok(block) => block,
             Err(payload::PayloadError::DecodeResource(reason))
                 if !cfg!(all(test, sumeragi_core_mutation = "HC8")) =>
@@ -1190,7 +1257,13 @@ impl<'s> Worker<'s> {
                 }
                 return Err(PublicationError::Deferred(reason.into()));
             }
-            Err(error) => return invalid_attempt(height, &error),
+            Err(payload::PayloadError::SignatureCustodyInvariant(reason)) => {
+                return Err(PublicationError::RecoveryRequired(reason));
+            }
+            Err(error) => {
+                self.signature_decode = None;
+                return invalid_attempt(height, &error);
+            }
         };
         match self.state.view().latest_block() {
             Ok(Some(_)) => {}
@@ -1364,6 +1437,9 @@ impl<'s> Worker<'s> {
                 "the execution witness was not captured".into(),
             ));
         };
+        // The original valid block now retains the same immutable signature owner.
+        // Retire only its preparation controls/source; later phases move this exact block.
+        self.signature_decode = None;
         self.finishing = Some(Finishing {
             block_hash,
             height,
@@ -2539,6 +2615,15 @@ impl<'s> Worker<'s> {
         if self.recovery.is_some() || self.publication_pending() {
             return;
         }
+        if self.signature_decode.as_ref().is_some_and(|attempt| {
+            attempt.block_hash == block_hash
+                && attempt.source.header().height == height
+                && attempt.source.header().origin_view == view
+        }) {
+            // Explicit rejection retires only this original partial decode and its source.
+            self.signature_decode = None;
+            self.routing_refusal = None;
+        }
         if self.quarantine_context.is_some_and(|checked| {
             (checked.height, checked.view, checked.block_hash) == (height, view, block_hash)
         }) {
@@ -2646,7 +2731,6 @@ mod tests {
         use iroha_sumeragi::{
             availability::PayloadBytes, message::ByteAdmissionError, preimage::payload_hash,
         };
-        use std::collections::BTreeSet;
 
         publication_tests::with_worker(|chain, worker, _blocks, _events| {
             let original = publication_tests::proposal(chain, worker);
@@ -2667,7 +2751,7 @@ mod tests {
             let proposal = payload::decode(original.payload().as_slice()).unwrap();
             let zero_transaction_wire =
                 iroha_data_model::block::builder::BlockBuilder::new(proposal.header())
-                    .build(BTreeSet::new())
+                    .build(iroha_data_model::block::BlockSignatures::default())
                     .encode_wire()
                     .unwrap();
             let mut header = original.header().clone();

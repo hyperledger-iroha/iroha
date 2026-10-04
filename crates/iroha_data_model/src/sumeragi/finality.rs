@@ -325,7 +325,7 @@ mod tests {
             2,
             0,
         ))
-        .build(std::collections::BTreeSet::default())
+        .build(crate::block::BlockSignatures::default())
     }
     #[test]
     fn codec_error_keeps_resource_refusal_distinct_from_malformed_source() {

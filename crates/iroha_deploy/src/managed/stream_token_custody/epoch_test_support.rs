@@ -40,6 +40,7 @@ impl ManagedStreamTokenCustody {
             &directory,
             purpose,
             original.digest().unwrap(),
+            &HistoryScope::FixedBody,
             authorization,
             deadline,
             None,

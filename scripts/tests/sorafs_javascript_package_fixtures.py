@@ -14,6 +14,14 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import sorafs_javascript_dependencies as dependencies
 
 CHECKSUM = b'{"component_control":"opaque original manifest; not native qualification"}'
+# Reviewed census of the captured candidate, shared by every SoraFS JavaScript
+# test so that adding or removing an SDK module changes it in one place.
+# TODO: the census owner re-reviews these after the merge (new src/petal/ and
+# src/query/ trees, stale package/build recipe pins) and resets them from a run.
+SOURCE_FILES = 212
+PROJECTED_MEMBERS = 209
+PROJECTED_DIST_MEMBERS = 171
+INSTALLED_MEMBERS = 228
 REQUIRED_OUTPUTS = (
     "address.js", "atomicPrivateSettlement.js", "browser.js", "curveRegistry.js",
     "ivmArtifact.js", "kagemusha.js", "native.js", "nativeArtifactHash.js", "numericV1.js",

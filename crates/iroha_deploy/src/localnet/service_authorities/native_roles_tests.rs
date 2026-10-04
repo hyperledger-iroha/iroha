@@ -4,6 +4,8 @@ use super::*;
 use iroha_core::{smartcontracts::ValidSingularQuery as _, state::WorldReadOnly as _};
 use iroha_fs::{PrivateDirectory, PublishMode};
 
+use mv::storage::StorageReadOnly as _;
+
 fn fixture() -> (tempfile::TempDir, PreparedLocalnet) {
     let temporary = tempfile::tempdir().unwrap();
     let ports = crate::managed::LocalnetPorts::reserve().unwrap();
@@ -118,7 +120,8 @@ fn original_native_signer_roles_are_distinct_funded_and_exactly_scoped_in_execut
             for role in NETWORK_ROLES {
                 let entry = manifest.network.authority(role).unwrap();
                 let permissions = match role {
-                    NetworkServiceAuthorityRole::ReserveOperations => BTreeSet::new(),
+                    NetworkServiceAuthorityRole::ReserveOperations
+                    | NetworkServiceAuthorityRole::MusubiPin => BTreeSet::new(),
                     NetworkServiceAuthorityRole::ReputationRecorder => {
                         BTreeSet::from([Permission::from(CanRecordSorafsReputationJournal)])
                     }

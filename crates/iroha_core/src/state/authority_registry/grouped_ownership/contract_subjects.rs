@@ -33,20 +33,25 @@ impl<'world> CheckedContractSubjects<'world> {
             accounts: world.accounts.try_committed_view_nonblocking()?,
             instances: world.contract_instances.try_committed_view_nonblocking()?,
         };
-        let mut work = Work::bounded(max_work);
-        let result = relation::validate_sources(
+        let result = validate_original_contract_subjects(
             &checked.rows,
+            &checked.reverse,
             &checked.accounts,
             &checked.instances,
-            &mut work,
-        )
-        .and_then(|()| relation::validate_index(&checked.rows, &checked.reverse, &mut work))
-        .map_err(error);
-        if !checked.matches_current()? {
+            max_work,
+        );
+        checked.finish_validation(result)
+    }
+
+    fn finish_validation(
+        self,
+        result: Result<(), GroupedOwnershipError>,
+    ) -> Result<Self, GroupedOwnershipError> {
+        if !self.matches_current()? {
             return Err(PublicationPreparationError::Changed.into());
         }
         result?;
-        Ok(checked)
+        Ok(self)
     }
     /// Borrow the original canonical rows consumed by the catalog encoder.
     pub(in super::super) fn rows(
@@ -56,20 +61,41 @@ impl<'world> CheckedContractSubjects<'world> {
     }
     /// Recheck all four original native publication identities.
     pub(in super::super) fn matches_current(&self) -> Result<bool, GroupedOwnershipError> {
-        // Evaluate every original identity even if an earlier owner changed.
+        // Compute every original Result before any error propagation.
         let rows = self
             .rows
-            .try_matches_current(&self.world.contract_subject_bindings)?;
+            .try_matches_current(&self.world.contract_subject_bindings);
         let reverse = self
             .reverse
-            .try_matches_current(&self.world.contract_subject_addresses)?;
-        let accounts = self.accounts.try_matches_current(&self.world.accounts)?;
+            .try_matches_current(&self.world.contract_subject_addresses);
+        let accounts = self.accounts.try_matches_current(&self.world.accounts);
         let instances = self
             .instances
-            .try_matches_current(&self.world.contract_instances)?;
+            .try_matches_current(&self.world.contract_instances);
+        let rows = rows?;
+        let reverse = reverse?;
+        let accounts = accounts?;
+        let instances = instances?;
         Ok(rows && reverse && accounts && instances)
     }
 }
+/// One original subject/lifecycle/inverse relation for committed and frozen owners.
+///
+/// Preserve source-before-index and Current-before-Predecessor ordering. Inputs
+/// are sealed native originals; no rebuild, fresh view or alternate predicate.
+pub(in crate::state) fn validate_original_contract_subjects(
+    rows: &impl relation::Images<ContractAddress, ContractSubjectBinding>,
+    reverse: &impl relation::Images<AccountId, ContractAddress>,
+    accounts: &impl relation::Images<AccountId, AccountValue>,
+    instances: &impl relation::Images<ContractAddress, Hash>,
+    max_work: u64,
+) -> Result<(), GroupedOwnershipError> {
+    let mut work = Work::bounded(max_work);
+    relation::validate_sources(rows, accounts, instances, &mut work)
+        .and_then(|()| relation::validate_index(rows, reverse, &mut work))
+        .map_err(error)
+}
+
 fn image(image: Image) -> GroupImage {
     match image {
         Image::Current => GroupImage::Current,

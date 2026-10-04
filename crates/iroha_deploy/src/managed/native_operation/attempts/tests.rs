@@ -9,12 +9,16 @@ use crate::managed::{
         now_ms,
         test_support::{
             UnavailablePeers,
-            native_fixture::{NativeFixture, NativeReadHttp, policy},
+            native_fixture::{NativeFixture, NativeReadHttp, policy, quote_instructions},
         },
     },
     service_authority::{NetworkPurpose, ServiceAuthority},
 };
-use iroha_data_model::{sorafs::reserve::ReserveAuthorityPolicyV1, transaction::FeePaymentIntent};
+use iroha_data_model::{
+    isi::{InstructionBox, Log},
+    sorafs::reserve::ReserveAuthorityPolicyV1,
+    transaction::FeePaymentIntent,
+};
 use iroha_primitives::numeric::Quantity;
 use iroha_wallet::operations::{
     AccountService, BoundedTransactionOptions, InitialReservePolicyRequest,
@@ -106,7 +110,12 @@ impl Fixture {
         }
     }
     fn history(&self) -> Result<History> {
-        History::read(&self.operation, Purpose::ReservePolicy, self.semantic)
+        History::read(
+            &self.operation,
+            Purpose::ReservePolicy,
+            self.semantic,
+            &crate::managed::native_operation::attempts::HistoryScope::FixedBody,
+        )
     }
     fn reserve(&self) -> Attempt {
         self.history()
@@ -149,6 +158,21 @@ impl Fixture {
     fn commit(&self, attempt: &Attempt) {
         let retained = self.retain(attempt);
         super::commit(attempt, None, Observation::ordinary(), &retained).unwrap();
+    }
+    fn current_native(&self) -> NativeFixture {
+        let mut native = NativeFixture::from_generated(&self.prepared, &self.authority);
+        assert_eq!(native.chain.height(), 1);
+        let log = quote_instructions(
+            &native,
+            &self.authority.config,
+            [InstructionBox::from(Log::new(
+                iroha_data_model::Level::INFO,
+                "authenticate attempt prerequisite".into(),
+            ))],
+        );
+        assert_eq!(native.chain.commit(vec![log]), vec![true]);
+        assert_eq!(native.chain.height(), 2);
+        native
     }
     fn sign(&self, attempt: &Attempt) {
         let native = NativeFixture::from_generated(&self.prepared, &self.authority);
@@ -246,11 +270,23 @@ fn committed_missing_wallet_and_lost_attempts_are_refused_before_http_or_recreat
 fn only_exact_unpaid_first_authorization_can_recover_missing_root_commitment() {
     let _resources = crate::managed::native_test_guard();
     let fixture = Fixture::new();
-    let attempt = fixture.reserve();
-    std::fs::remove_file(fixture.operation.path().join("dispatch.nrt")).unwrap();
+    // The producer now retains Reserved before the child. Only that exact prefix can finish
+    // the final Published commitment; an absent anchor is no longer a recoverable old layout.
+    fixture
+        .history()
+        .unwrap()
+        .reserve_pending(&fixture.operation, Origin::Explicit, fixture.terms.clone())
+        .unwrap();
     let history = fixture.history().unwrap();
-    assert!(!fixture.operation.path().join("dispatch.nrt").exists());
-    history.retain_root(&fixture.operation).unwrap();
+    assert!(history.reservation_pending());
+    assert!(!fixture.operation.path().join("attempts").exists());
+    let original = history.dispatch.as_ref().unwrap().highest.clone();
+    let attempt = history
+        .finish_reserved(&fixture.operation, false)
+        .unwrap()
+        .unwrap();
+    assert!(attempt.authorization == original);
+    assert!(!fixture.history().unwrap().reservation_pending());
     fixture.commit(&attempt);
     std::fs::remove_file(fixture.operation.path().join("dispatch.nrt")).unwrap();
     assert!(fixture.history().is_err());
@@ -421,6 +457,7 @@ fn live_unsigned_prefix_keeps_its_original_terms_and_request_under_a_current_epo
             &fixture.operation,
             Purpose::ReservePolicy,
             fixture.semantic,
+            &crate::managed::native_operation::attempts::HistoryScope::FixedBody,
             &grant,
             fixture.deadline,
             None,
@@ -475,7 +512,7 @@ fn live_unsigned_prefix_keeps_its_original_terms_and_request_under_a_current_epo
 fn cancellation_during_genuine_native_prerequisite_cannot_retain_request_or_commit_dispatch() {
     let _resources = crate::managed::native_test_guard();
     let fixture = Fixture::build(true);
-    let native = NativeFixture::from_generated(&fixture.prepared, &fixture.authority);
+    let native = fixture.current_native();
     let cap = fixture.authorization.as_ref().unwrap();
     let grant = cap.test_child(Purpose::ReservePolicy).unwrap();
     let entered = std::cell::Cell::new(false);
@@ -483,6 +520,7 @@ fn cancellation_during_genuine_native_prerequisite_cannot_retain_request_or_comm
         &fixture.operation,
         Purpose::ReservePolicy,
         fixture.semantic,
+        &crate::managed::native_operation::attempts::HistoryScope::FixedBody,
         &grant,
         fixture.deadline,
         None,
@@ -491,6 +529,7 @@ fn cancellation_during_genuine_native_prerequisite_cannot_retain_request_or_comm
         |_, _, _| panic!("cancelled prerequisite cannot reach request retention"),
         |_, _| {
             let checkpoint = native.observe(&fixture.authority);
+            assert_eq!(checkpoint.verified_tip().unwrap().height(), 2);
             let proof = native.policy_proof(&fixture.authority.config.account);
             let current = proof
                 .verify(
@@ -584,7 +623,8 @@ fn common_semantic_bound_accepts_the_capacity_envelope_and_refuses_one_byte_over
         History::read(
             &operation,
             Purpose::ReservePolicy,
-            *Hash::new(&bytes).as_ref()
+            *Hash::new(&bytes).as_ref(),
+            &crate::managed::native_operation::attempts::HistoryScope::FixedBody
         )
         .unwrap()
         .last()
@@ -598,7 +638,8 @@ fn common_semantic_bound_accepts_the_capacity_envelope_and_refuses_one_byte_over
         History::read(
             &operation,
             Purpose::ReservePolicy,
-            *Hash::new(&bytes).as_ref()
+            *Hash::new(&bytes).as_ref(),
+            &crate::managed::native_operation::attempts::HistoryScope::FixedBody
         )
         .is_err()
     );
@@ -629,7 +670,7 @@ fn expired_missing_or_request_only_prefix_requires_a_live_epoch_and_preserves_it
             assert!(Instant::now() < bound);
             std::thread::sleep(Duration::from_millis(10));
         }
-        let native = NativeFixture::from_generated(&fixture.prepared, &fixture.authority);
+        let native = fixture.current_native();
         let grant = fixture
             .authorization
             .as_ref()
@@ -641,6 +682,7 @@ fn expired_missing_or_request_only_prefix_requires_a_live_epoch_and_preserves_it
             &fixture.operation,
             Purpose::ReservePolicy,
             fixture.semantic,
+            &crate::managed::native_operation::attempts::HistoryScope::FixedBody,
             &grant,
             fixture.deadline,
             None,
@@ -657,6 +699,7 @@ fn expired_missing_or_request_only_prefix_requires_a_live_epoch_and_preserves_it
             |attempt, _, _| Ok(fixture.retain(attempt)),
             |_, _| {
                 let checkpoint = native.observe(&fixture.authority);
+                assert_eq!(checkpoint.verified_tip().unwrap().height(), 2);
                 let current = native
                     .policy_proof(&fixture.authority.config.account)
                     .verify(
@@ -710,4 +753,345 @@ fn expired_missing_or_request_only_prefix_requires_a_live_epoch_and_preserves_it
         assert!(!selected.wallet_path().join("operation.json").exists());
         assert!(fixture.prepared.context.client_config.parent().unwrap().join("runtime/service-operations/network/service-bootstrap/initial/epochs/0001-replacement.nrt").is_file());
     }
+}
+
+#[test]
+fn exact_reserved_prefixes_finish_once_without_new_terms_or_wallet_io() {
+    let _resources = crate::managed::native_test_guard();
+    for prefix in 0..3 {
+        let fixture = Fixture::new();
+        fixture
+            .history()
+            .unwrap()
+            .reserve_pending(&fixture.operation, Origin::Explicit, fixture.terms.clone())
+            .unwrap();
+        let reserved = read_record::<Dispatch>(&fixture.operation, "dispatch.nrt")
+            .unwrap()
+            .unwrap();
+        let original = encode(&reserved.highest, MAX_RECORD_BYTES).unwrap();
+        if prefix > 0 {
+            let root = fixture.operation.create_child("attempts").unwrap();
+            let directory = root.create_child("0001").unwrap();
+            if prefix == 2 {
+                // Exact bytes from the actual reservation, never another authorization DTO.
+                write_record(&directory, "authorization.nrt", &reserved.highest).unwrap();
+            }
+        }
+        let mut peers = UnavailablePeers::start(&fixture.prepared);
+        let history = fixture.history().unwrap();
+        assert_eq!(history.reserved_attempt_count(), 1);
+        assert!(history.selected().is_err());
+        history
+            .verify_wallets(|attempt| fixture.inspect(attempt))
+            .unwrap();
+        let before = fixture
+            .operation
+            .read("dispatch.nrt", MAX_RECORD_BYTES)
+            .unwrap();
+        let mut changed = fixture.terms.clone();
+        changed.requested_deadline_unix_ms += 1;
+        assert!(
+            history
+                .reserve(&fixture.operation, Origin::Explicit, changed)
+                .is_err()
+        );
+        assert_eq!(
+            fixture
+                .operation
+                .read("dispatch.nrt", MAX_RECORD_BYTES)
+                .unwrap(),
+            before
+        );
+        let attempt = history
+            .finish_reserved(&fixture.operation, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            attempt
+                .directory
+                .read("authorization.nrt", MAX_RECORD_BYTES)
+                .unwrap()
+                .as_slice(),
+            original.as_slice()
+        );
+        assert_eq!(fixture.history().unwrap().reserved_attempt_count(), 1);
+        assert!(!attempt.wallet_path().exists());
+        assert!(
+            fixture
+                .history()
+                .unwrap()
+                .finish_reserved(&fixture.operation, false)
+                .unwrap()
+                .is_none()
+        );
+        assert!(peers.requests.lock().unwrap().is_empty());
+        peers.finish();
+    }
+}
+
+#[test]
+fn reserved_last_slot_finishes_at_the_bound_without_refunding_or_appending() {
+    let _resources = crate::managed::native_test_guard();
+    let fixture = Fixture::new();
+    let mut previous = fixture.reserve();
+    for ordinal in 2..MAX_ATTEMPTS {
+        let next = fixture
+            .history()
+            .unwrap()
+            .reserve(
+                &fixture.operation,
+                Origin::Generated {
+                    ordinal: u8::try_from(ordinal - 1).unwrap(),
+                    epoch: [u8::try_from(ordinal).unwrap(); 32],
+                    parent_intent: [0x31; 32],
+                },
+                fixture.terms.clone(),
+            )
+            .unwrap();
+        retire_missing(&previous, &next).unwrap();
+        previous = next;
+    }
+    let last_origin = Origin::Generated {
+        ordinal: 63,
+        epoch: [64; 32],
+        parent_intent: [0x31; 32],
+    };
+    fixture
+        .history()
+        .unwrap()
+        .reserve_pending(&fixture.operation, last_origin, fixture.terms.clone())
+        .unwrap();
+    let history = fixture.history().unwrap();
+    assert_eq!(history.reserved_attempt_count(), MAX_ATTEMPTS);
+    assert_eq!(history.cumulative_reserved_count(), MAX_ATTEMPTS);
+    assert!(!fixture.operation.path().join("attempts/0064").exists());
+    let last = history
+        .finish_reserved(&fixture.operation, false)
+        .unwrap()
+        .unwrap();
+    retire_missing(&previous, &last).unwrap();
+    let history = fixture.history().unwrap();
+    history
+        .verify_wallets(|attempt| fixture.inspect(attempt))
+        .unwrap();
+    assert_eq!(history.reserved_attempt_count(), MAX_ATTEMPTS);
+    assert!(
+        history
+            .reserve(
+                &fixture.operation,
+                Origin::Generated {
+                    ordinal: 64,
+                    epoch: [65; 32],
+                    parent_intent: [0x31; 32],
+                },
+                fixture.terms.clone()
+            )
+            .is_err()
+    );
+    assert!(!fixture.operation.path().join("attempts/0065").exists());
+    assert!(
+        history
+            .finish_reserved(&fixture.operation, false)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn published_latest_signed_suffix_loss_and_unanchored_empty_tail_refuse_repair() {
+    let _resources = crate::managed::native_test_guard();
+    let fixture = Fixture::new();
+    let first = fixture.reserve();
+    fixture.commit(&first);
+    let next = fixture
+        .history()
+        .unwrap()
+        .reserve(
+            &fixture.operation,
+            Origin::Generated {
+                ordinal: 1,
+                epoch: [0x42; 32],
+                parent_intent: [0x43; 32],
+            },
+            fixture.terms.clone(),
+        )
+        .unwrap();
+    let retired = fixture
+        .wallet
+        .retire_initial_reserve_policy_unprepared(&first.wallet_path(), &fixture.request(&first))
+        .unwrap();
+    retire_request(&first, &next, &retired).unwrap();
+    let retained = fixture.retain(&next);
+    commit(&next, Some(&first), Observation::ordinary(), &retained).unwrap();
+    fixture.sign(&next);
+    assert_eq!(
+        fixture.inspect(&next).unwrap().phase(),
+        NativePreparationPhase::Signed
+    );
+    let anchor = fixture
+        .operation
+        .read("dispatch.nrt", MAX_RECORD_BYTES)
+        .unwrap();
+    std::fs::remove_dir_all(next.directory.path()).unwrap();
+    let mut peers = UnavailablePeers::start(&fixture.prepared);
+    assert!(fixture.history().is_err());
+    assert!(!next.directory.path().exists());
+    assert_eq!(
+        fixture
+            .operation
+            .read("dispatch.nrt", MAX_RECORD_BYTES)
+            .unwrap(),
+        anchor
+    );
+    assert!(peers.requests.lock().unwrap().is_empty());
+    peers.finish();
+
+    let separate = Fixture::new();
+    separate
+        .operation
+        .create_child("attempts")
+        .unwrap()
+        .create_child("0001")
+        .unwrap();
+    assert!(separate.history().is_err());
+    assert!(!separate.operation.path().join("dispatch.nrt").exists());
+}
+
+#[test]
+fn fixed_body_scope_rejects_enrollment_purposes_before_mutation() {
+    let _resources = crate::managed::native_test_guard();
+    let fixture = Fixture::new();
+    let before = fixture.operation.entries(3).unwrap();
+    for purpose in [
+        Purpose::CustodyEnroll(ProviderId::new([0x23; 32])),
+        Purpose::CustodyRenewal {
+            provider: ProviderId::new([0x23; 32]),
+            sequence: 2,
+        },
+    ] {
+        assert!(
+            History::read(
+                &fixture.operation,
+                purpose,
+                fixture.semantic,
+                &HistoryScope::FixedBody
+            )
+            .is_err()
+        );
+        assert_eq!(fixture.operation.entries(3).unwrap(), before);
+        assert!(!fixture.operation.path().join("dispatch.nrt").exists());
+        assert!(!fixture.operation.path().join("attempts").exists());
+    }
+}
+
+#[test]
+fn dispatch_compare_writer_refuses_changed_expected_record_and_illegal_edges() {
+    let _resources = crate::managed::native_test_guard();
+    let fixture = Fixture::new();
+    fixture
+        .history()
+        .unwrap()
+        .reserve_pending(&fixture.operation, Origin::Explicit, fixture.terms.clone())
+        .unwrap();
+    let reserved = read_record::<Dispatch>(&fixture.operation, "dispatch.nrt")
+        .unwrap()
+        .unwrap();
+    let original = fixture
+        .operation
+        .read("dispatch.nrt", MAX_RECORD_BYTES)
+        .unwrap();
+    let mut wrong_expected = reserved.clone();
+    wrong_expected.first = [0x77; 32];
+    let mut published = reserved.clone();
+    published.state = ReservationState::Published;
+    assert!(replace_dispatch(&fixture.operation, Some(&wrong_expected), &published).is_err());
+    assert!(replace_dispatch(&fixture.operation, None, &reserved).is_err());
+    let mut changed = published.clone();
+    changed.highest.terms.requested_deadline_unix_ms += 1;
+    assert!(replace_dispatch(&fixture.operation, Some(&reserved), &changed).is_err());
+    assert_eq!(
+        fixture
+            .operation
+            .read("dispatch.nrt", MAX_RECORD_BYTES)
+            .unwrap(),
+        original
+    );
+    assert!(!fixture.operation.path().join("attempts").exists());
+    fixture
+        .history()
+        .unwrap()
+        .finish_reserved(&fixture.operation, false)
+        .unwrap()
+        .unwrap();
+    let retained = fixture
+        .operation
+        .read("dispatch.nrt", MAX_RECORD_BYTES)
+        .unwrap();
+    assert!(replace_dispatch(&fixture.operation, Some(&published), &reserved).is_err());
+    let mut skipped = reserved.clone();
+    skipped.highest.ordinal = 3;
+    skipped.highest.previous = Some(digest(&published.highest).unwrap());
+    assert!(replace_dispatch(&fixture.operation, Some(&published), &skipped).is_err());
+    assert_eq!(
+        fixture
+            .operation
+            .read("dispatch.nrt", MAX_RECORD_BYTES)
+            .unwrap(),
+        retained
+    );
+    assert_eq!(fixture.history().unwrap().cumulative_reserved_count(), 1);
+}
+
+#[test]
+fn explicit_reserved_recovery_reuses_original_signing_cap_under_a_later_io_budget() {
+    let _resources = crate::managed::native_test_guard();
+    let fixture = Fixture::new();
+    fixture
+        .history()
+        .unwrap()
+        .reserve_pending(&fixture.operation, Origin::Explicit, fixture.terms.clone())
+        .unwrap();
+    let history = fixture.history().unwrap();
+    assert!(history.last().is_none());
+    let later = fixture.deadline + Duration::from_secs(60);
+    let options = fixture.terms.options(later);
+    let retained = history.retained_terms().unwrap();
+    retained
+        .matches(fixture.terms.requested_deadline_unix_ms, &options)
+        .unwrap();
+    assert!(
+        Terms::new(fixture.terms.requested_deadline_unix_ms, &options)
+            .unwrap()
+            .signing_deadline_unix_ms
+            > retained.signing_deadline_unix_ms
+    );
+    let original = encode(retained, MAX_RECORD_BYTES).unwrap();
+    let mut peers = UnavailablePeers::start(&fixture.prepared);
+    initial(
+        &fixture.operation,
+        Purpose::ReservePolicy,
+        fixture.semantic,
+        &HistoryScope::FixedBody,
+        retained.clone(),
+        Observation::ordinary(),
+        later,
+        |attempt| fixture.inspect(attempt),
+        |attempt, _, _| Ok(fixture.retain(attempt)),
+    )
+    .unwrap();
+    let complete = fixture.history().unwrap();
+    let selected = complete.selected().unwrap().unwrap();
+    assert_eq!(
+        encode(selected.terms(), MAX_RECORD_BYTES).unwrap(),
+        original
+    );
+    assert_eq!(complete.reserved_attempt_count(), 1);
+    assert_eq!(
+        fixture.inspect(selected).unwrap().phase(),
+        NativePreparationPhase::RequestOnly
+    );
+    assert!(!selected.wallet_path().join("payload.json").exists());
+    assert!(!selected.wallet_path().join("operation.json").exists());
+    assert!(peers.requests.lock().unwrap().is_empty());
+    peers.finish();
 }

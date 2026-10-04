@@ -91,6 +91,15 @@ jobs:
           test "$(git rev-parse HEAD)" = "$source_sha"
           test "$WORKFLOW_SHA" = "$source_sha"
           test -z "$(git status --porcelain)"
+      - name: Require the approved release-owned network profile
+        run: |
+          set -euo pipefail
+          profile=defaults/developer/network-profiles.nrt
+          git ls-files --error-unmatch -- "$profile" >/dev/null
+          test -f "$profile" && test ! -L "$profile"
+          test "$(git hash-object --no-filters -- "$profile")" = "$(git rev-parse "HEAD:$profile")"
+          # Native packaging performs the bounded canonical/Taira validation before its build.
+          # No key or URL can be supplied by this workflow or by an HTTP response.
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
           cache: "false"

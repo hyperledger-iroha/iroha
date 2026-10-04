@@ -1,7 +1,12 @@
 //! Genuine generated custody and original-profile controls; no worker or native finality claim.
 use super::*;
 
-fn prepare(profile: LocalnetServiceProfile) -> (tempfile::TempDir, PreparedLocalnet) {
+fn prepare(
+    profile: LocalnetServiceProfile,
+) -> (
+    crate::localnet::localnet_test_helpers::PrivateTempDir,
+    PreparedLocalnet,
+) {
     let temp = crate::localnet::localnet_test_helpers::private_tempdir().unwrap();
     let ports = crate::managed::LocalnetPorts::reserve().unwrap();
     let prepared = prepare_localnet_at(

@@ -255,3 +255,107 @@ fn pin_selection_field_is_explicit_and_controls_cannot_claim_a_pin_time() {
     changed.pin_selected_at_unix_ms = Some(1_000);
     assert!(changed.validate().is_err());
 }
+
+#[test]
+fn held_slot_inspection_refuses_missing_or_replaced_request_and_extraneous_later_records() {
+    for corruption in [
+        "missing",
+        "replacement",
+        "applied.json",
+        "submission.json",
+        "retired.json",
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("held");
+        let (_, request, _) = fixture();
+        let slot = Slot::create(&path, request).unwrap();
+        slot.require_path(&path).unwrap();
+        match corruption {
+            "missing" => std::fs::remove_file(path.join("preparation.json")).unwrap(),
+            "replacement" => {
+                let (_, mut changed, _) = fixture();
+                changed.operation[0] ^= 1;
+                iroha_fs::PrivateDirectory::open(&path)
+                    .unwrap()
+                    .write_atomic(
+                        "preparation.json",
+                        &norito::json::to_vec(&changed).unwrap(),
+                        iroha_fs::PublishMode::Replace,
+                    )
+                    .unwrap();
+            }
+            name => iroha_fs::PrivateDirectory::open(&path)
+                .unwrap()
+                .write_atomic(name, b"{}", iroha_fs::PublishMode::CreateNew)
+                .unwrap(),
+        }
+        assert!(slot.require_path(&path).is_err(), "{corruption}");
+        assert!(slot.signed().is_none());
+        assert!(!path.join("payload.json").exists());
+    }
+}
+
+#[test]
+fn held_slot_inspection_preserves_pending_signature_but_refuses_lost_persisted_original() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("held");
+    let (key, request, payload) = fixture();
+    let mut slot = Slot::create(&path, request).unwrap();
+    slot.retain_payload(&payload).unwrap();
+    slot.journal
+        .write_native(NativeRecord::Operation, &norito::json!({"wrong": true}))
+        .unwrap();
+    assert!(
+        slot.sign_original(
+            &key,
+            &mut crate::musubi_publication_service::native_pin::authorization::FixedClock(1_001),
+            Instant::now() + Duration::from_secs(30)
+        )
+        .is_err()
+    );
+    let original = slot.signed().unwrap().encode_wire_v1().unwrap();
+    assert!(slot.require_path(&path).is_err());
+    // Remove only the injected conflict: the still-owned signature has never been durably stored.
+    std::fs::remove_file(path.join("operation.json")).unwrap();
+    slot.require_path(&path).unwrap();
+    assert_eq!(slot.signed().unwrap().encode_wire_v1().unwrap(), original);
+    assert!(
+        !path.join("operation.json").exists(),
+        "inspection does not repair custody"
+    );
+    slot.persist_signed().unwrap();
+    slot.require_path(&path).unwrap();
+    std::fs::remove_file(path.join("operation.json")).unwrap();
+    assert!(
+        slot.require_path(&path).is_err(),
+        "a once-persisted signature cannot disappear"
+    );
+    assert_eq!(slot.signed().unwrap().encode_wire_v1().unwrap(), original);
+    assert!(!path.join("submission.json").exists());
+}
+
+#[test]
+fn held_exposed_slot_revalidates_exact_signature_and_submission_bytes() {
+    for name in ["operation.json", "submission.json", "payload.json"] {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("held");
+        let (key, request, payload) = fixture();
+        let mut slot = Slot::create(&path, request).unwrap();
+        slot.retain_payload(&payload).unwrap();
+        slot.sign_original(
+            &key,
+            &mut crate::musubi_publication_service::native_pin::authorization::FixedClock(1_001),
+            Instant::now() + Duration::from_secs(30),
+        )
+        .unwrap();
+        slot.record_exposure().unwrap();
+        slot.require_path(&path).unwrap();
+        let original = slot.signed().unwrap().encode_wire_v1().unwrap();
+        iroha_fs::PrivateDirectory::open(&path)
+            .unwrap()
+            .write_atomic(name, b"{}", iroha_fs::PublishMode::Replace)
+            .unwrap();
+        assert!(slot.require_path(&path).is_err(), "{name}");
+        assert_eq!(slot.signed().unwrap().encode_wire_v1().unwrap(), original);
+    }
+}

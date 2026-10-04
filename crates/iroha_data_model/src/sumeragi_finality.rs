@@ -1362,7 +1362,10 @@ mod configuration_fingerprint_tests {
             SignatureOf::new(foreign.private_key(), &tampered.header()),
         );
         tampered
-            .replace_signatures(std::collections::BTreeSet::from([signature]))
+            .replace_signatures(
+                crate::block::BlockSignatures::try_from_iter([signature])
+                    .expect("at most 31 block signatures"),
+            )
             .unwrap();
         assert!(consensus_configuration_fingerprint(&tampered).is_err());
     }

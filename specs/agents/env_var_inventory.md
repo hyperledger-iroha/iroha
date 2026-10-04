@@ -2,7 +2,7 @@
 
 _Last refreshed via `python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md`_
 
-Total references: **893** · Unique variables: **209**
+Total references: **890** · Unique variables: **208**
 
 ## CARGO (test: 3)
 
@@ -76,7 +76,7 @@ Total references: **893** · Unique variables: **209**
 
 ## CARGO_CFG_TARGET_OS (build: 6, prod: 2, tool: 2)
 
-- build: crates/fastpq_prover/build.rs:40 — `let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();`
+- build: crates/fastpq_prover/build.rs:22 — `let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();`
 - build: crates/gpuzstd_cuda/build.rs:28 — `let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();`
 - build: crates/gpuzstd_metal/build.rs:8 — `let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();`
 - prod: crates/iroha_crypto/src/bin/sm_perf_check.rs:654 — `let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_else(|_| env::consts::OS.to_owned());`
@@ -99,7 +99,7 @@ Total references: **893** · Unique variables: **209**
 
 ## CARGO_FEATURE_FASTPQ_GPU (build: 1)
 
-- build: crates/fastpq_prover/build.rs:19 — `let fastpq_gpu_feature = env::var_os("CARGO_FEATURE_FASTPQ_GPU").is_some();`
+- build: crates/fastpq_prover/build.rs:17 — `let fastpq_gpu_feature = env::var_os("CARGO_FEATURE_FASTPQ_GPU").is_some();`
 
 ## CARGO_FEATURE_METAL (test: 1)
 
@@ -658,7 +658,7 @@ Total references: **893** · Unique variables: **209**
 
 ## CUDA_HOME (build: 5)
 
-- build: crates/fastpq_prover/build.rs:342 — `env::var_os("CUDA_HOME")`
+- build: crates/fastpq_prover/build.rs:90 — `env::var_os("CUDA_HOME")`
 - build: crates/gpuzstd_cuda/build.rs:80 — `for root in env::var_os("CUDA_HOME")`
 - build: crates/gpuzstd_cuda/build.rs:99 — `let root = env::var_os("CUDA_HOME")`
 - build: crates/norito/accelerators/jsonstage1_cuda/build.rs:85 — `for root in env::var_os("CUDA_HOME")`
@@ -666,7 +666,7 @@ Total references: **893** · Unique variables: **209**
 
 ## CUDA_PATH (build: 5)
 
-- build: crates/fastpq_prover/build.rs:343 — `.or_else(|| env::var_os("CUDA_PATH"))`
+- build: crates/fastpq_prover/build.rs:91 — `.or_else(|| env::var_os("CUDA_PATH"))`
 - build: crates/gpuzstd_cuda/build.rs:82 — `.chain(env::var_os("CUDA_PATH"))`
 - build: crates/gpuzstd_cuda/build.rs:100 — `.or_else(|| env::var_os("CUDA_PATH"))`
 - build: crates/norito/accelerators/jsonstage1_cuda/build.rs:87 — `.chain(env::var_os("CUDA_PATH"))`
@@ -674,7 +674,7 @@ Total references: **893** · Unique variables: **209**
 
 ## CXX (build: 4)
 
-- build: crates/fastpq_prover/build.rs:386 — `env::var_os("CXX").is_some()`
+- build: crates/fastpq_prover/build.rs:134 — `env::var_os("CXX").is_some()`
 - build: crates/gpuzstd_cuda/build.rs:130 — `env::var_os("CXX").is_some()`
 - build: crates/ivm/build.rs:833 — `env::var_os("CXX").is_some()`
 - build: crates/norito/accelerators/jsonstage1_cuda/build.rs:135 — `env::var_os("CXX").is_some()`
@@ -695,18 +695,13 @@ Total references: **893** · Unique variables: **209**
 - test: crates/fastpq_prover/src/fastpq_cuda.rs:1373 — `std::env::var_os("FASTPQ_CUDA_REQUIRE").is_some(),`
 - test: crates/fastpq_prover/src/fastpq_cuda.rs:1403 — `std::env::var_os("FASTPQ_CUDA_REQUIRE").is_some(),`
 
-## FASTPQ_METAL_LIB (prod: 1, test: 1)
-
-- prod: crates/fastpq_prover/src/backend.rs:1262 — `option_env!("FASTPQ_METAL_LIB")`
-- test: crates/fastpq_prover/src/metal.rs:3115 — `option_env!("FASTPQ_METAL_LIB"),`
-
 ## FASTPQ_RESOURCE_OUTPUT_DIR (test: 1)
 
 - test: crates/fastpq_prover/tests/resource_profile.rs:180 — `let output_dir = std::env::var_os("FASTPQ_RESOURCE_OUTPUT_DIR").map(PathBuf::from);`
 
 ## FASTPQ_SKIP_GPU_BUILD (build: 1)
 
-- build: crates/fastpq_prover/build.rs:41 — `let skip_gpu_build = env::var_os("FASTPQ_SKIP_GPU_BUILD").is_some();`
+- build: crates/fastpq_prover/build.rs:34 — `let skip_gpu_build = env::var_os("FASTPQ_SKIP_GPU_BUILD").is_some();`
 
 ## FASTPQ_TEST_FIXED_SMT_ARTIFACT (prod: 1)
 
@@ -760,7 +755,7 @@ Total references: **893** · Unique variables: **209**
 
 ## HOST_CXX (build: 4)
 
-- build: crates/fastpq_prover/build.rs:387 — `|| env::var_os("HOST_CXX").is_some()`
+- build: crates/fastpq_prover/build.rs:135 — `|| env::var_os("HOST_CXX").is_some()`
 - build: crates/gpuzstd_cuda/build.rs:131 — `|| env::var_os("HOST_CXX").is_some()`
 - build: crates/ivm/build.rs:834 — `|| env::var_os("HOST_CXX").is_some()`
 - build: crates/norito/accelerators/jsonstage1_cuda/build.rs:136 — `|| env::var_os("HOST_CXX").is_some()`
@@ -1242,9 +1237,8 @@ Total references: **893** · Unique variables: **209**
 
 - build: crates/ivm/build.rs:674 — `.or_else(|_| env::var("NVCC"))`
 
-## OUT_DIR (build: 6, prod: 15, test: 8)
+## OUT_DIR (build: 5, prod: 15, test: 8)
 
-- build: crates/fastpq_prover/build.rs:151 — `let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(|err| err.to_string())?);`
 - build: crates/iroha_test_samples/build.rs:46 — `let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo must provide OUT_DIR"));`
 - test: crates/iroha_test_samples/src/lib.rs:231 — `PathBuf::from(env!("OUT_DIR"))`
 - test: crates/iroha_test_samples/src/lib.rs:239 — `PathBuf::from(env!("OUT_DIR")).join("ivm/build_config.toml")`
@@ -1419,7 +1413,7 @@ Total references: **893** · Unique variables: **209**
 
 ## SystemRoot (prod: 1, test: 1)
 
-- prod: crates/fastpq_prover/src/backend.rs:824 — `env::var_os("SystemRoot").map(PathBuf::from)`
+- prod: crates/fastpq_prover/src/backend.rs:830 — `env::var_os("SystemRoot").map(PathBuf::from)`
 - test: crates/irohad/src/soracloud_runtime.rs:17281 — `if let Some(system_root) = std::env::var_os("SystemRoot") {`
 
 ## TAIRA_TESTNET_BEACON_FIXTURE_DIR (test: 1)

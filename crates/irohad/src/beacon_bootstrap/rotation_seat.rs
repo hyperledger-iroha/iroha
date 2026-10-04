@@ -82,8 +82,13 @@ pub(super) fn encode_local_seat_credential(
         signer_index,
         components,
     )];
-    encode_global_beacon_partial_signer_credential_v1(&mut prepared, &inventory)
-        .map_err(|error| Error::Export(seat_export::ExportError::Credential(error)))?;
+    encode_global_beacon_partial_signer_credential_v1(
+        &mut prepared,
+        inventory
+            .iter()
+            .map(RuntimeGlobalBeaconShareProvisioningV1::credential_source),
+    )
+    .map_err(|error| Error::Export(seat_export::ExportError::Credential(error)))?;
     let credential = prepared.into_credential().map_err(
         |(_, error): (_, GlobalBeaconCredentialEncodeErrorV1)| {
             Error::Export(seat_export::ExportError::Credential(error))
@@ -172,18 +177,22 @@ pub(super) fn provision_rotation_seat_command(
         return Err(Error::InvalidCustody);
     }
     let verifier = rotation_phase_verifier(proof, &evidence, budget)?;
+    let authority =
+        iroha_core::beacon::AuthenticatedGlobalBeaconDkgAttemptV1::rotation(&selected, &verifier)?;
+    if authority.session() != session || authority.cutoff() != cutoff {
+        return Err(Error::InvalidInput);
+    }
     // SAFETY: fd numbers are distinct, inherited FIFO identities were checked
     // above, and this command transfers each source once into the retained owner.
     use std::os::fd::FromRawFd as _;
     let attempt = seat_attempt::SeatDkgAttempt::new(
-        session,
+        authority,
         &roster,
         signer_index,
         signer,
         unsafe { File::from_raw_fd(public_fd) },
         unsafe { File::from_raw_fd(finality_fd) },
         verifier,
-        cutoff,
         provider_handle,
         provider_revision,
         attempt_root,

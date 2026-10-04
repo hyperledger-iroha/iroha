@@ -41,9 +41,19 @@ pub use merkle::{sha256_leaves_cuda_into, sha256_pairs_reduce_cuda};
 #[path = "cuda/poseidon_api.rs"]
 mod poseidons;
 #[cfg(feature = "cuda")]
+pub(crate) use poseidons::{poseidon2_auto_into, poseidon6_auto_into};
+#[cfg(feature = "cuda")]
 pub use poseidons::{
     poseidon2_cuda, poseidon2_cuda_many_into, poseidon6_cuda, poseidon6_cuda_many_into,
 };
+#[cfg(not(feature = "cuda"))]
+pub(crate) fn poseidon2_auto_into(_inputs: &[(u64, u64)], _destination: &mut [u64]) -> bool {
+    false
+}
+#[cfg(not(feature = "cuda"))]
+pub(crate) fn poseidon6_auto_into(_inputs: &[[u64; 6]], _destination: &mut [u64]) -> bool {
+    false
+}
 #[cfg(feature = "cuda")]
 #[path = "cuda/bn254_api.rs"]
 mod bn254_batches;
@@ -1825,4 +1835,21 @@ pub fn with_cuda_device_for_qualification<T>(index: usize, call: impl FnOnce() -
 #[cfg(feature = "cuda-hardware-tests")]
 pub fn cuda_qualification_device() -> Option<usize> {
     crate::cuda_dispatch::qualification_device()
+}
+
+#[cfg(all(test, not(feature = "cuda")))]
+mod poseidon_auto_cpu_tests {
+    #[test]
+    fn absent_compiled_cuda_leaves_both_caller_destinations_unchanged() {
+        let mut output = [17, 19];
+        assert!(!super::poseidon2_auto_into(
+            &[(0, 1), (u64::MAX, 7)],
+            &mut output
+        ));
+        assert!(!super::poseidon6_auto_into(
+            &[[0; 6], [u64::MAX; 6]],
+            &mut output
+        ));
+        assert_eq!(output, [17, 19]);
+    }
 }

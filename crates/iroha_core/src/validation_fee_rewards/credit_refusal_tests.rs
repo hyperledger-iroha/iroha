@@ -56,6 +56,14 @@ fn check_current_claim_identity_refusal(owner_revision: bool) {
             .as_ptr();
         let marker: StatePath = "fee_claim_unpublished_TESTDATA".parse().unwrap();
         let mut stx = block.transaction();
+        // A transaction owns its own storage snapshot. Preserve each original source
+        // allocation across refusal, rather than equating it with its parent snapshot.
+        let original_transaction_pointer = stx
+            .world
+            .smart_contract_state
+            .get(&credit_key)
+            .unwrap()
+            .as_ptr();
         let plan = fee_reward_claim_plan(&stx.world, stx.block_height(), &claimant, lane)
             .unwrap()
             .unwrap();
@@ -145,10 +153,20 @@ fn check_current_claim_identity_refusal(owner_revision: bool) {
                 .get(&credit_key)
                 .unwrap()
                 .as_ptr(),
-            original_pointer
+            original_transaction_pointer
         );
         stx.apply();
         assert!(block.world.smart_contract_state.get(&marker).is_none());
+        assert_eq!(
+            block
+                .world
+                .smart_contract_state
+                .get(&credit_key)
+                .unwrap()
+                .as_ptr(),
+            original_pointer,
+            "the refused transaction preserves its original parent storage owner"
+        );
         assert_eq!(
             block.world.smart_contract_state.get(&credit_key),
             Some(&before_credit)

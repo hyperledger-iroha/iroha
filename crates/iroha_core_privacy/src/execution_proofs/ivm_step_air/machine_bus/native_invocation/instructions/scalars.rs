@@ -270,7 +270,7 @@ fn exact_scalar_gas_and_cycle_costs_leave_no_extra_padding_or_uncharged_comparis
         let mut parent =
             ExecutionMemoryLease::reserve(&budget, NativeInvocation::allocation_plan().unwrap())
                 .unwrap();
-        let result = NativeInvocation::run_unit_root(
+        let result = NativeInvocation::run_public_leaf_root(
             artifact_with_literals(&body, 0, &[i64::MIN as u64, u64::MAX]),
             "main",
             gas,
@@ -370,7 +370,7 @@ fn broader_valid_scalar_operations_remain_local_refusals_without_published_packe
             ExecutionMemoryLease::reserve(&budget, NativeInvocation::allocation_plan().unwrap())
                 .unwrap();
         assert!(matches!(
-            NativeInvocation::run_unit_root(artifact, "main", 10_000, &mut parent, &budget),
+            NativeInvocation::run_public_leaf_root(artifact, "main", 10_000, &mut parent, &budget),
             Err(CaptureError::Unsupported),
         ));
         drop(parent);

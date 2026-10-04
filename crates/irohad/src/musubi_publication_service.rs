@@ -1,28 +1,22 @@
 //! Supervised deployment boundary for the private Musubi publication service.
 //!
-//! The stock daemon injects nothing and therefore opens no publication listener. A deployment
-//! may construct the transport-independent service from `iroha_musubi_service`, retain its TLS
-//! and signing material outside argv and repository configuration, and inject an authenticated
-//! HTTPS ingress here. This module never routes through Torii or the daemon-private runtime
-//! provider broker. The native seed-staging backend holds exact verified CAR bytes in a bounded,
-//! handle-pinned directory and releases them only after the daemon-owned finalized registration
-//! reader succeeds; it is a custody component, not a complete publication runner.
-//! The local factory reopens the original journal, seed owners, and clock under the exact daemon
-//! network, but never enables the private ingress without the remaining qualified adapters.
-//! A separate read-only pin-registration reader checks the exact signed instruction, successful
-//! finalized output, and current pin record; it does not provide signing or queue submission.
+//! An explicit installation selects original signed-genesis transport intent and ordinary
+//! account signers after State exists. Startup reopens the original publication journal,
+//! seed custody, native pin session and clock before binding its dedicated private TLS listener.
+//! Standard profiles without installation remain inert; ambiguous injected/configured factories
+//! refuse. Fresh native finality and account-read verification remain mandatory for every
+//! provider observation, independently of TLS intent or listener construction.
 mod finality;
 mod local_custody;
 mod local_factory;
 mod native_pin;
+mod native_storage;
+pub(crate) mod stock_installation;
+pub use native_storage::{NativeMusubiStorageBuilderV1, NativeMusubiStorageLimitsV1};
 mod pin_registration;
 mod pin_signer;
 mod private_tls_ingress;
-mod provider_inventory;
 mod provider_readback;
-pub use provider_inventory::{
-    MusubiPublicationProviderInventoryReadErrorV1, MusubiPublicationProviderInventoryReaderV1,
-};
 mod shared_seed_staging;
 mod storage_coordination;
 pub use finality::{
@@ -39,7 +33,8 @@ pub use local_factory::{
 };
 pub use native_pin::{
     NativeMusubiFinalizedPinV1, NativeMusubiPinCheckRefusalV1, NativeMusubiPinCoordinatorV1,
-    NativeMusubiPinPhaseV1, NativeMusubiPinProgressV1, NativePinAuthorizationV1,
+    NativeMusubiPinOriginalV1, NativeMusubiPinPhaseV1, NativeMusubiPinProgressV1,
+    NativePinAuthorizationV1,
 };
 pub use pin_registration::{
     MusubiPublicationFinalizedPinRegistrationQueryV1,
@@ -55,55 +50,10 @@ pub use shared_seed_staging::{
     MusubiPublicationFinalizedSeedReadCapabilityV1, MusubiPublicationFinalizedSeedReadErrorV1,
     MusubiPublicationFinalizedSeedReadLeaseV1,
 };
-// TODO: Supply a deployment-qualified runner only after the production boundaries below exist.
-// The stock tree deliberately cannot assemble one from the current SoraFS/Torii primitives:
-//
-// 1. provider ingest durably binds a V5 network/archive authorization context, accepts only
-//    monotonic finalized observations over the retained admission cursor, and keeps generic and
-//    Musubi receipt shapes disjoint. The finalized reader can seal the local provider's exact
-//    opaque completed-row claim, and a fresh verifier result can derive an externally inert
-//    approval request. The bounded capture driver performs the fresh verifier pass. The concrete
-//    external software custody leaf consumes only that opaque approval request, validates its full
-//    public subject, and durably replays a fixed sorted controller set. The native software owner
-//    now supplies a distinct completion signer, current native authorization checks and a supervised
-//    capture driver. Combined daemon and network qualification remain;
-// 2. the approved provider attestation has a bounded journal and an inert, root-fenced local
-//    two-slot CAS adapter with a fixed 128 MiB checkpoint/payload ceiling on Linux/macOS. Its bound
-//    cross-process composite operation lease authenticates the committed initialization-lock
-//    identity plus separate checkpoint-head and immutable-blob namespaces. It binds the exact
-//    network/provider and rejects online substitution, torn writes, and divergent lineage. A
-//    separate portable native owner is daemon-wired with a durable host-clock floor and the same
-//    locally retained inventory reader. This software custody makes no external rollback-seal
-//    claim. Fault/platform qualification remains;
-// 3. the portable native pin coordinator retains exact payload/signature/exposure custody,
-//    fresh signed Check rounds and ordinary Queue admission. It consumes the original archive
-//    reader; the concrete storage backend must still join native pin success, provider ingestion,
-//    all-three authenticated inventories and their actual manager-side registry inclusion;
-// 4. the authenticated readback transport verifies the full plan/CAR/bundle and rechecks one
-//    coherent current State archive/location/provider cut and council-admitted exact HTTPS advert
-//    on both sides of the fetch. Complete State-root witness publication, live council-admission
-//    refresh, and independent replica readback qualification remain; and
-// 5. the daemon-owned factory assembles the recovered journal, seed backend, durable clock,
-//    runtime signer, authenticated readback, and finalized reader into the service core. The
-//    bounded private TLS ingress and its public listen/mount/concurrency settings exist, but
-//    stock startup has no qualified provider coordinator, runtime credentials, or installation
-//    path; complete network qualification still gates activation.
-//
-// The publication protocol core, publication-service durable clock and replay journal, typed
-// supervisor dependency, provider-attestation journal, inert local two-slot store with its bound
-// composite operation lease, bounded local seed custody, and read-only authoritative
-// archive-registration reader exist. The daemon-local factory reopens the initialized journal
-// before pinning seed custody, opens the durable clock, and retains the same-network finalized
-// reader through its injected storage backend.
-// The bounded finalized-completion capture driver and replay-stable software signer leaf also
-// exist. Native daemon wiring and local signed-inventory retention are implemented. The
-// authenticated inventory handoff across independent providers, complete publication installation
-// and production fault/platform qualification remain incomplete.
-// Until every boundary above is implemented and deployment-qualified, stock `irohad` must keep the
-// routes absent. In particular, do not
-// substitute an in-memory backend, treat the local two-slot store as protection from privileged
-// offline rollback, treat a public query response or publisher-supplied bytes as finality evidence,
-// or revive the retired public Torii upload path.
+// TODO: Qualify the complete generated multi-provider publication, independent replica
+// readback, crash/resource behavior and supported platforms end to end. The stock assembly
+// and genuine component controls do not establish release readiness. Never substitute cached
+// advertisements, publisher claims or result-only genesis for current certified native state.
 use iroha_core::{queue::Queue, state::State};
 use iroha_data_model::NetworkId;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
@@ -243,14 +193,14 @@ pub trait MusubiPublicationPrivateServiceRunnerV1: Send + 'static {
     /// Serve until shutdown while forwarding bounded requests to the publication service core.
     ///
     /// Implementations must enforce TLS, reject duplicate security-sensitive headers, bound the
-    /// body before allocation, strip only their configured private mount prefix, and pass the
+    /// body before allocation, accept only the three exact route paths, and pass the
     /// exact uppercase method plus path/header/body values to
     /// `iroha_musubi_service::MusubiPublicationPrivateServiceV1`.
     /// The runner owns that core together with its injected durable journal, signer, and
     /// `SoraFS` backends; `irohad` never receives those secrets or dependency objects.
     fn serve(self: Box<Self>, shutdown: ShutdownSignal) -> MusubiPublicationPrivateIngressFutureV1;
 }
-/// Complete injected private-service deployment assembled outside stock `irohad` configuration.
+/// Complete private-service deployment assembled from explicit runtime installation or injection.
 pub struct MusubiPublicationPrivateDeploymentV1 {
     runner: Box<dyn MusubiPublicationPrivateServiceRunnerV1>,
 }
@@ -596,6 +546,7 @@ mod tests {
             finalized_reader: MusubiPublicationFinalizedArchiveRegistrationReaderV1,
             finalized_seed: MusubiPublicationFinalizedSeedReadCapabilityV1,
             paid_pin: iroha_config::parameters::actual::MusubiPublicationPaidPinPolicy,
+            mut clock: Box<dyn iroha_musubi_service::MusubiPublicationServiceClockV1>,
         ) -> Result<
             Box<dyn MusubiStorageCoordinationBackendV1>,
             MusubiPublicationPrivateServiceFactoryErrorV1,
@@ -603,6 +554,7 @@ mod tests {
             assert_eq!(context.network_id(), *context.state().network_id_ref());
             assert_eq!(finalized_seed.provider_id(), ProviderId::new([0x38; 32]));
             assert_eq!(paid_pin.transaction_authority, self.1);
+            assert!(clock.current_time_ms().unwrap() > 0);
             assert_eq!(
                 paid_pin.storage_class,
                 iroha_data_model::sorafs::pin_registry::StorageClass::Hot

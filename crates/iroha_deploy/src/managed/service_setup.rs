@@ -458,6 +458,7 @@ impl Setup {
             &directory,
             purpose,
             original.digest()?,
+            &crate::managed::native_operation::attempts::HistoryScope::FixedBody,
             authorization,
             deadline,
             None,
@@ -505,7 +506,12 @@ impl Setup {
         };
         self.validate_original(&original)?;
         original.matches_intent(intent)?;
-        let history = attempts::History::read(&directory, self.purpose()?, original.digest()?)?;
+        let history = attempts::History::read(
+            &directory,
+            self.purpose()?,
+            original.digest()?,
+            &crate::managed::native_operation::attempts::HistoryScope::FixedBody,
+        )?;
         history.require_fees(fees)?;
         self.advance(deadline, mode).map(Some)
     }

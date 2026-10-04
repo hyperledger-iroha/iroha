@@ -1,0 +1,13 @@
+# Exact compact-emission controls
+
+The compiler keeps the original ABI1 callables, full argument/result and state schemas, authority declarations and access hints. The nominal-abort sites evaluate their original condition and stage their complete original descriptor/code before transferring to one terminal publication, reserved-register clearing and CONTRACT_ABORT body. That body is attributed to one original complete function range and uses ordinary control-transfer relocation.
+
+Rounded and typed integer helpers retain their existing synchronous numeric consumer. That consumer authenticates the original public envelope, canonical frame, precision, reserved inputs and checked operation while charging its actual work. Parallel argument staging removes preceding redundant publication and shuffles.
+
+`cases.rs` declares eight exact source pairs. Compiler controls compare the complete scalar and sole production artifacts, including schemas, permissions, frame geometry and all error metadata. VM consumers execute genuine captured artifacts with the original canonical decoder and check every typed result, complete failure identity, state effect, transaction rollback and authorized/denied role creation. The `abort_second` pair retains a twice-called private function and takes the failure in `main` into that other function's sole terminal body, preserving the exact High descriptor and prior `trace = 11` write before rollback. A dedicated compiler control checks both original callable ranges and the relocated cross-function ordinary jump. The actual VM consumer admits both complete artifacts through canonical instruction-boundary validation. A zero-gas execution control checks refusal before any source effect.
+
+The native compiler producer `compiler::compact_emission::native_pairs::capture_actual_compact_emission_native_pairs` must run explicitly before parity or VM consumers. Save only its eight complete COMPACT_EMISSION_NATIVE rows, without the prefix, as `native_v1.tsv`; the parser checks full source/artifact identities, canonical bounded hex, order-independent uniqueness and the exact mandatory case inventory. Never construct artifact bytes from declarations. No capture or execution result is a network or release qualification verdict.
+
+The checked-in eight-row capture comes from the complete successful native compiler producer; focused current-artifact compiler parity and metadata controls pass. VM execution and whole-candidate qualification remain open.
+
+TODO: execute the actual VM controls, rerun affected genuine existing frame/private captures and qualify the actual Core payout and disposable network under the unchanged default4M limit and 64gas/byte price.

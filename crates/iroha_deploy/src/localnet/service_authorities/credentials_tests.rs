@@ -30,7 +30,8 @@ fn assert_redacted(error: Error) {
 fn role_credential_requires_exact_bounded_canonical_ed25519_line() {
     let temporary = tempfile::tempdir().unwrap();
     let directory = PrivateDirectory::open_or_create(temporary.path().join("roles")).unwrap();
-    let key = fixture_key(19, iroha_crypto::Algorithm::Ed25519);
+    // Retained Ed25519 seed bytes must include alphabetic hex for the case-only variant below.
+    let key = fixture_key(0xab, iroha_crypto::Algorithm::Ed25519);
     let authority = StreamTokenAuthority {
         role: StreamTokenAuthorityRole::IssuerOperator,
         account: AccountId::new(key.public_key().clone()),
@@ -45,7 +46,7 @@ fn role_credential_requires_exact_bounded_canonical_ed25519_line() {
         .unwrap();
     assert!(read_role_key(&directory, &authority).unwrap() == key);
     let text = std::str::from_utf8(&canonical[..canonical.len() - 1]).unwrap();
-    // Alternate text may decode to the same key; the canonical re-encoding must still refuse it.
+    // Case-only alternate text is noncanonical even when the hexadecimal digit values agree.
     let alternate = if text.to_ascii_lowercase() != text {
         text.to_ascii_lowercase()
     } else {

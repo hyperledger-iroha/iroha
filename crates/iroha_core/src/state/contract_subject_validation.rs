@@ -3,13 +3,21 @@
 //! Live capture supplies finite local work. Startup retains its existing infallible
 //! admission boundary; restore allocation/work custody is a separate open gate.
 
-use crate::smartcontracts::code::ContractSubjectBinding;
+use crate::{
+    smartcontracts::code::ContractSubjectBinding,
+    state::authority_registry::borrowed_controller_work::prepay_account_id,
+};
 use iroha_crypto::{Algorithm, Hash};
 use iroha_data_model::{
-    account::{AccountId, AccountValue, controller::AccountController},
-    smart_contract::{ContractAddress, ContractLifecycleOwnerV1},
+    account::{AccountId, AccountValue},
+    smart_contract::{
+        ContractAddress, ContractDeploymentOriginV1, ContractLifecycleControlV1,
+        ContractLifecycleOwnerV1,
+    },
 };
-use mv::storage::{CommittedStorageView, History, StorageReadOnly};
+use mv::storage::{
+    CommittedStorageView, FrozenStorageImages, History, StorageMode, StorageReadOnly,
+};
 
 /// Which original logical image is being inspected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -95,24 +103,53 @@ impl Work {
     }
 }
 
-/// Borrow the same native maps in live capture and exclusive startup restoration.
-pub(super) trait Images<K: mv::Key, V: mv::Value> {
-    fn current_rows(&self) -> impl Iterator<Item = (&K, &V)>;
-    fn undo_rows(&self) -> impl Iterator<Item = (&K, &Option<V>)>;
+mod sealed {
+    pub trait Native {}
+    impl<K: mv::Key, V: mv::Value, M: super::StorageMode<K, V>> Native
+        for super::CommittedStorageView<'_, K, V, M>
+    {
+    }
+    impl<K: mv::Key, V: mv::Value, M: super::StorageMode<K, V>> Native
+        for super::FrozenStorageImages<'_, K, V, M>
+    {
+    }
+    impl<K: mv::Key, V: mv::Value, M: super::StorageMode<K, V>> Native for super::History<'_, K, V, M> {}
 }
-impl<K: mv::Key, V: mv::Value> Images<K, V> for CommittedStorageView<'_, K, V> {
-    fn current_rows(&self) -> impl Iterator<Item = (&K, &V)> {
+
+/// Only original committed/frozen maps or the existing exclusive startup history.
+///
+/// This closed surface never reacquires, copies or reconstructs a source. Its
+/// exact-size native iterators permit admission before every actual advance.
+/// Each owning consumer still owes its State provenance, mode and final fence.
+pub(super) trait Images<K: mv::Key, V: mv::Value>: sealed::Native {
+    fn current_rows(&self) -> impl DoubleEndedIterator<Item = (&K, &V)> + ExactSizeIterator;
+    fn undo_rows(&self) -> impl DoubleEndedIterator<Item = (&K, &Option<V>)> + ExactSizeIterator;
+}
+impl<K: mv::Key, V: mv::Value, M: StorageMode<K, V>> Images<K, V>
+    for CommittedStorageView<'_, K, V, M>
+{
+    fn current_rows(&self) -> impl DoubleEndedIterator<Item = (&K, &V)> + ExactSizeIterator {
         self.current().iter()
     }
-    fn undo_rows(&self) -> impl Iterator<Item = (&K, &Option<V>)> {
+    fn undo_rows(&self) -> impl DoubleEndedIterator<Item = (&K, &Option<V>)> + ExactSizeIterator {
         self.undo().iter()
     }
 }
-impl<K: mv::Key, V: mv::Value> Images<K, V> for History<'_, K, V> {
-    fn current_rows(&self) -> impl Iterator<Item = (&K, &V)> {
+impl<K: mv::Key, V: mv::Value, M: StorageMode<K, V>> Images<K, V>
+    for FrozenStorageImages<'_, K, V, M>
+{
+    fn current_rows(&self) -> impl DoubleEndedIterator<Item = (&K, &V)> + ExactSizeIterator {
+        self.current_entries()
+    }
+    fn undo_rows(&self) -> impl DoubleEndedIterator<Item = (&K, &Option<V>)> + ExactSizeIterator {
+        self.undo_entries()
+    }
+}
+impl<K: mv::Key, V: mv::Value, M: StorageMode<K, V>> Images<K, V> for History<'_, K, V, M> {
+    fn current_rows(&self) -> impl DoubleEndedIterator<Item = (&K, &V)> + ExactSizeIterator {
         self.current().iter()
     }
-    fn undo_rows(&self) -> impl Iterator<Item = (&K, &Option<V>)> {
+    fn undo_rows(&self) -> impl DoubleEndedIterator<Item = (&K, &Option<V>)> + ExactSizeIterator {
         self.revert_map().iter()
     }
 }
@@ -128,22 +165,7 @@ impl WorkKey for ContractAddress {
 }
 impl WorkKey for AccountId {
     fn prepay<'a>(&self, work: &mut Work) -> Result<(), Error<'a>> {
-        work.charge(1)?;
-        match self.controller() {
-            AccountController::Single(key) => {
-                work.charge(1)?;
-                work.charge(key.input_payload_len())
-            }
-            AccountController::Multisig(policy) => {
-                // Fund every member inspection before traversing the borrowed slice.
-                work.charge(policy.members().len())?;
-                for member in policy.members() {
-                    work.charge(1)?;
-                    work.charge(member.public_key().input_payload_len())?;
-                }
-                Ok(())
-            }
-        }
+        prepay_account_id(self, |amount| work.charge(amount))
     }
 }
 
@@ -159,47 +181,48 @@ pub(super) fn equal<'a, K: WorkKey>(
     Ok(left == right)
 }
 
-/// Bounded equality scans avoid hidden tree-comparison work for variable keys.
+fn next_physical<'a, I: ExactSizeIterator>(
+    rows: &mut I,
+    work: &mut Work,
+) -> Result<Option<I::Item>, Error<'a>> {
+    if rows.len() == 0 {
+        return Ok(None);
+    }
+    work.charge(1)?;
+    Ok(rows.next())
+}
+
+/// Complete equality scans retain a match until every original candidate is funded.
 pub(super) fn lookup<'a, K: WorkKey, V: mv::Value>(
     rows: &'a impl Images<K, V>,
     image: Image,
     wanted: &K,
     work: &mut Work,
 ) -> Result<Option<&'a V>, Error<'a>> {
-    if image == Image::Predecessor {
-        for (key, value) in rows.undo_rows() {
-            work.charge(1)?;
-            if equal(key, wanted, work)? {
-                return Ok(value.as_ref());
-            }
-        }
-    }
-    for (key, value) in rows.current_rows() {
-        work.charge(1)?;
+    let mut found = None;
+    visit(rows, image, work, |key, value, work| {
         if equal(key, wanted, work)? {
-            return Ok(Some(value));
+            found = Some(value);
         }
-    }
-    Ok(None)
+        Ok(())
+    })?;
+    Ok(found)
 }
 
-/// Inspect every physical row before masking, including absent undo preimages.
+/// Admit every actual advance and full masking tail, including absent preimages.
 pub(super) fn visit<'a, K: WorkKey, V: mv::Value>(
     rows: &'a impl Images<K, V>,
     image: Image,
     work: &mut Work,
     mut visitor: impl FnMut(&'a K, &'a V, &mut Work) -> Result<(), Error<'a>>,
 ) -> Result<(), Error<'a>> {
-    for (key, value) in rows.current_rows() {
-        work.charge(1)?;
+    let mut current = rows.current_rows();
+    while let Some((key, value)) = next_physical(&mut current, work)? {
         let mut masked = false;
         if image == Image::Predecessor {
-            for (prior_key, _) in rows.undo_rows() {
-                work.charge(1)?;
-                if equal(key, prior_key, work)? {
-                    masked = true;
-                    break;
-                }
+            let mut undo = rows.undo_rows();
+            while let Some((prior_key, _)) = next_physical(&mut undo, work)? {
+                masked |= equal(key, prior_key, work)?;
             }
         }
         if !masked {
@@ -207,12 +230,53 @@ pub(super) fn visit<'a, K: WorkKey, V: mv::Value>(
         }
     }
     if image == Image::Predecessor {
-        for (key, value) in rows.undo_rows() {
-            work.charge(1)?;
+        let mut undo = rows.undo_rows();
+        while let Some((key, value)) = next_physical(&mut undo, work)? {
             if let Some(value) = value {
                 visitor(key, value, work)?;
             }
         }
+    }
+    Ok(())
+}
+
+fn prepay_owner<'a>(owner: &ContractLifecycleOwnerV1, work: &mut Work) -> Result<(), Error<'a>> {
+    work.charge(1)?; // owner discriminant
+    if let ContractLifecycleOwnerV1::Account(account) = owner {
+        account.prepay(work)?;
+    }
+    Ok(())
+}
+
+// Admit the exact retained inputs which the unchanged lifecycle predicate can
+// inspect. Historical origin accounts are not inspected or required to be live.
+fn prepay_lifecycle<'a>(
+    lifecycle: &ContractLifecycleControlV1,
+    work: &mut Work,
+) -> Result<(), Error<'a>> {
+    work.charge(core::mem::size_of::<u16>() + core::mem::size_of::<u64>())?;
+    prepay_owner(&lifecycle.owner, work)?;
+    work.charge(1)?; // pending-owner option
+    if let Some(owner) = &lifecycle.pending_owner {
+        prepay_owner(owner, work)?;
+    }
+    work.charge(1)?; // Parliament delegation
+    work.charge(1)?; // origin discriminant
+    if let ContractDeploymentOriginV1::Parliament(_) = &lifecycle.origin {
+        work.charge(2 * Hash::LENGTH)?;
+    }
+    work.charge(1)?; // emergency-hold option
+    if let Some(hold) = &lifecycle.emergency_hold {
+        work.charge(3 * Hash::LENGTH + 2 * core::mem::size_of::<u64>())?;
+        work.charge(hold.reason.len())?;
+    }
+    Ok(())
+}
+
+fn prepay_optional_hash<'a, T>(hash: &Option<T>, work: &mut Work) -> Result<(), Error<'a>> {
+    work.charge(1)?;
+    if hash.is_some() {
+        work.charge(Hash::LENGTH)?;
     }
     Ok(())
 }
@@ -239,28 +303,17 @@ pub(super) fn validate_sources<'a>(
                 // One fixed strict curve check in addition to the exact hash bytes.
                 work.charge(bytes.checked_add(1).ok_or(Error::work_limit())?)
             })?;
+            binding.subject.prepay(work)?;
             let stored = binding
                 .subject
                 .try_signatory()
                 .and_then(|key| key.borrowed_parts().ok());
-            work.charge(64)?;
+            work.charge(expected.len())?;
             if !matches!(stored, Some((Algorithm::Ed25519, payload)) if payload == expected.as_slice())
             {
                 return Err(source(None, "contract subject binding mismatch"));
             }
-            // validate() compares owners and trims the hold reason. Admit both
-            // complete geometries first, including malformed/oversized sources.
-            for owner in core::iter::once(&binding.lifecycle.owner)
-                .chain(binding.lifecycle.pending_owner.as_ref())
-            {
-                work.charge(1)?;
-                if let ContractLifecycleOwnerV1::Account(account) = owner {
-                    account.prepay(work)?;
-                }
-            }
-            if let Some(hold) = &binding.lifecycle.emergency_hold {
-                work.charge(hold.reason.len())?;
-            }
+            prepay_lifecycle(&binding.lifecycle, work)?;
             binding
                 .lifecycle
                 .validate()
@@ -268,18 +321,21 @@ pub(super) fn validate_sources<'a>(
             if lookup(accounts, image, &binding.subject, work)?.is_none() {
                 return Err(source(Some(&binding.subject), "subject account is absent"));
             }
-            if binding.lifecycle.active_code_hash
-                != lookup(instances, image, address, work)?.copied()
-            {
+            let indexed = lookup(instances, image, address, work)?;
+            prepay_optional_hash(&binding.lifecycle.active_code_hash, work)?;
+            prepay_optional_hash(&indexed, work)?;
+            if binding.lifecycle.active_code_hash != indexed.copied() {
                 return Err(source(
                     None,
                     "contract lifecycle active code hash does not match the active-instance index",
                 ));
             }
+            // The already admitted pending option determines the two fixed
+            // owner advances; reserve them all before entering the iterator.
+            work.charge(1 + usize::from(binding.lifecycle.pending_owner.is_some()))?;
             for owner in core::iter::once(&binding.lifecycle.owner)
                 .chain(binding.lifecycle.pending_owner.as_ref())
             {
-                work.charge(1)?;
                 if let ContractLifecycleOwnerV1::Account(account) = owner
                     && lookup(accounts, image, account, work)?.is_none()
                 {
@@ -414,3 +470,7 @@ mod error_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "contract_subject_validation/work_tests.rs"]
+mod work_tests;

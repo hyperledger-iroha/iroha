@@ -15,6 +15,16 @@ impl MusubiSeedIngressBackendV1 for UnusedSeed {
     fn provider_id(&self) -> ProviderId {
         self.0
     }
+    fn verify_staged_car(
+        &self,
+        _: [u8; 32],
+        _: &MusubiSeedIngressReceiptBindingV1,
+        _: &MusubiArchiveCommitmentV1,
+        _: &sorafs_car::CarBuildPlan,
+        _: &[u8],
+    ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
+        panic!("storage route cannot verify or replay seed ingress")
+    }
     fn stage_exact_car(
         &mut self,
         _: [u8; 32],

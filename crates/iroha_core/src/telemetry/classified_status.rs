@@ -521,7 +521,7 @@ mod tests {
         name = "iroha_core::telemetry::classified_status::tests::MutableClassifiedBlock"
     )]
     struct MutableClassifiedBlock {
-        signatures: std::collections::BTreeSet<iroha_data_model::block::BlockSignature>,
+        signatures: iroha_data_model::block::BlockSignatures,
         payload: iroha_data_model::block::BlockPayload,
         result: Option<iroha_data_model::block::BlockResult>,
         commit_certificate: Option<iroha_data_model::block::CommitCertificate>,

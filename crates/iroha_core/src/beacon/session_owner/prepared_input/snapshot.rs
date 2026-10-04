@@ -13,6 +13,9 @@ use sequence::Rows;
 pub(super) enum SnapshotPhase {
     Commitments,
     Deliveries,
+    SinglePublication { seat: u16 },
+    LocalDeliveries { seat: u16 },
+    LocalAcceptances { seat: u16 },
 }
 
 /// Field declaration order preserves payload/backing retirement before its ledger.
@@ -49,22 +52,47 @@ impl Snapshot {
         {
             return Err(crate::beacon::GlobalThresholdBeaconError::InvalidDkgSession.into());
         }
+        let (rows, first) = match phase {
+            SnapshotPhase::SinglePublication { seat } => {
+                if seat == 0 || usize::from(seat) > n {
+                    return Err(crate::beacon::GlobalThresholdBeaconError::InvalidDkgSession.into());
+                }
+                (1, usize::from(seat - 1))
+            }
+            SnapshotPhase::LocalDeliveries { seat } | SnapshotPhase::LocalAcceptances { seat } => {
+                if seat == 0 || usize::from(seat) > n {
+                    return Err(crate::beacon::GlobalThresholdBeaconError::InvalidDkgSession.into());
+                }
+                (n, 0)
+            }
+            SnapshotPhase::Commitments | SnapshotPhase::Deliveries => (n, 0),
+        };
         let edges = match phase {
             SnapshotPhase::Commitments => 0,
-            SnapshotPhase::Deliveries => {
+            SnapshotPhase::SinglePublication { .. } => 0,
+            SnapshotPhase::LocalDeliveries { .. } => n,
+            SnapshotPhase::Deliveries | SnapshotPhase::LocalAcceptances { .. } => {
                 n.checked_mul(n).ok_or(AllocationRefusal::DemandOverflow)?
             }
         };
+        let acceptance_count = match phase {
+            SnapshotPhase::LocalAcceptances { .. } => n,
+            _ => 0,
+        };
         let entries = 4usize
-            .checked_add(n.checked_mul(5).ok_or(AllocationRefusal::DemandOverflow)?)
+            .checked_add(
+                rows.checked_mul(5)
+                    .ok_or(AllocationRefusal::DemandOverflow)?,
+            )
             .and_then(|value| value.checked_add(edges.checked_mul(3)?))
+            .and_then(|value| value.checked_add(acceptance_count))
             .ok_or(AllocationRefusal::DemandOverflow)?;
-        let recipients = Rows::new(n, budget, |index| {
-            Recipient::new(roster[index].public_key(), budget)
+        let recipients = Rows::new(rows, budget, |index| {
+            Recipient::new(roster[first + index].public_key(), budget)
         })?;
-        let dealers = Rows::new(n, budget, |_| Dealer::new(session.threshold, budget))?;
+        let dealers = Rows::new(rows, budget, |_| Dealer::new(session.threshold, budget))?;
         let edges = Rows::new(edges, budget, |_| Edge::new(budget))?;
-        let acceptances = Rows::new(0, budget, |_| Acceptance::new(budget))?;
+        let acceptances = Rows::new(acceptance_count, budget, |_| Acceptance::new(budget))?;
         let ledger = Ledger::new(entries, budget)?;
         Ok(Self {
             session,
@@ -80,6 +108,24 @@ impl Snapshot {
             ready: false,
             canonical: false,
         })
+    }
+    #[cfg(test)]
+    pub(super) fn extraction_scaffolding_bytes(&self) -> usize {
+        self.recipients.extraction_scaffolding_bytes()
+            + self.dealers.extraction_scaffolding_bytes()
+            + self.edges.extraction_scaffolding_bytes()
+            + self.acceptances.extraction_scaffolding_bytes()
+            + self
+                .dealers
+                .destinations
+                .as_slice()
+                .iter()
+                .map(|dealer| {
+                    dealer
+                        .coefficient_commitments
+                        .extraction_scaffolding_bytes()
+                })
+                .sum::<usize>()
     }
     pub(super) fn decode(
         &mut self,
@@ -205,3 +251,6 @@ impl SerializePayload for Snapshot {
         .serialize(writer)
     }
 }
+
+#[cfg(test)]
+mod tests;

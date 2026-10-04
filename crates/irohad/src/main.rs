@@ -4788,6 +4788,15 @@ impl Iroha {
                 native_provider_attestation_inventory.clone(),
             )
         });
+        let musubi_publication_factory =
+            musubi_publication_service::stock_installation::select_factory(
+                &config.musubi_publication,
+                musubi_publication_context.as_ref(),
+                shared_sorafs_cache.clone(),
+                musubi_publication_factory,
+                emergency_fast,
+            )
+            .map_err(|error| Report::new(StartError::StartTorii).attach(error))?;
         let private_settlement_availability_signer = state
             .nexus_snapshot()
             .atomic_private_settlement

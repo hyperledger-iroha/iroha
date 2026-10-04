@@ -1,9 +1,10 @@
 //! Bounded private TLS transport for the three daemon-owned Musubi publication routes.
 //!
+//! This dedicated listener accepts only the three exact `/v1/musubi/publication/...` paths.
 //! The deployment injects an in-memory TLS server identity. Public listener geometry comes from
 //! `iroha_config`; no certificate, key, operator token, or signing material is read from it.
 // TODO: Qualify live certificate rotation, independent provider replicas, and the complete
-// finalized-State publication chain before stock startup can inject this builder.
+// finalized-State publication chain through the configured stock installation.
 use super::{
     MusubiPublicationPrivateDeploymentV1, MusubiPublicationPrivateIngressBuilderV1,
     MusubiPublicationPrivateIngressErrorV1, MusubiPublicationPrivateIngressFutureV1,
@@ -52,12 +53,10 @@ const REQUEST_BODY_TIMEOUT: Duration = Duration::from_secs(120);
 const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Non-secret, bounded listener settings projected from `iroha_config`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MusubiPublicationPrivateTlsSettingsV1 {
     /// Socket bound before a publication child is supervised.
     pub bind: SocketAddr,
-    /// Exact private path prefix removed before matching the three closed service routes.
-    pub mount_prefix: String,
     /// Maximum concurrent TLS connections and admitted request buffers.
     pub max_inflight_requests: u16,
 }
@@ -67,31 +66,16 @@ impl MusubiPublicationPrivateTlsSettingsV1 {
     pub fn from_config(config: &iroha_config::parameters::actual::MusubiPublication) -> Self {
         Self {
             bind: config.private_tls_bind,
-            mount_prefix: config.private_mount_prefix.clone(),
             max_inflight_requests: config.max_inflight_requests,
         }
     }
 
     fn validate(&self) -> Result<(), MusubiPublicationPrivateServiceFactoryErrorV1> {
-        if self.max_inflight_requests == 0
-            || self.max_inflight_requests > 4
-            || !valid_mount_prefix(&self.mount_prefix)
-        {
+        if self.max_inflight_requests == 0 || self.max_inflight_requests > 4 {
             return Err(MusubiPublicationPrivateServiceFactoryErrorV1::Unqualified);
         }
         Ok(())
     }
-}
-
-fn valid_mount_prefix(prefix: &str) -> bool {
-    prefix.len() <= 64
-        && prefix.starts_with('/')
-        && prefix[1..].split('/').all(|part| {
-            !part.is_empty()
-                && part
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-        })
 }
 
 /// Pre-bound private TLS ingress builder with a runtime-only server identity.
@@ -314,7 +298,6 @@ impl MusubiPublicationPrivateTlsRunnerV1 {
                     let acceptor = acceptor.clone();
                     let dispatch = Arc::clone(&dispatch);
                     let active_dispatches = Arc::clone(&active_dispatches);
-                    let mount_prefix = settings.mount_prefix.clone();
                     let fatal_tx = fatal_tx.clone();
                     let shutdown = shutdown.clone();
                     connections.spawn(async move {
@@ -323,7 +306,6 @@ impl MusubiPublicationPrivateTlsRunnerV1 {
                             acceptor,
                             dispatch,
                             active_dispatches,
-                            mount_prefix,
                             fatal_tx,
                             shutdown,
                             Arc::new(permit),
@@ -341,7 +323,6 @@ async fn serve_connection(
     acceptor: TlsAcceptor,
     dispatch: Arc<dyn PrivateDispatchV1>,
     active_dispatches: Arc<ActiveDispatchesV1>,
-    mount_prefix: String,
     fatal_tx: mpsc::UnboundedSender<MusubiPublicationPrivateIngressErrorV1>,
     shutdown: ShutdownSignal,
     permit: Arc<OwnedSemaphorePermit>,
@@ -353,20 +334,11 @@ async fn serve_connection(
     let service = service_fn(move |request: Request<Incoming>| {
         let dispatch = Arc::clone(&dispatch);
         let active_dispatches = Arc::clone(&active_dispatches);
-        let mount_prefix = mount_prefix.clone();
         let fatal_tx = fatal_tx.clone();
         let permit = Arc::clone(&permit);
         async move {
             Ok::<_, Infallible>(
-                handle_http(
-                    request,
-                    dispatch,
-                    active_dispatches,
-                    &mount_prefix,
-                    fatal_tx,
-                    permit,
-                )
-                .await,
+                handle_http(request, dispatch, active_dispatches, fatal_tx, permit).await,
             )
         }
     });
@@ -388,7 +360,6 @@ async fn handle_http(
     request: Request<Incoming>,
     dispatch: Arc<dyn PrivateDispatchV1>,
     active_dispatches: Arc<ActiveDispatchesV1>,
-    mount_prefix: &str,
     fatal_tx: mpsc::UnboundedSender<MusubiPublicationPrivateIngressErrorV1>,
     permit: Arc<OwnedSemaphorePermit>,
 ) -> Response<Full<Bytes>> {
@@ -399,17 +370,7 @@ async fn handle_http(
             MusubiPublicationServiceErrorCodeV1::RouteNotFound,
         );
     }
-    let Some(path) = parts
-        .uri
-        .path()
-        .strip_prefix(mount_prefix)
-        .filter(|path| path.starts_with('/'))
-    else {
-        return error_response(
-            StatusCode::NOT_FOUND,
-            MusubiPublicationServiceErrorCodeV1::RouteNotFound,
-        );
-    };
+    let path = parts.uri.path();
     let Some(route) = MusubiPublicationPrivateRouteV1::parse(path) else {
         return error_response(
             StatusCode::NOT_FOUND,
@@ -682,7 +643,6 @@ mod tests {
     fn settings() -> MusubiPublicationPrivateTlsSettingsV1 {
         MusubiPublicationPrivateTlsSettingsV1 {
             bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-            mount_prefix: "/private".to_owned(),
             max_inflight_requests: 2,
         }
     }
@@ -873,33 +833,16 @@ mod tests {
     }
 
     #[test]
-    fn settings_reject_noncanonical_mount_and_unbounded_concurrency() {
+    fn settings_reject_unbounded_concurrency() {
         let mut config = iroha_config::parameters::actual::MusubiPublication::default();
         config.private_tls_bind = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
         let projected = MusubiPublicationPrivateTlsSettingsV1::from_config(&config);
         assert_eq!(projected.bind, config.private_tls_bind);
-        assert_eq!(projected.mount_prefix, config.private_mount_prefix);
         assert_eq!(
             projected.max_inflight_requests,
             config.max_inflight_requests
         );
         assert!(projected.validate().is_ok());
-        assert!(valid_mount_prefix("/private/operator"));
-        for prefix in [
-            "",
-            "/",
-            "private",
-            "/private/",
-            "/private//route",
-            "/private%2froute",
-        ] {
-            let mut invalid = projected.clone();
-            invalid.mount_prefix = prefix.to_owned();
-            assert_eq!(
-                invalid.validate(),
-                Err(MusubiPublicationPrivateServiceFactoryErrorV1::Unqualified)
-            );
-        }
         for maximum in [0, 5] {
             let mut invalid = projected.clone();
             invalid.max_inflight_requests = maximum;
@@ -980,7 +923,7 @@ mod tests {
         };
         let shutdown = ShutdownSignal::new();
         let task = tokio::spawn(Box::new(runner).run(shutdown.clone()));
-        let route = "/private/v1/musubi/publication/storage-coordinate";
+        let route = "/v1/musubi/publication/storage-coordinate";
         let request = format!(
             "POST {route} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/x-norito\r\n{MUSUBI_PUBLICATION_AUTHORIZATION_HEADER_V1}: test-auth\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc"
         );
@@ -1006,11 +949,21 @@ mod tests {
         );
         let rejected = send_tls_request(address, Arc::clone(&client), oversized.as_bytes()).await;
         assert!(rejected.starts_with(b"HTTP/1.1 413"));
-        let wrong_route = format!(
-            "POST /public/v1/musubi/publication/storage-coordinate HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-        );
-        let rejected = send_tls_request(address, client, wrong_route.as_bytes()).await;
-        assert!(rejected.starts_with(b"HTTP/1.1 404"));
+        for path in [
+            "/private/v1/musubi/publication/storage-coordinate",
+            "/public/v1/musubi/publication/storage-coordinate",
+            "/v1/musubi/publication/storage-coordinate?operation=one",
+            "/v1/musubi/publication/storage-coordinate/",
+            "/v1/musubi/publication/unknown",
+            "/v1/musubi/publication/%73torage-coordinate",
+        ] {
+            let wrong_route = format!(
+                "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            let rejected =
+                send_tls_request(address, Arc::clone(&client), wrong_route.as_bytes()).await;
+            assert!(rejected.starts_with(b"HTTP/1.1 404"), "{path}");
+        }
         assert_eq!(dispatch.requests.lock().expect("test lock").len(), 1);
         shutdown.send();
         assert!(
@@ -1021,6 +974,64 @@ mod tests {
                 .is_ok()
         );
         assert!(tokio::net::TcpStream::connect(address).await.is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dedicated_tls_listener_accepts_only_the_three_exact_publication_paths() {
+        let (server, client) = tls_identity();
+        let builder = MusubiPublicationPrivateTlsIngressBuilderV1::new(settings(), server)
+            .expect("prebind dedicated TLS listener");
+        let address = builder.local_addr().expect("bound private address");
+        let dispatch = Arc::new(RecordingDispatchV1::default());
+        let runner = MusubiPublicationPrivateTlsRunnerV1 {
+            settings: builder.settings,
+            listener: builder.listener,
+            tls: builder.tls,
+            dispatch: dispatch.clone(),
+            active_dispatches: Arc::new(ActiveDispatchesV1::default()),
+        };
+        let shutdown = ShutdownSignal::new();
+        let task = tokio::spawn(Box::new(runner).run(shutdown.clone()));
+        let routes = [
+            MusubiPublicationPrivateRouteV1::SeedIngress,
+            MusubiPublicationPrivateRouteV1::StorageCoordination,
+            MusubiPublicationPrivateRouteV1::ProviderReadback,
+        ];
+        for (index, route) in routes.into_iter().enumerate() {
+            let path = route.path();
+            // This component records framing only; the service still owns authorization.
+            let request = format!(
+                "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/x-norito\r\n{MUSUBI_PUBLICATION_AUTHORIZATION_HEADER_V1}: transport-only\r\nContent-Length: 1\r\nConnection: close\r\n\r\nx"
+            );
+            let accepted = send_tls_request(address, Arc::clone(&client), request.as_bytes()).await;
+            assert!(accepted.starts_with(b"HTTP/1.1 200"), "{path}");
+            {
+                let seen = dispatch.requests.lock().expect("test lock");
+                assert_eq!(seen.len(), index + 1);
+                assert_eq!(seen[index].borrowed().path, path);
+                assert_eq!(seen[index].borrowed().body, b"x");
+            }
+            for rejected_path in [format!("/private{path}"), format!("{path}?selection=one")] {
+                let request = format!(
+                    "POST {rejected_path} HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                let rejected =
+                    send_tls_request(address, Arc::clone(&client), request.as_bytes()).await;
+                assert!(rejected.starts_with(b"HTTP/1.1 404"), "{rejected_path}");
+                assert_eq!(
+                    dispatch.requests.lock().expect("test lock").len(),
+                    index + 1
+                );
+            }
+        }
+        shutdown.send();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), task)
+                .await
+                .expect("supervised ingress shutdown")
+                .expect("runner task")
+                .is_ok()
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1086,7 +1097,7 @@ mod tests {
             };
             let shutdown = ShutdownSignal::new();
             let mut task = tokio::spawn(Box::new(runner).run(shutdown.clone()));
-            let route = "/private/v1/musubi/publication/storage-coordinate";
+            let route = "/v1/musubi/publication/storage-coordinate";
             let request = format!(
                 "POST {route} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/x-norito\r\n{MUSUBI_PUBLICATION_AUTHORIZATION_HEADER_V1}: test-auth\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
             );

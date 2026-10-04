@@ -4,7 +4,9 @@
 //! They preserve actual native owners and modes, including prepaid storage, and
 //! derive the encoding pool from the original State. Raw row encoding does not
 //! validate a table's derived indexes, record invariants or cross-table relations.
-//! Verifier, proof-status and validation-fee adapters check their complete bounded relations.
+//! Verifier, proof-status, validation-fee, contract-alias, contract-subject,
+//! domain-owner, account-identity, account-alias and asset-definition adapters
+//! check complete bounded relations.
 //!
 //! TODO: adapt every other structural group, trigger Set, Musubi semantic source
 //! and membership pair/frontier. Then retain every canonical cell and history
@@ -88,6 +90,18 @@ pub(in crate::state) fn capture_original_table_once(
     let result = match *owner {
         TableMaterializer::Native { frozen, .. } => frozen(block, limits),
         TableMaterializer::Single {
+            id: "world.domains",
+            ..
+        } => super::super::frozen_domain_ownership::capture(block, limits, max_relation_work),
+        TableMaterializer::Single {
+            id: "world.accounts",
+            ..
+        } => super::super::frozen_account_identity::capture(block, limits, max_relation_work),
+        TableMaterializer::Single {
+            id: "world.account_aliases",
+            ..
+        } => super::super::frozen_account_aliases::capture(block, limits, max_relation_work),
+        TableMaterializer::Single {
             id: "world.verifying_keys",
             ..
         } => super::super::frozen_verifying_keys::capture(block, limits, max_relation_work),
@@ -100,6 +114,25 @@ pub(in crate::state) fn capture_original_table_once(
         } => {
             super::super::frozen_validation_fee_proposals::capture(block, limits, max_relation_work)
         }
+        TableMaterializer::Single {
+            id: "world.contract_subject_bindings",
+            ..
+        } => super::super::frozen_contract_subjects::capture(block, limits, max_relation_work),
+        TableMaterializer::Single {
+            id: "world.contract_alias_bindings",
+            ..
+        } => super::super::frozen_contract_aliases::capture(block, limits, max_relation_work),
+        TableMaterializer::Single {
+            id: "world.asset_definitions",
+            ..
+        } => super::super::frozen_asset_definitions::capture(block, limits, max_relation_work),
+        TableMaterializer::Single {
+            id: "world.assets", ..
+        } => super::super::frozen_assets::capture(block, limits, max_relation_work),
+        TableMaterializer::Single {
+            id: "world.asset_escrows",
+            ..
+        } => super::super::frozen_escrows::capture(block, limits, max_relation_work),
         // The two membership outputs must eventually come from one original
         // owner together with its frontier, never independent raw callbacks.
         // The same rule applies to all semantic/structural checked groups.

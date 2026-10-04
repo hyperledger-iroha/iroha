@@ -63,3 +63,7 @@ path = "tests/addr_parsing.rs"
 name = "ui"
 path = "tests/ui.rs"
 required-features = ["trybuild-tests"]
+
+[[test]]
+name = "numeric_abi_encoding_allocations"
+path = "tests/numeric_abi_encoding_allocations.rs"

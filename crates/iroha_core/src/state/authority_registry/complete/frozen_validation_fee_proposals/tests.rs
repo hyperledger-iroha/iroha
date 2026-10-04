@@ -146,14 +146,14 @@ fn moved_retyped_deleted_inserted_noop_and_absent_rows_encode_the_checked_origin
     let original = Original::retain(&block).unwrap();
     assert_eq!(original.rows.mode(), mv::BlockMode::Ordinary);
     assert_eq!(original.index.mode(), mv::BlockMode::Ordinary);
-    assert_eq!(
+    assert!(
         original
             .rows
             .undo_entries()
             .find(|(key, _)| *key == &[9; 32])
             .unwrap()
-            .1,
-        &None
+            .1
+            .is_none()
     );
     assert!(
         original
@@ -333,8 +333,7 @@ fn original_pool_refusal_retry_and_final_snapshot_reclamation_preserve_bytes_and
         .world
         .validation_fee_proposal_index
         .publication_identity();
-    let pointer =
-        block.world.governance_proposals.get(&[0; 32]).unwrap() as *const GovernanceProposalRecord;
+    let pointer = core::ptr::from_ref(block.world.governance_proposals.get(&[0; 32]).unwrap());
     freeze(&mut block);
     let baseline = budget.reserved_bytes();
     assert_eq!(
@@ -384,7 +383,7 @@ fn original_pool_refusal_retry_and_final_snapshot_reclamation_preserve_bytes_and
         index_identity
     );
     assert_eq!(
-        block.world.governance_proposals.get(&[0; 32]).unwrap() as *const GovernanceProposalRecord,
+        core::ptr::from_ref(block.world.governance_proposals.get(&[0; 32]).unwrap()),
         pointer
     );
     let retained = snapshot.clone();
