@@ -74,6 +74,8 @@ iroha_zkp_poseidon = { path = "crates/iroha_zkp_poseidon" }
 # (publish = false): use it only as a dev-dependency.
 iroha_pasta = { path = "crates/iroha_pasta" }
 iroha_plonk = { path = "crates/iroha_plonk" }
+iroha_plonk_gadgets = { path = "crates/iroha_plonk_gadgets" }
+iroha_kagemusha_proof = { path = "crates/iroha_kagemusha_proof" }
 iroha_plonk_oracle = { path = "crates/iroha_plonk_oracle" }
 iroha_i18n = { path = "crates/iroha_i18n" }
 

@@ -32,7 +32,7 @@ fn require_full_census(history: &History) {
 fn refresh_old_anchor(fixture: &mut Fixture) {
     let height = fixture.native.chain.height();
     let committed = fixture.native.chain.committed(height);
-    let issued = u64::try_from(committed.as_ref().header().creation_time().as_millis()).unwrap();
+    let issued = u64::try_from(committed.block().header().creation_time().as_millis()).unwrap();
     if now_ms().unwrap().saturating_sub(issued) < fixture.policy.max_anchor_age_ms / 2 {
         return;
     }
@@ -106,7 +106,7 @@ fn sixty_four_genuine_bodies_bound_retained_visits_and_refuse_oldest_material_su
         // Each separate startup has its own finite I/O budget. No retained body, epoch or
         // wallet Terms are changed, and the originally configured policy remains the cap.
         fixture.options.deadline = (Instant::now() + Duration::from_secs(120)).min(complete_before);
-        assert_eq!(Fees::from_options(&fixture.options).unwrap(), original_fees);
+        assert!(Fees::from_options(&fixture.options).unwrap() == original_fees);
         refresh_old_anchor(&mut fixture);
         let mut turn = fixture.renewal_turn();
         let (checkpoint, current) = fixture.current();
@@ -192,7 +192,7 @@ fn sixty_four_genuine_bodies_bound_retained_visits_and_refuse_oldest_material_su
             selected.attempt().origin(),
             attempts::Origin::Generated { .. }
         ));
-        assert_eq!(selected.terms.fees, original_fees);
+        assert!(selected.terms.fees == original_fees);
         let wallet = selected.directory().path().join("transaction");
         assert_eq!(
             selected
@@ -217,13 +217,18 @@ fn sixty_four_genuine_bodies_bound_retained_visits_and_refuse_oldest_material_su
             request: std::fs::read(wallet.join("preparation.json")).unwrap(),
         });
         drop(selected);
-        drop(history);
         drop(turn);
-        retained = Some(
-            BodyHistory::open(&fixture.owner, CustodyPurpose::Renewal(2))
-                .unwrap()
-                .unwrap(),
-        );
+        let root = Arc::clone(&history.root);
+        let container = Arc::clone(history.body_root.as_ref().unwrap());
+        let oldest = Arc::clone(&history.bodies[0].directory);
+        let reparsed = history.reopen(&fixture.owner).unwrap();
+        assert!(Arc::ptr_eq(&root, &reparsed.root));
+        assert!(Arc::ptr_eq(
+            &container,
+            reparsed.body_root.as_ref().unwrap()
+        ));
+        assert!(Arc::ptr_eq(&oldest, &reparsed.bodies[0].directory));
+        retained = Some(reparsed);
         assert_eq!(
             retained
                 .as_ref()
@@ -339,10 +344,7 @@ fn sixty_four_genuine_bodies_bound_retained_visits_and_refuse_oldest_material_su
         assert!(!wallet.join("submission.json").exists());
         assert_eq!(wallet.join("retired.json").exists(), index < 63);
     }
-    let selected = fixture
-        .owner
-        .required_enrollment(CustodyPurpose::Renewal(2))
-        .unwrap();
+    let selected = history.retained_selected(&fixture.owner).unwrap();
     assert_eq!(
         selected
             .request(fixture.options.deadline)

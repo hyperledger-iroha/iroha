@@ -556,18 +556,6 @@ public sealed partial class ToriiClient : IDisposable
         return response;
     }
 
-    public async Task<ToriiExplorerAccountsPage> GetExplorerAccountsAsync(
-        ToriiExplorerAccountsQuery? query = null,
-        CancellationToken cancellationToken = default)
-    {
-        var response = await GetAsync<ToriiExplorerAccountsPage>(
-            "/v1/explorer/accounts",
-            BuildExplorerAccountsQuery(query),
-            cancellationToken);
-        ValidateExplorerAccountsPage(response, "explorer accounts response");
-        return response;
-    }
-
     public async Task<ToriiExplorerAccount> GetExplorerAccountAsync(
         string accountId,
         CancellationToken cancellationToken = default)
@@ -579,18 +567,6 @@ public sealed partial class ToriiClient : IDisposable
         return response;
     }
 
-    public async Task<ToriiExplorerDomainsPage> GetExplorerDomainsAsync(
-        ToriiExplorerDomainsQuery? query = null,
-        CancellationToken cancellationToken = default)
-    {
-        var response = await GetAsync<ToriiExplorerDomainsPage>(
-            "/v1/explorer/domains",
-            BuildExplorerDomainsQuery(query),
-            cancellationToken);
-        ValidateExplorerDomainsPage(response, "explorer domains response");
-        return response;
-    }
-
     public async Task<ToriiExplorerDomain> GetExplorerDomainAsync(
         string domainId,
         CancellationToken cancellationToken = default)
@@ -599,18 +575,6 @@ public sealed partial class ToriiClient : IDisposable
             $"/v1/explorer/domains/{EncodeIdentifierPathSegment(domainId, nameof(domainId))}",
             cancellationToken: cancellationToken);
         ValidateExplorerDomain(response, "explorer domain response");
-        return response;
-    }
-
-    public async Task<ToriiExplorerAssetDefinitionsPage> GetExplorerAssetDefinitionsAsync(
-        ToriiExplorerAssetDefinitionsQuery? query = null,
-        CancellationToken cancellationToken = default)
-    {
-        var response = await GetAsync<ToriiExplorerAssetDefinitionsPage>(
-            "/v1/explorer/asset-definitions",
-            BuildExplorerAssetDefinitionsQuery(query),
-            cancellationToken);
-        ValidateExplorerAssetDefinitionsPage(response, "explorer asset definitions response");
         return response;
     }
 
@@ -647,18 +611,6 @@ public sealed partial class ToriiClient : IDisposable
         return response;
     }
 
-    public async Task<ToriiExplorerAssetsPage> GetExplorerAssetsAsync(
-        ToriiExplorerAssetsQuery? query = null,
-        CancellationToken cancellationToken = default)
-    {
-        var response = await GetAsync<ToriiExplorerAssetsPage>(
-            "/v1/explorer/assets",
-            BuildExplorerAssetsQuery(query),
-            cancellationToken);
-        ValidateExplorerAssetsPage(response, "explorer assets response");
-        return response;
-    }
-
     public async Task<ToriiExplorerAsset> GetExplorerAssetAsync(
         string assetId,
         CancellationToken cancellationToken = default)
@@ -667,18 +619,6 @@ public sealed partial class ToriiClient : IDisposable
             $"/v1/explorer/assets/{EncodeIdentifierPathSegment(assetId, nameof(assetId))}",
             cancellationToken: cancellationToken);
         ValidateExplorerAsset(response, "explorer asset response");
-        return response;
-    }
-
-    public async Task<ToriiExplorerNftsPage> GetExplorerNftsAsync(
-        ToriiExplorerNftsQuery? query = null,
-        CancellationToken cancellationToken = default)
-    {
-        var response = await GetAsync<ToriiExplorerNftsPage>(
-            "/v1/explorer/nfts",
-            BuildExplorerNftsQuery(query),
-            cancellationToken);
-        ValidateExplorerNftsPage(response, "explorer nfts response");
         return response;
     }
 
@@ -693,18 +633,6 @@ public sealed partial class ToriiClient : IDisposable
         return response;
     }
 
-    public async Task<ToriiExplorerRwasPage> GetExplorerRwasAsync(
-        ToriiExplorerRwasQuery? query = null,
-        CancellationToken cancellationToken = default)
-    {
-        var response = await GetAsync<ToriiExplorerRwasPage>(
-            "/v1/explorer/rwas",
-            BuildExplorerRwasQuery(query),
-            cancellationToken);
-        ValidateExplorerRwasPage(response, "explorer rwas response");
-        return response;
-    }
-
     public async Task<ToriiExplorerRwa> GetExplorerRwaAsync(
         string rwaId,
         CancellationToken cancellationToken = default)
@@ -713,18 +641,6 @@ public sealed partial class ToriiClient : IDisposable
             $"/v1/explorer/rwas/{EncodeIdentifierPathSegment(rwaId, nameof(rwaId))}",
             cancellationToken: cancellationToken);
         ValidateExplorerRwa(response, "explorer rwa response");
-        return response;
-    }
-
-    public async Task<ToriiExplorerBlocksPage> GetExplorerBlocksAsync(
-        ToriiExplorerCursorQuery? query = null,
-        CancellationToken cancellationToken = default)
-    {
-        var response = await GetAsync<ToriiExplorerBlocksPage>(
-            "/v1/explorer/blocks",
-            BuildExplorerCursorQuery(query),
-            cancellationToken);
-        ValidateExplorerBlocksPage(response, "explorer blocks response");
         return response;
     }
 
@@ -739,30 +655,6 @@ public sealed partial class ToriiClient : IDisposable
         return response;
     }
 
-    public async Task<ToriiExplorerTransactionsPage> GetExplorerTransactionsAsync(
-        ToriiExplorerTransactionsQuery? query = null,
-        CancellationToken cancellationToken = default)
-    {
-        var response = await GetAsync<ToriiExplorerTransactionsPage>(
-            "/v1/explorer/transactions",
-            BuildExplorerTransactionsQuery(query),
-            cancellationToken);
-        ValidateExplorerTransactionsPage(response, "explorer transactions response");
-        return response;
-    }
-
-    public async Task<ToriiExplorerLatestTransactionsResponse> GetExplorerLatestTransactionsAsync(
-        ToriiExplorerTransactionsQuery? query = null,
-        CancellationToken cancellationToken = default)
-    {
-        var response = await GetAsync<ToriiExplorerLatestTransactionsResponse>(
-            "/v1/explorer/transactions/latest",
-            BuildExplorerTransactionsQuery(query),
-            cancellationToken);
-        ValidateExplorerLatestTransactionsResponse(response, "explorer latest transactions response");
-        return response;
-    }
-
     public async Task<ToriiExplorerTransactionDetail> GetExplorerTransactionAsync(
         string transactionHash,
         CancellationToken cancellationToken = default)
@@ -771,30 +663,6 @@ public sealed partial class ToriiClient : IDisposable
             $"/v1/explorer/transactions/{EncodeIdentifierPathSegment(transactionHash, nameof(transactionHash))}",
             cancellationToken: cancellationToken);
         ValidateExplorerTransactionDetail(response, "explorer transaction response");
-        return response;
-    }
-
-    public async Task<ToriiExplorerInstructionsPage> GetExplorerInstructionsAsync(
-        ToriiExplorerInstructionsQuery? query = null,
-        CancellationToken cancellationToken = default)
-    {
-        var response = await GetAsync<ToriiExplorerInstructionsPage>(
-            "/v1/explorer/instructions",
-            BuildExplorerInstructionsQuery(query),
-            cancellationToken);
-        ValidateExplorerInstructionsPage(response, "explorer instructions response");
-        return response;
-    }
-
-    public async Task<ToriiExplorerLatestInstructionsResponse> GetExplorerLatestInstructionsAsync(
-        ToriiExplorerInstructionsQuery? query = null,
-        CancellationToken cancellationToken = default)
-    {
-        var response = await GetAsync<ToriiExplorerLatestInstructionsResponse>(
-            "/v1/explorer/instructions/latest",
-            BuildExplorerInstructionsQuery(query),
-            cancellationToken);
-        ValidateExplorerLatestInstructionsResponse(response, "explorer latest instructions response");
         return response;
     }
 
@@ -837,21 +705,6 @@ public sealed partial class ToriiClient : IDisposable
             "/v1/explorer/metrics",
             cancellationToken: cancellationToken);
         ValidateExplorerMetricsSnapshot(response, "explorer metrics response");
-        return response;
-    }
-
-    public async Task<ToriiAccountPermissionsPage> GetAccountPermissionsAsync(
-        string accountId,
-        int? limit = null,
-        long offset = 0,
-        CancellationToken cancellationToken = default)
-    {
-        var encodedAccountId = EncodeAccountIdPathSegment(accountId, nameof(accountId));
-        var response = await GetAsync<ToriiAccountPermissionsPage>(
-            $"/v1/accounts/{encodedAccountId}/permissions",
-            BuildPaginationQuery(limit, offset),
-            cancellationToken);
-        ValidateAccountPermissionsPage(response, "account permissions response");
         return response;
     }
 
@@ -953,24 +806,6 @@ public sealed partial class ToriiClient : IDisposable
         if (!string.Equals(response.Uaid, normalizedUaid, StringComparison.Ordinal))
         {
             throw new JsonException("UAID bindings response.uaid must match the requested UAID.");
-        }
-        return response;
-    }
-
-    public async Task<ToriiUaidManifestsResponse> GetUaidManifestsAsync(
-        string uaid,
-        ToriiUaidManifestQuery? query = null,
-        CancellationToken cancellationToken = default)
-    {
-        var normalizedUaid = NormalizeUaidLiteral(uaid);
-        var response = await GetAsync<ToriiUaidManifestsResponse>(
-            $"/v1/space-directory/uaids/{EncodePathSegment(normalizedUaid)}/manifests",
-            BuildUaidManifestQuery(query),
-            cancellationToken);
-        ValidateUaidManifestsResponse(response, "UAID manifests response");
-        if (!string.Equals(response.Uaid, normalizedUaid, StringComparison.Ordinal))
-        {
-            throw new JsonException("UAID manifests response.uaid must match the requested UAID.");
         }
         return response;
     }
@@ -6369,11 +6204,6 @@ public sealed partial class ToriiClient : IDisposable
         ToriiRuntimeJson.ValidateRuntimeMetrics(response, context);
     }
 
-    private static void ValidateUaidManifestsResponse(ToriiUaidManifestsResponse response, string context)
-    {
-        ToriiUaidJson.ValidateUaidManifestsResponse(response, context);
-    }
-
     private static void ValidateUaidManifestRecord(ToriiUaidManifestRecord response, string context)
     {
         ToriiUaidJson.ValidateUaidManifestRecord(response, context);
@@ -6435,11 +6265,6 @@ public sealed partial class ToriiClient : IDisposable
         }
     }
 
-    private static void ValidateAccountPermissionsPage(ToriiAccountPermissionsPage response, string context)
-    {
-        ToriiAccountQueryJson.ValidateAccountPermissionsPage(response, context);
-    }
-
     private static void ValidateAccountAliasLookupResponse(ToriiAccountAliasLookupResponse response, string context)
     {
         ToriiAccountAliasLookupJson.ValidateAccountAliasLookupResponse(response, context);
@@ -6475,16 +6300,6 @@ public sealed partial class ToriiClient : IDisposable
         ToriiAliasResolutionJson.ValidateContractAliasBinding(response, context);
     }
 
-    private static void ValidateExplorerBlocksPage(ToriiExplorerBlocksPage response, string context)
-    {
-        ToriiExplorerJson.ValidateExplorerBlocksPage(response, context);
-    }
-
-    private static void ValidateExplorerAccountsPage(ToriiExplorerAccountsPage response, string context)
-    {
-        ToriiExplorerJson.ValidateExplorerAccountsPage(response, context);
-    }
-
     private static void ValidateExplorerAccount(ToriiExplorerAccount response, string context)
     {
         ToriiExplorerJson.ValidateExplorerAccount(response, context);
@@ -6495,21 +6310,9 @@ public sealed partial class ToriiClient : IDisposable
         ToriiExplorerSnapshotJson.ValidateExplorerAccountQrSnapshot(response, context);
     }
 
-    private static void ValidateExplorerDomainsPage(ToriiExplorerDomainsPage response, string context)
-    {
-        ToriiExplorerJson.ValidateExplorerDomainsPage(response, context);
-    }
-
     private static void ValidateExplorerDomain(ToriiExplorerDomain response, string context)
     {
         ToriiExplorerJson.ValidateExplorerDomain(response, context);
-    }
-
-    private static void ValidateExplorerAssetDefinitionsPage(
-        ToriiExplorerAssetDefinitionsPage response,
-        string context)
-    {
-        ToriiExplorerJson.ValidateExplorerAssetDefinitionsPage(response, context);
     }
 
     private static void ValidateExplorerAssetDefinition(ToriiExplorerAssetDefinition response, string context)
@@ -6569,29 +6372,14 @@ public sealed partial class ToriiClient : IDisposable
         ToriiExplorerJson.ValidateExplorerLorenzPoint(response, context);
     }
 
-    private static void ValidateExplorerAssetsPage(ToriiExplorerAssetsPage response, string context)
-    {
-        ToriiExplorerJson.ValidateExplorerAssetsPage(response, context);
-    }
-
     private static void ValidateExplorerAsset(ToriiExplorerAsset response, string context)
     {
         ToriiExplorerJson.ValidateExplorerAsset(response, context);
     }
 
-    private static void ValidateExplorerNftsPage(ToriiExplorerNftsPage response, string context)
-    {
-        ToriiExplorerJson.ValidateExplorerNftsPage(response, context);
-    }
-
     private static void ValidateExplorerNft(ToriiExplorerNft response, string context)
     {
         ToriiExplorerJson.ValidateExplorerNft(response, context);
-    }
-
-    private static void ValidateExplorerRwasPage(ToriiExplorerRwasPage response, string context)
-    {
-        ToriiExplorerJson.ValidateExplorerRwasPage(response, context);
     }
 
     private static void ValidateExplorerRwa(ToriiExplorerRwa response, string context)
@@ -6619,18 +6407,6 @@ public sealed partial class ToriiClient : IDisposable
         ToriiExplorerJson.ValidateExplorerBlock(response, context);
     }
 
-    private static void ValidateExplorerTransactionsPage(ToriiExplorerTransactionsPage response, string context)
-    {
-        ToriiExplorerJson.ValidateExplorerTransactionsPage(response, context);
-    }
-
-    private static void ValidateExplorerLatestTransactionsResponse(
-        ToriiExplorerLatestTransactionsResponse response,
-        string context)
-    {
-        ToriiExplorerJson.ValidateExplorerLatestTransactionsResponse(response, context);
-    }
-
     private static void ValidateExplorerTransaction(ToriiExplorerTransaction response, string context)
     {
         ToriiExplorerJson.ValidateExplorerTransaction(response, context);
@@ -6650,44 +6426,9 @@ public sealed partial class ToriiClient : IDisposable
         ToriiExplorerJson.ValidateExplorerTransactionRejection(response, context);
     }
 
-    private static void ValidateExplorerInstructionsPage(ToriiExplorerInstructionsPage response, string context)
-    {
-        ToriiExplorerJson.ValidateExplorerInstructionsPage(response, context);
-    }
-
-    private static void ValidateExplorerLatestInstructionsResponse(
-        ToriiExplorerLatestInstructionsResponse response,
-        string context)
-    {
-        ToriiExplorerJson.ValidateExplorerLatestInstructionsResponse(response, context);
-    }
-
     private static void ValidateExplorerInstruction(ToriiExplorerInstruction response, string context)
     {
         ToriiExplorerJson.ValidateExplorerInstruction(response, context);
-    }
-
-    private static void ValidateExplorerItems<TItem>(
-        IReadOnlyList<TItem>? items,
-        string context,
-        Action<TItem, string> validate)
-        where TItem : class
-    {
-        if (items is null)
-        {
-            throw new JsonException($"{context} must not be null.");
-        }
-
-        for (var index = 0; index < items.Count; index++)
-        {
-            var item = items[index];
-            if (item is null)
-            {
-                throw new JsonException($"{context}[{index}] must not be null.");
-            }
-
-            validate(item, $"{context}[{index}]");
-        }
     }
 
     private static void ValidateSoraFsCidLookupResponse(ToriiSoraFsCidLookupResponse response, string context)
@@ -7995,33 +7736,6 @@ public sealed partial class ToriiClient : IDisposable
         return builder.ToString();
     }
 
-    private static string? BuildUaidManifestQuery(ToriiUaidManifestQuery? query)
-    {
-        if (query is null)
-        {
-            return null;
-        }
-
-        return BuildQueryString(
-        [
-            new KeyValuePair<string, string?>(
-                "dataspace",
-                query.DataspaceId?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>(
-                "status",
-                query.Status is null ? null : FormatUaidManifestStatusFilter(query.Status.Value)),
-            new KeyValuePair<string, string?>(
-                "limit",
-                query.Limit?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>(
-                "offset",
-                query.Offset?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>(
-                "count_mode",
-                query.CountMode is null ? null : FormatUaidManifestCountMode(query.CountMode.Value)),
-        ]);
-    }
-
     private static string BuildContractStateQuery(ToriiContractStateQuery query)
     {
         ArgumentNullException.ThrowIfNull(query);
@@ -8060,177 +7774,6 @@ public sealed partial class ToriiClient : IDisposable
                 "limit",
                 NormalizeOptionalPositiveUInt64(query.Limit, nameof(query.Limit))?.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, string?>("decode", NormalizeOptionalExactValue(query.Decode, nameof(query.Decode))),
-        ]);
-    }
-
-    private static string? BuildExplorerCursorQuery(ToriiExplorerCursorQuery? query)
-    {
-        if (query is null)
-        {
-            return null;
-        }
-
-        ValidateExplorerCursor(query, nameof(query));
-
-        return BuildQueryString(
-        [
-            new KeyValuePair<string, string?>("cursor", query.Cursor),
-            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
-        ]);
-    }
-
-    private static string? BuildExplorerAccountsQuery(ToriiExplorerAccountsQuery? query)
-    {
-        if (query is null)
-        {
-            return null;
-        }
-
-        ValidateExplorerCursor(query, nameof(query));
-
-        return BuildQueryString(
-        [
-            new KeyValuePair<string, string?>("cursor", query.Cursor),
-            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("domain", NormalizeOptionalExactValue(query.Domain, nameof(query.Domain))),
-            new KeyValuePair<string, string?>("with_asset", NormalizeOptionalExactValue(query.WithAsset, nameof(query.WithAsset))),
-        ]);
-    }
-
-    private static string? BuildExplorerDomainsQuery(ToriiExplorerDomainsQuery? query)
-    {
-        if (query is null)
-        {
-            return null;
-        }
-
-        ValidateExplorerCursor(query, nameof(query));
-
-        return BuildQueryString(
-        [
-            new KeyValuePair<string, string?>("cursor", query.Cursor),
-            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("owned_by", NormalizeOptionalAccountId(query.OwnedBy, nameof(query.OwnedBy))),
-        ]);
-    }
-
-    private static string? BuildExplorerAssetDefinitionsQuery(ToriiExplorerAssetDefinitionsQuery? query)
-    {
-        if (query is null)
-        {
-            return null;
-        }
-
-        ValidateExplorerCursor(query, nameof(query));
-
-        return BuildQueryString(
-        [
-            new KeyValuePair<string, string?>("cursor", query.Cursor),
-            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("owning_domain", NormalizeOptionalExactValue(query.OwningDomain, nameof(query.OwningDomain))),
-            new KeyValuePair<string, string?>("owned_by", NormalizeOptionalAccountId(query.OwnedBy, nameof(query.OwnedBy))),
-        ]);
-    }
-
-    private static string? BuildExplorerAssetsQuery(ToriiExplorerAssetsQuery? query)
-    {
-        if (query is null)
-        {
-            return null;
-        }
-
-        ValidateExplorerCursor(query, nameof(query));
-
-        return BuildQueryString(
-        [
-            new KeyValuePair<string, string?>("cursor", query.Cursor),
-            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("owned_by", NormalizeOptionalAccountId(query.OwnedBy, nameof(query.OwnedBy))),
-            new KeyValuePair<string, string?>("definition", NormalizeOptionalExactValue(query.Definition, nameof(query.Definition))),
-            new KeyValuePair<string, string?>("asset_id", NormalizeOptionalExactValue(query.AssetId, nameof(query.AssetId))),
-        ]);
-    }
-
-    private static string? BuildExplorerNftsQuery(ToriiExplorerNftsQuery? query)
-    {
-        if (query is null)
-        {
-            return null;
-        }
-
-        ValidateExplorerCursor(query, nameof(query));
-
-        return BuildQueryString(
-        [
-            new KeyValuePair<string, string?>("cursor", query.Cursor),
-            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("owned_by", NormalizeOptionalAccountId(query.OwnedBy, nameof(query.OwnedBy))),
-            new KeyValuePair<string, string?>("domain", NormalizeOptionalExactValue(query.Domain, nameof(query.Domain))),
-        ]);
-    }
-
-    private static string? BuildExplorerRwasQuery(ToriiExplorerRwasQuery? query)
-    {
-        if (query is null)
-        {
-            return null;
-        }
-
-        ValidateExplorerCursor(query, nameof(query));
-
-        return BuildQueryString(
-        [
-            new KeyValuePair<string, string?>("cursor", query.Cursor),
-            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("owned_by", NormalizeOptionalAccountId(query.OwnedBy, nameof(query.OwnedBy))),
-            new KeyValuePair<string, string?>("domain", NormalizeOptionalExactValue(query.Domain, nameof(query.Domain))),
-        ]);
-    }
-
-    private static string? BuildExplorerTransactionsQuery(ToriiExplorerTransactionsQuery? query)
-    {
-        if (query is null)
-        {
-            return null;
-        }
-
-        ValidateExplorerCursor(query, nameof(query));
-
-        return BuildQueryString(
-        [
-            new KeyValuePair<string, string?>("cursor", query.Cursor),
-            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("authority", NormalizeOptionalAccountId(query.Authority, nameof(query.Authority))),
-            new KeyValuePair<string, string?>("block", query.Block?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>(
-                "status",
-                query.Status is null ? null : FormatExplorerTransactionStatusFilter(query.Status.Value)),
-            new KeyValuePair<string, string?>("asset_id", NormalizeOptionalExactValue(query.AssetId, nameof(query.AssetId))),
-        ]);
-    }
-
-    private static string? BuildExplorerInstructionsQuery(ToriiExplorerInstructionsQuery? query)
-    {
-        if (query is null)
-        {
-            return null;
-        }
-
-        ValidateExplorerCursor(query, nameof(query));
-
-        return BuildQueryString(
-        [
-            new KeyValuePair<string, string?>("cursor", query.Cursor),
-            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("authority", NormalizeOptionalAccountId(query.Authority, nameof(query.Authority))),
-            new KeyValuePair<string, string?>("account", NormalizeOptionalAccountId(query.Account, nameof(query.Account))),
-            new KeyValuePair<string, string?>("transaction_hash", NormalizeOptionalExactValue(query.TransactionHash, nameof(query.TransactionHash))),
-            new KeyValuePair<string, string?>(
-                "transaction_status",
-                query.TransactionStatus is null ? null : FormatExplorerTransactionStatusFilter(query.TransactionStatus.Value)),
-            new KeyValuePair<string, string?>("block", query.Block?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("kind", NormalizeOptionalExactValue(query.Kind, nameof(query.Kind))),
-            new KeyValuePair<string, string?>("asset_id", NormalizeOptionalExactValue(query.AssetId, nameof(query.AssetId))),
         ]);
     }
 
@@ -9783,40 +9326,6 @@ public sealed partial class ToriiClient : IDisposable
         {
             "local" or "global" => exact,
             _ => throw new ArgumentException("Pipeline scope must be exactly `local` or `global`.", nameof(scope)),
-        };
-    }
-
-    private static string FormatUaidManifestStatusFilter(ToriiUaidManifestStatusFilter status)
-    {
-        return status switch
-        {
-            ToriiUaidManifestStatusFilter.Active => "active",
-            ToriiUaidManifestStatusFilter.Inactive => "inactive",
-            ToriiUaidManifestStatusFilter.All => "all",
-            _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Unknown UAID manifest status filter."),
-        };
-    }
-
-    private static string FormatUaidManifestCountMode(ToriiUaidManifestCountMode countMode)
-    {
-        return countMode switch
-        {
-            ToriiUaidManifestCountMode.Exact => "exact",
-            ToriiUaidManifestCountMode.Bounded => "bounded",
-            _ => throw new ArgumentOutOfRangeException(
-                nameof(countMode),
-                countMode,
-                "Unknown UAID manifest count mode."),
-        };
-    }
-
-    private static string FormatExplorerTransactionStatusFilter(ToriiExplorerTransactionStatusFilter status)
-    {
-        return status switch
-        {
-            ToriiExplorerTransactionStatusFilter.Committed => "committed",
-            ToriiExplorerTransactionStatusFilter.Rejected => "rejected",
-            _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Unknown explorer transaction status filter."),
         };
     }
 

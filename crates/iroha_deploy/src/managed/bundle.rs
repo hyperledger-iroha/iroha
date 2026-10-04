@@ -7,7 +7,25 @@ use super::{Error, Result};
 /// Stable native macOS application identity; signing and notarization are separate release steps.
 pub const MOCHI_APPLICATION_ID: &str = "org.hyperledger.iroha.mochi";
 
-/// The sole shipped runtime layout for each supported native operating system.
+/// Native CLI package geometry; Kagami and its matching daemon need no desktop application.
+#[derive(Debug, Clone, Copy)]
+pub struct KagamiBundleLayout;
+
+impl KagamiBundleLayout {
+    /// Exact directory containing the two native CLI programs on every supported host.
+    #[must_use]
+    pub fn runtime_directory(bundle_root: &Path) -> PathBuf {
+        bundle_root.join("bin")
+    }
+
+    /// Optional independently authenticated authority, colocated with the CLI runtime.
+    #[must_use]
+    pub fn profiles_path(bundle_root: &Path) -> PathBuf {
+        Self::runtime_directory(bundle_root).join(crate::bootstrap::NETWORK_PROFILES_FILENAME)
+    }
+}
+
+/// The shipped desktop runtime layout for each supported native operating system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeBundleLayout {
     /// One application containing every executable and its resources.
@@ -103,7 +121,7 @@ pub fn macos_info_plist(version: &str) -> Result<String> {
     ))
 }
 
-/// Distinguish a canonical application from an explicitly supported loose development runtime.
+/// Use application resources for desktop packages and colocated profiles for CLI/loose runtimes.
 pub(super) fn runtime_profiles_path(directory: &Path) -> Result<PathBuf> {
     let application = directory
         .ancestors()

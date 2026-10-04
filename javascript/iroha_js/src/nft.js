@@ -1,3 +1,4 @@
+import { field } from "./query/grammar.js";
 import { requireNetworkPrefix } from "./networkPrefix.js";
 /** Browser-safe native NFT ownership reads and owner-authorized transfers. */
 import { ensureCanonicalAccountId } from "./normalizers.js";
@@ -140,15 +141,18 @@ export async function readOwnedNftInventoryV1(client, options) {
   if (options.domain !== undefined) {
     buildOwnedNftTransferInstructionV1({ ownerAccountId: owner, nftId: `inventory$${options.domain}`, destinationAccountId: owner, networkPrefix });
   }
+  let filter = field("owned_by").eq(owner);
+  if (options.domain !== undefined) filter = filter.and(field("domain").eq(options.domain));
   let cursor;
   const cursors = new Set(), ids = new Set(), items = [];
   for (let pageIndex = 0; pageIndex <= maxItems; pageIndex += 1) {
     options.signal?.throwIfAborted();
-    const page = await client.listExplorerNfts({ ownedBy: owner, domain: options.domain, limit, cursor, signal: options.signal });
-    exactKeys(page, ["pagination", "items"], "NFT page");
-    exactKeys(page.pagination, ["limit", "next_cursor", "has_more"], "NFT pagination");
-    if (!Array.isArray(page.items) || page.items.length > limit || page.pagination.limit !== limit
-        || typeof page.pagination.has_more !== "boolean") throw new TypeError("Invalid NFT page geometry");
+    const page = await client.explorerNfts.list({ filter, limit, cursor }, { signal: options.signal });
+    exactKeys(page, ["nextCursor", "items", "total"], "NFT page");
+    if (!Array.isArray(page.items) || page.items.length > limit || page.total !== undefined
+        || !(page.nextCursor === null || (typeof page.nextCursor === "string" && page.nextCursor.length > 0))) {
+      throw new TypeError("Invalid NFT page geometry");
+    }
     for (const value of page.items) {
       const item = normalizeNftInventoryItemV1(value, networkPrefix);
       if (item.ownedBy !== owner) throw new TypeError("NFT query returned another owner's item");
@@ -157,12 +161,11 @@ export async function readOwnedNftInventoryV1(client, options) {
       ids.add(item.id); items.push(item);
       if (items.length > maxItems) throw new TypeError("NFT inventory exceeds item bound");
     }
-    const next = page.pagination.next_cursor;
-    if (!page.pagination.has_more) {
-      if (next !== null) throw new TypeError("Finished NFT inventory retained a cursor");
+    const next = page.nextCursor;
+    if (next === null) {
       return { ownerAccountId: owner, verification: "endpoint_reported", items };
     }
-    if (!page.items.length || items.length >= maxItems || typeof next !== "string" || next.length > 1424
+    if (items.length >= maxItems || typeof next !== "string" || next.length > 1424
         || !/^[A-Za-z0-9_-]+$/u.test(next) || cursors.has(next)) {
       throw new TypeError("NFT inventory cursor did not make bounded progress");
     }

@@ -7993,11 +7993,16 @@ pub(crate) mod valid {
                 .unpack(|_| {})
                 .into();
             let signed_header = block.header();
-            let mut substituted = block
+            let original = block
                 .da_proof_policies()
-                .expect("builder must attach default policies")
-                .clone();
-            substituted.policies[0].alias.push_str("-substituted");
+                .expect("builder must attach default policies");
+            let mut changed_policies = original.policies().to_vec();
+            changed_policies[0].alias.push_str("-substituted");
+            let substituted = DaProofPolicyBundle::from_untrusted_parts(
+                original.version(),
+                original.policy_hash(),
+                changed_policies,
+            );
             block.set_da_proof_policies(Some(substituted));
             block.replace_header_for_testing(signed_header);
             assert!(matches!(

@@ -828,10 +828,17 @@ mod tests {
     }
     #[test]
     fn bounded_manifest_decoder_retains_original_active_allocation_refusal() {
+        use std::error::Error as _;
+
         let original = norito::encode_canonical(&manifest_with_defaults()).unwrap();
         let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
         norito::with_decode_limits_scope(limits, || {
             let error = decode_manifest_v1_canonical(&original).unwrap_err();
+            let source = error
+                .source()
+                .and_then(|source| source.downcast_ref::<norito::Error>())
+                .expect("original typed codec cause");
+            assert!(norito::core::decode_error_matches_active_limits(source));
             let ManifestDecodeError::Decode { source } = error else {
                 panic!("expected the original typed canonical decoder refusal");
             };
@@ -852,8 +859,10 @@ mod tests {
         let oversized = vec![0_u8; MAX_MANIFEST_ENCODED_BYTES + 1];
         assert!(matches!(
             decode_manifest_v1_canonical(&oversized),
-            Err(ManifestDecodeError::PayloadTooLarge { found, maximum })
-                if found == MAX_MANIFEST_ENCODED_BYTES + 1 && maximum == MAX_MANIFEST_ENCODED_BYTES
+            Err(ManifestDecodeError::PayloadTooLarge {
+                found,
+                maximum: MAX_MANIFEST_ENCODED_BYTES,
+            }) if found == MAX_MANIFEST_ENCODED_BYTES + 1
         ));
     }
     #[test]
@@ -913,8 +922,10 @@ mod tests {
         let oversized = "A".repeat(MAX_MANIFEST_BASE64_BYTES + 1);
         assert!(matches!(
             decode_manifest_v1_base64_canonical(&oversized),
-            Err(ManifestDecodeError::Base64PayloadTooLarge { found, maximum })
-                if found == MAX_MANIFEST_BASE64_BYTES + 1 && maximum == MAX_MANIFEST_BASE64_BYTES
+            Err(ManifestDecodeError::Base64PayloadTooLarge {
+                found,
+                maximum: MAX_MANIFEST_BASE64_BYTES,
+            }) if found == MAX_MANIFEST_BASE64_BYTES + 1
         ));
     }
     #[test]
@@ -924,8 +935,10 @@ mod tests {
         assert_eq!(encoded.len(), MAX_MANIFEST_BASE64_BYTES);
         assert!(matches!(
             decode_manifest_v1_base64_canonical(&encoded),
-            Err(ManifestDecodeError::PayloadTooLarge { found, maximum })
-                if found == MAX_MANIFEST_ENCODED_BYTES + 1 && maximum == MAX_MANIFEST_ENCODED_BYTES
+            Err(ManifestDecodeError::PayloadTooLarge {
+                found,
+                maximum: MAX_MANIFEST_ENCODED_BYTES,
+            }) if found == MAX_MANIFEST_ENCODED_BYTES + 1
         ));
     }
     #[test]

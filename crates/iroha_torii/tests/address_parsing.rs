@@ -762,7 +762,10 @@ async fn explorer_domains_query_accepts_encoded_account_params() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(format!("/v1/explorer/domains?limit=1&owned_by={literal}"))
+                    .uri(format!(
+                        "/v1/explorer/domains?limit=1&filter={}",
+                        encode_query_value(&format!("owned_by = \"{literal}\""))
+                    ))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -786,7 +789,7 @@ async fn explorer_domains_query_invalid_account_param_records_metric() {
     let reason = AccountId::parse_encoded(literal)
         .expect_err("literal must fail to parse")
         .reason();
-    let context = "/v1/explorer/domains?owned_by";
+    let context = "/v1/explorer?filter";
     let before = metrics
         .torii_address_invalid_total
         .with_label_values(&[context, reason])
@@ -795,7 +798,10 @@ async fn explorer_domains_query_invalid_account_param_records_metric() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v1/explorer/domains?limit=1&owned_by={literal}"))
+                .uri(format!(
+                    "/v1/explorer/domains?limit=1&filter={}",
+                    encode_query_value(&format!("owned_by = \"{literal}\""))
+                ))
                 .body(Body::empty())
                 .unwrap(),
         )

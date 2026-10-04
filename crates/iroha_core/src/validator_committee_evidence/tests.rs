@@ -1062,7 +1062,7 @@ fn status_selection_binding_uses_the_same_actual_native_boundary_as_custody() {
     let evidence = selection_evidence_fixture();
     let verifier = verifier(&evidence.finality_journal, evidence.status.network_id);
     with_verified_native_journal(
-        &evidence.finality_journal,
+        (&evidence.finality_journal).into(),
         &chain_id(),
         &evidence.status.network_id,
         limits(),
@@ -1172,7 +1172,7 @@ fn verified_rotation_attempt_uses_exact_native_selection_source_and_original_wid
         &budget,
     )
     .unwrap();
-    clock.advance(&evidence.finality_journal).unwrap();
+    clock.advance((&evidence.finality_journal).into()).unwrap();
     let authority =
         crate::beacon::AuthenticatedGlobalBeaconDkgAttemptV1::rotation(&selected, &clock).unwrap();
     assert_eq!(authority.session().start_height, selected.observed_height());

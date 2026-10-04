@@ -45,8 +45,8 @@ const ACCOUNT_EXPENSIVE: RoutePolicyExpectation = RoutePolicyExpectation {
     effect: Some(RouteEffect::ExpensiveCompute),
     ..ACCOUNT_AUTHENTICATED
 };
-const DATASPACE_EXPENSIVE: RoutePolicyExpectation = RoutePolicyExpectation {
-    effect: Some(RouteEffect::ExpensiveCompute),
+const DATASPACE_READ: RoutePolicyExpectation = RoutePolicyExpectation {
+    effect: Some(RouteEffect::ReadOnly),
     admission: Some(AdmissionPolicy::DataspaceVisible),
     authentication: Some(AuthenticationPolicy::OptionalCanonicalAccountSignature),
     ..EMPTY_POLICY
@@ -175,7 +175,7 @@ macro_rules! named_route_policy_test {
 }
 
 named_route_policy_test!(
-    application_query_posts_authenticate_before_expensive_compute,
+    collection_queries_preserve_authentication_and_proofs_remain_expensive,
     {
         assert_route_policies(
             [
@@ -189,11 +189,14 @@ named_route_policy_test!(
                 application_api::ACCOUNTS_BY_ACCOUNT_ID_ASSETS_QUERY_POST,
                 telemetry::ASSET_HOLDERS_QUERY,
             ],
-            DATASPACE_EXPENSIVE,
+            DATASPACE_READ,
         );
         assert_route_policies(
             [application_api::REPO_AGREEMENTS_QUERY_POST],
-            ACCOUNT_EXPENSIVE,
+            RoutePolicyExpectation {
+                effect: Some(RouteEffect::ReadOnly),
+                ..ACCOUNT_AUTHENTICATED
+            },
         );
         assert_route_policy(
             application_api::PROOFS_QUERY_POST,

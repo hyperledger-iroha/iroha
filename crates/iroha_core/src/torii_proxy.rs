@@ -587,6 +587,12 @@ pub enum ToriiReadEndpointV1 {
     ContractDeploymentState,
     /// `POST /v1/accounts/onboarding/current-state`
     AccountOnboardingCurrentState,
+    /// `POST /v1/accounts/{account_id}/permissions/query`
+    AccountPermissionsQuery,
+    /// `POST /v1/space-directory/uaids/{uaid}/manifests/query`
+    UaidManifestsQuery,
+    /// `POST /v1/accounts/{account_id}/history/query`
+    AccountHistoryQuery,
 }
 /// Canonical routed read executed on an authoritative Torii peer.
 #[derive(norito::NoritoSchema)]
@@ -639,21 +645,12 @@ pub enum ToriiReadFanoutMergeV1 {
     Singleton,
     /// Merge account-detail responses while preserving the requested response format.
     Account,
-    /// Merge account-history responses with global ordering and pagination.
-    AccountHistory,
     /// Merge account portfolio responses.
     Portfolio,
     /// Merge dataspace account summary responses.
     DataspaceSummary,
     /// Merge space-directory bindings responses.
     SpaceDirectoryBindings,
-    /// Merge space-directory manifest responses.
-    SpaceDirectoryManifests {
-        /// Client pagination offset to apply after merged deduplication.
-        page_offset: u64,
-        /// Client pagination limit to apply after merged deduplication.
-        page_limit: Option<u64>,
-    },
 }
 /// App API read fanout coordinated by the Nexus/default route.
 #[derive(norito::NoritoSchema)]
@@ -924,6 +921,16 @@ mod tests {
             torii_read_endpoint_wire_index(ToriiReadEndpointV1::AccountOnboardingCurrentState),
             45
         );
+    }
+    #[test]
+    fn collection_read_endpoint_wire_indexes_are_distinct() {
+        for (endpoint, expected) in [
+            (ToriiReadEndpointV1::AccountPermissionsQuery, 46),
+            (ToriiReadEndpointV1::UaidManifestsQuery, 47),
+            (ToriiReadEndpointV1::AccountHistoryQuery, 48),
+        ] {
+            assert_eq!(torii_read_endpoint_wire_index(endpoint), expected);
+        }
     }
     fn native_amx_participant_legs(count: usize) -> Vec<RouteLeg> {
         (0..count)

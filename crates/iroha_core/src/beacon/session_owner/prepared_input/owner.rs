@@ -529,6 +529,16 @@ impl PreparedGlobalThresholdBeaconFinalSessionInputV1 {
         })
     }
 
+    /// Observe temporary layouts in the same original destination before its graph move.
+    #[cfg(test)]
+    pub(super) fn extraction_scaffolding_bytes(&self) -> usize {
+        self.final_session
+            .prepared
+            .as_ref()
+            .map(session::Session::extraction_scaffolding_bytes)
+            .expect("the original final-session destination must still be prepared")
+    }
+
     /// Whether the prepared graph and its controls retain the supplied original pool.
     #[must_use]
     pub fn belongs_to(&self, budget: &AllocationBudget) -> bool {

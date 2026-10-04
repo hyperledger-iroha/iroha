@@ -106,7 +106,6 @@ fn automatic_parent_clients_use_only_signed_hints_and_never_forward_child_creden
             torii_url = (release.torii_roots[0].as_str())
             [account]
             chain_discriminant = (release.account_chain_discriminant)
-            domain = "tests.universal"
             public_key = (key.public_key().to_string())
             private_key = (ExposedPrivateKey(key.private_key().clone()).to_string())
         },

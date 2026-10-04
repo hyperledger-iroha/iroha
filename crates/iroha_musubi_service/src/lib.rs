@@ -1618,8 +1618,8 @@ pub enum MusubiPublicationServiceBackendErrorV1 {
 impl fmt::Display for MusubiPublicationServiceBackendErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::Retryable => "private publication backend is unavailable",
-            Self::Permanent => "private publication backend refused the operation",
+            Self::Retryable => "Musubi publication backend is temporarily unavailable",
+            Self::Permanent => "Musubi publication backend requires configuration or state changes",
         })
     }
 }

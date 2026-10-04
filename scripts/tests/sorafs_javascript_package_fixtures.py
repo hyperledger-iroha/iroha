@@ -16,19 +16,19 @@ import sorafs_javascript_dependencies as dependencies
 CHECKSUM = b'{"component_control":"opaque original manifest; not native qualification"}'
 # Reviewed census of the captured candidate, shared by every SoraFS JavaScript
 # test so that adding or removing an SDK module changes it in one place.
-# TODO: the census owner re-reviews these after the merge (new src/petal/ and
-# src/query/ trees, stale package/build recipe pins) and resets them from a run.
-SOURCE_FILES = 212
-PROJECTED_MEMBERS = 209
-PROJECTED_DIST_MEMBERS = 171
-INSTALLED_MEMBERS = 228
+SOURCE_FILES = 240
+PROJECTED_MEMBERS = 237
+PROJECTED_DIST_MEMBERS = 198
+INSTALLED_MEMBERS = 256
 REQUIRED_OUTPUTS = (
     "address.js", "atomicPrivateSettlement.js", "browser.js", "curveRegistry.js",
     "ivmArtifact.js", "kagemusha.js", "native.js", "nativeArtifactHash.js", "numericV1.js",
     "strictLosslessJson.js", "boundedByteSnapshot.js", "validationFeeTrust.js", "sorafsOrderbookPreflight.js", "sorafsOrderbookSubmission.js", "sorafsOrderbookSubmission.d.ts",
     "smartContractDeploymentSubmit.js", "sumeragiTyped.js", "tairaTestnetProfile.js",
     "toriiBrowserClient.js", "toriiClient.js", "toriiOptional.js", "kotodamaCompiler/index.js",
-    "kotodamaCompiler/browser.js", "kotodamaCompiler/client.js", "kotodamaCompiler/nativeBridge.js",
+    "kotodamaCompiler/browser.js", "kotodamaCompiler/client.js",
+    "kotodamaCompiler/embeddedCallSchema.js", "kotodamaCompiler/embeddedNorito.js",
+    "kotodamaCompiler/nativeBridge.js",
     "kotodamaCompiler/normalize.js",
 )
 

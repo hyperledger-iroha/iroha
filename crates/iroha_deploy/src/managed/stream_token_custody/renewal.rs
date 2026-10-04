@@ -87,7 +87,14 @@ impl ManagedStreamTokenCustody {
             &self.wallet()?,
             scope,
         )?;
-        self.advance_renewal(sequence, options.deadline)
+        let selected = history.into_reparsed_selected(self)?;
+        self.advance_selected(
+            purpose,
+            selected,
+            options.deadline,
+            Mode::SubmitOriginal,
+            true,
+        )
     }
 
     /// Advance only this immutable renewal, with no new interval or wallet resend permission.

@@ -325,11 +325,178 @@ impl History {
         semantic: [u8; 32],
         scope: &HistoryScope,
     ) -> Result<Self> {
+        Self::read_with_handles(operation, purpose, semantic, scope, None)
+    }
+
+    // The opaque graph lends only native handles. Every record and the supplied fresh scope
+    // pass through the ordinary parser. A new body may have no member in the retained graph.
+    pub(in crate::managed) fn read_retained(
+        operation: &PrivateDirectory,
+        purpose: Purpose,
+        semantic: [u8; 32],
+        scope: &HistoryScope,
+        retained: &History,
+    ) -> Result<Self> {
+        retained.revalidate_retained_handles()?;
+        let mut current = Some(retained);
+        let mut matched = None;
+        let mut count = 0usize;
+        while let Some(history) = current {
+            count += 1;
+            if count > MAX_ATTEMPTS {
+                return Err(invalid("retained dispatch graph exceeds its body bound"));
+            }
+            if history.operation.path() == operation.path() {
+                if matched.is_some()
+                    || history.purpose != purpose
+                    || history.semantic != semantic
+                    || history.operation.identity()? != operation.identity()?
+                {
+                    return Err(invalid("retained dispatch belongs to another original"));
+                }
+                matched = Some(history);
+            }
+            current = history
+                .scope
+                .predecessor()
+                .map(VerifiedUnsignedClosure::retained_history);
+        }
+        let current = Self::read_with_handles(operation, purpose, semantic, scope, matched)?;
+        retained.revalidate_retained_handles()?;
+        Ok(current)
+    }
+
+    fn read_with_handles(
+        operation: &PrivateDirectory,
+        purpose: Purpose,
+        semantic: [u8; 32],
+        scope: &HistoryScope,
+        retained: Option<&History>,
+    ) -> Result<Self> {
+        if let Some(prior) = retained {
+            prior.revalidate_handles()?;
+            if prior.operation.path() != operation.path()
+                || prior.operation.identity()? != operation.identity()?
+                || prior.purpose != purpose
+                || prior.semantic != semantic
+                || prior.scope.commitment()? != scope.commitment()?
+            {
+                return Err(invalid("retained dispatch belongs to another original"));
+            }
+        }
+        let current = Self::parse(operation, purpose, semantic, scope, retained)?;
+        if let Some(prior) = retained {
+            prior.revalidate_handles()?;
+            if (prior.root.is_some()
+                && prior
+                    .root
+                    .as_ref()
+                    .map(PrivateDirectory::identity)
+                    .transpose()?
+                    != current
+                        .root
+                        .as_ref()
+                        .map(PrivateDirectory::identity)
+                        .transpose()?)
+                || current.attempts.len() < prior.attempts.len()
+            {
+                return Err(invalid(
+                    "dispatch custody changed across its local transition",
+                ));
+            }
+            for (before, after) in prior.attempts.iter().zip(&current.attempts) {
+                after.directory.revalidate()?;
+                if before.directory.identity()? != after.directory.identity()?
+                    || before.authorization != after.authorization
+                    || before.observation.is_some() && before.observation != after.observation
+                    || before.commit.is_some() && before.commit != after.commit
+                    || before.retirement.is_some() && before.retirement != after.retirement
+                {
+                    return Err(invalid(
+                        "dispatch attempt custody changed across its local transition",
+                    ));
+                }
+            }
+        }
+        if let Some(prior) = retained {
+            if prior.closing.is_some() && prior.closing != current.closing
+                || prior.closed.is_some() && prior.closed != current.closed
+            {
+                return Err(invalid("retained dispatch closure was lost or changed"));
+            }
+            if let Some(before) = &prior.dispatch {
+                let after = current
+                    .dispatch
+                    .as_ref()
+                    .ok_or_else(|| invalid("retained dispatch high-water was lost"))?;
+                let selected = current
+                    .attempts
+                    .get(usize::from(before.highest.ordinal) - 1)
+                    .map(|attempt| &attempt.authorization)
+                    .or_else(|| {
+                        (after.highest.ordinal == before.highest.ordinal).then_some(&after.highest)
+                    });
+                if before.first != after.first
+                    || before.scope != after.scope
+                    || selected != Some(&before.highest)
+                    || before.highest.ordinal > after.highest.ordinal
+                    || before.state == ReservationState::Published
+                        && before.highest.ordinal == after.highest.ordinal
+                        && after.state != ReservationState::Published
+                {
+                    return Err(invalid("retained dispatch high-water regressed or changed"));
+                }
+            }
+        }
+        current.revalidate_handles()?;
+        Ok(current)
+    }
+
+    // Directory custody only: old metadata can legitimately differ after the canonical writer.
+    // Fresh record/scope verification belongs exclusively to the parser, never this traversal.
+    pub(in crate::managed) fn revalidate_retained_handles(&self) -> Result<()> {
+        let mut current = Some(self);
+        let mut count = 0usize;
+        while let Some(history) = current {
+            count += 1;
+            if count > MAX_ATTEMPTS {
+                return Err(invalid("retained dispatch graph exceeds its body bound"));
+            }
+            history.revalidate_handles()?;
+            current = history
+                .scope
+                .predecessor()
+                .map(VerifiedUnsignedClosure::retained_history);
+        }
+        Ok(())
+    }
+
+    fn revalidate_handles(&self) -> Result<()> {
+        self.operation.revalidate()?;
+        if let Some(root) = &self.root {
+            root.revalidate()?;
+        }
+        for attempt in &self.attempts {
+            attempt.directory.revalidate()?;
+        }
+        Ok(())
+    }
+
+    fn parse(
+        operation: &PrivateDirectory,
+        purpose: Purpose,
+        semantic: [u8; 32],
+        scope: &HistoryScope,
+        retained: Option<&History>,
+    ) -> Result<Self> {
         scope.validate(operation, purpose, semantic)?;
         operation.revalidate()?;
         operation_inventory(operation, purpose)?;
         require_semantic_original(operation, semantic)?;
-        let retained_operation = operation.retain()?;
+        let retained_operation = match retained {
+            Some(prior) => prior.operation.retain()?,
+            None => operation.retain()?,
+        };
         if retained_operation.identity()? != operation.identity()? {
             return Err(invalid("dispatch operation custody changed"));
         }
@@ -368,7 +535,11 @@ impl History {
             .ok_or_else(|| invalid("body dispatch count exceeds its cumulative bound"))?;
         let closing: Option<ClosurePlan> = read_record(operation, "closing.nrt")?;
         let closed: Option<ClosureRecord> = read_record(operation, "closed.nrt")?;
-        let root = match operation.open_child("attempts") {
+        let root = match retained.and_then(|prior| prior.root.as_ref()) {
+            Some(root) => root.retain(),
+            None => operation.open_child("attempts"),
+        };
+        let root = match root {
             Ok(value) => value,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 if dispatch.as_ref().is_some_and(|value| {
@@ -407,7 +578,15 @@ impl History {
                     "dispatch attempt inventory has a gap or foreign name",
                 ));
             }
-            let directory = root.open_child(name)?;
+            let directory = match retained.and_then(|prior| prior.attempts.get(index)) {
+                Some(attempt) => {
+                    if attempt.directory.path() != root.path().join(name) {
+                        return Err(invalid("retained dispatch row belongs to another path"));
+                    }
+                    attempt.directory.retain()?
+                }
+                None => root.open_child(name)?,
+            };
             let inventory = attempt_inventory(&directory)?;
             let Some(authorization): Option<Authorization> =
                 read_record(&directory, "authorization.nrt")?
@@ -788,50 +967,16 @@ impl History {
             .validate_local(&self.operation, self.purpose, self.semantic)
     }
 
-    // Re-read after a permitted local transition while keeping every original native handle
-    // alive through acquisition and identity comparison. Only then release the obsolete graph.
+    // Keep original native owners live through the sole fresh parser; retain shares their
+    // Files rather than opening a second complete graph before the old value can drop.
     fn reread(self) -> Result<Self> {
-        self.operation.revalidate()?;
-        if let Some(root) = &self.root {
-            root.revalidate()?;
-        }
-        for attempt in &self.attempts {
-            attempt.directory.revalidate()?;
-        }
-        let current = Self::read(&self.operation, self.purpose, self.semantic, &self.scope)?;
-        if (self.root.is_some()
-            && self
-                .root
-                .as_ref()
-                .map(PrivateDirectory::identity)
-                .transpose()?
-                != current
-                    .root
-                    .as_ref()
-                    .map(PrivateDirectory::identity)
-                    .transpose()?)
-            || current.attempts.len() < self.attempts.len()
-        {
-            return Err(invalid(
-                "dispatch custody changed across its local transition",
-            ));
-        }
-        for (before, after) in self.attempts.iter().zip(&current.attempts) {
-            before.directory.revalidate()?;
-            after.directory.revalidate()?;
-            if before.directory.identity()? != after.directory.identity()? {
-                return Err(invalid(
-                    "dispatch attempt custody changed across its local transition",
-                ));
-            }
-        }
-        if let Some(root) = &self.root {
-            root.revalidate()?;
-        }
-        self.operation.revalidate()?;
-        current.operation.revalidate()?;
-        drop(self);
-        Ok(current)
+        Self::read_retained(
+            &self.operation,
+            self.purpose,
+            self.semantic,
+            &self.scope,
+            &self,
+        )
     }
 
     fn require_metadata(&self) -> Result<()> {
@@ -988,7 +1133,7 @@ impl History {
         terms: Terms,
     ) -> Result<Attempt> {
         self.reserve_pending(operation, origin, terms)?;
-        Self::read(operation, self.purpose, self.semantic, &self.scope)?
+        Self::read_retained(operation, self.purpose, self.semantic, &self.scope, self)?
             .finish_reserved(operation, false)?
             .ok_or_else(|| invalid("new dispatch reservation was not retained"))
     }

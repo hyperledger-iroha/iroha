@@ -792,6 +792,16 @@ Android Keystore fallback backend), Norito codec round-trips that verify typed
 instruction decoding, transaction builder signing, and HTTP client serialization
 paths to keep the Java pathways aligned.
 
+`connect_norito_bridge` exports JNI only for the Kotlin SDK classes
+(`org.hyperledger.iroha.sdk.*`). The Java `NativeSignerBridge`,
+`SorafsReferenceValidators` and `AtomicPrivateSettlementNativeResponseVerifierV1`
+declare no native methods: they keep their Java argument checks and delegate to the
+Kotlin owners, so native availability and the ABI-25 / signer-contract-7
+requirements come from the Kotlin SDK. `NativeBridgeDelegationTests` rejects any
+new Java `native` declaration. Native-dependent harness mains (ML-DSA, SoraFS
+reference validators, native ZK signing) need a host build of the bridge; run them
+with `IROHA_NATIVE_LIBRARY_PATH=<dir containing the library> ./gradlew :core:test`.
+
 ### Publishing snapshots (AND9)
 
 Run

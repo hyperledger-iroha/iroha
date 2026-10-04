@@ -28,8 +28,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1741 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1774 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1748 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1781 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
     'domain.rs': ('smartcontracts::isi::domain::tests::', (
@@ -433,7 +433,7 @@ class BeaconGateTests(unittest.TestCase):
                             (source / "snapshot_restore_policy.rs").read_text())
         expected = {"snapshot_restore_policy::tests::" + name for name in leaves}
         selected = {name for _, tests in gate.DAEMON_SNAPSHOT_STAGES for name in tests}
-        self.assertEqual(len(expected), 3)
+        self.assertEqual(len(expected), 4)
         self.assertEqual(selected, expected)
         self.assertEqual(gate.HARNESS_TARGETS["daemon"][3], ["-p", "irohad_lib", "--lib"])
         for scope in gate.QUALIFICATION_SCOPES:

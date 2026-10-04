@@ -209,7 +209,10 @@ fn transaction_get_uses_exact_authenticated_details_and_preserves_rejection() {
         }
     }
 }
-fn effective_permission_page(names: &[&str]) -> iroha::http::Response<Vec<u8>> {
+fn effective_permission_page(
+    names: &[&str],
+    cursor: Option<&str>,
+) -> iroha::http::Response<Vec<u8>> {
     let items: Vec<_> = names
         .iter()
         .map(|name| {
@@ -219,94 +222,24 @@ fn effective_permission_page(names: &[&str]) -> iroha::http::Response<Vec<u8>> {
             )
         })
         .collect();
-    let body = format!(
-        "{{\"items\":{},\"total\":{}}}",
-        norito::json::to_json(&items).unwrap(),
-        items.len()
-    );
+    let page = iroha::collections::Page {
+        items,
+        next_cursor: cursor.map(str::to_owned),
+        total: None,
+    };
     iroha::http::Response::builder()
         .status(200)
         .header("content-type", "application/json; charset=utf-8")
         .header("x-iroha-account-permission-semantics", "effective-v1")
-        .header("x-iroha-fanout-routes-attempted", "2")
-        .header("x-iroha-fanout-routes-succeeded", "2")
-        .header("x-iroha-fanout-routes-failed", "0")
-        .header("x-iroha-fanout-routes-denied", "0")
-        .header("x-iroha-fanout-routes-unavailable", "0")
-        .header("x-iroha-fanout-routes-not-found", "0")
-        .body(body.into_bytes())
+        .body(norito::json::to_vec(&page).unwrap())
         .unwrap()
 }
 #[test]
-fn account_permission_list_reads_complete_effective_fanout_before_global_pagination() {
-    for bounded in [false, true] {
-        // Pages are merged per route, so a page can exceed --fetch-size and a permission
-        // may occur on different pages in different dataspaces. `total` is page-local.
-        let (mut context, transport) = canonical_read_context(vec![
-            effective_permission_page(&["CanC", "CanA", "CanB"]),
-            effective_permission_page(&["CanC", "CanD"]),
-            effective_permission_page(&["CanE"]),
-        ]);
-        let account = context.config.account.to_string();
-        let mut argv = vec![
-            "iroha",
-            "account",
-            "permission",
-            "list",
-            "--id",
-            account.as_str(),
-            "--fetch-size",
-            "2",
-        ];
-        if bounded {
-            argv.extend(["--offset", "1", "--limit", "2"]);
-        }
-        Args::try_parse_from(argv)
-            .unwrap()
-            .command
-            .run(&mut context)
-            .unwrap();
-        let permissions: Vec<Permission> =
-            norito::json::from_json(context.output.as_deref().unwrap()).unwrap();
-        let names: Vec<_> = permissions.iter().map(Permission::name).collect();
-        assert_eq!(
-            names,
-            if bounded {
-                vec!["CanB", "CanC"]
-            } else {
-                vec!["CanA", "CanB", "CanC", "CanD", "CanE"]
-            }
-        );
-        let mut expected_url = context.config.torii_api_url.clone();
-        expected_url.set_path(&format!("/v1/accounts/{account}/permissions"));
-        let requests = transport.requests.lock().unwrap();
-        assert_eq!(
-            requests.len(),
-            3,
-            "oversized and saturated union pages must continue; the final short page must stop"
-        );
-        for (index, request) in requests.iter().enumerate() {
-            assert_eq!(request.method, iroha::http::Method::GET);
-            assert_eq!(request.url.path(), expected_url.path());
-            let params: std::collections::BTreeMap<_, _> = request.url.query_pairs().collect();
-            assert_eq!(params.get("limit").map(|v| v.as_ref()), Some("2"));
-            assert_eq!(params.get("offset").unwrap(), &(index * 2).to_string());
-            assert_eq!(params.get("count_mode").map(|v| v.as_ref()), Some("exact"));
-            for name in ["x-iroha-account", "x-iroha-signature"] {
-                assert!(
-                    request
-                        .headers
-                        .iter()
-                        .any(|(key, value)| key.as_str() == name && !value.is_empty())
-                );
-            }
-        }
-    }
-
-    // The default 500-row request already uses the native fetch budget. A
-    // complete short page must retain its rows without probing offset 500.
-    let (mut context, transport) =
-        canonical_read_context(vec![effective_permission_page(&["CanA"])]);
+fn account_permission_list_uses_shared_cursor_pages() {
+    let (mut context, transport) = canonical_read_context(vec![
+        effective_permission_page(&["CanA", "CanB"], Some("permissions-next")),
+        effective_permission_page(&["CanC"], None),
+    ]);
     let account = context.config.account.to_string();
     Args::try_parse_from([
         "iroha",
@@ -314,33 +247,49 @@ fn account_permission_list_reads_complete_effective_fanout_before_global_paginat
         "permission",
         "list",
         "--id",
-        account.as_str(),
+        &account,
+        "--limit",
+        "2",
+        "--all",
+        "--sort",
+        "name",
+        "--select",
+        "name,payload",
     ])
     .unwrap()
     .command
     .run(&mut context)
-    .expect("a complete nonempty short page must succeed without an empty probe");
-    let permissions: Vec<Permission> =
+    .unwrap();
+    let page: iroha::collections::Page<Permission> =
         norito::json::from_json(context.output.as_deref().unwrap()).unwrap();
     assert_eq!(
-        permissions.iter().map(Permission::name).collect::<Vec<_>>(),
-        vec!["CanA"]
+        page.items.iter().map(Permission::name).collect::<Vec<_>>(),
+        vec!["CanA", "CanB", "CanC"]
     );
+    assert!(!page.has_more());
     let requests = transport.requests.lock().unwrap();
-    assert_eq!(
-        requests.len(),
-        1,
-        "the default short page must not trigger another HTTP request"
-    );
-    let params: std::collections::BTreeMap<_, _> = requests[0].url.query_pairs().collect();
-    assert_eq!(params.get("limit").map(|v| v.as_ref()), Some("500"));
-    assert_eq!(params.get("offset").map(|v| v.as_ref()), Some("0"));
-    assert_eq!(params.get("count_mode").map(|v| v.as_ref()), Some("exact"));
+    assert_eq!(requests.len(), 2);
+    for (index, request) in requests.iter().enumerate() {
+        assert_eq!(request.method, iroha::http::Method::POST);
+        assert!(request.url.path().ends_with("/permissions/query"));
+        assert!(request.url.query().is_none());
+        let query = iroha::collections::ListQuery::from_json_value(
+            norito::json::from_slice(&request.body).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(query.limit, Some(2));
+        assert_eq!(
+            query.cursor.as_deref(),
+            (index == 1).then_some("permissions-next")
+        );
+        assert!(query.select.is_some());
+        assert_eq!(query.sort.len(), 1);
+    }
 }
 #[test]
-fn account_permission_list_rejects_partial_or_non_effective_pages_without_output() {
+fn account_permission_list_rejects_failed_or_non_effective_pages_without_output() {
     for damage in 0..5 {
-        let mut damaged = effective_permission_page(&["CanB"]);
+        let mut damaged = effective_permission_page(&["CanB"], None);
         match damage {
             0 => {
                 damaged
@@ -348,14 +297,16 @@ fn account_permission_list_rejects_partial_or_non_effective_pages_without_output
                     .remove("x-iroha-account-permission-semantics");
             }
             1 => {
-                damaged
-                    .headers_mut()
-                    .insert("x-iroha-fanout-routes-failed", "1".parse().unwrap());
+                damaged.headers_mut().insert(
+                    "x-iroha-account-permission-semantics",
+                    "direct-only".parse().unwrap(),
+                );
             }
             2 => {
-                damaged
-                    .headers_mut()
-                    .remove("x-iroha-fanout-routes-succeeded");
+                damaged.headers_mut().append(
+                    "x-iroha-account-permission-semantics",
+                    "effective-v1".parse().unwrap(),
+                );
             }
             3 => {
                 *damaged.body_mut() = br#"{"items":[],"total":1}"#.to_vec();
@@ -365,8 +316,10 @@ fn account_permission_list_rejects_partial_or_non_effective_pages_without_output
             }
             _ => unreachable!(),
         }
-        let (mut context, transport) =
-            canonical_read_context(vec![effective_permission_page(&["CanA"]), damaged]);
+        let (mut context, transport) = canonical_read_context(vec![
+            effective_permission_page(&["CanA"], Some("permissions-next")),
+            damaged,
+        ]);
         let account = context.config.account.to_string();
         let result = Args::try_parse_from([
             "iroha",
@@ -374,14 +327,15 @@ fn account_permission_list_rejects_partial_or_non_effective_pages_without_output
             "permission",
             "list",
             "--id",
-            account.as_str(),
-            "--fetch-size",
+            &account,
+            "--limit",
             "1",
+            "--all",
         ])
         .unwrap()
         .command
         .run(&mut context);
-        assert!(result.is_err(), "damage {damage} must fail");
+        assert!(result.is_err(), "damage {damage}");
         assert!(
             context.output.is_none(),
             "no partial permission set may escape"
@@ -390,63 +344,68 @@ fn account_permission_list_rejects_partial_or_non_effective_pages_without_output
     }
 }
 #[test]
-fn account_permission_list_rejects_zero_pagination_before_http() {
-    for flag in ["--limit", "--fetch-size"] {
-        let (mut context, transport) = canonical_read_context(Vec::new());
-        let account = context.config.account.to_string();
-        let error = Args::try_parse_from([
-            "iroha",
-            "account",
-            "permission",
-            "list",
-            "--id",
-            account.as_str(),
-            flag,
-            "0",
-        ])
-        .unwrap()
-        .command
-        .run(&mut context)
-        .expect_err("zero pagination rejected");
-        assert!(error.to_string().contains("must be positive"));
-        assert!(transport.requests.lock().unwrap().is_empty());
-    }
-}
-#[test]
-fn account_permission_list_propagates_server_page_cap_rejection() {
-    // The permission handler's enforce_app_pagination rejects an oversized explicit
-    // limit; it does not silently clamp the per-route stride to its configured cap.
-    let response = iroha::http::Response::builder()
-        .status(400)
-        .header("x-iroha-reject-code", "invalid_pagination")
-        .body(Vec::new())
-        .unwrap();
-    let (mut context, transport) = canonical_read_context(vec![response]);
+fn account_permission_list_rejects_zero_limit_before_http() {
+    let (mut context, transport) = canonical_read_context(Vec::new());
     let account = context.config.account.to_string();
-    let oversized = u64::MAX.to_string();
-    let error = Args::try_parse_from([
+    let result = Args::try_parse_from([
         "iroha",
         "account",
         "permission",
         "list",
         "--id",
-        account.as_str(),
-        "--fetch-size",
-        oversized.as_str(),
+        &account,
+        "--limit",
+        "0",
     ])
     .unwrap()
     .command
-    .run(&mut context)
-    .expect_err(
-        "server page cap rejection must not return a partial set or retry with a guessed stride",
-    );
-    assert!(error.to_string().contains("HTTP 400"));
+    .run(&mut context);
+    assert!(result.is_err());
+    assert!(transport.requests.lock().unwrap().is_empty());
+    for flag in ["--offset", "--fetch-size", "--count-mode"] {
+        assert!(
+            Args::try_parse_from([
+                "iroha",
+                "account",
+                "permission",
+                "list",
+                "--id",
+                &account,
+                flag,
+                "1",
+            ])
+            .is_err()
+        );
+    }
+}
+#[test]
+fn account_permission_list_propagates_server_page_cap_rejection() {
+    let response = iroha::http::Response::builder()
+        .status(400)
+        .header("content-type", "application/json")
+        .body(
+            br#"{"code":"invalid_limit","message":"page limit exceeds server bound","details":{}}"#
+                .to_vec(),
+        )
+        .unwrap();
+    let (mut context, transport) = canonical_read_context(vec![response]);
+    let account = context.config.account.to_string();
+    let result = Args::try_parse_from([
+        "iroha",
+        "account",
+        "permission",
+        "list",
+        "--id",
+        &account,
+        "--limit",
+        "1000",
+    ])
+    .unwrap()
+    .command
+    .run(&mut context);
+    assert!(result.is_err());
     assert!(context.output.is_none());
-    let requests = transport.requests.lock().unwrap();
-    assert_eq!(requests.len(), 1);
-    let params: std::collections::BTreeMap<_, _> = requests[0].url.query_pairs().collect();
-    assert_eq!(params.get("limit").unwrap(), &oversized);
-    assert_eq!(params.get("offset").map(|value| value.as_ref()), Some("0"));
+    assert_eq!(transport.requests.lock().unwrap().len(), 1);
 }
 #[test]
 fn ledger_asset_get_uses_exact_singular_query_and_preserves_missing_asset_diagnostic() {
@@ -1422,5 +1381,82 @@ fn committee_submit_rejects_wrong_network_missing_and_unknown_fields_before_sign
             );
             assert!(transport.requests.lock().unwrap().is_empty());
         }
+    }
+}
+
+#[test]
+fn contract_history_commands_use_shared_collection_controls() {
+    for command in ["activity", "events"] {
+        let reply = iroha::http::Response::builder()
+            .status(200)
+            .header("content-type", "application/json")
+            .body(br#"{"items":[],"next_cursor":null}"#.to_vec())
+            .unwrap();
+        let (mut context, transport) = canonical_read_context(vec![reply]);
+        Args::try_parse_from([
+            "iroha",
+            "contract",
+            command,
+            "--filter",
+            "block_height >= 7",
+            "--limit",
+            "2",
+        ])
+        .unwrap()
+        .command
+        .run(&mut context)
+        .unwrap();
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, iroha::http::Method::POST);
+        assert_eq!(
+            requests[0].url.path(),
+            format!("/v1/contracts/{command}/query")
+        );
+        assert!(context.output.is_some());
+    }
+}
+
+#[test]
+fn explorer_and_account_history_commands_use_shared_query_pages() {
+    for (command, path) in [
+        (vec!["account", "history"], "history"),
+        (vec!["explorer", "accounts"], "accounts"),
+        (vec!["explorer", "domains"], "domains"),
+        (vec!["explorer", "asset-definitions"], "asset-definitions"),
+        (vec!["explorer", "assets"], "assets"),
+        (vec!["explorer", "nfts"], "nfts"),
+        (vec!["explorer", "rwas"], "rwas"),
+        (vec!["explorer", "blocks"], "blocks"),
+        (vec!["explorer", "transactions"], "transactions"),
+        (
+            vec!["explorer", "transactions-latest"],
+            "transactions/latest",
+        ),
+        (vec!["explorer", "instructions"], "instructions"),
+        (
+            vec!["explorer", "instructions-latest"],
+            "instructions/latest",
+        ),
+    ] {
+        let reply = iroha::http::Response::builder()
+            .status(200)
+            .header("content-type", "application/json")
+            .body(br#"{"items":[],"next_cursor":null}"#.to_vec())
+            .unwrap();
+        let (mut context, transport) = canonical_read_context(vec![reply]);
+        let mut args = vec!["iroha"];
+        args.extend(command);
+        args.extend(["--limit", "2"]);
+        Args::try_parse_from(args)
+            .unwrap()
+            .command
+            .run(&mut context)
+            .unwrap();
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, iroha::http::Method::POST);
+        assert!(requests[0].url.path().ends_with(&format!("/{path}/query")));
+        assert!(context.output.is_some());
     }
 }

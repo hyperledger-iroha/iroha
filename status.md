@@ -18,9 +18,9 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 | Rust client | Immutable account contexts, owned async transport, explicit blocking capabilities and typed fee quoting are implemented. | Remaining capability/consumer migration, unified errors and network cancellation/finality/authorization coverage. |
 | Kotlin/JVM | Kotlin owns the SDK, HTTP/SSE/WebSocket, attestation tools and JNI API; Java consumers exercise that API. Host coverage includes native/confidential operations. Android Keystore alias existence is decided only by keystore2 `getKey` (API 31+); a Keystore error is never read as absence. | Remaining Java/publication retirement, signed packages, CUDA hardware and Android/device qualification. |
 | Other SDKs | Shared prepared-operation, signing, account and native checkpoint contracts are being migrated across Swift, JavaScript, Python and C#. | Same-source native artifacts, complete fixtures/consumers and release OS/architecture matrices. |
-| Torii collection queries | Domains, accounts, asset definitions, NFTs, RWA lots, balances, holders, transactions, account transactions and repo agreements share one [query language](specs/torii/collection_queries.md) and engine: text/JSON filters, sort, select, aggregates, keyset or block-coordinate cursors and optional totals, merged across dataspace routes. The Rust, Kotlin/Java, Swift, JavaScript, Python and C# SDKs and the CLI implement it against shared golden vectors. | Aggregates spanning several dataspace routes are rejected; explorer and history feeds keep their own paging; no live multi-peer qualification yet. |
+| Torii collection queries | Seventeen collections and eleven explorer feeds share the [query contract](specs/torii/collection_queries.md) across Rust, Kotlin/Java, Swift, JavaScript, Python, C#, CLI and MCP. Identity-ordered reads seek and stream; authenticated history checkpoints bound deep reads. Global-state collections execute once per read for exact totals and aggregates. History and explorer feeds explicitly reject unsupported controls. Signed query selectors have one feature-independent layout; client network context is explicit. | Current-candidate live multi-dataspace paging and full SDK/native delivery qualification remain open. Swift package tests require the missing NoritoBridge XCFramework; JS and Python native suites require matching authenticated artifacts. See the [completion goals](specs/torii/query_completion_goals.md). |
 | Norito | Declared identities own canonical frames; payload serialization/reconstruction and explicit JSON key contracts are integrated. | Consumer/feature closure, fallible allocation ownership, physical model extraction and workspace lint/runtime coverage. |
-| IVM/Kotodama | IVM is the sole VM with ABI V1 and program header 1.1; header 1.0 is rejected. Compiler separation and state-free proof owners reduce normal dependency graphs. Source bundles support declaration includes and explicit module exports; authenticated error-message catalogs preserve nominal schemas. FASTPQ Metal uses one embedded-bundle admission owner; runtime source/path loading is removed. Ordinary Linux/Windows daemon dependencies include driver-loaded IVM CUDA; genuine bundle absence permits CPU build/startup, and supplied unapproved material is rejected. | Lifecycle/custody closure, native execution proofs, anchored private invocation/AXT, coherent SDK regeneration and hardware validation. FASTPQ has no approved Metal bundle. IVM CUDA approval is `None`; genuine signed ten-family artifacts, driverless runtime checks and physical qualification remain open. |
+| IVM/Kotodama | IVM is the sole VM with ABI V1 and program header 1.1; header 1.0 is rejected. Compiler separation and state-free proof owners reduce normal dependency graphs. Source bundles support declaration includes and explicit module exports; authenticated error-message catalogs preserve nominal schemas. FASTPQ Metal uses one embedded-bundle admission owner; runtime source/path loading is removed. Ordinary Linux/Windows daemon dependencies include driver-loaded IVM CUDA; genuine bundle absence permits CPU build/startup, and supplied unapproved material is rejected. Original-pool idle-runtime rows and scoped committed/frozen account-rekey capture are integrated; fresh runtime validation remains pending. | Lifecycle/custody closure, native execution proofs, anchored private invocation/AXT, coherent SDK regeneration and hardware validation. FASTPQ has no approved Metal bundle. IVM CUDA approval is `None`; genuine signed ten-family artifacts, driverless runtime checks and physical qualification remain open. |
 | SoraFS | Software signing, canonical manifests and storage/billing/publication ownership are implemented; the ordinary Node library tests pass. | Matched daemon/harness, provider resilience and L1/L2 promotion. |
 | KAGEMUSHA | Single-design G1 canonical objects (`kagemusha_wallet_v1`) and shared Rust/Kotlin/Swift vectors are implemented and tested; no relation, provider or ledger consumes them yet. The empty `iroha_kagemusha_attested`/`iroha_kagemusha_issuer` crates are deleted; results are in the [checklist](specs/kagemusha_evidence_gate.md#8-recorded-results). | Owner decisions on proof size versus R9 and 2 s p95 (measured: one in-circuit P-256 check alone gives a 10,112-byte k=16 proof); stock-OS journal/marker Advance, the single recursive relation, ledger load/unload and device recovery measurements. |
 | Petal Stream | `iroha_petal` implements the [Petal Stream](specs/petal_stream.md) animated optical transport (`天` orientation field, katakana, tile polarity and ring dots as three Reed–Solomon lanes under a rateless fountain) with decoder, renderer, camera simulator and `iroha offline petal`. A gain-free tile read keeps lanes `P` and `K` alive under over-exposure, veiling light and shadows. Swift, Kotlin/JVM, JavaScript, Python and C# ports reproduce the shared fixtures and decode the golden captures to the recorded lanes. Three corner blossoms suffice (a thumb, glare or frame edge may hide the fourth) and sessions track the pose between frames (about 4× cheaper per frame). Simulated reads complete a 10,000-byte KAGEMUSHA message in 11.5 s (45 s from lanes `P` and `D` alone). | All evidence is simulated: physical-camera reads on the governed Android/iOS device matrix, lane `K` at 480p or soft focus, and the public guides in `iroha-docs`. |
@@ -76,15 +76,19 @@ See the [protocol](specs/private_settlement.md).
 
 ## Deployment state
 
-Taira's four validators run the a2a98f02 daemon build with fresh keys and signed
-genesis. The genesis beacon ceremony resolved to StateApplied at height 5.
-All four completed sequential C2 restarts with their keys and ledger retained.
-Latest direct checks verified each active process, current selector and C2
-binary, with height 8, three peers and readiness HTTP 200. Public TLS,
-readiness and status are healthy at a2a98f02, height 8, three peers, twenty-one
-approved transactions, zero rejected transactions and an empty queue. The
-same-revision native basic doctor passed all fifteen checks with no failures.
-The previous live ledger and twenty obsolete validator releases were deleted.
+Taira's four validators serve the e3766fdb daemon build and the fresh signed
+genesis `277902D32673C29F56D4AA104063347F290881909ECB838B5038E39ABE11C15F`.
+October 4 direct checks found height 9, three peers and an empty queue on every
+validator. Public status, text readiness and faucet policy return HTTP 200;
+twenty-two transactions are approved and none rejected. Idle chains create no
+empty blocks. Shared HTTP defaults are 1,000,000 requests per second,
+60,000,000 per minute and a 10,000,000-token burst. Native amendments applied
+26 explicit request-budget fields to each serving validator; installed-daemon
+config checks and service-unit checks passed before a serial restart. All four
+new process config bindings match the native amendment receipts. The live
+amendment excludes optional recipient lookup because the installed daemon's
+schema cannot accept its new source budget. The deployed native client's basic
+doctor passes all fifteen checks, including MCP server discovery and tools list.
 
 Current source initializes fresh safety records before first startup and retires
 completed execution after successful replay before strict native archive
@@ -93,14 +97,20 @@ authenticated build-only candidate without a full regression gate. On-chain
 governance owns deployment policy; no fixed 24-hour fault test is a prerequisite
 for testnet or production. Release qualification remains open.
 
-Fresh-account funding applied at height 6; ordinary paid public pings applied
-at heights 7 and 8, with exactly one C2 ping submission. Native read-only
-funding resume now returns Applied with exact committed-transaction readback
-at height 6. The live endpoint objective is achieved; broader native release
-qualification and original public-reset coordinator completion remain separate.
-Mac outbound-port exhaustion was recovered, with the ephemeral-port setting
-and scoped SYN guard persisted. The temporary artifact server was stopped.
-Physical DPN, paid `dpn`/`admin@dpn` and clean-client completion remain open.
+The previous 7c77fd3c network's public accounts regression completed 240
+requests with HTTP 200 and no HTTP 429, but sustained only 3.01 requests per
+second against the required 20.
+The deployed fanout admission reserves its entire 48 MB execution pool for each
+read; the current single-World collection redesign still requires bounded row
+allocation and encoding before it can use a smaller concurrent reservation.
+Current-candidate release qualification and authenticated deployment completion
+remain open.
+Private DPN, paid `dpn`/`admin@dpn` and clean-client completion remain open.
+The serving bundle lacks the standard `iroha3d` sibling and an installed native
+network profile. Source now prepares independently signed checkpoint/profile
+artifacts and provisions the dataspace and owner alias under one retained quote;
+component validation and a matching complete bundle remain required before
+those paths can qualify live deployment.
 Validators run in a Linux guest on MacStadium in Dublin; use the approved
 deployment tooling. Retained incident records describe the
 [previous readiness failure](docs/incidents/2026-09-30-taira-readiness.md).

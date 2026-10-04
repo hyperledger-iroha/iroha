@@ -9739,10 +9739,6 @@ impl NetworkPeer {
             port = %self.port_api,
             "TEST_NETWORK client"
         );
-        let default_account_domain =
-            iroha_model_base::domain::DomainId::try_new("default", "universal")
-                .expect("explicit client convenience domain")
-                .to_string();
         let identity = self
             .client_config
             .get()
@@ -9757,7 +9753,6 @@ impl NetworkPeer {
                 Table::new()
                     .write("chain", identity.chain.to_string())
                     .write("network_id", identity.network_id.to_string())
-                    .write(["account", "domain"], default_account_domain)
                     .write(
                         ["account", "chain_discriminant"],
                         i64::from(identity.chain_discriminant),
@@ -12769,7 +12764,7 @@ mod tests {
         );
         let policies = resolve_da_proof_policies(peer, &config_layers)
             .expect("should resolve da proof policies");
-        assert_eq!(policies.policies.len(), 2);
+        assert_eq!(policies.policies().len(), 2);
         let actual = resolve_actual_config(peer, &config_layers)
             .expect("should resolve full config for genesis");
         assert_eq!(

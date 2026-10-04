@@ -148,11 +148,12 @@ fn original_pool_refusal_keeps_once_decoded_journal_and_same_complete_frame_unti
     assert!(input.clock.tip().is_none());
     let journal_pointer = input
         .journal
-        .view(input.input.frame().unwrap())
+        .view(input.input.charged_frame().unwrap())
         .unwrap()
-        .blocks()
+        .frames()
         .next()
         .unwrap()
+        .wire()
         .as_ptr();
     assert_eq!(input.input.frame().unwrap().as_ptr(), frame_pointer);
     let mut context = Context::from_waker(Waker::noop());
@@ -164,11 +165,12 @@ fn original_pool_refusal_keeps_once_decoded_journal_and_same_complete_frame_unti
     assert_eq!(
         input
             .journal
-            .view(input.input.frame().unwrap())
+            .view(input.input.charged_frame().unwrap())
             .unwrap()
-            .blocks()
+            .frames()
             .next()
             .unwrap()
+            .wire()
             .as_ptr(),
         journal_pointer
     );
@@ -228,18 +230,74 @@ fn malformed_original_journal_and_prepared_source_failures_are_terminal() {
             .terminal(phase)
         );
         let pool = AllocationBudget::new(64 * 1024 * 1024);
+        let mut malformed = ChargedBuffer::new(1, &pool).unwrap();
+        malformed.append(&[0]).unwrap();
+        let (wire, _, _) = proof();
+        let mut bytes = ChargedBuffer::new(wire.len(), &pool).unwrap();
+        bytes.append(&wire).unwrap();
+        drop(wire);
+        let source_bytes = malformed.capacity() + bytes.capacity();
+        assert_eq!(pool.reserved_bytes(), source_bytes);
+        let source_pointer = bytes.as_slice().as_ptr();
+        let source_hash = Hash::new(bytes.as_slice());
+        let foreign_pool = AllocationBudget::new(pool.limit_bytes());
+        let mut foreign_source = ChargedBuffer::new(bytes.as_slice().len(), &foreign_pool).unwrap();
+        foreign_source.append(bytes.as_slice()).unwrap();
+        let foreign_pointer = foreign_source.as_slice().as_ptr();
+        let foreign_hash = Hash::new(foreign_source.as_slice());
         let mut prepared = PreparedNativeFinalityJournal::new(limits(), &pool).unwrap();
-        let error = prepared.decode(&[0]).unwrap_err();
-        assert!(AttemptError::JournalSource(error).terminal(phase));
-        let (bytes, _, _) = proof();
+        let original_bytes = pool.reserved_bytes();
+        let foreign_bytes = foreign_pool.reserved_bytes();
+        let foreign_error = prepared.decode(&foreign_source).unwrap_err();
+        assert!(matches!(
+            foreign_error,
+            iroha_data_model::sumeragi::finality::PreparedNativeFinalityError::ForeignPool
+        ));
+        let foreign_error = AttemptError::JournalSource(foreign_error);
+        assert!(foreign_error.terminal(phase));
+        assert!(!prepared.is_decoded());
+        assert_eq!(pool.reserved_bytes(), original_bytes);
+        assert_eq!(foreign_pool.reserved_bytes(), foreign_bytes);
+        assert_eq!(bytes.as_slice().as_ptr(), source_pointer);
+        assert_eq!(Hash::new(bytes.as_slice()), source_hash);
+        assert_eq!(foreign_source.as_slice().as_ptr(), foreign_pointer);
+        assert_eq!(Hash::new(foreign_source.as_slice()), foreign_hash);
+        let malformed_error = AttemptError::JournalSource(prepared.decode(&malformed).unwrap_err());
+        assert!(malformed_error.terminal(phase));
         prepared.clear_consumed();
-        let error = norito::core::with_decode_limits_scope(
+        let enclosing_error = norito::core::with_decode_limits_scope(
             norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
             || prepared.decode(&bytes),
         )
         .unwrap_err();
-        assert!(!AttemptError::JournalSource(error).terminal(phase));
+        assert!(matches!(
+            enclosing_error,
+            iroha_data_model::sumeragi::finality::PreparedNativeFinalityError::Decode(
+                norito::core::PreparedDecodeError::Codec(ref original)
+            ) if original.kind() == norito::core::DecodeAttemptErrorKind::EnclosingLimit
+        ));
+        let enclosing_error = AttemptError::JournalSource(enclosing_error);
+        assert!(!enclosing_error.terminal(phase));
         prepared.decode(&bytes).unwrap();
+        assert!(foreign_error.terminal(phase));
+        assert!(malformed_error.terminal(phase));
+        assert!(!enclosing_error.terminal(phase));
+        assert_eq!(malformed.as_slice(), &[0]);
+        assert_eq!(bytes.as_slice().as_ptr(), source_pointer);
+        assert_eq!(Hash::new(bytes.as_slice()), source_hash);
+        assert_eq!(foreign_source.as_slice().as_ptr(), foreign_pointer);
+        assert_eq!(Hash::new(foreign_source.as_slice()), foreign_hash);
+        assert_eq!(foreign_pool.reserved_bytes(), foreign_bytes);
+        drop(foreign_error);
+        drop(malformed_error);
+        drop(enclosing_error);
+        drop(prepared);
+        assert_eq!(pool.reserved_bytes(), source_bytes);
+        drop(bytes);
+        drop(malformed);
+        assert_eq!(pool.reserved_bytes(), 0);
+        drop(foreign_source);
+        assert_eq!(foreign_pool.reserved_bytes(), 0);
     }
 }
 
@@ -311,10 +369,16 @@ fn original_verified_target_proof_publication_refusal_retains_frame_and_never_ad
 #[test]
 fn original_durable_native_proof_replay_checks_true_ancestry_and_keeps_original_source_on_refusal()
 {
-    let (bytes, chain, network) = proof();
+    let (wire, chain, network) = proof();
     let pool = AllocationBudget::new(64 * 1024 * 1024);
+    let mut bytes = ChargedBuffer::new(wire.len(), &pool).unwrap();
+    bytes.append(&wire).unwrap();
+    let mut same_bytes_different_owner = ChargedBuffer::new(wire.len(), &pool).unwrap();
+    same_bytes_different_owner.append(&wire).unwrap();
+    drop(wire);
+    let source_bytes = pool.reserved_bytes();
     let (_writer, mut input) = source(chain.clone(), network, &pool);
-    let source_pointer = bytes.as_ptr();
+    let source_pointer = bytes.as_slice().as_ptr();
     let blocker = pool
         .try_reserve_bytes(pool.limit_bytes() - pool.reserved_bytes())
         .unwrap();
@@ -329,11 +393,11 @@ fn original_durable_native_proof_replay_checks_true_ancestry_and_keeps_original_
         .journal
         .view(&bytes)
         .unwrap()
-        .blocks()
+        .frames()
         .next()
         .unwrap()
+        .wire()
         .as_ptr();
-    let same_bytes_different_owner = bytes.clone();
     assert!(matches!(
         input.restore_target_from_original_frame(&same_bytes_different_owner, 2, 4),
         Err(AttemptError::Binding)
@@ -343,9 +407,10 @@ fn original_durable_native_proof_replay_checks_true_ancestry_and_keeps_original_
             .journal
             .view(&bytes)
             .unwrap()
-            .blocks()
+            .frames()
             .next()
             .unwrap()
+            .wire()
             .as_ptr(),
         span
     );
@@ -387,5 +452,82 @@ fn original_durable_native_proof_replay_checks_true_ancestry_and_keeps_original_
     assert_eq!(wrong.height(), 1);
     drop(wrong);
     drop(input);
+    assert_eq!(pool.reserved_bytes(), source_bytes);
+    drop(same_bytes_different_owner);
+    assert_eq!(pool.reserved_bytes(), bytes.capacity());
+    drop(bytes);
     assert_eq!(pool.reserved_bytes(), 0);
+}
+
+#[test]
+fn durable_native_replay_rejects_foreign_source_pool_without_pinning_or_advancing() {
+    let (wire, chain, network) = proof();
+    let pool = AllocationBudget::new(64 * 1024 * 1024);
+    let foreign_pool = AllocationBudget::new(pool.limit_bytes());
+    let mut foreign_source = ChargedBuffer::new(wire.len(), &foreign_pool).unwrap();
+    foreign_source.append(&wire).unwrap();
+    let mut original = ChargedBuffer::new(wire.len(), &pool).unwrap();
+    original.append(&wire).unwrap();
+    drop(wire);
+    let pointer = original.as_slice().as_ptr();
+    let digest = Hash::new(original.as_slice());
+    let (_writer, mut input) = source(chain, network, &pool);
+    let mut foreign_journal = PreparedNativeFinalityJournal::new(limits(), &foreign_pool).unwrap();
+    foreign_journal.decode(&foreign_source).unwrap();
+    let original_bytes = pool.reserved_bytes();
+    let foreign_bytes = foreign_pool.reserved_bytes();
+    let native_error = input
+        .clock
+        .advance(foreign_journal.view(&foreign_source).unwrap())
+        .unwrap_err();
+    assert!(matches!(
+        native_error,
+        iroha_core::sumeragi::native_journal::NativeJournalError::SourcePool
+    ));
+    let native_error = AttemptError::Journal(native_error);
+    for phase in [
+        Phase::CommitmentsDecoded,
+        Phase::EdgesDecoded,
+        Phase::SessionDecoded,
+    ] {
+        assert!(native_error.terminal(phase));
+    }
+    assert!(input.clock.tip().is_none());
+    assert!(input.restored_source.is_none());
+    assert!(!input.journal.is_decoded());
+    assert_eq!(input.height(), 1);
+    assert_eq!(pool.reserved_bytes(), original_bytes);
+    assert_eq!(foreign_pool.reserved_bytes(), foreign_bytes);
+    drop(native_error);
+    assert!(matches!(
+        input.restore_target_from_original_frame(&foreign_source, 2, 4),
+        Err(AttemptError::Binding)
+    ));
+    assert!(input.restored_source.is_none());
+    assert!(!input.journal.is_decoded());
+    assert!(input.clock.tip().is_none());
+    assert_eq!(input.height(), 1);
+    assert_eq!(input.generation(), 0);
+    assert_eq!(pool.reserved_bytes(), original_bytes);
+    assert_eq!(foreign_pool.reserved_bytes(), foreign_bytes);
+    input
+        .restore_target_from_original_frame(&original, 2, 4)
+        .unwrap();
+    assert_eq!(input.clock.tip().unwrap().height(), 2);
+    assert_eq!(input.height(), 2);
+    assert_eq!(input.generation(), 0);
+    assert_eq!(
+        input.restored_source.as_ref().unwrap().address,
+        pointer.addr()
+    );
+    assert_eq!(original.as_slice().as_ptr(), pointer);
+    assert_eq!(Hash::new(original.as_slice()), digest);
+    drop(input);
+    assert_eq!(pool.reserved_bytes(), original.capacity());
+    drop(original);
+    assert_eq!(pool.reserved_bytes(), 0);
+    drop(foreign_journal);
+    assert_eq!(foreign_pool.reserved_bytes(), foreign_source.capacity());
+    drop(foreign_source);
+    assert_eq!(foreign_pool.reserved_bytes(), 0);
 }

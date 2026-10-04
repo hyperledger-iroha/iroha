@@ -48,16 +48,21 @@ fn initial_period_fixed_period_matches_charge_window() {
     assert_eq!(end, 12_000);
 }
 #[test]
-fn parse_subscription_status_filter_accepts_known_values() {
-    assert_eq!(
-        parse_subscription_status_filter("active").unwrap(),
-        SubscriptionStatus::Active
-    );
-    assert_eq!(
-        parse_subscription_status_filter("past_due").unwrap(),
-        SubscriptionStatus::PastDue
-    );
-    assert!(parse_subscription_status_filter("unknown").is_err());
+fn subscription_status_uses_the_shared_collection_filter() {
+    use iroha_torii_shared::list_query::{ListQuery, field};
+    let limits = crate::collections::Limits::from_page_limits(50, 200);
+    let query = ListQuery::new().filter(field("status").eq("past_due"));
+    let prepared = crate::collections::prepare(
+        &crate::collections::specs::SUBSCRIPTIONS, "", &query, &limits,
+    ).unwrap();
+    let matching = norito::json!({"status": "past_due"});
+    let active = norito::json!({"status": "active"});
+    assert!(prepared.matches(matching.as_object().unwrap()));
+    assert!(!prepared.matches(active.as_object().unwrap()));
+    let invalid = ListQuery::new().filter(field("retired_status").eq("past_due"));
+    assert!(crate::collections::prepare(
+        &crate::collections::specs::SUBSCRIPTIONS, "", &invalid, &limits,
+    ).is_err());
 }
 #[test]
 fn subscription_plan_from_metadata_roundtrips() {

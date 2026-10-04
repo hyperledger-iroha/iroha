@@ -67,6 +67,7 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.connect.ConnectRetryPolicyTests",
         "org.hyperledger.iroha.android.crypto.Blake2sTests",
         "org.hyperledger.iroha.android.crypto.Blake3Tests",
+        "org.hyperledger.iroha.android.crypto.NativeBridgeDelegationTests",
         "org.hyperledger.iroha.android.crypto.SoftwareKeyProviderBouncyCastleTests",
         "org.hyperledger.iroha.android.crypto.SoftwareKeyProviderStorageTests",
         "org.hyperledger.iroha.android.crypto.export.DeterministicKeyExporterTests",

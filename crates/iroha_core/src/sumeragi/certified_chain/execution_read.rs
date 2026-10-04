@@ -65,6 +65,16 @@ impl<V: StateReadOnly + ?Sized> CertifiedChain<'_, V> {
                 .into_authenticated_execution()
                 .map_err(Into::into);
         }
+        self.authenticated_genesis_execution()
+    }
+
+    // The complete H1/H2 prefix owners belong to the genesis read only. Keep them
+    // in a separate frame so ordinary height reads do not retain their stack slots
+    // while decoding and authenticating the native certificate chain.
+    #[inline(never)]
+    fn authenticated_genesis_execution(
+        &self,
+    ) -> Result<AuthenticatedExecutionBlock, ExecutionAttemptError<ChainReadError>> {
         let mut prefix = CertifiedPrefix::new(
             self.source.chain_id(),
             *self.source.network_id(),
@@ -77,7 +87,7 @@ impl<V: StateReadOnly + ?Sized> CertifiedChain<'_, V> {
             .map(GenesisExecutionAnchor::into_authenticated_execution)
             .ok_or_else(|| {
                 ChainReadError::Malformed {
-                    height,
+                    height: GENESIS_HEIGHT,
                     reason: "native successor did not authenticate genesis execution".into(),
                 }
                 .into()

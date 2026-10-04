@@ -26,6 +26,7 @@ mod kagemusha;
 mod kura;
 /// Helpers for generating a multi-peer localnet (configs, scripts, genesis).
 pub mod localnet;
+mod network_bootstrap;
 mod privacy_bootstrap;
 mod schema;
 use iroha_deploy::secret_toml;
@@ -144,6 +145,9 @@ enum Command {
 }
 #[derive(Subcommand)]
 enum AdvancedCommand {
+    /// Prepare signed remote-network bootstrap and native installation authorities offline
+    #[command(subcommand)]
+    NetworkBootstrap(network_bootstrap::Command),
     /// Generate per-client CLI configs from a base client.toml
     #[command(name = "client-configs")]
     ClientConfigs(client_configs::Args),
@@ -159,6 +163,7 @@ enum AdvancedCommand {
 impl<T: Write> RunArgs<T> for AdvancedCommand {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         match self {
+            Self::NetworkBootstrap(args) => args.run(writer),
             Self::ClientConfigs(args) => args.run(writer),
             Self::Codec(args) => args.run(writer),
             Self::Kura(args) => args.run(writer),

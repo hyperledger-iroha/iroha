@@ -30,37 +30,33 @@ retention keeps the current key generation without claiming forward security.
 Missing target readiness cannot change the frozen roster in place. Missing the
 current quorum does not authorize weakened voting rules.
 
-The latest recorded compiler artifact of the production DLMM pool is 59,985 bytes.
-The same compiler measures a 2,956-byte reduction from the 62,941-byte sequence by
-reusing the original verified local result and consecutive entry argument table
-base. Full schemas, permissions, access hints, literal payloads, callable frame
-geometry and original metered consumers remain exact. The existing compact, frame
-and private-call compiler controls pass, with complete genuine native captures.
-The corrected map sources now have a complete genuine native capture, and all
-new local compiler controls pass. The current IVM run passed seven of eight local
-cases; the map recorder's exact diagnostic allocation was underfunded before
-execution and its repaired fixture awaits a fresh run. Three earlier compiler
-structural controls now compare the original scalar emission and production
-lifetime rules explicitly; the complete current compiler library controls pass.
-Full compiler and VM candidate qualification remain open.
+The latest recorded compiler artifact of the production DLMM pool is 59,817 bytes,
+including 32,360 bytes of code. Exact numeric operand staging removes 168 bytes
+from the 59,985-byte artifact while preserving complete schemas, permissions,
+access hints, literal payloads, callable frames and every original metered
+consumer. All ten numeric compiler controls pass, with complete genuine native
+captures and exact reproduction. The full compiler library run passed 1,241
+controls and failed one spill-shape fixture that still expected removed zero
+instructions. Its exact fixture correction preserves reload registers, lifetimes,
+operand order and independent original-zero comparisons; a fresh run is pending.
+The current IVM run passed seven of eight local cases; the map recorder's exact
+diagnostic allocation was underfunded before execution and its repaired fixture
+awaits a fresh run. Full compiler and VM candidate qualification remain open.
 
-The artifact's nested byte charge alone is 3,839,040 gas at the unchanged
-64-gas-per-byte price, leaving 160,960 gas within the default four-million-gas
-block limit. An explicit ignored diagnostic measured 3,983,636 gas for the
-complete genuine native preview using an eight-million-gas VM against the same
-default-policy signed genesis; it discarded all effects and overlays. The
-four-million-gas preview still fails before the signed callback: after the
-artifact charge, the child cannot escrow a state read's unchanged maximum
-512-KiB value allowance. Refunded actual consumption does not establish that
-the original temporary reservation fits. Further artifact reduction is required
-before the maintained default-limit gate can pass; the diagnostic cannot qualify
-the signed callback or change the default block allowance.
-The prior Core wrapper diagnostic used the 64,713-byte artifact and
-4,289,445 gas under an eight-million-gas component fixture. That fixture override
-has been removed: both the signed-genesis callback and preview must now execute
-under the original default four-million-gas limit. This stronger gate currently
-fails with `OutOfGas`. The strict workspace source inventory refuses an unsafe nested checkout
-path; component measurements do not establish candidate or network qualification.
+The artifact's nested byte charge alone is 3,828,288 gas at the unchanged
+64-gas-per-byte price, leaving 171,712 gas within the default four-million-gas
+block limit. A state read requires at least 524,304 gas before its path prefix to
+escrow the unchanged maximum 512-KiB value allowance. Refunded actual consumption
+does not establish that this original temporary reservation fits. Further artifact
+reduction is required before the maintained default-limit gate can pass.
+The latest actual default-limit Core preview, using the 59,985-byte artifact,
+failed with `OutOfGas` before the signed callback. An explicit ignored diagnostic
+using that artifact measured 3,983,636 gas with an eight-million-gas VM against the
+same default-policy signed genesis and discarded all effects and overlays. That
+diagnostic cannot qualify the signed callback or change the default allowance;
+the fresh 59,817-byte artifact still requires the actual default-limit gate.
+The strict workspace source inventory refuses an unsafe nested checkout path;
+component measurements do not establish candidate or network qualification.
 TODO: qualify the actual enacted payout under the default policy on the
 disposable network, including all original byte and execution charges.
 

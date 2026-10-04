@@ -554,6 +554,7 @@ test("package Nexus browser export has an enforced browser-only dependency graph
       "dist/noritoNftMarketCodecs.js",
       "dist/noritoRecordDecoder.js",
       "dist/noritoReplicationOrderValidator.js",
+      "dist/noritoStakingCodecs.js",
       "dist/normalizers.js",
       "dist/numericV1.js",
       "dist/privacyExact12Network.js",

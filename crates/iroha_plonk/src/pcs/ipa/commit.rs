@@ -24,11 +24,20 @@
 //! budget only changes its window and wave sizes, never its result. The
 //! optimized batch-affine `iroha_pasta::msm::msm_public` stays prover-only
 //! until it is audited and differentially qualified for consensus.
+//!
+//! The scalars are public, so [`msm_complete`] splits each one with the GLV
+//! endomorphism (`s = k1 + k2 ZETA`, `|k1|, |k2| < 2^128`, so `s B = k1 B +
+//! k2 phi(B)` with `phi(x, y) = (beta x, y)`) and recodes the halves into
+//! signed base-`2^c` digits: half the buckets of unsigned digits, and the
+//! negated affine base for a negative digit (free, and still a complete mixed
+//! addition). The scalar recoding changes no formula and no result; when a
+//! split were unavailable (excluded by the Pasta constants) the unsigned
+//! full-width windows run instead.
 
 use ff::{Field, PrimeField};
 use group::prime::PrimeCurveAffine;
 use iroha_pasta::{
-    PastaCurve, PastaField,
+    PastaAffine, PastaCurve, PastaField,
     msm::{FixedBaseTable, MemoryBudget, MsmError, msm_public, msm_secret},
     params::ParamsIpa,
 };
@@ -288,13 +297,192 @@ fn complete_window_sum<C: PastaCurve>(
     sum
 }
 
+/// The most bits of a GLV half (`|k1|, |k2| < 2^128`).
+const GLV_HALF_BITS: usize = 128;
+/// The widest signed window of the GLV path (`2^15` buckets).
+const MAX_SIGNED_WINDOW: usize = 16;
+
+/// The signed windows of a [`GLV_HALF_BITS`]-bit magnitude at width `width`:
+/// one more than `ceil(128 / width)` takes the last carry.
+const fn signed_windows(width: usize) -> usize {
+    GLV_HALF_BITS.div_ceil(width) + 1
+}
+
+/// The signed window width of the GLV path for `terms` split terms: the
+/// minimum of a cost model counting field multiplications (11 per complete
+/// mixed addition into a bucket, 12 per complete addition of the running
+/// sums, 8 per doubling), narrowed until one window's `2^(width - 1)`
+/// buckets fit `budget`.
+fn signed_window(terms: usize, budget: MemoryBudget) -> usize {
+    let terms = u128::try_from(terms).unwrap_or(u128::MAX);
+    let cost = |width: usize| -> u128 {
+        let windows = u128::try_from(signed_windows(width)).unwrap_or(u128::MAX);
+        let buckets = 1_u128 << (width - 1);
+        let per_window = terms
+            .saturating_mul(11)
+            .saturating_add(buckets.saturating_mul(24))
+            .saturating_add(u128::try_from(width).unwrap_or(0).saturating_mul(8));
+        windows.saturating_mul(per_window)
+    };
+    let mut width = (1..=MAX_SIGNED_WINDOW)
+        .min_by_key(|width| (cost(*width), *width))
+        .unwrap_or(1);
+    while width > 1 && (BUCKET_BYTES << (width - 1)) > budget.bytes() {
+        width -= 1;
+    }
+    width
+}
+
+/// Recodes `value < 2^128` into `out.len()` signed digits of `width <= 16`
+/// bits, least significant first: `value = sum_w out[w] 2^(width w)` with
+/// every digit in `(-2^(width - 1), 2^(width - 1)]`. Returns the carry left
+/// after the last digit (zero when `out` has [`signed_windows`] digits).
+fn signed_digits(value: u128, width: usize, out: &mut [i32]) -> i32 {
+    let full = 1_i32 << width;
+    let half = 1_i32 << (width - 1);
+    let mask = (1_u128 << width) - 1;
+    let mut carry = 0_i32;
+    for (window, digit) in out.iter_mut().enumerate() {
+        let shift = window.saturating_mul(width);
+        let bits = if shift < GLV_HALF_BITS {
+            i32::try_from((value >> shift) & mask).unwrap_or(0)
+        } else {
+            0
+        };
+        let mut signed = bits + carry;
+        carry = 0;
+        if signed > half {
+            signed -= full;
+            carry = 1;
+        }
+        *digit = signed;
+    }
+    carry
+}
+
+/// The GLV split of every term: `2n` affine bases (`±B`, `±phi(B)` for each
+/// base `B`) and their signed digits (row-major, [`signed_windows`] per
+/// split base), or `None` when a split or an endomorphism image is
+/// unavailable.
+fn glv_split<C: PastaCurve>(
+    scalars: &[C::ScalarExt],
+    bases: &[C::AffineExt],
+    width: usize,
+) -> Option<(Vec<C::AffineExt>, Vec<i32>)> {
+    let windows = signed_windows(width);
+    let beta = <C::AffineExt as PastaAffine>::endo_beta();
+    let terms = scalars.len().min(bases.len());
+    let mut split_bases = vec![C::AffineExt::identity(); terms.checked_mul(2)?];
+    let mut digits = vec![0_i32; terms.checked_mul(2)?.checked_mul(windows)?];
+    split_bases
+        .par_chunks_mut(2)
+        .zip(digits.par_chunks_mut(2 * windows))
+        .zip(scalars.par_iter().zip(bases))
+        .try_for_each(|((split, split_digits), (scalar, base))| {
+            let halves = C::glv_decompose(scalar)?;
+            // phi(x, y) = (beta x, y) = [ZETA] (x, y); the identity (0, 0)
+            // maps to itself.
+            let image: C::AffineExt =
+                Option::from(C::AffineExt::from_xy(base.x() * beta, base.y()))?;
+            split[0] = if halves.k1_neg { -*base } else { *base };
+            split[1] = if halves.k2_neg { -image } else { image };
+            let (first, second) = split_digits.split_at_mut(windows);
+            let carry =
+                signed_digits(halves.k1, width, first) | signed_digits(halves.k2, width, second);
+            (carry == 0).then_some(())
+        })?;
+    Some((split_bases, digits))
+}
+
+/// The sum of one signed window: `2^(width - 1)` buckets by digit magnitude
+/// (the negated base for a negative digit), then the running-sum reduction.
+fn signed_window_sum<C: PastaCurve>(
+    digits: &[i32],
+    bases: &[C::AffineExt],
+    window: usize,
+    windows: usize,
+    width: usize,
+) -> C {
+    let mut buckets = vec![C::identity(); 1_usize << (width - 1)];
+    for (term, base) in bases.iter().enumerate() {
+        let digit = digits
+            .get(term.saturating_mul(windows).saturating_add(window))
+            .copied()
+            .unwrap_or(0);
+        let Some(bucket) = usize::try_from(digit.unsigned_abs())
+            .ok()
+            .and_then(|magnitude| magnitude.checked_sub(1))
+            .and_then(|index| buckets.get_mut(index))
+        else {
+            continue;
+        };
+        // Complete mixed addition of the (possibly negated) affine base:
+        // correct for equal, opposite and identity inputs.
+        if digit > 0 {
+            *bucket += base;
+        } else {
+            *bucket += &(-*base);
+        }
+    }
+    let mut running = C::identity();
+    let mut sum = C::identity();
+    for bucket in buckets.iter().rev() {
+        running += bucket;
+        sum += &running;
+    }
+    sum
+}
+
+/// Runs `window_sum` for every window in waves of at most `concurrency`
+/// windows and combines them from the top: `sum_w 2^(width w) S_w` with
+/// complete doublings and additions.
+fn combine_windows<C: PastaCurve>(
+    windows: usize,
+    width: usize,
+    concurrency: usize,
+    window_sum: impl Fn(usize) -> C + Sync,
+) -> C {
+    let indices: Vec<usize> = (0..windows).collect();
+    let mut sums: Vec<C> = Vec::with_capacity(windows);
+    for wave in indices.chunks(concurrency.clamp(1, windows.max(1))) {
+        let wave_sums: Vec<C> = wave.par_iter().map(|window| window_sum(*window)).collect();
+        sums.extend(wave_sums);
+    }
+    let mut total = C::identity();
+    for sum in sums.iter().rev() {
+        for _ in 0..width {
+            total = total.double();
+        }
+        total += sum;
+    }
+    total
+}
+
+/// [`msm_complete`] on GLV-split, signed-digit windows, or `None` when a
+/// split is unavailable.
+fn msm_complete_glv<C: PastaCurve>(
+    scalars: &[C::ScalarExt],
+    bases: &[C::AffineExt],
+    budget: MemoryBudget,
+) -> Option<C> {
+    let width = signed_window(scalars.len().saturating_mul(2), budget);
+    let windows = signed_windows(width);
+    let (split_bases, digits) = glv_split::<C>(scalars, bases, width)?;
+    let per_window = BUCKET_BYTES << (width - 1);
+    let concurrency = budget.bytes() / per_window;
+    Some(combine_windows(windows, width, concurrency, |window| {
+        signed_window_sum::<C>(&digits, &split_bases, window, windows, width)
+    }))
+}
+
 /// `sum_i scalars[i] * bases[i]` for public data with complete formulas only
 /// (see the module documentation, S10). The scalars and bases must have
-/// equal lengths; extra entries of the longer one are ignored. Windows run
-/// in waves on the caller's Rayon pool, at most as many at once as `budget`
-/// holds buckets for (always at least one), and are combined in window
-/// order, so the result is the same group element for every thread count
-/// and budget. It never fails.
+/// equal lengths; extra entries of the longer one are ignored. Each scalar is
+/// split with the GLV endomorphism into two signed-digit halves (see the
+/// module documentation). Windows run in waves on the caller's Rayon pool,
+/// at most as many at once as `budget` holds buckets for (always at least
+/// one), and are combined in window order, so the result is the same group
+/// element for every thread count and budget. It never fails.
 #[must_use]
 pub fn msm_complete<C: PastaCurve>(
     scalars: &[C::ScalarExt],
@@ -302,6 +490,22 @@ pub fn msm_complete<C: PastaCurve>(
     budget: MemoryBudget,
 ) -> C {
     debug_assert_eq!(scalars.len(), bases.len());
+    let n = scalars.len().min(bases.len());
+    if n == 0 {
+        return C::identity();
+    }
+    let (scalars, bases) = (&scalars[..n], &bases[..n]);
+    msm_complete_glv::<C>(scalars, bases, budget)
+        .unwrap_or_else(|| msm_complete_unsigned::<C>(scalars, bases, budget))
+}
+
+/// [`msm_complete`] on unsigned full-width windows: the fallback when a GLV
+/// split is unavailable, and the differential reference of the tests.
+fn msm_complete_unsigned<C: PastaCurve>(
+    scalars: &[C::ScalarExt],
+    bases: &[C::AffineExt],
+    budget: MemoryBudget,
+) -> C {
     let n = scalars.len().min(bases.len());
     if n == 0 {
         return C::identity();
@@ -323,25 +527,10 @@ pub fn msm_complete<C: PastaCurve>(
         })
         .collect();
     let bases = &bases[..n];
-    let per_window = BUCKET_BYTES << width;
-    let concurrency = (budget.bytes() / per_window).clamp(1, windows);
-    let starts: Vec<usize> = (0..windows).map(|window| window * width).collect();
-    let mut sums: Vec<C> = Vec::with_capacity(windows);
-    for wave in starts.chunks(concurrency) {
-        let wave_sums: Vec<C> = wave
-            .par_iter()
-            .map(|start| complete_window_sum::<C>(&limbs, bases, *start, width))
-            .collect();
-        sums.extend(wave_sums);
-    }
-    let mut total = C::identity();
-    for sum in sums.iter().rev() {
-        for _ in 0..width {
-            total = total.double();
-        }
-        total += sum;
-    }
-    total
+    let concurrency = budget.bytes() / (BUCKET_BYTES << width);
+    combine_windows(windows, width, concurrency, |window| {
+        complete_window_sum::<C>(&limbs, bases, window * width, width)
+    })
 }
 
 /// A linear combination of points `sum_i scalars[i] * bases[i]` (public
@@ -519,6 +708,163 @@ mod tests {
     fn complete_msm_matches_the_naive_msm_on_adversarial_inputs() {
         complete_matches_naive::<Ep>(11);
         complete_matches_naive::<Eq>(12);
+    }
+
+    #[test]
+    fn signed_digits_reconstruct_their_magnitudes() {
+        let values = [
+            0_u128,
+            1,
+            2,
+            u128::from(u64::MAX),
+            1 << 127,
+            (1 << 127) - 1,
+            u128::MAX,
+            u128::MAX - 1,
+            0x5555_5555_5555_5555_5555_5555_5555_5555,
+            0xaaaa_aaaa_aaaa_aaaa_aaaa_aaaa_aaaa_aaaa,
+            0x8000_0000_0000_0001_8000_0000_0000_0001,
+        ];
+        for width in 1..=MAX_SIGNED_WINDOW {
+            let windows = signed_windows(width);
+            let half = 1_i64 << (width - 1);
+            for value in values {
+                let mut digits = vec![0_i32; windows];
+                assert_eq!(signed_digits(value, width, &mut digits), 0, "{width}");
+                // sum_w d_w 2^(width w) == value, digits in (-half, half].
+                let mut total = Fq::ZERO;
+                let radix = Fq::from(2_u64).pow_vartime([u64::try_from(width).expect("width")]);
+                for digit in digits.iter().rev() {
+                    assert!(i64::from(*digit) > -half && i64::from(*digit) <= half);
+                    let magnitude = Fq::from(u64::from(digit.unsigned_abs()));
+                    total = total * radix + if *digit < 0 { -magnitude } else { magnitude };
+                }
+                assert_eq!(
+                    total,
+                    Fq::from_u128(value),
+                    "width {width} value {value:#x}"
+                );
+            }
+            // Too few digits leave a carry (or drop high bits).
+            let mut short = vec![0_i32; 1];
+            if width < 128 {
+                let carry = signed_digits(u128::MAX, width, &mut short);
+                assert!(carry != 0 || short[0] != 0);
+            }
+        }
+    }
+
+    #[test]
+    fn signed_windows_follow_the_cost_model_and_the_budget() {
+        assert_eq!(signed_windows(10), 14);
+        assert_eq!(signed_windows(16), 9);
+        assert_eq!(signed_windows(1), 129);
+        // About 2^12 split terms (k = 11) choose 9- to 10-bit windows.
+        let width = signed_window(1 << 12, MemoryBudget::DEFAULT);
+        assert!((9..=10).contains(&width), "{width}");
+        assert!(signed_window(1 << 20, MemoryBudget::DEFAULT) > width);
+        assert!(signed_window(2, MemoryBudget::DEFAULT) <= 4);
+        assert_eq!(signed_window(1 << 20, MemoryBudget::new(0)), 1);
+        assert_eq!(
+            signed_window(1 << 20, MemoryBudget::new(BUCKET_BYTES << 4)),
+            5
+        );
+    }
+
+    /// The GLV path equals the unsigned path and the naive MSM on inputs
+    /// built around the endomorphism: `B` with `[ZETA] B` and `-[ZETA] B` in
+    /// one MSM, scalars `±ZETA`, `±ZETA^2`, halves at `2^127` and `2^128`.
+    fn glv_matches_unsigned<C: PastaCurve>(seed: u64) {
+        use ff::WithSmallOrderMulGroup;
+        let mut rng = ChaCha20Rng::seed_from_u64(seed);
+        let zeta = <C::ScalarExt as WithSmallOrderMulGroup<3>>::ZETA;
+        let p = C::random(&mut rng);
+        let endo = p.endo();
+        let two_127 = C::ScalarExt::from_u128(1 << 127);
+        let two_128 = two_127.double();
+        let special = [
+            zeta,
+            -zeta,
+            zeta.square(),
+            -zeta.square(),
+            C::ScalarExt::ONE,
+            -C::ScalarExt::ONE,
+            two_127,
+            two_128,
+            two_128 - C::ScalarExt::ONE,
+            -two_128,
+            C::ScalarExt::ZERO,
+            zeta + C::ScalarExt::ONE,
+        ];
+        let bases_cycle = [
+            p.to_affine(),
+            endo.to_affine(),
+            (-endo).to_affine(),
+            endo.endo().to_affine(),
+            C::AffineExt::identity(),
+        ];
+        for n in [1_usize, 2, 5, 12, 60, 300] {
+            let scalars: Vec<C::ScalarExt> = (0..n)
+                .map(|i| {
+                    if i % 3 == 2 {
+                        C::ScalarExt::random(&mut rng)
+                    } else {
+                        special[i % special.len()]
+                    }
+                })
+                .collect();
+            let bases: Vec<C::AffineExt> =
+                (0..n).map(|i| bases_cycle[i % bases_cycle.len()]).collect();
+            let expected = msm_naive::<C>(&scalars, &bases);
+            for budget in [
+                MemoryBudget::DEFAULT,
+                MemoryBudget::new(0),
+                MemoryBudget::new(BUCKET_BYTES * 8),
+            ] {
+                assert_eq!(
+                    msm_complete_glv::<C>(&scalars, &bases, budget),
+                    Some(expected),
+                    "n = {n}"
+                );
+                assert_eq!(
+                    msm_complete_unsigned::<C>(&scalars, &bases, budget),
+                    expected
+                );
+            }
+        }
+        // `zeta P - [ZETA] P` cancels inside the split.
+        let cancel = msm_complete::<C>(
+            &[zeta, -C::ScalarExt::ONE],
+            &[p.to_affine(), endo.to_affine()],
+            MemoryBudget::DEFAULT,
+        );
+        assert!(bool::from(cancel.is_identity()));
+    }
+
+    #[test]
+    fn glv_path_matches_the_unsigned_path_around_the_endomorphism() {
+        glv_matches_unsigned::<Ep>(21);
+        glv_matches_unsigned::<Eq>(22);
+    }
+
+    #[test]
+    #[ignore = "random differential sweep; run in release"]
+    fn glv_path_matches_the_unsigned_path_on_random_inputs() {
+        let mut rng = ChaCha20Rng::seed_from_u64(23);
+        for round in 0..64 {
+            let n = 1 + (round * 37) % 700;
+            let scalars: Vec<Fq> = (0..n).map(|_| Fq::random(&mut rng)).collect();
+            let bases: Vec<_> = (0..n).map(|_| Ep::random(&mut rng).to_affine()).collect();
+            assert_eq!(
+                msm_complete_glv::<Ep>(&scalars, &bases, MemoryBudget::DEFAULT),
+                Some(msm_complete_unsigned::<Ep>(
+                    &scalars,
+                    &bases,
+                    MemoryBudget::DEFAULT
+                )),
+                "round {round}"
+            );
+        }
     }
 
     /// Release timing of the verifier MSM against the prover-only

@@ -1057,7 +1057,7 @@ impl Fixture {
                 Ok(observed <= now && now - observed <= self.policy.max_anchor_age_ms)
             },
         )?;
-        self.owner.required_enrollment(CustodyPurpose::Renewal(2))
+        history.retained_selected(&self.owner)
     }
 }
 

@@ -1,6 +1,34 @@
 //! Tests for xtask command parsing and release helpers.
 use super::*;
 use norito::json::Value;
+
+#[test]
+fn kagami_bundle_selects_native_cli_profile_and_one_explicit_authority() {
+    assert!(matches!(
+        parse_command(["xtask", "kagami-bundle"].into_iter().map(String::from)).unwrap(),
+        CommandKind::KagamiBundle { network_profiles: None, profile, .. } if profile == "release"
+    ));
+    assert!(matches!(
+        parse_command(["xtask", "kagami-bundle", "--profile", "debug"].into_iter().map(String::from)).unwrap(),
+        CommandKind::KagamiBundle { profile, .. } if profile == "debug"
+    ));
+    for arguments in [
+        vec!["xtask", "kagami-bundle", "--profile", "local-release"],
+        vec!["xtask", "kagami-bundle", "--kagami", "other"],
+        vec!["xtask", "kagami-bundle", "--network-profiles"],
+        vec![
+            "xtask",
+            "kagami-bundle",
+            "--network-profiles",
+            "a",
+            "--network-profiles",
+            "b",
+        ],
+    ] {
+        assert!(parse_command(arguments.into_iter().map(String::from)).is_err());
+    }
+}
+
 #[test]
 fn mochi_bundle_rejects_local_release_profile_during_argument_parsing() {
     let result = parse_command(

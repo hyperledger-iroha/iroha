@@ -18,16 +18,6 @@ export interface SubscriptionPlanCreateResponse extends AppApiTransactionDraft {
   plan_id: string;
 }
 
-export interface SubscriptionPlanListItem {
-  plan_id: string;
-  plan: SubscriptionPlan;
-}
-
-export interface SubscriptionPlanListResponse {
-  items: ReadonlyArray<SubscriptionPlanListItem>;
-  total: number;
-}
-
 export interface SubscriptionCreateRequest {
   authority: string;
   subscriptionId: string;
@@ -55,18 +45,6 @@ export interface SubscriptionCreateResponse {
   provider_usage_grant_included: boolean;
   resulting_subscription: SubscriptionState;
   tx_instructions: ReadonlyArray<SubscriptionMutationInstructionDraft>;
-}
-
-export interface SubscriptionListItem {
-  subscription_id: string;
-  subscription: SubscriptionState;
-  invoice?: SubscriptionInvoice | null;
-  plan?: SubscriptionPlan | null;
-}
-
-export interface SubscriptionListResponse {
-  items: ReadonlyArray<SubscriptionListItem>;
-  total: number;
 }
 
 export interface SubscriptionGetResponse {

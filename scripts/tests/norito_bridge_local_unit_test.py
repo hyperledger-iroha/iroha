@@ -1,0 +1,424 @@
+"""Portable local-unit policy tests. Fixtures are inert parser data only.
+
+No framework, native build, native execution, or qualification is simulated.
+Synthetic dictionaries below exercise policy parsers only.
+"""
+import copy
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'scripts'))
+import norito_bridge_local_unit as unit
+import native_sdk_source_custody as custody
+
+
+
+@pytest.fixture(autouse=True)
+def no_children(monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Pure policy tests attempted child/native execution')
+    monkeypatch.setattr(unit.subprocess, 'run', forbidden)
+    monkeypatch.setattr(unit.subprocess, 'Popen', forbidden)
+
+
+@pytest.fixture(scope='module')
+def originals():
+    """Inert parser fixtures; no native bytes, archive or provenance claim."""
+    source = {'Cargo.toml': 'a' * 64}
+    tools = {'/inert/rustc': 'b' * 64}
+    actual = {'reason': 'compiler-artifact', 'target': {'name': 'connect_norito_bridge',
+              'crate_types': ['cdylib', 'staticlib', 'rlib']}, 'fresh': True,
+              'features': ['privacy-production-enabled'], 'profile': {'test': False},
+              'filenames': ['/owned/warm/debug/libconnect_norito_bridge.a']}
+    emitter = {'natural_exit': 0, 'finished_unix': 10, 'capture_errors': [], 'source_changes': [],
+               'dep_info_errors': [], 'collector_toolchain_changes': [],
+               'source_before': source, 'source_after': source,
+               'collector_toolchain_before': tools, 'collector_toolchain_after': tools,
+               'dep_info': [{'inert': True}], 'emitted': [{'cargo_artifact': actual,
+               'sha256': 'c' * 64, 'snapshot': '/owned/retained/lib.dylib'}]}
+    capture = {'emitter': '/owned/emitter.json', 'emitter_sha256': 'd' * 64,
+               'actual_cargo_artifact': actual, 'target_triple': 'aarch64-apple-darwin',
+               'archive_original': actual['filenames'][0], 'snapshot_method': 'clonefile-cow',
+               'source_changes': [], 'source_before': source, 'source_after': source,
+               'finished_unix': 12, 'native_companion_sha256': 'c' * 64}
+    component = {'emitter_path': '/owned/emitter.json', 'emitter_sha256': 'd' * 64,
+                 'qualified': True, 'observed_abi_version': 25,
+                 'artifact_path': '/owned/retained/lib.dylib', 'artifact_sha256': 'c' * 64,
+                 'source_before': source, 'source_after': source,
+                 'toolchain_before': tools, 'toolchain_after': tools,
+                 'finished_unix': 11, 'export_count': 1}
+    pins = {'emitter': {'path': '/owned/emitter.json', 'sha256': 'd' * 64}}
+    return pins, {'emitter': emitter, 'static_capture': capture, 'component': component}
+
+
+
+def semantic(originals, changes=()):
+    pins, records = originals
+    values = copy.deepcopy(records)
+    for role, key, value in changes:
+        values[role][key] = value
+    return unit.check_record_semantics(values['emitter'], values['static_capture'], values['component'],
+                                      Path(pins['emitter']['path']), pins['emitter']['sha256'],
+                                      'aarch64-apple-darwin')
+
+
+def test_inert_emitter_component_static_relationship_parser_positive(originals):
+    actual = semantic(originals)
+    assert actual == originals[1]['static_capture']['actual_cargo_artifact']
+    assert set(actual['target']['crate_types']) == {'cdylib', 'staticlib', 'rlib'}
+    assert type(actual['fresh']) is bool
+
+
+
+@pytest.mark.parametrize('role,key,value', (
+    ('emitter', 'natural_exit', False), ('emitter', 'natural_exit', 1),
+    ('emitter', 'finished_unix', None), ('emitter', 'capture_errors', ['inert error']),
+    ('emitter', 'source_changes', ['changed']), ('emitter', 'dep_info_errors', ['uncovered']),
+    ('emitter', 'collector_toolchain_changes', ['changed']), ('emitter', 'source_before', {}),
+    ('emitter', 'collector_toolchain_before', {}), ('emitter', 'dep_info', []),
+    ('emitter', 'emitted', []), ('static_capture', 'emitter', '/different/emitter.json'),
+    ('static_capture', 'emitter_sha256', '0' * 64),
+    ('static_capture', 'actual_cargo_artifact', {}), ('static_capture', 'target_triple', 'aarch64-apple-ios'),
+    ('static_capture', 'archive_original', '/old/libconnect_norito_bridge.a'),
+    ('static_capture', 'snapshot_method', 'fingerprint-old-archive'),
+    ('static_capture', 'source_changes', ['changed']), ('static_capture', 'source_before', {}),
+    ('static_capture', 'source_after', {}), ('static_capture', 'finished_unix', 1),
+    ('static_capture', 'native_companion_sha256', '0' * 64),
+    ('component', 'emitter_sha256', '0' * 64), ('component', 'qualified', False),
+    ('component', 'observed_abi_version', 24), ('component', 'artifact_path', '/old/lib.dylib'),
+    ('component', 'artifact_sha256', '0' * 64), ('component', 'source_before', {}),
+    ('component', 'toolchain_before', {}), ('component', 'export_count', 0),
+))
+def test_wrong_stale_archive_emitter_source_tool_and_component_relationship_refused(originals, role, key, value):
+    with pytest.raises(unit.Refused):
+        semantic(originals, [(role, key, value)])
+
+
+def test_current_repository_owned_c_jni_and_privacy_policy_is_exact():
+    policy = unit.native_policy(ROOT)
+    assert len(policy['c_jni']) == 114
+    assert len(policy['privacy']) == 6
+    assert set(policy['c_jni']) <= set(policy['required'])
+
+
+
+@pytest.mark.parametrize('scope,platform,configuration,external', (
+    ('local-integration', 'macos', 'debug', False), ('release', 'macos', 'debug', False),
+    ('local-unit', 'ios', 'debug', False), ('local-unit', 'macos', 'release', False),
+    ('local-unit', 'macos', 'debug', True),
+))
+def test_release_ios_and_other_scope_refusal(scope, platform, configuration, external):
+    with pytest.raises(unit.Refused):
+        unit.host_policy(scope, platform, configuration, external)
+
+
+def test_local_unit_debug_host_is_the_only_policy_positive():
+    unit.host_policy('local-unit', 'macos', 'debug')
+
+
+def command_fixture():
+    output = Path('/owned/inert-output')
+    config = {'python': '/tools/python3.12', 'clang': '/tools/clang', 'ranlib': '/tools/ranlib',
+              'xcodebuild': '/tools/xcodebuild', 'developer_dir': '/tools/Developer',
+              'sdk': '/tools/Developer/MacOSX.sdk', 'deployment_target': '13.0',
+              'actual_archive_original': '/owned/warm/debug/libconnect_norito_bridge.a',
+              'messages_path': '/owned/actual-cargo.jsonl'}
+    environment = {'DEVELOPER_DIR': '/tools/Developer'}
+    expected = unit.expected_commands(ROOT, output, 'aarch64-apple-darwin', config)
+    commands = [{'argv': argv, 'executable': executable, 'environment': environment,
+                 'cwd': str(ROOT), 'started_unix': i + 1, 'finished_unix': i + 1.5,
+                 'natural_exit': 0, 'log': str(output / 'staging' / name), 'log_sha256': 'a' * 64}
+                for i, (argv, executable, name) in enumerate(expected)]
+    tools = {config[name]: 'b' * 64 for name in ('python', 'clang', 'ranlib', 'xcodebuild')}
+    return output, config, environment, commands, tools
+
+
+def test_exact_five_recipe_relationships_are_pure_and_complete():
+    output, config, environment, commands, tools = command_fixture()
+    unit.verify_commands(ROOT, output, 'aarch64-apple-darwin', config, environment, commands, tools)
+
+
+@pytest.mark.parametrize('index,field,value', (
+    (0, 'argv', ['/tools/python3.12', '/different/normalizer.py']),
+    (1, 'executable', '/different/ranlib'), (2, 'argv', ['/tools/clang', 'empty-stub.c']),
+    (3, 'argv', ['/different/consumer']), (4, 'argv', ['/tools/xcodebuild', '-archive']),
+    (0, 'environment', {}), (1, 'cwd', '/different'), (2, 'natural_exit', 1),
+    (3, 'finished_unix', 0), (4, 'started_unix', 0), (4, 'log', '/different/log'),
+))
+def test_child_argv_tool_environment_natural_order_and_logs_are_not_relabelled(index, field, value):
+    output, config, environment, commands, tools = command_fixture()
+    commands[index][field] = value
+    with pytest.raises(unit.Refused):
+        unit.verify_commands(ROOT, output, 'aarch64-apple-darwin', config, environment, commands, tools)
+
+
+def info_fixture():
+    return {'CFBundlePackageType': 'XFWK', 'XCFrameworkFormatVersion': '1.0',
+            'AvailableLibraries': [{'HeadersPath': 'Headers', 'LibraryIdentifier': 'macos-arm64',
+                                   'LibraryPath': 'libNoritoBridge.a', 'SupportedArchitectures': ['arm64'],
+                                   'SupportedPlatform': 'macos'}]}
+
+
+def test_exact_thin_host_metadata_is_only_an_inert_parser_positive():
+    info = info_fixture()
+    unit.check_info(info, 'aarch64-apple-darwin')
+    info['AvailableLibraries'][0]['BinaryPath'] = 'libNoritoBridge.a'
+    unit.check_info(info, 'aarch64-apple-darwin')
+
+
+@pytest.mark.parametrize('field,value', (
+    ('SupportedPlatform', 'ios'), ('SupportedArchitectures', ['arm64', 'x86_64']),
+    ('LibraryIdentifier', 'macos-arm64_x86_64'), ('LibraryPath', 'empty.a'),
+    ('BinaryPath', 'other.a'), ('HeadersPath', '../Headers'), ('Unexpected', True),
+))
+def test_plist_cannot_invent_ios_universal_headers_or_other_archive(field, value):
+    info = info_fixture(); info['AvailableLibraries'][0][field] = value
+    with pytest.raises(unit.Refused):
+        unit.check_info(info, 'aarch64-apple-darwin')
+
+
+def test_tool_alias_resolution_preserves_spelling_without_weakening_archive_policy(tmp_path):
+    target = tmp_path / 'real-tool'; target.write_bytes(b'inert tool bytes; never executed')
+    alias = tmp_path / 'opt-tool'; alias.symlink_to(target)
+    assert unit.tool_digest(alias) == unit.digest(target)
+    with pytest.raises(unit.Refused):
+        unit.digest(alias)
+
+
+def test_wrong_receipt_digest_and_duplicate_json_cannot_be_resealed(tmp_path):
+    path = tmp_path / 'inert.json'; path.write_bytes(b'{"scope":"local-unit","scope":"release"}')
+    with pytest.raises(unit.Refused, match='duplicate'):
+        unit.load(path)
+    with pytest.raises(unit.Refused, match='digest differs'):
+        unit.load(path, '0' * 64)
+
+
+def test_no_native_packaging_without_explicit_recipe_acknowledgement(tmp_path):
+    with pytest.raises(unit.Refused, match='local-unit recipe acknowledgement'):
+        unit.produce(ROOT, {}, tmp_path / 'uncreated-output', {}, False)
+    assert not (tmp_path / 'uncreated-output').exists()
+
+
+def test_original_crypto_consumer_is_preserved_under_current_symbol_wrapper():
+    source = unit.consumer_source(ROOT)
+    assert '#define main iroha_original_crypto_main' in source
+    assert 'return iroha_original_crypto_main();' in source
+    for check in ('check_mldsa_ffi()', 'sha3_expected', 'shake_expected', 'PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec'):
+        assert check in source
+
+
+@pytest.mark.parametrize('raw', (
+    '{"reason":"build-finished","success":false}',
+    '{"reason":"build-finished","success":true}\n{"reason":"build-finished","success":true}',
+    '{"reason":"compiler-artifact"}\n[cargo-fast] late diagnostics\n{"reason":"build-finished","success":true}',
+    'not Cargo JSON', '[]',
+))
+def test_actual_cargo_stream_needs_one_successful_terminal_and_only_preceding_wrapper_diagnostics(raw):
+    with pytest.raises((ValueError, RuntimeError)):
+        custody.cargo_messages(raw)
+
+
+def test_cargo_message_parser_positive_is_inert_data_only():
+    raw = '[cargo-fast] inert banner\n{"reason":"compiler-artifact"}\n{"reason":"build-finished","success":true}'
+    messages = custody.cargo_messages(raw, unit.duplicates)
+    assert len(messages) == 2
+    assert messages[-1] == {'reason': 'build-finished', 'success': True}
+
+
+
+def test_make_dependency_words_are_not_shell_evaluated():
+    assert custody.make_words(r'a\ b.rs c\\d.rs $(literal)') == ['a b.rs', 'c\\d.rs', '$(literal)']
+    with pytest.raises(RuntimeError):
+        custody.make_words('unfinished\\')
+
+
+def manifest_fixture():
+    return {'schema': unit.SCHEMA, 'artifact_scope': 'local-unit', 'purpose': unit.PURPOSE,
+            'version': '0.1.0', 'native_bridge_abi_version': 25,
+            'target_triple': 'aarch64-apple-darwin', 'hashes': {'macos-arm64': 'a' * 64},
+            'producer_record': '/owned/producer-record.json', 'producer_record_sha256': 'b' * 64,
+            'source_inputs': {'inert-source': 'c' * 64}, 'tool_inputs': {'inert-tool': 'd' * 64},
+            'receipt_inputs': {'inert-receipt': 'e' * 64}}
+
+
+@pytest.mark.parametrize('field,value', (
+    ('artifact_scope', 'release'), ('artifact_scope', 'local-integration'),
+    ('schema', 'historical-schema'), ('purpose', 'publication'), ('native_bridge_abi_version', 24),
+    ('target_triple', 'aarch64-apple-ios'), ('producer_record', '/other/producer-record.json'),
+    ('producer_record_sha256', '0' * 64), ('source_inputs', {}), ('tool_inputs', {}),
+    ('receipt_inputs', {}), ('hashes', {'macos-arm64_x86_64': 'a' * 64}),
+))
+def test_wrong_local_manifest_scope_abi_producer_and_inventory_refused_early(field, value):
+    manifest = manifest_fixture(); manifest[field] = value
+    with pytest.raises(unit.Refused):
+        unit.check_manifest(manifest, 'aarch64-apple-darwin', Path('/owned/producer-record.json'), 'b' * 64)
+
+
+def test_native_source_contract_only_selects_repository_owned_bridge_or_real_napi():
+    assert custody.NATIVE_PACKAGE_OWNERS == {'connect_norito_bridge', 'iroha_js_host'}
+    with pytest.raises(RuntimeError, match='Unreviewed native package owner'):
+        custody.capture({}, ROOT, unit.digest, 'caller-selected-private-helper')
+
+
+def dep_fixture(tmp_path):
+    root = tmp_path / 'root'; root.mkdir()
+    source = root / 'source.rs'; source.write_bytes(b'// inert pure dependency parser fixture\n')
+    output = root / 'target'; output.mkdir()
+    retained = tmp_path / 'retained'; retained.mkdir()
+    artifact = output / 'libinert.rlib'
+    actual = str(output / 'inert.d')
+    held = retained / (hashlib.sha256(actual.encode()).hexdigest() + '.d')
+    held.write_text(str(artifact) + ': source.rs\n')
+    sha = unit.digest(source)
+    messages = [{'reason': 'compiler-artifact', 'package_id': 'inert-owner',
+                 'target': {'kind': ['lib']}, 'filenames': [str(artifact)]}]
+    receipts = [{'package_id': 'inert-owner', 'target': {'kind': ['lib']}, 'dep_info': [
+        {'actual_dep_info': actual, 'retained_dep_info': str(held), 'sha256': unit.digest(held),
+         'matched_originals': [{'path': 'source.rs', 'sha256': sha}], 'actual_generated_outputs': []}]}]
+    return messages, receipts, root, {'source.rs': sha}, output, retained
+
+
+def test_retained_actual_dependency_projection_rederives_original_source_bytes(tmp_path):
+    custody.verify_dep_info(*dep_fixture(tmp_path), unit.digest)
+
+
+def test_compiler_lexical_include_parent_normalizes_only_after_original_ancestry_checks(tmp_path):
+    messages, receipts, root, originals, output, retained = dep_fixture(tmp_path)
+    (root / 'nested').mkdir()
+    held = Path(receipts[0]['dep_info'][0]['retained_dep_info'])
+    held.write_text(messages[0]['filenames'][0] + ': nested/../source.rs\n')
+    receipts[0]['dep_info'][0]['sha256'] = unit.digest(held)
+    custody.verify_dep_info(messages, receipts, root, originals, output, retained, unit.digest)
+
+
+@pytest.mark.parametrize('change', ('missing', 'package', 'target', 'owner', 'hash', 'matched', 'generated', 'source'))
+def test_retained_depinfo_missing_substituted_stale_or_generated_original_refused(tmp_path, change):
+    messages, receipts, root, originals, output, retained = dep_fixture(tmp_path)
+    item = receipts[0]['dep_info'][0]
+    if change == 'missing': receipts.clear()
+    elif change == 'package': receipts[0]['package_id'] = 'foreign'
+    elif change == 'target': receipts[0]['target'] = {'kind': ['custom-build']}
+    elif change == 'owner': item['actual_dep_info'] = str(output / 'foreign.d')
+    elif change == 'hash': item['sha256'] = '0' * 64
+    elif change == 'matched': item['matched_originals'] = []
+    elif change == 'generated': item['actual_generated_outputs'] = [{'path': 'source.rs', 'sha256': originals['source.rs']}]
+    elif change == 'source': (root / 'source.rs').write_bytes(b'changed inert source')
+    with pytest.raises(RuntimeError):
+        custody.verify_dep_info(messages, receipts, root, originals, output, retained, unit.digest)
+
+
+@pytest.mark.parametrize('option,value,diagnostic', (
+    ('--consumer-platform', 'ios', 'cannot target iOS'),
+    ('--consumer-configuration', 'release', 'cannot enter Release'),
+))
+def test_verifier_cli_refuses_release_ios_before_any_artifact_or_native_use(monkeypatch, capsys, option, value, diagnostic):
+    monkeypatch.setattr(sys, 'argv', ['norito_bridge_local_unit.py', 'verify', '--root', str(ROOT), option, value])
+    assert unit.cli() == 3
+    assert diagnostic in capsys.readouterr().out
+
+
+def projection_fixture(tmp_path):
+    root = tmp_path / 'worktree'; root.mkdir()
+    manifest = root / 'Cargo.toml'; manifest.write_text('[package]\nname="connect_norito_bridge"\n')
+    originals = {'Cargo.toml': unit.digest(manifest), 'source.rs': 'a' * 64,
+                 'README.md': 'b' * 64, 'fixtures/runtime.json': 'c' * 64}
+    metadata = {'workspace_root': str(root), 'workspace_members': ['bridge'],
+                'packages': [{'id': 'bridge', 'name': 'connect_norito_bridge', 'source': None,
+                              'manifest_path': str(manifest)}],
+                'resolve': {'nodes': [{'id': 'bridge', 'deps': []}]}}
+    receipts = [{'dep_info': [{'matched_originals': [{'path': 'source.rs', 'sha256': 'a' * 64}]}]}]
+    return root, metadata, originals, receipts
+
+
+def test_local_consumed_custody_preserves_broad_docs_change_as_diagnostic_only(tmp_path):
+    root, metadata, originals, receipts = projection_fixture(tmp_path)
+    current = dict(originals, **{'README.md': 'd' * 64})
+    selected = custody.consumed_source_projection(metadata, root, originals, current, receipts)
+    assert selected == {name: originals[name] for name in ('Cargo.toml', 'source.rs', 'fixtures/runtime.json')}
+    assert originals['README.md'] == 'b' * 64
+
+
+@pytest.mark.parametrize('change', ('compiled', 'manifest', 'runtime', 'runtime-add', 'runtime-remove', 'workspace', 'owner'))
+def test_local_consumed_custody_refuses_runtime_compiler_manifest_or_identity_drift(tmp_path, change):
+    root, metadata, originals, receipts = projection_fixture(tmp_path)
+    current = dict(originals)
+    if change == 'compiled': current['source.rs'] = 'd' * 64
+    elif change == 'manifest': current['Cargo.toml'] = 'd' * 64
+    elif change == 'runtime': current['fixtures/runtime.json'] = 'd' * 64
+    elif change == 'runtime-add': current['fixtures/uncaptured.json'] = 'd' * 64
+    elif change == 'runtime-remove': del current['fixtures/runtime.json']
+    elif change == 'workspace': metadata['workspace_root'] = '/different/worktree'
+    elif change == 'owner': metadata['packages'][0]['name'] = 'other_native_owner'
+    with pytest.raises(RuntimeError):
+        custody.consumed_source_projection(metadata, root, originals, current, receipts)
+
+
+def test_static_broad_doc_endpoint_retains_actual_current_dictionary_and_old_emitter(originals):
+    pins, values = originals
+    data = copy.deepcopy(values)
+    source = dict(data['emitter']['source_after'])
+    name = next(iter(source)); source[name] = 'e' * 64
+    capture = data['static_capture']
+    capture.update(source_before=source, source_after=source, upstream_sealed_source_delta=[name],
+                   documentary_scope_review='/owned/review.json', documentary_scope_review_sha256='f' * 64,
+                   original_broad_collector_refusal='/owned/original-refusal.json')
+    # Parser acceptance alone grants no admission: complete actual .d, manifest,
+    # config/runtime projection, original refusal/review and file bytes follow.
+    unit.check_record_semantics(data['emitter'], capture, data['component'],
+                               Path(pins['emitter']['path']), pins['emitter']['sha256'],
+                               'aarch64-apple-darwin')
+    assert data['emitter']['source_after'] != capture['source_after']
+
+
+@pytest.mark.parametrize('change', ('missing-delta', 'false-delta', 'after', 'membership', 'missing-review'))
+def test_static_endpoint_never_relabels_upstream_source_or_silently_prunes_it(originals, change):
+    pins, values = originals; data = copy.deepcopy(values)
+    source = dict(data['emitter']['source_after']); name = next(iter(source)); source[name] = 'e' * 64
+    capture = data['static_capture']
+    capture.update(source_before=source, source_after=source, upstream_sealed_source_delta=[name],
+                   documentary_scope_review='/owned/review.json', documentary_scope_review_sha256='f' * 64,
+                   original_broad_collector_refusal='/owned/original-refusal.json')
+    if change == 'missing-delta': del capture['upstream_sealed_source_delta']
+    elif change == 'false-delta': capture['upstream_sealed_source_delta'] = ['unrelated.md']
+    elif change == 'after': capture['source_after'] = dict(source, **{'extra': 'a' * 64})
+    elif change == 'membership': capture['source_before'] = capture['source_after'] = {}
+    elif change == 'missing-review': del capture['documentary_scope_review_sha256']
+    with pytest.raises(unit.Refused):
+        unit.check_record_semantics(data['emitter'], capture, data['component'],
+                                   Path(pins['emitter']['path']), pins['emitter']['sha256'],
+                                   'aarch64-apple-darwin')
+
+
+@pytest.mark.parametrize('target,accepted', (('../dist/NoritoBridge.xcframework', True), ('../old-native-artifact', False)))
+def test_swift_guard_binds_only_declared_release_selector_link_without_adopting_target(tmp_path, monkeypatch, target, accepted):
+    root = tmp_path / 'root'; (root / 'IrohaSwift').mkdir(parents=True)
+    (root / 'IrohaSwift/NoritoBridge.xcframework').symlink_to(target)
+    monkeypatch.setattr(unit, 'POLICY_INPUTS', [])
+    monkeypatch.setattr(unit, 'HEADER_INPUTS', {})
+    if accepted:
+        assert unit.swift_sources(root) == {'@symlink:IrohaSwift/NoritoBridge.xcframework': hashlib.sha256(target.encode()).hexdigest()}
+    else:
+        with pytest.raises(unit.Refused): unit.swift_sources(root)
+
+
+def test_producer_cli_forwards_acknowledgement_to_exact_recipe_without_native_execution(tmp_path, monkeypatch, capsys):
+    pins = tmp_path / 'pins.json'; pins.write_text('{"inert":true}')
+    config = tmp_path / 'config.json'; config.write_text('{"tool":"inert"}')
+    output = tmp_path / 'not-created'
+    observed = []
+    def observe(root, selected_pins, selected_output, selected_config, acknowledge):
+        observed.append((root, selected_pins, selected_output, selected_config, acknowledge))
+        return selected_output
+    monkeypatch.setattr(unit, 'produce', observe)
+    monkeypatch.setattr(sys, 'argv', ['norito_bridge_local_unit.py', 'produce', '--root', str(ROOT),
+                                     '--pins', str(pins), '--config', str(config), '--output', str(output),
+                                     '--acknowledge-local-unit-recipe'])
+    assert unit.cli() == 0
+    assert observed == [(ROOT, {'inert': True}, output, {'tool': 'inert'}, True)]
+    assert not output.exists()
+    assert str(output) in capsys.readouterr().out

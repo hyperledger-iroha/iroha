@@ -465,14 +465,10 @@ test(
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
     });
-    const page = await client.listBlocks({ limit: 5 });
+    const page = await client.explorerBlocks.list({ limit: 5 });
     assert.ok(page, "blocks page payload must be present");
-    const { pagination, items } = page;
-    assert.ok(pagination, "block list should include pagination metadata");
-    assertNonNegativeInteger(pagination.page, "blocks.pagination.page");
-    assertNonNegativeInteger(pagination.perPage, "blocks.pagination.perPage");
-    assertNonNegativeInteger(pagination.totalPages, "blocks.pagination.totalPages");
-    assertNonNegativeInteger(pagination.totalItems, "blocks.pagination.totalItems");
+    const { nextCursor, items } = page;
+    assert.ok(nextCursor === null || typeof nextCursor === "string");
     assert.ok(Array.isArray(items), "block list should return an items array");
     assert.ok(items.length <= 5, "block list must respect provided limit");
     if (items.length === 0) {
@@ -507,7 +503,7 @@ test(
       apiToken: API_TOKEN,
     });
     const accountId = AUTHORITY_ACCOUNT_ID;
-    const page = await client.listAccountPermissions(accountId, { limit: 10 });
+    const page = await client.accountPermissions(accountId).list({ limit: 10, includeTotal: true });
     assert.ok(page, "account permission list should return a payload");
     assert.ok(
       typeof page.total === "number",
@@ -533,7 +529,7 @@ test(
         "permission token payload must be an object when present",
       );
     }
-    const limitedPage = await client.listAccountPermissions(accountId, { limit: 1 });
+    const limitedPage = await client.accountPermissions(accountId).list({ limit: 1 });
     assert.ok(
       Array.isArray(limitedPage.items),
       "account permission list should respect pagination parameters",
@@ -543,12 +539,12 @@ test(
       "account permission list must respect the provided limit",
     );
     const iteratorIncludesSample = await iteratorIncludes(
-      client.iterateAccountPermissions(accountId, { limit: 2 }),
+      client.accountPermissions(accountId).iterate({ limit: 2 }),
       (entry) => entry?.name === sample.name,
     );
     assert.ok(
       iteratorIncludesSample,
-      "account permission iterator should surface entries returned by listAccountPermissions",
+      "account permission iterator should surface entries returned by the permission collection",
     );
   },
 );
@@ -2249,7 +2245,7 @@ test(
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
     });
-    const blocksPage = await client.listBlocks({ limit: 5 });
+    const blocksPage = await client.explorerBlocks.list({ limit: 5 });
     const candidateHeights = (blocksPage?.items ?? [])
       .map((entry) => entry?.height)
       .filter(
@@ -2514,11 +2510,11 @@ test(
       apiToken: API_TOKEN,
     });
     const manifestOptions =
-      UAID_DATASPACE_ID === null ? undefined : { dataspaceId: UAID_DATASPACE_ID };
-    const manifests = await client.getUaidManifests(UAID_LITERAL, manifestOptions);
+      UAID_DATASPACE_ID === null ? undefined : { filter: `dataspace_id = ${UAID_DATASPACE_ID}` };
+    const manifests = await client.uaidManifests(UAID_LITERAL).list(manifestOptions);
     assertUaidManifestsSnapshot(manifests, UAID_LITERAL);
     assert.notEqual(
-      manifests.manifests.length,
+      manifests.items.length,
       0,
       "UAID manifests endpoint must return the qualification manifest for the supplied UAID",
     );
@@ -4401,13 +4397,10 @@ function assertUaidBindingsSnapshot(snapshot, expectedUaid) {
 
 function assertUaidManifestsSnapshot(snapshot, expectedUaid) {
   assert.ok(snapshot && typeof snapshot === "object", "uaid manifests snapshot must be an object");
-  assert.equal(
-    snapshot.uaid,
-    expectedUaid,
-    "uaid manifests response must echo the requested UAID",
-  );
-  assert.ok(Array.isArray(snapshot.manifests), "uaid manifests array must be present");
-  snapshot.manifests.forEach((record, index) => {
+  assert.ok(snapshot.nextCursor === null || typeof snapshot.nextCursor === "string");
+  assert.ok(Array.isArray(snapshot.items), "uaid manifests array must be present");
+  snapshot.items.forEach((record, index) => {
+    assert.equal(record.manifest.uaid, expectedUaid);
     assert.equal(
       typeof record.dataspace_id,
       "number",
@@ -4600,13 +4593,13 @@ async function waitForUaidManifestRecord(client, uaidLiteral, dataspaceId, optio
   let lastSnapshot = null;
   for (let index = 0; index < attempts; index += 1) {
     try {
-      const snapshot = await client.getUaidManifests(uaidLiteral, {
-        dataspaceId,
+      const snapshot = await client.uaidManifests(uaidLiteral).list({
+        filter: `dataspace_id = ${dataspaceId}`,
       });
       assertUaidManifestsSnapshot(snapshot, uaidLiteral);
       lastSnapshot = snapshot;
       const record =
-        snapshot.manifests.find(
+        snapshot.items.find(
           (entry) => entry && entry.dataspace_id === dataspaceId,
         ) ?? null;
       if (record && predicate(record)) {
@@ -4619,7 +4612,7 @@ async function waitForUaidManifestRecord(client, uaidLiteral, dataspaceId, optio
   }
   if (lastSnapshot) {
     throw new Error(
-      `Space Directory manifest for dataspace ${dataspaceId} not ready after ${attempts} attempts (last manifest count=${lastSnapshot.manifests.length})`,
+      `Space Directory manifest for dataspace ${dataspaceId} not ready after ${attempts} attempts (last manifest count=${lastSnapshot.items.length})`,
     );
   }
   if (lastError) {

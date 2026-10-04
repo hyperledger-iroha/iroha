@@ -176,7 +176,7 @@ fn generated_queries() -> Vec<Value> {
     rows.push(record([
         query::asset::FindAssetsByAccountId::new(account()),
     ]));
-    rows.push(record([query::asset::FindAssetsDefinitions]));
+    rows.push(record([query::asset::FindAssetDefinitions]));
     rows.push(record([query::block::FindBlockHeaders]));
     rows.push(record([query::block::FindBlocks]));
     rows.push(record([query::da::FindDaPinIntentByAlias::new(
@@ -712,6 +712,15 @@ fn generated_queries_preserve_captured_frames() {
         &captured,
         &Value::Array(rows),
         "generated query identities",
+    );
+}
+
+#[test]
+#[ignore = "explicit maintenance capture of the complete generated query catalog"]
+fn print_generated_query_identity_frames() {
+    println!(
+        "GENERATED_QUERY_IDENTITY_FRAMES={}",
+        json::to_json(&Value::Array(generated_queries())).unwrap()
     );
 }
 

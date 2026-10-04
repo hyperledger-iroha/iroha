@@ -125,66 +125,30 @@ test("subscription plan and create endpoints send normalized payloads", async ()
   assert.equal(captured[1].init.redirect, "error");
 });
 
-test("subscription list endpoints build query params and normalize responses", async () => {
+test("subscription collections use flat rows and the shared cursor query", async () => {
   const captured = [];
-  const fetchImpl = async (url) => {
-    const parsed = asUrl(url);
-    captured.push(parsed);
-    if (parsed.pathname === "/v1/subscriptions/plans") {
-      return createResponse({
-        status: 200,
-        jsonData: {
-          items: [{ plan_id: "plan#subs", plan: { provider: SAMPLE_ACCOUNT_ID } }],
-          total: 1,
-        },
-      });
-    }
-    return createResponse({
-      status: 200,
-      jsonData: {
-        items: [
-          {
-            subscription_id: "sub-1$subscriptions",
-            subscription: { status: { status: "active", value: null } },
-            invoice: null,
-            plan: { provider: SAMPLE_ACCOUNT_ID },
-          },
-        ],
-        total: 1,
-      },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-
-  const plans = await client.listSubscriptionPlans({
-    provider: SAMPLE_ACCOUNT_ID,
-    limit: 5,
-    offset: 2,
-  });
-  assert.equal(plans.items.length, 1);
-  assert.equal(plans.items[0].plan_id, "plan#subs");
-  const planUrl = captured[0];
-  assert.equal(planUrl.pathname, "/v1/subscriptions/plans");
-  assert.equal(planUrl.searchParams.get("provider"), SAMPLE_ACCOUNT_ID);
-  assert.equal(planUrl.searchParams.get("limit"), "5");
-  assert.equal(planUrl.searchParams.get("offset"), "2");
-
-  const subs = await client.listSubscriptions({
-    ownedBy: SAMPLE_ACCOUNT_ID,
-    provider: SAMPLE_ACCOUNT_ID,
-    status: "past_due",
-    limit: 1,
-    offset: 0,
-  });
-  assert.equal(subs.items.length, 1);
-  assert.equal(subs.items[0].subscription_id, "sub-1$subscriptions");
-  const subUrl = captured[1];
-  assert.equal(subUrl.pathname, "/v1/subscriptions");
-  assert.equal(subUrl.searchParams.get("owned_by"), SAMPLE_ACCOUNT_ID);
-  assert.equal(subUrl.searchParams.get("provider"), SAMPLE_ACCOUNT_ID);
-  assert.equal(subUrl.searchParams.get("status"), "past_due");
-  assert.equal(subUrl.searchParams.get("limit"), "1");
-  assert.equal(subUrl.searchParams.get("offset"), "0");
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async (url, init) => {
+    const path = asUrl(url).pathname;
+    captured.push({ path, init, body: JSON.parse(init.body) });
+    const row = path.includes("/plans/")
+      ? { id: "plan#subs", provider: SAMPLE_ACCOUNT_ID, billing: {}, pricing: {} }
+      : { id: "sub-1$subscriptions", owned_by: SAMPLE_ACCOUNT_ID, status: "past_due", invoice: null, plan: null };
+    return createResponse({ status: 200, jsonData: { items: [row], next_cursor: null, total: 1 } });
+  }});
+  const plans = await client.subscriptionPlans.list({ filter: `provider = "${SAMPLE_ACCOUNT_ID}"`, limit: 5, includeTotal: true });
+  assert.equal(plans.items[0].id, "plan#subs");
+  assert.equal(plans.items[0].provider, SAMPLE_ACCOUNT_ID);
+  assert.equal(captured[0].path, "/v1/subscriptions/plans/query");
+  assert.equal(captured[0].init.method, "POST");
+  assert.equal(captured[0].body.limit, 5);
+  assert.equal(captured[0].body.include_total, true);
+  const subs = await client.subscriptions.list({ filter: 'status = "past_due"', limit: 1 });
+  assert.equal(subs.items[0].id, "sub-1$subscriptions");
+  assert.equal(subs.items[0].status, "past_due");
+  assert.equal(captured[1].path, "/v1/subscriptions/query");
+  assert.equal(captured[1].body.limit, 1);
+  await assert.rejects(() => client.subscriptions.list({ offset: 0 }), /offset/);
+  assert.equal(captured.length, 2);
 });
 
 test("subscription action endpoints send normalized payloads", async () => {

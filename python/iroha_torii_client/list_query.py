@@ -49,6 +49,8 @@ from typing import (
 )
 
 __all__ = [
+    "AGGREGATE_MAX_GROUP_BY",
+    "AGGREGATE_MAX_METRICS",
     "CURSOR_MAX_BYTES",
     "F",
     "FIELD_PATH_MAX_BYTES",
@@ -109,6 +111,10 @@ SORT_MAX_KEYS = 8
 SELECT_MAX_FIELDS = 64
 #: Maximum encoded length of a pagination cursor.
 CURSOR_MAX_BYTES = 4096
+#: Maximum number of ``group_by`` fields in one aggregate.
+AGGREGATE_MAX_GROUP_BY = 8
+#: Maximum number of metrics in one aggregate.
+AGGREGATE_MAX_METRICS = 16
 #: JSON members accepted in a ``POST /query`` body, in canonical order.
 LIST_QUERY_MEMBERS = (
     "filter",
@@ -388,6 +394,9 @@ def _validate_field_path(path: str) -> None:
         )
     if any(not segment for segment in path.split(".")):
         raise FilterError._invalid_field(path, "field path segments must not be empty")
+    # The text form quotes segments with backticks and has no escape.
+    if "`" in path:
+        raise FilterError._invalid_field(path, "field paths must not contain backticks")
 
 
 def _is_bare_segment(segment: str, first: bool) -> bool:
@@ -1110,7 +1119,12 @@ def _from_json_rec(value: Any, depth: int, budget: _Budget, location: List[Union
             location.append(index)
             operands.append(_from_json_rec(nested, depth + 1, budget, location))
             location.pop()
-        parsed = And(operands) if op == "and" else Or(operands)
+        # A one-operand `and`/`or` is its operand: the text form cannot spell
+        # it, and both forms must decode to the same tree.
+        if len(operands) == 1:
+            parsed = operands[0]
+        else:
+            parsed = And(operands) if op == "and" else Or(operands)
     elif op == "not":
         if not isinstance(args, list) or len(args) != 1:
             raise malformed("`not` takes an array with exactly one filter node")
@@ -1381,7 +1395,9 @@ class _Lexer:
                 else:
                     raise self.error(escape_at, f"unknown escape sequence `\\{escaped}`")
                 continue
-            if unicodedata.category(ch) == "Cc":
+            # As in JSON, only U+0000..U+001F must be escaped; DEL and C1
+            # characters stay literal, so every rendered literal parses.
+            if ch < "\x20":
                 raise self.error(index, "control characters must be escaped inside string literals")
             out.append(ch)
             index += 1
@@ -1976,6 +1992,20 @@ class ListQuery:
         if self.aggregate is not None:
             if not self.aggregate.metrics:
                 raise ListQueryError("aggregate", "`metrics` must list at least one metric")
+            if len(self.aggregate.group_by) > AGGREGATE_MAX_GROUP_BY:
+                raise ListQueryError(
+                    "aggregate", f"`group_by` lists at most {AGGREGATE_MAX_GROUP_BY} fields"
+                )
+            if len(self.aggregate.metrics) > AGGREGATE_MAX_METRICS:
+                raise ListQueryError(
+                    "aggregate", f"`metrics` lists at most {AGGREGATE_MAX_METRICS} metrics"
+                )
+            metric_fields = [m.field for m in self.aggregate.metrics if m.field is not None]
+            for path in (*self.aggregate.group_by, *metric_fields):
+                try:
+                    _validate_field_path(path)
+                except FilterError as error:
+                    raise ListQueryError("aggregate", str(error)) from None
             if isinstance(self.aggregate.having, Filter):
                 try:
                     self.aggregate.having.validate()
@@ -2265,21 +2295,27 @@ class Page(Generic[T]):
     ) -> "Page[T]":
         """Decode a page envelope, converting items with ``item``.
 
-        Unknown envelope members are ignored; ``items`` must be an array,
-        ``next_cursor`` a string or null and ``total`` a non-negative integer.
+        The envelope contains only ``items``, mandatory ``next_cursor`` and
+        optional ``total``. Totals cannot be smaller than the current page.
         """
 
         if not isinstance(payload, Mapping):
             raise ValueError("a page must be a JSON object")
+        if set(payload) - {"items", "next_cursor", "total"}:
+            raise ValueError("a page contains an unknown envelope field")
         items = payload.get("items")
         if not isinstance(items, list):
             raise ValueError("a page must contain an `items` array")
-        next_cursor = payload.get("next_cursor")
-        if next_cursor is not None and not isinstance(next_cursor, str):
-            raise ValueError("`next_cursor` must be a string or null")
+        if "next_cursor" not in payload:
+            raise ValueError("a page must contain `next_cursor`")
+        next_cursor = payload["next_cursor"]
+        if next_cursor is not None and (not isinstance(next_cursor, str) or not next_cursor):
+            raise ValueError("`next_cursor` must be a non-empty string or null")
         total = payload.get("total")
         if total is not None and (isinstance(total, bool) or not isinstance(total, int) or total < 0):
             raise ValueError("`total` must be a non-negative integer")
+        if "total" in payload and (total is None or total < len(items)):
+            raise ValueError("`total` must be an integer at least as large as the current page")
         converted = tuple(items) if item is None else tuple(item(entry) for entry in items)
         return cls(converted, next_cursor, total)  # type: ignore[arg-type]
 

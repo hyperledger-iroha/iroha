@@ -246,7 +246,12 @@ impl From<Error> for ManagedAttachmentFailure {
             Error::Io(_) | Error::Busy(_) => Self::CustodyUnavailable,
             Error::ParentDeadline | Error::Timeout(_) => Self::AwaitingCompletion,
             Error::ParentProgressDeadline { failure, .. } => failure,
-            Error::NoSelection | Error::Invalid(_) => Self::ContextRejected,
+            // A retained service bootstrap that cannot advance under this authorization
+            // invalidates the selected context; it is never a parent completion signal.
+            Error::NoSelection
+            | Error::Invalid(_)
+            | Error::Bootstrap(_)
+            | Error::ContractCall { .. } => Self::ContextRejected,
         }
     }
 }

@@ -76,8 +76,8 @@ export function stringifyRequestJson(value, context) {
 }
 
 /**
- * Decode a page envelope. Unknown envelope members are ignored so that Torii
- * can add members without breaking clients. `total` (a `u64`) is a number,
+ * Decode the exact page envelope, requiring an explicit `next_cursor`.
+ * `total` (a `u64`) is a number,
  * or a `bigint` beyond `Number.MAX_SAFE_INTEGER`, and is present only when
  * the query asked for it.
  *
@@ -90,23 +90,34 @@ export function decodePage(value, context = "collection page") {
   if (!isPlainRecord(value)) {
     throw protocolError(`${context} must be a JSON object`);
   }
+  for (const field of Object.keys(value)) {
+    if (!["items", "next_cursor", "total"].includes(field)) {
+      throw protocolError(`${context} contains unknown field \`${field}\``);
+    }
+  }
   if (!Array.isArray(value.items)) {
     throw protocolError(`${context} must contain an \`items\` array`);
   }
   let nextCursor = null;
-  if (value.next_cursor !== undefined && value.next_cursor !== null) {
+  if (!Object.hasOwn(value, "next_cursor")) {
+    throw protocolError(`${context} must contain \`next_cursor\``);
+  }
+  if (value.next_cursor !== null) {
     if (typeof value.next_cursor !== "string" || value.next_cursor.length === 0) {
       throw protocolError(`${context} \`next_cursor\` must be a non-empty string or null`);
     }
     nextCursor = value.next_cursor;
   }
   let total;
-  if (value.total !== undefined && value.total !== null) {
+  if (Object.hasOwn(value, "total")) {
     const valid = typeof value.total === "bigint"
       ? value.total > BigInt(Number.MAX_SAFE_INTEGER) && value.total <= U64_MAX
       : Number.isSafeInteger(value.total) && value.total >= 0;
     if (!valid) {
       throw protocolError(`${context} \`total\` must be a non-negative 64-bit integer`);
+    }
+    if (value.total < value.items.length) {
+      throw protocolError(`${context} \`total\` cannot be smaller than the page`);
     }
     total = value.total;
   }

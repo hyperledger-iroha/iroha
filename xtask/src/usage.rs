@@ -538,6 +538,10 @@ fn print_usage() {
         "    Produce a PolicyJurySortitionV1 manifest for roadmap item MINFO-5 (specs/ministry/policy_jury_ballots.md), wiring deterministic draws + waitlists into referendum packets."
     );
     eprintln!(
+        "  cargo xtask kagami-bundle [--out <fresh-directory>] [--profile debug|release] [--network-profiles <artifact>]"
+    );
+    eprintln!("    Build matching Kagami and iroha3d together and inventory a native CLI package.");
+    eprintln!(
         "  cargo xtask mochi-bundle [--out <path>] [--profile <name>] [--no-archive] [--network-profiles <path>] [--matrix <path>] [--smoke] [--stage <path>]"
     );
     eprintln!("  cargo xtask mochi-latency --bundle <directory> --out <new-sample-directory>");

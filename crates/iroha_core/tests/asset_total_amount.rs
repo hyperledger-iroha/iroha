@@ -98,7 +98,7 @@ fn asset_totals_track_multi_account_mint_and_burn() {
     stx.apply();
     state_block.commit_world_overlay_for_testing().unwrap();
     let view = state.view();
-    let definition = FindAssetsDefinitions::new()
+    let definition = FindAssetDefinitions::new()
         .execute(CompoundPredicate::PASS, &view)
         .expect("query asset definitions")
         .find(|definition| definition.id() == &definition_id)
@@ -176,7 +176,7 @@ fn asset_totals_drop_when_unregistering_account() {
         .commit_world_overlay_for_testing()
         .expect("commit block 2");
     let view = state.view();
-    let definition = FindAssetsDefinitions::new()
+    let definition = FindAssetDefinitions::new()
         .execute(CompoundPredicate::PASS, &view)
         .expect("query definitions")
         .find(|candidate| candidate.id() == &definition_id)
@@ -268,7 +268,7 @@ fn asset_totals_preserve_when_unregistering_domain_with_foreign_holders() {
         .commit_world_overlay_for_testing()
         .expect("commit block 2");
     let view = state.view();
-    let definition = FindAssetsDefinitions::new()
+    let definition = FindAssetDefinitions::new()
         .execute(CompoundPredicate::PASS, &view)
         .expect("query definitions")
         .find(|candidate| candidate.id() == &definition_id)
@@ -369,7 +369,7 @@ fn unregistering_definition_domain_cleans_foreign_assets() {
         .expect("commit block 2");
     let view = state.view();
     assert!(
-        FindAssetsDefinitions::new()
+        FindAssetDefinitions::new()
             .execute(CompoundPredicate::PASS, &view)
             .expect("query definitions")
             .all(|definition| definition.id() != &definition_id),

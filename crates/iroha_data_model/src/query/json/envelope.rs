@@ -706,7 +706,7 @@ impl SingularQueryJson {
 pub struct IterableQueryJson {
     /// Query selector describing which dataset to enumerate.
     pub kind: IterableQueryKind,
-    /// Optional pagination, sorting, and projection controls.
+    /// Optional pagination and sorting controls.
     pub params: IterableQueryParamsJson,
     /// Optional predicate evaluated against each item.
     pub predicate: Option<PredicateJson>,
@@ -779,22 +779,6 @@ impl IterableQueryJson {
             },
         )
     }
-    #[cfg(not(feature = "ids_projection"))]
-    fn selector<T>(&self) -> Result<SelectorTuple<T>, QueryJsonError> {
-        if self.params.ids_projection.unwrap_or(false) {
-            Err(QueryJsonError::IdsProjectionUnavailable)
-        } else {
-            Ok(SelectorTuple::default())
-        }
-    }
-    #[cfg(feature = "ids_projection")]
-    fn selector<T>(&self) -> SelectorTuple<T> {
-        if self.params.ids_projection.unwrap_or(false) {
-            SelectorTuple::ids_only()
-        } else {
-            SelectorTuple::default()
-        }
-    }
     fn build_for_kind<Item, Q, F>(
         &self,
         params: QueryParams,
@@ -811,13 +795,9 @@ impl IterableQueryJson {
         F: FnOnce() -> Q,
     {
         let predicate = self.predicate_or_pass::<Item>()?;
-        #[cfg(not(feature = "ids_projection"))]
-        let selector = self.selector::<Item>()?;
-        #[cfg(feature = "ids_projection")]
-        let selector = self.selector::<Item>();
         Ok(build_query_with_params::<Item, Q, _>(
             &predicate,
-            &selector,
+            &SelectorTuple::default(),
             params,
             constructor,
         ))
@@ -850,10 +830,20 @@ impl IterableQueryJson {
                     crate::query::account::prelude::FindAccountIds
                 })
             }
-            IterableQueryKind::FindAssetsDefinitions => {
+            IterableQueryKind::FindTriggers => {
+                type Item = crate::trigger::Trigger;
+                self.build_for_kind::<Item, _, _>(params, || crate::query::trigger::FindTriggers)
+            }
+            IterableQueryKind::FindActiveTriggerIds => {
+                type Item = crate::trigger::TriggerId;
+                self.build_for_kind::<Item, _, _>(params, || {
+                    crate::query::trigger::FindActiveTriggerIds
+                })
+            }
+            IterableQueryKind::FindAssetDefinitions => {
                 type Item = crate::asset::definition::AssetDefinition;
                 self.build_for_kind::<Item, _, _>(params.clone(), || {
-                    crate::query::asset::prelude::FindAssetsDefinitions
+                    crate::query::asset::prelude::FindAssetDefinitions
                 })
             }
             IterableQueryKind::FindAssetEscrows => {
@@ -918,8 +908,12 @@ pub enum IterableQueryKind {
     FindAccounts,
     /// Enumerate account identifiers only.
     FindAccountIds,
+    /// Enumerate trigger records.
+    FindTriggers,
+    /// Enumerate active trigger identifiers.
+    FindActiveTriggerIds,
     /// Enumerate asset definitions.
-    FindAssetsDefinitions,
+    FindAssetDefinitions,
     /// Enumerate native asset escrows.
     FindAssetEscrows,
     /// Enumerate registered NFTs.
@@ -944,7 +938,9 @@ impl IterableQueryKind {
             IterableQueryKind::FindDomains => "FindDomains",
             IterableQueryKind::FindAccounts => "FindAccounts",
             IterableQueryKind::FindAccountIds => "FindAccountIds",
-            IterableQueryKind::FindAssetsDefinitions => "FindAssetsDefinitions",
+            IterableQueryKind::FindTriggers => "FindTriggers",
+            IterableQueryKind::FindActiveTriggerIds => "FindActiveTriggerIds",
+            IterableQueryKind::FindAssetDefinitions => "FindAssetDefinitions",
             IterableQueryKind::FindAssetEscrows => "FindAssetEscrows",
             IterableQueryKind::FindNfts => "FindNfts",
             IterableQueryKind::FindRwas => "FindRwas",
@@ -964,7 +960,9 @@ impl FromStr for IterableQueryKind {
             "FindDomains" => Ok(IterableQueryKind::FindDomains),
             "FindAccounts" => Ok(IterableQueryKind::FindAccounts),
             "FindAccountIds" => Ok(IterableQueryKind::FindAccountIds),
-            "FindAssetsDefinitions" => Ok(IterableQueryKind::FindAssetsDefinitions),
+            "FindTriggers" => Ok(IterableQueryKind::FindTriggers),
+            "FindActiveTriggerIds" => Ok(IterableQueryKind::FindActiveTriggerIds),
+            "FindAssetDefinitions" => Ok(IterableQueryKind::FindAssetDefinitions),
             "FindAssetEscrows" => Ok(IterableQueryKind::FindAssetEscrows),
             "FindNfts" => Ok(IterableQueryKind::FindNfts),
             "FindRwas" => Ok(IterableQueryKind::FindRwas),
@@ -990,12 +988,6 @@ pub struct IterableQueryParamsJson {
     pub sort_by_metadata_key: Option<String>,
     /// Sort direction applied when a metadata key is provided.
     pub order: Option<crate::query::parameters::SortOrder>,
-    /// Whether to project identifiers only (requires the `ids_projection` feature).
-    pub ids_projection: Option<bool>,
-    /// Optional lane identifier filter.
-    pub lane_id: Option<u64>,
-    /// Optional data-space identifier filter.
-    pub dsid: Option<String>,
 }
 impl IterableQueryParamsJson {
     fn is_empty(&self) -> bool {
@@ -1004,9 +996,6 @@ impl IterableQueryParamsJson {
             && self.fetch_size.is_none()
             && self.sort_by_metadata_key.is_none()
             && self.order.is_none()
-            && self.ids_projection.is_none()
-            && self.lane_id.is_none()
-            && self.dsid.is_none()
     }
     fn to_value(&self) -> Value {
         let mut map = Map::new();
@@ -1031,15 +1020,6 @@ impl IterableQueryParamsJson {
                 json::to_value(order).expect("SortOrder serializes"),
             );
         }
-        if let Some(ids) = self.ids_projection {
-            map.insert("ids_projection".to_owned(), Value::from(ids));
-        }
-        if let Some(lane) = self.lane_id {
-            map.insert("lane_id".to_owned(), Value::from(lane));
-        }
-        if let Some(dsid) = &self.dsid {
-            map.insert("dsid".to_owned(), Value::String(dsid.clone()));
-        }
         Value::Object(map)
     }
     fn from_value(value: &Value) -> Result<Self, QueryJsonError> {
@@ -1051,9 +1031,6 @@ impl IterableQueryParamsJson {
         let mut fetch_size = None;
         let mut sort_by_metadata_key = None;
         let mut order = None;
-        let mut ids_projection = None;
-        let mut lane_id = None;
-        let mut dsid = None;
         for (key, value) in map {
             match key.as_str() {
                 "limit" => limit = params_optional_u64(value, "limit")?,
@@ -1076,11 +1053,6 @@ impl IterableQueryParamsJson {
                         }
                     });
                 }
-                "ids_projection" => {
-                    ids_projection = params_optional_bool(value, "ids_projection")?;
-                }
-                "lane_id" => lane_id = params_optional_u64(value, "lane_id")?,
-                "dsid" => dsid = params_optional_string(value, "dsid")?,
                 other => {
                     return Err(QueryJsonError::UnknownField {
                         section: "params",
@@ -1095,9 +1067,6 @@ impl IterableQueryParamsJson {
             fetch_size,
             sort_by_metadata_key,
             order,
-            ids_projection,
-            lane_id,
-            dsid,
         })
     }
     fn into_query_params(self) -> Result<QueryParams, QueryJsonError> {
@@ -1107,9 +1076,6 @@ impl IterableQueryParamsJson {
             fetch_size,
             sort_by_metadata_key,
             order,
-            ids_projection: _,
-            lane_id: _,
-            dsid: _,
         } = self;
         let limit = limit
             .map(|value| {
@@ -1146,16 +1112,6 @@ fn params_optional_u64(value: &Value, field: &'static str) -> Result<Option<u64>
             .as_u64()
             .map(Some)
             .ok_or(QueryJsonError::InvalidField("params", field)),
-    }
-}
-fn params_optional_bool(
-    value: &Value,
-    field: &'static str,
-) -> Result<Option<bool>, QueryJsonError> {
-    match value {
-        Value::Null => Ok(None),
-        Value::Bool(value) => Ok(Some(*value)),
-        _ => Err(QueryJsonError::InvalidField("params", field)),
     }
 }
 fn params_optional_string(
@@ -1254,9 +1210,6 @@ pub enum QueryJsonError {
     /// invalid sort order: {0}
     #[error("invalid sort order: {0}")]
     InvalidSortOrder(String),
-    /// ids projection requested but feature is disabled
-    #[error("ids projection requested but feature is disabled")]
-    IdsProjectionUnavailable,
 }
 impl From<PredicateParseError> for QueryJsonError {
     fn from(err: PredicateParseError) -> Self {
@@ -1757,10 +1710,7 @@ mod tests {
             "limit": null,
             "offset": null,
             "fetch_size": null,
-            "sort_by_metadata_key": null,
-            "ids_projection": null,
-            "lane_id": null,
-            "dsid": null
+            "sort_by_metadata_key": null
         });
         let parsed = IterableQueryParamsJson::from_value(&value)
             .expect("null optional params should be accepted as absent");
@@ -1779,11 +1729,6 @@ mod tests {
             ("fetch_size", Value::from(1.5_f64)),
             ("fetch_size", Value::from("fifty")),
             ("sort_by_metadata_key", Value::from(false)),
-            ("ids_projection", Value::from(1_u64)),
-            ("lane_id", Value::from(-1_i64)),
-            ("lane_id", Value::from(1.5_f64)),
-            ("lane_id", Value::from("zero")),
-            ("dsid", Value::from(false)),
         ];
         for (field, value) in invalid_values {
             let mut map = Map::new();
@@ -1794,21 +1739,92 @@ mod tests {
         }
     }
     #[test]
-    fn ids_projection_requires_feature() {
-        let json = norito::json!({
-            "type": "FindPeers",
-            "params": {
-                "ids_projection": true
+    fn unsupported_iterable_params_are_rejected_as_unknown() {
+        for field in ["ids_projection", "lane_id", "dsid"] {
+            for value in [
+                Value::Null,
+                Value::from(false),
+                Value::from(1_u64),
+                Value::from("0"),
+            ] {
+                let mut params = Map::new();
+                params.insert(field.to_owned(), value);
+                let json = norito::json!({
+                    "type": "FindPeers",
+                    "params": (Value::Object(params))
+                });
+                assert_eq!(
+                    IterableQueryJson::from_value(&json),
+                    Err(QueryJsonError::UnknownField {
+                        section: "params",
+                        field: field.to_owned(),
+                    })
+                );
             }
-        });
-        let parsed = IterableQueryJson::from_value(&json).expect("parse");
-        #[cfg(not(feature = "ids_projection"))]
-        assert!(matches!(
-            parsed.clone().into_query_with_params(),
-            Err(QueryJsonError::IdsProjectionUnavailable)
-        ));
-        #[cfg(feature = "ids_projection")]
-        assert!(parsed.into_query_with_params().is_ok());
+        }
+    }
+    #[test]
+    fn asset_definition_query_has_one_canonical_name() {
+        let json = norito::json!({"type": "FindAssetDefinitions"});
+        let query = IterableQueryJson::from_value(&json).expect("canonical query name");
+        assert_eq!(query.to_value(), json);
+        let start = query
+            .into_query_with_params()
+            .expect("canonical query request");
+        assert_eq!(
+            start.parts().0,
+            crate::query::QueryItemKind::AssetDefinition
+        );
+        assert_eq!(
+            IterableQueryJson::from_value(&norito::json!({"type": "FindAssetsDefinitions"})),
+            Err(QueryJsonError::UnknownIterableType(
+                "FindAssetsDefinitions".to_owned()
+            ))
+        );
+    }
+    #[test]
+    fn admitted_iterable_kinds_roundtrip_through_json_and_norito() {
+        use crate::query::QueryItemKind;
+        for (name, kind) in [
+            ("FindPeers", QueryItemKind::PeerId),
+            ("FindAccountIds", QueryItemKind::AccountId),
+            ("FindTriggers", QueryItemKind::Trigger),
+            ("FindActiveTriggerIds", QueryItemKind::TriggerId),
+        ] {
+            let source = norito::json!({"iterable": {"type": name}});
+            let json = norito::json::to_json(&source).expect("query JSON");
+            let envelope: QueryEnvelopeJson =
+                norito::json::from_str(&json).expect("query envelope");
+            assert_eq!(
+                norito::json::to_value(&envelope).expect("JSON roundtrip"),
+                source
+            );
+            let request = envelope.into_request().expect("admitted query kind");
+            let frame = norito::encode_canonical(&request).expect("query wire frame");
+            let QueryRequest::Start(start) =
+                norito::decode_from_bytes(&frame).expect("query wire roundtrip")
+            else {
+                panic!("iterable envelope must produce a Start");
+            };
+            assert_eq!(start.parts().0, kind);
+        }
+    }
+    #[test]
+    fn iterable_requests_carry_the_empty_selector() {
+        let json = norito::json!({"type": "FindPeers"});
+        let start = IterableQueryJson::from_value(&json)
+            .expect("parse")
+            .into_query_with_params()
+            .expect("build");
+        let (_, _, selector, _) = start.parts();
+        assert_eq!(
+            selector,
+            norito::codec::Encode::encode(
+                &SelectorTuple::<iroha_model_base::peer::PeerId>::default()
+            )
+            .as_slice(),
+            "selectors have exactly one wire layout"
+        );
     }
 }
 

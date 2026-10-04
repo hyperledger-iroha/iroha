@@ -250,39 +250,88 @@ impl fmt::Display for ConfigLoadError {
 
 impl std::error::Error for ConfigLoadError {}
 /// Invalid signer-free account network context from a client configuration.
-#[derive(thiserror::Error, Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum AccountChainDiscriminantError {
+    /// Neither a public network profile nor an explicit discriminant was configured.
+    #[error("account network context is missing: set a public profile or a chain discriminant")]
+    Missing,
     /// The configured public network profile is unknown.
-    #[error("unknown account network profile")]
-    UnknownProfile,
+    #[error("unknown account network profile `{profile}`")]
+    UnknownProfile {
+        /// Supplied profile label.
+        profile: String,
+    },
     /// An explicit discriminant disagrees with the selected public profile.
-    #[error("account network profile and chain discriminant disagree")]
-    ProfileMismatch,
-    /// Zero is not a valid public account chain discriminant.
+    #[error(
+        "account network profile `{profile}` expects chain discriminant {expected}, but {actual} was configured"
+    )]
+    ProfileMismatch {
+        /// Canonical name of the selected public profile.
+        profile: &'static str,
+        /// I105 chain discriminant assigned to the profile.
+        expected: u16,
+        /// Explicitly configured I105 chain discriminant.
+        actual: u16,
+    },
+    /// Zero is not a valid account chain discriminant.
     #[error("account chain discriminant must be nonzero")]
     Zero,
 }
-/// Resolve a public account profile and optional explicit I105 chain discriminant.
+impl From<AccountChainDiscriminantError> for ParseError {
+    fn from(error: AccountChainDiscriminantError) -> Self {
+        match error {
+            AccountChainDiscriminantError::Missing => Self::MissingAccountNetworkContext,
+            AccountChainDiscriminantError::UnknownProfile { profile } => {
+                Self::InvalidAccountProfile { profile }
+            }
+            AccountChainDiscriminantError::ProfileMismatch {
+                profile,
+                expected,
+                actual,
+            } => Self::AccountProfileDiscriminantMismatch {
+                profile: profile.to_owned(),
+                expected,
+                actual,
+            },
+            AccountChainDiscriminantError::Zero => Self::ZeroAccountChainDiscriminant,
+        }
+    }
+}
+/// Resolve a client account network context to its I105 chain discriminant.
 ///
-/// This helper does not parse or construct an account or key pair, so signer-free
-/// clients can validate the same public network context as [`Config::load`].
+/// A known public `profile` (`taira`, `minamoto`; blank counts as absent) determines the
+/// discriminant. An `explicit` discriminant selects any other network and must agree with a
+/// profile when both are present. There is no default network: with neither input the context
+/// is missing. [`Config::load`] applies exactly this rule to `account.profile` and
+/// `account.chain_discriminant`; this helper constructs no account or key pair, so signer-free
+/// clients validate the same public network context.
 ///
 /// # Errors
-/// Returns an error for an unknown profile, a profile/discriminant mismatch, or zero.
+/// Returns an error when both inputs are absent, for an unknown profile, for a
+/// profile/discriminant mismatch, or for zero.
 pub fn resolve_account_chain_discriminant(
     profile: Option<&str>,
     explicit: Option<u16>,
 ) -> Result<u16, AccountChainDiscriminantError> {
     let profile = profile.map(str::trim).filter(|profile| !profile.is_empty());
-    let discriminant = if let Some(profile) = profile {
-        let profile = iroha_torii_shared::network_profile(profile)
-            .ok_or(AccountChainDiscriminantError::UnknownProfile)?;
-        if explicit.is_some_and(|value| value != profile.chain_discriminant) {
-            return Err(AccountChainDiscriminantError::ProfileMismatch);
+    let discriminant = match (profile, explicit) {
+        (Some(name), explicit) => {
+            let profile = iroha_torii_shared::network_profile(name).ok_or_else(|| {
+                AccountChainDiscriminantError::UnknownProfile {
+                    profile: name.to_owned(),
+                }
+            })?;
+            if let Some(actual) = explicit.filter(|value| *value != profile.chain_discriminant) {
+                return Err(AccountChainDiscriminantError::ProfileMismatch {
+                    profile: profile.name,
+                    expected: profile.chain_discriminant,
+                    actual,
+                });
+            }
+            profile.chain_discriminant
         }
-        profile.chain_discriminant
-    } else {
-        explicit.unwrap_or(iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT)
+        (None, Some(explicit)) => explicit,
+        (None, None) => return Err(AccountChainDiscriminantError::Missing),
     };
     if discriminant == 0 {
         return Err(AccountChainDiscriminantError::Zero);
@@ -498,7 +547,7 @@ mod tests {
             web_login = "mad_hatter"
             password = "ilovetea"
             [account]
-            domain = "wonderland.universal"
+            chain_discriminant = 753
             public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
             [transaction]
@@ -773,16 +822,169 @@ mod tests {
             iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT
         );
         assert_eq!(
+            resolve_account_chain_discriminant(Some(" Minamoto "), None).expect("known profile"),
+            iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT
+        );
+        assert_eq!(
             resolve_account_chain_discriminant(None, Some(777)).expect("explicit discriminant"),
             777
         );
         assert_eq!(
+            resolve_account_chain_discriminant(Some("taira"), Some(369)).expect("matching pair"),
+            369
+        );
+        assert_eq!(
             resolve_account_chain_discriminant(Some("taira"), Some(753)),
-            Err(AccountChainDiscriminantError::ProfileMismatch)
+            Err(AccountChainDiscriminantError::ProfileMismatch {
+                profile: iroha_torii_shared::NETWORK_PROFILE_TAIRA,
+                expected: iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT,
+                actual: 753,
+            })
+        );
+        assert_eq!(
+            resolve_account_chain_discriminant(Some("unknownnet"), Some(777)),
+            Err(AccountChainDiscriminantError::UnknownProfile {
+                profile: "unknownnet".to_owned(),
+            })
         );
         assert_eq!(
             resolve_account_chain_discriminant(None, Some(0)),
             Err(AccountChainDiscriminantError::Zero)
+        );
+        for profile in [None, Some(""), Some(" ")] {
+            assert_eq!(
+                resolve_account_chain_discriminant(profile, None),
+                Err(AccountChainDiscriminantError::Missing),
+                "{profile:?} must not select a default network"
+            );
+        }
+    }
+    #[test]
+    fn signer_free_resolution_errors_map_onto_parse_errors() {
+        assert_eq!(
+            ParseError::from(AccountChainDiscriminantError::Missing),
+            ParseError::MissingAccountNetworkContext
+        );
+        assert_eq!(
+            ParseError::from(AccountChainDiscriminantError::UnknownProfile {
+                profile: "unknownnet".to_owned(),
+            }),
+            ParseError::InvalidAccountProfile {
+                profile: "unknownnet".to_owned(),
+            }
+        );
+        assert_eq!(
+            ParseError::from(AccountChainDiscriminantError::ProfileMismatch {
+                profile: iroha_torii_shared::NETWORK_PROFILE_TAIRA,
+                expected: iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT,
+                actual: 753,
+            }),
+            ParseError::AccountProfileDiscriminantMismatch {
+                profile: iroha_torii_shared::NETWORK_PROFILE_TAIRA.to_owned(),
+                expected: iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT,
+                actual: 753,
+            }
+        );
+        assert_eq!(
+            ParseError::from(AccountChainDiscriminantError::Zero),
+            ParseError::ZeroAccountChainDiscriminant
+        );
+    }
+    fn account_table(table: &mut toml::Table) -> &mut toml::Table {
+        table
+            .get_mut("account")
+            .and_then(toml::Value::as_table_mut)
+            .expect("client account table")
+    }
+    fn load_without_env(table: toml::Table) -> Result<Config, ConfigLoadError> {
+        Ok(ConfigReader::new()
+            .without_env()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<user::Root>()
+            .change_context(LoadError)?
+            .parse()
+            .change_context(LoadError)?)
+    }
+    #[test]
+    fn loader_requires_explicit_account_network_context() {
+        let mut table = config_sample();
+        account_table(&mut table).remove("chain_discriminant");
+        let error = load_without_env(table.clone())
+            .expect_err("a client config without network context must not default to mainnet");
+        assert!(
+            error
+                .report()
+                .frames()
+                .filter_map(|frame| frame.downcast_ref::<ParseError>())
+                .any(|error| *error == ParseError::MissingAccountNetworkContext),
+            "{error:?}"
+        );
+        assert_contains!(error.to_string(), "account.profile");
+
+        account_table(&mut table).insert("profile".into(), toml::Value::String("taira".into()));
+        let config = load_without_env(table.clone()).expect("profile context");
+        assert_eq!(
+            config.account_chain_discriminant,
+            iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT
+        );
+
+        account_table(&mut table).insert("chain_discriminant".into(), toml::Value::Integer(753));
+        let error = load_without_env(table)
+            .expect_err("an explicit discriminant must agree with the profile");
+        assert!(
+            error
+                .report()
+                .frames()
+                .filter_map(|frame| frame.downcast_ref::<ParseError>())
+                .any(|error| matches!(
+                    error,
+                    ParseError::AccountProfileDiscriminantMismatch { actual: 753, .. }
+                )),
+            "{error:?}"
+        );
+    }
+    #[test]
+    fn loader_rejects_retired_account_domain() {
+        let mut table = config_sample();
+        account_table(&mut table).insert(
+            "domain".into(),
+            toml::Value::String("wonderland.universal".into()),
+        );
+        let error = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<user::Root>()
+            .expect_err("`account.domain` is not a client configuration parameter");
+        let unknown: Vec<String> = error
+            .frames()
+            .filter_map(|frame| frame.downcast_ref::<iroha_config_base::attach::UnknownParameter>())
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(unknown, ["unknown parameter: `account.domain`"]);
+    }
+    #[test]
+    fn env_account_domain_is_not_read() {
+        let key = checked_random_keypair();
+        let env = MockEnv::new()
+            .set("CHAIN", "wonder")
+            .set(
+                "NETWORK_ID",
+                "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+            )
+            .set("TORII_URL", "http://localhost:8080")
+            .set("ACCOUNT_CHAIN_DISCRIMINANT", "777")
+            .set("ACCOUNT_DOMAIN", "land.universal")
+            .set(
+                "ACCOUNT_PRIVATE_KEY",
+                ExposedPrivateKey(key.private_key().clone()).to_string(),
+            )
+            .set("ACCOUNT_PUBLIC_KEY", key.public_key().to_string());
+        let config =
+            Config::load_with_env(LoadPath::Default("non_existing_path"), env.clone()).unwrap();
+        assert_eq!(config.account_chain_discriminant, 777);
+        assert_eq!(
+            env.unvisited(),
+            HashSet::from(["ACCOUNT_DOMAIN".to_owned()]),
+            "the retired account scope must not be an environment parameter"
         );
     }
     #[test]
@@ -800,7 +1002,6 @@ mod tests {
                 "ACCOUNT_CHAIN_DISCRIMINANT",
                 iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT.to_string(),
             )
-            .set("ACCOUNT_DOMAIN", "land.universal")
             .set(
                 "ACCOUNT_PRIVATE_KEY",
                 ExposedPrivateKey(key.private_key().clone()).to_string(),

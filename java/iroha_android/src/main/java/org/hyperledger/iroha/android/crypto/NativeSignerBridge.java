@@ -1,24 +1,34 @@
 package org.hyperledger.iroha.android.crypto;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
-import org.hyperledger.iroha.android.client.JsonEncoder;
+import kotlin.Pair;
+import org.hyperledger.iroha.android.model.FeeChargeLimit;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.instructions.RegisterZkAssetInstruction;
 
-/** Thin JVM/JNI wrapper around {@code connect_norito_bridge} signing helpers. */
+/**
+ * Java view of the {@code connect_norito_bridge} signing helpers.
+ *
+ * <p>The bridge exports its JNI entry points only for the Kotlin SDK class {@link
+ * org.hyperledger.iroha.sdk.crypto.NativeSignerBridge}; the duplicate {@code
+ * org.hyperledger.iroha.android} exports are retired. This class keeps the Java argument checks
+ * and exceptions, then delegates every native call to the Kotlin owner.
+ */
 public final class NativeSignerBridge {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
-  public static final int REQUIRED_BRIDGE_ABI_VERSION = 25;
-  public static final int REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION = 7;
-  private static final int HASH_BYTES = 32;
-  private static final boolean NATIVE_AVAILABLE = loadLibrary();
+  public static final int REQUIRED_BRIDGE_ABI_VERSION =
+      org.hyperledger.iroha.sdk.crypto.NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION;
+  public static final int REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION =
+      org.hyperledger.iroha.sdk.crypto.NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION;
 
   private NativeSignerBridge() {}
 
   public static boolean isNativeAvailable() {
-    return NATIVE_AVAILABLE;
+    return org.hyperledger.iroha.sdk.crypto.NativeSignerBridge.isNativeAvailable();
   }
 
   public static byte[] publicKeyFromPrivate(
@@ -27,11 +37,8 @@ public final class NativeSignerBridge {
       throw new IllegalArgumentException("privateKey must not be empty");
     }
     requireNative();
-    final byte[] result = nativePublicKeyFromPrivate(algorithm.bridgeCode(), privateKey);
-    if (result == null) {
-      throw new IllegalStateException("nativePublicKeyFromPrivate returned null");
-    }
-    return result;
+    return org.hyperledger.iroha.sdk.crypto.NativeSignerBridge.publicKeyFromPrivate(
+        kotlinAlgorithm(algorithm), privateKey);
   }
 
   public static KeypairBytes keypairFromSeed(
@@ -40,11 +47,10 @@ public final class NativeSignerBridge {
       throw new IllegalArgumentException("seed must not be empty");
     }
     requireNative();
-    final byte[][] result = nativeKeypairFromSeed(algorithm.bridgeCode(), seed);
-    if (result == null || result.length != 2 || result[0] == null || result[1] == null) {
-      throw new IllegalStateException("nativeKeypairFromSeed returned invalid key material");
-    }
-    return new KeypairBytes(result[0], result[1]);
+    final Pair<byte[], byte[]> result =
+        org.hyperledger.iroha.sdk.crypto.NativeSignerBridge.keypairFromSeed(
+            kotlinAlgorithm(algorithm), seed);
+    return new KeypairBytes(result.getFirst(), result.getSecond());
   }
 
   public static byte[] signDetached(
@@ -56,11 +62,8 @@ public final class NativeSignerBridge {
       throw new IllegalArgumentException("message must not be empty");
     }
     requireNative();
-    final byte[] result = nativeSignDetached(algorithm.bridgeCode(), privateKey, message);
-    if (result == null) {
-      throw new IllegalStateException("nativeSignDetached returned null");
-    }
-    return result;
+    return org.hyperledger.iroha.sdk.crypto.NativeSignerBridge.signDetached(
+        kotlinAlgorithm(algorithm), privateKey, message);
   }
 
   public static boolean verifyDetached(
@@ -78,7 +81,8 @@ public final class NativeSignerBridge {
       throw new IllegalArgumentException("signature must not be empty");
     }
     requireNative();
-    return nativeVerifyDetached(algorithm.bridgeCode(), publicKey, message, signature);
+    return org.hyperledger.iroha.sdk.crypto.NativeSignerBridge.verifyDetached(
+        kotlinAlgorithm(algorithm), publicKey, message, signature);
   }
 
   public static NativeSignedTransaction encodeRegisterZkAssetSignedTransaction(
@@ -120,58 +124,62 @@ public final class NativeSignerBridge {
     final byte[] key = requirePrivateKey(privateKey);
     final byte[] networkIdBytes =
         Objects.requireNonNull(networkId, "networkId").bytes();
-    final byte[] authorityBytes = textBytes(authority, "authority");
-    final byte[] assetBytes = textBytes(instruction.asset(), "asset");
-    final byte[] unshieldBytes = optionalTextBytes(instruction.unshieldVerifyingKey());
-    final byte[] feePaymentJson = feePaymentJson(feePayment);
-    final long ttl = ttlValue(ttlMs);
-    final boolean hasTtl = ttlMs != null;
+    textBytes(authority, "authority");
+    textBytes(instruction.asset(), "asset");
+    Objects.requireNonNull(feePayment, "feePayment");
+    ttlValue(ttlMs);
     requireNative();
-    return requireNativeSignedOutput(
-        nativeEncodeRegisterZkAssetSignedTransaction(
-            algorithm.bridgeCode(),
-            networkIdBytes,
+    final org.hyperledger.iroha.sdk.crypto.NativeSignedTransaction signed =
+        org.hyperledger.iroha.sdk.crypto.NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
+            kotlinAlgorithm(algorithm),
+            org.hyperledger.iroha.sdk.core.model.NetworkId.fromBytes(networkIdBytes),
             validatedChainDiscriminant,
-            authorityBytes,
+            authority,
             creationTimeMs,
-            ttl,
-            hasTtl,
-            assetBytes,
-            unshieldBytes,
-            instruction.unshieldVerifyingKey() != null,
+            ttlMs,
+            org.hyperledger.iroha.sdk.core.model.instructions.RegisterZkAssetInstruction.builder()
+                .setAsset(instruction.asset())
+                .setUnshieldVerifyingKey(instruction.unshieldVerifyingKey())
+                .build(),
             key,
-            feePaymentJson),
-        "encodeRegisterZkAssetSignedTransaction");
+            kotlinFeePayment(feePayment));
+    return new NativeSignedTransaction(
+        signed.versionedSignedTransactionBytes(), signed.transactionHashBytes());
   }
 
   private static void requireNative() {
-    if (!NATIVE_AVAILABLE) {
+    if (!isNativeAvailable()) {
       throw new IllegalStateException(LIBRARY_NAME + " is not available in this runtime");
     }
   }
 
-  private static boolean loadLibrary() {
-    try {
-      System.loadLibrary(LIBRARY_NAME);
-      return nativeBridgeAbiVersion() == REQUIRED_BRIDGE_ABI_VERSION
-          && nativeSignerContractRevision() == REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION;
-    } catch (final UnsatisfiedLinkError | SecurityException error) {
-      return false;
-    }
+  private static org.hyperledger.iroha.sdk.crypto.SigningAlgorithm kotlinAlgorithm(
+      final SigningAlgorithm algorithm) {
+    return org.hyperledger.iroha.sdk.crypto.SigningAlgorithm.valueOf(
+        Objects.requireNonNull(algorithm, "algorithm").name());
   }
 
-  private static NativeSignedTransaction requireNativeSignedOutput(
-      final byte[][] output, final String context) {
-    if (output == null || output.length != 2) {
-      throw new IllegalArgumentException(context + " returned invalid output");
+  /** The same fee intent in the Kotlin model; both encode the identical Norito JSON. */
+  static org.hyperledger.iroha.sdk.core.model.FeePaymentIntent kotlinFeePayment(
+      final FeePaymentIntent value) {
+    final List<org.hyperledger.iroha.sdk.core.model.FeeChargeLimit> limits = new ArrayList<>();
+    for (final FeeChargeLimit limit : value.chargeLimits()) {
+      limits.add(
+          new org.hyperledger.iroha.sdk.core.model.FeeChargeLimit(
+              org.hyperledger.iroha.sdk.core.model.FeeChargeKind.valueOf(limit.kind().name()),
+              limit.assetDefinitionId(),
+              limit.maxAmount()));
     }
-    if (output[0] == null || output[0].length == 0) {
-      throw new IllegalArgumentException(context + " returned empty transaction bytes");
+    if (value instanceof FeePaymentIntent.Sponsor sponsor) {
+      return org.hyperledger.iroha.sdk.core.model.FeePaymentIntent.sponsor(
+          org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId.parse(
+              sponsor.programId().literal()),
+          sponsor.programRevision(),
+          limits,
+          value.gasLimit());
     }
-    if (output[1] == null || output[1].length != HASH_BYTES) {
-      throw new IllegalArgumentException(context + " returned invalid hash bytes");
-    }
-    return new NativeSignedTransaction(output[0], output[1]);
+    return org.hyperledger.iroha.sdk.core.model.FeePaymentIntent.authority(
+        limits, value.gasLimit());
   }
 
   private static byte[] textBytes(final String value, final String name) {
@@ -188,15 +196,6 @@ public final class NativeSignerBridge {
       throw new IllegalArgumentException(name + " must not contain NUL");
     }
     return value.getBytes(StandardCharsets.UTF_8);
-  }
-
-  private static byte[] optionalTextBytes(final String value) {
-    return value == null ? new byte[0] : value.getBytes(StandardCharsets.UTF_8);
-  }
-
-  private static byte[] feePaymentJson(final FeePaymentIntent value) {
-    return JsonEncoder.encode(Objects.requireNonNull(value, "feePayment").toJsonMap())
-        .getBytes(StandardCharsets.UTF_8);
   }
 
   private static void requireCreationTime(final long creationTimeMs) {
@@ -228,33 +227,6 @@ public final class NativeSignerBridge {
     }
     return privateKey.clone();
   }
-
-  private static native int nativeBridgeAbiVersion();
-
-  private static native int nativeSignerContractRevision();
-
-  private static native byte[] nativePublicKeyFromPrivate(int algorithmCode, byte[] privateKey);
-
-  private static native byte[][] nativeKeypairFromSeed(int algorithmCode, byte[] seed);
-
-  private static native byte[] nativeSignDetached(int algorithmCode, byte[] privateKey, byte[] message);
-
-  private static native boolean nativeVerifyDetached(
-      int algorithmCode, byte[] publicKey, byte[] message, byte[] signature);
-
-  private static native byte[][] nativeEncodeRegisterZkAssetSignedTransaction(
-      int algorithmCode,
-      byte[] networkId,
-      int chainDiscriminant,
-      byte[] authority,
-      long creationTimeMs,
-      long ttlMs,
-      boolean ttlPresent,
-      byte[] asset,
-      byte[] unshieldVerifyingKey,
-      boolean unshieldVerifyingKeyPresent,
-      byte[] privateKey,
-      byte[] feePaymentJson);
 
   /** Raw keypair bytes returned by the bridge. */
   public record KeypairBytes(byte[] privateKey, byte[] publicKey) {}

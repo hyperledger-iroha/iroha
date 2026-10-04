@@ -318,14 +318,19 @@ def create_fresh_directory(path: Path, *, mode: int = 0o755) -> Path:
 
 def publish_directory_noreplace(
     stage: Path, destination: Path, *, parent_fd: int, stage_fd: int,
+    stage_mode: int = 0o700,
 ) -> None:
-    """Atomically publish a private sibling directory using its original custody.
+    """Atomically publish an admitted sibling directory using its original custody.
 
     Both descriptors must remain held from preparation through publication. No
     existing destination, including an empty directory, is replaceable. Unsupported
     hosts fail closed; a pathname check followed by ordinary rename is insufficient.
     The caller owns content validation and retains incomplete work after failure.
+    Private artifacts require 0700; a verified public source tree must explicitly
+    admit 0755. Neither mode permits group or other writes or special bits.
     """
+    if type(stage_mode) is not int or stage_mode not in {0o700, 0o755}:
+        _fail("exclusive directory publication mode must be exactly 0700 or 0755")
     if (not stage.is_absolute() or not destination.is_absolute()
             or str(stage) != os.path.abspath(stage)
             or str(destination) != os.path.abspath(destination)
@@ -344,7 +349,7 @@ def publish_directory_noreplace(
                     != (named_parent.st_dev, named_parent.st_ino, named_parent.st_uid, named_parent.st_mode)
                     or not stat.S_ISDIR(original.st_mode)
                     or original.st_uid != os.geteuid()
-                    or stat.S_IMODE(original.st_mode) != 0o700
+                    or stat.S_IMODE(original.st_mode) != stage_mode
                     or (original.st_dev, original.st_ino, original.st_uid, original.st_mode)
                     != (named.st_dev, named.st_ino, named.st_uid, named.st_mode)):
                 _fail("exclusive directory publication custody changed")

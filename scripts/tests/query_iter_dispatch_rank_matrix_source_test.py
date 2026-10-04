@@ -36,7 +36,7 @@ CORE_START = """    #[derive(Clone, Copy)]
     enum IterDispatchRankFixture"""
 CORE_END = """    #[tokio::test]
     async fn iter_dispatch_accounts_sort_ties_stable_by_id"""
-CORE_HASH = "0b70210d8ff9169531c27e25385b0d7e6bc9cc2c540464abba45a79548431cd7"
+CORE_HASH = "70633e0e3a4164f14607e7525f8ed44bcdd9d241f53e55459f20f39ab9a858fc"
 
 DIRECT_TESTS = (
     "iter_dispatch_sorts_and_paginates_end_to_end",
@@ -56,12 +56,6 @@ DIRECT_TESTS = (
     "iter_dispatch_find_triggers_full",
     "iter_dispatch_assets_non_empty_and_contains_minted",
     "iter_dispatch_accounts_with_asset_parity_and_continue",
-    "iter_dispatch_domains_ids_only_projection",
-    "iter_dispatch_accounts_ids_only_projection",
-    "iter_dispatch_asset_definitions_ids_only_projection",
-    "iter_dispatch_nfts_ids_only_projection",
-    "iter_dispatch_roles_ids_only_projection",
-    "iter_dispatch_triggers_ids_only_projection",
 )
 
 MATRIX_CASES = {
@@ -173,17 +167,6 @@ EXPECTED_TEST_ORDER = (
     "iter_dispatch_accounts_offset_and_fetch_size_interplay_desc",
 )
 
-PROJECTION_TESTS = frozenset(
-    {
-        "iter_dispatch_domains_ids_only_projection",
-        "iter_dispatch_accounts_ids_only_projection",
-        "iter_dispatch_asset_definitions_ids_only_projection",
-        "iter_dispatch_nfts_ids_only_projection",
-        "iter_dispatch_roles_ids_only_projection",
-        "iter_dispatch_triggers_ids_only_projection",
-    }
-)
-
 CORE_TOKENS = (
     "IterDispatchRankFixture::Sparse => [Some(2), Some(1), None]",
     "IterDispatchRankFixture::Dense => [Some(0), Some(1), Some(2)]",
@@ -193,7 +176,7 @@ CORE_TOKENS = (
     'sort_by_metadata_key: Some("rank".parse().unwrap())',
     "fetch_size: FetchSize::new(fetch_size)",
     "FindAccounts",
-    "FindAssetsDefinitions",
+    "FindAssetDefinitions",
     "QueryOutputBatchBox::$variant(values)",
     "assert_eq!(values.len(), expected_indices.len())",
     "assert_eq!(value.id(), &ids[*expected_position])",
@@ -281,9 +264,7 @@ def validate_source(source: str) -> None:
             raise GuardError(f"{name}: typed matrix wiring changed")
 
     for name in DIRECT_TESTS:
-        if name in PROJECTION_TESTS:
-            expected = ('cfg(feature = "ids_projection")', "tokio::test")
-        elif name == "iter_dispatch_accounts_with_asset_parity_and_continue":
+        if name == "iter_dispatch_accounts_with_asset_parity_and_continue":
             expected = ("tokio::test", "allow(clippy::too_many_lines)")
         else:
             expected = ("tokio::test",)
@@ -317,7 +298,7 @@ def validate_first_release_dispatch(
     if valid_request_source.count("match item {") != 2:
         raise GuardError("stored and ephemeral dispatch must each have one item-kind match")
     if (
-        "let peer_source = canonical_peer_source_shape(start, query_limits)?;"
+        "if !admitted_source_has_pass_predicate(start, source, query_limits)? {"
         not in ordinary_memory_source
     ):
         raise GuardError("ordinary-memory admission must inspect only the canonical source")
@@ -365,9 +346,9 @@ class QueryIterDispatchRankMatrixSourceTests(unittest.TestCase):
             validate_source(mutated)
 
     def test_ordered_attribute_mutation_is_rejected(self) -> None:
-        name = "iter_dispatch_domains_ids_only_projection"
-        old = f'#[cfg(feature = "ids_projection")]\n    #[tokio::test]\n    async fn {name}'
-        mutated = _replace_once(self.source, old, old.replace("#[tokio::test]", "#[ignore]"))
+        name = "iter_dispatch_nfts"
+        old = f"    #[tokio::test]\n    async fn {name}()"
+        mutated = _replace_once(self.source, old, f"    #[ignore]\n{old}")
         with self.assertRaises(GuardError):
             validate_source(mutated)
 

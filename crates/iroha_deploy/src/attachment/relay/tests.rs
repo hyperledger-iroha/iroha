@@ -53,7 +53,7 @@ fn config(fixture: &Fixture, private: bool) -> Config {
             network_id = (fixture.parent.network_id().to_string())
             torii_url = "https://parent.example/"
             [account]
-            domain = "tests.universal"
+            chain_discriminant = 753
             public_key = (key.public_key().to_string())
             private_key = (ExposedPrivateKey(key.private_key().clone()).to_string())
         },

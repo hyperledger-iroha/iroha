@@ -182,11 +182,11 @@ fn closed_backend_errors_preserve_class_and_expose_no_payload() {
     for (error, text) in [
         (
             MusubiPublicationServiceBackendErrorV1::Retryable,
-            "private publication backend is unavailable",
+            "Musubi publication backend is temporarily unavailable",
         ),
         (
             MusubiPublicationServiceBackendErrorV1::Permanent,
-            "private publication backend refused the operation",
+            "Musubi publication backend requires configuration or state changes",
         ),
     ] {
         assert_eq!(error.to_string(), text);

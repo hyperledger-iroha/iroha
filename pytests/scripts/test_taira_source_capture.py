@@ -387,11 +387,12 @@ class SignedSourceCaptureTests(unittest.TestCase):
     def test_exclusive_publication_preserves_racing_destination(self):
         self.export()
         original = source._publish
-        def collide(stage, destination):
+        def collide(stage, destination, *, stage_mode):
             self.assertEqual(destination, self.imported)
+            self.assertEqual(stage_mode, 0o755)
             destination.mkdir(mode=0o700)
             (destination / "keep").write_bytes(b"other owner result")
-            return original(stage, destination)
+            return original(stage, destination, stage_mode=stage_mode)
         with mock.patch.object(source, "_publish", side_effect=collide):
             with self.assertRaisesRegex(source.SourceCaptureError, "exclusive source publication failed"):
                 self.import_capture()

@@ -79,6 +79,26 @@ impl PreparedElementSequence<'_, '_> {
     }
 }
 
+/// Inspect the complete element framing before admitting its actual planning arrays.
+///
+/// The sole advertised-layout scalar walker checks every original element span.
+/// No span Vec, element body, aligned copy or destination is created. The sequence
+/// ceiling and original element-length logical byte charges remain active; nominal
+/// sequence count/span/element storage accounting occurs when the unchanged source is prepared and filled. The returned
+/// shape grants only physical preparation, never a decoded value or protocol authority.
+/// An enclosing field still requires `used == bytes.len()`.
+///
+/// # Errors
+/// Returns the original advertised-layout, span, sequence/field-bound or overflow cause.
+pub fn inspect_element_sequence(bytes: &[u8]) -> Result<(usize, usize), Error> {
+    let (count, _) = inspect_seq_len_slice(bytes)?;
+    let flags = effective_decode_flags().unwrap_or_else(default_encode_flags);
+    validate_header_flags(flags)?;
+    let used = byte_sequence::visit_binary_sequence_with_count(bytes, flags, count, |_| Ok(()))?;
+    note_payload_access(bytes, used);
+    Ok((count, used))
+}
+
 /// Plan an element sequence into initialized scratch using its sole scalar walker.
 ///
 /// This uses the same count admission, advertised flags, minimum framing check,

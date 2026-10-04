@@ -333,13 +333,17 @@ pub fn decode(payload: &[u8]) -> Result<SignedBlock, PayloadError> {
     require_proposal(block)
 }
 
-/// Decode the original funded payload using the canonical walk and retained signature owner.
+/// Decode the original funded payload using the canonical walk and retained signature/certificate owners.
 /// Other transaction/result children remain an explicit preparation obligation.
 pub(crate) fn decode_prepared(
     payload: &iroha_allocation::ChargedBuffer<u8>,
     decoder: &mut iroha_data_model::block::PreparedSignedBlockSignaturesDecode,
 ) -> Result<SignedBlock, PayloadError> {
-    use iroha_data_model::block::{BlockSignatureCustodyError, PreparedSignatureBlockError};
+    use iroha_data_model::block::{
+        BlockSignatureCustodyError, PreparedSignatureBlockError,
+        commit_certificate::CertificateCustodyError,
+    };
+    use iroha_data_model::da::commitment::DaProofPolicyCustodyError;
     use norito::core::{PreparedDecodeError, SequenceSpan};
     let block = decoder
         .decode(
@@ -355,6 +359,8 @@ pub(crate) fn decode_prepared(
             let canonical = matches!(
                 &error,
                 PreparedSignatureBlockError::Frame(_)
+                    | PreparedSignatureBlockError::Certificate(CertificateCustodyError::Decode(_))
+                    | PreparedSignatureBlockError::Policy(DaProofPolicyCustodyError::Decode(_))
                     | PreparedSignatureBlockError::Decode(PreparedDecodeError::Codec(_))
                     | PreparedSignatureBlockError::Decode(PreparedDecodeError::Destination(
                         BlockSignatureCustodyError::Decode(_)

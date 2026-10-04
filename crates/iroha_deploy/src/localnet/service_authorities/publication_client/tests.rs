@@ -10,6 +10,88 @@ fn prepare(root: &Path, profile: LocalnetServiceProfile) -> PreparedLocalnet {
 }
 
 #[test]
+fn retained_publication_preserves_the_signed_custom_chain_prefix() {
+    use crate::managed::{ManagedContext, ManagedPeer};
+
+    let _resources = crate::managed::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let ports = crate::managed::LocalnetPorts::reserve().unwrap();
+    let root = temporary.path().join("custom-prefix");
+    let prefix = 369;
+    let default_prefix = iroha_config::parameters::defaults::common::chain_discriminant();
+    assert_ne!(prefix, default_prefix);
+    let profile = LocalnetServiceProfile::StreamTokenAuthorities;
+    let options = LocalnetOptions {
+        service_profile: profile,
+        sora_profile: None,
+        perf_profile: None,
+        peers: NonZeroU16::new(4).unwrap(),
+        seed: None,
+        bind_host: "127.0.0.1".into(),
+        public_host: "127.0.0.1".into(),
+        base_api_port: ports.base_api,
+        base_p2p_port: ports.base_p2p,
+        out_dir: root.clone(),
+        extra_accounts: 0,
+        assets: Vec::new(),
+        block_cadence_ms: None,
+        consensus_mode: SumeragiConsensusMode::Permissioned,
+    };
+    // The existing managed generator supports an explicit prefix on the local chain.
+    crate::localnet::generate_localnet_runtime(
+        &options,
+        &mut BufWriter::new(std::io::sink()),
+        Some(DEFAULT_CHAIN_ID),
+        Some(prefix),
+        true,
+        None,
+    )
+    .unwrap();
+    let root = root.canonicalize().unwrap();
+    let client_config = root.join("client.toml");
+    let original_bytes = iroha_fs::read_private(&client_config, MAX_CLIENT_BYTES).unwrap();
+    let (client, _) =
+        iroha::config::Config::load_bytes_with_musubi_publication(&client_config, &original_bytes)
+            .unwrap();
+    assert_eq!(client.account_chain_discriminant, prefix);
+    let _address = ChainDiscriminantGuard::enter(prefix);
+    let prepared = PreparedLocalnet {
+        service_profile: profile,
+        context: ManagedContext {
+            name: "publication-custom-prefix".into(),
+            chain_id: client.chain.to_string(),
+            network_id: client.network_id.to_string(),
+            account_id: client.account.to_string(),
+            dataspace_id: 0,
+            dataspace_alias: "universal".into(),
+            torii_url: client.torii_api_url.to_string(),
+            client_config,
+        },
+        peers: (0..4)
+            .map(|index| ManagedPeer {
+                config_path: root.join(format!("peer{index}.toml")),
+                torii_url: format!("http://127.0.0.1:{}/", ports.base_api + index),
+                log_name: format!("peer{index}.log"),
+            })
+            .collect(),
+    };
+    let retained = prepared.publication_client_config().unwrap().unwrap();
+    assert_eq!(retained.client_config_image(), original_bytes.as_slice());
+    assert_eq!(retained.publisher(), &client.account);
+
+    let changed = Zeroizing::new(std::str::from_utf8(&original_bytes).unwrap().replace(
+        &format!("chain_discriminant = {prefix}"),
+        &format!("chain_discriminant = {default_prefix}"),
+    ));
+    assert_ne!(changed.as_bytes(), original_bytes.as_slice());
+    PrivateDirectory::open_exact(&root)
+        .unwrap()
+        .write_atomic("client.toml", changed.as_bytes(), PublishMode::Replace)
+        .unwrap();
+    assert!(prepared.publication_client_config().is_err());
+}
+
+#[test]
 fn native_publication_projection_requires_exact_staged_bound_genesis_manifest() {
     let _resources = crate::managed::native_test_guard();
     let temporary = tempfile::tempdir().unwrap();

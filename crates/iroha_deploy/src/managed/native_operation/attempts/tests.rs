@@ -1356,3 +1356,188 @@ fn reserved_empty_tail_keeps_original_parser_semantics_without_losing_published_
     assert!(fixture.history().is_err());
     assert!(!attempt.wallet_path().exists());
 }
+
+#[test]
+fn retained_reparse_admits_canonical_append_and_refuses_changed_original_custody() {
+    let _guard = crate::managed::native_test_guard();
+    let fixture = Fixture::build(true);
+    let before = fixture.history().unwrap();
+    assert!(before.root.is_none());
+    let attempt = fixture.reserve();
+    fixture.commit(&attempt);
+    let request = std::fs::read(attempt.wallet_path().join("preparation.json")).unwrap();
+    let current = History::read_retained(
+        &fixture.operation,
+        Purpose::ReservePolicy,
+        fixture.semantic,
+        &HistoryScope::FixedBody,
+        &before,
+    )
+    .unwrap();
+    current
+        .verify_wallets(|attempt| fixture.inspect(attempt))
+        .unwrap();
+    assert_eq!(current.attempts.len(), 1);
+    assert_eq!(
+        current.operation.identity().unwrap(),
+        before.operation.identity().unwrap()
+    );
+    assert_eq!(
+        current.attempts[0].directory.identity().unwrap(),
+        attempt.directory.identity().unwrap()
+    );
+    let reparse = || {
+        History::read_retained(
+            &fixture.operation,
+            Purpose::ReservePolicy,
+            fixture.semantic,
+            &HistoryScope::FixedBody,
+            &current,
+        )
+    };
+    let repeated = reparse().unwrap();
+    repeated
+        .verify_wallets(|attempt| fixture.inspect(attempt))
+        .unwrap();
+    assert_eq!(
+        repeated.root.as_ref().unwrap().identity().unwrap(),
+        current.root.as_ref().unwrap().identity().unwrap()
+    );
+    assert_eq!(
+        repeated.attempts[0].directory.identity().unwrap(),
+        current.attempts[0].directory.identity().unwrap()
+    );
+    assert_eq!(
+        std::fs::read(attempt.wallet_path().join("preparation.json")).unwrap(),
+        request
+    );
+    assert!(!attempt.wallet_path().join("payload.json").exists());
+    assert!(!attempt.wallet_path().join("operation.json").exists());
+    assert!(
+        History::read_retained(
+            &fixture.operation,
+            Purpose::ReservePolicy,
+            [7; 32],
+            &HistoryScope::FixedBody,
+            &current,
+        )
+        .is_err()
+    );
+    let authorization = attempt
+        .directory
+        .read("authorization.nrt", MAX_RECORD_BYTES)
+        .unwrap();
+    attempt
+        .directory
+        .write_atomic(
+            "authorization.nrt",
+            b"invalid retained authorization",
+            PublishMode::Replace,
+        )
+        .unwrap();
+    assert!(reparse().is_err());
+    attempt
+        .directory
+        .write_atomic("authorization.nrt", &authorization, PublishMode::Replace)
+        .unwrap();
+    reparse().unwrap();
+    attempt
+        .directory
+        .write_atomic("foreign.nrt", b"unknown", PublishMode::CreateNew)
+        .unwrap();
+    assert!(reparse().is_err());
+    std::fs::remove_file(attempt.directory.path().join("foreign.nrt")).unwrap();
+    reparse().unwrap();
+    // The original native row stays live: Unix detects its displacement, while Windows's
+    // no-delete-sharing custody refuses the displacement itself. Neither path recreates it.
+    let displaced = fixture.operation.path().join("held-attempt");
+    #[cfg(unix)]
+    {
+        std::fs::rename(attempt.directory.path(), &displaced).unwrap();
+        assert!(reparse().is_err());
+        assert!(!attempt.directory.path().exists());
+        std::fs::rename(&displaced, attempt.directory.path()).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        assert!(std::fs::rename(attempt.directory.path(), &displaced).is_err());
+        assert!(!displaced.exists());
+    }
+    reparse()
+        .unwrap()
+        .verify_wallets(|attempt| fixture.inspect(attempt))
+        .unwrap();
+    assert_eq!(
+        std::fs::read(attempt.wallet_path().join("preparation.json")).unwrap(),
+        request
+    );
+
+    // A genuine live epoch reserves an exact successor but no child or wallet is created.
+    // Restoring the earlier published root remains a valid ordinary prefix, yet cannot erase
+    // the higher reservation observed by this still-owned parser input.
+    use crate::managed::native_operation::authorization::DispatchAuthorization;
+    let grant = fixture
+        .authorization
+        .as_ref()
+        .unwrap()
+        .test_child(Purpose::ReservePolicy)
+        .unwrap();
+    let published = fixture
+        .operation
+        .read("dispatch.nrt", MAX_RECORD_BYTES)
+        .unwrap();
+    current
+        .reserve_pending(
+            &fixture.operation,
+            grant.origin().unwrap(),
+            fixture.terms.clone(),
+        )
+        .unwrap();
+    let pending = History::read_retained(
+        &fixture.operation,
+        Purpose::ReservePolicy,
+        fixture.semantic,
+        &HistoryScope::FixedBody,
+        &current,
+    )
+    .unwrap();
+    assert_eq!(pending.reserved_attempt_count(), 2);
+    assert!(!fixture.operation.path().join("attempts/0002").exists());
+    let reservation = fixture
+        .operation
+        .read("dispatch.nrt", MAX_RECORD_BYTES)
+        .unwrap();
+    fixture
+        .operation
+        .write_atomic("dispatch.nrt", &published, PublishMode::Replace)
+        .unwrap();
+    assert!(fixture.history().is_ok());
+    assert!(
+        History::read_retained(
+            &fixture.operation,
+            Purpose::ReservePolicy,
+            fixture.semantic,
+            &HistoryScope::FixedBody,
+            &pending,
+        )
+        .is_err()
+    );
+    fixture
+        .operation
+        .write_atomic("dispatch.nrt", &reservation, PublishMode::Replace)
+        .unwrap();
+    let recovered = History::read_retained(
+        &fixture.operation,
+        Purpose::ReservePolicy,
+        fixture.semantic,
+        &HistoryScope::FixedBody,
+        &pending,
+    )
+    .unwrap();
+    assert_eq!(recovered.reserved_attempt_count(), 2);
+    assert!(!fixture.operation.path().join("attempts/0002").exists());
+    assert_eq!(
+        std::fs::read(attempt.wallet_path().join("preparation.json")).unwrap(),
+        request
+    );
+}

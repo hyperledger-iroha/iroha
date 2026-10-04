@@ -596,6 +596,7 @@ def require_block_start_construction(state: str) -> None:
         "world",
     )}
     expected.update({
+        "_da_rewind_releases": "da_rewind_releases",
         "canonical_runtime": "block_field::BlockField::new(canonical_runtime)",
         "native_execution_tip": "block_field::BlockField::new(native_execution_tip)",
         "block_hashes": "block_hash_field::BlockHashField::new(block_hashes)",

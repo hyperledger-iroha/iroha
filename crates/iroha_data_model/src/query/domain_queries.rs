@@ -268,11 +268,11 @@ pub mod asset {
         #[display("Find all assets")]
         #[norito_schema(name = "iroha_data_model::query::asset::model::FindAssets")]
         pub struct FindAssets;
-        /// [`FindAssetsDefinitions`] Iroha Query finds all `AssetDefinition`s presented.
+        /// [`FindAssetDefinitions`] Iroha Query finds all `AssetDefinition`s presented.
         #[derive(Copy, Display)]
         #[display("Find all asset definitions")]
-        #[norito_schema(name = "iroha_data_model::query::asset::model::FindAssetsDefinitions")]
-        pub struct FindAssetsDefinitions;
+        #[norito_schema(name = "iroha_data_model::query::asset::model::FindAssetDefinitions")]
+        pub struct FindAssetDefinitions;
         /// [`FindAssetsByAccountId`] Iroha Query finds all `Asset`s owned by an account.
         #[derive(Display)]
         #[display("Find assets owned by `{id}`")]
@@ -322,8 +322,8 @@ pub mod asset {
     pub mod prelude {
         //! The prelude re-exports most commonly used traits, structs and macros from this crate.
         pub use super::{
-            FindAssetById, FindAssetDefinitionById, FindAssets, FindAssetsByAccountId,
-            FindAssetsDefinitions,
+            FindAssetById, FindAssetDefinitionById, FindAssetDefinitions, FindAssets,
+            FindAssetsByAccountId,
         };
     }
 }

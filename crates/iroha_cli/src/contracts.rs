@@ -65,6 +65,10 @@ pub enum Command {
     Manifest(ManifestCommand),
     /// Run an offline simulation of IVM bytecode to see the queued ISIs and header metadata
     Simulate(SimulateArgs),
+    /// List committed contract activity with shared filter, projection and cursor controls.
+    Activity(crate::collection_list::ListArgs),
+    /// List committed contract events with shared filter, projection and cursor controls.
+    Events(crate::collection_list::ListArgs),
 }
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -78,6 +82,16 @@ impl Run for Command {
             Command::DebugCall(args) => args.run(context),
             Command::Manifest(cmd) => cmd.run(context),
             Command::Simulate(args) => args.run(context),
+            Command::Activity(args) => crate::collection_list::run_list(
+                context,
+                iroha::collections::Collection::ContractActivity,
+                &args,
+            ),
+            Command::Events(args) => crate::collection_list::run_list(
+                context,
+                iroha::collections::Collection::ContractEvents,
+                &args,
+            ),
         }
     }
 }

@@ -6,6 +6,7 @@ import importlib.util
 import os
 from pathlib import Path
 import struct
+import stat
 import sys
 from types import SimpleNamespace
 
@@ -233,7 +234,11 @@ def test_native_reader_rechecks_each_identity_and_memory_boundary(tmp_path, fail
                                   0o777, 0o1700, 0o2700, 0o4700])
 def test_unreviewed_executable_permissions_rejected_before_content_read(tmp_path, monkeypatch, mode):
     path, digest = image_path(tmp_path)
+    # Darwin clears setgid when the temporary directory supplies a group the
+    # owner does not hold. Bind a held group before requesting the invalid mode.
+    os.chown(path, -1, os.getegid())
     path.chmod(mode)
+    assert stat.S_IMODE(path.stat().st_mode) == mode
     monkeypatch.setattr(process.os, "pread", lambda *_: pytest.fail("invalid mode reached content read"))
     try:
         with pytest.raises((process.ProcessObservationError, PermissionError)):

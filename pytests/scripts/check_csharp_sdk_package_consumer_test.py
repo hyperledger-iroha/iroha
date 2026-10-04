@@ -143,10 +143,6 @@ def test_csharp_sdk_package_consumer_script_pins_real_package_consumption() -> N
     ("owner", "source_path"),
     (
         ("SoraFsReferenceValidators", "SoraFs/SoraFsReferenceValidators.cs"),
-        (
-            "ValidationFeeHijiriQuoteNative",
-            "Torii/ToriiClient.ValidationFeeHijiriQuote.cs",
-        ),
     ),
 )
 def test_native_package_consumer_matches_sdk_abi(owner: str, source_path: str) -> None:
@@ -159,6 +155,103 @@ def test_native_package_consumer_matches_sdk_abi(owner: str, source_path: str) -
     assert len(versions) == 1
     script = SCRIPT.read_text(encoding="utf-8")
     assert f"{owner}.RequiredBridgeAbiVersion != {versions[0]}u" in script
+
+
+def _validate_retail_fee_native_probe(program: str) -> list[str]:
+    """Check that the installed bridge proves current exports and rejects retirement."""
+
+    errors = []
+    required = (
+        '"connect_norito_bridge", typeof(SoraFsReferenceValidators).Assembly, null)',
+        '"connect_norito_retail_fee_intent_hash_v1"',
+        '"connect_norito_retail_fee_assessment_marker_v1"',
+        '"connect_norito_retail_fee_assessment_decode_v1"',
+        "System.Runtime.InteropServices.NativeLibrary.GetExport(feeBridge, symbol)",
+        '"connect_norito_validation_fee_hijiri_quote_request_v1"',
+        '"connect_norito_validation_fee_hijiri_quote_response_verify_v1"',
+        "if (System.Runtime.InteropServices.NativeLibrary.TryGetExport(feeBridge, retired, out _))",
+        'throw new InvalidOperationException("Packed Native artifact retains a retired quote protocol")',
+        "finally\n{\n    System.Runtime.InteropServices.NativeLibrary.Free(feeBridge);\n}",
+    )
+    for marker in required:
+        if marker not in program:
+            errors.append(marker)
+    return errors
+
+
+def _consumer_program_source() -> str:
+    """Read the complete C# heredoc without treating C# braces as Bash endings."""
+
+    script = SCRIPT.read_text(encoding="utf-8")
+    programs = re.findall(r'(?ms)^  cat > "\$\{program_path\}" <<EOF\n(.*?)^EOF\n', script)
+    assert len(programs) == 1
+    return programs[0]
+
+
+def test_native_package_consumer_probes_current_retail_fee_exports() -> None:
+    """Retired quote APIs stay absent while the packed consumer probes actual codecs."""
+
+    program = _consumer_program_source()
+    assert _validate_retail_fee_native_probe(program) == []
+    native = (ROOT / "crates/connect_norito_bridge/src/lib.rs").read_text(
+        encoding="utf-8"
+    )
+    for name in (
+        "connect_norito_retail_fee_intent_hash_v1",
+        "connect_norito_retail_fee_assessment_marker_v1",
+        "connect_norito_retail_fee_assessment_decode_v1",
+    ):
+        assert f'pub unsafe extern "C" fn {name}(' in native
+    for name in (
+        "connect_norito_validation_fee_hijiri_quote_request_v1",
+        "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
+    ):
+        assert not re.search(rf'extern "C" fn {name}\(', native)
+    assert not (
+        ROOT
+        / "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.ValidationFeeHijiriQuote.cs"
+    ).exists()
+    assert "ValidationFeeHijiriQuoteNative" not in program
+
+
+@pytest.mark.parametrize(
+    ("marker", "replacement"),
+    (
+        ('"connect_norito_retail_fee_intent_hash_v1"', '"invented_intent_export"'),
+        ('"connect_norito_retail_fee_assessment_marker_v1"', '"invented_marker_export"'),
+        ('"connect_norito_retail_fee_assessment_decode_v1"', '"invented_decode_export"'),
+        (
+            "System.Runtime.InteropServices.NativeLibrary.GetExport(feeBridge, symbol)",
+            "symbol",
+        ),
+        ('"connect_norito_validation_fee_hijiri_quote_request_v1"', '"invented_request"'),
+        ('"connect_norito_validation_fee_hijiri_quote_response_verify_v1"', '"invented_response"'),
+        (
+            "if (System.Runtime.InteropServices.NativeLibrary.TryGetExport(feeBridge, retired, out _))",
+            "if (false)",
+        ),
+        (
+            'throw new InvalidOperationException("Packed Native artifact retains a retired quote protocol")',
+            'Console.WriteLine("retired export ignored")',
+        ),
+        (
+            "finally\n{\n    System.Runtime.InteropServices.NativeLibrary.Free(feeBridge);\n}",
+            "",
+        ),
+        (
+            '"connect_norito_bridge", typeof(SoraFsReferenceValidators).Assembly, null)',
+            '"connect_norito_bridge", null, null)',
+        ),
+    ),
+)
+def test_native_package_consumer_rejects_retail_fee_probe_drift(
+    marker: str, replacement: str
+) -> None:
+    """Missing exports, borrowed resolution and ignored retired protocols must fail."""
+
+    program = _consumer_program_source()
+    changed = _replace_once(program, marker, replacement)
+    assert marker in _validate_retail_fee_native_probe(changed)
 
 
 def test_csharp_sdk_package_consumer_stages_and_uses_pinned_dotnet_sdk(

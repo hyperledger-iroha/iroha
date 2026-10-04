@@ -5,6 +5,25 @@ the signed `POST /v1/query` protocol. A REST collection that uses a different
 cursor type must document its own lifecycle and must not claim these guarantees
 implicitly.
 
+## Admitted query shapes
+
+Signed `POST /v1/query` admits singular queries and these iterable starts, each
+with the pass predicate, bounded counting, a zero offset and no metadata
+sorting: `FindPeers` (ephemeral mode only), `FindAccountIds`, `FindTriggers` and
+`FindActiveTriggerIds`. Stored cursors therefore exist only for the last three.
+Torii refuses every other iterable shape before execution with HTTP 400
+`query_validation_failed` and a message starting with
+`signed_query_shape_not_admitted: <query> <reason>`, which lists the collection
+endpoints (see [Query JSON envelope](../query_json.md#admission-on-signed-v1query)).
+
+Listings of domains, accounts, asset definitions, NFTs, RWA lots, account
+assets, asset holders, transactions and repo agreements are read through
+`/v1/domains`, `/v1/accounts`, `/v1/assets/definitions`, `/v1/nfts`,
+`/v1/rwas`, `/v1/accounts/{id}/assets`, `/v1/assets/{definition}/holders`,
+`/v1/transactions/query` and `/v1/repo/agreements`. Those
+[collection queries](collection_queries.md) use keyset cursors with their own
+lifecycle.
+
 ## Cursor representation
 
 `ForwardCursor` contains:
@@ -31,8 +50,9 @@ Consequently:
 - a request routed to another Torii instance is reported as expired;
 - a load-balanced deployment must use instance affinity for the lifetime of a
   stored cursor; and
-- stored mode does not promise failover. Clients that require retry across
-  instances must use ephemeral requests until a shared cursor store is provided.
+- stored mode does not promise failover. After losing the serving instance,
+  clients must restart the query. Ephemeral mode returns only the first batch
+  and cannot replace continuation because signed queries require zero offset.
 
 No cursor-signing key or key-rotation policy applies to this server-side design.
 The identifier is unpredictable, and allocation retries rather than overwriting
@@ -142,15 +162,14 @@ The signed query protocol calls this control `count_mode`, not `include_total`:
 - `count_mode=bounded` is the default. `remaining_items` is absent,
   `has_more` is authoritative, and the server avoids a full count where
   possible.
-- `count_mode=exact` requests exact `remaining_items`. It can require full
-  materialization or additional work and can therefore cost more.
+- `count_mode=exact` is rejected for every signed iterable start. Use
+  `include_total` on the collection endpoints when an exact listing total is
+  needed.
 
 There is no generic `include_total` parameter or `total_items` field on
-`QueryOutput`. A caller can derive the original exact total only by combining
-the number of items already returned with `remaining_items` from exact mode.
-Collection-specific REST endpoints that expose `include_total` must state
-whether totals are supported and must omit `total_items` when they are not; they
-must not return a fabricated zero.
+`QueryOutput`. The admitted bounded queries do not report an exact total;
+`remaining_items` is absent throughout their cursor lifecycle. Collection REST
+endpoints expose totals through their separate page contract.
 
 Cursor pagination is forward-only. It supports sequential iteration and cached
 navigation among pages the client already visited. It does not support random

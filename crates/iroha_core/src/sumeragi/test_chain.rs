@@ -2170,7 +2170,6 @@ mod tests {
             assert_eq!(
                 crate::sns::get_name_record(
                     view.world(),
-                    &catalog,
                     crate::sns::SnsNamespace::AccountAlias,
                     "merchant@bootstrap.universal",
                     1_000,
@@ -2544,15 +2543,15 @@ mod tests {
         nexus.configured_lane_catalog = nexus.lane_catalog.clone();
         // Deliberately retain the prior derived table: the configured catalog is the source.
         let stale_policies = crate::da::active_proof_policy_bundle_at_height(&nexus, 1);
-        assert!(stale_policies.policies.is_empty());
+        assert!(stale_policies.policies().is_empty());
         config.nexus = Some(nexus);
         let prepared = CertifiedTestChain::prepare(config)
             .expect("custom catalog policies are signed before original genesis execution");
         let original = prepared.genesis.block();
         let actual_nexus = prepared.state.nexus_snapshot();
         let expected = crate::da::active_proof_policy_bundle_at_height(&actual_nexus, 1);
-        assert_eq!(expected.policies.len(), 1);
-        assert_eq!(expected.policies[0].alias, "configured-primary");
+        assert_eq!(expected.policies().len(), 1);
+        assert_eq!(expected.policies()[0].alias, "configured-primary");
         assert_eq!(original.da_proof_policies(), Some(&expected));
         assert_eq!(
             original.header().da_proof_policies_hash(),

@@ -3968,7 +3968,6 @@ mod tests {
         assert_eq!(
             get_name_record(
                 tx.world(),
-                tx.world().dataspace_catalog(),
                 SnsNamespace::Dataspace,
                 "sbp",
                 tx.block_unix_timestamp_ms(),
@@ -3980,7 +3979,6 @@ mod tests {
         assert_eq!(
             get_name_record(
                 tx.world(),
-                tx.world().dataspace_catalog(),
                 SnsNamespace::Domain,
                 &hbl_domain.to_string(),
                 tx.block_unix_timestamp_ms(),
@@ -4103,7 +4101,6 @@ mod tests {
         .expect("signer2 approval executes FI registration batch");
         let lease = get_name_record(
             tx.world(),
-            &tx.nexus.dataspace_catalog,
             SnsNamespace::AccountAlias,
             "clear-orbit-3941@hbl.sbp",
             0,

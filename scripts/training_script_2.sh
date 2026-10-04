@@ -793,16 +793,11 @@ print(data["i105"]["value"])
 PY
 }
 
-read_domain() {
-  read_toml_string "domain" "$1"
-}
-
 generate_client_configs() {
   local base_config="$1"
   local out_dir="$2"
-  local domain="$3"
-  local seed_material="$4"
-  local names_csv="$5"
+  local seed_material="$3"
+  local names_csv="$4"
   local seed_hex
   seed_hex="$(python3 - "$seed_material" <<'PY'
 import hashlib
@@ -814,7 +809,6 @@ PY
   "$KAGAMI_BIN" advanced client-configs \
     --base-config "$base_config" \
     --out-dir "$out_dir" \
-    --domain "$domain" \
     --seed-hex "$seed_hex" \
     --names "$names_csv"
 }
@@ -1121,7 +1115,6 @@ for run in $(seq 1 "$RUNS"); do
   fi
 
   client_cfg="$run_dir/client.toml"
-  domain="$(read_domain "$client_cfg")"
   sender_pub="$(read_public_key "$client_cfg")"
   sender_account="$(public_key_to_i105 "$sender_pub")"
   asset_def="$TRAINING_ASSET_DEFINITION_ID"
@@ -1141,7 +1134,7 @@ for run in $(seq 1 "$RUNS"); do
     mkdir -p "$clients_dir"
     client_seed_material="${SEED}-clients-${run}"
     client_names="recipient,sig1,sig2,sig3,multisig"
-    if ! generate_client_configs "$client_cfg" "$clients_dir" "$domain" "$client_seed_material" "$client_names"; then
+    if ! generate_client_configs "$client_cfg" "$clients_dir" "$client_seed_material" "$client_names"; then
       echo "[run $run] kagami client-configs failed" >&2
       stop_localnet "$run_dir"
       cleanup_run_dir=""

@@ -275,7 +275,14 @@ impl ManagedStreamTokenCustody {
             &self.wallet()?,
             scope,
         )?;
-        self.advance_enroll(options.deadline)
+        let selected = history.into_reparsed_selected(self)?;
+        self.advance_selected(
+            CustodyPurpose::InitialEnroll,
+            selected,
+            options.deadline,
+            Mode::SubmitOriginal,
+            true,
+        )
     }
     fn select_initial_unsigned(
         &mut self,
@@ -412,8 +419,10 @@ impl ManagedStreamTokenCustody {
         authorization.validate(&self.authority, purpose, deadline)?;
         let (directory, original, scope) = history.dispatch()?;
         self.select_generated_attempt(directory, original, scope, authorization, deadline)?;
-        self.advance(
+        let selected = history.into_reparsed_selected(self)?;
+        self.advance_selected(
             CustodyPurpose::InitialEnroll,
+            selected,
             deadline,
             Mode::SubmitAuthorized(authorization),
             false,
@@ -665,7 +674,11 @@ impl ManagedStreamTokenCustody {
             }
             let expired = history.body_expired()?;
             match history.into_selected() {
-                Ok(_) => return self.advance(purpose, deadline, mode, false).map(Some),
+                Ok(selected) => {
+                    return self
+                        .advance_selected(purpose, selected, deadline, mode, false)
+                        .map(Some);
+                }
                 Err(super::Error::Bootstrap(ManagedBootstrapFailure::TransitionPending)) => {
                     return Ok(Some(ManagedCustodyProgress {
                         transaction_status: if expired {
@@ -697,7 +710,9 @@ impl ManagedStreamTokenCustody {
             &HistoryScope::FixedBody,
         )?;
         history.require_fees(fees)?;
-        self.advance(purpose, deadline, mode, false).map(Some)
+        let selected = Selected::from_history(original, history)?;
+        self.advance_selected(purpose, selected, deadline, mode, false)
+            .map(Some)
     }
 
     fn advance(
@@ -715,6 +730,32 @@ impl ManagedStreamTokenCustody {
         } else {
             self.required_enrollment(purpose)?
         };
+        self.advance_selected_validated(purpose, original, deadline, mode, observe_current)
+    }
+
+    // All loaders and consuming enrollment transitions join this one advance implementation.
+    // A selection owns its original native graph; no second enrollment root is opened here.
+    fn advance_selected(
+        &mut self,
+        purpose: CustodyPurpose,
+        original: Selected<Original>,
+        deadline: Instant,
+        mode: Mode<'_>,
+        observe_current: bool,
+    ) -> Result<ManagedCustodyProgress> {
+        require_deadline(deadline)?;
+        self.authority.validate_profile()?;
+        self.advance_selected_validated(purpose, original, deadline, mode, observe_current)
+    }
+
+    fn advance_selected_validated(
+        &mut self,
+        purpose: CustodyPurpose,
+        original: Selected<Original>,
+        deadline: Instant,
+        mode: Mode<'_>,
+        observe_current: bool,
+    ) -> Result<ManagedCustodyProgress> {
         let directory = original.directory();
         self.validate_original(&original, purpose)?;
         if matches!(purpose, CustodyPurpose::Renewal(_)) {

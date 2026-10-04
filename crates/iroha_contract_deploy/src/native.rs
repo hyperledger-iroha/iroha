@@ -341,6 +341,14 @@ pub fn quote_and_resign_transaction(
     draft: &SignedTransaction,
     requested_fee_payment: &FeePaymentIntent,
 ) -> Result<(SignedTransaction, FeeQuoteResponse)> {
+    quote_and_resign_transaction_reviewed(client, draft, requested_fee_payment, &mut |_| Ok(()))
+}
+pub(super) fn quote_and_resign_transaction_reviewed(
+    client: &Client,
+    draft: &SignedTransaction,
+    requested_fee_payment: &FeePaymentIntent,
+    review: &mut dyn FnMut(&FeeQuoteResponse) -> Result<()>,
+) -> Result<(SignedTransaction, FeeQuoteResponse)> {
     let mut payload = draft.payload().clone();
     let quote = client
         .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
@@ -350,6 +358,7 @@ pub fn quote_and_resign_transaction(
             "fee quote changed the selected payer, sponsor revision, or gas bound; refusing to sign"
         ));
     }
+    review(&quote)?;
     payload.fee_payment = quote.intent.clone();
     let transaction = client
         .account_client()

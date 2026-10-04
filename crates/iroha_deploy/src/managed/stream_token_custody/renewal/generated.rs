@@ -510,8 +510,10 @@ impl ManagedStreamTokenCustody {
         };
         let (operation, original, scope) = history.dispatch()?;
         self.select_generated_attempt(operation, original, scope, authorization, deadline)?;
-        let result = self.advance(
+        let selected = history.into_reparsed_selected(self)?;
+        let result = self.advance_selected(
             CustodyPurpose::Renewal(next),
+            selected,
             deadline,
             Mode::SubmitAuthorized(authorization),
             false,

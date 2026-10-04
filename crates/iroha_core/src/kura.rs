@@ -6,6 +6,7 @@ mod block_hash_range;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 mod certificate_corruption_test_support;
 mod fastpq_artifact_store;
+pub(crate) mod history_checkpoints;
 mod lane_geometry;
 mod lane_storage;
 mod membership_storage;
@@ -299,6 +300,9 @@ pub struct Kura {
     block_height_index: ResidentMutex<BlockHeightIndex>,
     /// Reverse lookup for committed transaction entrypoint hash to containing block heights.
     transaction_entrypoint_index: ResidentMutex<TransactionEntrypointIndex>,
+    /// Authenticated native identities of checkpoint heights for off-chain
+    /// history reads; node-local and never consensus authority.
+    history_checkpoints: history_checkpoints::HistoryCheckpoints,
     /// Channel for waking the writer thread when sidecars need flushing or shutdown is signalled.
     block_notify_tx: mpsc::SyncSender<BlockNotify>,
     block_notify_rx: Mutex<Option<mpsc::Receiver<BlockNotify>>>,
@@ -504,6 +508,10 @@ impl Kura {
     /// Retain the original configured pool through membership restore, replay, and edits.
     pub(crate) fn transaction_history_budget(&self) -> iroha_allocation::AllocationBudget {
         self.transaction_history_budget.clone()
+    }
+    /// Node-local checkpoints that let off-chain history reads start below the tip.
+    pub(crate) fn history_checkpoints(&self) -> &history_checkpoints::HistoryCheckpoints {
+        &self.history_checkpoints
     }
     fn notify_block_writer_sender(
         sender: &mpsc::SyncSender<BlockNotify>,
@@ -1552,6 +1560,7 @@ impl Kura {
                 transaction_entrypoint_index,
                 &resource_inventory,
             ),
+            history_checkpoints: history_checkpoints::HistoryCheckpoints::default(),
             block_notify_tx,
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(block_plain_text_path),
@@ -1792,6 +1801,7 @@ impl Kura {
                 TransactionEntrypointIndex::complete_empty(),
                 &resource_inventory,
             ),
+            history_checkpoints: history_checkpoints::HistoryCheckpoints::default(),
             block_notify_tx,
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(None),

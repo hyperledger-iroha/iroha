@@ -571,6 +571,9 @@ enum Command {
     /// Canonical account reads and account mutations
     #[command(subcommand)]
     Account(account::Command),
+    /// Explorer feeds with shared filters, projection and cursor paging
+    #[command(subcommand)]
+    Explorer(explorer::Command),
     /// Typed transaction status and transaction helpers
     #[command(subcommand)]
     Tx(transaction::Command),
@@ -828,6 +831,7 @@ impl Run for Command {
         match self {
             Account(variant) => Run::run(variant, context),
             Tx(variant) => Run::run(variant, context),
+            Explorer(variant) => Run::run(variant, context),
             Ledger(variant) => Run::run(variant, context),
             Trigger(variant) => Run::run(variant, context),
             Ops(variant) => Run::run(variant, context),
@@ -851,6 +855,7 @@ impl Command {
             Self::Tools(command) => command.allows_fallback_config(),
             Self::Account(_)
             | Self::Tx(_)
+            | Self::Explorer(_)
             | Self::Ledger(_)
             | Self::Trigger(_)
             | Self::Ops(_)
@@ -869,6 +874,65 @@ impl Command {
             Self::Contract(command) => command.allows_fallback_config(),
             Self::Tools(command) => command.allows_fallback_config(),
             _ => false,
+        }
+    }
+}
+mod explorer {
+    use super::*;
+    #[derive(clap::Subcommand, Debug)]
+    pub enum Command {
+        /// Read the bounded Accounts Explorer feed.
+        Accounts(crate::collection_list::ListArgs),
+        /// Read the bounded Domains Explorer feed.
+        Domains(crate::collection_list::ListArgs),
+        /// Read the bounded AssetDefinitions Explorer feed.
+        AssetDefinitions(crate::collection_list::ListArgs),
+        /// Read the bounded Assets Explorer feed.
+        Assets(crate::collection_list::ListArgs),
+        /// Read the bounded Nfts Explorer feed.
+        Nfts(crate::collection_list::ListArgs),
+        /// Read the bounded Rwas Explorer feed.
+        Rwas(crate::collection_list::ListArgs),
+        /// Read the bounded Blocks Explorer feed.
+        Blocks(crate::collection_list::ListArgs),
+        /// Read the bounded Transactions Explorer feed.
+        Transactions(crate::collection_list::ListArgs),
+        /// Read the bounded TransactionsLatest Explorer feed.
+        TransactionsLatest(crate::collection_list::ListArgs),
+        /// Read the bounded Instructions Explorer feed.
+        Instructions(crate::collection_list::ListArgs),
+        /// Read the bounded InstructionsLatest Explorer feed.
+        InstructionsLatest(crate::collection_list::ListArgs),
+    }
+    impl Run for Command {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let (collection, args) = match self {
+                Self::Accounts(args) => (iroha::collections::Collection::ExplorerAccounts, args),
+                Self::Domains(args) => (iroha::collections::Collection::ExplorerDomains, args),
+                Self::AssetDefinitions(args) => (
+                    iroha::collections::Collection::ExplorerAssetDefinitions,
+                    args,
+                ),
+                Self::Assets(args) => (iroha::collections::Collection::ExplorerAssets, args),
+                Self::Nfts(args) => (iroha::collections::Collection::ExplorerNfts, args),
+                Self::Rwas(args) => (iroha::collections::Collection::ExplorerRwas, args),
+                Self::Blocks(args) => (iroha::collections::Collection::ExplorerBlocks, args),
+                Self::Transactions(args) => {
+                    (iroha::collections::Collection::ExplorerTransactions, args)
+                }
+                Self::TransactionsLatest(args) => (
+                    iroha::collections::Collection::ExplorerTransactionsLatest,
+                    args,
+                ),
+                Self::Instructions(args) => {
+                    (iroha::collections::Collection::ExplorerInstructions, args)
+                }
+                Self::InstructionsLatest(args) => (
+                    iroha::collections::Collection::ExplorerInstructionsLatest,
+                    args,
+                ),
+            };
+            crate::collection_list::run_list(context, collection, &args)
         }
     }
 }
@@ -2486,6 +2550,8 @@ mod account {
         Permission(PermissionCommand),
         /// List accounts (`/v1/accounts`) with filter, sort, projection and paging
         List(crate::collection_list::ListArgs),
+        /// List account asset movements with filters, projection and cursor paging
+        History(History),
         /// Retrieve details of a specific account
         Get(Id),
         /// Register an account
@@ -2507,6 +2573,19 @@ mod account {
                     iroha::collections::Collection::Accounts,
                     &args,
                 ),
+                History(args) => {
+                    let account = args
+                        .id
+                        .as_deref()
+                        .map(|id| resolve_account_id(context, id))
+                        .transpose()?
+                        .unwrap_or_else(|| context.config().account.clone());
+                    crate::collection_list::run_list(
+                        context,
+                        iroha::collections::Collection::AccountHistory(account),
+                        &args.list,
+                    )
+                }
                 Get(args) => {
                     let account_id = resolve_account_id(context, &args.id)
                         .wrap_err("failed to resolve --id account")?;
@@ -2538,6 +2617,14 @@ mod account {
                 Meta(cmd) => cmd.run(context),
             }
         }
+    }
+    #[derive(clap::Args, Debug)]
+    pub struct History {
+        /// Account to inspect; defaults to the configured account.
+        #[arg(long)]
+        pub id: Option<String>,
+        #[command(flatten)]
+        pub list: crate::collection_list::ListArgs,
     }
     #[derive(clap::Subcommand, Debug)]
     pub enum RoleCommand {
@@ -2608,15 +2695,11 @@ mod account {
                 List(args) => {
                     let account_id = resolve_account_id(context, &args.id)
                         .wrap_err("failed to resolve --id account")?;
-                    let client = context.client_from_config()?;
-                    let permissions = list_effective_permissions(
-                        &client,
-                        &account_id,
-                        args.limit,
-                        args.offset,
-                        args.fetch_size,
-                    )?;
-                    context.print_data(&permissions)
+                    crate::collection_list::run_list(
+                        context,
+                        iroha::collections::Collection::AccountPermissions(account_id),
+                        &args.list,
+                    )
                 }
                 Grant(args) => {
                     let permission: Permission = parse_json_stdin(context)?;
@@ -2647,108 +2730,14 @@ mod account {
             }
         }
     }
-    /// Read the complete effective permission set before applying global pagination.
-    ///
-    /// Torii's list fanout applies the requested window independently to every route and
-    /// returns a deduplicated page whose `total` is that page's size, not a global count.
-    /// A fully successful merged page shorter than the requested size establishes that
-    /// every route is exhausted: any full route contributes at least that many distinct
-    /// rows to the union. The handler rejects oversized windows rather than clamping
-    /// them, so advancing by the requested size cannot skip a shard row.
+    /// Read every effective permission using the shared cursor page contract.
     pub(crate) fn list_effective_permissions(
         client: &Client,
         account_id: &AccountId,
-        limit: Option<u64>,
-        offset: u64,
-        fetch_size: Option<u64>,
     ) -> Result<Vec<Permission>> {
-        use std::collections::BTreeSet;
-
-        #[derive(crate::json_macros::JsonDeserialize)]
-        struct Page {
-            items: Vec<Permission>,
-            total: u64,
-        }
-
-        let page_size = fetch_size.unwrap_or(500);
-        if page_size == 0 || limit == Some(0) {
-            eyre::bail!("permission --limit and --fetch-size must be positive when provided");
-        }
-        let mut permissions = BTreeSet::new();
-        let mut page_offset = 0_u64;
-        loop {
-            let response = client
-                .get_account_permissions_page_response(account_id, page_size, page_offset)
-                .wrap_err("Failed to get effective account permissions")?;
-            if response.status().as_u16() != 200 {
-                eyre::bail!(
-                    "effective account permissions request failed with HTTP {}",
-                    response.status()
-                );
-            }
-            let header = |name: &str| {
-                response
-                    .headers()
-                    .get(name)
-                    .and_then(|value| value.to_str().ok())
-            };
-            if !header("content-type").is_some_and(|value| {
-                value
-                    .split(';')
-                    .next()
-                    .unwrap_or_default()
-                    .trim()
-                    .eq_ignore_ascii_case("application/json")
-            }) {
-                eyre::bail!("effective account permissions response must be application/json");
-            }
-            if header("x-iroha-account-permission-semantics") != Some("effective-v1") {
-                eyre::bail!("account permissions response is missing effective-v1 semantics");
-            }
-            let counter = |name: &str| -> Result<u64> {
-                header(name)
-                    .and_then(|value| value.parse().ok())
-                    .ok_or_else(|| eyre!("account permissions response has invalid {name}"))
-            };
-            let attempted = counter("x-iroha-fanout-routes-attempted")?;
-            let succeeded = counter("x-iroha-fanout-routes-succeeded")?;
-            if attempted == 0
-                || succeeded != attempted
-                || counter("x-iroha-fanout-routes-failed")? != 0
-                || counter("x-iroha-fanout-routes-denied")? != 0
-                || counter("x-iroha-fanout-routes-unavailable")? != 0
-                || counter("x-iroha-fanout-routes-not-found")? != 0
-            {
-                eyre::bail!("account permissions fanout is incomplete; no partial result returned");
-            }
-            let page: Page = parse_json(
-                std::str::from_utf8(response.body())
-                    .wrap_err("account permissions response is not UTF-8")?,
-            )
-            .wrap_err("Failed to decode effective account permissions page")?;
-            if page.total != u64::try_from(page.items.len())? {
-                eyre::bail!("account permissions merged page total does not match its items");
-            }
-            let exhausted = page.total < page_size;
-            permissions.extend(page.items);
-            if exhausted {
-                break;
-            }
-            page_offset = page_offset
-                .checked_add(page_size)
-                .ok_or_else(|| eyre!("account permissions page offset overflow"))?;
-        }
-        Ok(permissions
-            .into_iter()
-            .enumerate()
-            .filter(|(index, _)| (*index as u64) >= offset)
-            .take(
-                limit
-                    .and_then(|value| usize::try_from(value).ok())
-                    .unwrap_or(usize::MAX),
-            )
-            .map(|(_, permission)| permission)
-            .collect())
+        client
+            .read_effective_permissions(account_id)
+            .map(|permissions| permissions.into_iter().collect())
     }
     #[derive(clap::Args, Debug)]
     pub struct Id {
@@ -2794,16 +2783,9 @@ mod account {
         /// Account identifier (canonical I105 literal)
         #[arg(short, long)]
         id: String,
-        /// Maximum number of effective permissions to return after merging all dataspaces
-        /// (at least 1)
-        #[arg(long)]
-        limit: Option<u64>,
-        /// Offset into the complete, canonically ordered effective permission set
-        #[arg(long, default_value_t = 0)]
-        offset: u64,
-        /// Number of permissions to fetch per dataspace per request (default: 500, at least 1)
-        #[arg(long)]
-        fetch_size: Option<u64>,
+        /// Shared collection filter, sort, projection and cursor pagination controls.
+        #[command(flatten)]
+        list: crate::collection_list::ListArgs,
     }
     #[derive(clap::Args, Debug)]
     pub struct IdRole {
@@ -8665,15 +8647,23 @@ mod cli_integration_harness_tests {
         assert!(err.to_string().contains("failed to parse JSON"));
     }
     #[test]
-    fn parse_selector_and_apply_to_builder() {
-        // Selector tuple parses from null under the lightweight DSL.
+    fn parse_selector_and_execute_builder() {
+        // Selectors have one data-free layout: JSON `null` parses, a projection mode does not.
         let tuple: iroha::data_model::query::dsl::SelectorTuple<Domain> =
             super::parse_json("null").expect("parse selector JSON");
-        // Build a query with a non-default selector and ensure it executes via a dummy executor
+        assert_eq!(
+            tuple,
+            iroha::data_model::query::dsl::SelectorTuple::default()
+        );
+        assert!(
+            super::parse_json::<iroha::data_model::query::dsl::SelectorTuple<Domain>>(
+                "\"IdsOnly\""
+            )
+            .is_err()
+        );
+        // Ensure the remaining builder parameters pass through a dummy executor.
         let exec = DummyExec;
-        let builder = QueryBuilder::new(&exec, FindDomains).with_selector_tuple(tuple);
-        // Also exercise other params to ensure they pass through
-        let builder = builder
+        let builder = QueryBuilder::new(&exec, FindDomains)
             .with_sorting(Sorting::default())
             .with_pagination(Pagination::default())
             .with_fetch_size(FetchSize::default());
@@ -9175,12 +9165,7 @@ mod cli_integration_harness_tests {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Asc),
         };
-        // Also assert selector tuple parsing is accepted
-        let tuple: iroha::data_model::query::dsl::SelectorTuple<Domain> =
-            super::parse_json("null").expect("parse selector JSON");
-        let builder = QueryBuilder::new(&exec, FindDomains)
-            .with_selector_tuple(tuple)
-            .with_sorting(sorting);
+        let builder = QueryBuilder::new(&exec, FindDomains).with_sorting(sorting);
         let out: Vec<Domain> = builder.execute_all().expect("exec ok");
         // Expect d2 (rank=1), d1 (rank=2), then d3 (no rank)
         assert_eq!(out[0].id().name().as_ref(), "d2");
@@ -9194,11 +9179,7 @@ mod cli_integration_harness_tests {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Desc),
         };
-        let tuple: iroha::data_model::query::dsl::SelectorTuple<Domain> =
-            super::parse_json("null").expect("parse selector JSON");
-        let builder = QueryBuilder::new(&exec, FindDomains)
-            .with_selector_tuple(tuple)
-            .with_sorting(sorting);
+        let builder = QueryBuilder::new(&exec, FindDomains).with_sorting(sorting);
         let out: Vec<Domain> = builder.execute_all().expect("exec ok");
         // Descending: d1 (2), d2 (1), then d3 (None)
         assert_eq!(out[0].id().name().as_ref(), "d1");
@@ -9214,11 +9195,7 @@ mod cli_integration_harness_tests {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Asc),
         };
-        let tuple: iroha::data_model::query::dsl::SelectorTuple<Account> =
-            super::parse_json("null").expect("parse selector JSON");
-        let builder = QueryBuilder::new(&exec, FindAccounts)
-            .with_selector_tuple(tuple)
-            .with_sorting(sorting);
+        let builder = QueryBuilder::new(&exec, FindAccounts).with_sorting(sorting);
         let out: Vec<Account> = builder.execute_all().expect("exec ok");
         // Expect a2 (rank=1), a1 (rank=2), then a3 (no rank)
         // Check by presence of metadata key for first two and existence of three items
@@ -9251,11 +9228,7 @@ mod cli_integration_harness_tests {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Desc),
         };
-        let tuple: iroha::data_model::query::dsl::SelectorTuple<Account> =
-            super::parse_json("null").expect("parse selector JSON");
-        let builder = QueryBuilder::new(&exec, FindAccounts)
-            .with_selector_tuple(tuple)
-            .with_sorting(sorting);
+        let builder = QueryBuilder::new(&exec, FindAccounts).with_sorting(sorting);
         let out: Vec<Account> = builder.execute_all().expect("exec ok");
         // Descending: ranks [2, 1, None]
         let key: Name = "rank".parse().unwrap();
@@ -9272,17 +9245,13 @@ mod cli_integration_harness_tests {
     #[test]
     fn metadata_sorting_asset_defs_end_to_end() {
         use iroha::data_model::asset::definition::AssetDefinition;
-        use iroha::data_model::prelude::FindAssetsDefinitions;
+        use iroha::data_model::prelude::FindAssetDefinitions;
         let exec = HarnessQueryExecutor::<AssetDefinitionFixture>::ranked_three();
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Asc),
         };
-        let tuple: iroha::data_model::query::dsl::SelectorTuple<AssetDefinition> =
-            super::parse_json("null").expect("parse selector JSON");
-        let builder = QueryBuilder::new(&exec, FindAssetsDefinitions)
-            .with_selector_tuple(tuple)
-            .with_sorting(sorting);
+        let builder = QueryBuilder::new(&exec, FindAssetDefinitions).with_sorting(sorting);
         let out: Vec<AssetDefinition> = builder.execute_all().expect("exec ok");
         // Expect silver (rank=1), gold (rank=2), then bronze (no rank)
         assert_eq!(out.len(), 3);
@@ -9293,17 +9262,13 @@ mod cli_integration_harness_tests {
     #[test]
     fn metadata_sorting_asset_defs_desc_end_to_end() {
         use iroha::data_model::asset::definition::AssetDefinition;
-        use iroha::data_model::prelude::FindAssetsDefinitions;
+        use iroha::data_model::prelude::FindAssetDefinitions;
         let exec = HarnessQueryExecutor::<AssetDefinitionFixture>::ranked_three();
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Desc),
         };
-        let tuple: iroha::data_model::query::dsl::SelectorTuple<AssetDefinition> =
-            super::parse_json("null").expect("parse selector JSON");
-        let builder = QueryBuilder::new(&exec, FindAssetsDefinitions)
-            .with_selector_tuple(tuple)
-            .with_sorting(sorting);
+        let builder = QueryBuilder::new(&exec, FindAssetDefinitions).with_sorting(sorting);
         let out: Vec<AssetDefinition> = builder.execute_all().expect("exec ok");
         // Descending: gold (2), silver (1), bronze (None)
         assert_eq!(out.len(), 3);
@@ -9487,7 +9452,7 @@ mod cli_integration_harness_tests {
     }
     #[test]
     fn pagination_sorting_asset_defs_asc() {
-        use iroha::data_model::prelude::FindAssetsDefinitions;
+        use iroha::data_model::prelude::FindAssetDefinitions;
         use iroha::data_model::query::parameters::{FetchSize, Pagination, SortOrder};
         PSAD_ASC_STARTS.store(0, Ordering::SeqCst);
         PSAD_ASC_CONTS.store(0, Ordering::SeqCst);
@@ -9501,7 +9466,7 @@ mod cli_integration_harness_tests {
             order: Some(SortOrder::Asc),
         };
         let out: Vec<iroha::data_model::asset::definition::AssetDefinition> =
-            QueryBuilder::new(&exec, FindAssetsDefinitions)
+            QueryBuilder::new(&exec, FindAssetDefinitions)
                 .with_sorting(sorting)
                 .with_pagination(Pagination {
                     limit: Some(NonZeroU64::new(3).unwrap()),
@@ -9527,7 +9492,7 @@ mod cli_integration_harness_tests {
     }
     #[test]
     fn pagination_sorting_asset_defs_desc() {
-        use iroha::data_model::prelude::FindAssetsDefinitions;
+        use iroha::data_model::prelude::FindAssetDefinitions;
         use iroha::data_model::query::parameters::{FetchSize, Pagination, SortOrder};
         PSAD_DESC_STARTS.store(0, Ordering::SeqCst);
         PSAD_DESC_CONTS.store(0, Ordering::SeqCst);
@@ -9541,7 +9506,7 @@ mod cli_integration_harness_tests {
             order: Some(SortOrder::Desc),
         };
         let out: Vec<iroha::data_model::asset::definition::AssetDefinition> =
-            QueryBuilder::new(&exec, FindAssetsDefinitions)
+            QueryBuilder::new(&exec, FindAssetDefinitions)
                 .with_sorting(sorting)
                 .with_pagination(Pagination {
                     limit: Some(NonZeroU64::new(3).unwrap()),
@@ -9574,11 +9539,7 @@ mod cli_integration_harness_tests {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Asc),
         };
-        let tuple: iroha::data_model::query::dsl::SelectorTuple<Nft> =
-            super::parse_json("null").expect("parse selector JSON");
-        let builder = QueryBuilder::new(&exec, FindNfts)
-            .with_selector_tuple(tuple)
-            .with_sorting(sorting);
+        let builder = QueryBuilder::new(&exec, FindNfts).with_sorting(sorting);
         let out: Vec<Nft> = builder.execute_all().expect("exec ok");
         // Expect n2 (rank=1), n1 (rank=2), then n3 (no rank)
         assert_eq!(out.len(), 3);
@@ -9595,11 +9556,7 @@ mod cli_integration_harness_tests {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(iroha::data_model::query::parameters::SortOrder::Desc),
         };
-        let tuple: iroha::data_model::query::dsl::SelectorTuple<Nft> =
-            super::parse_json("null").expect("parse selector JSON");
-        let builder = QueryBuilder::new(&exec, FindNfts)
-            .with_selector_tuple(tuple)
-            .with_sorting(sorting);
+        let builder = QueryBuilder::new(&exec, FindNfts).with_sorting(sorting);
         let out: Vec<Nft> = builder.execute_all().expect("exec ok");
         // Descending: n1 (2), n2 (1), then n3 (None)
         assert_eq!(out.len(), 3);
@@ -9706,7 +9663,7 @@ mod cli_integration_harness_tests {
     #[test]
     fn pagination_and_fetch_size_asset_defs() {
         use iroha::data_model::asset::definition::AssetDefinition;
-        use iroha::data_model::prelude::FindAssetsDefinitions;
+        use iroha::data_model::prelude::FindAssetDefinitions;
         use iroha::data_model::query::parameters::{FetchSize, Pagination};
         let exec = HarnessQueryExecutor::<AssetDefinitionFixture>::positioned_five(
             0x90,
@@ -9715,7 +9672,7 @@ mod cli_integration_harness_tests {
         );
         PAGED_ADS_STARTS.store(0, Ordering::SeqCst);
         PAGED_ADS_CONTS.store(0, Ordering::SeqCst);
-        let builder = QueryBuilder::new(&exec, FindAssetsDefinitions)
+        let builder = QueryBuilder::new(&exec, FindAssetDefinitions)
             .with_pagination(Pagination {
                 limit: Some(NonZeroU64::new(3).unwrap()),
                 offset: 1,
@@ -9739,10 +9696,9 @@ mod cli_integration_harness_tests {
         assert_eq!(PAGED_ADS_CONTS.load(Ordering::SeqCst), 1);
     }
 }
-// Experimental: feature-gated integration harness for CLI queries.
+// Feature-gated integration harness for CLI queries.
 //
-// This module sketches how to exercise CLI query flows against a mock server or
-// embedded state once server-side selectors/projections are fully enabled.
+// This module exercises CLI query flows against an in-memory mock query server.
 // It is intentionally behind a feature and unused by default to avoid pulling
 // additional dependencies or affecting production builds.
 #[cfg(all(test, feature = "cli_integration_harness"))]
@@ -9750,8 +9706,6 @@ mod cli_integration_harness {
     use super::*;
     use eyre::eyre;
     use iroha::crypto::KeyPair;
-    #[cfg(feature = "ids_projection")]
-    use iroha::data_model::query::QueryItemKind;
     use iroha::data_model::query::runtime::AbiVersion;
     use iroha::data_model::{
         account::AccountId,
@@ -9767,8 +9721,6 @@ mod cli_integration_harness {
     };
     use iroha_crypto::{Algorithm, Hash};
     use iroha_model_base::domain::DomainId;
-    #[cfg(feature = "ids_projection")]
-    use norito::codec::Decode;
     use std::collections::BTreeMap;
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -9816,81 +9768,6 @@ mod cli_integration_harness {
             "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
         );
     }
-    #[cfg(feature = "ids_projection")]
-    fn build_query_with_params<T, Q, F>(
-        predicate: iroha::data_model::query::dsl::CompoundPredicate<T>,
-        selector: iroha::data_model::query::dsl::SelectorTuple<T>,
-        params: iroha::data_model::query::parameters::QueryParams,
-        builder: F,
-    ) -> QueryWithParams
-    where
-        T: iroha::data_model::query::dsl::HasProjection<
-                iroha::data_model::query::dsl::PredicateMarker,
-            > + iroha::data_model::query::dsl::HasProjection<
-                iroha::data_model::query::dsl::SelectorMarker,
-                AtomType = (),
-            > + Send
-            + Sync
-            + iroha::data_model::query::ItemKindTag
-            + 'static,
-        Q: iroha::data_model::query::Query<Item = T> + norito::codec::Encode,
-        F: FnOnce() -> Q,
-    {
-        let query = builder();
-        QueryWithParams {
-            query: (),
-            query_payload: query.dyn_encode(),
-            item: query.query_item_kind(),
-            predicate_bytes: norito::codec::Encode::encode(&predicate),
-            selector_bytes: norito::codec::Encode::encode(&selector),
-            params,
-        }
-    }
-    #[cfg(feature = "ids_projection")]
-    fn query_projects_domain_ids(query: &QueryWithParams) -> bool {
-        let (item_kind, _, selector_bytes, _) = query.parts();
-        if item_kind != QueryItemKind::Domain {
-            return false;
-        }
-        let mut cursor = selector_bytes;
-        let selector: iroha::data_model::query::dsl::SelectorTuple<
-            iroha::data_model::domain::Domain,
-        > = match Decode::decode(&mut cursor) {
-            Ok(selector) => selector,
-            Err(_) => return false,
-        };
-        selector.is_ids_only()
-    }
-    #[cfg(feature = "ids_projection")]
-    fn query_projects_account_ids(query: &QueryWithParams) -> bool {
-        let (item_kind, _, selector_bytes, _) = query.parts();
-        if item_kind != QueryItemKind::Account {
-            return false;
-        }
-        let mut cursor = selector_bytes;
-        let selector: iroha::data_model::query::dsl::SelectorTuple<
-            iroha::data_model::account::Account,
-        > = match Decode::decode(&mut cursor) {
-            Ok(selector) => selector,
-            Err(_) => return false,
-        };
-        selector.is_ids_only()
-    }
-    #[cfg(feature = "ids_projection")]
-    fn query_projects_asset_definition_ids(query: &QueryWithParams) -> bool {
-        let (item_kind, _, selector_bytes, _) = query.parts();
-        if item_kind != QueryItemKind::AssetDefinition {
-            return false;
-        }
-        let mut cursor = selector_bytes;
-        let selector: iroha::data_model::query::dsl::SelectorTuple<
-            iroha::data_model::asset::definition::AssetDefinition,
-        > = match Decode::decode(&mut cursor) {
-            Ok(selector) => selector,
-            Err(_) => return false,
-        };
-        selector.is_ids_only()
-    }
     // Cursor that carries the remaining items and fetch size
     pub enum MockCursor {
         Domains {
@@ -9905,24 +9782,6 @@ mod cli_integration_harness {
         },
         AssetDefs {
             items: Vec<iroha::data_model::asset::definition::AssetDefinition>,
-            idx: usize,
-            fetch: usize,
-        },
-        #[cfg(feature = "ids_projection")]
-        DomainIds {
-            ids: Vec<iroha_model_base::domain::DomainId>,
-            idx: usize,
-            fetch: usize,
-        },
-        #[cfg(feature = "ids_projection")]
-        AccountIds {
-            ids: Vec<iroha::data_model::account::AccountId>,
-            idx: usize,
-            fetch: usize,
-        },
-        #[cfg(feature = "ids_projection")]
-        AssetDefIds {
-            ids: Vec<iroha::data_model::asset::id::AssetDefinitionId>,
             idx: usize,
             fetch: usize,
         },
@@ -10036,29 +9895,6 @@ mod cli_integration_harness {
                 let first_end = start.saturating_add(fetch).min(end);
                 let first = v[start..first_end].to_vec();
                 let remaining = end.saturating_sub(first_end) as u64;
-                // Detect ids-only selector for domains
-                #[cfg(feature = "ids_projection")]
-                if query_projects_domain_ids(&query) {
-                    let first_ids: Vec<_> = first.iter().map(|d| d.id().clone()).collect();
-                    let remaining_ids: Vec<_> =
-                        v[first_end..end].iter().map(|d| d.id().clone()).collect();
-                    let next = if remaining > 0 {
-                        Some(MockCursor::DomainIds {
-                            ids: remaining_ids,
-                            idx: 0,
-                            fetch,
-                        })
-                    } else {
-                        None
-                    };
-                    return Ok((
-                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::DomainId(
-                            first_ids,
-                        )),
-                        Some(remaining),
-                        next,
-                    ));
-                }
                 let next = if remaining > 0 {
                     Some(MockCursor::Domains {
                         items: v[first_end..end].to_vec(),
@@ -10096,28 +9932,6 @@ mod cli_integration_harness {
                 let first_end = start.saturating_add(fetch).min(end);
                 let first = v[start..first_end].to_vec();
                 let remaining = end.saturating_sub(first_end) as u64;
-                #[cfg(feature = "ids_projection")]
-                if query_projects_account_ids(&query) {
-                    let first_ids: Vec<_> = first.iter().map(|a| a.id().clone()).collect();
-                    let remaining_ids: Vec<_> =
-                        v[first_end..end].iter().map(|a| a.id().clone()).collect();
-                    let next = if remaining > 0 {
-                        Some(MockCursor::AccountIds {
-                            ids: remaining_ids,
-                            idx: 0,
-                            fetch,
-                        })
-                    } else {
-                        None
-                    };
-                    return Ok((
-                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::AccountId(
-                            first_ids,
-                        )),
-                        Some(remaining),
-                        next,
-                    ));
-                }
                 let next = if remaining > 0 {
                     Some(MockCursor::Accounts {
                         items: v[first_end..end].to_vec(),
@@ -10155,28 +9969,6 @@ mod cli_integration_harness {
                 let first_end = start.saturating_add(fetch).min(end);
                 let first = v[start..first_end].to_vec();
                 let remaining = end.saturating_sub(first_end) as u64;
-                #[cfg(feature = "ids_projection")]
-                if query_projects_asset_definition_ids(&query) {
-                    let first_ids: Vec<_> = first.iter().map(|ad| ad.id().clone()).collect();
-                    let remaining_ids: Vec<_> =
-                        v[first_end..end].iter().map(|ad| ad.id().clone()).collect();
-                    let next = if remaining > 0 {
-                        Some(MockCursor::AssetDefIds {
-                            ids: remaining_ids,
-                            idx: 0,
-                            fetch,
-                        })
-                    } else {
-                        None
-                    };
-                    return Ok((
-                        QueryOutputBatchBoxTuple::from_batch(
-                            QueryOutputBatchBox::AssetDefinitionId(first_ids),
-                        ),
-                        Some(remaining),
-                        next,
-                    ));
-                }
                 let next = if remaining > 0 {
                     Some(MockCursor::AssetDefs {
                         items: v[first_end..end].to_vec(),
@@ -10264,68 +10056,6 @@ mod cli_integration_harness {
                         next,
                     ))
                 }
-                #[cfg(feature = "ids_projection")]
-                MockCursor::DomainIds { ids, idx, fetch } => {
-                    let end = (idx + fetch).min(ids.len());
-                    let batch = ids[idx..end].to_vec();
-                    let remaining = ids.len().saturating_sub(end) as u64;
-                    let next = if remaining > 0 {
-                        Some(MockCursor::DomainIds {
-                            ids,
-                            idx: end,
-                            fetch,
-                        })
-                    } else {
-                        None
-                    };
-                    Ok((
-                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::DomainId(batch)),
-                        Some(remaining),
-                        next,
-                    ))
-                }
-                #[cfg(feature = "ids_projection")]
-                MockCursor::AccountIds { ids, idx, fetch } => {
-                    let end = (idx + fetch).min(ids.len());
-                    let batch = ids[idx..end].to_vec();
-                    let remaining = ids.len().saturating_sub(end) as u64;
-                    let next = if remaining > 0 {
-                        Some(MockCursor::AccountIds {
-                            ids,
-                            idx: end,
-                            fetch,
-                        })
-                    } else {
-                        None
-                    };
-                    Ok((
-                        QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::AccountId(batch)),
-                        Some(remaining),
-                        next,
-                    ))
-                }
-                #[cfg(feature = "ids_projection")]
-                MockCursor::AssetDefIds { ids, idx, fetch } => {
-                    let end = (idx + fetch).min(ids.len());
-                    let batch = ids[idx..end].to_vec();
-                    let remaining = ids.len().saturating_sub(end) as u64;
-                    let next = if remaining > 0 {
-                        Some(MockCursor::AssetDefIds {
-                            ids,
-                            idx: end,
-                            fetch,
-                        })
-                    } else {
-                        None
-                    };
-                    Ok((
-                        QueryOutputBatchBoxTuple::from_batch(
-                            QueryOutputBatchBox::AssetDefinitionId(batch),
-                        ),
-                        Some(remaining),
-                        next,
-                    ))
-                }
             }
         }
     }
@@ -10380,322 +10110,6 @@ mod cli_integration_harness {
         assert_eq!(out[0].id(), w2.id());
         assert_eq!(out[1].id(), w1.id());
         assert_eq!(out[2].id(), w3.id());
-    }
-    #[cfg(feature = "ids_projection")]
-    #[test]
-    fn mock_query_domains_ids_projection() {
-        use iroha::data_model::domain::Domain;
-        use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
-        use iroha::data_model::query::parameters::QueryParams;
-        use iroha::data_model::query::{self};
-        use iroha_model_base::domain::DomainId;
-        let owner_w1 = sample_account_id("w1", 1);
-        let owner_w2 = sample_account_id("w2", 2);
-        let mut server = MockQueryServer::default();
-        server.domains = vec![
-            Domain::new(DomainId::try_new("w1", "universal").unwrap()).build(owner_w1.account()),
-            Domain::new(DomainId::try_new("w2", "universal").unwrap()).build(owner_w2.account()),
-        ];
-        let qwp = build_query_with_params(
-            CompoundPredicate::PASS,
-            SelectorTuple::<Domain>::ids_only(),
-            QueryParams::default(),
-            || query::domain::prelude::FindDomains,
-        );
-        let (batch, _rem, _cur) = server.start_query(qwp).expect("start ok");
-        let ids = match batch.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::DomainId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids.len(), 2);
-        assert_eq!(ids[0], DomainId::try_new("w1", "universal").unwrap());
-        assert_eq!(ids[1], DomainId::try_new("w2", "universal").unwrap());
-    }
-    #[cfg(feature = "ids_projection")]
-    #[test]
-    fn mock_query_accounts_ids_projection() {
-        use iroha::data_model::account::Account;
-        use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
-        use iroha::data_model::query::parameters::QueryParams;
-        use iroha::data_model::query::{self};
-        let alice = sample_account_id("w", 1);
-        let bob = sample_account_id("w", 2);
-        let mut server = MockQueryServer::default();
-        server.accounts = vec![
-            Account::new(alice.clone()).build(&alice),
-            Account::new(bob.clone()).build(&bob),
-        ];
-        let qwp = build_query_with_params(
-            CompoundPredicate::PASS,
-            SelectorTuple::<Account>::ids_only(),
-            QueryParams::default(),
-            || query::account::prelude::FindAccounts,
-        );
-        let (batch, _rem, _cur) = server.start_query(qwp).expect("start ok");
-        let ids = match batch.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::AccountId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids.len(), 2);
-        assert!(ids.iter().any(|id| id == &alice));
-        assert!(ids.iter().any(|id| id == &bob));
-    }
-    #[cfg(feature = "ids_projection")]
-    #[test]
-    fn mock_query_asset_defs_ids_projection() {
-        use iroha::data_model::asset::{definition::AssetDefinition, id::AssetDefinitionId};
-        use iroha::data_model::prelude::NumericSpec;
-        use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
-        use iroha::data_model::query::parameters::QueryParams;
-        use iroha::data_model::query::{self};
-        let owner_w = sample_account_id("w", 1);
-        let mut server = MockQueryServer::default();
-        server.asset_defs = vec![
-            {
-                let __asset_definition_id =
-                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                        DomainId::try_new("w", "universal").unwrap(),
-                        "rose".parse().unwrap(),
-                    );
-                AssetDefinition::new(
-                    __asset_definition_id.clone(),
-                    "rose".to_owned(),
-                    NumericSpec::default(),
-                    iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
-                )
-            }
-            .build(owner_w.account()),
-            {
-                let __asset_definition_id =
-                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                        DomainId::try_new("w", "universal").unwrap(),
-                        "tulip".parse().unwrap(),
-                    );
-                AssetDefinition::new(
-                    __asset_definition_id.clone(),
-                    "tulip".to_owned(),
-                    NumericSpec::default(),
-                    iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
-                )
-            }
-            .build(owner_w.account()),
-        ];
-        let qwp = build_query_with_params(
-            CompoundPredicate::PASS,
-            SelectorTuple::<AssetDefinition>::ids_only(),
-            QueryParams::default(),
-            || query::asset::prelude::FindAssetsDefinitions,
-        );
-        let (batch, _rem, _cur) = server.start_query(qwp).expect("start ok");
-        let ids = match batch.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::AssetDefinitionId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids.len(), 2);
-        assert!(ids.iter().any(|id| id
-            == &AssetDefinitionId::derive_from_components(
-                DomainId::try_new("w", "universal").unwrap(),
-                "rose".parse().unwrap()
-            )));
-        assert!(ids.iter().any(|id| id
-            == &AssetDefinitionId::derive_from_components(
-                DomainId::try_new("w", "universal").unwrap(),
-                "tulip".parse().unwrap()
-            )));
-    }
-    #[cfg(feature = "ids_projection")]
-    #[test]
-    fn mock_query_asset_defs_ids_projection_batched() {
-        use iroha::data_model::asset::{definition::AssetDefinition, id::AssetDefinitionId};
-        use iroha::data_model::prelude::NumericSpec;
-        use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
-        use iroha::data_model::query::parameters::{FetchSize, QueryParams};
-        use iroha::data_model::query::{self};
-        use std::num::NonZeroU64;
-        let owner_w = sample_account_id("w", 2);
-        let mut server = MockQueryServer::default();
-        server.asset_defs = vec![
-            {
-                let __asset_definition_id =
-                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                        DomainId::try_new("w", "universal").unwrap(),
-                        "rose".parse().unwrap(),
-                    );
-                AssetDefinition::new(
-                    __asset_definition_id.clone(),
-                    "rose".to_owned(),
-                    NumericSpec::default(),
-                    iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
-                )
-            }
-            .build(owner_w.account()),
-            {
-                let __asset_definition_id =
-                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                        DomainId::try_new("w", "universal").unwrap(),
-                        "tulip".parse().unwrap(),
-                    );
-                AssetDefinition::new(
-                    __asset_definition_id.clone(),
-                    "tulip".to_owned(),
-                    NumericSpec::default(),
-                    iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
-                )
-            }
-            .build(owner_w.account()),
-            {
-                let __asset_definition_id =
-                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                        DomainId::try_new("w", "universal").unwrap(),
-                        "peony".parse().unwrap(),
-                    );
-                AssetDefinition::new(
-                    __asset_definition_id.clone(),
-                    "peony".to_owned(),
-                    NumericSpec::default(),
-                    iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
-                )
-            }
-            .build(owner_w.account()),
-        ];
-        let mut params = QueryParams::default();
-        params.fetch_size = FetchSize::new(Some(NonZeroU64::new(2).unwrap()));
-        let qwp = build_query_with_params(
-            CompoundPredicate::PASS,
-            SelectorTuple::<AssetDefinition>::ids_only(),
-            params,
-            || query::asset::prelude::FindAssetsDefinitions,
-        );
-        let (batch1, rem, cur) = server.start_query(qwp).expect("start ok");
-        let ids1 = match batch1.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::AssetDefinitionId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids1.len(), 2);
-        assert!(ids1.contains(&AssetDefinitionId::derive_from_components(
-            DomainId::try_new("w", "universal").unwrap(),
-            "rose".parse().unwrap()
-        )));
-        assert!(ids1.contains(&AssetDefinitionId::derive_from_components(
-            DomainId::try_new("w", "universal").unwrap(),
-            "tulip".parse().unwrap()
-        )));
-        assert_eq!(rem, Some(1));
-        let cur = cur.expect("should continue");
-        let (batch2, rem2, cur2) =
-            <MockQueryServer as query::builder::QueryExecutor>::continue_query(cur)
-                .expect("cont ok");
-        let ids2 = match batch2.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::AssetDefinitionId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids2.len(), 1);
-        assert!(ids2.contains(&AssetDefinitionId::derive_from_components(
-            DomainId::try_new("w", "universal").unwrap(),
-            "peony".parse().unwrap()
-        )));
-        assert_eq!(rem2, Some(0));
-        assert!(cur2.is_none());
-    }
-    #[cfg(feature = "ids_projection")]
-    #[test]
-    fn mock_query_accounts_ids_projection_batched() {
-        use iroha::data_model::account::Account;
-        use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
-        use iroha::data_model::query::parameters::{FetchSize, QueryParams};
-        use iroha::data_model::query::{self};
-        use std::num::NonZeroU64;
-        let alice = sample_account_id("w", 3);
-        let bob = sample_account_id("w", 4);
-        let carol = sample_account_id("w", 5);
-        let mut server = MockQueryServer::default();
-        server.accounts = vec![
-            Account::new(alice.clone()).build(&alice),
-            Account::new(bob.clone()).build(&bob),
-            Account::new(carol.clone()).build(&carol),
-        ];
-        let mut params = QueryParams::default();
-        params.fetch_size = FetchSize::new(Some(NonZeroU64::new(2).unwrap()));
-        let qwp = build_query_with_params(
-            CompoundPredicate::PASS,
-            SelectorTuple::<Account>::ids_only(),
-            params,
-            || query::account::prelude::FindAccounts,
-        );
-        let (batch1, rem, cur) = server.start_query(qwp).expect("start ok");
-        let ids1 = match batch1.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::AccountId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids1.len(), 2);
-        assert!(ids1.contains(&alice));
-        assert!(ids1.contains(&bob));
-        assert_eq!(rem, Some(1));
-        let cur = cur.expect("should continue");
-        let (batch2, rem2, cur2) =
-            <MockQueryServer as query::builder::QueryExecutor>::continue_query(cur)
-                .expect("cont ok");
-        let ids2 = match batch2.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::AccountId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids2.len(), 1);
-        assert!(ids2.contains(&carol));
-        assert_eq!(rem2, Some(0));
-        assert!(cur2.is_none());
-    }
-    #[cfg(feature = "ids_projection")]
-    #[test]
-    fn mock_query_domains_ids_projection_batched() {
-        use iroha::data_model::domain::Domain;
-        use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
-        use iroha::data_model::query::parameters::{FetchSize, QueryParams};
-        use iroha::data_model::query::{self};
-        use iroha_model_base::domain::DomainId;
-        use std::num::NonZeroU64;
-        let owner_d1 = sample_account_id("d1", 1);
-        let owner_d2 = sample_account_id("d2", 2);
-        let owner_d3 = sample_account_id("d3", 3);
-        let mut server = MockQueryServer::default();
-        server.domains = vec![
-            Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(owner_d1.account()),
-            Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(owner_d2.account()),
-            Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(owner_d3.account()),
-        ];
-        let mut params = QueryParams::default();
-        params.fetch_size = FetchSize::new(Some(NonZeroU64::new(2).unwrap()));
-        let qwp = build_query_with_params(
-            CompoundPredicate::PASS,
-            SelectorTuple::<Domain>::ids_only(),
-            params,
-            || query::domain::prelude::FindDomains,
-        );
-        let (batch1, rem, cur) = server.start_query(qwp).expect("start ok");
-        let ids1 = match batch1.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::DomainId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids1.len(), 2);
-        assert!(ids1.contains(&DomainId::try_new("d1", "universal").unwrap()));
-        assert!(ids1.contains(&DomainId::try_new("d2", "universal").unwrap()));
-        assert_eq!(rem, Some(1));
-        let cur = cur.expect("should continue");
-        let (batch2, rem2, cur2) =
-            <MockQueryServer as query::builder::QueryExecutor>::continue_query(cur)
-                .expect("cont ok");
-        let ids2 = match batch2.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::DomainId(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(ids2.len(), 1);
-        assert!(ids2.contains(&DomainId::try_new("d3", "universal").unwrap()));
-        assert_eq!(rem2, Some(0));
-        assert!(cur2.is_none());
     }
     #[test]
     fn mock_query_domains_sorting_desc_batched() {

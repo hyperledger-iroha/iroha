@@ -31,15 +31,21 @@
 //! commitment-key tables, and the digest of the copy mapping it was built
 //! from ([`ProvingKey::copy_digest`]), which is how a synthesized circuit is
 //! checked against the key without recomputing `sigma`. The cache holds
-//! every fixed, `sigma` and mask
-//! polynomial evaluated on every quotient coset
+//! every fixed and `sigma` polynomial evaluated on every quotient coset
 //! ([`CosetCachePolicy::Eager`]), or nothing, in which case
 //! [`ProvingKey::coset_values`] computes the same values on demand
 //! ([`CosetCachePolicy::OnDemand`]).
+//!
+//! The masks are never cached: [`ProvingKey::coset_masks`] computes them on
+//! a coset from their closed forms. With `x_i = s_c omega^i`,
+//! `l_0(x_i) = (lambda_c - 1) / (n (x_i - 1))` (one batch inversion), and
+//! `l_r(x_i) = l_0(x_{i - r})`, so `l_last` is a rotation of `l_0` and
+//! `l_active = 1 - sum_{r = u}^{n - 1} l_r` a sliding sum of `b + 1` of its
+//! rotations. The values equal the coset FFT of the mask polynomials.
 
 use std::borrow::Cow;
 
-use ff::{Field, PrimeField, WithSmallOrderMulGroup};
+use ff::{BatchInvert, Field, PrimeField, WithSmallOrderMulGroup};
 use iroha_pasta::{PastaCurve, PastaField, fft::FftDomain};
 
 use super::{DescriptorBinding, KeyError, check_shape, vk::VerifyingKey};
@@ -244,6 +250,17 @@ pub enum CosetPolynomial {
 /// `(l_0, l_last, l_active)` borrowed from a proving key.
 pub type MaskSlices<'a, F> = (&'a [F], &'a [F], &'a [F]);
 
+/// The masks on one quotient coset ([`ProvingKey::coset_masks`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CosetMasks<F> {
+    /// `l_0`.
+    pub l0: Vec<F>,
+    /// `l_last`.
+    pub l_last: Vec<F>,
+    /// `l_active = 1 - l_last - l_blind`.
+    pub l_active: Vec<F>,
+}
+
 /// The masks in evaluation and coefficient form.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Masks<F> {
@@ -394,30 +411,80 @@ impl<C: PastaCurve> ProvingKey<C> {
         Ok(key)
     }
 
-    /// Every cached polynomial, in cache order.
+    /// Every cached polynomial, in cache order (the masks are computed per
+    /// coset, see [`Self::coset_masks`]).
     fn cache_order(&self) -> Vec<CosetPolynomial> {
         (0..self.fixed_polys.len())
             .map(CosetPolynomial::Fixed)
             .chain((0..self.permutation_polys.len()).map(CosetPolynomial::Permutation))
-            .chain([
-                CosetPolynomial::L0,
-                CosetPolynomial::LLast,
-                CosetPolynomial::LActive,
-            ])
             .collect()
     }
 
-    /// The position of `poly` in the cache order.
+    /// The position of `poly` in the cache order (`None` for the masks).
     fn cache_index(&self, poly: CosetPolynomial) -> Option<usize> {
         let fixed = self.fixed_polys.len();
         let permutation = self.permutation_polys.len();
         match poly {
             CosetPolynomial::Fixed(i) => (i < fixed).then_some(i),
             CosetPolynomial::Permutation(j) => (j < permutation).then_some(fixed + j),
-            CosetPolynomial::L0 => Some(fixed + permutation),
-            CosetPolynomial::LLast => Some(fixed + permutation + 1),
-            CosetPolynomial::LActive => Some(fixed + permutation + 2),
+            CosetPolynomial::L0 | CosetPolynomial::LLast | CosetPolynomial::LActive => None,
         }
+    }
+
+    /// `(l_0, l_last, l_active)` on quotient coset `coset`, from their
+    /// closed forms (see the module documentation): one batch inversion and
+    /// a sliding sum, equal to the coset FFT of the mask polynomials.
+    ///
+    /// # Errors
+    ///
+    /// [`KeyError::CosetIndex`] for a missing coset, and
+    /// [`KeyError::Shape`] when the blinding rows do not fit the domain.
+    pub fn coset_masks(&self, coset: usize) -> Result<CosetMasks<C::ScalarExt>, KeyError> {
+        let shift = self.quotient.shift(coset).ok_or(KeyError::CosetIndex)?;
+        let lambda = self.quotient.lambda(coset).ok_or(KeyError::CosetIndex)?;
+        let n = self.domain.n();
+        let blinding = usize::from(self.binding.descriptor().blinding_factors);
+        let last = n
+            .checked_sub(blinding)
+            .and_then(|rows| rows.checked_sub(1))
+            .ok_or(KeyError::Shape {
+                what: "blinding rows",
+                expected: n,
+                actual: blinding,
+            })?;
+        let n_field = C::ScalarExt::from(u64::try_from(n).map_err(|_| KeyError::CosetIndex)?);
+        let n_inv = Option::<C::ScalarExt>::from(n_field.invert()).ok_or(KeyError::CosetIndex)?;
+        let factor = (lambda - C::ScalarExt::ONE) * n_inv;
+        // l_0(x_i) = (lambda - 1) / (n (x_i - 1)); x_i != 1 since x_i^n =
+        // lambda != 1.
+        let omega = self.domain.omega();
+        let mut l0 = Vec::with_capacity(n);
+        let mut point = shift;
+        for _ in 0..n {
+            l0.push(point - C::ScalarExt::ONE);
+            point *= omega;
+        }
+        l0.iter_mut().batch_invert();
+        for value in &mut l0 {
+            *value *= factor;
+        }
+        // l_r(x_i) = l_0(x_{i - r}).
+        let rotated = |row: usize, rotation: usize| l0[(row + n - rotation) % n];
+        let l_last: Vec<C::ScalarExt> = (0..n).map(|row| rotated(row, last)).collect();
+        // sum_{r = last}^{n - 1} l_r(x_i) = sum_{t = 0}^{b} l_0(x_{i - last - t}),
+        // slid one row at a time.
+        let mut window: C::ScalarExt = (0..=blinding).map(|t| rotated(0, last + t)).sum();
+        let mut l_active = Vec::with_capacity(n);
+        for row in 0..n {
+            l_active.push(C::ScalarExt::ONE - window);
+            window += rotated(row + 1, last);
+            window -= rotated(row + 1, last + blinding + 1);
+        }
+        Ok(CosetMasks {
+            l0,
+            l_last,
+            l_active,
+        })
     }
 
     /// The coefficients of a cached polynomial.
@@ -445,6 +512,17 @@ impl<C: PastaCurve> ProvingKey<C> {
     ) -> Result<Cow<'_, [C::ScalarExt]>, KeyError> {
         if coset >= self.quotient.pieces() {
             return Err(KeyError::CosetIndex);
+        }
+        if matches!(
+            poly,
+            CosetPolynomial::L0 | CosetPolynomial::LLast | CosetPolynomial::LActive
+        ) {
+            let masks = self.coset_masks(coset)?;
+            return Ok(Cow::Owned(match poly {
+                CosetPolynomial::L0 => masks.l0,
+                CosetPolynomial::LLast => masks.l_last,
+                _ => masks.l_active,
+            }));
         }
         self.cache.as_ref().map_or_else(
             || {
@@ -493,7 +571,10 @@ impl<C: PastaCurve> ProvingKey<C> {
         &self.binding
     }
 
-    /// The finalized constraint system (selectors substituted).
+    /// The finalized constraint system (selectors substituted). Its
+    /// selector columns were moved into the key's fixed columns
+    /// ([`Self::fixed_values`] from the descriptor's selector
+    /// `first_column`), so its own `selector_columns()` is empty.
     #[must_use]
     pub fn constraint_system(&self) -> &FinalizedConstraintSystem<C::ScalarExt> {
         &self.finalized

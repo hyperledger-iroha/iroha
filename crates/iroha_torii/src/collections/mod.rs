@@ -9,6 +9,7 @@
 //! depth.
 mod cursor;
 mod engine;
+pub(crate) mod memory;
 pub(crate) mod specs;
 
 pub(crate) use engine::{Limits, Prepared, RowPage, prepare};
@@ -18,7 +19,7 @@ pub(crate) use specs::CollectionSpec;
 pub(crate) fn aggregate_collections() -> impl Iterator<Item = &'static str> {
     specs::ALL
         .into_iter()
-        .filter(|spec| !spec.positioned)
+        .filter(|spec| spec.positioned == 0)
         .map(|spec| spec.id)
 }
 

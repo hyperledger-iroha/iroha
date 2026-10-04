@@ -30,8 +30,6 @@ maintenance = { status = "actively-developed" }
 [features]
 default = ["bridge", "offline-visual-codecs"]
 offline-visual-codecs = ["dep:image"]
-# Experimental selector support. Forwarded to client/data-model crates when enabled.
-ids_projection = ["iroha/ids_projection", "iroha_data_model/ids_projection"]
 # Hooks used only by integration tests.
 cli_integration_harness = []
 bridge = []

@@ -22,6 +22,7 @@ pub(super) trait ProvisioningOperations {
         &self,
         config: &Config,
         alias: &str,
+        account_alias: &str,
         deadline: Instant,
     ) -> Result<AliasSetupPlanRequestV1>;
     fn reserve(
@@ -69,11 +70,14 @@ impl ProvisioningOperations for NativeOperations {
         &self,
         config: &Config,
         alias: &str,
+        account_alias: &str,
         deadline: Instant,
     ) -> Result<AliasSetupPlanRequestV1> {
-        Ok(prepare_private_dataspace_request(config, alias, deadline)
-            .map_err(|_| ProvisioningError::NamespaceQuote)?
-            .request)
+        Ok(
+            prepare_private_dataspace_request(config, alias, account_alias, deadline)
+                .map_err(|_| ProvisioningError::NamespaceQuote)?
+                .request,
+        )
     }
 
     fn reserve(

@@ -20,6 +20,7 @@ mod local_emission;
 mod local_structural_controls;
 #[cfg(test)]
 mod numeric_operands;
+mod numeric_zero;
 #[cfg(test)]
 mod single_use_fixtures;
 #[cfg(test)]
@@ -4261,6 +4262,8 @@ impl Compiler {
                 Default::default();
             let mut next_allocation_position = 0usize;
             for (block_index, bb) in func.blocks.iter().enumerate() {
+                // This block begins with no inherited physical-register facts.
+                let mut numeric_zero = numeric_zero::Block::new(code.len());
                 let next_label = func.blocks.get(block_index + 1).map(|next| next.label);
                 block_offsets.insert(bb.label.0, code.len() - func_base);
                 // Emit a frame only when spills, callee-saved registers, or a
@@ -7251,9 +7254,7 @@ impl Compiler {
                             result_kind,
                         } => {
                             emit_numeric_operands(left, right, &mut code)?;
-                            for register in 12..=14 {
-                                push_word(&mut code, encode_addi(register, 0, 0)?);
-                            }
+                            numeric_zero.emit_trap_inputs(&mut code, &fixups)?;
                             let num = match (left_kind, op, right_kind, result_kind) {
                                 (
                                     ir::WideNumericKind::Int,

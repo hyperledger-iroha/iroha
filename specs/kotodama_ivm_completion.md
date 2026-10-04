@@ -354,12 +354,17 @@ freeze and exact State target ownership, and use the original State encoding poo
 They return only existing scoped paired-table snapshots. Raw encoding does not
 validate dependent indexes or other fields' modes and identities. Verifier and
 domain-owner, account-identity, account-alias, asset-definition, asset-balance,
-proof-status, validation-fee, contract-alias, contract-subject, escrow and
-repo-agreement captures use their complete bounded inverse relations; 13 other
-structural, trigger, Musubi and membership outputs report an explicit missing
-original adapter instead
-of yielding partial success. Complete structural/cell/history checks and the sole
+proof-status, validation-fee, contract-alias, contract-subject, escrow,
+repo-agreement, NFT/RWA and account-rekey captures use their complete bounded
+inverse relations. The scoped catalog has 192 raw adapters, 15 checked outputs
+and 10 structural, trigger, Musubi and membership outputs with an explicit
+missing original adapter; missing adapters cannot yield partial success. Complete structural/cell/history checks and the sole
 StatePublication integration remain open.
+Account-rekey capture shares one complete four-source relation across committed
+and frozen owners, preserving canonical rekey provenance and historical audit
+occurrences. It retains native probes and encoding results through the final State
+fence, with the original pool and Ordinary/Replace owners. Fresh compilation and
+execution remain required; see the [source-coupled relation](frozen_account_rekey_occurrence_relation.md).
 
 Contract-subject capture shares one sealed native relation with committed readers
 and startup history. It preserves source-before-index and Current-before-
@@ -629,6 +634,13 @@ reservation gauges alongside retained, active and unmeasured-owner totals. Compo
 retained-owner classification and funding missing active/scratch owners remain open;
 these gauges do not represent complete process RSS. The new
 pool and buffer APIs are not evidence that those production paths are funded.
+Shared and local idle-runtime rows now use one optional fixed ExecutionBuffer
+backing reserved from the original pool and carried through the real active lease.
+Warm checkout and return transfer that backing without growth; eviction refunds
+only at its final reclamation. Cold row refusal declines retention after mandatory
+VM/template admission, preserving completed guest outcomes and gas. Cache indexes,
+executor controls, host/native scratch and composite retained-owner classification
+remain open, and the current candidate still requires fresh execution tests.
 
 G6 ordinary Linux and Windows daemon dependencies now include IVM CUDA, including
 builds without default features. Apple builds retain target-appropriate Metal;

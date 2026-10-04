@@ -4919,7 +4919,7 @@ web_login = \"mad_hatter\"\n\
 password = \"ilovetea\"\n\
 \n\
 [account]\n\
-domain = \"wonderland.universal\"\n\
+chain_discriminant = 753\n\
 public_key = \"ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03\"\n\
 private_key = \"{private_key}\"\n",
             private_key = super::ALICE_PRIVATE_KEY,

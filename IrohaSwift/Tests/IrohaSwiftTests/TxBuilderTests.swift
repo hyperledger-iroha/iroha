@@ -952,28 +952,11 @@ final class TxBuilderTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetExplorerInstructionsFailsWhenRestClientUnavailable() {
-        let stub = StubPipelineClient()
-        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
-        let expectation = expectation(description: "rest unavailable")
-        sdk.getExplorerInstructions { result in
-            switch result {
-            case .success:
-                XCTFail("expected failure when REST client is missing")
-            case .failure(let error):
-                XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
-            }
-            expectation.fulfill()
-        }
-        waitForExpectations(timeout: 1)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
     func testGetExplorerInstructionsAsyncFailsWhenRestClientUnavailable() async {
         let stub = StubPipelineClient()
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         do {
-            _ = try await sdk.getExplorerInstructions()
+            _ = try await sdk.collections.explorerInstructions.page()
             XCTFail("expected failure when REST client is missing")
         } catch {
             XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
@@ -1010,28 +993,11 @@ final class TxBuilderTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetExplorerTransactionsFailsWhenRestClientUnavailable() {
-        let stub = StubPipelineClient()
-        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
-        let expectation = expectation(description: "rest unavailable")
-        sdk.getExplorerTransactions { result in
-            switch result {
-            case .success:
-                XCTFail("expected failure when REST client is missing")
-            case .failure(let error):
-                XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
-            }
-            expectation.fulfill()
-        }
-        waitForExpectations(timeout: 1)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
     func testGetExplorerTransactionsAsyncFailsWhenRestClientUnavailable() async {
         let stub = StubPipelineClient()
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
         do {
-            _ = try await sdk.getExplorerTransactions()
+            _ = try await sdk.collections.explorerTransactions.page()
             XCTFail("expected failure when REST client is missing")
         } catch {
             XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)

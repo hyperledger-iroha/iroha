@@ -278,6 +278,12 @@ impl<T, Charge> Reserved<T, Charge> {
         Ok(Self { pointer })
     }
 
+    /// Borrow the original charge while this uninitialized physical shell lives.
+    pub(crate) fn charge(&self) -> &Charge {
+        // SAFETY: this unique live shell initialized only the charge and counter.
+        unsafe { &self.pointer.as_ref().charge }
+    }
+
     /// Allocate the same exact shell, invoking the standard allocation-error handler on refusal.
     /// Fallible admission paths should retain their charge through [`Self::try_new`].
     pub fn new(charge: Charge) -> Self {

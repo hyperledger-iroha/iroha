@@ -42,6 +42,40 @@ pub const DRY_RUN_OK: &str = "ok";
 /// `snapshot_restore_dry_run` value of a restore this build cannot perform.
 pub const DRY_RUN_ERROR: &str = "error";
 
+/// Native node and effective local configuration derived from an executed signed genesis.
+///
+/// This is an offline input projection, not evidence that a validator is running.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct NodeConfigIdentityV1 {
+    /// Consensus peer identity selected by the actual daemon configuration.
+    pub node_id: iroha_model_base::peer::PeerId,
+    /// Native hash of the Norito-encoded peer identity.
+    pub node_fingerprint: String,
+    /// Native fingerprint of the effective local/driver settings and retired keys.
+    pub node_config_fingerprint: String,
+    /// Ready committee size obtained from the executed genesis schedule.
+    pub initial_committee_size: u64,
+    /// Network identity authenticated by original signed genesis execution.
+    pub network_id: NetworkId,
+    /// Hash of the original signed genesis block.
+    pub genesis_hash: String,
+}
+
+/// Identity compiled into the executable performing this offline diagnostic.
+///
+/// A separately built diagnostic must not be presented as the running validator's build.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct DiagnosticBuildIdentityV1 {
+    /// Diagnostic executable package version.
+    pub version: String,
+    /// Diagnostic executable source revision or explicit local development label.
+    pub source_revision: String,
+    /// Native fingerprint of the diagnostic executable's immutable build identity.
+    pub build_fingerprint: String,
+}
+
 /// Compatibility values printed by `iroha3d --check-config --json`.
 ///
 /// Hashes are lowercase hex. The genesis-bound values are `null` when the signed genesis is not
@@ -51,6 +85,10 @@ pub const DRY_RUN_ERROR: &str = "error";
 pub struct ConfigCompatibilityV1 {
     /// `ready` when the configuration and the signed genesis validated, `pending` without genesis.
     pub status: String,
+    /// Offline native node/configuration projection; absent without executed signed genesis.
+    pub node_identity: Option<NodeConfigIdentityV1>,
+    /// Immutable identity of this diagnostic executable, separate from a running node.
+    pub diagnostic_build: DiagnosticBuildIdentityV1,
     /// Sumeragi configuration fingerprint (`/status` `config_fingerprint`, handshake-bound).
     pub config_fingerprint: Option<String>,
     /// Consensus wire protocol version.
@@ -109,11 +147,21 @@ fn hex_hash(hash: impl Into<Hash>) -> String {
 /// # Errors
 ///
 /// [`MainError::Config`] when the lane manifest or compliance policy cannot be frozen or the
-/// signed genesis carries no valid handshake context.
+/// signed genesis carries no valid handshake context, or compiled diagnostic identity is invalid.
 pub fn config_compatibility_v1(
     config: &Config,
     genesis: Option<(&GenesisBlock, &AuthenticatedGenesis)>,
+    build: iroha_core::release_identity::CompiledBuildMetadata,
 ) -> ReportResult<ConfigCompatibilityV1, MainError> {
+    use norito::codec::Encode as _;
+    let diagnostic = build
+        .identity()
+        .map_err(|error| Report::new(MainError::Config).attach(error.to_string()))?;
+    let diagnostic_build = DiagnosticBuildIdentityV1 {
+        version: diagnostic.version().to_owned(),
+        source_revision: diagnostic.source_commit().to_owned(),
+        build_fingerprint: hex_hash(diagnostic.build_fingerprint()),
+    };
     let lane_manifests = freeze_lane_manifests_for_startup_replay(&config.nexus)
         .map_err(|error| Report::new(error).change_context(MainError::Config))
         .attach("lane manifest registry is not ready")?;
@@ -127,27 +175,50 @@ pub fn config_compatibility_v1(
         Some(lane_manifests.baseline_consensus_policy_digest()),
     )
     .change_context(MainError::Config)?;
-    let (status, config_fingerprint, execution_policy_hash, nexus_amx_context_hash) = match genesis
-    {
-        Some((block, bootstrap)) => {
-            let (_, _, handshake, _, _) = consensus_caps_from_genesis(block, &caps)
+    let (status, config_fingerprint, execution_policy_hash, nexus_amx_context_hash, node_identity) =
+        match genesis {
+            Some((block, bootstrap)) => {
+                let (_, _, handshake, _, _) = consensus_caps_from_genesis(block, &caps)
                 .ok_or_else(|| {
                     Report::new(MainError::Config).attach(
                         "local genesis does not contain one valid canonical Sumeragi handshake context",
                     )
                 })?;
-            let context = bootstrap;
-            (
-                "ready",
-                Some(hex::encode(handshake.config.native_config_fingerprint)),
-                Some(hex_hash(context.execution_policy_hash)),
-                Some(hex_hash(context.nexus_amx_context_hash)),
-            )
-        }
-        None => ("pending", None, None, None),
-    };
+                let context = bootstrap;
+                let node_id = iroha_model_base::peer::PeerId::new(
+                    config.common.key_pair.public_key().clone(),
+                );
+                let node_identity = NodeConfigIdentityV1 {
+                    node_fingerprint: hex_hash(Hash::new(node_id.encode())),
+                    node_id,
+                    node_config_fingerprint: hex_hash(
+                        iroha_core::sumeragi::node::configuration_fingerprint(
+                            context.initial_committee_size,
+                            &config.sumeragi.local,
+                            &iroha_core::sumeragi::driver::DriverConfig::default(),
+                            &config.sumeragi.retired_keys,
+                        ),
+                    ),
+                    initial_committee_size: u64::try_from(context.initial_committee_size).map_err(
+                        |error| Report::new(MainError::Config).attach(error.to_string()),
+                    )?,
+                    network_id: context.network_id,
+                    genesis_hash: hex_hash(block.0.hash()),
+                };
+                (
+                    "ready",
+                    Some(hex::encode(handshake.config.native_config_fingerprint)),
+                    Some(hex_hash(context.execution_policy_hash)),
+                    Some(hex_hash(context.nexus_amx_context_hash)),
+                    Some(node_identity),
+                )
+            }
+            None => ("pending", None, None, None, None),
+        };
     Ok(ConfigCompatibilityV1 {
         status: status.to_owned(),
+        node_identity,
+        diagnostic_build,
         config_fingerprint,
         protocol_version: PROTOCOL_VERSION,
         wire_schema_hash: hex::encode(iroha_core::release_identity::wire_schema_hash()),

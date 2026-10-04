@@ -86,12 +86,8 @@ fn actual_original_complete_aggregate_head_interrupted_before_sync_restores_thro
     let inode = original
         .aggregate_durable
         .head_progress
-        .descriptor
-        .as_ref()
-        .unwrap()
-        .metadata()
-        .unwrap()
-        .ino();
+        .retained_inode()
+        .unwrap();
     drop(original);
     assert_eq!(budget.reserved_bytes(), 0);
     let mut restored = prepare_with_sources(&path, &budget, inherited, HANDLE, 7).unwrap();

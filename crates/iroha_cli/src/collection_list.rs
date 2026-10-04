@@ -113,11 +113,47 @@ pub(crate) fn default_columns(collection: &Collection) -> &'static [&'static str
         Collection::Nfts => &["id", "owned_by"],
         Collection::Rwas => &["id", "owned_by", "quantity", "status"],
         Collection::AccountAssets(_) => &["asset", "asset_alias", "scope", "quantity"],
+        Collection::AccountPermissions(_) => &["name", "payload"],
         Collection::AssetHolders(_) => &["account_id", "scope", "quantity"],
         Collection::Transactions | Collection::AccountTransactions(_) => {
             &["timestamp_ms", "entrypoint_hash", "result_ok", "authority"]
         }
+        Collection::AccountHistory(_) => {
+            &["timestamp_ms", "asset_id", "amount", "direction", "tx_hash"]
+        }
+        Collection::ExplorerAccounts => &["id", "owned_assets", "owned_domains", "owned_nfts"],
+        Collection::ExplorerDomains => &["id", "owned_by", "accounts", "assets", "nfts"],
+        Collection::ExplorerAssetDefinitions => &["id", "owned_by", "total_quantity"],
+        Collection::ExplorerAssets => &["id", "account_id", "definition_id", "value"],
+        Collection::ExplorerNfts => &["id", "owned_by"],
+        Collection::ExplorerRwas => &["id", "owned_by", "quantity", "status"],
+        Collection::ExplorerBlocks => &["height", "hash", "created_at", "transactions_total"],
+        Collection::ExplorerTransactions => &["block", "hash", "authority", "status"],
+        Collection::ExplorerTransactionsLatest => &["block", "hash", "authority", "status"],
+        Collection::ExplorerInstructions => &["block", "transaction_hash", "index", "kind"],
+        Collection::ExplorerInstructionsLatest => &["block", "transaction_hash", "index", "kind"],
         Collection::RepoAgreements => &["id", "status", "initiator", "counterparty"],
+        Collection::ContractActivity => &[
+            "block_height",
+            "authority",
+            "contract_alias",
+            "contract_entrypoint",
+            "result_ok",
+            "entrypoint_hash",
+        ],
+        Collection::ContractEvents => &[
+            "block_height",
+            "event_kind",
+            "module",
+            "contract_address",
+            "result_ok",
+            "event_id",
+        ],
+        Collection::SubscriptionPlans => &["id", "provider", "billing", "pricing"],
+        Collection::Subscriptions => &["id", "owned_by", "provider", "status"],
+        Collection::UaidManifests(_) => {
+            &["dataspace_id", "dataspace_alias", "status", "manifest_hash"]
+        }
     }
 }
 
@@ -297,6 +333,19 @@ mod tests {
 
     fn args() -> ListArgs {
         ListArgs::default()
+    }
+
+    #[test]
+    fn history_collections_share_default_columns() {
+        let account = iroha::data_model::account::AccountId::new(
+            iroha_crypto::KeyPair::from_seed(vec![7; 32], iroha_crypto::Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        assert_eq!(
+            default_columns(&Collection::Transactions),
+            default_columns(&Collection::AccountTransactions(account))
+        );
     }
 
     #[test]

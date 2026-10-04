@@ -523,7 +523,12 @@ class Collection(Generic[T]):
             context=f"{self._name} query",
         )
         try:
-            return Page.from_json(payload)
+            page = Page.from_json(payload)
+            if query.limit is not None and len(page.items) > query.limit:
+                raise ValueError("items exceed the requested limit")
+            if isinstance(self, HistoryCollection) and page.total is not None:
+                raise ValueError("bounded collections must omit total")
+            return page
         except ValueError as error:
             raise ValueError(f"{self._name} query returned a malformed page: {error}") from None
 
@@ -655,10 +660,11 @@ class Collection(Generic[T]):
 
 
 class HistoryCollection(Collection[T]):
-    """A transaction-history collection: newest first, paged by block coordinates.
+    """A bounded collection with fixed server ordering.
 
-    Rows come in history order, ``block_height`` then ``block_index``
-    descending, and each cursor holds the block coordinates of the last row,
+    Chain history rows come by ``block_height`` then ``block_index``
+    descending; Explorer world rows use the collection key. History cursors
+    hold the block coordinates of the last row,
     so transactions committed while paging never shift later pages. ``sort``,
     ``include_total`` and ``aggregate`` would need a scan of the whole history
     and are rejected before any request with Torii's codes (``invalid_sort``,
@@ -692,8 +698,8 @@ class HistoryCollection(Collection[T]):
         if query.sort:
             raise ListQueryError(
                 "sort",
-                f"`{collection}` rows are returned newest first and cannot be re-sorted; "
-                "omit `sort` and filter on `block_height` or `timestamp_ms` to select a range",
+                f"`{collection}` rows use a fixed server order and cannot be re-sorted; "
+                "omit `sort` and use `filter` to select a range",
             )
         if query.include_total:
             raise ListQueryError(
@@ -707,14 +713,13 @@ class HistoryCollection(Collection[T]):
             )
 
     def count(self, filter: Optional[FilterLike] = None) -> int:
-        """Number of transactions matching ``filter``, counted page by page.
+        """Number of rows matching ``filter``, counted page by page.
 
         History has no ``include_total``: this follows ``next_cursor`` through
-        every matching row (fetching only ``entrypoint_hash``), so bound large
-        reads with ``block_height`` in the filter's top-level ``and``.
+        every matching row, so bound large reads with a selective filter.
         """
 
-        query = ListQuery(filter=filter, select=("entrypoint_hash",))
+        query = ListQuery(filter=filter)
         self._check(query)
         return sum(len(page.items) for page in iter_pages(self._fetch, query))
 
@@ -726,9 +731,30 @@ def _path_segment(value: Any, name: str) -> str:
 
 
 class AccountsCollection(Collection[Account]):
-    """``/v1/accounts`` plus the per-account ``assets`` and ``transactions`` collections."""
+    """``/v1/accounts`` plus per-account assets, permissions, movements and transactions."""
 
     __slots__ = ()
+
+    def history(self, account_id: str) -> HistoryCollection[JsonObject]:
+        """Indexed account movements, newest first by block and movement position."""
+
+        return HistoryCollection(
+            self._transport,
+            f"/v1/accounts/{_path_segment(account_id, 'account_id')}/history",
+            _json_object_row,
+            "account history",
+            "account_history",
+        )
+
+    def permissions(self, account_id: str) -> Collection[JsonObject]:
+        """Effective direct and role-inherited permission tokens, with ``name`` and ``payload``."""
+
+        return Collection(
+            self._transport,
+            f"/v1/accounts/{_path_segment(account_id, 'account_id')}/permissions",
+            _json_object_row,
+            "account permissions",
+        )
 
     def assets(self, account_id: str) -> Collection[AccountAsset]:
         """Balance buckets held by ``account_id`` (``/v1/accounts/{account_id}/assets``)."""
@@ -773,6 +799,184 @@ class AssetDefinitionsCollection(Collection[AssetDefinition]):
 
 class CollectionsMixin:
     """Collection attributes shared by every Torii client."""
+
+    @property
+    def explorer_accounts(self) -> HistoryCollection[JsonObject]:
+        """Bounded Explorer ``accounts`` rows with shared query controls."""
+
+        return HistoryCollection(
+            self,  # type: ignore[arg-type]
+            "/v1/explorer/accounts",
+            _json_object_row,
+            "Explorer accounts",
+            "explorer_accounts",
+        )
+
+    @property
+    def explorer_domains(self) -> HistoryCollection[JsonObject]:
+        """Bounded Explorer ``domains`` rows with shared query controls."""
+
+        return HistoryCollection(
+            self,  # type: ignore[arg-type]
+            "/v1/explorer/domains",
+            _json_object_row,
+            "Explorer domains",
+            "explorer_domains",
+        )
+
+    @property
+    def explorer_asset_definitions(self) -> HistoryCollection[JsonObject]:
+        """Bounded Explorer ``asset-definitions`` rows with shared query controls."""
+
+        return HistoryCollection(
+            self,  # type: ignore[arg-type]
+            "/v1/explorer/asset-definitions",
+            _json_object_row,
+            "Explorer asset-definitions",
+            "explorer_asset_definitions",
+        )
+
+    @property
+    def explorer_assets(self) -> HistoryCollection[JsonObject]:
+        """Bounded Explorer ``assets`` rows with shared query controls."""
+
+        return HistoryCollection(
+            self,  # type: ignore[arg-type]
+            "/v1/explorer/assets",
+            _json_object_row,
+            "Explorer assets",
+            "explorer_assets",
+        )
+
+    @property
+    def explorer_nfts(self) -> HistoryCollection[JsonObject]:
+        """Bounded Explorer ``nfts`` rows with shared query controls."""
+
+        return HistoryCollection(
+            self,  # type: ignore[arg-type]
+            "/v1/explorer/nfts",
+            _json_object_row,
+            "Explorer nfts",
+            "explorer_nfts",
+        )
+
+    @property
+    def explorer_rwas(self) -> HistoryCollection[JsonObject]:
+        """Bounded Explorer ``rwas`` rows with shared query controls."""
+
+        return HistoryCollection(
+            self,  # type: ignore[arg-type]
+            "/v1/explorer/rwas",
+            _json_object_row,
+            "Explorer rwas",
+            "explorer_rwas",
+        )
+
+    @property
+    def explorer_blocks(self) -> HistoryCollection[JsonObject]:
+        """Bounded Explorer ``blocks`` rows with shared query controls."""
+
+        return HistoryCollection(
+            self,  # type: ignore[arg-type]
+            "/v1/explorer/blocks",
+            _json_object_row,
+            "Explorer blocks",
+            "explorer_blocks",
+        )
+
+    @property
+    def explorer_transactions(self) -> HistoryCollection[JsonObject]:
+        """Bounded Explorer ``transactions`` rows with shared query controls."""
+
+        return HistoryCollection(
+            self,  # type: ignore[arg-type]
+            "/v1/explorer/transactions",
+            _json_object_row,
+            "Explorer transactions",
+            "explorer_transactions",
+        )
+
+    @property
+    def explorer_latest_transactions(self) -> HistoryCollection[JsonObject]:
+        """Bounded Explorer ``transactions/latest`` rows with shared query controls."""
+
+        return HistoryCollection(
+            self,  # type: ignore[arg-type]
+            "/v1/explorer/transactions/latest",
+            _json_object_row,
+            "Explorer transactions/latest",
+            "explorer_latest_transactions",
+        )
+
+    @property
+    def explorer_instructions(self) -> HistoryCollection[JsonObject]:
+        """Bounded Explorer ``instructions`` rows with shared query controls."""
+
+        return HistoryCollection(
+            self,  # type: ignore[arg-type]
+            "/v1/explorer/instructions",
+            _json_object_row,
+            "Explorer instructions",
+            "explorer_instructions",
+        )
+
+    @property
+    def explorer_latest_instructions(self) -> HistoryCollection[JsonObject]:
+        """Bounded Explorer ``instructions/latest`` rows with shared query controls."""
+
+        return HistoryCollection(
+            self,  # type: ignore[arg-type]
+            "/v1/explorer/instructions/latest",
+            _json_object_row,
+            "Explorer instructions/latest",
+            "explorer_latest_instructions",
+        )
+
+    @property
+    def contract_activity(self) -> HistoryCollection[JsonObject]:
+        """Committed contract calls in block order, with history cursors."""
+
+        return HistoryCollection(
+            self,  # type: ignore[arg-type]
+            "/v1/contracts/activity",
+            _json_object_row,
+            "contract activity",
+            "contract_activity",
+        )
+
+    @property
+    def contract_events(self) -> HistoryCollection[JsonObject]:
+        """Committed contract events in block order, with history cursors."""
+
+        return HistoryCollection(
+            self,  # type: ignore[arg-type]
+            "/v1/contracts/events",
+            _json_object_row,
+            "contract events",
+            "contract_events",
+        )
+
+    @property
+    def subscription_plans(self) -> Collection[JsonObject]:
+        """Subscription plans with ``id``, ``provider``, ``billing`` and ``pricing`` fields."""
+
+        return Collection(
+            self,  # type: ignore[arg-type]
+            "/v1/subscriptions/plans",
+            _json_object_row,
+            "subscription plans",
+        )
+
+    @property
+    def subscriptions(self) -> Collection[JsonObject]:
+        """Subscription state rows with ``id``, ``owned_by``, ``invoice`` and ``plan`` fields."""
+
+        return Collection(
+            self,  # type: ignore[arg-type]
+            "/v1/subscriptions",
+            _json_object_row,
+            "subscriptions",
+        )
 
     @property
     def domains(self) -> Collection[Domain]:
@@ -829,4 +1033,9 @@ class CollectionsMixin:
     def repo_agreements(self) -> Collection[Any]:
         """``/v1/repo/agreements`` (JSON objects; ``iroha_python`` decodes typed records)."""
 
-        return Collection(self, "/v1/repo/agreements", _json_object_row, "repo agreements")  # type: ignore[arg-type]
+        return Collection(
+            self,  # type: ignore[arg-type]
+            "/v1/repo/agreements",
+            _json_object_row,
+            "repo agreements",
+        )

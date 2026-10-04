@@ -2148,7 +2148,6 @@ torii_url = "{torii_url}"
 torii_request_timeout_ms = 2000
 
 [account]
-domain = "packages.universal"
 profile = "taira"
 public_key = "{}"
 private_key = "{}"
@@ -2182,7 +2181,6 @@ private_key = "{}"
                     torii_url = "https://torii.example/"
                     torii_request_timeout_ms = 2000
                     [account]
-                    domain = "packages.universal"
                     profile = "taira"
                     public_key = "{}"
                     private_key = "{}"

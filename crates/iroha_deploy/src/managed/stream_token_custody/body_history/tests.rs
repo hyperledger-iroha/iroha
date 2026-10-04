@@ -56,10 +56,7 @@ fn retain_request(
         scope,
     )
     .unwrap();
-    fixture
-        .owner
-        .required_enrollment(CustodyPurpose::Renewal(2))
-        .unwrap()
+    history.retained_selected(&fixture.owner).unwrap()
 }
 fn expiry(history: &BodyHistory) -> u64 {
     history
@@ -82,6 +79,40 @@ fn completed_body_and_high_water_loss_refuse_and_scope_rechecks_outer_names() {
     let _guard = crate::managed::native_test_guard();
     let fixture = ready();
     let history = retain_body(&fixture);
+    let reparsed = history.read_current(&fixture.owner).unwrap();
+    assert!(Arc::ptr_eq(&history.root, &reparsed.root));
+    assert!(Arc::ptr_eq(
+        history.body_root.as_ref().unwrap(),
+        reparsed.body_root.as_ref().unwrap()
+    ));
+    assert!(Arc::ptr_eq(
+        &history.bodies[0].directory,
+        &reparsed.bodies[0].directory
+    ));
+    assert_eq!(
+        history.selection.digest().unwrap(),
+        reparsed.selection.digest().unwrap()
+    );
+    drop(reparsed);
+    // Ordinary crash parsing can admit Original-before-completion publication. An already
+    // retained completed anchor cannot be reinterpreted as that earlier prefix.
+    let completed_anchor = history.root.read("anchor.nrt", MAX_BODY_BYTES).unwrap();
+    let mut regressed = history.anchor.clone();
+    regressed.completed = None;
+    history
+        .root
+        .write_atomic(
+            "anchor.nrt",
+            &encode(&regressed, MAX_BODY_BYTES).unwrap(),
+            PublishMode::Replace,
+        )
+        .unwrap();
+    assert!(history.read_current(&fixture.owner).is_err());
+    history
+        .root
+        .write_atomic("anchor.nrt", &completed_anchor, PublishMode::Replace)
+        .unwrap();
+    assert!(history.read_current(&fixture.owner).is_ok());
     let (body, original, scope) = history.dispatch().unwrap();
     let wire = encode(original, journal::MAX_ORIGINAL_BYTES).unwrap();
     let root_anchor = history.root.read("anchor.nrt", MAX_BODY_BYTES).unwrap();
@@ -99,6 +130,7 @@ fn completed_body_and_high_water_loss_refuse_and_scope_rechecks_outer_names() {
         .is_err()
     );
     std::fs::remove_file(container.path().join("unknown.nrt")).unwrap();
+    assert!(history.read_current(&fixture.owner).is_ok());
     let selected_path = body.path().join("original.nrt");
     let held_path = fixture._temporary.path().join("held-completed-body.nrt");
     std::fs::rename(&selected_path, &held_path).unwrap();
@@ -108,6 +140,7 @@ fn completed_body_and_high_water_loss_refuse_and_scope_rechecks_outer_names() {
             ManagedBootstrapFailure::RetainedMaterial
         ))
     ));
+    assert!(history.read_current(&fixture.owner).is_err());
     assert!(!selected_path.exists());
     assert_eq!(
         history.root.read("anchor.nrt", MAX_BODY_BYTES).unwrap(),
@@ -129,6 +162,7 @@ fn completed_body_and_high_water_loss_refuse_and_scope_rechecks_outer_names() {
     let held_anchor = fixture._temporary.path().join("held-anchor.nrt");
     std::fs::rename(&anchor_path, &held_anchor).unwrap();
     assert!(BodyHistory::open(&fixture.owner, CustodyPurpose::Renewal(2)).is_err());
+    assert!(history.read_current(&fixture.owner).is_err());
     assert!(!anchor_path.exists());
     std::fs::rename(&held_anchor, &anchor_path).unwrap();
     let original = reopen(&fixture);

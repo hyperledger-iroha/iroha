@@ -483,9 +483,12 @@ pub(super) fn evaluate<C: PastaCurve>(
         let sigma = (0..shape.permutation_columns)
             .map(|j| pk.coset_values(CosetPolynomial::Permutation(j), coset))
             .collect::<Result<Vec<_>, _>>()?;
-        let l0 = pk.coset_values(CosetPolynomial::L0, coset)?;
-        let l_last = pk.coset_values(CosetPolynomial::LLast, coset)?;
-        let l_active = pk.coset_values(CosetPolynomial::LActive, coset)?;
+        let masks = pk.coset_masks(coset)?;
+        let (l0, l_last, l_active) = (
+            masks.l0.as_slice(),
+            masks.l_last.as_slice(),
+            masks.l_active.as_slice(),
+        );
         let advice = inputs
             .advice
             .par_iter()
@@ -535,13 +538,12 @@ pub(super) fn evaluate<C: PastaCurve>(
             .collect::<Result<Vec<_>, _>>()?;
         if sigma_refs.iter().any(|values| values.len() != n)
             || products.iter().any(|values| values.len() != n)
-            || [&*l0, &*l_last, &*l_active]
+            || [l0, l_last, l_active]
                 .iter()
                 .any(|values| values.len() != n)
         {
             return Err(KeyError::CosetIndex.into());
         }
-        let (l0, l_last, l_active) = (&*l0, &*l_last, &*l_active);
         let mut values = vec![C::ScalarExt::ZERO; n];
         values
             .par_chunks_mut(ROWS_PER_TASK)

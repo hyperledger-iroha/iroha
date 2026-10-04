@@ -234,7 +234,10 @@ def test_projection_and_original_content_perform_no_io_or_execution(captured, mo
 
 
 @pytest.mark.parametrize("name", ("src/._hidden.js", "src/CVS/a.js", "src/.git/a.js", "src/a.orig/b.js",
-                                   "src/foreign/a.js", "src/public/nested/a.js", "src/a.json", "src/program.wasm"))
+                                   "src/foreign/a.js", "src/public/nested/a.js", "src/a.json", "src/program.wasm",
+                                   "src/petal/._hidden.js", "src/query/._hidden.js",
+                                   "src/petal/nested/a.js", "src/query/nested/a.js",
+                                   "src/petal/a.json", "src/query/a.json", "src/Petal/a.js", "src/Query/a.js"))
 def test_source_recipe_refuses_npm_ignored_or_unreviewed_layouts(captured, name):
     sources, lock, _ = captured
     changed = dict(sources); changed[name] = b"inert"

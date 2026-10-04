@@ -204,7 +204,7 @@ fn prepare<C: PastaCurve>(
     let usable_rows = cs.usable_rows(k)?;
     check_usable_rows(usable_rows, &fixed, &selectors, permutation)?;
 
-    let finalized = cs.finalize(&selectors, config.compress_selectors)?;
+    let mut finalized = cs.finalize(&selectors, config.compress_selectors)?;
     let descriptor = CircuitDescriptorV1::from_constraint_system(
         &finalized,
         DescriptorConfig {
@@ -216,8 +216,10 @@ fn prepare<C: PastaCurve>(
         },
     )?;
     let binding = DescriptorBinding::new(descriptor)?;
+    // The selector columns move into the fixed columns: the key keeps one
+    // copy.
     let mut fixed = fixed;
-    fixed.extend(finalized.selector_columns().iter().cloned());
+    fixed.extend(finalized.take_selector_columns());
     let sigma = permutation_values(permutation, domain.omega())?;
     let copy_digest = permutation.mapping_digest();
     let vk_selectors = if config.compress_selectors {

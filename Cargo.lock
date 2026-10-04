@@ -4919,6 +4919,7 @@ dependencies = [
  "iroha_primitives",
  "iroha_torii_shared",
  "iroha_version",
+ "ivm",
  "ivm_abi",
  "ivm_artifact_admission",
  "kotodama_lang",
@@ -5503,6 +5504,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroha_kagemusha_proof"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "ff",
+ "iroha_pasta",
+ "iroha_plonk",
+ "iroha_plonk_gadgets",
+ "norito",
+ "rand_chacha 0.3.1",
+ "rayon",
+]
+
+[[package]]
 name = "iroha_logger"
 version = "2.0.0-rc.2.0"
 dependencies = [
@@ -5669,6 +5683,17 @@ dependencies = [
  "rand_core 0.6.4",
  "rayon",
  "sha2",
+]
+
+[[package]]
+name = "iroha_plonk_gadgets"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "ff",
+ "iroha_pasta",
+ "iroha_plonk",
+ "norito",
+ "rand_chacha 0.3.1",
 ]
 
 [[package]]
@@ -6223,6 +6248,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "iroha",
  "iroha_allocation",
  "iroha_config",
  "iroha_config_base",
@@ -13237,6 +13263,7 @@ dependencies = [
  "iroha_crypto",
  "iroha_data_model",
  "iroha_deploy",
+ "iroha_fs",
  "iroha_genesis",
  "iroha_model_base",
  "iroha_primitives",

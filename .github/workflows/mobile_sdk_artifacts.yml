@@ -15,6 +15,8 @@ on:
       - "scripts/norito_bridge_apple_slice_handoff.py"
       - "scripts/tests/norito_bridge_apple_slice_handoff_test.py"
       - "scripts/tests/package_mobile_sdk_artifacts_test.py"
+      - "scripts/tests/mobile_sdk_apple_lock_workflow_test.py"
+      - "scripts/tests/swift_native_export_retention_test.py"
       - "scripts/update_norito_bridge_swift_pins.py"
       - "scripts/tests/update_norito_bridge_swift_pins_test.py"
       - "scripts/validate_norito_bridge_xcframework.py"
@@ -205,6 +207,10 @@ jobs:
         run: python3 -I -S -B scripts/tests/android_publication_contract_test.py
       - name: Mobile Python 3.12 contract
         run: bash scripts/tests/mobile_sdk_python312_contract.sh
+      - name: Apple workflow external lock handoff contract
+        run: python3 -I -S -B scripts/tests/mobile_sdk_apple_lock_workflow_test.py
+      - name: Swift native export retention contract
+        run: python3 -I -S -B scripts/tests/swift_native_export_retention_test.py
 
   apple-mobile-sdk:
     needs: checker-self-test
@@ -316,10 +322,26 @@ jobs:
           echo "RUSTDOC=$rustdoc_path" >> "$GITHUB_ENV"
       - name: Make reviewed Iroha source read-only
         run: chmod -R a-w "$GITHUB_WORKSPACE"
+      - name: Materialize the authenticated external Apple Cargo lock
+        shell: bash
+        run: |
+          umask 077
+          source ci/privacy_sdk_cargo_lockfile.sh
+          lock_dir="$RUNNER_TEMP/iroha-mobile-apple-lock"
+          mkdir -m 0700 "$lock_dir"
+          lock_dir="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$lock_dir")"
+          release_lock="$lock_dir/Cargo.lock"
+          workspace_lock_state="present:$(privacy_sdk_file_seal "$GITHUB_WORKSPACE/Cargo.lock" "$MOBILE_SDK_PYTHON_BINARY")"
+          privacy_sdk_materialize_canonical_cargo_lock \
+            "$GITHUB_WORKSPACE" "$release_lock" "$workspace_lock_state" \
+            "$MOBILE_SDK_PYTHON_BINARY"
+          release_lock="$(IROHA_PRIVACY_CARGO_LOCKFILE_PATH="$release_lock" \
+            privacy_sdk_resolve_cargo_lockfile "$GITHUB_WORKSPACE" "$MOBILE_SDK_PYTHON_BINARY")"
+          echo "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH=$release_lock" >> "$GITHUB_ENV"
       - name: Build NoritoBridge XCFramework
-        run: scripts/build_norito_xcframework.sh --lockfile-path "$GITHUB_WORKSPACE/Cargo.lock"
+        run: scripts/build_norito_xcframework.sh --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"
       - name: Validate Apple mobile SDK artifact
-        run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only --lockfile-path "$GITHUB_WORKSPACE/Cargo.lock"
+        run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"
       - name: Test Swift SDK
         working-directory: IrohaSwift
         run: >-
@@ -327,7 +349,7 @@ jobs:
           --disable-automatic-resolution
           --scratch-path "$MOBILE_SDK_SWIFT_SCRATCH_DIR"
       - name: Package Apple mobile SDK artifact
-        run: bash scripts/package_mobile_sdk_artifacts.sh --apple --lockfile-path "$GITHUB_WORKSPACE/Cargo.lock" --version "$MOBILE_SDK_VERSION"
+        run: bash scripts/package_mobile_sdk_artifacts.sh --apple --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH" --version "$MOBILE_SDK_VERSION"
       - name: CocoaPods authenticated archive and source lint (no capability skip)
         env:
           SWIFT_POD_REPORT_DIR: ${{ runner.temp }}/iroha-swift-pod-report

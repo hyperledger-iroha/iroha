@@ -27,7 +27,7 @@ fn advance(chain: &CertifiedTestChain, clock: &mut NativeJournalCursor, height: 
             })
             .collect(),
     };
-    clock.advance(&journal).unwrap();
+    clock.advance((&journal).into()).unwrap();
     assert_eq!(clock.tip().unwrap().height(), height);
 }
 fn phase_context(
@@ -217,6 +217,19 @@ fn actual_native_h4_aggregate_stays_original_until_explicit_retirement_and_resto
     let local = &mut original.local[0];
     let contribution_pointer = local.outputs.shares.as_slice().as_ptr();
     let acceptance_pointer = local.outputs.acceptances.as_slice().as_ptr();
+    // Each original acceptance owns its signature leaf and physical charge ledger.
+    // Retirement drops those exact owners while retaining both typed row buffers.
+    let retired_acceptance_bytes = local
+        .outputs
+        .acceptances
+        .as_slice()
+        .iter()
+        .try_fold(0usize, |bytes, acceptance| {
+            assert!(acceptance.belongs_to(&budget));
+            bytes.checked_add(acceptance.allocation_bytes().unwrap())
+        })
+        .unwrap();
+    assert!(retired_acceptance_bytes > 0);
     let parts = local
         .outputs
         .shares
@@ -278,6 +291,8 @@ fn actual_native_h4_aggregate_stays_original_until_explicit_retirement_and_resto
         .encrypted_record()
         .unwrap()
         .as_ptr();
+    let before_retirement = budget.reserved_bytes();
+    assert_eq!(before_retirement, budget.limit_bytes());
     let mut owned = None;
     assert_eq!(
         allocations_during(|| owned = Some(
@@ -294,7 +309,20 @@ fn actual_native_h4_aggregate_stays_original_until_explicit_retirement_and_resto
     assert!(local.extracted);
     assert!(local.outputs.shares.as_slice().is_empty());
     assert!(local.outputs.acceptances.as_slice().is_empty());
-    assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+    assert_eq!(
+        local.outputs.shares.as_slice().as_ptr(),
+        contribution_pointer
+    );
+    assert_eq!(
+        local.outputs.acceptances.as_slice().as_ptr(),
+        acceptance_pointer
+    );
+    assert_eq!(
+        budget.reserved_bytes(),
+        before_retirement
+            .checked_sub(retired_acceptance_bytes)
+            .unwrap()
+    );
     drop(blocker);
     let expected = zeroize::Zeroizing::new(*owned.secret.components_for_runtime_custody());
     let encrypted = owned.encrypted_checkpoint().to_vec();

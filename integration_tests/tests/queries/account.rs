@@ -38,7 +38,7 @@ fn find_accounts_with_asset() -> Result<()> {
         // Checking results before all
         let received_asset_definition = test_client
             .client()
-            .query(FindAssetsDefinitions::new())
+            .query(FindAssetDefinitions::new())
             .execute_all()?
             .into_iter()
             .find(|asset_definition| asset_definition.id() == &definition_id)
@@ -76,7 +76,7 @@ fn find_accounts_with_asset() -> Result<()> {
         // Checking results
         let received_asset_definition = test_client
             .client()
-            .query(FindAssetsDefinitions::new())
+            .query(FindAssetDefinitions::new())
             .execute_all()?
             .into_iter()
             .find(|asset_definition| asset_definition.id() == &definition_id)

@@ -133,3 +133,6 @@ mod compact_emission;
 
 #[path = "kotodama_local_emission.rs"]
 mod local_emission;
+
+#[path = "kotodama_numeric_zero.rs"]
+mod numeric_zero;

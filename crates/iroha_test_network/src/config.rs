@@ -1385,13 +1385,13 @@ fn resolve_preexec_nexus_config(
     let has_authoritative_nexus = nexus_config.is_some();
     let mut nexus = nexus_config.cloned().unwrap_or_default();
     if let Some(policies) = block_policies
-        && !policies.policies.is_empty()
+        && !policies.policies().is_empty()
         && !has_authoritative_nexus
     {
-        let mut lanes = Vec::with_capacity(policies.policies.len());
+        let mut lanes = Vec::with_capacity(policies.policies().len());
         let mut dataspace_ids = BTreeSet::new();
         let mut max_lane = 0u32;
-        for policy in &policies.policies {
+        for policy in policies.policies() {
             max_lane = max_lane.max(policy.lane_id.as_u32());
             dataspace_ids.insert(policy.dataspace_id);
             lanes.push(iroha_data_model::nexus::LaneConfig {
@@ -2245,8 +2245,8 @@ mod tests {
             .0
             .da_proof_policies()
             .expect("genesis carries the active DA policies")
-            .policies
-            .clone();
+            .policies()
+            .to_vec();
         changed_policies[0].alias = "reexecuted-default".to_owned();
         let changed_policies = DaProofPolicyBundle::new(changed_policies);
         assert_ne!(

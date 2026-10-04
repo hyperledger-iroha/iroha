@@ -238,8 +238,11 @@ impl PreparedLocalnet {
             port,
             &CanonicalHost::parse("127.0.0.1", "generated Torii host").map_err(|_| invalid())?,
             &client.chain.to_string(),
-            resolve_localnet_chain_discriminant(&client.chain.to_string(), None)
-                .map_err(|_| invalid())?,
+            resolve_localnet_chain_discriminant(
+                &client.chain.to_string(),
+                Some(client.account_chain_discriminant),
+            )
+            .map_err(|_| invalid())?,
             &identity,
             Some(&public),
         )

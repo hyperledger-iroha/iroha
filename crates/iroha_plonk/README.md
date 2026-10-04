@@ -27,8 +27,10 @@ Stage ENGINE-2 (tasks T10, T11 and the PCS half of T13) provides:
   trailing bytes, and the selector-compression registration rule);
   `transcript_repr` from the descriptor digest and the VK bytes; `ProvingKey`
   with the fixed and `sigma` columns, the masks, the exact quotient cosets
-  (`QuotientDomain`: `d - 1` cosets and a small Vandermonde recombination) and
-  the fixed-coset cache and the digest of its copy mapping; deterministic key
+  (`QuotientDomain`: `d - 1` cosets and a small Vandermonde recombination),
+  the fixed- and `sigma`-coset cache (the masks are computed per coset from
+  their closed forms, never cached) and the digest of its copy mapping;
+  deterministic key
   generation from a circuit or from explicit assignment tables (public API
   with no soundness effect; imported tables may not touch rows at or beyond
   the usable rows), with the permutation cycles built exactly as halo2 builds
@@ -44,7 +46,8 @@ Stage ENGINE-2 (tasks T10, T11 and the PCS half of T13) provides:
   verdict), the `AccumulatorV1` codec, `decide` and the deterministic
   `BLAKE2b`-weighted `batch_decide`, `PinnedParams` (parameters derived here
   or matching the pinned digest), and `msm_complete`, the portable
-  complete-formula Pippenger that every verifier-side MSM uses (S10).
+  complete-formula Pippenger that every verifier-side MSM uses (S10), on
+  GLV-split scalars with signed-digit windows.
 - `pcs::multiopen`: the halo2 multi-point opening with static query grouping:
   queries are grouped by slot (column kind and index), never by commitment
   value, and a repeated query must repeat its evaluation bit for bit.

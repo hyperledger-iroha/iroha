@@ -10,8 +10,8 @@ mod timing;
 use super::super::*;
 use crate::{
     bootstrap::{
-        InstalledNetworkProfile, InstalledNetworkProfiles, NetworkRelease, ReleaseFaucet,
-        ReleasePeer, SignedNetworkCheckpoint,
+        InstalledNetworkProfile, InstalledNetworkProfiles, NetworkRelease, ReleaseCheckpointStore,
+        ReleaseFaucet, ReleasePeer, SignedNetworkCheckpoint,
     },
     verify::{
         finality::{FinalitySource, FinalityVerifier, GenesisAnchor},
@@ -225,6 +225,7 @@ struct Harness {
     temporary: Option<RetainedTemporary>,
     root: PrivateDirectory,
     kagami: PathBuf,
+    profiles: PathBuf,
     parent: ManagedStore,
     child: ManagedStore,
     workspace: PrivateDirectory,
@@ -279,34 +280,16 @@ impl Harness {
         ));
         let root = PrivateDirectory::open_or_create(temporary.path().join("custody"))?;
         eprintln!("ATTACHMENT_SMOKE_STORE={}", root.path().display());
-        let layout = NativeBundleLayout::current();
-        let binaries = fixture_bundle_directory(&root, &layout.runtime_directory(root.path()))?;
-        fixture_bundle_directory(&root, &layout.resources_directory(root.path()))?;
-        if layout == NativeBundleLayout::MacOs {
-            let original_contents = installed
-                .parent()
-                .ok_or_else(|| eyre!("installed app has no Contents directory"))?;
-            ensure!(
-                installed.file_name().is_some_and(|name| name == "MacOS")
-                    && original_contents
-                        .file_name()
-                        .is_some_and(|name| name == "Contents")
-                    && original_contents.parent().is_some_and(|app| app
-                        .extension()
-                        .is_some_and(|extension| extension == "app")),
-                "macOS attachment fixture requires the installed app runtime directory"
-            );
-            let metadata = iroha_fs::read_regular(original_contents.join("Info.plist"), 64 * 1024)?;
-            PrivateDirectory::open(binaries.path().parent().unwrap())?.write_atomic(
-                "Info.plist",
-                &metadata,
-                PublishMode::CreateNew,
-            )?;
-        }
-        let pins = ["kagami", "iroha3d", "mochi"]
+        let binaries =
+            fixture_bundle_directory(&root, &KagamiBundleLayout::runtime_directory(root.path()))?;
+        let profiles = crate::managed::bundle::runtime_profiles_path(binaries.path())?;
+        let pins = ["kagami", "iroha3d"]
             .into_iter()
             .map(|name| {
                 let filename = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+                admit_native_program(&mut iroha_fs::RetainedFile::open_regular(
+                    installed.join(&filename),
+                )?)?;
                 Ok((
                     filename.clone(),
                     store::pin_binary(&installed.join(filename))?,
@@ -327,6 +310,9 @@ impl Harness {
                 store::pin_binary(&binaries.path().join(filename))?.blake3 == pin.blake3,
                 "copied runtime binary differs from original retained input"
             );
+            admit_native_program(&mut iroha_fs::RetainedFile::open_regular(
+                binaries.path().join(filename),
+            )?)?;
         }
         for (filename, pin) in &pins {
             ensure!(
@@ -346,6 +332,7 @@ impl Harness {
             kagami: binaries
                 .path()
                 .join(format!("kagami{}", std::env::consts::EXE_SUFFIX)),
+            profiles,
             workspace,
             sequence: 0,
             ingress: None,
@@ -489,7 +476,7 @@ impl Harness {
             1,
             format!("{}fixture/checkpoint.nrt", ingress_roots[0]),
         )?])?;
-        let profile_path = NativeBundleLayout::current().profiles_path(self.root.path());
+        let profile_path = &self.profiles;
         PrivateDirectory::open(profile_path.parent().unwrap())?.write_atomic(
             profile_path.file_name().unwrap(),
             &profiles.encode_installation()?,
@@ -504,7 +491,7 @@ impl Harness {
             .as_ref()
             .map(|timing| timing.start("disposable_loopback_attachment"))
             .transpose()?;
-        let up = self.command(&["dataspace", "up", "acme", "--network", "fixture"]);
+        let up = self.command(&["dataspace", "up", "dpn", "--network", "fixture"]);
         if let Some(timing) = attachment_timing.as_mut() {
             timing.command_finished(up.is_ok());
         }
@@ -512,7 +499,7 @@ impl Harness {
         let up: ManagedDataspaceStatus = json::from_value(up)?;
         require_attached(&up)?;
         eprintln!("ATTACHMENT_CHILD_ATTACHED peers=4");
-        let child_prepared = self.child.prepared("acme")?;
+        let child_prepared = self.child.prepared("dpn")?;
         let private_config = child_prepared.context.load_client_config()?;
         let listener_token = zeroize::Zeroizing::new(
             private_config
@@ -535,8 +522,58 @@ impl Harness {
             "parent owner differs from generated child owner"
         );
         ensure!(
-            registered.record.alias == "acme",
+            registered.record.alias == "dpn",
             "parent registered another SNS alias"
+        );
+        // Read both paid leases and resolve the owner label through native account
+        // authentication. This parent has no physical `dpn` catalog or execution lane.
+        let read_bootstrap =
+            ReleaseCheckpointStore::open(&self.root.path().join("namespace-read-bootstrap"))?
+                .authenticate(
+                    profiles.select("fixture")?.release_trust(),
+                    &signed.encode_canonical()?,
+                    unix_ms()?,
+                )?;
+        let mut owner_parent = crate::provisioning::RemoteProvisioning::load_parent_config(
+            &self.child.root().join("attachments/dpn/provisioning"),
+            &read_bootstrap,
+            &child_prepared,
+            "admin",
+        )?;
+        // The disposable fixture's exact parent loopback listener needs no fixture CA.
+        owner_parent.torii_api_url = parent_config.torii_api_url.clone();
+        let owner_client = Client::builder(owner_parent)
+            .build()?
+            .with_request_deadline(Instant::now() + Duration::from_secs(10));
+        let owner_alias = iroha_wallet::namespace::resolve_private_owner_alias("dpn", "admin")?;
+        for (namespace, literal) in [
+            (iroha::sns::SnsNamespacePath::Dataspace, "dpn"),
+            (iroha::sns::SnsNamespacePath::AccountAlias, "admin@dpn"),
+        ] {
+            let lease = owner_client.sns().get_name(namespace, literal)?;
+            ensure!(
+                lease.owner == private_config.account
+                    && matches!(lease.status, iroha_data_model::sns::NameStatus::Active)
+                    && lease.ownership_generation > 0,
+                "paid private namespace readback changed its active owner"
+            );
+        }
+        let resolved = owner_client
+            .resolve_account_alias_authenticated(&owner_alias.canonical_name)?
+            .ok_or_else(|| eyre!("paid private owner alias did not resolve"))?;
+        ensure!(
+            resolved.account_id() == &private_config.account,
+            "authenticated private owner alias resolved to another account"
+        );
+        ensure!(
+            iroha::blocking::Client::from_client(owner_client)?
+                .status()
+                .get()?
+                .dataspace_catalog
+                .iter()
+                .all(|entry| entry.alias != "dpn"
+                    && entry.dataspace_id != owner_alias.dataspace_id.as_u64()),
+            "private namespace acquisition created a physical parent catalog entry"
         );
         let generation = registered.record.ownership_generation;
         if let Some(timing) = attachment_timing {
@@ -582,7 +619,7 @@ impl Harness {
             "deploy",
             "secret.to",
             "--alias",
-            "PrivateBytecode::acme",
+            "PrivateBytecode::dpn",
         ];
         let mut bytecode_timing = self
             .timing
@@ -639,18 +676,78 @@ impl Harness {
                 "identical private deployment changed receipt or journal"
             );
         }
+        let initialized = self.command(&[
+            "contract",
+            "call",
+            "PrivateSecret::dpn",
+            "--entrypoint",
+            "hajimari",
+            "--max-fee",
+            "1000",
+            "--readback",
+            "current",
+        ])?;
+        let initialization_height = verify_private_call(&child_prepared, &initialized, "0")?;
+        let mutated = self.command(&[
+            "contract",
+            "call",
+            "PrivateSecret::dpn",
+            "--entrypoint",
+            "set",
+            "--args",
+            "{\"next\":\"7\"}",
+            "--max-fee",
+            "1000",
+            "--readback",
+            "current",
+        ])?;
+        let mutation_height = verify_private_call(&child_prepared, &mutated, "7")?;
+        let call_journal = mutated
+            .get("journal")
+            .and_then(Value::as_str)
+            .ok_or_else(|| eyre!("mutable call omitted its recovery journal"))?;
+        let recovered = self.command(&[
+            "contract",
+            "call",
+            "--resume",
+            call_journal,
+            "--readback",
+            "current",
+        ])?;
+        ensure!(
+            recovered.get("receipt") == mutated.get("receipt")
+                && recovered.get("journal") == mutated.get("journal"),
+            "mutable recovery replaced its original signed call or fee authorization"
+        );
+        let viewed = self.command(&[
+            "contract",
+            "view",
+            "PrivateSecret::dpn",
+            "--entrypoint",
+            "current",
+        ])?;
+        ensure!(
+            viewed
+                .get("result")
+                .and_then(|response| response.get("result"))
+                .and_then(Value::as_str)
+                == Some("7"),
+            "managed alias-selected view did not observe the mutable value"
+        );
         let applied = [source, to, packaged]
             .iter()
             .map(deployment_height)
             .collect::<TestResult<Vec<_>>>()?
             .into_iter()
             .max()
-            .unwrap();
+            .unwrap()
+            .max(initialization_height)
+            .max(mutation_height);
         let deadline = Instant::now() + Duration::from_secs(120);
         let anchored = loop {
             let status = self
                 .child
-                .dataspace_status("acme")?
+                .dataspace_status("dpn")?
                 .ok_or_else(|| eyre!("private attachment disappeared"))?;
             if status
                 .attachment
@@ -749,7 +846,7 @@ impl Harness {
     fn stop(&mut self) -> TestResult<()> {
         self.shutdown_confirmed = false;
         let mut failures = Vec::new();
-        for (store, name) in [(&self.child, "acme"), (&self.parent, "parent")] {
+        for (store, name) in [(&self.child, "dpn"), (&self.parent, "parent")] {
             match store.down(name) {
                 Ok(stopped)
                     if stopped.phase == ManagedPhase::Stopped && stopped.running_peers == 0 => {}
@@ -997,7 +1094,7 @@ impl PrivateProgram {
 
     fn source(&self) -> String {
         format!(
-            "seiyaku {} {{ view fn secret() -> string {{ return \"{}\"; }} }}",
+            "seiyaku {} {{ state int value; hajimari() {{ value = 0; }} kotoage fn set(int next) authorize(\"CanInvokeContractEntrypoint\") {{ value = next; }} view fn current() -> int {{ return value; }} view fn secret() -> string {{ return \"{}\"; }} }}",
             self.name,
             self.result()
         )
@@ -1017,6 +1114,67 @@ impl PrivateProgram {
             .ok_or_else(|| eyre!("offline compiler omitted canonical artifact hash"))?;
         Ok((bytes, code_hash))
     }
+}
+
+fn verify_private_call(
+    prepared: &PreparedLocalnet,
+    report: &Value,
+    expected: &str,
+) -> TestResult<u64> {
+    let registration = prepared.load_private_registration()?;
+    verify_execution_report(report, registration.child_network_id, registration.scope)?;
+    ensure!(
+        report.get("status").and_then(Value::as_str) == Some("applied"),
+        "mutable call did not report exact Applied"
+    );
+    let receipt: iroha_contract_deploy::call::ContractCallReceipt = json::from_value(
+        report
+            .get("receipt")
+            .cloned()
+            .ok_or_else(|| eyre!("missing mutable call receipt"))?,
+    )?;
+    ensure!(
+        receipt.network_id.to_string() == prepared.context.network_id
+            && receipt.contract_address.dataspace_id()?.as_u64() == prepared.context.dataspace_id
+            && receipt.call.terminal_kind == "Applied"
+            && receipt.call.resolved_from == "state"
+            && receipt.call.block_height > 1,
+        "mutable call evidence changed private root or exact state completion"
+    );
+    ensure!(
+        report.get("readback_failure").is_some_and(Value::is_null)
+            && report
+                .get("readback")
+                .and_then(|view| view.get("result"))
+                .and_then(|response| response.get("result"))
+                .and_then(Value::as_str)
+                == Some(expected),
+        "explicit managed readback did not observe the mutable value"
+    );
+    let original = prepared.context.load_client_config()?;
+    for peer in &prepared.peers {
+        let mut selected = original.clone();
+        selected.torii_api_url = peer.torii_url.parse()?;
+        let client = Client::builder(selected).build()?;
+        wait_for_peer_commit(
+            &client,
+            &receipt.call,
+            Instant::now() + Duration::from_secs(20),
+        )?;
+        let response = client.post_contract_view_json(
+            &original.account,
+            Some(&receipt.contract_address),
+            None,
+            "current",
+            None,
+            1_500_000,
+        )?;
+        ensure!(
+            response.get("result").and_then(Value::as_str) == Some(expected),
+            "private mutable value did not reach every child peer"
+        );
+    }
+    Ok(receipt.call.block_height)
 }
 
 struct VerifiedPrivateDeployment {
@@ -1800,4 +1958,38 @@ fn installed_fixture_uses_one_canonical_bundle_runtime_and_resource_directory() 
         assert!(fixture_bundle_directory(&root, &root.path().join("../escape")).is_err());
         assert!(fixture_bundle_directory(&root, temporary.path()).is_err());
     }
+}
+
+#[test]
+fn installed_cli_fixture_admits_only_two_programs_and_colocated_profiles() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = PrivateDirectory::open_or_create(temporary.path().join("custody")).unwrap();
+    let runtime =
+        fixture_bundle_directory(&root, &KagamiBundleLayout::runtime_directory(root.path()))
+            .unwrap();
+    for program in ["kagami", "iroha3d"] {
+        runtime
+            .write_atomic(
+                format!("{program}{}", std::env::consts::EXE_SUFFIX),
+                b"native runtime admission fixture",
+                PublishMode::CreateNew,
+            )
+            .unwrap();
+    }
+    let installed = InstalledRuntime::from_directory(runtime.path()).unwrap();
+    let profiles = InstalledNetworkProfiles::new(Vec::new()).unwrap();
+    runtime
+        .write_atomic(
+            crate::bootstrap::NETWORK_PROFILES_FILENAME,
+            &profiles.encode_installation().unwrap(),
+            PublishMode::CreateNew,
+        )
+        .unwrap();
+    assert_eq!(installed.network_profiles().unwrap().names().len(), 0);
+    assert_eq!(
+        crate::managed::bundle::runtime_profiles_path(runtime.path()).unwrap(),
+        KagamiBundleLayout::profiles_path(root.path())
+    );
+    assert!(!runtime.path().join("mochi").exists());
+    assert!(!root.path().join("Mochi.app").exists());
 }

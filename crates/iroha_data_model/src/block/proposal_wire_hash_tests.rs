@@ -307,9 +307,14 @@ fn checked_resultless_comparison_binds_signatures_and_all_seven_payload_fields()
             block.payload.da_commitments.as_mut().unwrap().commitments[0].sequence += 1;
         }),
         ("DA proof policies", |block| {
-            block.payload.da_proof_policies.as_mut().unwrap().policies[0]
-                .alias
-                .push('x');
+            let original = block.payload.da_proof_policies.as_ref().unwrap();
+            let mut policies = original.policies().to_vec();
+            policies[0].alias.push('x');
+            block.payload.da_proof_policies = Some(DaProofPolicyBundle::from_untrusted_parts(
+                original.version(),
+                original.policy_hash(),
+                policies,
+            ));
         }),
         ("DA pin intents", |block| {
             block.payload.da_pin_intents.as_mut().unwrap().intents[0].alias =

@@ -1,10 +1,8 @@
 //! Allocation-conscious DSL used by the canonical query representation.
 //!
 //! This preserves the established `query::dsl` public surface. Predicate payloads are captured
-//! and evaluated via JSON when enabled; selector projections remain minimal.
-#[cfg(feature = "ids_projection")]
-use crate::Identifiable;
-
+//! and evaluated via JSON when enabled. Selectors carry no projection: every iterable query
+//! returns whole items, and [`SelectorTuple`] has a single wire layout that carries no data.
 use crate::query::json::{EqualsCondition, InCondition, PredicateJson};
 pub use crate::query::tx_predicate::CommittedTxPredicate;
 use crate::query::tx_predicate::{
@@ -20,8 +18,6 @@ use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId};
 use norito::codec::{Decode, Encode};
 
 use norito::json::{self, JsonSerialize, Value};
-#[cfg(feature = "ids_projection")]
-use std::any::TypeId as StdTypeId;
 use std::{any::Any, marker::PhantomData, sync::Arc};
 /// Marker for predicate projections.
 #[derive(Debug, Clone, Copy)]
@@ -169,11 +165,6 @@ impl<T: 'static> IntoPredicate<T> for PredicateJson {
         CompoundPredicate::from_predicate_json(&self)
     }
 }
-#[cfg(feature = "ids_projection")]
-#[derive(Debug, Copy, Clone)]
-/// Marker returned from selector builders to request ids-only projection.
-pub struct SelectorField<T>(PhantomData<T>);
-
 impl<T> Prototype<PredicateMarker, BaseProjector<PredicateMarker, T>> {
     /// Start an equality predicate for the provided field path.
     #[must_use]
@@ -197,17 +188,6 @@ impl<T> Prototype<PredicateMarker, BaseProjector<PredicateMarker, T>> {
     #[must_use]
     pub fn exists(&self, field: impl Into<String>) -> PredicateBuilder<T> {
         PredicateBuilder::default().exists(field)
-    }
-}
-#[cfg(feature = "ids_projection")]
-impl<T> Prototype<SelectorMarker, BaseProjector<SelectorMarker, T>>
-where
-    T: Identifiable,
-{
-    /// Request ids-only projection for the selected type.
-    #[must_use]
-    pub fn ids_only(&self) -> SelectorField<T> {
-        SelectorField(PhantomData)
     }
 }
 /// Lightweight predicate container.
@@ -864,13 +844,13 @@ impl<T> HasPredicateAtom for T {
     type Predicate = ();
 }
 impl<T> EvaluatePredicate<T> for () {}
-/// Lightweight selector tuple returned by stubbed DSL builders.
+/// Selector tuple carried by iterable queries.
+///
+/// Selectors carry no projection: queries always return whole items, so the tuple has exactly
+/// one value and a single wire layout that carries no data (JSON `null`).
 #[derive(Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::query::dsl::SelectorTuple")]
-pub struct SelectorTuple<T>(
-    #[cfg(feature = "ids_projection")] SelectorMode,
-    PhantomData<T>,
-);
+pub struct SelectorTuple<T>(PhantomData<T>);
 // Norito slice decoding delegations for lightweight DSL containers.
 impl<'a, T: 'static> norito::core::DecodeFromSlice<'a> for CompoundPredicate<T> {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
@@ -890,17 +870,6 @@ impl<'a, T> norito::core::DecodeFromSlice<'a> for SelectorTuple<T> {
         Ok((v, used))
     }
 }
-/// Experimental selector mode to prototype basic projections.
-#[cfg(feature = "ids_projection")]
-#[derive(Debug, Clone, Copy, Decode, Encode, PartialEq, Eq, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::query::dsl::SelectorMode")]
-/// Controls how selector tuples project data when the experimental ids projection feature is enabled.
-pub enum SelectorMode {
-    /// Request the full object for each row.
-    Full,
-    /// Request identifiers only.
-    IdsOnly,
-}
 impl<T> SelectorTuple<T> {
     #[inline]
     /// Build a selector tuple using the provided closure.
@@ -915,68 +884,17 @@ impl<T> SelectorTuple<T> {
     {
         f(Default::default()).into_selector_tuple()
     }
-    #[inline]
-    /// Iterate over the selector payload applied to a batch (always empty in lightweight mode).
-    pub fn iter(&self) -> impl Iterator<Item = ()> {
-        #[cfg(not(feature = "ids_projection"))]
-        {
-            core::iter::empty()
-        }
-        #[cfg(feature = "ids_projection")]
-        {
-            let count = match self.0 {
-                SelectorMode::Full => 0,
-                // The actual projector is provided by EvaluateSelector on unit; we emit a single
-                // unit value to trigger projection when ids-only is requested.
-                SelectorMode::IdsOnly => 1,
-            };
-            core::iter::repeat_n((), count)
-        }
-    }
-    /// Construct an ids-only selector (experimental; feature-gated).
-    #[cfg(feature = "ids_projection")]
-    #[must_use]
-    pub fn ids_only() -> Self {
-        Self(SelectorMode::IdsOnly, PhantomData)
-    }
-    /// Returns true if this tuple requests ids-only projection.
-    #[cfg(feature = "ids_projection")]
-    pub fn is_ids_only(&self) -> bool {
-        matches!(self.0, SelectorMode::IdsOnly)
-    }
 }
 
 impl<T> norito::json::JsonSerialize for SelectorTuple<T> {
     fn json_serialize(&self, out: &mut String) {
-        #[cfg(feature = "ids_projection")]
-        {
-            let mode = match self.0 {
-                SelectorMode::Full => "Full",
-                SelectorMode::IdsOnly => "IdsOnly",
-            };
-            norito::json::write_json_string(mode, out);
-        }
-        #[cfg(not(feature = "ids_projection"))]
-        {
-            Value::Null.json_serialize(out);
-        }
+        Value::Null.json_serialize(out);
     }
     fn json_serialize_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
-        #[cfg(feature = "ids_projection")]
-        {
-            let mode = match self.0 {
-                SelectorMode::Full => "Full",
-                SelectorMode::IdsOnly => "IdsOnly",
-            };
-            norito::json::write_json_string_to(mode, out)
-        }
-        #[cfg(not(feature = "ids_projection"))]
-        {
-            Value::Null.json_serialize_to(out)
-        }
+        Value::Null.json_serialize_to(out)
     }
 }
 
@@ -984,35 +902,11 @@ impl<T> norito::json::JsonDeserialize for SelectorTuple<T> {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
-        #[cfg(feature = "ids_projection")]
-        {
-            match Value::json_deserialize(parser)? {
-                Value::Null => Ok(Self::default()),
-                Value::String(s) => {
-                    let mode = match s.as_str() {
-                        "Full" => SelectorMode::Full,
-                        "IdsOnly" => SelectorMode::IdsOnly,
-                        other => {
-                            return Err(norito::json::Error::Message(format!(
-                                "invalid selector mode `{other}`"
-                            )));
-                        }
-                    };
-                    Ok(Self(mode, PhantomData))
-                }
-                other => Err(norito::json::Error::Message(format!(
-                    "expected string or null for SelectorTuple, got {other:?}"
-                ))),
-            }
-        }
-        #[cfg(not(feature = "ids_projection"))]
-        {
-            match Value::json_deserialize(parser)? {
-                Value::Null => Ok(Self(PhantomData)),
-                other => Err(norito::json::Error::Message(format!(
-                    "expected null for SelectorTuple, got {other:?}"
-                ))),
-            }
+        match Value::json_deserialize(parser)? {
+            Value::Null => Ok(Self(PhantomData)),
+            other => Err(norito::json::Error::Message(format!(
+                "expected null for SelectorTuple, got {other:?}"
+            ))),
         }
     }
 }
@@ -1027,11 +921,6 @@ mod tests {
     #[test]
     fn selector_marker_is_copy() {
         assert_copy::<SelectorMarker>();
-    }
-    #[test]
-    fn selector_tuple_iter_is_empty() {
-        let selector = SelectorTuple::<u32>::default();
-        assert_eq!(selector.iter().count(), 0);
     }
 }
 #[cfg(test)]
@@ -1885,32 +1774,14 @@ mod predicate_tests {
         assert_eq!(parsed.exists, vec!["y".to_string(), "z".to_string()]);
     }
 }
-#[cfg(all(test, feature = "ids_projection"))]
-mod selector_tests {
-    use super::*;
-    use crate::account::Account;
-    #[test]
-    fn selector_build_ids_only() {
-        let selector = SelectorTuple::<Account>::build(|s| s.ids_only());
-        assert!(selector.is_ids_only());
-    }
-}
 impl<T> Default for SelectorTuple<T> {
     fn default() -> Self {
-        Self(
-            #[cfg(feature = "ids_projection")]
-            SelectorMode::Full,
-            PhantomData,
-        )
+        Self(PhantomData)
     }
 }
 impl<T> Clone for SelectorTuple<T> {
     fn clone(&self) -> Self {
-        Self(
-            #[cfg(feature = "ids_projection")]
-            self.0,
-            PhantomData,
-        )
+        Self(PhantomData)
     }
 }
 impl<T: 'static> TypeId for SelectorTuple<T> {
@@ -1953,148 +1824,6 @@ impl<T> IntoSelectorTuple for SelectorTuple<T> {
         self
     }
 }
-#[cfg(feature = "ids_projection")]
-impl<T> IntoSelectorTuple for SelectorField<T>
-where
-    T: Identifiable,
-{
-    type SelectingType = T;
-    type SelectedTuple = <T as Identifiable>::Id;
-    fn into_selector_tuple(self) -> SelectorTuple<Self::SelectingType> {
-        SelectorTuple::ids_only()
-    }
-}
-// -----------------------------------------------------------------------------
-// Query error integration (minimal)
-// -----------------------------------------------------------------------------
-use crate::query::QueryOutputBatchBox;
-/// Trait implemented on all evaluable selectors (minimal version).
-pub trait EvaluateSelector<T: 'static> {
-    /// Project a batch of references into a `QueryOutputBatchBox`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the lightweight DSL cannot project the provided
-    /// items or when conversion fails in downstream codecs.
-    fn project_clone<'a, I>(
-        &self,
-        _batch: I,
-    ) -> Result<QueryOutputBatchBox, crate::query::error::QueryExecutionFail>
-    where
-        I: Iterator<Item = &'a T> + 'a,
-    {
-        Err(crate::query::error::QueryExecutionFail::Conversion(
-            "lightweight dsl does not project".to_string(),
-        ))
-    }
-    /// Project a batch of owned items into a `QueryOutputBatchBox`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the lightweight DSL cannot project the provided
-    /// items or when conversion fails in downstream codecs.
-    fn project(
-        &self,
-        _batch: impl Iterator<Item = T>,
-    ) -> Result<QueryOutputBatchBox, crate::query::error::QueryExecutionFail> {
-        Err(crate::query::error::QueryExecutionFail::Conversion(
-            "lightweight dsl does not project".to_string(),
-        ))
-    }
-}
-impl<T: 'static> EvaluateSelector<T> for () {
-    fn project_clone<'a, I>(
-        &self,
-        batch: I,
-    ) -> Result<QueryOutputBatchBox, crate::query::error::QueryExecutionFail>
-    where
-        I: Iterator<Item = &'a T> + 'a,
-    {
-        #[cfg(not(feature = "ids_projection"))]
-        let _ = &batch;
-        #[cfg(feature = "ids_projection")]
-        {
-            macro_rules! project_ids_ref {
-                ($target:ty, $id:ty, $iter:expr) => {{
-                    if StdTypeId::of::<T>() == StdTypeId::of::<$target>() {
-                        let ids: Vec<$id> = $iter
-                            .map(|item| {
-                                let any: &dyn Any = item;
-                                any.downcast_ref::<$target>()
-                                    .expect("type checked via TypeId")
-                                    .id()
-                                    .clone()
-                            })
-                            .collect();
-                        return Ok(QueryOutputBatchBox::from(ids));
-                    }
-                }};
-            }
-            project_ids_ref!(
-                crate::domain::Domain,
-                iroha_model_base::domain::DomainId,
-                batch
-            );
-            project_ids_ref!(crate::account::Account, crate::account::AccountId, batch);
-            project_ids_ref!(
-                crate::asset::definition::AssetDefinition,
-                crate::AssetDefinitionId,
-                batch
-            );
-            project_ids_ref!(crate::nft::Nft, crate::nft::NftId, batch);
-            project_ids_ref!(crate::rwa::Rwa, crate::rwa::RwaId, batch);
-            project_ids_ref!(crate::role::Role, crate::role::RoleId, batch);
-            project_ids_ref!(crate::trigger::Trigger, crate::trigger::TriggerId, batch);
-        }
-        Err(crate::query::error::QueryExecutionFail::Conversion(
-            "lightweight dsl does not project".to_string(),
-        ))
-    }
-    fn project(
-        &self,
-        batch: impl Iterator<Item = T>,
-    ) -> Result<QueryOutputBatchBox, crate::query::error::QueryExecutionFail> {
-        #[cfg(not(feature = "ids_projection"))]
-        let _ = &batch;
-        #[cfg(feature = "ids_projection")]
-        {
-            macro_rules! project_ids_owned {
-                ($target:ty, $id:ty, $iter:expr) => {{
-                    if StdTypeId::of::<T>() == StdTypeId::of::<$target>() {
-                        let ids: Vec<$id> = $iter
-                            .map(|item| {
-                                let any: &dyn Any = &item;
-                                any.downcast_ref::<$target>()
-                                    .expect("type checked via TypeId")
-                                    .id()
-                                    .clone()
-                            })
-                            .collect();
-                        return Ok(QueryOutputBatchBox::from(ids));
-                    }
-                }};
-            }
-            project_ids_owned!(
-                crate::domain::Domain,
-                iroha_model_base::domain::DomainId,
-                batch
-            );
-            project_ids_owned!(crate::account::Account, crate::account::AccountId, batch);
-            project_ids_owned!(
-                crate::asset::definition::AssetDefinition,
-                crate::AssetDefinitionId,
-                batch
-            );
-            project_ids_owned!(crate::nft::Nft, crate::nft::NftId, batch);
-            project_ids_owned!(crate::rwa::Rwa, crate::rwa::RwaId, batch);
-            project_ids_owned!(crate::role::Role, crate::role::RoleId, batch);
-            project_ids_owned!(crate::trigger::Trigger, crate::trigger::TriggerId, batch);
-        }
-        Err(crate::query::error::QueryExecutionFail::Conversion(
-            "lightweight dsl does not project".to_string(),
-        ))
-    }
-}
 #[cfg(test)]
 mod checked_json_tests {
     use super::*;
@@ -2124,8 +1853,27 @@ mod checked_json_tests {
             ),
         );
         assert_exact(&SelectorTuple::<crate::domain::Domain>::default());
-        #[cfg(feature = "ids_projection")]
-        assert_exact(&SelectorTuple::<crate::domain::Domain>::ids_only());
+    }
+    #[test]
+    fn selector_tuple_has_one_layout() {
+        let selector = SelectorTuple::<crate::domain::Domain>::default();
+        let bytes = Encode::encode(&selector);
+        let decoded: SelectorTuple<crate::domain::Domain> =
+            Decode::decode(&mut bytes.as_slice()).expect("decode selector");
+        assert_eq!(decoded, selector);
+        assert_eq!(
+            norito::json::to_json(&selector).expect("selector JSON"),
+            "null"
+        );
+        let parsed: SelectorTuple<crate::domain::Domain> =
+            norito::json::from_json("null").expect("null selector");
+        assert_eq!(parsed, selector);
+        for retired in ["\"Full\"", "\"IdsOnly\""] {
+            assert!(
+                norito::json::from_json::<SelectorTuple<crate::domain::Domain>>(retired).is_err(),
+                "retired projection mode {retired} must be rejected"
+            );
+        }
     }
 }
 /// Prelude re-export for the lightweight query DSL.

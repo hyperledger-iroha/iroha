@@ -27,7 +27,7 @@ test("ToriiClient emits an exact ASCII alias credential and a verifiable signatu
   const captured = [];
   const fetchImpl = async (url, init) => {
     captured.push({ url, init });
-    return new Response(JSON.stringify({ items: [], total: 0 }), {
+    return new Response(JSON.stringify({ items: [], next_cursor: null }), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
@@ -75,7 +75,7 @@ test("ToriiClient transports an exact canonical I105 credential as canonical hex
   const captured = [];
   const fetchImpl = async (url, init) => {
     captured.push({ url, init });
-    return new Response(JSON.stringify({ items: [], total: 0 }), {
+    return new Response(JSON.stringify({ items: [], next_cursor: null }), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
@@ -137,7 +137,7 @@ test("ToriiClient canonical auth accepts byte-array private keys", async () => {
   const captured = [];
   const fetchImpl = async (url, init) => {
     captured.push({ url, init });
-    return new Response(JSON.stringify({ items: [], total: 0 }), {
+    return new Response(JSON.stringify({ items: [], next_cursor: null }), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
@@ -159,7 +159,7 @@ test("ToriiClient uses its configured signer for optional account reads", async 
   const captured = [];
   const fetchImpl = async (url, init) => {
     captured.push({ url: new URL(url), init });
-    return new Response(JSON.stringify({ items: [], total: 0 }), {
+    return new Response(JSON.stringify({ items: [], next_cursor: null }), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
@@ -173,14 +173,14 @@ test("ToriiClient uses its configured signer for optional account reads", async 
 
   await client.accountAssets(targetAccountId).list();
   await client.accountTransactions(targetAccountId).list();
-  await client.listAccountPermissions(targetAccountId);
+  await client.accountPermissions(targetAccountId).list();
 
   assert.deepEqual(
     captured.map(({ url }) => url.pathname),
     [
       `/v1/accounts/${encodeURIComponent(targetAccountId)}/assets/query`,
       `/v1/accounts/${encodeURIComponent(targetAccountId)}/transactions/query`,
-      `/v1/accounts/${encodeURIComponent(targetAccountId)}/permissions`,
+      `/v1/accounts/${encodeURIComponent(targetAccountId)}/permissions/query`,
     ],
   );
   for (const { init } of captured) {
@@ -196,7 +196,7 @@ test("ToriiClient permits explicit anonymous optional account reads", async () =
   const captured = [];
   const fetchImpl = async (url, init) => {
     captured.push({ url: new URL(url), init });
-    return new Response(JSON.stringify({ items: [], total: 0 }), {
+    return new Response(JSON.stringify({ items: [], next_cursor: null }), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
@@ -210,7 +210,7 @@ test("ToriiClient permits explicit anonymous optional account reads", async () =
 
   await client.accountAssets(targetAccountId).list({}, { canonicalAuth: null });
   await client.accountTransactions(targetAccountId).list({}, { canonicalAuth: null });
-  await client.listAccountPermissions(targetAccountId, { canonicalAuth: null });
+  await client.accountPermissions(targetAccountId).list({}, { canonicalAuth: null });
 
   assert.equal(captured.length, 3);
   for (const { init } of captured) {

@@ -16,6 +16,8 @@ if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
 
 from iroha_torii_client.list_query import (  # noqa: E402  (import depends on sys.path mutation)
+    AGGREGATE_MAX_GROUP_BY,
+    AGGREGATE_MAX_METRICS,
     FILTER_MAX_DEPTH,
     FILTER_MAX_MEMBERSHIP_VALUES,
     FILTER_MAX_NODES,
@@ -73,6 +75,18 @@ def test_filter_vectors_render_canonical_text_and_json(case: dict) -> None:
     assert str(parsed) == case["canonical"]
     assert parsed.to_json() == case["json"]
     assert parse_filter(case["canonical"]) == parsed
+
+
+@pytest.mark.parametrize(
+    "case", VECTORS["json_filters"], ids=_ids(VECTORS["json_filters"], "canonical")
+)
+def test_json_filter_vectors_decode_to_the_normalized_tree(case: dict) -> None:
+    decoded = Filter.from_json(case["json"])
+    assert str(decoded) == case["canonical"]
+    assert decoded.to_json() == case["normalized"]
+    assert parse_filter(case["canonical"]) == decoded
+    assert Filter.from_json(case["normalized"]) == decoded
+    assert ListQuery.from_json({"filter": case["json"]}).to_json() == {"filter": case["normalized"]}
 
 
 @pytest.mark.parametrize("case", VECTORS["filter_errors"], ids=_ids(VECTORS["filter_errors"], "text"))
@@ -391,6 +405,139 @@ def test_json_form_rejects_fractional_numbers_like_torii(text: str, field: str) 
     assert str(query_error.value) == f"invalid `filter`: {expected}"
 
 
+@pytest.mark.parametrize("op", ["and", "or"])
+def test_json_form_single_operand_connectives_decode_to_their_operand(op: str) -> None:
+    leaf = {"op": "eq", "args": ["a", 1]}
+    decoded = Filter.from_json({"op": op, "args": [leaf]})
+    assert decoded == (F.a == 1)
+    assert decoded.to_json() == leaf
+    assert parse_filter(str(decoded)) == decoded
+
+
+def test_json_form_collapses_nested_single_operand_connectives() -> None:
+    leaf = {"op": "eq", "args": ["a", 1]}
+    is_null = {"op": "is_null", "args": ["b"]}
+    decoded = Filter.from_json(
+        {
+            "op": "and",
+            "args": [
+                {"op": "or", "args": [{"op": "and", "args": [leaf, is_null]}]},
+                {"op": "or", "args": [leaf]},
+            ],
+        }
+    )
+    assert decoded == And([And([F.a == 1, F.b.is_null()]), F.a == 1])
+    assert str(decoded) == "(a = 1 and b is null) and a = 1"
+    # The collapsed connective still counts toward the depth limit.
+    deep: dict = leaf
+    for _ in range(FILTER_MAX_DEPTH + 1):
+        deep = {"op": "or", "args": [deep]}
+    with pytest.raises(FilterError, match="nesting depth limit of 10"):
+        Filter.from_json(deep)
+
+
+def test_field_paths_must_not_contain_backticks() -> None:
+    message = "invalid field `metadata.a`b`: field paths must not contain backticks"
+    with pytest.raises(FilterError) as raised:
+        (F["metadata.a`b"] == 1).validate()
+    assert str(raised.value) == message
+    for value in (
+        {"op": "eq", "args": ["metadata.a`b", 1]},
+        {"op": "in", "args": ["metadata.a`b", [1]]},
+        {"op": "exists", "args": ["metadata.a`b"]},
+    ):
+        with pytest.raises(FilterError) as raised:
+            Filter.from_json(value)
+        assert str(raised.value) == message
+    aggregate = AggregateSpec(metrics=[AggregateMetric("n", "count")], group_by=["a`b"])
+    for query, parameter in (
+        (ListQuery(select=["id", "a`b"]), "select"),
+        (ListQuery(sort=[SortKey("a`b")]), "sort"),
+        (ListQuery(aggregate=aggregate), "aggregate"),
+    ):
+        with pytest.raises(ListQueryError) as query_error:
+            query.validate()
+        assert query_error.value.parameter == parameter
+        assert "must not contain backticks" in query_error.value.message
+    # A backtick in the text form always opens or closes a quoted segment.
+    assert parse_filter("`a-b`.c = 1") == (F["a-b.c"] == 1)
+
+
+def test_string_literals_keep_del_and_c1_but_reject_c0_controls() -> None:
+    raw = "x\x7fy\x80\x85\x9fz"
+    parsed = parse_filter(f'a = "{raw}"')
+    assert parsed == (F.a == raw)
+    assert str(parsed) == f'a = "{raw}"'
+    assert parse_filter(f"a = '{raw}'") == parsed
+    for control in ("\x00", "\x01", "\t", "\n", "\x1f"):
+        with pytest.raises(FilterSyntaxError) as raised:
+            parse_filter(f'a = "x{control}y"')
+        assert raised.value.message == "control characters must be escaped inside string literals"
+        assert raised.value.column == 7
+    # Only `"`, `\` and U+0000..U+001F are escaped, with JSON's short forms.
+    value = 'q"b\\s\b\f\n\r\t\x00\x1f\x7f\x85/\''
+    rendered = str(F.a == value)
+    assert rendered == 'a = "q\\"b\\\\s\\b\\f\\n\\r\\t\\u0000\\u001f\x7f\x85/\'"'
+    assert parse_filter(rendered) == (F.a == value)
+
+
+def test_aggregates_are_bounded_and_their_paths_validated() -> None:
+    count = AggregateMetric("n", AggregateFn.COUNT)
+
+    def aggregate(group_by: list, metrics: list) -> ListQuery:
+        return ListQuery(aggregate=AggregateSpec(metrics=metrics, group_by=group_by))
+
+    def groups(size: int) -> list:
+        return [f"metadata.k{index}" for index in range(size)]
+
+    def metrics(size: int) -> list:
+        return [AggregateMetric(f"m{index}", "count") for index in range(size)]
+
+    widest = aggregate(groups(AGGREGATE_MAX_GROUP_BY), metrics(AGGREGATE_MAX_METRICS))
+    widest.validate()
+    assert ListQuery.from_json(widest.to_json()) == widest
+    rejected = [
+        (
+            aggregate(groups(AGGREGATE_MAX_GROUP_BY + 1), [count]),
+            "`group_by` lists at most 8 fields",
+        ),
+        (
+            aggregate([], metrics(AGGREGATE_MAX_METRICS + 1)),
+            "`metrics` lists at most 16 metrics",
+        ),
+        (
+            aggregate(["a..b"], [count]),
+            "invalid field `a..b`: field path segments must not be empty",
+        ),
+        (
+            aggregate([], [AggregateMetric("s", "sum", "a b")]),
+            "invalid field `a b`: field paths must not contain whitespace or control characters",
+        ),
+    ]
+    for query, message in rejected:
+        with pytest.raises(ListQueryError) as raised:
+            query.validate()
+        assert (raised.value.parameter, raised.value.code) == ("aggregate", "invalid_aggregate")
+        assert raised.value.message == message
+        with pytest.raises(ListQueryError) as decoded:
+            ListQuery.from_json(query.to_json())
+        assert decoded.value.message == message
+    for body, needle in (
+        (
+            {"groupby": ["a"], "metrics": [{"alias": "n", "fn": "count"}]},
+            "unknown aggregate member `groupby`",
+        ),
+        (
+            {"metrics": [{"alias": "n", "fn": "count", "feild": "a"}]},
+            "unknown metric member `feild`",
+        ),
+    ):
+        with pytest.raises(ListQueryError) as raised:
+            ListQuery.from_json({"aggregate": body})
+        assert raised.value.code == "invalid_aggregate"
+        assert needle in raised.value.message
+
+
 def test_json_form_checks_the_field_before_the_operand() -> None:
     with pytest.raises(FilterError, match="invalid field `a b`"):
         Filter.from_json({"op": "eq", "args": ["a b", Decimal("1.5")]})
@@ -596,8 +743,13 @@ def test_iteration_follows_short_and_empty_pages_until_the_cursor_is_null() -> N
         ([], "JSON object"),
         ({"next_cursor": None}, "`items` array"),
         ({"items": [], "next_cursor": 1}, "next_cursor"),
-        ({"items": [], "total": -1}, "total"),
-        ({"items": [], "total": True}, "total"),
+        ({"items": []}, "next_cursor"),
+        ({"items": [], "next_cursor": ""}, "next_cursor"),
+        ({"items": [], "next_cursor": None, "has_more": False}, "unknown envelope"),
+        ({"items": [1], "next_cursor": None, "total": 0}, "current page"),
+        ({"items": [], "next_cursor": None, "total": None}, "current page"),
+        ({"items": [], "next_cursor": None, "total": -1}, "total"),
+        ({"items": [], "next_cursor": None, "total": True}, "total"),
     ],
 )
 def test_page_decoding_is_strict(payload: object, needle: str) -> None:

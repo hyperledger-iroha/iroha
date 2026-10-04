@@ -142,6 +142,9 @@ pub(crate) struct DataspaceUpArgs {
     /// Exact independently installed parent profile, such as taira.
     #[arg(long)]
     network: String,
+    /// Canonical owner label leased on the parent as LABEL@ALIAS; retained across retries.
+    #[arg(long, default_value = "admin")]
+    account_alias: String,
     /// Store-local context name (defaults to the dataspace alias).
     #[arg(long)]
     name: Option<String>,
@@ -219,6 +222,74 @@ pub struct PackagePublishArgs {
 pub enum ContractCommand {
     /// Deploy source, bytecode, or a Musubi package; automatically start a default localnet if needed.
     Deploy(DeployArgs),
+    /// Read a verified deployed view in the selected managed environment.
+    View(ContractViewArgs),
+    /// Prepare, execute or resume a finite durable mutable call.
+    Call(ContractCallArgs),
+}
+
+/// Selected managed deployment view, without caller-supplied configuration or intent files.
+#[derive(Debug, Args)]
+pub struct ContractViewArgs {
+    /// Exact deployed contract alias.
+    alias: String,
+    #[command(flatten)]
+    store: StoreArgs,
+    /// Existing managed environment; otherwise use the workspace selection.
+    #[arg(long)]
+    context: Option<String>,
+    /// Read-only public entrypoint.
+    #[arg(long)]
+    entrypoint: String,
+    /// Named arguments validated against the retained deployed interface.
+    #[arg(long, default_value = "{}")]
+    args: String,
+    /// Positive view execution budget.
+    #[arg(long, default_value_t = 1_500_000, value_parser = clap::value_parser!(u64).range(1..=10_000_000))]
+    gas_limit: u64,
+}
+
+/// Finite native call authorization or exact journal recovery.
+#[derive(Debug, Args)]
+pub struct ContractCallArgs {
+    /// Exact deployed alias for a fresh operation.
+    #[arg(required_unless_present = "resume", conflicts_with = "resume")]
+    alias: Option<String>,
+    #[command(flatten)]
+    store: StoreArgs,
+    /// Existing managed environment; otherwise use the workspace selection.
+    #[arg(long)]
+    context: Option<String>,
+    /// Mutable public selector, including an explicitly requested lifecycle hook.
+    #[arg(long, required_unless_present = "resume", conflicts_with = "resume")]
+    entrypoint: Option<String>,
+    /// Named arguments validated and encoded natively from the retained deployed interface.
+    #[arg(long, default_value = "{}", conflicts_with = "resume")]
+    args: String,
+    /// Positive aggregate cap across any exact self-grant and the call in the generated fee asset.
+    #[arg(long, required_unless_present = "resume", conflicts_with = "resume")]
+    max_fee: Option<Quantity>,
+    /// Signature-bound mutable execution budget.
+    #[arg(long, default_value_t = 1_500_000, value_parser = clap::value_parser!(u64).range(1..=10_000_000), conflicts_with = "resume")]
+    gas_limit: u64,
+    /// Original signing interval, retained unchanged when the operation is resumed.
+    #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(1..=600), conflicts_with = "resume")]
+    timeout: u64,
+    /// Persist the exact original authorization without submitting either stage.
+    #[arg(long, conflicts_with = "resume")]
+    prepare: bool,
+    /// Recover this exact managed call without a new authorization or replacement transaction.
+    #[arg(long)]
+    resume: Option<PathBuf>,
+    /// Explicit view to read after Applied; its availability is reported separately.
+    #[arg(long)]
+    readback: Option<String>,
+    /// Named arguments for the explicitly selected readback view.
+    #[arg(long, default_value = "{}", requires = "readback")]
+    readback_args: String,
+    /// Independent positive gas budget for the readback view.
+    #[arg(long, default_value_t = 1_500_000, value_parser = clap::value_parser!(u64).range(1..=10_000_000), requires = "readback")]
+    readback_gas_limit: u64,
 }
 
 #[derive(Debug, Args)]
@@ -378,6 +449,7 @@ impl<T: Write> RunArgs<T> for DataspaceCommand {
                     name: args.name.unwrap_or_else(|| args.alias.clone()),
                     network: args.network,
                     alias: args.alias,
+                    account_alias: args.account_alias,
                     timeout: Duration::from_secs(args.timeout),
                 };
                 tui::status("Authenticating the installed parent and preparing private validators");
@@ -537,7 +609,17 @@ impl<T: Write> RunArgs<T> for PackageCommand {
 
 impl<T: Write> RunArgs<T> for ContractCommand {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
-        let Self::Deploy(args) = self;
+        match self {
+            Self::Deploy(args) => args.run(writer),
+            Self::View(args) => args.run(writer),
+            Self::Call(args) => args.run(writer),
+        }
+    }
+}
+
+impl<T: Write> RunArgs<T> for DeployArgs {
+    fn run(self, writer: &mut BufWriter<T>) -> Outcome {
+        let args = self;
         // Reject local input mistakes before provisioning a network or selecting an identity.
         let resume = args
             .resume
@@ -640,6 +722,161 @@ impl<T: Write> RunArgs<T> for ContractCommand {
             writeln!(writer, "journal: {}", report.journal.display())?;
             if let Some(parent) = report.parent_summary() {
                 writeln!(writer, "{parent}")?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn managed_contract_context(
+    store: &ManagedStore,
+    requested: Option<&str>,
+) -> Result<ManagedContext> {
+    // Calls and views select an existing identity. They never create another default ledger.
+    store.context(requested)?;
+    Ok(store
+        .ensure_selected(
+            &InstalledRuntime::discover()?,
+            requested,
+            Duration::from_secs(30),
+        )?
+        .context)
+}
+
+fn view_request(
+    entrypoint: String,
+    arguments: &str,
+    gas_limit: u64,
+) -> Result<managed::ManagedContractViewRequest> {
+    ensure!(
+        !entrypoint.is_empty() && entrypoint.trim() == entrypoint,
+        "entrypoint must use its exact public selector"
+    );
+    ensure!(
+        arguments.len() <= 64 * 1024,
+        "contract arguments exceed the 64 KiB bound"
+    );
+    let arguments = iroha_contract_deploy::call::parse_contract_arguments(arguments)?;
+    Ok(managed::ManagedContractViewRequest {
+        entrypoint,
+        arguments,
+        gas_limit: std::num::NonZeroU64::new(gas_limit)
+            .ok_or_else(|| eyre!("gas limit must be positive"))?,
+    })
+}
+
+impl<T: Write> RunArgs<T> for ContractViewArgs {
+    fn run(self, writer: &mut BufWriter<T>) -> Outcome {
+        let alias = self.alias.parse().wrap_err("invalid contract alias")?;
+        let request = view_request(self.entrypoint, &self.args, self.gas_limit)?;
+        let store = self.store.open()?;
+        let context = managed_contract_context(&store, self.context.as_deref())?;
+        let config = context.load_client_config()?;
+        let _profile = ChainDiscriminantGuard::enter(config.account_chain_discriminant);
+        let deployed =
+            DeploymentRuntime::new(config, store.root().join("deployments").join(&context.name))
+                .current_deployment(&alias)?;
+        let result = store.view_contract(&context, &deployed.contract, request)?;
+        if self.store.json {
+            write_json(writer, &result)
+        } else {
+            write_json(writer, &result.result)
+        }
+    }
+}
+
+impl<T: Write> RunArgs<T> for ContractCallArgs {
+    fn run(self, writer: &mut BufWriter<T>) -> Outcome {
+        let readback = self
+            .readback
+            .map(|entrypoint| {
+                view_request(entrypoint, &self.readback_args, self.readback_gas_limit)
+            })
+            .transpose()?;
+        let resumed = self
+            .resume
+            .as_ref()
+            .map(|path| self.store.resolve_path(path))
+            .transpose()?;
+        let requested = if resumed.is_none() {
+            let alias = self
+                .alias
+                .as_ref()
+                .ok_or_else(|| eyre!("call requires a contract alias"))?
+                .parse()
+                .wrap_err("invalid contract alias")?;
+            let request = view_request(
+                self.entrypoint
+                    .clone()
+                    .ok_or_else(|| eyre!("call requires --entrypoint"))?,
+                &self.args,
+                self.gas_limit,
+            )?;
+            let max_fee = self
+                .max_fee
+                .clone()
+                .ok_or_else(|| eyre!("call requires --max-fee"))?;
+            ensure!(!max_fee.is_zero(), "--max-fee must be positive");
+            Some((alias, request, max_fee))
+        } else {
+            None
+        };
+        let store = self.store.open()?;
+        let context = managed_contract_context(&store, self.context.as_deref())?;
+        let config = context.load_client_config()?;
+        let _profile = ChainDiscriminantGuard::enter(config.account_chain_discriminant);
+        let report = if let Some(journal) = resumed {
+            store.resume_contract_call(&context, &journal, readback)?
+        } else {
+            let (alias, request, max_fee) =
+                requested.ok_or_else(|| eyre!("call request is missing"))?;
+            let deployed = DeploymentRuntime::new(
+                config,
+                store.root().join("deployments").join(&context.name),
+            )
+            .current_deployment(&alias)?;
+            let now = u64::try_from(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_millis(),
+            )?;
+            let deadline = now
+                .checked_add(
+                    self.timeout
+                        .checked_mul(1000)
+                        .ok_or_else(|| eyre!("call interval overflow"))?,
+                )
+                .ok_or_else(|| eyre!("call deadline overflow"))?;
+            store.call_contract(
+                &context,
+                &deployed.contract,
+                &request.entrypoint,
+                request.arguments,
+                managed::ManagedContractCallOptions {
+                    max_fee,
+                    signing_deadline_unix_ms: deadline,
+                    gas_limit: request.gas_limit,
+                    prepare_only: self.prepare,
+                    readback,
+                },
+            )?
+        };
+        if self.store.json {
+            write_json(writer, &report)
+        } else {
+            writeln!(writer, "{} on {}", report.status, report.context)?;
+            writeln!(writer, "journal: {}", report.journal.display())?;
+            if let Some(receipt) = &report.receipt {
+                writeln!(writer, "call hash: {}", receipt.call.hash)?;
+            }
+            if let Some(readback) = &report.readback {
+                write_json(writer, &readback.result)?;
+            }
+            if let Some(reason) = &report.readback_failure {
+                writeln!(writer, "{reason}")?;
+            }
+            if let Some(parent) = &report.parent {
+                writeln!(writer, "{}", parent.summary())?;
             }
             Ok(())
         }
@@ -1115,6 +1352,107 @@ mod tests {
         assert!(human.contains(&format!("--state (quoted path): {root:?}")));
     }
 
+    #[test]
+    fn managed_contract_view_and_call_use_aliases_and_exact_recovery() {
+        for arguments in [
+            vec![
+                "kagami",
+                "contract",
+                "view",
+                "Counter::dpn",
+                "--entrypoint",
+                "current",
+            ],
+            vec![
+                "kagami",
+                "contract",
+                "call",
+                "Counter::dpn",
+                "--entrypoint",
+                "set",
+                "--args",
+                "{\"next\":\"7\"}",
+                "--max-fee",
+                "1000",
+                "--prepare",
+                "--readback",
+                "current",
+            ],
+            vec![
+                "kagami",
+                "contract",
+                "call",
+                "--resume",
+                "/private/calls/original",
+                "--readback",
+                "current",
+            ],
+        ] {
+            crate::Cli::try_parse_from(arguments).unwrap();
+        }
+        for arguments in [
+            vec![
+                "kagami",
+                "contract",
+                "call",
+                "Counter::dpn",
+                "--entrypoint",
+                "set",
+            ],
+            vec![
+                "kagami",
+                "contract",
+                "call",
+                "--resume",
+                "/private/call",
+                "--max-fee",
+                "1000",
+            ],
+            vec![
+                "kagami",
+                "contract",
+                "call",
+                "--resume",
+                "/private/call",
+                "Counter::dpn",
+            ],
+            vec![
+                "kagami",
+                "contract",
+                "view",
+                "Counter::dpn",
+                "--entrypoint",
+                "current",
+                "--gas-limit",
+                "0",
+            ],
+        ] {
+            assert!(crate::Cli::try_parse_from(arguments).is_err());
+        }
+    }
+
+    #[test]
+    fn managed_contract_argument_admission_precedes_network_selection() {
+        assert!(view_request("current".into(), "{}", 1).is_ok());
+        assert!(view_request(" current ".into(), "{}", 1).is_err());
+        assert!(
+            view_request(
+                "current".into(),
+                &format!("\"{}\"", "x".repeat(64 * 1024)),
+                1
+            )
+            .is_err()
+        );
+        assert!(
+            view_request(
+                "current".into(),
+                &format!("{}0{}", "[".repeat(129), "]".repeat(129)),
+                1
+            )
+            .is_err()
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn recovery_does_not_emit_lossy_arguments_for_non_utf8_state_paths() {
@@ -1146,6 +1484,7 @@ mod tests {
         };
         assert_eq!(args.alias, "privateapp");
         assert_eq!(args.network, "taira");
+        assert_eq!(args.account_alias, "admin");
         assert!(args.name.is_none());
         assert_eq!(args.timeout, 60);
         assert!(args.store.state.is_none());
@@ -1167,6 +1506,26 @@ mod tests {
         }
         assert!(crate::Cli::try_parse_from(["kagami", "dataspace", "status", "--json"]).is_ok());
         assert!(crate::Cli::try_parse_from(["kagami", "dataspace", "networks", "--json"]).is_ok());
+    }
+
+    #[test]
+    fn dataspace_up_retains_an_explicit_owner_alias_label() {
+        let cli = crate::Cli::try_parse_from([
+            "kagami",
+            "dataspace",
+            "up",
+            "dpn",
+            "--network",
+            "taira",
+            "--account-alias",
+            "treasury",
+        ])
+        .unwrap();
+        let crate::Command::Dataspace(DataspaceCommand::Up(args)) = cli.command else {
+            panic!("expected private dataspace startup");
+        };
+        assert_eq!(args.alias, "dpn");
+        assert_eq!(args.account_alias, "treasury");
     }
 
     #[test]

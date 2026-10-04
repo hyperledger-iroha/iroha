@@ -150,6 +150,8 @@ enum PublicResetCommand {
     SourceManifest(PublicResetSourceManifest),
     /// Materialize a retained validator config from an inherited descriptor without printing secrets.
     ConfigRebase(config::ConfigRebase),
+    /// Amend validator HTTP request budgets through an inherited descriptor and emit public provenance.
+    ToriiRateConfigAmend(config::ToriiRateConfigAmend),
     /// Materialize a fresh validator config for its exact public-reset runtime paths.
     MaterializeValidatorConfig(validator_config::MaterializeValidatorConfig),
     /// Rebind a retained client config to an explicitly checked new genesis identity.
@@ -377,6 +379,9 @@ impl PublicReset {
             PublicResetCommand::ConfigRebase(args) => {
                 config::config_rebase(args)?;
                 return Ok(());
+            }
+            PublicResetCommand::ToriiRateConfigAmend(args) => {
+                return config::torii_rate_config_amend(args, &mut output);
             }
             PublicResetCommand::MaterializeValidatorConfig(args) => {
                 validator_config::materialize(args)?;

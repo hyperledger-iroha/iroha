@@ -504,7 +504,7 @@ fn native_journal(binding: &Binding, height: Option<u64>) -> Result<NativeFinali
                 .map_err(|error| eyre!(error))?;
                 ensure!(
                     cursor
-                        .advance(&journal)
+                        .advance((&journal).into())
                         .map_err(|error| eyre!(error))?
                         .height()
                         == height,

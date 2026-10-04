@@ -28,7 +28,7 @@ fn original_clock(chain: &CertifiedTestChain, clock: &mut NativeJournalCursor, h
             })
             .collect(),
     };
-    clock.advance(&journal).unwrap();
+    clock.advance((&journal).into()).unwrap();
     assert_eq!(clock.tip().unwrap().height(), height);
 }
 

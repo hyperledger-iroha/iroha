@@ -1132,13 +1132,22 @@ fn client_config_selects_the_generated_identity_file_only() {
         .get("account")
         .and_then(toml::Value::as_table)
         .expect("account table");
+    assert!(
+        !account.contains_key("domain"),
+        "client configurations carry no account domain"
+    );
     assert_eq!(
-        account.get("domain").and_then(toml::Value::as_str),
-        Some(CLIENT_ACCOUNT_DOMAIN)
+        account
+            .get("chain_discriminant")
+            .and_then(toml::Value::as_integer),
+        Some(i64::from(
+            iroha_config::parameters::defaults::common::chain_discriminant()
+        )),
+        "peers without an explicit prefix run with the node default, which the client states"
     );
     assert!(
-        !account.contains_key("chain_discriminant"),
-        "default localnet client config should not force an I105 prefix"
+        !account.contains_key("profile"),
+        "a local network must not claim a public network profile"
     );
 }
 #[test]
@@ -1170,6 +1179,36 @@ fn client_config_records_chain_discriminant_when_known() {
             .and_then(toml::Value::as_integer),
         Some(369)
     );
+}
+#[test]
+fn client_config_preserves_publication_with_explicit_network_context() {
+    let host =
+        CanonicalHost::parse(DEFAULT_PUBLIC_HOST, "--public-host").expect("canonicalize host");
+    let client = localnet_client_identity(None, false).expect("default client");
+    let publication =
+        toml::Table::from_iter([("request_timeout_ms".into(), toml::Value::Integer(30_000))]);
+    for configured in [None, Some(369)] {
+        let rendered = render_client_config(
+            8080,
+            &host,
+            DEFAULT_CHAIN_ID,
+            configured,
+            &client,
+            Some(&publication),
+        )
+        .expect("render client config");
+        let value: toml::Value = toml::from_str(&rendered).expect("parse client config");
+        let expected = configured
+            .unwrap_or_else(iroha_config::parameters::defaults::common::chain_discriminant);
+        assert_eq!(
+            value["account"]["chain_discriminant"].as_integer(),
+            Some(i64::from(expected))
+        );
+        assert_eq!(
+            value["musubi"]["publication"].as_table(),
+            Some(&publication)
+        );
+    }
 }
 #[test]
 fn generated_taira_genesis_grants_deployment_only_to_generated_client() {

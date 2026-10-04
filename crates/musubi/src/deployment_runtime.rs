@@ -466,6 +466,53 @@ impl DeploymentRuntime {
             journal: retained,
         })
     }
+
+    /// Locate and authenticate the current completed deployment for one exact alias.
+    ///
+    /// No build, wallet discovery, signing or dispatch occurs. The same native alias slot and
+    /// retained journal ownership used by deployment also governs this read.
+    ///
+    /// # Errors
+    /// Rejects absent, unresolved, substituted, unsafe or changed current deployments.
+    pub fn current_deployment(&self, alias: &ContractAlias) -> Result<CurrentDeployment> {
+        let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
+        let slot = deployment_slot(&self.config, &self.journal_root, alias);
+        // A read must not create a new alias slot merely because no deployment exists.
+        let writer = PrivateDirectory::open(&slot)?;
+        let lock = writer.open_read("deployment.lock")?;
+        lock.try_lock()
+            .wrap_err("deployment target is already in use")?;
+        writer.revalidate()?;
+        let session = DeploymentSlot {
+            writer,
+            _lock: lock,
+        };
+        let journal = session
+            .current_journal()?
+            .ok_or_else(|| eyre!("contract alias has no retained deployment"))?;
+        let service = DeploymentService::new(self.config.clone())?;
+        let preflight = service.retained_preflight(&journal)?;
+        if &preflight.contract_alias != alias {
+            bail!("retained deployment resolves a different alias");
+        }
+        validate_journal_location(
+            &self.config,
+            &self.journal_root,
+            &journal,
+            alias,
+            &plan_journal_id(&preflight)?,
+        )?;
+        let contract = service.current_completed_contract(&journal)?;
+        Ok(CurrentDeployment { contract, journal })
+    }
+}
+
+/// Exact completed deployment selected by the native alias slot.
+pub struct CurrentDeployment {
+    /// Authenticated Applied receipt and complete retained artifact.
+    pub contract: iroha_contract_deploy::CompletedContract,
+    /// Owner-private original deployment recovery path.
+    pub journal: PathBuf,
 }
 
 fn journal_failure(error: DeploymentError, journal: &Path) -> eyre::Report {
@@ -735,7 +782,6 @@ chain = "00000000-0000-0000-0000-000000000000"
 network_id = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
 torii_url = "http://127.0.0.1:9/"
 [account]
-domain = "wonderland.universal"
 chain_discriminant = 753
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
 private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
@@ -743,6 +789,26 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
         Config::load_bytes_with_musubi_publication(Path::new("unused-runtime.toml"), source)
             .expect("fixture config")
             .0
+    }
+
+    #[test]
+    fn current_deployment_read_never_creates_or_repairs_an_absent_slot() -> Result<()> {
+        let temporary = TempDir::new()?;
+        let config = config();
+        let root = temporary.path().join("absent-deployments");
+        let runtime = DeploymentRuntime::new(config.clone(), root.clone());
+        let alias: ContractAlias = "Counter::universal".parse()?;
+        assert!(runtime.current_deployment(&alias).is_err());
+        assert!(!root.exists());
+
+        let slot = deployment_slot(&config, &root, &alias);
+        let directory = PrivateDirectory::open_or_create(&slot)?;
+        directory.write_atomic("sentinel", b"original", PublishMode::CreateNew)?;
+        assert!(runtime.current_deployment(&alias).is_err());
+        assert!(!slot.join("deployment.lock").exists());
+        assert!(!slot.join("active-journal").exists());
+        assert_eq!(directory.read("sentinel", 8)?.as_slice(), b"original");
+        Ok(())
     }
 
     #[test]

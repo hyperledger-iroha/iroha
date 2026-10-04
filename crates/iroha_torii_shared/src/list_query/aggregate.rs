@@ -40,6 +40,13 @@ impl json::JsonSerialize for AggregateFn {
     fn json_serialize(&self, out: &mut String) {
         json::write_json_string(self.as_str(), out);
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        self.as_str().json_serialize_to(out)
+    }
 }
 
 impl json::JsonDeserialize for AggregateFn {

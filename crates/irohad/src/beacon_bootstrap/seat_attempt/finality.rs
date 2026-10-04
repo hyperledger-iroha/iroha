@@ -101,7 +101,7 @@ impl FinalityInput {
         }
         while self.height < target {
             self.input.read_until_complete()?;
-            let frame = self.input.frame().ok_or(AttemptError::Phase)?;
+            let frame = self.input.charged_frame().ok_or(AttemptError::Phase)?;
             self.journal.decode(frame)?;
             let journal = self.journal.view(frame)?;
             let height = u64::try_from(journal.len()).map_err(|_| AttemptError::Height)?;
@@ -140,17 +140,22 @@ impl FinalityInput {
     /// TODO: decoded nested native block/result graphs still need retained funding.
     pub(super) fn restore_target_from_original_frame(
         &mut self,
-        frame: &[u8],
+        frame: &ChargedBuffer<u8>,
         target: u64,
         cutoff: u64,
     ) -> std::result::Result<(), AttemptError> {
         self.input.require_empty_cursor()?;
+        if !cfg!(all(test, sumeragi_daemon_mutation = "HC119"))
+            && !frame.belongs_to(self.clock.allocation_budget())
+        {
+            return Err(AttemptError::Binding);
+        }
         if self.committed {
             return Err(AttemptError::Phase);
         }
         if let Some(original) = &self.restored_source {
             if original.target == target {
-                if !original.matches(frame, target) {
+                if !original.matches(frame.as_slice(), target) {
                     return Err(AttemptError::Binding);
                 }
                 if self.height == target {
@@ -176,7 +181,7 @@ impl FinalityInput {
             .as_ref()
             .is_none_or(|old| old.target != target)
         {
-            self.restored_source = Some(RestoredProofSource::of(frame, target));
+            self.restored_source = Some(RestoredProofSource::of(frame.as_slice(), target));
         }
         self.journal.decode(frame)?;
         let journal = self.journal.view(frame)?;

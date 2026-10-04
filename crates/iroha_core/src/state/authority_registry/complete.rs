@@ -47,6 +47,7 @@ pub(in crate::state) mod frozen_account_aliases;
 #[path = "complete/frozen_contract_subjects.rs"]
 pub(in crate::state) mod frozen_contract_subjects;
 
+mod frozen_account_rekeys;
 #[path = "complete/frozen_escrows.rs"]
 pub(in crate::state) mod frozen_escrows;
 #[path = "complete/frozen_nfts_rwas.rs"]

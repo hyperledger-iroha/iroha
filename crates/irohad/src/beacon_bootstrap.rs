@@ -894,7 +894,7 @@ fn advance_phase_journal(
     if verifier.tip().map(|tip| tip.height()).unwrap_or(1) != *last_height {
         return Err(Error::Height);
     }
-    let verified = verifier.advance(journal)?;
+    let verified = verifier.advance(journal.into())?;
     // The sole verifier checks actual height, source order and the prior receipt.
     debug_assert_eq!(verified.height(), height);
     *last_height = verified.height();
@@ -913,7 +913,7 @@ fn rotation_phase_verifier(
         proof.finality_limits.checked()?,
         budget,
     )?;
-    verifier.advance(&evidence.finality_journal)?;
+    verifier.advance((&evidence.finality_journal).into())?;
     Ok(verifier)
 }
 

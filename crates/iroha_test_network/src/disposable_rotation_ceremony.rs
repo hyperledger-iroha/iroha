@@ -116,14 +116,14 @@ pub struct DisposableRotationSeatOutput {
     pub pending_share_path: PathBuf,
     /// Non-secret public provider identity and qualification digest.
     pub provider_path: PathBuf,
-    genesis_config_source: bool,
     _owner_root: Arc<TempDir>,
 }
 
 /// One signed-genesis voter and its owner-private native validator config.
 ///
-/// The native seat child consumes a separate pinned copy through FD198. Its
-/// private BLS key is never placed in a command argument or environment value.
+/// The native config reader resolves this direct generated root at its original
+/// origin. The seat child consumes a separate canonical BLS key record through
+/// FD198; its private key never appears in command arguments or environment values.
 #[derive(Clone, Debug)]
 pub struct DisposableGenesisConfigSeat {
     /// Exact voter in the signed genesis roster.
@@ -176,7 +176,6 @@ struct SeatProcess {
     finality_writer: fs::File,
     attempt_path: PathBuf,
     owner_root: Arc<TempDir>,
-    genesis_config_source: bool,
 }
 
 fn attempt_child_name(session: &GlobalThresholdBeaconDkgSessionV1, signer_index: u16) -> String {
@@ -274,7 +273,7 @@ fn verify_input(
         "rotation DKG misses the preparation cutoff"
     );
     verifier
-        .advance(&evidence.finality_journal)
+        .advance((&evidence.finality_journal).into())
         .map_err(|error| eyre!(error))?;
     Ok((
         GlobalThresholdBeaconDkgSessionV1 {
@@ -393,7 +392,7 @@ fn advance_native_phase(
     );
     ensure!(
         cursor
-            .advance(journal)
+            .advance(journal.into())
             .map_err(|error| eyre!(error))?
             .height()
             == height,
@@ -749,7 +748,6 @@ fn spawn_seat(
             .path()
             .join(attempt_child_name(session, signer_index)),
         owner_root,
-        genesis_config_source: false,
     })
 }
 
@@ -942,7 +940,6 @@ fn spawn_genesis_seat(
             .path()
             .join(attempt_child_name(session, signer_index)),
         owner_root,
-        genesis_config_source: false,
     })
 }
 
@@ -1030,6 +1027,131 @@ fn retire_one_shot_genesis_descriptor(path: &Path) -> Result<bool> {
     Ok(consumed)
 }
 
+/// Erase every string in the native configuration projection before it is dropped.
+fn scrub_genesis_config_table(table: &mut toml::Table) {
+    use zeroize::Zeroize as _;
+
+    fn scrub(value: &mut toml::Value) {
+        match value {
+            toml::Value::String(value) => value.zeroize(),
+            toml::Value::Array(values) => values.iter_mut().for_each(scrub),
+            toml::Value::Table(table) => scrub_genesis_config_table(table),
+            _ => {}
+        }
+    }
+    table.iter_mut().for_each(|(_, value)| scrub(value));
+}
+
+/// Read the selected generated root at its original origin and bind its BLS key
+/// to the independently authenticated genesis voter and chain context.
+fn read_owner_private_genesis_config_key(
+    seat: &DisposableGenesisConfigSeat,
+    network: NetworkId,
+    chain_discriminant: u16,
+    chain_id: &ChainId,
+) -> Result<KeyPair> {
+    let path = &seat.config_path;
+    ensure!(
+        path.is_absolute()
+            && path.components().all(|component| matches!(
+                component,
+                std::path::Component::RootDir | std::path::Component::Normal(_)
+            )),
+        "genesis config seat path is not a canonical absolute path"
+    );
+    let uid = nix::unistd::Uid::effective().as_raw();
+    let parent = path
+        .parent()
+        .ok_or_else(|| eyre!("genesis config seat has no parent"))?;
+    for (index, ancestor) in parent.ancestors().enumerate() {
+        let metadata = fs::symlink_metadata(ancestor)?;
+        ensure!(
+            metadata.is_dir()
+                && !metadata.file_type().is_symlink()
+                && metadata.mode() & 0o022 == 0
+                && (metadata.uid() == uid || (index != 0 && metadata.uid() == 0)),
+            "genesis config seat has an untrusted directory ancestor"
+        );
+    }
+    let before = fs::symlink_metadata(path)?;
+    ensure!(
+        before.is_file()
+            && !before.file_type().is_symlink()
+            && before.uid() == nix::unistd::Uid::effective().as_raw()
+            && before.mode() & 0o7777 == 0o600
+            && before.nlink() == 1
+            && (1..=1024 * 1024).contains(&before.len()),
+        "genesis config seat is not a direct owner-private root file"
+    );
+    let identity = |m: &fs::Metadata| {
+        (
+            m.dev(),
+            m.ino(),
+            m.uid(),
+            m.gid(),
+            m.nlink(),
+            m.mode(),
+            m.len(),
+            m.mtime(),
+            m.mtime_nsec(),
+            m.ctime(),
+            m.ctime_nsec(),
+        )
+    };
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NOFOLLOW)
+        .open(path)?;
+    ensure!(
+        identity(&before) == identity(&file.metadata()?),
+        "genesis config seat changed before its pinned read"
+    );
+    let mut bytes = zeroize::Zeroizing::new(Vec::new());
+    std::io::Read::by_ref(&mut file)
+        .take(1024 * 1024 + 1)
+        .read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() as u64 == before.len()
+            && identity(&before) == identity(&file.metadata()?)
+            && identity(&before) == identity(&fs::symlink_metadata(path)?),
+        "genesis config seat changed during its pinned read"
+    );
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|_| eyre!("selected genesis config seat is not UTF-8"))?;
+    let table = toml::from_str(text)
+        .map_err(|_| eyre!("cannot decode selected genesis config seat TOML"))?;
+    let mut source = TomlSource::new_sensitive(path.clone(), table, scrub_genesis_config_table);
+    ensure!(
+        !source.table_mut().contains_key("extends"),
+        "genesis config seat must select a direct generated root without extends"
+    );
+    let _guard =
+        iroha_data_model::account::address::ChainDiscriminantGuard::enter(chain_discriminant);
+    let native: iroha_config::parameters::actual::Root = ConfigReader::new()
+        .without_env()
+        .with_toml_source(source)
+        .read_and_complete::<iroha_config::parameters::user::Root>()
+        .map_err(|_| eyre!("cannot read selected native genesis config seat"))?
+        .parse()
+        .map_err(|_| eyre!("cannot validate selected native genesis config seat"))?;
+    ensure!(
+        identity(&before) == identity(&file.metadata()?)
+            && identity(&before) == identity(&fs::symlink_metadata(path)?),
+        "genesis config seat changed during native validation"
+    );
+    ensure!(
+        native.common.chain == *chain_id
+            && *native.common.chain_discriminant.value() == chain_discriminant
+            && native.genesis.expected_hash == network.into_genesis_hash()
+            && native.common.peer.id() == &seat.validator
+            && native.common.key_pair.public_key().algorithm() == Algorithm::BlsNormal
+            && native.common.key_pair.public_key() == seat.validator.public_key()
+            && matches!(native.kura.init_mode, iroha_config::kura::InitMode::Strict),
+        "genesis config seat differs from its independent native anchors"
+    );
+    Ok(native.common.key_pair)
+}
+
 fn spawn_genesis_config_seat(
     binary: &Path,
     seat: &DisposableGenesisConfigSeat,
@@ -1042,15 +1164,18 @@ fn spawn_genesis_config_seat(
 ) -> Result<SeatProcess> {
     let owner_root =
         super::disposable_runtime_provider_broker::new_disposable_owner_private_root()?;
-    let retained_config = copy_owner_private_genesis_signer_input(
-        &seat.config_path,
-        &owner_root.path().join("identity.private"),
+    let key = read_owner_private_genesis_config_key(
+        seat,
+        session.network_id,
+        chain_discriminant,
+        chain_id,
     )?;
-    let provision_config = copy_owner_private_genesis_signer_input(
+    let retained_key = write_owner_private_key(&owner_root.path().join("identity.private"), &key)?;
+    let provision_key = copy_owner_private_genesis_signer_input(
         &owner_root.path().join("identity.private"),
         &owner_root.path().join("provision.fd198"),
     )?;
-    drop(retained_config);
+    drop(retained_key);
     let public_path = owner_root.path().join("public.fifo");
     let finality_path = owner_root.path().join("finality.fifo");
     nix::unistd::mkfifo(
@@ -1098,7 +1223,7 @@ fn spawn_genesis_config_seat(
         .args(finality_limit_args(limits))
         .arg("--signer-index")
         .arg(signer_index.to_string())
-        .arg("--config-fd")
+        .arg("--key-fd")
         .arg(KEY_FD.to_string())
         .arg("--public-fd")
         .arg(PUBLIC_FD.to_string())
@@ -1116,7 +1241,7 @@ fn spawn_genesis_config_seat(
         .kill_on_drop(true);
     inherit_rotation_descriptors(
         &mut command,
-        provision_config.as_raw_fd(),
+        provision_key.as_raw_fd(),
         public_fifo.as_raw_fd(),
         finality_fifo.as_raw_fd(),
     );
@@ -1124,7 +1249,7 @@ fn spawn_genesis_config_seat(
         let _ = retire_one_shot_genesis_descriptor(&owner_root.path().join("provision.fd198"));
         error
     })?;
-    drop(provision_config);
+    drop(provision_key);
     drop(public_fifo);
     drop(finality_fifo);
     Ok(SeatProcess {
@@ -1137,7 +1262,6 @@ fn spawn_genesis_config_seat(
             .path()
             .join(attempt_child_name(session, signer_index)),
         owner_root,
-        genesis_config_source: true,
     })
 }
 
@@ -1223,11 +1347,7 @@ async fn sign_genesis_draft(
         .arg(public_bundle)
         .arg("--signer-index")
         .arg((seat.signer_index - 1).to_string())
-        .arg(if seat.genesis_config_source {
-            "--config-fd"
-        } else {
-            "--key-fd"
-        })
+        .arg("--key-fd")
         .arg(KEY_FD.to_string())
         .arg("--output")
         .arg(output)
@@ -1759,7 +1879,6 @@ where
             credential_path: process.attempt_path.join(GLOBAL_BEACON_CREDENTIAL_FILE),
             pending_share_path: process.attempt_path.join("pending-share.bin"),
             provider_path: process.attempt_path.join("provider.json"),
-            genesis_config_source: process.genesis_config_source,
             _owner_root: process.owner_root,
         });
     }
@@ -1990,7 +2109,6 @@ where
             credential_path: process.attempt_path.join(GLOBAL_BEACON_CREDENTIAL_FILE),
             pending_share_path: process.attempt_path.join("pending-share.bin"),
             provider_path: process.attempt_path.join("provider.json"),
-            genesis_config_source: process.genesis_config_source,
             _owner_root: process.owner_root,
         });
     }
@@ -2374,6 +2492,357 @@ mod tests {
                 .to_string()
                 .contains("rotation transport deadline elapsed")
         );
+    }
+
+    /// Own generated root using the same file-based checked identity as bare Kagami output.
+    fn genesis_config_key_fixture(
+        root: &Path,
+        algorithm: Algorithm,
+    ) -> (DisposableGenesisConfigSeat, KeyPair, NetworkId, ChainId) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let key = KeyPair::try_from_seed(vec![0x31; 32], algorithm).unwrap();
+        let transport = KeyPair::try_from_seed(vec![0x32; 32], Algorithm::Ed25519).unwrap();
+        let streaming = KeyPair::try_from_seed(vec![0x33; 32], Algorithm::Ed25519).unwrap();
+        let genesis = KeyPair::try_from_seed(vec![0x34; 32], Algorithm::Ed25519).unwrap();
+        let network = NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+            CryptoHash::new(b"owned ordinary genesis config seat"),
+        ));
+        let chain = ChainId::from("00000000-0000-0000-0000-000000000000");
+        // Bare Kagami explicitly renders every account-bearing default for
+        // the generated chain. Native defaults deliberately remain Sora753
+        // literals, even inside an ambient chain-discriminant guard.
+        let literal = |account: iroha_data_model::account::AccountId| {
+            account.to_i105_for_discriminant(369).unwrap()
+        };
+        let governance =
+            iroha_config::parameters::defaults::governance::slash_receiver_account_id();
+        let identity_path = root.join("network.id");
+        fs::write(&identity_path, format!("{network}\n")).unwrap();
+        fs::set_permissions(&identity_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let table = Table::new()
+            .write("chain", chain.to_string())
+            .write("chain_discriminant", 369_i64)
+            .write("public_key", key.public_key().to_string())
+            .write(
+                "private_key",
+                ExposedPrivateKey(key.private_key().clone()).to_string(),
+            )
+            .write(
+                "soranet_transport_public_key",
+                transport.public_key().to_string(),
+            )
+            .write(
+                "soranet_transport_private_key",
+                ExposedPrivateKey(transport.private_key().clone()).to_string(),
+            )
+            .write(
+                ["streaming", "identity_public_key"],
+                streaming.public_key().to_string(),
+            )
+            .write(
+                ["streaming", "identity_private_key"],
+                ExposedPrivateKey(streaming.private_key().clone()).to_string(),
+            )
+            .write(["network", "address"], "addr:127.0.0.1:1337#8F78")
+            .write(["network", "public_address"], "addr:127.0.0.1:1337#8F78")
+            .write(
+                ["network", "soranet_vpn", "operator_account_id"],
+                literal(iroha_data_model::account::AccountId::new(
+                    transport.public_key().clone(),
+                )),
+            )
+            .write(
+                ["gov", "citizenship_escrow_account"],
+                literal(iroha_config::parameters::defaults::governance::citizenship_escrow_account_id()),
+            )
+            .write(
+                ["gov", "bond_escrow_account"],
+                literal(iroha_config::parameters::defaults::governance::bond_escrow_account_id()),
+            )
+            .write(["gov", "slash_receiver_account"], literal(governance.clone()))
+            .write(["gov", "viral_incentive_pool_account"], literal(governance.clone()))
+            .write(["gov", "viral_escrow_account"], literal(governance.clone()))
+            .write(
+                ["gov", "sorafs_pin_fee_treasury_account"],
+                literal(iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account_id()),
+            )
+            .write(
+                ["nexus", "fees", "sponsor_vault_custody_account_id"],
+                literal(iroha_config::parameters::defaults::nexus::fees::sponsor_vault_custody_account_id()),
+            )
+            .write(["torii", "address"], "addr:127.0.0.1:8080#8942")
+            .write(["genesis", "public_key"], genesis.public_key().to_string())
+            .write(["genesis", "expected_hash_file"], "network.id");
+        let config_path = root.join("validator.toml");
+        fs::write(&config_path, toml::to_string(&table).unwrap()).unwrap();
+        fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600)).unwrap();
+        (
+            DisposableGenesisConfigSeat {
+                validator: PeerId::new(key.public_key().clone()),
+                config_path,
+            },
+            key,
+            network,
+            chain,
+        )
+    }
+
+    #[test]
+    fn native_genesis_config_key_preserves_original_and_consumes_canonical_copy() {
+        let root =
+            super::super::disposable_runtime_provider_broker::new_disposable_owner_private_root()
+                .unwrap();
+        let (seat, key, network, chain) =
+            genesis_config_key_fixture(root.path(), Algorithm::BlsNormal);
+        let original = fs::read(&seat.config_path).unwrap();
+        let before = fs::metadata(&seat.config_path).unwrap();
+        let loaded = read_owner_private_genesis_config_key(&seat, network, 369, &chain).unwrap();
+        assert_eq!(loaded.public_key(), key.public_key());
+        let retained_path = root.path().join("identity.private");
+        let retained = write_owner_private_key(&retained_path, &loaded).unwrap();
+        assert_eq!(retained.metadata().unwrap().len(), 71);
+        assert_eq!(retained.metadata().unwrap().mode() & 0o7777, 0o600);
+        drop(retained);
+        let one_shot_path = root.path().join("provision.fd198");
+        let mut one_shot =
+            copy_owner_private_genesis_signer_input(&retained_path, &one_shot_path).unwrap();
+        let mut observed = zeroize::Zeroizing::new(Vec::new());
+        one_shot.read_to_end(&mut observed).unwrap();
+        assert_eq!(observed.len(), 71);
+        assert_eq!(
+            observed.as_slice(),
+            format!("{}\n", ExposedPrivateKey(key.private_key().clone())).as_bytes()
+        );
+        one_shot.rewind().unwrap();
+        one_shot.write_all(&[0; 71]).unwrap();
+        one_shot.sync_data().unwrap();
+        one_shot.set_len(0).unwrap();
+        one_shot.sync_data().unwrap();
+        assert!(retire_one_shot_genesis_descriptor(&one_shot_path).unwrap());
+        assert!(!one_shot_path.exists());
+        assert_eq!(fs::metadata(&retained_path).unwrap().len(), 71);
+        let after = fs::metadata(&seat.config_path).unwrap();
+        assert_eq!(
+            (
+                before.dev(),
+                before.ino(),
+                before.uid(),
+                before.gid(),
+                before.mode(),
+                before.nlink(),
+                before.len(),
+                before.mtime(),
+                before.mtime_nsec(),
+                before.ctime(),
+                before.ctime_nsec()
+            ),
+            (
+                after.dev(),
+                after.ino(),
+                after.uid(),
+                after.gid(),
+                after.mode(),
+                after.nlink(),
+                after.len(),
+                after.mtime(),
+                after.mtime_nsec(),
+                after.ctime(),
+                after.ctime_nsec()
+            ),
+        );
+        assert_eq!(fs::read(&seat.config_path).unwrap(), original);
+    }
+
+    #[test]
+    fn native_genesis_config_key_rejects_each_independent_anchor_mismatch() {
+        let root =
+            super::super::disposable_runtime_provider_broker::new_disposable_owner_private_root()
+                .unwrap();
+        let (seat, _, network, chain) =
+            genesis_config_key_fixture(root.path(), Algorithm::BlsNormal);
+        let other_chain = ChainId::from("00000000-0000-0000-0000-000000000001");
+        let other_network =
+            NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                CryptoHash::new(b"another independently selected network"),
+            ));
+        let original = fs::read(&seat.config_path).unwrap();
+        assert!(read_owner_private_genesis_config_key(&seat, network, 369, &other_chain).is_err());
+        assert!(read_owner_private_genesis_config_key(&seat, network, 370, &chain).is_err());
+        assert!(read_owner_private_genesis_config_key(&seat, other_network, 369, &chain).is_err());
+        let mut other_seat = seat.clone();
+        other_seat.validator = PeerId::new(
+            KeyPair::try_from_seed(vec![0x41; 32], Algorithm::BlsNormal)
+                .unwrap()
+                .public_key()
+                .clone(),
+        );
+        assert!(read_owner_private_genesis_config_key(&other_seat, network, 369, &chain).is_err());
+        assert_eq!(fs::read(&seat.config_path).unwrap(), original);
+    }
+
+    #[test]
+    fn native_genesis_config_key_rejects_untrusted_custody_and_indirect_root() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root =
+            super::super::disposable_runtime_provider_broker::new_disposable_owner_private_root()
+                .unwrap();
+        let (seat, _, network, chain) =
+            genesis_config_key_fixture(root.path(), Algorithm::BlsNormal);
+        let original = fs::read(&seat.config_path).unwrap();
+        fs::set_permissions(&seat.config_path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(read_owner_private_genesis_config_key(&seat, network, 369, &chain).is_err());
+        fs::set_permissions(&seat.config_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let alias = root.path().join("alias.toml");
+        std::os::unix::fs::symlink(&seat.config_path, &alias).unwrap();
+        let mut indirect = seat.clone();
+        indirect.config_path = alias;
+        assert!(read_owner_private_genesis_config_key(&indirect, network, 369, &chain).is_err());
+        let linked = root.path().join("hardlink.toml");
+        fs::hard_link(&seat.config_path, &linked).unwrap();
+        assert!(read_owner_private_genesis_config_key(&seat, network, 369, &chain).is_err());
+        fs::remove_file(linked).unwrap();
+        fs::write(&seat.config_path, b"").unwrap();
+        assert!(read_owner_private_genesis_config_key(&seat, network, 369, &chain).is_err());
+        fs::write(&seat.config_path, vec![b'x'; 1024 * 1024 + 1]).unwrap();
+        assert!(read_owner_private_genesis_config_key(&seat, network, 369, &chain).is_err());
+        let mut extended = b"extends = ['other.toml']\n".to_vec();
+        extended.extend_from_slice(&original);
+        fs::write(&seat.config_path, &extended).unwrap();
+        assert!(read_owner_private_genesis_config_key(&seat, network, 369, &chain).is_err());
+        fs::write(&seat.config_path, &original).unwrap();
+        indirect.config_path = PathBuf::from("validator.toml");
+        assert!(read_owner_private_genesis_config_key(&indirect, network, 369, &chain).is_err());
+        let ancestor_link = root.path().join("linked-root");
+        std::os::unix::fs::symlink(root.path(), &ancestor_link).unwrap();
+        indirect.config_path = ancestor_link.join("validator.toml");
+        assert!(read_owner_private_genesis_config_key(&indirect, network, 369, &chain).is_err());
+        indirect.config_path = root
+            .path()
+            .join("..")
+            .join(root.path().file_name().unwrap())
+            .join("validator.toml");
+        assert!(read_owner_private_genesis_config_key(&indirect, network, 369, &chain).is_err());
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o770)).unwrap();
+        assert!(read_owner_private_genesis_config_key(&seat, network, 369, &chain).is_err());
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[test]
+    fn native_genesis_config_key_rejects_non_bls_and_invalid_native_identity_file() {
+        let root =
+            super::super::disposable_runtime_provider_broker::new_disposable_owner_private_root()
+                .unwrap();
+        let (seat, _, network, chain) = genesis_config_key_fixture(root.path(), Algorithm::Ed25519);
+        assert!(read_owner_private_genesis_config_key(&seat, network, 369, &chain).is_err());
+        let (seat, _, network, chain) =
+            genesis_config_key_fixture(root.path(), Algorithm::BlsNormal);
+        fs::write(
+            root.path().join("network.id"),
+            b"not a checked native identity\n",
+        )
+        .unwrap();
+        assert!(read_owner_private_genesis_config_key(&seat, network, 369, &chain).is_err());
+    }
+
+    #[test]
+    fn native_genesis_config_scrubber_erases_nested_private_values() {
+        let mut table: toml::Table = toml::from_str(
+            "private_key = 'secret'\nvalues = ['secret', 4]\n[nested]\nprivate_key = 'secret'\n",
+        )
+        .unwrap();
+        scrub_genesis_config_table(&mut table);
+        assert_eq!(table["private_key"].as_str(), Some(""));
+        assert_eq!(table["values"].as_array().unwrap()[0].as_str(), Some(""));
+        assert_eq!(table["values"].as_array().unwrap()[1].as_integer(), Some(4));
+        assert_eq!(table["nested"]["private_key"].as_str(), Some(""));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn native_genesis_config_seat_hands_only_key_record_to_owned_child() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root =
+            super::super::disposable_runtime_provider_broker::new_disposable_owner_private_root()
+                .unwrap();
+        let (seat, _, network, chain) =
+            genesis_config_key_fixture(root.path(), Algorithm::BlsNormal);
+        let script = root.path().join("observe-key-handoff.sh");
+        let memory_bound = iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get();
+        let script_body = format!(
+            r#"#!/bin/sh
+set -eu
+key=0
+memory=0
+previous=''
+for argument do
+  test "$argument" != '--config-fd'
+  if test "$previous" = '--key-fd'; then test "$argument" = '198'; key=1; fi
+  if test "$previous" = '--credential-max-memory-bytes'; then test "$argument" = '{memory_bound}'; memory=1; fi
+  previous=$argument
+done
+test "$key" = 1
+test "$memory" = 1
+test "$(/usr/bin/wc -c < /dev/fd/198)" -eq 71
+: > ./provision.fd198
+"#,
+        );
+        fs::write(&script, script_body.as_bytes()).unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+        let roster = (1_u8..=4)
+            .map(|index| {
+                if index == 1 {
+                    seat.validator.clone()
+                } else {
+                    PeerId::new(
+                        KeyPair::try_from_seed(vec![index; 32], Algorithm::BlsNormal)
+                            .unwrap()
+                            .public_key()
+                            .clone(),
+                    )
+                }
+            })
+            .collect::<Vec<_>>();
+        let session = genesis_dkg_session(network, &roster);
+        let public_paths =
+            ["request", "manifest", "signed", "public-key"].map(|name| root.path().join(name));
+        let limits = NativeFinalityLimits {
+            block_bytes: 1024,
+            journal_bytes: 4096,
+            block_count: 8,
+            allocated_bytes: 8192,
+        };
+        let original = fs::read(&seat.config_path).unwrap();
+        let mut process = spawn_genesis_config_seat(
+            &script,
+            &seat,
+            1,
+            &session,
+            &public_paths,
+            369,
+            &chain,
+            limits,
+        )
+        .unwrap();
+        assert!(
+            timeout(Duration::from_secs(5), process.child.wait())
+                .await
+                .unwrap()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            retire_one_shot_genesis_descriptor(&process.owner_root.path().join("provision.fd198"))
+                .unwrap()
+        );
+        assert_eq!(
+            fs::metadata(process.owner_root.path().join("identity.private"))
+                .unwrap()
+                .len(),
+            71
+        );
+        assert_eq!(fs::read(&seat.config_path).unwrap(), original);
     }
 
     #[test]

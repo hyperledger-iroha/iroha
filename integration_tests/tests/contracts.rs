@@ -2545,7 +2545,7 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
                     .collect::<Vec<_>>();
                 let asset_definition_ids = client
                     .client()
-                    .query(FindAssetsDefinitions::new())
+                    .query(FindAssetDefinitions::new())
                     .execute_all()?
                     .into_iter()
                     .map(|definition| definition.id().clone())

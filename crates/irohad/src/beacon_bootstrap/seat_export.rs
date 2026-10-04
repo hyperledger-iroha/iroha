@@ -91,6 +91,16 @@ impl FileProgress {
     pub(super) fn is_synced(&self) -> bool {
         self.synced
     }
+    /// Observe the original held file's inode without exposing or reopening its descriptor.
+    #[cfg(test)]
+    pub(super) fn retained_inode(&self) -> std::result::Result<u64, ExportError> {
+        self.descriptor
+            .as_ref()
+            .ok_or(ExportError::Phase)?
+            .metadata()
+            .map(|metadata| metadata.ino())
+            .map_err(ExportError::Io)
+    }
 }
 struct Outputs {
     credential: PreparedGlobalBeaconCredentialV1,

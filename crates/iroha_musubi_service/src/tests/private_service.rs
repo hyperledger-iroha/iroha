@@ -1,5 +1,23 @@
 // Private HTTP service test body included from the parent module.
 #[test]
+fn backend_errors_are_closed_standard_errors_without_diagnostic_sources() {
+    for (error, expected) in [
+        (
+            MusubiPublicationServiceBackendErrorV1::Retryable,
+            "Musubi publication backend is temporarily unavailable",
+        ),
+        (
+            MusubiPublicationServiceBackendErrorV1::Permanent,
+            "Musubi publication backend requires configuration or state changes",
+        ),
+    ] {
+        let standard: &(dyn std::error::Error + Send + Sync) = &error;
+        assert_eq!(standard.to_string(), expected);
+        assert!(standard.source().is_none());
+    }
+}
+
+#[test]
 fn authorization_is_domain_bound_and_verifiable() {
     let (client, _) = client();
     let runtime = AuthenticatedMusubiPublicationRuntimeClientV1::from_iroha_client(

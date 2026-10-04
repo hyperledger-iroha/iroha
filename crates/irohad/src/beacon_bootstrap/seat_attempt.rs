@@ -218,6 +218,7 @@ impl AttemptError {
             }
             Self::JournalSource(
                 PreparedNativeFinalityError::Invalid(_)
+                | PreparedNativeFinalityError::ForeignPool
                 | PreparedNativeFinalityError::SourceChanged
                 | PreparedNativeFinalityError::NotDecoded,
             ) => true,
@@ -259,6 +260,7 @@ impl AttemptError {
             ) => true,
             Self::Journal(
                 NativeJournalError::Invalid(_)
+                | NativeJournalError::SourcePool
                 | NativeJournalError::Decode(
                     NativeFinalityDecodeError::Invalid(_) | NativeFinalityDecodeError::Malformed(_),
                 ),
@@ -973,7 +975,7 @@ impl SeatDkgAttempt {
             .map_err(|_| AttemptError::Binding)?;
         if self.aggregate_accepted_context.is_none() {
             self.finality.restore_target_from_original_frame(
-                self.aggregate_durable.source(6)?,
+                self.aggregate_durable.charged_source(6)?,
                 self.session.deliveries_end_height,
                 self.cutoff,
             )?;
@@ -1001,7 +1003,7 @@ impl SeatDkgAttempt {
             return Err(AttemptError::Binding);
         }
         self.finality.restore_target_from_original_frame(
-            self.aggregate_durable.source(2)?,
+            self.aggregate_durable.charged_source(2)?,
             self.session.acceptances_end_height,
             self.cutoff,
         )?;
@@ -1234,7 +1236,7 @@ impl SeatDkgAttempt {
         let index = usize::from(phase - 2);
         let (_, _, input, proof) = self.durable.later_sources(phase)?;
         self.source_publications[index].restore_complete(directory, input)?;
-        self.source_publications[index + 3].restore_complete(directory, proof)?;
+        self.source_publications[index + 3].restore_complete(directory, proof.as_slice())?;
         self.publications[usize::from(phase)].restore_complete(
             directory,
             self.local

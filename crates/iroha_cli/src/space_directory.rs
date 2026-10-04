@@ -311,31 +311,18 @@ impl Run for ManifestExpireArgs {
 pub struct ManifestFetchArgs {
     /// UAID literal whose manifests should be fetched.
     #[arg(long, value_name = "UAID")]
-    pub uaid: String,
-    /// Optional dataspace id filter.
-    #[arg(long, value_name = "ID")]
-    pub dataspace: Option<u64>,
-    /// Manifest lifecycle status filter (active, inactive, all).
-    #[arg(long, value_enum, default_value_t = ManifestStatusArg::All)]
-    pub status: ManifestStatusArg,
-    /// Maximum number of manifests to return.
-    #[arg(long, value_name = "N")]
-    pub limit: Option<u64>,
-    /// Offset for pagination.
-    #[arg(long, value_name = "N")]
-    pub offset: Option<u64>,
-    /// Optional path where the JSON response will be stored.
-    #[arg(long = "json-out", value_name = "PATH")]
-    pub json_out: Option<PathBuf>,
+    pub uaid: UniversalAccountId,
+    /// Shared collection filter, sort, projection and cursor pagination controls.
+    #[command(flatten)]
+    pub list: crate::collection_list::ListArgs,
 }
 impl Run for ManifestFetchArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = SpaceDirectoryRestClient::new(context.config())?;
-        let payload = client.fetch_manifests(&self)?;
-        if let Some(path) = &self.json_out {
-            write_json_response(path, &payload)?;
-        }
-        context.print_data(&payload)
+        crate::collection_list::run_list(
+            context,
+            iroha::collections::Collection::UaidManifests(self.uaid),
+            &self.list,
+        )
     }
 }
 #[derive(clap::Args, Debug)]
@@ -858,22 +845,6 @@ impl Run for BindingsFetchArgs {
         context.print_data(&payload)
     }
 }
-#[derive(Default, clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ManifestStatusArg {
-    Active,
-    Inactive,
-    #[default]
-    All,
-}
-impl ManifestStatusArg {
-    fn as_query_value(self) -> &'static str {
-        match self {
-            Self::Active => "active",
-            Self::Inactive => "inactive",
-            Self::All => "all",
-        }
-    }
-}
 impl Run for ManifestAuditBundleArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let manifest =
@@ -984,34 +955,6 @@ impl SpaceDirectoryRestClient {
             base_url: config.torii_api_url.clone(),
             basic_auth,
         })
-    }
-    fn fetch_manifests(&self, args: &ManifestFetchArgs) -> Result<JsonValue> {
-        let mut url = build_space_directory_url(
-            &self.base_url,
-            &[
-                "v1",
-                "space-directory",
-                "uaids",
-                args.uaid.as_str(),
-                "manifests",
-            ],
-        )?;
-        {
-            let mut pairs = url.query_pairs_mut();
-            if let Some(dataspace) = args.dataspace {
-                pairs.append_pair("dataspace", &dataspace.to_string());
-            }
-            if args.status != ManifestStatusArg::All {
-                pairs.append_pair("status", args.status.as_query_value());
-            }
-            if let Some(limit) = args.limit {
-                pairs.append_pair("limit", &limit.to_string());
-            }
-            if let Some(offset) = args.offset {
-                pairs.append_pair("offset", &offset.to_string());
-            }
-        }
-        self.get_json(&url)
     }
     fn fetch_bindings(&self, args: &BindingsFetchArgs) -> Result<JsonValue> {
         let url = build_space_directory_url(
@@ -1696,10 +1639,40 @@ mod tests {
         );
     }
     #[test]
-    fn manifest_status_arg_serializes_expected_labels() {
-        assert_eq!(ManifestStatusArg::Active.as_query_value(), "active");
-        assert_eq!(ManifestStatusArg::Inactive.as_query_value(), "inactive");
-        assert_eq!(ManifestStatusArg::All.as_query_value(), "all");
+    fn manifest_fetch_uses_shared_collection_query_flags() {
+        #[derive(clap::Parser)]
+        struct Args {
+            #[command(flatten)]
+            fetch: ManifestFetchArgs,
+        }
+        let uaid = UniversalAccountId::from_hash(CryptoHash::new(b"manifest-list"));
+        let args = <Args as clap::Parser>::try_parse_from([
+            "fetch",
+            "--uaid",
+            &uaid.to_string(),
+            "--filter",
+            "dataspace_id = 11",
+            "--cursor",
+            "manifest-page",
+            "--include-total",
+        ])
+        .unwrap();
+        let query = args.fetch.list.to_query().unwrap();
+        assert_eq!(args.fetch.uaid, uaid);
+        assert_eq!(query.cursor.as_deref(), Some("manifest-page"));
+        assert!(query.include_total);
+        for retired in ["--dataspace", "--offset", "--status", "--count-mode"] {
+            assert!(
+                <Args as clap::Parser>::try_parse_from([
+                    "fetch",
+                    "--uaid",
+                    &uaid.to_string(),
+                    retired,
+                    "1",
+                ])
+                .is_err()
+            );
+        }
     }
     #[test]
     fn manifest_reason_rejects_aggregate_expansion_before_mutation() {

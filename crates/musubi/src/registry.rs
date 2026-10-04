@@ -468,7 +468,6 @@ torii_url = "{torii_url}"
 torii_request_timeout_ms = {timeout_ms}
 
 [account]
-domain = "packages.universal"
 chain_discriminant = {account_chain_discriminant}
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
 private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
@@ -2528,7 +2527,6 @@ torii_url = "{url}"
 torii_request_timeout_ms = 2000
 
 [account]
-domain = "packages.universal"
 profile = "taira"
 public_key = "{}"
 private_key = "{}"
@@ -2920,8 +2918,10 @@ private_key = "{}"
     #[test]
     fn public_address_projection_enforces_the_canonical_profile_rules() {
         for (source, expected) in [
-            ("[account]\n", Some(753)),
+            ("[account]\n", None),
+            ("[account]\nprofile = ''\n", None),
             ("[account]\nprofile = 'taira'\n", Some(369)),
+            ("[account]\nprofile = 'minamoto'\n", Some(753)),
             ("[account]\nchain_discriminant = 753\n", Some(753)),
             (
                 "[account]\nprofile = 'taira'\nchain_discriminant = 369\n",
@@ -3159,7 +3159,6 @@ private_key = "{}"
                     network_id = "{network_id}"
                     torii_url = "https://registry.example/iroha/"
                     [account]
-                    domain = "dex.universal"
                     profile = "taira"
                     public_key = "{}"
                     private_key = "{}"
@@ -3208,7 +3207,6 @@ private_key = "{}"
                     network_id = "{network_id}"
                     torii_url = "{url}"
                     [account]
-                    domain = "dex.universal"
                     profile = "taira"
                     public_key = "{}"
                     private_key = "{}"

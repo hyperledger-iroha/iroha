@@ -51,10 +51,6 @@ create_every_ms = 60000
 
 [policy.torii]
 preauth_allow_cidrs = ["127.0.0.0/8", "::1/128"]
-preauth_rate_per_ip_per_sec = 1000000
-preauth_burst_per_ip = 2000000
-tx_rate_per_authority_per_sec = 1000000
-tx_burst_per_authority = 2000000
 api_rate_limit_bypass_cidrs = ["127.0.0.0/8", "::1/128"]
 
 [policy.torii.operator_signatures]

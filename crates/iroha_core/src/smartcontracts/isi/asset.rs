@@ -10012,7 +10012,7 @@ pub mod query {
             )
         }
     }
-    impl ValidQuery for FindAssetsDefinitions {
+    impl ValidQuery for FindAssetDefinitions {
         #[metrics(+"find_asset_definitions")]
         fn execute(
             self,

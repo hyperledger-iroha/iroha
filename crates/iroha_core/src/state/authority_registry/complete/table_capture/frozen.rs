@@ -6,7 +6,7 @@
 //! validate a table's derived indexes, record invariants or cross-table relations.
 //! Verifier, proof-status, validation-fee, contract-alias, contract-subject,
 //! domain-owner, account-identity, account-alias, asset-definition, asset-balance,
-//! escrow, repo-agreement and NFT/RWA adapters check complete bounded relations.
+//! escrow, repo-agreement, NFT/RWA and account-rekey adapters check bounded relations.
 //!
 //! TODO: adapt every other structural group, trigger Set, Musubi semantic source
 //! and membership pair/frontier. Then retain every canonical cell and history
@@ -88,6 +88,10 @@ pub(in crate::state) fn capture_original_table_once(
         return Err(Failure::UnknownTable.into());
     };
     let result = match *owner {
+        TableMaterializer::Single {
+            id: "world.account_rekey_records",
+            ..
+        } => super::super::frozen_account_rekeys::capture(block, limits, max_relation_work),
         TableMaterializer::Native { frozen, .. } => frozen(block, limits),
         TableMaterializer::Single {
             id: "world.domains",

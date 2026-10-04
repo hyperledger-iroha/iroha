@@ -80,30 +80,45 @@ mod tests {
         assert!(!stale);
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn readiness_panic_fails_closed_and_clears_physical_worker_suppression() {
-        use std::sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
-        };
-
-        let suppressed = Arc::new(AtomicBool::new(false));
-        let observed = Arc::clone(&suppressed);
-        let ready = super::super::wait_for_consensus_readiness(
-            std::time::Instant::now() + std::time::Duration::from_secs(1),
-            move |_| {
-                observed.store(iroha_panic_hook::is_suppressed(), Ordering::Release);
-                panic!("injected readiness observation panic");
-            },
-        )
-        .await;
-        assert!(!ready);
-        assert!(suppressed.load(Ordering::Acquire));
-        assert!(!iroha_panic_hook::is_suppressed());
-        let stale = tokio::task::spawn_blocking(iroha_panic_hook::is_suppressed)
+    #[test]
+    fn readiness_panic_fails_closed_and_clears_physical_worker_suppression() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .expect("single-worker readiness test runtime");
+        runtime.block_on(async {
+            let (observation_tx, observation_rx) = std::sync::mpsc::channel();
+            let ready = super::super::wait_for_consensus_readiness(
+                std::time::Instant::now() + std::time::Duration::from_secs(1),
+                move |_| {
+                    observation_tx
+                        .send((
+                            std::thread::current().id(),
+                            iroha_panic_hook::is_suppressed(),
+                        ))
+                        .expect("readiness worker observation");
+                    panic!("injected readiness observation panic");
+                },
+            )
+            .await;
+            assert!(!ready);
+            let (worker, suppressed) = observation_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .expect("physical readiness worker must be observed");
+            assert!(suppressed);
+            assert!(!iroha_panic_hook::is_suppressed());
+            let (reused_worker, stale) = tokio::task::spawn_blocking(|| {
+                (
+                    std::thread::current().id(),
+                    iroha_panic_hook::is_suppressed(),
+                )
+            })
             .await
             .expect("ordinary blocking worker probe must join");
-        assert!(!stale);
+            assert_eq!(reused_worker, worker);
+            assert!(!stale);
+        });
     }
 
     #[tokio::test]

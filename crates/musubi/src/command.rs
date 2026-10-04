@@ -1621,11 +1621,22 @@ struct ResolvedWorkspaceGraphV1 {
     prepared_archive_fetch:
         Option<Result<PreparedProductionSorafsArchiveTransportV1, ArchiveTransportErrorV1>>,
     platform_config_provenance: Option<PlatformConfigProvenanceV1>,
-    account_chain_discriminant: u16,
+    /// Compiler address profile; `None` only for a local graph resolved without network context.
+    account_chain_discriminant: Option<u16>,
 }
 impl ResolvedWorkspaceGraphV1 {
-    const fn account_chain_discriminant(&self) -> u16 {
-        self.account_chain_discriminant
+    /// The address profile for compiling this graph.
+    ///
+    /// A purely local graph resolved without a client configuration or requested profile has
+    /// no network context, and no default network is substituted for it.
+    fn account_chain_discriminant(&self) -> Result<u16, Diagnostic> {
+        self.account_chain_discriminant.ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::Usage,
+                "this operation requires an account address profile",
+            )
+            .with_help("select a network, pass --config, or pass --chain-discriminant")
+        })
     }
     fn registry_context(
         &self,
@@ -1732,18 +1743,20 @@ fn resolve_and_persist_graph(
             resolve_workspace_local(workspace, selected_packages, previous.clone(), resolve_mode)
                 .map_err(graph_diagnostic)?
     {
-        let configured = match &public_config {
-            Some(image) => image
-                .account_chain_discriminant()
-                .map_err(|error| registry_diagnostic(error, ErrorCode::Usage))?,
-            None => iroha::config::resolve_account_chain_discriminant(None, None)
-                .expect("the canonical default address profile is valid"),
+        // A client configuration binds the profile and a request must match it. Without one,
+        // the profile is only what the caller requested: compiling commands always request
+        // their selected network's profile, while `fetch` and `update` resolve local graphs
+        // without compiling them. No default (in particular no mainnet) profile is assumed.
+        let account_chain_discriminant = match &public_config {
+            Some(image) => Some(select_compiler_chain_discriminant(
+                image
+                    .account_chain_discriminant()
+                    .map_err(|error| registry_diagnostic(error, ErrorCode::Usage))?,
+                requested_chain_discriminant,
+                true,
+            )?),
+            None => requested_chain_discriminant,
         };
-        let account_chain_discriminant = select_compiler_chain_discriminant(
-            configured,
-            requested_chain_discriminant,
-            public_config.is_some(),
-        )?;
         if outcome.changed {
             let writer = AtomicWriteRoot::new(workspace.root()).map_err(atomic_diagnostic)?;
             outcome
@@ -1909,7 +1922,7 @@ fn resolve_and_persist_graph(
         cached_source,
         prepared_archive_fetch,
         platform_config_provenance,
-        account_chain_discriminant,
+        account_chain_discriminant: Some(account_chain_discriminant),
     })
 }
 fn write_resolved_lock(
@@ -2299,7 +2312,7 @@ fn run_package(explicit_manifest: Option<&Path>, args: &PackageArgs) -> CommandR
             &cache,
             &plan,
             &verification_lock,
-            graph.account_chain_discriminant(),
+            graph.account_chain_discriminant()?,
         )
         .map_err(|error| graph_mode_compiler_diagnostic(&error, args.mode))?;
         let semantic = semantic_release_manifest(
@@ -2635,7 +2648,7 @@ fn run_publish(
         &cache,
         &plan,
         &verification_lock,
-        graph.account_chain_discriminant(),
+        graph.account_chain_discriminant()?,
     )
     .map_err(|error| compiler_bridge_diagnostic(&error))?;
     let semantic = semantic_release_manifest(member, release, &verification_lock, interface_digest)
@@ -2920,7 +2933,7 @@ fn recover_publication_sidecars_at(
         cached_source: None,
         prepared_archive_fetch: None,
         platform_config_provenance: None,
-        account_chain_discriminant,
+        account_chain_discriminant: Some(account_chain_discriminant),
     };
     let platform_cache;
     let cache = if let Some(cache) = injected_cache {
@@ -2962,7 +2975,7 @@ fn recover_publication_sidecars_at(
         cache,
         &plan,
         &verification_lock,
-        graph.account_chain_discriminant(),
+        graph.account_chain_discriminant()?,
     )
     .map_err(|error| graph_mode_compiler_diagnostic(&error, args.mode))?;
     let semantic = semantic_release_manifest(

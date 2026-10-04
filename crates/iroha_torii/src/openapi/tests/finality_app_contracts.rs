@@ -482,12 +482,18 @@ fn generated_spec_documents_collection_pages_and_queries() {
         "/v1/accounts/{account_id}/transactions", "get", "200", "#/components/schemas/TransactionPage";
         "/v1/accounts/{account_id}/transactions/query", "post", "200", "#/components/schemas/TransactionPage";
         "/v1/transactions/query", "post", "200", "#/components/schemas/TransactionPage";
+        "/v1/accounts/{account_id}/history", "get", "200", "#/components/schemas/AccountHistoryPage";
+        "/v1/accounts/{account_id}/history/query", "post", "200", "#/components/schemas/AccountHistoryPage";
+        "/v1/contracts/activity", "get", "200", "#/components/schemas/ContractActivityPage";
+        "/v1/contracts/activity/query", "post", "200", "#/components/schemas/ContractActivityPage";
+        "/v1/contracts/events", "get", "200", "#/components/schemas/ContractEventPage";
+        "/v1/contracts/events/query", "post", "200", "#/components/schemas/ContractEventPage";
         "/v1/repo/agreements", "get", "200", "#/components/schemas/RepoAgreementPage";
         "/v1/repo/agreements/query", "post", "200", "#/components/schemas/RepoAgreementPage";
     },
     );
     let schemas = component_schemas(&document);
-    for page in contract_words("AccountPage AccountAssetPage AssetDefinitionPage AssetHolderPage DomainPage NftPage RepoAgreementPage RwaPage TransactionPage") {
+    for page in contract_words("AccountPage AccountAssetPage AssetDefinitionPage AssetHolderPage DomainPage NftPage RepoAgreementPage RwaPage TransactionPage AccountHistoryPage ContractActivityPage ContractEventPage") {
         let schema = contract_schema(schemas, page);
         let required = schema_fields(schema, "required", page);
         string_members! { required; Present => &["items", "next_cursor"]; };

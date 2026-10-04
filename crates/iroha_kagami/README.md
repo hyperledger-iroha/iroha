@@ -14,6 +14,18 @@ cargo build --bin kagami
 
 This places `kagami` in `target/debug/` from the repository root.
 
+The native CLI package builds the matching worker and standard daemon together:
+
+```bash
+cargo xtask kagami-bundle --profile debug
+```
+
+It publishes `target/kagami-bundle/kagami-<os>-<arch>-debug/bin/{kagami,iroha3d}`
+with a sorted hash inventory. Use a fresh `--out` directory for another immutable
+package. `--network-profiles <artifact.nrt>` installs explicitly supplied native
+authority beside the two programs. The CLI package requires no Mochi desktop;
+`cargo xtask mochi-bundle` remains the separate desktop application packager.
+
 Kagami always includes the BLS validator tooling required by Sumeragi.
 Optional crypto features come from `iroha_crypto`:
 
@@ -42,7 +54,7 @@ kagami contract deploy hello.ko
 kagami localnet down
 ```
 
-Install the complete native bundle with `kagami` and `iroha3d` side by side.
+Install the native CLI package with `kagami` and `iroha3d` side by side.
 State and credentials live outside the project in a private workspace-scoped
 store. `down` retains the ledger; `localnet reset local` deliberately retires it.
 `contract deploy` also accepts `.to` or a Musubi package directory and starts the
@@ -67,13 +79,28 @@ qualified parent profile installed, the command surface is:
 ```bash
 kagami dataspace up privateapp --network taira
 kagami dataspace status
-kagami contract deploy hello.ko
+kagami contract deploy counter.ko --alias Counter::privateapp
+kagami contract call Counter::privateapp --entrypoint hajimari --max-fee 1000
+kagami contract call Counter::privateapp --entrypoint set --args '{"next":"7"}' --max-fee 1000 --readback current
+kagami contract view Counter::privateapp --entrypoint current
 ```
 
 This retains four owner-private local validators, their original owner identity,
-and exact parent-operation journals. A timeout leaves that work available for
-status and retry. Official Taira profile publication and combined runtime
+and exact parent-operation journals. One paid request leases the dataspace and
+its owner's `admin@privateapp` alias without adding a parent execution lane.
+`--account-alias LABEL` selects another canonical owner label before first
+provisioning; changing it on retry is refused. The original two-lease rent quote
+and fee allowance survive interrupted preparation. A timeout leaves that work
+available for status and retry. Official Taira profile publication and combined runtime
 qualification remain tracked acceptance gates; the CLI invents no release key.
+
+Views and calls use an existing selected context and the verified deployed alias.
+A call's positive `--max-fee` caps the combined self-grant and call in that private
+root's native fee asset. `--timeout` fixes the original authorization and signed
+expiry; `--prepare` retains both signed stages without dispatch. Recover the exact
+printed journal with `kagami contract call --resume JOURNAL`; recovery does not
+quote or sign replacement transactions. `--readback SELECTOR` observes an explicit
+view after local `Applied`; the separate parent observation remains historical.
 
 The [developer acceptance goals](../../specs/kagami_mochi_devex_goals.md) track
 remaining native-platform, private-dataspace, and end-to-end qualification.
@@ -120,10 +147,10 @@ kagami keys --algorithm ed25519 --out-dir ./key-custody
 kagami keys --algorithm bls_normal --pop --out-dir ./validator-custody
 ```
 
-`--out-dir` is required: it creates a mode-`0700`
-directory containing newline-terminated `public.key` and owner-only
-`private.key` files, refuses to reuse a non-empty directory, and never prints
-the private key.
+`--out-dir` is required and must name a fresh directory. The generator atomically
+publishes a complete mode-`0700` directory containing newline-terminated
+`public.key` and owner-only `private.key` files. It refuses every existing
+destination, including an empty directory, and never prints the private key.
 
 The generator commands print a concise summary with generated paths and the
 next handoff. `localnet generate` and `wizard` also emit a generated `README.md`

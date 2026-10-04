@@ -25,6 +25,89 @@ abstract class CollectionRow internal constructor(
     override fun toString(): String = "${javaClass.simpleName}$json"
 }
 
+/** One effective permission; payload remains structured JSON. */
+class AccountPermissionRow internal constructor(json: JsonObject) : CollectionRow(json) {
+    private val row = RowReader(json)
+    @JvmField val name: String = row.string("name")
+    @JvmField val payload: Json = requireNotNull(json["payload"]) { "payload is required" }
+}
+
+/** A subscription plan, keyed by its asset definition id. */
+class SubscriptionPlanRow internal constructor(json: JsonObject) : CollectionRow(json) {
+    private val row = RowReader(json)
+    @JvmField val id: String = row.string("id")
+    @JvmField val provider: String? = row.stringOrNull("provider")
+    @JvmField val billing: Json? = row.value("billing")
+    @JvmField val pricing: Json? = row.value("pricing")
+}
+
+/** A flattened subscription, keyed by its NFT id. */
+class SubscriptionRow internal constructor(json: JsonObject) : CollectionRow(json) {
+    private val row = RowReader(json)
+    @JvmField val id: String = row.string("id")
+    @JvmField val ownedBy: String? = row.stringOrNull("owned_by")
+    @JvmField val planId: String? = row.stringOrNull("plan_id")
+    @JvmField val provider: String? = row.stringOrNull("provider")
+    @JvmField val subscriber: String? = row.stringOrNull("subscriber")
+    @JvmField val status: String? = row.stringOrNull("status")
+    @JvmField val currentPeriodStartMs: Long? = row.unsignedLongOrNull("current_period_start_ms")
+    @JvmField val currentPeriodEndMs: Long? = row.unsignedLongOrNull("current_period_end_ms")
+    @JvmField val nextChargeMs: Long? = row.unsignedLongOrNull("next_charge_ms")
+    @JvmField val cancelAtPeriodEnd: Boolean? = row.booleanOrNull("cancel_at_period_end")
+    @JvmField val cancelAtMs: Long? = row.unsignedLongOrNull("cancel_at_ms")
+    @JvmField val failureCount: Long? = row.unsignedLongOrNull("failure_count")
+    @JvmField val usageAccumulated: Json? = row.value("usage_accumulated")
+    @JvmField val billingTriggerId: String? = row.stringOrNull("billing_trigger_id")
+    @JvmField val invoice: JsonObject? = row.objectOrNull("invoice")
+    @JvmField val plan: JsonObject? = row.objectOrNull("plan")
+}
+
+/** A contract transaction with its committed ledger position. */
+class ContractActivityRow internal constructor(json: JsonObject) : CollectionRow(json) {
+    private val row = RowReader(json)
+    @JvmField val blockHeight: Long = row.unsignedLong("block_height")
+    @JvmField val blockIndex: Long = row.unsignedLong("block_index")
+    @JvmField val entrypointHash: String = row.string("entrypoint_hash")
+    @JvmField val timestampMs: Long? = row.unsignedLongOrNull("timestamp_ms")
+    @JvmField val contractAlias: String? = row.stringOrNull("contract_alias")
+    @JvmField val contractEntrypoint: String? = row.stringOrNull("contract_entrypoint")
+    @JvmField val resultOk: Boolean? = row.booleanOrNull("result_ok")
+}
+
+/** A contract event with its committed ledger position. */
+class ContractEventRow internal constructor(json: JsonObject) : CollectionRow(json) {
+    private val row = RowReader(json)
+    @JvmField val blockHeight: Long = row.unsignedLong("block_height")
+    @JvmField val blockIndex: Long = row.unsignedLong("block_index")
+    @JvmField val eventId: String = row.string("event_id")
+    @JvmField val txHashHex: String = row.string("tx_hash_hex")
+    @JvmField val eventIndex: Long? = row.unsignedLongOrNull("event_index")
+    @JvmField val module: String? = row.stringOrNull("module")
+    @JvmField val eventKind: String? = row.stringOrNull("event_kind")
+    @JvmField val payload: Json? = row.value("payload")
+}
+
+/** One account movement and its committed ledger position. */
+class AccountHistoryRow internal constructor(json: JsonObject) : CollectionRow(json) {
+    private val row = RowReader(json)
+    @JvmField val id: String = row.string("id")
+    @JvmField val blockHeight: Long = row.unsignedLong("block_height")
+    @JvmField val blockIndex: Long = row.unsignedLong("block_index")
+    @JvmField val movementIndex: Long = row.unsignedLong("movement_index")
+    @JvmField val source: String? = row.stringOrNull("source")
+    @JvmField val type: String? = row.stringOrNull("type")
+    @JvmField val status: String? = row.stringOrNull("status")
+    @JvmField val direction: String? = row.stringOrNull("direction")
+    @JvmField val accountId: String? = row.stringOrNull("account_id")
+    @JvmField val counterpartyAccountId: String? = row.stringOrNull("counterparty_account_id")
+    @JvmField val assetId: String? = row.stringOrNull("asset_id")
+    @JvmField val assetDefinitionId: String? = row.stringOrNull("asset_definition_id")
+    @JvmField val amount: String? = row.stringOrNull("amount")
+    @JvmField val txHash: String? = row.stringOrNull("tx_hash")
+    @JvmField val timestampMs: Long? = row.unsignedLongOrNull("timestamp_ms")
+    @JvmField val resultOk: Boolean? = row.booleanOrNull("result_ok")
+}
+
 /** A domain. Only [id] is always present. */
 class DomainRow internal constructor(json: JsonObject) : CollectionRow(json) {
     private val row = RowReader(json)

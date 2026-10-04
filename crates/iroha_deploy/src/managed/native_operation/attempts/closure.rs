@@ -74,7 +74,7 @@ impl VerifiedUnsignedClosure {
         self.history.require_current()?;
         self.require_receipt()
     }
-    pub(super) fn retained_history(&self) -> &History {
+    pub(in crate::managed) fn retained_history(&self) -> &History {
         &self.history
     }
     // The bounded graph owner invokes this only as part of its complete before/after passes.
@@ -368,7 +368,13 @@ impl History {
         }
         let evidence = self.scope.enrollment()?;
         let value = VerifiedUnsignedClosure {
-            history: Self::read(&self.operation, self.purpose, self.semantic, &self.scope)?,
+            history: Self::read_retained(
+                &self.operation,
+                self.purpose,
+                self.semantic,
+                &self.scope,
+                self,
+            )?,
             digest: digest(closed)?,
             successor: plan.successor,
             cumulative_reserved: usize::from(plan.cumulative_reserved),

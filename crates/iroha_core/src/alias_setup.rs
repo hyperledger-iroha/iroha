@@ -1599,6 +1599,52 @@ mod tests {
         );
     }
     #[test]
+    fn private_dpn_owner_alias_uses_ordered_or_active_sns_without_physical_catalog() {
+        let owner = account(21);
+        let mut world = world_with_accounts(core::slice::from_ref(&owner));
+        let catalog = DataSpaceCatalog::new(Vec::new()).expect("no physical dataspace catalog");
+        let dataspace_id = crate::sns::dataspace_id_for_sns_alias("dpn").unwrap();
+        let parent = AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
+            dataspace: iroha_data_model::alias_setup::ResolvedDataSpaceV1::new(
+                "dpn".parse().unwrap(),
+                dataspace_id,
+            ),
+            owner: owner.clone(),
+        });
+        let alias = AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+            alias: ResolvedAccountAliasV1::new("admin@dpn".parse().unwrap(), dataspace_id),
+            target_account: owner.clone(),
+            provision: AccountProvisionV1::Existing,
+            role: AccountAliasRoleV1::Additional,
+        });
+        assert!(classify_alias_intent(&world.view(), &catalog, &alias, 1).is_err());
+        let planned = BTreeMap::from([("dpn".parse().unwrap(), dataspace_id)]);
+        assert_eq!(
+            classify_alias_intent_with_planned_dataspaces(
+                &world.view(),
+                &catalog,
+                &planned,
+                &alias,
+                1,
+            )
+            .unwrap(),
+            AliasPlanDispositionV1::Create
+        );
+        validate_alias_intent_authority(&world.view(), &owner, &alias).unwrap();
+        insert_record(&mut world, &parent, owner);
+        assert_eq!(
+            classify_alias_intent(&world.view(), &catalog, &alias, 1).unwrap(),
+            AliasPlanDispositionV1::Create
+        );
+        let mut wrong = alias;
+        if let AliasIntentV1::AccountAlias(value) = &mut wrong {
+            value.alias.dataspace_id = DataSpaceId::new(7);
+        }
+        assert!(classify_alias_intent(&world.view(), &catalog, &wrong, 1).is_err());
+        assert!(catalog.by_alias("dpn").is_none());
+    }
+
+    #[test]
     fn account_alias_requires_active_or_earlier_planned_domain() {
         let owner = account(11);
         let world = world_with_accounts(core::slice::from_ref(&owner));

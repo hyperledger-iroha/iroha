@@ -43,7 +43,10 @@ pub(in crate::state) use contract_aliases::test_support as contract_alias_test_s
 pub(in crate::state) use contract_aliases::validate_original_contract_aliases;
 pub(super) use contract_aliases::{CONTRACT_ALIAS_WORK_PER_ROW, CheckedContractAliases};
 mod account_rekeys;
-pub(super) use account_rekeys::CheckedAccountRekeys;
+#[cfg(test)]
+pub(in crate::state) use account_rekeys::test_support as account_rekey_test_support;
+pub(in crate::state) use account_rekeys::validate_original_account_rekeys;
+pub(super) use account_rekeys::{ACCOUNT_REKEY_WORK_PER_ROW, CheckedAccountRekeys};
 mod validation_fee_proposals;
 #[cfg(test)]
 pub(in crate::state) use validation_fee_proposals::test_support as validation_fee_proposal_test_support;
@@ -129,6 +132,7 @@ impl Work {
     }
 }
 
+#[cfg(test)]
 fn get_at<'a, K: mv::Key, V: mv::Value>(
     view: &'a CommittedStorageView<'_, K, V>,
     image: GroupImage,
@@ -140,30 +144,6 @@ fn get_at<'a, K: mv::Key, V: mv::Value>(
         }
     }
     view.current().get(key)
-}
-
-/// Visit physical rows before filtering: absent undo entries still consume work.
-fn visit_image<K: mv::Key, V: mv::Value>(
-    view: &CommittedStorageView<'_, K, V>,
-    image: GroupImage,
-    work: &mut Work,
-    mut visit: impl FnMut(&K, &V, &mut Work) -> Result<(), GroupedOwnershipError>,
-) -> Result<(), GroupedOwnershipError> {
-    for (key, value) in view.current().iter() {
-        work.charge()?;
-        if image == GroupImage::Current || !view.undo().contains_key(key) {
-            visit(key, value, work)?;
-        }
-    }
-    if image == GroupImage::Predecessor {
-        for (key, value) in view.undo().iter() {
-            work.charge()?;
-            if let Some(value) = value {
-                visit(key, value, work)?;
-            }
-        }
-    }
-    Ok(())
 }
 
 mod nfts_rwas;

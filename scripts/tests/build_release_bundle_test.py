@@ -6,6 +6,8 @@ import os
 import shutil
 import subprocess
 import tarfile
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,29 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "build_release_bundle.sh"
 VERSION = "2.0.0-rc.2.0"
 EPOCH = 1_234_567_890
+
+
+@pytest.fixture
+def tmp_path() -> Iterator[Path]:
+    """Own every ancestor of the authenticated packaging fixtures.
+
+    Release custody refuses shared writable ancestors. Create only this test's
+    private workspace below the checkout and remove that workspace on exit.
+    Test bodies keep the ordinary 022 mask so explicit safe artifact modes and
+    permission refusal controls retain their coverage. Restore the caller mask
+    after setup, execution, or cleanup failure.
+    """
+    original_umask = os.umask(0o077)
+    try:
+        parent = REPO_ROOT
+        for component in ("target", "unit-tests", "script-tests"):
+            parent /= component
+            parent.mkdir(mode=0o700, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="release-bundle-", dir=parent) as directory:
+            os.umask(0o022)
+            yield Path(directory).resolve()
+    finally:
+        os.umask(original_umask)
 
 
 def _write_executable(path: Path, payload: str) -> Path:

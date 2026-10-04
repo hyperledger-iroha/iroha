@@ -17,22 +17,6 @@ object SubscriptionJsonParser {
     }
 
     @JvmStatic
-    fun parsePlanList(payload: ByteArray): SubscriptionPlanListResponse {
-        val obj = expectObject(parse(payload), "root")
-        val items = asArrayOrEmpty(obj["items"], "items")
-        val total = asLongOrDefault(obj["total"], "total", items.size.toLong())
-        val parsed = items.mapIndexed { i, item ->
-            val path = "items[$i]"
-            val entry = expectObject(item, path)
-            SubscriptionPlanListResponse.SubscriptionPlanListItem(
-                planId = asString(entry["plan_id"], "$path.plan_id"),
-                plan = expectObject(entry["plan"], "$path.plan"),
-            )
-        }
-        return SubscriptionPlanListResponse(parsed, total)
-    }
-
-    @JvmStatic
     fun parseSubscriptionCreateResponse(payload: ByteArray): SubscriptionCreateResponse {
         val obj = expectObject(parse(payload), "root")
         return SubscriptionCreateResponse(
@@ -46,18 +30,7 @@ object SubscriptionJsonParser {
     }
 
     @JvmStatic
-    fun parseSubscriptionList(payload: ByteArray): SubscriptionListResponse {
-        val obj = expectObject(parse(payload), "root")
-        val items = asArrayOrEmpty(obj["items"], "items")
-        val total = asLongOrDefault(obj["total"], "total", items.size.toLong())
-        val parsed = items.mapIndexed { i, item ->
-            parseSubscriptionRecord(item, "items[$i]")
-        }
-        return SubscriptionListResponse(parsed, total)
-    }
-
-    @JvmStatic
-    fun parseSubscriptionRecord(payload: ByteArray): SubscriptionListResponse.SubscriptionRecord =
+    fun parseSubscriptionRecord(payload: ByteArray): SubscriptionRecord =
         parseSubscriptionRecord(parse(payload), "root")
 
     @JvmStatic
@@ -128,9 +101,9 @@ object SubscriptionJsonParser {
     private fun asLongOrDefault(value: Any?, path: String, defaultValue: Long): Long =
         if (value == null) defaultValue else asNonNegativeLong(value, path)
 
-    private fun parseSubscriptionRecord(value: Any?, path: String): SubscriptionListResponse.SubscriptionRecord {
+    private fun parseSubscriptionRecord(value: Any?, path: String): SubscriptionRecord {
         val entry = expectObject(value, path)
-        return SubscriptionListResponse.SubscriptionRecord(
+        return SubscriptionRecord(
             subscriptionId = asString(entry["subscription_id"], "$path.subscription_id"),
             subscription = expectObject(entry["subscription"], "$path.subscription"),
             invoice = asOptionalObject(entry["invoice"], "$path.invoice"),

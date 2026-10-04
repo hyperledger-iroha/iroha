@@ -129,6 +129,7 @@ fn each_missing_checked_semantic_or_membership_adapter_names_its_exact_output() 
                         | "world.repo_agreements"
                         | "world.nfts"
                         | "world.rwas"
+                        | "world.account_rekey_records"
                 )
             {
                 continue;
@@ -142,7 +143,8 @@ fn each_missing_checked_semantic_or_membership_adapter_names_its_exact_output() 
             missing.push(table);
         }
     }
-    assert_eq!(missing.len(), 11);
+    assert_eq!(missing.len(), 10);
+    assert!(!missing.contains(&"world.account_rekey_records"));
     assert!(!missing.contains(&"world.nfts"));
     assert!(!missing.contains(&"world.rwas"));
     assert!(!missing.contains(&"world.asset_escrows"));

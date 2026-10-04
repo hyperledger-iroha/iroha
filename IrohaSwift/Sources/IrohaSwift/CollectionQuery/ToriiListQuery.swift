@@ -423,9 +423,14 @@ public struct ToriiAggregate: Hashable, Sendable {
         }
     }
 
-    /// Grouping dimensions.
+    /// Maximum grouping fields in one aggregate.
+    public static let maximumGroupBy = 8
+    /// Maximum metrics in one aggregate.
+    public static let maximumMetrics = 16
+
+    /// Grouping dimensions; at most `maximumGroupBy`.
     public var groupBy: [ToriiFieldPath]
-    /// Metrics computed per group; at least one.
+    /// Metrics computed per group; at least one and at most `maximumMetrics`.
     public var metrics: [Metric]
     /// Filter over group fields and metric aliases.
     public var having: ToriiFilterClause?
@@ -445,6 +450,21 @@ public struct ToriiAggregate: Hashable, Sendable {
     func validate() throws {
         guard !metrics.isEmpty else {
             throw ToriiListQueryError(parameter: "aggregate", message: "`metrics` must list at least one metric")
+        }
+        guard groupBy.count <= Self.maximumGroupBy else {
+            throw ToriiListQueryError(
+                parameter: "aggregate",
+                message: "`group_by` lists at most \(Self.maximumGroupBy) fields"
+            )
+        }
+        guard metrics.count <= Self.maximumMetrics else {
+            throw ToriiListQueryError(
+                parameter: "aggregate",
+                message: "`metrics` lists at most \(Self.maximumMetrics) metrics"
+            )
+        }
+        for field in groupBy + metrics.compactMap(\.field) {
+            try field.validate(parameter: "aggregate")
         }
         if let having {
             do {

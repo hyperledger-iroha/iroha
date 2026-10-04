@@ -151,9 +151,7 @@ use iroha_torii_shared::subscriptions::{
     SUBSCRIPTION_MUTATION_DRAFT_VERSION_V1, SubscriptionActionDraftDetails,
     SubscriptionActionRequest, SubscriptionActionResponse, SubscriptionCancelMode,
     SubscriptionCreateRequest, SubscriptionCreateResponse, SubscriptionGetResponse,
-    SubscriptionInstructionDraft, SubscriptionListItem, SubscriptionListParams,
-    SubscriptionListResponse, SubscriptionPlanCreateRequest, SubscriptionPlanCreateResponse,
-    SubscriptionPlanListItem, SubscriptionPlanListParams, SubscriptionPlanListResponse,
+    SubscriptionInstructionDraft, SubscriptionPlanCreateRequest, SubscriptionPlanCreateResponse,
     SubscriptionUsageRequest, SubscriptionUsageResponse,
 };
 use iroha_torii_shared::sumeragi_evidence_api::{
@@ -216,11 +214,12 @@ impl DataspaceReadVisibility {
         }
     }
 
-    /// Restrict an authorized account-assets route to one exact account.
-    /// The account grant opens its balance routes, not the caller's siblings.
-    pub(crate) fn exact_account(dataspace: DataSpaceId, account: AccountId) -> Self {
+    /// Restrict an authorized account-assets read to one exact account on its
+    /// authorized dataspaces. The account grant opens its balance routes, not
+    /// the caller's siblings.
+    pub(crate) fn exact_account(dataspaces: BTreeSet<DataSpaceId>, account: AccountId) -> Self {
         Self {
-            visible_dataspaces: BTreeSet::from([dataspace]),
+            visible_dataspaces: dataspaces,
             can_read_all: false,
             exact_account: Some(account),
         }
@@ -677,11 +676,6 @@ fn app_count_mode(raw: Option<&str>, endpoint: &'static str) -> AppCountMode {
         }
     }
 }
-fn app_transaction_count_mode(raw: Option<&str>, endpoint: &'static str) -> AppCountMode {
-    raw.map_or(AppCountMode::Bounded, |raw| {
-        app_count_mode(Some(raw), endpoint)
-    })
-}
 fn collect_page_streaming<K, T, I>(
     iter: I,
     offset: u64,
@@ -768,35 +762,6 @@ where
         page.total
             .expect("exact-count pagination always records the matched total"),
     )
-}
-fn collect_ordered_page_bounded<K, T, I>(
-    mut iter: I,
-    offset: u64,
-    limit: u64,
-) -> (Vec<T>, usize, bool)
-where
-    I: Iterator<Item = (K, T)>,
-{
-    let mut observed = 0_usize;
-    for _ in 0..offset {
-        if iter.next().is_none() {
-            return (Vec::new(), observed, false);
-        }
-        observed = observed.saturating_add(1);
-    }
-    let mut items = Vec::new();
-    for _ in 0..limit {
-        let Some((_, item)) = iter.next() else {
-            return (items, observed, false);
-        };
-        observed = observed.saturating_add(1);
-        items.push(item);
-    }
-    let has_more = iter.next().is_some();
-    if has_more {
-        observed = observed.saturating_add(1);
-    }
-    (items, observed, has_more)
 }
 #[derive(Copy, Clone)]
 struct EffectivePagination {
@@ -957,50 +922,6 @@ fn enforce_app_pagination(
         cap: max_cap,
     })
 }
-/// Resolve the effective page requested by the space-directory manifest route.
-#[cfg(feature = "app_api")]
-pub(crate) fn space_directory_manifest_pagination(
-    limit: Option<u64>,
-    offset: u64,
-) -> Result<(u64, u64)> {
-    let pagination = enforce_app_pagination(
-        limit,
-        offset,
-        app_query_limits().max_page_limit,
-        ENDPOINT_SPACE_DIRECTORY_MANIFESTS,
-    )?;
-    let limit = pagination
-        .limit
-        .expect("app pagination always resolves an effective page limit");
-    Ok((pagination.offset, limit))
-}
-/// Return the prefix each shard must expose before global manifest pagination.
-#[cfg(feature = "app_api")]
-pub(crate) fn space_directory_manifest_fanout_window(
-    offset: u64,
-    limit: u64,
-) -> Result<u64> {
-    let window = offset
-        .checked_add(limit)
-        .ok_or_else(|| Error::AppQueryValidation {
-            code: "invalid_pagination",
-            message: format!(
-                "pagination window overflows for {ENDPOINT_SPACE_DIRECTORY_MANIFESTS}"
-            ),
-        })?;
-    let max_page_limit = app_query_limits().max_page_limit;
-    if window > max_page_limit {
-        // TODO: fetch bounded multi-page prefixes from each shard before admitting wider fanout
-        // windows; a single shard page cannot currently prove the global prefix.
-        return Err(Error::AppQueryValidation {
-            code: "invalid_pagination",
-            message: format!(
-                "fanout offset plus limit must not exceed {max_page_limit} rows for {ENDPOINT_SPACE_DIRECTORY_MANIFESTS}"
-            ),
-        });
-    }
-    Ok(window)
-}
 fn collect_page_linear<T, I>(
     iter: I,
     offset: u64,
@@ -1139,21 +1060,11 @@ fn insert_page_metadata<T>(
 #[cfg(all(test, feature = "app_api"))]
 mod streaming_pager_tests {
     use super::{
-        AppCountMode, app_query_limits, app_transaction_count_mode,
-        collect_exact_page_streaming, collect_ordered_page_bounded, collect_page_linear,
+        AppCountMode, app_query_limits,
+        collect_exact_page_streaming, collect_page_linear,
         collect_page_streaming, enforce_app_pagination,
     };
     use std::{cell::Cell, rc::Rc};
-    routing_test! { sync omitted_count_mode_is_bounded
-        assert_eq!(
-            app_transaction_count_mode(None, "/v1/test/bounded"),
-            AppCountMode::Bounded
-        );
-        assert_eq!(
-            app_transaction_count_mode(Some("exact"), "/v1/test/bounded"),
-            AppCountMode::Exact
-        );
-    }
     routing_test! { sync pagination_window_cannot_exceed_the_configured_fetch_budget
         let limits = app_query_limits();
         let error = match enforce_app_pagination(
@@ -1218,17 +1129,6 @@ mod streaming_pager_tests {
         assert_eq!(page.total, None);
         assert!(page.has_more);
         assert_eq!(visited.get(), 1, "bounded empty pages need only one probe");
-    }
-    routing_test! { sync ordered_bounded_page_stops_after_one_probe
-        let visited = Cell::new(0_usize);
-        let iter = (0..100)
-            .inspect(|_| visited.set(visited.get() + 1))
-            .map(|item| (item, item));
-        let (items, total, has_more) = collect_ordered_page_bounded(iter, 2, 3);
-        assert_eq!(items, vec![2, 3, 4]);
-        assert_eq!(total, 6, "bounded total is the observed lower bound");
-        assert!(has_more);
-        assert_eq!(visited.get(), 6, "only offset + limit + one probe may be read");
     }
     routing_test! { sync orders_multi_key_with_mixed_directions
         use std::cmp::Reverse;
@@ -3547,28 +3447,6 @@ fn infallible_pretty_json_response<T: json::JsonSerialize + ?Sized>(
     application_json_response(json::to_json_pretty(value).unwrap_or_else(|_| fallback.into()))
 }
 app_api_items! {
-fn paginated_json_response<T>(
-    page: &PageResult<T>,
-    count_mode: AppCountMode,
-    item_json: impl FnMut(&T) -> Result<Value>,
-) -> Result<Response> {
-    let items = page
-        .items
-        .iter()
-        .map(item_json)
-        .collect::<Result<Vec<_>>>()?;
-    let mut top = Map::new();
-    top.insert("items".into(), Value::Array(items));
-    insert_page_metadata(&mut top, page, count_mode);
-    pretty_json_response(&top)
-}
-fn paginated_json_map_response<T>(
-    page: &PageResult<T>,
-    count_mode: AppCountMode,
-    mut item_json: impl FnMut(&T) -> Map,
-) -> Result<Response> {
-    paginated_json_response(page, count_mode, |item| Ok(Value::Object(item_json(item))))
-}
 fn app_api_transaction_signing_error(context: &str, err: impl fmt::Display) -> Error {
     Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
         "failed to sign {context} transaction: {err}",
@@ -8509,42 +8387,6 @@ mod zk_roots_selector_tests {
                 iroha_data_model::query::error::QueryExecutionFail::NotFound
             ))
         ));
-    }
-    routing_test! { sync parse_tx_history_asset_selector_accepts_asset_alias_literal
-        let parsed = parse_tx_history_asset_selector("usd#issuer.universal").expect("selector should parse");
-        match parsed {
-            TxHistoryAssetSelectorInput::DefinitionSelector(value) => {
-                assert_eq!(value, "usd#issuer.universal")
-            }
-            other => panic!("unexpected selector variant: {other:?}"),
-        }
-    }
-    routing_test! { sync resolve_tx_history_asset_selector_accepts_asset_alias_literal
-        let (state, definition_id) = selector_state();
-        let view = state.world_view();
-        let resolved = resolve_tx_history_asset_selector(&view, 0, Some("usd#issuer.universal"), None)
-            .expect("selector should resolve");
-        assert!(matches!(
-            resolved,
-            Some(TxHistoryAssetSelector::DefinitionId(ref id)) if id == &definition_id
-        ));
-    }
-    routing_test! { sync resolve_tx_history_asset_selector_rejects_alias_outside_allowed_definition
-        let (state, definition_id) = selector_state();
-        let view = state.world_view();
-        let other_definition =
-            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400ee");
-        let err =
-            resolve_tx_history_asset_selector(&view, 0, Some("usd#issuer.universal"), Some(&other_definition))
-                .expect_err("mismatched selector should fail");
-        assert!(matches!(
-            err,
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
-            )) if message
-                == "asset_id is outside the allowed transaction history asset definition"
-        ));
-        assert_ne!(definition_id, other_definition);
     }
     routing_test! { sync typed_fee_payment_validation_rejects_missing_contract_gas
         let intent = iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None);
@@ -31129,21 +30971,10 @@ struct AccountHistoryProjection {
     finalized_at_ms: Option<u64>,
     requesting_fi_id: Option<String>,
 }
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct AccountHistoryIndexCacheKey {
-    committed_height: usize,
-    tip_block_hash: Option<String>,
-}
 #[derive(Default, Clone)]
 struct AccountHistoryIndex {
-    cache_key: AccountHistoryIndexCacheKey,
     items: Vec<AccountHistoryProjection>,
-    by_account: std::collections::HashMap<String, Vec<usize>>,
-    by_asset_id: std::collections::HashMap<String, Vec<usize>>,
-    by_asset_definition: std::collections::HashMap<String, Vec<usize>>,
 }
-static ACCOUNT_HISTORY_INDEX: LazyLock<RwLock<Option<Arc<AccountHistoryIndex>>>> =
-    LazyLock::new(|| RwLock::new(None));
 #[derive(Debug, Clone, Default)]
 struct ContractActivityProjection {
     authority: Option<String>,
@@ -31157,24 +30988,6 @@ struct ContractActivityProjection {
     contract_payload: Option<norito::json::Value>,
     fee_payment: Option<iroha_data_model::transaction::FeePaymentIntent>,
 }
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct ContractActivityIndexCacheKey {
-    committed_height: usize,
-    tip_block_hash: Option<String>,
-}
-#[derive(Default, Clone)]
-struct ContractActivityIndex {
-    cache_key: ContractActivityIndexCacheKey,
-    items: Vec<ContractActivityProjection>,
-    by_authority: std::collections::HashMap<String, Vec<usize>>,
-    by_contract_address: std::collections::HashMap<String, Vec<usize>>,
-    by_contract_alias: std::collections::HashMap<String, Vec<usize>>,
-    by_contract_entrypoint: std::collections::HashMap<String, Vec<usize>>,
-    ok_positions: Vec<usize>,
-    error_positions: Vec<usize>,
-}
-static CONTRACT_ACTIVITY_INDEX: LazyLock<RwLock<Option<Arc<ContractActivityIndex>>>> =
-    LazyLock::new(|| RwLock::new(None));
 #[derive(Debug, Clone, Default)]
 struct ContractEventProjection {
     event_id: String,
@@ -31219,37 +31032,15 @@ struct ContractEventIndex {
 static CONTRACT_EVENT_INDEX: LazyLock<RwLock<Option<Arc<ContractEventIndex>>>> =
     LazyLock::new(|| RwLock::new(None));
 #[derive(Debug)]
-enum ContractActivityCandidatePositions<'a> {
-    All,
-    Indexed(std::borrow::Cow<'a, [usize]>),
-    Empty,
-}
-#[derive(Debug)]
 enum ContractEventCandidatePositions<'a> {
     All,
     Indexed(std::borrow::Cow<'a, [usize]>),
     Empty,
 }
-fn contract_activity_index_cache_key(state: &CoreState) -> ContractActivityIndexCacheKey {
-    let committed_height = state.committed_height();
-    let tip_block_hash = committed_block_hash_string_at_height(state, committed_height);
-    ContractActivityIndexCacheKey {
-        committed_height,
-        tip_block_hash,
-    }
-}
 fn contract_event_index_cache_key(state: &CoreState) -> ContractEventIndexCacheKey {
     let committed_height = state.committed_height();
     let tip_block_hash = committed_block_hash_string_at_height(state, committed_height);
     ContractEventIndexCacheKey {
-        committed_height,
-        tip_block_hash,
-    }
-}
-fn account_history_index_cache_key(state: &CoreState) -> AccountHistoryIndexCacheKey {
-    let committed_height = state.committed_height();
-    let tip_block_hash = committed_block_hash_string_at_height(state, committed_height);
-    AccountHistoryIndexCacheKey {
         committed_height,
         tip_block_hash,
     }
@@ -31260,27 +31051,10 @@ fn committed_block_hash_string_at_height(state: &CoreState, height: usize) -> Op
         .committed_block_hash_at_height(height)
         .map(|hash| format!("{hash}"))
 }
-fn account_history_insert_index(
-    index: &mut std::collections::HashMap<String, Vec<usize>>,
-    key: &str,
-    position: usize,
-) {
-    if !key.trim().is_empty() {
-        index.entry(key.to_owned()).or_default().push(position);
-    }
-}
 fn append_account_history_projection(
     index: &mut AccountHistoryIndex,
     projection: AccountHistoryProjection,
 ) {
-    let position = index.items.len();
-    account_history_insert_index(&mut index.by_account, &projection.account_id, position);
-    if let Some(asset_id) = projection.asset_id.as_deref() {
-        account_history_insert_index(&mut index.by_asset_id, asset_id, position);
-    }
-    if let Some(definition_id) = projection.asset_definition_id.as_deref() {
-        account_history_insert_index(&mut index.by_asset_definition, definition_id, position);
-    }
     index.items.push(projection);
 }
 #[derive(Clone)]
@@ -31350,7 +31124,8 @@ impl HistoryReadBudget {
         Self { work_left, bytes_left: iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work_left) }
     }
     fn read(&mut self, state: &CoreState, height: NonZeroUsize) -> Result<SharedSignedBlock> {
-        let carrier = state.read_finalized_execution_carrier(height, self.work_left, self.bytes_left)
+        // Off-chain read: authenticate from the nearest history checkpoint, not signed genesis.
+        let carrier = state.read_executed_carrier_from_checkpoints(height, self.work_left, self.bytes_left)
             .map_err(crate::canonical_history::query_attempt_error)?;
         self.work_left = self.work_left.checked_sub(carrier.work_items()).ok_or_else(history_capacity_error)?;
         self.bytes_left = self.bytes_left.checked_sub(carrier.wire_bytes()).ok_or_else(history_capacity_error)?;
@@ -31712,79 +31487,6 @@ fn append_account_history_projections_for_tx(
         }
     }
 }
-fn account_history_projections_for_height_range(
-    state: &CoreState, start_height: usize, end_height: usize, expected_end_hash: HashOf<BlockHeader>,
-) -> Result<Vec<AccountHistoryProjection>> {
-    project_finalized_network_range(state, start_height, end_height, true, expected_end_hash, |height, tx| {
-        let mut index = AccountHistoryIndex::default();
-        append_account_history_projections_for_tx(&mut index, tx, height as u64);
-        index.items
-    })
-}
-fn build_account_history_index(
-    state: &CoreState,
-    cache_key: AccountHistoryIndexCacheKey,
-) -> Result<AccountHistoryIndex> {
-    let mut index = AccountHistoryIndex {
-        cache_key,
-        ..Default::default()
-    };
-    let committed_height = index.cache_key.committed_height;
-    let Some(expected_end_hash) = history_cache_anchor(index.cache_key.committed_height, &index.cache_key.tip_block_hash)? else { return Ok(index); };
-    for projection in account_history_projections_for_height_range(state, 1, committed_height, expected_end_hash)? {
-        append_account_history_projection(&mut index, projection);
-    }
-    check_history_retention(index.items.len(), app_query_limits().max_fetch_size)?;
-    Ok(index)
-}
-fn account_history_cache_extends_append_only(
-    existing: &AccountHistoryIndex,
-    state: &CoreState,
-    next_key: &AccountHistoryIndexCacheKey,
-) -> bool {
-    if next_key.committed_height < existing.cache_key.committed_height {
-        return false;
-    }
-    if next_key.committed_height == existing.cache_key.committed_height {
-        return existing.cache_key == *next_key;
-    }
-    if existing.cache_key.committed_height == 0 {
-        return true;
-    }
-    let Some(previous_tip_block_hash) =
-        committed_block_hash_string_at_height(state, existing.cache_key.committed_height)
-    else {
-        return false;
-    };
-    Some(previous_tip_block_hash) == existing.cache_key.tip_block_hash
-}
-fn extend_account_history_index(
-    state: &CoreState,
-    previous: &AccountHistoryIndex,
-    cache_key: AccountHistoryIndexCacheKey,
-) -> Result<AccountHistoryIndex> {
-    if previous.cache_key.committed_height >= cache_key.committed_height {
-        return build_account_history_index(state, cache_key);
-    }
-    let expected_end_hash = history_cache_anchor(cache_key.committed_height, &cache_key.tip_block_hash)?
-        .ok_or_else(|| conversion_error("nonempty history extension has no tip".into()))?;
-    let mut index = AccountHistoryIndex {
-        cache_key: cache_key.clone(),
-        ..Default::default()
-    };
-    for projection in account_history_projections_for_height_range(
-        state,
-        previous.cache_key.committed_height.saturating_add(1),
-        cache_key.committed_height, expected_end_hash,
-    )? {
-        append_account_history_projection(&mut index, projection);
-    }
-    for projection in previous.items.iter().cloned() {
-        append_account_history_projection(&mut index, projection);
-    }
-    check_history_retention(index.items.len(), app_query_limits().max_fetch_size)?;
-    Ok(index)
-}
 fn reject_emergency_fast_history_index(state: &CoreState) -> Result<()> {
     reject_emergency_fast_unbounded_history(state, false, "lazy application history index")
 }
@@ -31803,67 +31505,12 @@ fn reject_emergency_fast_unbounded_history(
     }
     Ok(())
 }
-fn account_history_index_snapshot(state: &CoreState) -> Result<Arc<AccountHistoryIndex>> {
-    reject_emergency_fast_history_index(state)?;
-    let cache_key = account_history_index_cache_key(state);
-    if let Some(existing) = ACCOUNT_HISTORY_INDEX
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .as_ref()
-        .filter(|index| index.cache_key == cache_key)
-    {
-        return Ok(Arc::clone(existing));
-    }
-    let mut guard = ACCOUNT_HISTORY_INDEX
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(existing) = guard.as_ref().filter(|index| index.cache_key == cache_key) {
-        return Ok(Arc::clone(existing));
-    }
-    let rebuilt = if let Some(previous) = guard.as_ref() {
-        if account_history_cache_extends_append_only(previous.as_ref(), state, &cache_key) {
-            Arc::new(extend_account_history_index(state, previous, cache_key)?)
-        } else {
-            Arc::new(build_account_history_index(state, cache_key)?)
-        }
-    } else {
-        Arc::new(build_account_history_index(state, cache_key)?)
-    };
-    *guard = Some(Arc::clone(&rebuilt));
-    Ok(rebuilt)
-}
-fn contract_activity_insert_index(
+fn contract_event_insert_index(
     index: &mut std::collections::HashMap<String, Vec<usize>>,
     key: &str,
     position: usize,
 ) {
     index.entry(key.to_owned()).or_default().push(position);
-}
-fn append_contract_activity_projection(
-    index: &mut ContractActivityIndex,
-    projection: ContractActivityProjection,
-) {
-    let position = index.items.len();
-    if let Some(authority) = projection.authority.as_deref() {
-        contract_activity_insert_index(&mut index.by_authority, authority, position);
-    }
-    contract_activity_insert_index(
-        &mut index.by_contract_address,
-        &projection.contract_address,
-        position,
-    );
-    if let Some(alias) = projection.contract_alias.as_deref() {
-        contract_activity_insert_index(&mut index.by_contract_alias, alias, position);
-    }
-    if let Some(entrypoint) = projection.contract_entrypoint.as_deref() {
-        contract_activity_insert_index(&mut index.by_contract_entrypoint, entrypoint, position);
-    }
-    if projection.result_ok {
-        index.ok_positions.push(position);
-    } else {
-        index.error_positions.push(position);
-    }
-    index.items.push(projection);
 }
 fn append_contract_event_projection(
     index: &mut ContractEventIndex,
@@ -31871,38 +31518,31 @@ fn append_contract_event_projection(
 ) {
     let position = index.items.len();
     if let Some(authority) = projection.authority.as_deref() {
-        contract_activity_insert_index(&mut index.by_authority, authority, position);
+        contract_event_insert_index(&mut index.by_authority, authority, position);
     }
-    contract_activity_insert_index(
+    contract_event_insert_index(
         &mut index.by_contract_address,
         &projection.contract_address,
         position,
     );
     if let Some(alias) = projection.contract_alias.as_deref() {
-        contract_activity_insert_index(&mut index.by_contract_alias, alias, position);
+        contract_event_insert_index(&mut index.by_contract_alias, alias, position);
     }
-    contract_activity_insert_index(&mut index.by_module, &projection.module, position);
-    contract_activity_insert_index(&mut index.by_event_kind, &projection.event_kind, position);
+    contract_event_insert_index(&mut index.by_module, &projection.module, position);
+    contract_event_insert_index(&mut index.by_event_kind, &projection.event_kind, position);
     for participant in &projection.participants {
-        contract_activity_insert_index(&mut index.by_participant, participant, position);
+        contract_event_insert_index(&mut index.by_participant, participant, position);
     }
     for asset_id in &projection.asset_ids {
-        contract_activity_insert_index(&mut index.by_asset_id, asset_id, position);
+        contract_event_insert_index(&mut index.by_asset_id, asset_id, position);
     }
-    contract_activity_insert_index(&mut index.by_provenance, &projection.provenance, position);
+    contract_event_insert_index(&mut index.by_provenance, &projection.provenance, position);
     if projection.result_ok {
         index.ok_positions.push(position);
     } else {
         index.error_positions.push(position);
     }
     index.items.push(projection);
-}
-fn contract_activity_projections_for_height_range(
-    state: &CoreState, start_height: usize, end_height: usize, expected_end_hash: HashOf<BlockHeader>,
-) -> Result<Vec<ContractActivityProjection>> {
-    project_finalized_network_range(state, start_height, end_height, false, expected_end_hash, |height, tx| {
-        contract_activity_projection_from_tx(height, tx).into_iter().collect()
-    })
 }
 fn contract_event_module(contract_alias: Option<&str>, contract_address: &str) -> String {
     if let Some(module) = canonical_contract_module(contract_alias, contract_address) {
@@ -32564,23 +32204,6 @@ fn contract_event_projections_for_height_range(
         contract_event_projection_from_tx(height, tx).into_iter().collect()
     })
 }
-fn build_contract_activity_index(
-    state: &CoreState,
-    cache_key: ContractActivityIndexCacheKey,
-) -> Result<ContractActivityIndex> {
-    let mut index = ContractActivityIndex {
-        cache_key: cache_key.clone(),
-        ..ContractActivityIndex::default()
-    };
-    let Some(expected_end_hash) = history_cache_anchor(index.cache_key.committed_height, &index.cache_key.tip_block_hash)? else { return Ok(index); };
-    for projection in
-        contract_activity_projections_for_height_range(state, 1, cache_key.committed_height, expected_end_hash)?
-    {
-        append_contract_activity_projection(&mut index, projection);
-    }
-    check_history_retention(index.items.len(), app_query_limits().max_fetch_size)?;
-    Ok(index)
-}
 fn build_contract_event_index(
     state: &CoreState,
     cache_key: ContractEventIndexCacheKey,
@@ -32597,23 +32220,6 @@ fn build_contract_event_index(
     }
     check_history_retention(index.items.len(), app_query_limits().max_fetch_size)?;
     Ok(index)
-}
-fn contract_activity_cache_extends_append_only(
-    existing: &ContractActivityIndex,
-    state: &CoreState,
-    next_key: &ContractActivityIndexCacheKey,
-) -> bool {
-    if next_key.committed_height < existing.cache_key.committed_height {
-        return false;
-    }
-    if next_key.committed_height == existing.cache_key.committed_height {
-        return existing.cache_key == *next_key;
-    }
-    if existing.cache_key.committed_height == 0 {
-        return true;
-    }
-    committed_block_hash_string_at_height(state, existing.cache_key.committed_height)
-        == existing.cache_key.tip_block_hash
 }
 fn contract_event_cache_extends_append_only(
     existing: &ContractEventIndex,
@@ -32632,26 +32238,6 @@ fn contract_event_cache_extends_append_only(
     committed_block_hash_string_at_height(state, existing.cache_key.committed_height)
         == existing.cache_key.tip_block_hash
 }
-fn extend_contract_activity_index(
-    existing: &ContractActivityIndex,
-    state: &CoreState,
-    next_key: ContractActivityIndexCacheKey,
-) -> Result<ContractActivityIndex> {
-    let expected_end_hash = history_cache_anchor(next_key.committed_height, &next_key.tip_block_hash)?
-        .ok_or_else(|| conversion_error("nonempty history extension has no tip".into()))?;
-    let mut index = existing.clone();
-    let start_height = existing.cache_key.committed_height.saturating_add(1);
-    for projection in contract_activity_projections_for_height_range(
-        state,
-        start_height,
-        next_key.committed_height, expected_end_hash,
-    )? {
-        append_contract_activity_projection(&mut index, projection);
-    }
-    index.cache_key = next_key;
-    check_history_retention(index.items.len(), app_query_limits().max_fetch_size)?;
-    Ok(index)
-}
 fn extend_contract_event_index(
     existing: &ContractEventIndex,
     state: &CoreState,
@@ -32669,45 +32255,6 @@ fn extend_contract_event_index(
     index.cache_key = next_key;
     check_history_retention(index.items.len(), app_query_limits().max_fetch_size)?;
     Ok(index)
-}
-fn contract_activity_index_snapshot(state: &CoreState) -> Result<Arc<ContractActivityIndex>> {
-    reject_emergency_fast_history_index(state)?;
-    let cache_key = contract_activity_index_cache_key(state);
-    if let Some(existing) = CONTRACT_ACTIVITY_INDEX
-        .read()
-        .ok()
-        .and_then(|guard| guard.clone())
-    {
-        if existing.cache_key == cache_key {
-            return Ok(existing);
-        }
-    }
-    let rebuilt = if let Some(existing) = CONTRACT_ACTIVITY_INDEX
-        .read()
-        .ok()
-        .and_then(|guard| guard.clone())
-    {
-        if contract_activity_cache_extends_append_only(existing.as_ref(), state, &cache_key) {
-            Arc::new(extend_contract_activity_index(
-                existing.as_ref(),
-                state,
-                cache_key.clone(),
-            )?)
-        } else {
-            Arc::new(build_contract_activity_index(state, cache_key.clone())?)
-        }
-    } else {
-        Arc::new(build_contract_activity_index(state, cache_key.clone())?)
-    };
-    if let Ok(mut guard) = CONTRACT_ACTIVITY_INDEX.write() {
-        if let Some(existing) = guard.as_ref() {
-            if existing.cache_key == cache_key {
-                return Ok(Arc::clone(existing));
-            }
-        }
-        *guard = Some(Arc::clone(&rebuilt));
-    }
-    Ok(rebuilt)
 }
 fn contract_event_index_snapshot(state: &CoreState) -> Result<Arc<ContractEventIndex>> {
     reject_emergency_fast_history_index(state)?;
@@ -32752,8 +32299,6 @@ fn contract_event_index_snapshot(state: &CoreState) -> Result<Arc<ContractEventI
 routing_test! { sync emergency_fast_history_guard_precedes_every_lazy_full_index_build {
     let source = include_str!("routing.rs");
     for function in [
-        "fn account_history_index_snapshot",
-        "fn contract_activity_index_snapshot",
         "fn contract_event_index_snapshot",
     ] {
         let body = source
@@ -32772,7 +32317,7 @@ routing_test! { sync emergency_fast_history_guard_precedes_every_lazy_full_index
         );
     }
 } }
-fn intersect_contract_activity_positions(left: &[usize], right: &[usize]) -> Vec<usize> {
+fn intersect_contract_event_positions(left: &[usize], right: &[usize]) -> Vec<usize> {
     let mut merged = Vec::with_capacity(left.len().min(right.len()));
     let mut left_index = 0usize;
     let mut right_index = 0usize;
@@ -32788,131 +32333,6 @@ fn intersect_contract_activity_positions(left: &[usize], right: &[usize]) -> Vec
         }
     }
     merged
-}
-fn contract_activity_candidate_positions<'a>(
-    index: &'a ContractActivityIndex,
-    params: &ContractActivityGetParams,
-) -> ContractActivityCandidatePositions<'a> {
-    let mut exact_candidates = Vec::new();
-    let mut consider =
-        |candidate: Option<&'a Vec<usize>>| -> Option<ContractActivityCandidatePositions<'a>> {
-            let positions = match candidate {
-                Some(positions) => positions.as_slice(),
-                None => return Some(ContractActivityCandidatePositions::Empty),
-            };
-            exact_candidates.push(positions);
-            None
-        };
-    if let Some(authority) = params.authority.as_deref() {
-        if let Some(empty) = consider(index.by_authority.get(authority)) {
-            return empty;
-        }
-    }
-    if let Some(contract_address) = params.contract_address.as_deref() {
-        if let Some(empty) = consider(index.by_contract_address.get(contract_address)) {
-            return empty;
-        }
-    }
-    if let Some(contract_alias) = params.contract_alias.as_deref() {
-        if let Some(empty) = consider(index.by_contract_alias.get(contract_alias)) {
-            return empty;
-        }
-    }
-    if let Some(contract_entrypoint) = params.contract_entrypoint.as_deref() {
-        if let Some(empty) = consider(index.by_contract_entrypoint.get(contract_entrypoint)) {
-            return empty;
-        }
-    }
-    if let Some(result_ok) = params.result_ok {
-        let positions = if result_ok {
-            index.ok_positions.as_slice()
-        } else {
-            index.error_positions.as_slice()
-        };
-        if positions.is_empty() {
-            return ContractActivityCandidatePositions::Empty;
-        }
-        exact_candidates.push(positions);
-    }
-    if exact_candidates.is_empty() {
-        return ContractActivityCandidatePositions::All;
-    }
-    exact_candidates.sort_by_key(|positions| positions.len());
-    let mut merged = std::borrow::Cow::Borrowed(exact_candidates[0]);
-    for candidate in exact_candidates.into_iter().skip(1) {
-        let intersection = intersect_contract_activity_positions(merged.as_ref(), candidate);
-        if intersection.is_empty() {
-            return ContractActivityCandidatePositions::Empty;
-        }
-        merged = std::borrow::Cow::Owned(intersection);
-    }
-    ContractActivityCandidatePositions::Indexed(merged)
-}
-fn collect_contract_activity_page(
-    index: &ContractActivityIndex,
-    params: &ContractActivityGetParams,
-    pagination: EffectivePagination,
-    fetch_cap: Option<u64>,
-    is_visible: impl Fn(&ContractActivityProjection) -> bool,
-) -> (Vec<ContractActivityProjection>, usize) {
-    let offset_usize = if pagination.offset > usize::MAX as u64 {
-        usize::MAX
-    } else {
-        pagination.offset as usize
-    };
-    let limit_usize = pagination
-        .limit
-        .filter(|&lim| lim > 0)
-        .map(|lim| lim.min(usize::MAX as u64) as usize);
-    let fetch_cap_usize = fetch_cap
-        .filter(|&cap| cap > 0)
-        .map(|cap| cap.min(usize::MAX as u64) as usize);
-    let mut matched: usize = 0;
-    let mut items = Vec::new();
-    let mut additional_after_fill: usize = 0;
-    let mut visit = |projection: &ContractActivityProjection| {
-        // Keep restricted records out of caller-controlled filters, offsets,
-        // counts, and response projection.
-        if !is_visible(projection) || !contract_activity_matches(projection, params) {
-            return false;
-        }
-        matched = matched.saturating_add(1);
-        let within_page =
-            matched > offset_usize && limit_usize.map(|lim| items.len() < lim).unwrap_or(true);
-        if within_page {
-            items.push(projection.clone());
-            return false;
-        }
-        if limit_usize.map(|lim| items.len() >= lim).unwrap_or(false) {
-            if let Some(cap) = fetch_cap_usize {
-                additional_after_fill = additional_after_fill.saturating_add(1);
-                if additional_after_fill >= cap {
-                    return true;
-                }
-            }
-        }
-        false
-    };
-    match contract_activity_candidate_positions(index, params) {
-        ContractActivityCandidatePositions::All => {
-            for projection in index.items.iter().rev() {
-                if visit(projection) {
-                    break;
-                }
-            }
-        }
-        ContractActivityCandidatePositions::Indexed(positions) => {
-            for position in positions.iter().rev() {
-                if let Some(projection) = index.items.get(*position) {
-                    if visit(projection) {
-                        break;
-                    }
-                }
-            }
-        }
-        ContractActivityCandidatePositions::Empty => {}
-    }
-    (items, matched)
 }
 fn contract_event_candidate_positions<'a>(
     index: &'a ContractEventIndex,
@@ -32985,7 +32405,7 @@ fn contract_event_candidate_positions<'a>(
     exact_candidates.sort_by_key(|positions| positions.len());
     let mut merged = std::borrow::Cow::Borrowed(exact_candidates[0]);
     for candidate in exact_candidates.into_iter().skip(1) {
-        let intersection = intersect_contract_activity_positions(merged.as_ref(), candidate);
+        let intersection = intersect_contract_event_positions(merged.as_ref(), candidate);
         if intersection.is_empty() {
             return ContractEventCandidatePositions::Empty;
         }
@@ -33398,103 +32818,6 @@ fn instruction_matches_account_id(
 ) -> bool {
     crate::account_activity::instruction_matches_account_id(instr, expected)
 }
-fn instruction_matches_domain_predicate<F>(
-    instr: &iroha_data_model::isi::InstructionBox,
-    matches_domain: &F,
-    asset_definition_domains: &BTreeMap<iroha_data_model::asset::AssetDefinitionId, DomainId>,
-) -> bool
-where
-    F: Fn(&DomainId) -> bool,
-{
-    use iroha_data_model::isi::{
-        BurnBox, CustomInstruction, MintBox, RegisterBox, RemoveAssetKeyValue, SetAssetKeyValue,
-        TransferAssetBatch, TransferBox, staking::RecordPublicLaneRewards,
-    };
-    use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
-    let matches_asset_definition_domain =
-        |definition: &iroha_data_model::asset::AssetDefinitionId| {
-            asset_definition_domains
-                .get(definition)
-                .is_some_and(|domain_id| matches_domain(domain_id))
-        };
-    let any = instr.as_any();
-    if let Some(register) = any.downcast_ref::<RegisterBox>() {
-        return match register {
-            RegisterBox::Domain(register) => matches_domain(&register.object().id),
-            RegisterBox::AssetDefinition(register) => register
-                .object()
-                .owning_domain
-                .as_ref()
-                .is_some_and(matches_domain),
-            RegisterBox::Nft(register) => matches_domain(register.object().id.domain()),
-            RegisterBox::Peer(_)
-            | RegisterBox::Account(_)
-            | RegisterBox::Role(_)
-            | RegisterBox::Trigger(_) => false,
-        };
-    }
-    if let Some(transfer) = any.downcast_ref::<TransferBox>() {
-        return match transfer {
-            TransferBox::Domain(inner) => matches_domain(inner.object()),
-            TransferBox::AssetDefinition(inner) => matches_asset_definition_domain(inner.object()),
-            TransferBox::Asset(inner) => {
-                matches_asset_definition_domain(inner.source().definition())
-            }
-            TransferBox::Nft(inner) => matches_domain(inner.object().domain()),
-        };
-    }
-    if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
-        return batch
-            .entries()
-            .iter()
-            .any(|entry| matches_asset_definition_domain(entry.asset_definition()));
-    }
-    if let Some(mint) = any.downcast_ref::<MintBox>() {
-        if let MintBox::Asset(asset_mint) = mint {
-            return matches_asset_definition_domain(asset_mint.destination().definition());
-        }
-        return false;
-    }
-    if let Some(burn) = any.downcast_ref::<BurnBox>() {
-        if let BurnBox::Asset(asset_burn) = burn {
-            return matches_asset_definition_domain(asset_burn.destination().definition());
-        }
-        return false;
-    }
-    if let Some(set) = any.downcast_ref::<SetAssetKeyValue>() {
-        return matches_asset_definition_domain(set.asset().definition());
-    }
-    if let Some(remove) = any.downcast_ref::<RemoveAssetKeyValue>() {
-        return matches_asset_definition_domain(remove.asset().definition());
-    }
-    if let Some(rewards) = any.downcast_ref::<RecordPublicLaneRewards>() {
-        return matches_asset_definition_domain(rewards.reward_asset().definition());
-    }
-    if let Some(custom) = any.downcast_ref::<CustomInstruction>() {
-        if let Ok(multisig) = MultisigInstructionBox::try_from(custom.payload()) {
-            return match multisig {
-                MultisigInstructionBox::Register(register) => register
-                    .home_domain
-                    .as_ref()
-                    .is_some_and(|domain_id| matches_domain(domain_id)),
-                MultisigInstructionBox::Approve(_approve) => false,
-                MultisigInstructionBox::Cancel(_cancel) => false,
-                MultisigInstructionBox::InvalidateOutstanding(_invalidate) => false,
-                MultisigInstructionBox::Propose(propose) => {
-                    propose.instructions.iter().any(|nested| {
-                        instruction_matches_domain_predicate(
-                            nested,
-                            matches_domain,
-                            asset_definition_domains,
-                        )
-                    })
-                }
-            };
-        }
-        return false;
-    }
-    false
-}
 fn executable_explicit_instructions(
     executable: &iroha_data_model::transaction::Executable,
     mut visit: impl FnMut(&iroha_data_model::isi::InstructionBox),
@@ -33510,24 +32833,6 @@ fn executable_contains_account_id(
     let mut found = false;
     executable_explicit_instructions(executable, |instruction| {
         found |= instruction_matches_account_id(instruction, expected);
-    });
-    found
-}
-fn executable_contains_domain_predicate<F>(
-    executable: &iroha_data_model::transaction::Executable,
-    matches_domain: &F,
-    asset_definition_domains: &BTreeMap<iroha_data_model::asset::AssetDefinitionId, DomainId>,
-) -> bool
-where
-    F: Fn(&DomainId) -> bool,
-{
-    let mut found = false;
-    executable_explicit_instructions(executable, |instruction| {
-        found |= instruction_matches_domain_predicate(
-            instruction,
-            matches_domain,
-            asset_definition_domains,
-        );
     });
     found
 }
@@ -33549,145 +32854,10 @@ pub(crate) fn tx_references_account_id(
         }
     }
 }
-fn tx_references_domain_predicate<F>(
-    tx: &iroha_data_model::query::CommittedTransaction,
-    matches_domain: &F,
-    asset_definition_domains: &BTreeMap<iroha_data_model::asset::AssetDefinitionId, DomainId>,
-) -> bool
-where
-    F: Fn(&DomainId) -> bool,
-{
-    match tx.entrypoint() {
-        TransactionEntrypoint::External(signed) => executable_contains_domain_predicate(
-            signed.instructions(),
-            matches_domain,
-            asset_definition_domains,
-        ),
-        TransactionEntrypoint::SealedCommitment(_) => false,
-        TransactionEntrypoint::SealedReveal(reveal) => executable_contains_domain_predicate(
-            reveal.signed_transaction().instructions(),
-            matches_domain,
-            asset_definition_domains,
-        ),
-    }
-}
-fn tx_references_dataspace_alias(
-    tx: &iroha_data_model::query::CommittedTransaction,
-    expected_dataspace_alias: &str,
-    asset_definition_domains: &BTreeMap<iroha_data_model::asset::AssetDefinitionId, DomainId>,
-) -> bool {
-    let expected_dataspace_alias = expected_dataspace_alias.trim();
-    if expected_dataspace_alias.is_empty() {
-        return false;
-    }
-    tx_references_domain_predicate(
-        tx,
-        &|domain_id| {
-            domain_id
-                .dataspace()
-                .as_ref()
-                .eq_ignore_ascii_case(expected_dataspace_alias)
-        },
-        asset_definition_domains,
-    )
-}
-#[derive(Debug, Clone)]
-pub(crate) enum TxHistoryAssetSelectorInput {
-    AssetId(iroha_data_model::asset::AssetId),
-    DefinitionSelector(String),
-}
 #[derive(Debug, Clone)]
 pub(crate) enum TxHistoryAssetSelector {
     AssetId(iroha_data_model::asset::AssetId),
     DefinitionId(iroha_data_model::asset::id::AssetDefinitionId),
-}
-#[derive(Debug, Clone)]
-pub(crate) struct TxHistoryVisibilityScope {
-    pub viewer_account_ids: Vec<AccountId>,
-    pub viewer_dataspace_id: String,
-    pub allow_dataspace_wide: bool,
-    pub asset_definition_domains: BTreeMap<iroha_data_model::asset::AssetDefinitionId, DomainId>,
-}
-fn tx_matches_history_visibility_scope(
-    tx: &iroha_data_model::query::CommittedTransaction,
-    visibility: &TxHistoryVisibilityScope,
-) -> bool {
-    if visibility.allow_dataspace_wide {
-        return tx_references_dataspace_alias(
-            tx,
-            &visibility.viewer_dataspace_id,
-            &visibility.asset_definition_domains,
-        );
-    }
-    visibility
-        .viewer_account_ids
-        .iter()
-        .any(|account_id| tx_references_account_id(tx, account_id))
-}
-pub(crate) fn parse_tx_history_asset_selector(raw: &str) -> Result<TxHistoryAssetSelectorInput> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(conversion_error("asset_id must not be empty".to_string()));
-    }
-    if let Ok(asset_id) = iroha_data_model::asset::AssetId::parse_literal(trimmed) {
-        return Ok(TxHistoryAssetSelectorInput::AssetId(asset_id));
-    }
-    if iroha_data_model::asset::id::AssetDefinitionId::parse_address_literal(trimmed).is_ok()
-        || trimmed
-            .parse::<iroha_data_model::asset::AssetDefinitionAlias>()
-            .is_ok()
-    {
-        return Ok(TxHistoryAssetSelectorInput::DefinitionSelector(
-            trimmed.to_owned(),
-        ));
-    }
-    Err(conversion_error(
-        "asset_id must be a valid internal asset balance-bucket literal, canonical Base58 asset definition id, or active asset alias"
-            .to_string(),
-    ))
-}
-pub(crate) fn resolve_tx_history_asset_selector(
-    world: &impl WorldReadOnly,
-    now_ms: u64,
-    raw: Option<&str>,
-    allowed_definition: Option<&iroha_data_model::asset::id::AssetDefinitionId>,
-) -> Result<Option<TxHistoryAssetSelector>> {
-    let requested = raw.map(parse_tx_history_asset_selector).transpose()?;
-    if let Some(allowed_definition) = allowed_definition {
-        let requested = requested
-            .map(|selector| selector.into_resolved(world, now_ms))
-            .transpose()?;
-        let requested_definition = requested.as_ref().map(|selector| match selector {
-            TxHistoryAssetSelector::AssetId(asset_id) => asset_id.definition(),
-            TxHistoryAssetSelector::DefinitionId(definition_id) => definition_id,
-        });
-        if requested_definition.is_some_and(|definition_id| definition_id != allowed_definition) {
-            return Err(conversion_error(
-                "asset_id is outside the allowed transaction history asset definition".to_string(),
-            ));
-        }
-        return Ok(Some(requested.unwrap_or_else(|| {
-            TxHistoryAssetSelector::DefinitionId(allowed_definition.clone())
-        })));
-    }
-    requested
-        .map(|selector| selector.into_resolved(world, now_ms))
-        .transpose()
-}
-impl TxHistoryAssetSelectorInput {
-    fn into_resolved(
-        self,
-        world: &impl WorldReadOnly,
-        now_ms: u64,
-    ) -> Result<TxHistoryAssetSelector> {
-        match self {
-            Self::AssetId(asset_id) => Ok(TxHistoryAssetSelector::AssetId(asset_id)),
-            Self::DefinitionSelector(definition) => {
-                resolve_asset_definition_selector(world, &definition, now_ms)
-                    .map(TxHistoryAssetSelector::DefinitionId)
-            }
-        }
-    }
 }
 fn tx_matches_asset_selector(
     tx: &iroha_data_model::query::CommittedTransaction,
@@ -33805,55 +32975,6 @@ fn tx_fee_projection(
     };
     intent
 }
-fn contract_activity_matches(
-    projection: &ContractActivityProjection,
-    params: &ContractActivityGetParams,
-) -> bool {
-    if let Some(expected) = params.authority.as_deref() {
-        if projection.authority.as_deref() != Some(expected) {
-            return false;
-        }
-    }
-    if let Some(expected) = params.contract_address.as_deref() {
-        if projection.contract_address != expected {
-            return false;
-        }
-    }
-    if let Some(expected) = params.contract_alias.as_deref() {
-        if projection.contract_alias.as_deref() != Some(expected) {
-            return false;
-        }
-    }
-    if let Some(expected) = params.contract_entrypoint.as_deref() {
-        if projection.contract_entrypoint.as_deref() != Some(expected) {
-            return false;
-        }
-    }
-    if let Some(min_ts) = params.since_timestamp_ms {
-        if projection
-            .timestamp_ms
-            .map(|ts| ts < min_ts)
-            .unwrap_or(true)
-        {
-            return false;
-        }
-    }
-    if let Some(max_ts) = params.until_timestamp_ms {
-        if projection
-            .timestamp_ms
-            .map(|ts| ts > max_ts)
-            .unwrap_or(true)
-        {
-            return false;
-        }
-    }
-    if let Some(result_ok) = params.result_ok {
-        if projection.result_ok != result_ok {
-            return false;
-        }
-    }
-    true
-}
 static SUBSCRIPTION_PLAN_KEY: LazyLock<Name> = LazyLock::new(|| {
     Name::from_str(iroha_data_model::subscription::SUBSCRIPTION_PLAN_METADATA_KEY)
         .expect("subscription plan metadata key is valid")
@@ -33919,7 +33040,7 @@ pub const ENDPOINT_CONTRACTS_ROLLUPS_RWA_LOTS: &str = "/v1/contracts/rollups/rwa
 pub const ENDPOINT_CONTRACTS_ROLLUPS_DLMM_HOOKS: &str = "/v1/contracts/rollups/dlmm/hooks";
 pub const ENDPOINT_CONTRACTS_ROLLUPS_URANAI_MARKETS_HISTORY: &str =
     "/v1/contracts/rollups/uranai/markets/history";
-const ENDPOINT_ACCOUNTS_PERMISSIONS: &str = "/v1/accounts/{account_id}/permissions";
+pub(crate) const ENDPOINT_ACCOUNTS_PERMISSIONS: &str = "/v1/accounts/{account_id}/permissions";
 pub const ENDPOINT_ACCOUNTS_ASSETS: &str = "/v1/accounts/{account_id}/assets";
 pub const ENDPOINT_ACCOUNTS_ASSETS_QUERY: &str = "/v1/accounts/{account_id}/assets/query";
 const ENDPOINT_DOMAINS_QUERY: &str = "/v1/domains/query";
@@ -34118,7 +33239,7 @@ fn scoped_accounts_for_subject_sorted(
     accounts.dedup();
     accounts
 }
-fn canonicalize_filter_account_literals(
+pub(crate) fn canonicalize_filter_account_literals(
     expr: &mut FilterExpr,
     field_name: &str,
     state: Option<&CoreState>,
@@ -34527,27 +33648,6 @@ impl HistoryVisibilityReads {
         Ok(())
     }
 }
-fn committed_transaction_is_visible(
-    reads: &HistoryVisibilityReads,
-    visibility: &DataspaceReadVisibility,
-    transaction: &iroha_data_model::query::CommittedTransaction,
-) -> bool {
-    if visibility.can_read_all() {
-        return true;
-    }
-    let Some(height) = reads
-        .state
-        .committed_block_height_for_hash(transaction.block_hash)
-    else {
-        return reads.refuse("projected transaction has no canonical carrier");
-    };
-    reads.allows(
-        visibility,
-        height.get() as u64,
-        Some(transaction.block_hash),
-        *transaction.entrypoint_hash(),
-    )
-}
 #[cfg(test)]
 fn committed_transaction_is_visible_in_block(
     visibility: &DataspaceReadVisibility,
@@ -34558,16 +33658,13 @@ fn committed_transaction_is_visible_in_block(
         || visibility.allows_external_entrypoint_hash(block, *transaction.entrypoint_hash())
 }
 }
-include!("routing/committed_transaction_pagination.rs");
 app_api_items! {
 fn account_history_projection_matches_asset_selector(
     projection: &AccountHistoryProjection,
     selector: &TxHistoryAssetSelector,
 ) -> bool {
     match selector {
-        TxHistoryAssetSelector::AssetId(asset_id) => projection
-            .asset_id
-            .as_deref()
+        TxHistoryAssetSelector::AssetId(asset_id) => projection.asset_id.as_deref()
             .is_some_and(|candidate| candidate == asset_id.to_string()),
         TxHistoryAssetSelector::DefinitionId(definition_id) => {
             let definition = definition_id.to_string();
@@ -34576,428 +33673,38 @@ fn account_history_projection_matches_asset_selector(
         }
     }
 }
-pub(crate) async fn handle_v1_account_history_get_with_visibility_policy(
-    state: Arc<CoreState>,
-    axum::extract::Path(account_id): axum::extract::Path<String>,
-    crate::NoritoQuery(params): crate::NoritoQuery<AccountHistoryGetParams>,
-    telemetry: MaybeTelemetry,
-    allowed_asset_definition_id: Option<AssetDefinitionId>,
-    visibility: DataspaceReadVisibility,
-) -> Result<impl IntoResponse> {
-    let visibility_owner = HistoryVisibilityReads::new(Arc::clone(&state));
-    let visibility_reads = &visibility_owner;
-    let response = async {
-    #[cfg(feature = "telemetry")]
-    use std::time::Instant;
-    #[cfg(feature = "telemetry")]
-    let start = Instant::now();
-    record_account_literal_selection(&telemetry, ENDPOINT_ACCOUNTS_HISTORY);
-    let (account_id, _) = parse_account_path_segment_with_state(
-        state.as_ref(),
-        &account_id,
-        &telemetry,
-        ENDPOINT_ACCOUNTS_HISTORY,
-    )?;
-    let subject_visible = {
-        let world = state.world_view();
-        visibility.allows_account(&world, &account_id)
-    };
-    let cap = app_query_page_cap(&state);
-    let count_mode = app_count_mode(params.count_mode.as_deref(), ENDPOINT_ACCOUNTS_HISTORY);
-    let (page, snapshot) = {
-        let limits = app_query_limits();
-        let world = state.world_view();
-        let now_ms = asset_alias_observation_time_ms(&state);
-        let asset_filter = resolve_tx_history_asset_selector(
-            &world,
-            now_ms,
-            params.asset_id.as_deref(),
-            allowed_asset_definition_id.as_ref(),
-        )?;
-        let pagination =
-            enforce_app_pagination(params.limit, params.offset, cap, ENDPOINT_ACCOUNTS_HISTORY)?;
-        let fetch_cap = if count_mode == AppCountMode::Exact {
-            None
-        } else {
-            limits
-                .clamp_fetch_size(None)?
-                .map(|value| value.min(pagination.cap))
-        };
-        let snapshot = account_history_index_snapshot(state.as_ref())?;
-        let account_key = account_id.to_string();
-        let positions = snapshot
-            .by_account
-            .get(&account_key)
-            .cloned()
-            .unwrap_or_default();
-        let filtered = positions.into_iter().filter_map({
-            let index = Arc::clone(&snapshot);
-            let asset_filter = asset_filter.clone();
-            move |position| {
-                if !subject_visible {
-                    return None;
-                }
-                let projection = index.items.get(position)?;
-                if !visibility.can_read_all()
-                    && !projection
-                        .block_height
-                        .zip(projection.tx_hash.as_deref())
-                        .is_some_and(|(height, hash)| {
-                            committed_entrypoint_is_visible(
-                                visibility_reads,
-                                &visibility,
-                                height,
-                                hash,
-                            )
-                        })
-                {
-                    return None;
-                }
-                if asset_filter.as_ref().is_some_and(|selector| {
-                    !account_history_projection_matches_asset_selector(projection, selector)
-                }) {
-                    return None;
-                }
-                Some(projection.clone())
-            }
-        });
-        (
-            collect_page_linear_for_mode(
-                filtered,
-                pagination.offset,
-                pagination.limit,
-                fetch_cap,
-                count_mode,
-            ),
-            snapshot,
-        )
-    };
-    #[cfg(feature = "telemetry")]
-    if telemetry.is_enabled() {
-        let metrics = telemetry.metrics().await;
-        metrics
-            .torii_filter_depth
-            .with_label_values(&[ENDPOINT_ACCOUNTS_HISTORY])
-            .observe(0.0);
-        metrics
-            .torii_filter_match_count
-            .with_label_values(&[ENDPOINT_ACCOUNTS_HISTORY])
-            .observe(page.total.unwrap_or(page.items.len()) as f64);
-        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-        metrics
-            .torii_scan_ms
-            .with_label_values(&[ENDPOINT_ACCOUNTS_HISTORY])
-            .observe(elapsed_ms);
-        metrics
-            .torii_stream_rows
-            .with_label_values(&[ENDPOINT_ACCOUNTS_HISTORY])
-            .observe(page.items.len() as f64);
-    }
-    let mut top = norito::json::Map::new();
-    top.insert(
-        "items".into(),
-        norito::json::Value::Array(account_history_projections_to_json(&page.items)),
-    );
-    insert_page_metadata(&mut top, &page, count_mode);
-    top.insert(
-        "indexed_height".into(),
-        norito::json::Value::from(snapshot.cache_key.committed_height as u64),
-    );
-    match snapshot.cache_key.tip_block_hash.as_ref() {
-        Some(hash) => {
-            top.insert(
-                "indexed_block_hash".into(),
-                norito::json::Value::from(hash.clone()),
-            );
-        }
-        None => {
-            top.insert("indexed_block_hash".into(), norito::json::Value::Null);
-        }
-    }
-    top.insert(
-        "query_source".into(),
-        norito::json::Value::from("account_history_index"),
-    );
-    pretty_json_response(&top)
-
-    }.await;
-    visibility_owner.finish()?;
-    response
-}
-/// GET `/v1/transactions/history` — visible history feed for the authenticated viewer.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_transactions_history_get(
-    state: Arc<CoreState>,
-    crate::NoritoQuery(params): crate::NoritoQuery<AccountTransactionsGetParams>,
-    telemetry: MaybeTelemetry,
-    visibility: TxHistoryVisibilityScope,
-    dataspace_visibility: DataspaceReadVisibility,
-    allowed_asset_definition_id: Option<AssetDefinitionId>,
-) -> Result<impl IntoResponse> {
-    let visibility_owner = HistoryVisibilityReads::new(Arc::clone(&state));
-    let visibility_reads = &visibility_owner;
-    let response = async {
-    #[cfg(feature = "telemetry")]
-    use std::time::Instant;
-    #[cfg(not(feature = "telemetry"))]
-    let _ = &telemetry;
-    #[cfg(feature = "telemetry")]
-    let start = Instant::now();
-    let cap = app_query_page_cap(&state);
-    let count_mode =
-        app_transaction_count_mode(params.count_mode.as_deref(), "/v1/transactions/history");
-    let page = {
-        let limits = app_query_limits();
-        let world = state.world_view();
-        let now_ms = asset_alias_observation_time_ms(&state);
-        let asset_filter = resolve_tx_history_asset_selector(
-            &world,
-            now_ms,
-            params.asset_id.as_deref(),
-            allowed_asset_definition_id.as_ref(),
-        )?;
-        let pagination =
-            enforce_app_pagination(params.limit, params.offset, cap, "/v1/transactions/history")?;
-        let fetch_cap = limits
-            .clamp_fetch_size(None)?
-            .map(|v| v.min(pagination.cap));
-        collect_committed_transaction_page(
-            state.as_ref(),
-            iroha_data_model::query::dsl::CompoundPredicate::PASS,
-            pagination,
-            fetch_cap,
-            count_mode,
-            {
-                let visibility = visibility.clone();
-                let dataspace_visibility = dataspace_visibility.clone();
-                let asset_filter = asset_filter.clone();
-                move |tx| {
-                    if !committed_transaction_is_visible(
-                        visibility_reads,
-                        &dataspace_visibility,
-                        tx,
-                    ) {
-                        return None;
-                    }
-                    if let Some(expected) = asset_filter.as_ref() {
-                        if !tx_matches_asset_selector(tx, expected) {
-                            return None;
-                        }
-                    }
-                    if !tx_matches_history_visibility_scope(tx, &visibility) {
-                        return None;
-                    }
-                    Some(project_tx(tx))
-                }
-            },
-        )?
-    };
-    #[cfg(feature = "telemetry")]
-    let item_count = page.items.len();
-    #[cfg(feature = "telemetry")]
-    if telemetry.is_enabled() {
-        let metrics = telemetry.metrics().await;
-        let endpoint = "/v1/transactions/history";
-        metrics
-            .torii_filter_depth
-            .with_label_values(&[endpoint])
-            .observe(0.0);
-        metrics
-            .torii_filter_match_count
-            .with_label_values(&[endpoint])
-            .observe(page.total.unwrap_or(page.items.len()) as f64);
-        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-        metrics
-            .torii_scan_ms
-            .with_label_values(&[endpoint])
-            .observe(elapsed_ms);
-        metrics
-            .torii_stream_rows
-            .with_label_values(&[endpoint])
-            .observe(item_count as f64);
-    }
-    let items_json = tx_projections_to_json(&page.items);
-    let mut top = norito::json::Map::new();
-    top.insert("items".into(), norito::json::Value::Array(items_json));
-    insert_page_metadata(&mut top, &page, count_mode);
-    pretty_json_response(&top)
-
-    }.await;
-    visibility_owner.finish()?;
-    response
-}
-/// Bench entry point for `/v1/contracts/activity` with unrestricted dataspace visibility.
+/// Bench entry point for `/v1/contracts/activity` with unrestricted visibility.
 #[cfg(all(feature = "app_api", feature = "bench"))]
 pub async fn handle_v1_contracts_activity_get_for_bench(
     state: Arc<CoreState>,
-    query: crate::NoritoQuery<ContractActivityGetParams>,
+    query: iroha_torii_shared::list_query::ListQuery,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     handle_v1_contracts_activity_get(state, DataspaceReadVisibility::all(), query, telemetry).await
 }
-/// GET `/v1/contracts/activity` — contract-call activity feed derived from committed transaction metadata.
-#[iroha_futures::telemetry_future]
+/// Return a bounded collection page of authenticated committed contract calls.
 pub async fn handle_v1_contracts_activity_get(
     state: Arc<CoreState>,
     visibility: DataspaceReadVisibility,
-    crate::NoritoQuery(params): crate::NoritoQuery<ContractActivityGetParams>,
+    query: iroha_torii_shared::list_query::ListQuery,
     telemetry: MaybeTelemetry,
-) -> Result<impl IntoResponse> {
-    let visibility_owner = HistoryVisibilityReads::new(Arc::clone(&state));
-    let visibility_reads = &visibility_owner;
-    let response = async {
-    #[cfg(feature = "telemetry")]
-    use std::time::Instant;
-    #[cfg(not(feature = "telemetry"))]
-    let _ = &telemetry;
-    #[cfg(feature = "telemetry")]
-    let start = Instant::now();
-    let cap = app_query_page_cap(&state);
-    let count_mode = app_count_mode(params.count_mode.as_deref(), ENDPOINT_CONTRACTS_ACTIVITY);
-    let page = {
-        let limits = app_query_limits();
-        let index = contract_activity_index_snapshot(state.as_ref())?;
-        let pagination = enforce_app_pagination(
-            params.limit,
-            params.offset,
-            cap,
-            ENDPOINT_CONTRACTS_ACTIVITY,
-        )?;
-        let fetch_cap = if count_mode == AppCountMode::Exact {
-            None
-        } else {
-            limits
-                .clamp_fetch_size(None)?
-                .map(|value| value.min(pagination.cap))
-        };
-        let offset = pagination.offset;
-        let (items, matched) = collect_contract_activity_page(
-            index.as_ref(),
-            &params,
-            pagination,
-            fetch_cap,
-            |projection| {
-                contract_activity_projection_is_visible(
-                    visibility_reads,
-                    &visibility,
-                    projection,
-                )
-            },
-        );
-        page_result_from_counted_items(items, matched, offset, count_mode)
-    };
-    #[cfg(feature = "telemetry")]
-    let item_count = page.items.len();
-    #[cfg(feature = "telemetry")]
-    if telemetry.is_enabled() {
-        let metrics = telemetry.metrics().await;
-        metrics
-            .torii_filter_depth
-            .with_label_values(&[ENDPOINT_CONTRACTS_ACTIVITY])
-            .observe(0.0);
-        metrics
-            .torii_filter_match_count
-            .with_label_values(&[ENDPOINT_CONTRACTS_ACTIVITY])
-            .observe(page.total.unwrap_or(page.items.len()) as f64);
-        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-        metrics
-            .torii_scan_ms
-            .with_label_values(&[ENDPOINT_CONTRACTS_ACTIVITY])
-            .observe(elapsed_ms);
-        metrics
-            .torii_stream_rows
-            .with_label_values(&[ENDPOINT_CONTRACTS_ACTIVITY])
-            .observe(item_count as f64);
-    }
-    let items_json = contract_activity_projections_to_json(&page.items);
-    let mut top = norito::json::Map::new();
-    top.insert("items".into(), norito::json::Value::Array(items_json));
-    insert_page_metadata(&mut top, &page, count_mode);
-    pretty_json_response(&top)
-
-    }.await;
-    visibility_owner.finish()?;
-    response
+) -> Result<Response> {
+    collection_sources::execute_collection_response(
+        None, &state, &collection_sources::CollectionTarget::ContractActivity,
+        query, &telemetry, &visibility,
+    ).await
 }
-/// GET `/v1/contracts/events` — generic contract event feed derived from committed transaction metadata.
-#[iroha_futures::telemetry_future]
+/// Return a bounded collection page of authenticated committed contract events.
 pub async fn handle_v1_contracts_events_get(
     state: Arc<CoreState>,
     visibility: DataspaceReadVisibility,
-    crate::NoritoQuery(params): crate::NoritoQuery<ContractEventGetParams>,
+    query: iroha_torii_shared::list_query::ListQuery,
     telemetry: MaybeTelemetry,
-) -> Result<impl IntoResponse> {
-    let visibility_owner = HistoryVisibilityReads::new(Arc::clone(&state));
-    let visibility_reads = &visibility_owner;
-    let response = async {
-    #[cfg(feature = "telemetry")]
-    use std::time::Instant;
-    #[cfg(not(feature = "telemetry"))]
-    let _ = &telemetry;
-    #[cfg(feature = "telemetry")]
-    let start = Instant::now();
-    let cap = app_query_page_cap(&state);
-    let count_mode = app_count_mode(params.count_mode.as_deref(), ENDPOINT_CONTRACTS_EVENTS);
-    let page = {
-        let limits = app_query_limits();
-        let index = contract_event_index_snapshot(state.as_ref())?;
-        let pagination =
-            enforce_app_pagination(params.limit, params.offset, cap, ENDPOINT_CONTRACTS_EVENTS)?;
-        let fetch_cap = if count_mode == AppCountMode::Exact {
-            None
-        } else {
-            limits
-                .clamp_fetch_size(None)?
-                .map(|value| value.min(pagination.cap))
-        };
-        let offset = pagination.offset;
-        let (items, matched) = collect_contract_event_page(
-            index.as_ref(),
-            &params,
-            pagination,
-            fetch_cap,
-            |projection| {
-                contract_event_projection_is_visible(
-                    visibility_reads,
-                    &visibility,
-                    projection,
-                )
-            },
-        );
-        page_result_from_counted_items(items, matched, offset, count_mode)
-    };
-    #[cfg(feature = "telemetry")]
-    let item_count = page.items.len();
-    #[cfg(feature = "telemetry")]
-    if telemetry.is_enabled() {
-        let metrics = telemetry.metrics().await;
-        metrics
-            .torii_filter_depth
-            .with_label_values(&[ENDPOINT_CONTRACTS_EVENTS])
-            .observe(0.0);
-        metrics
-            .torii_filter_match_count
-            .with_label_values(&[ENDPOINT_CONTRACTS_EVENTS])
-            .observe(page.total.unwrap_or(page.items.len()) as f64);
-        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-        metrics
-            .torii_scan_ms
-            .with_label_values(&[ENDPOINT_CONTRACTS_EVENTS])
-            .observe(elapsed_ms);
-        metrics
-            .torii_stream_rows
-            .with_label_values(&[ENDPOINT_CONTRACTS_EVENTS])
-            .observe(item_count as f64);
-    }
-    let items_json = contract_event_projections_to_json(&page.items);
-    let mut top = norito::json::Map::new();
-    top.insert("items".into(), norito::json::Value::Array(items_json));
-    insert_page_metadata(&mut top, &page, count_mode);
-    pretty_json_response(&top)
-
-    }.await;
-    visibility_owner.finish()?;
-    response
+) -> Result<Response> {
+    collection_sources::execute_collection_response(
+        None, &state, &collection_sources::CollectionTarget::ContractEvents,
+        query, &telemetry, &visibility,
+    ).await
 }
 /// GET /v1/parameters — Returns current executor/system parameters as JSON.
 #[iroha_futures::telemetry_future]
@@ -35714,31 +34421,6 @@ mod tx_query_filter_tests {
         let result = dm::TransactionResult::new(Ok(dm::DataTriggerSequence::default()));
         committed_transaction_fixture(signed, keypair, result)
     }
-    routing_test! { sync tx_history_visibility_dataspace_wide_matches_dataspace_alias
-        let (authority, keypair): (dm::AccountId, KeyPair) = account_with_key();
-        let banka_domain = DomainId::try_new("treasury", "banka").expect("banka domain");
-        let bankb_domain = DomainId::try_new("treasury", "bankb").expect("bankb domain");
-        let scope = TxHistoryVisibilityScope {
-            viewer_account_ids: Vec::new(),
-            viewer_dataspace_id: "banka".to_owned(),
-            allow_dataspace_wide: true,
-            asset_definition_domains: BTreeMap::new(),
-        };
-        let banka_tx = make_external_tx_with_instructions(
-            &authority,
-            &keypair,
-            1_710_000_000_000,
-            vec![dm::Transfer::domain(authority.clone(), banka_domain, authority.clone()).into()],
-        );
-        let bankb_tx = make_external_tx_with_instructions(
-            &authority,
-            &keypair,
-            1_710_000_001_000,
-            vec![dm::Transfer::domain(authority.clone(), bankb_domain, authority.clone()).into()],
-        );
-        assert!(tx_matches_history_visibility_scope(&banka_tx, &scope));
-        assert!(!tx_matches_history_visibility_scope(&bankb_tx, &scope));
-    }
     routing_test! { sync kaigi_call_signal_cursor_binds_call_filter_and_canonical_encoding
         let call_id = iroha_data_model::kaigi::KaigiId::new(
             DomainId::try_new("kaigi", "universal").expect("domain"),
@@ -36109,24 +34791,20 @@ mod tx_query_filter_tests {
         );
         let mut index = AccountHistoryIndex::default();
         append_account_history_projections_for_tx(&mut index, &tx, 1);
-        let recipient_rows = index
-            .by_account
-            .get(&recipient.to_string())
-            .expect("recipient indexed by account");
+        let recipient_rows: Vec<_> = index.items.iter()
+            .filter(|row| row.account_id == recipient.to_string()).collect();
         assert_eq!(recipient_rows.len(), 1);
-        let projection = &index.items[recipient_rows[0]];
+        let projection = recipient_rows[0];
         assert_eq!(projection.direction, "incoming");
         assert_eq!(
             projection.asset_id.as_deref(),
             Some(recipient_asset_literal.as_str())
         );
         assert!(account_history_projection_matches_asset_selector(
-            projection,
-            &TxHistoryAssetSelector::AssetId(recipient_asset_id)
+            projection, &TxHistoryAssetSelector::AssetId(recipient_asset_id)
         ));
         assert!(!account_history_projection_matches_asset_selector(
-            projection,
-            &TxHistoryAssetSelector::AssetId(source_asset_id)
+            projection, &TxHistoryAssetSelector::AssetId(source_asset_id)
         ));
         assert_ne!(
             projection.asset_id.as_deref(),
@@ -36193,7 +34871,6 @@ mod tx_query_filter_tests {
         let asset_id = dm::AssetId::new(def.clone(), holder.clone());
         let asset_literal = asset_id.to_string();
         let def_literal = def.to_string();
-        let other_def = test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400ab");
         let tx = make_external_tx_with_instructions(
             &authority,
             &keypair,
@@ -36202,12 +34879,10 @@ mod tx_query_filter_tests {
         );
         let mut index = AccountHistoryIndex::default();
         append_account_history_projections_for_tx(&mut index, &tx, 1);
-        let account_rows = index
-            .by_account
-            .get(&holder.to_string())
-            .expect("holder indexed by account");
+        let account_rows: Vec<_> = index.items.iter()
+            .filter(|row| row.account_id == holder.to_string()).collect();
         assert_eq!(account_rows.len(), 1);
-        let projection = &index.items[account_rows[0]];
+        let projection = account_rows[0];
         assert_eq!(projection.account_id, holder.to_string());
         assert_eq!(projection.direction, "incoming");
         assert_eq!(projection.history_type, "RAW_ON_CHAIN");
@@ -36217,101 +34892,6 @@ mod tx_query_filter_tests {
             projection.asset_definition_id.as_deref(),
             Some(def_literal.as_str())
         );
-        assert!(account_history_projection_matches_asset_selector(
-            projection,
-            &TxHistoryAssetSelector::AssetId(asset_id)
-        ));
-        assert!(account_history_projection_matches_asset_selector(
-            projection,
-            &TxHistoryAssetSelector::DefinitionId(def)
-        ));
-        assert!(!account_history_projection_matches_asset_selector(
-            projection,
-            &TxHistoryAssetSelector::DefinitionId(other_def)
-        ));
-    }
-    routing_test! { sync account_history_cache_extension_rejects_missing_previous_tip
-        let state = iroha_core::state::State::new_for_testing(
-            iroha_core::state::World::default(),
-            iroha_core::kura::Kura::blank_kura_for_testing(),
-            iroha_core::query::store::LiveQueryStore::start_test(),
-        );
-        let existing = AccountHistoryIndex {
-            cache_key: AccountHistoryIndexCacheKey {
-                committed_height: 1,
-                tip_block_hash: Some("unrelated-tip".to_owned()),
-            },
-            ..Default::default()
-        };
-        let next_key = AccountHistoryIndexCacheKey {
-            committed_height: 2,
-            tip_block_hash: None,
-        };
-        assert!(!account_history_cache_extends_append_only(
-            &existing, &state, &next_key
-        ));
-    }
-    routing_test! { sync account_history_cache_key_uses_committed_hash_journal_without_block_body
-        let state = iroha_core::state::State::new_for_testing(
-            iroha_core::state::World::default(),
-            iroha_core::kura::Kura::blank_kura_for_testing(),
-            iroha_core::query::store::LiveQueryStore::start_test(),
-        );
-        let first = GenericHashOf::<dm::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-            [0x11; Hash::LENGTH],
-        ));
-        let second = GenericHashOf::<dm::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-            [0x22; Hash::LENGTH],
-        ));
-        let second_hash = second.to_string();
-        {
-            let mut block_hashes = state.block_hashes.block();
-            block_hashes.push_for_tests(first);
-            block_hashes.push_for_tests(second);
-            block_hashes.commit_for_tests();
-        }
-        let cache_key = account_history_index_cache_key(&state);
-        assert_eq!(cache_key.committed_height, 2);
-        assert_eq!(
-            cache_key.tip_block_hash.as_deref(),
-            Some(second_hash.as_str())
-        );
-    }
-    #[test]
-    fn account_history_cache_extension_accepts_journal_previous_tip_without_block_body() {
-        let state = iroha_core::state::State::new_for_testing(
-            iroha_core::state::World::default(),
-            iroha_core::kura::Kura::blank_kura_for_testing(),
-            iroha_core::query::store::LiveQueryStore::start_test(),
-        );
-        let first = GenericHashOf::<dm::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-            [0x31; Hash::LENGTH],
-        ));
-        let second = GenericHashOf::<dm::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-            [0x32; Hash::LENGTH],
-        ));
-        let first_hash = first.to_string();
-        let second_hash = second.to_string();
-        {
-            let mut block_hashes = state.block_hashes.block();
-            block_hashes.push_for_tests(first);
-            block_hashes.push_for_tests(second);
-            block_hashes.commit_for_tests();
-        }
-        let existing = AccountHistoryIndex {
-            cache_key: AccountHistoryIndexCacheKey {
-                committed_height: 1,
-                tip_block_hash: Some(first_hash),
-            },
-            ..Default::default()
-        };
-        let next_key = AccountHistoryIndexCacheKey {
-            committed_height: 2,
-            tip_block_hash: Some(second_hash),
-        };
-        assert!(account_history_cache_extends_append_only(
-            &existing, &state, &next_key
-        ));
     }
     routing_test! { sync instruction_matches_account_id_matches_multisig_custom_cancel_account
         let (multisig, _) = account_with_key();
@@ -37927,7 +36507,6 @@ mod explorer_lookup_tests {
                 query,
                 &MaybeTelemetry::for_tests(),
                 &public_only,
-                None,
             )
             .await
             .expect("public account page");
@@ -39596,18 +38175,6 @@ fn committed_entrypoint_is_visible(
     if visibility.can_read_all() { return true; }
     let Ok(hash) = entrypoint_hash.parse() else { return reads.refuse("projected source hash is malformed"); };
     reads.allows(visibility, block_height, None, hash)
-}
-fn contract_activity_projection_is_visible(
-    reads: &HistoryVisibilityReads,
-    visibility: &DataspaceReadVisibility,
-    projection: &ContractActivityProjection,
-) -> bool {
-    committed_entrypoint_is_visible(
-        reads,
-        visibility,
-        projection.block_height,
-        &projection.entrypoint_hash,
-    )
 }
 fn contract_event_projection_is_visible(
     reads: &HistoryVisibilityReads,
@@ -44784,106 +43351,7 @@ fn parse_block_status(s: &str) -> Option<BlockStatus> {
         _ => None,
     }
 }
-derived_items! {
-/// Common GET list params: optional JSON filter + pagination.
-( crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
-pub struct ListFilterParams {
-    /// Optional JSON-encoded FilterExpr for compact GET filters.
-    pub filter: Option<String>,
-    /// Optional limit for pagination.
-    pub limit: Option<u64>,
-    /// Offset for pagination (default 0).
-    #[norito(default)]
-    pub offset: u64,
-    /// Optional compact sort string: e.g., "metadata.display_name:asc,id:desc".
-    pub sort: Option<String>,
-    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
-    #[norito(default)]
-    pub count_mode: Option<String>,
-}
-/// Common GET pagination params with count mode.
-( crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
-pub struct PaginationParams {
-    /// Optional limit for pagination.
-    pub limit: Option<u64>,
-    /// Offset for pagination (default 0).
-    #[norito(default)]
-    pub offset: u64,
-    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
-    #[norito(default)]
-    pub count_mode: Option<String>,
-}
-( crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
-pub struct AccountAssetsGetParams {
-    /// Optional limit for pagination.
-    pub limit: Option<u64>,
-    /// Offset for pagination (default 0).
-    #[norito(default)]
-    pub offset: u64,
-    /// Filter assets by asset definition selector.
-    pub asset: Option<String>,
-    /// Filter assets by balance scope (`global` or `dataspace:<id>`).
-    pub scope: Option<String>,
-    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
-    #[norito(default)]
-    pub count_mode: Option<String>,
-}
-( crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
-pub struct AccountTransactionsGetParams {
-    /// Optional limit for pagination.
-    pub limit: Option<u64>,
-    /// Offset for pagination (default 0).
-    #[norito(default)]
-    pub offset: u64,
-    /// Filter transactions by asset definition selector.
-    pub asset_id: Option<String>,
-    /// Exact dataspace alias selected by the signed history-feed query.
-    #[norito(default)]
-    pub dataspace_id: Option<String>,
-    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
-    #[norito(default)]
-    pub count_mode: Option<String>,
-}
-( crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
-pub struct AccountHistoryGetParams {
-    /// Optional limit for pagination.
-    pub limit: Option<u64>,
-    /// Offset for pagination (default 0).
-    #[norito(default)]
-    pub offset: u64,
-    /// Filter history by asset balance-bucket or asset definition selector.
-    pub asset_id: Option<String>,
-    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
-    #[norito(default)]
-    pub count_mode: Option<String>,
-}
-( crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
-/// Query parameters accepted by the committed contract-activity feed.
-pub struct ContractActivityGetParams {
-    /// Optional limit for pagination.
-    pub limit: Option<u64>,
-    /// Offset for pagination (default 0).
-    #[norito(default)]
-    pub offset: u64,
-    /// Filter by canonical I105 authority.
-    pub authority: Option<String>,
-    /// Filter by contract address.
-    pub contract_address: Option<String>,
-    /// Filter by deployed contract alias.
-    pub contract_alias: Option<String>,
-    /// Filter by contract entrypoint name.
-    pub contract_entrypoint: Option<String>,
-    /// Filter items whose timestamp is greater than or equal to this value.
-    pub since_timestamp_ms: Option<u64>,
-    /// Filter items whose timestamp is less than or equal to this value.
-    pub until_timestamp_ms: Option<u64>,
-    /// Filter items by execution outcome.
-    pub result_ok: Option<bool>,
-    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
-    #[norito(default)]
-    pub count_mode: Option<String>,
-}
-( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
+derived_items! {( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
 pub struct ContractEventGetParams {
     /// Optional limit for pagination.
     pub limit: Option<u64>,
@@ -45201,24 +43669,6 @@ fn repo_filter_candidate_ids(
         _ => None,
     }
 }
-fn repo_agreements_for_filter<'a>(
-    world: &'a impl WorldReadOnly,
-    filter: Option<&crate::filter::FilterExpr>,
-) -> Box<dyn Iterator<Item = &'a RepoAgreement> + 'a> {
-    if let Some(candidate_ids) = repo_filter_candidate_ids(world, filter) {
-        return Box::new(
-            candidate_ids
-                .into_iter()
-                .filter_map(move |agreement_id| world.repo_agreements().get(&agreement_id)),
-        );
-    }
-    Box::new(
-        world
-            .repo_agreements()
-            .iter()
-            .map(|(_, agreement)| agreement),
-    )
-}
 fn repo_agreement_projection_to_query_row(proj: &RepoAgreementProjection) -> norito::json::Map {
     let mut row = norito::json::Map::new();
     row.insert("id".into(), Value::from(proj.canonical_id.clone()));
@@ -45398,37 +43848,6 @@ fn account_history_projections_to_json(
                 );
             }
             norito::json::Value::Object(row)
-        })
-        .collect()
-}
-fn tx_projections_to_json(items: &[TxProjection]) -> Vec<norito::json::Value> {
-    items
-        .iter()
-        .map(|it| {
-            let mut m = norito::json::Map::new();
-            if let Some(ref authority_literal) = it.authority {
-                if let Some(display) =
-                    crate::account_literal::display_from_literal(authority_literal)
-                {
-                    m.insert("authority".into(), norito::json::Value::from(display));
-                }
-            }
-            if let Some(ts) = it.timestamp_ms {
-                m.insert("timestamp_ms".into(), norito::json::Value::from(ts));
-            }
-            m.insert(
-                "entrypoint_kind".into(),
-                norito::json::Value::from(it.entrypoint_kind.clone()),
-            );
-            m.insert(
-                "entrypoint_hash".into(),
-                norito::json::Value::from(it.entrypoint_hash.clone()),
-            );
-            m.insert("result_ok".into(), norito::json::Value::from(it.result_ok));
-            if let Some(memo) = it.memo.as_ref().filter(|value| !value.trim().is_empty()) {
-                m.insert("memo".into(), norito::json::Value::from(memo.clone()));
-            }
-            norito::json::Value::Object(m)
         })
         .collect()
 }
@@ -47989,72 +46408,6 @@ mod tx_projection_display_tests {
             u128::MAX.to_string()
         );
     }
-    routing_test! { sync projections_emit_i105_authority_when_requested
-        let account: AccountId = ALICE_ID.clone();
-        let i105 = account
-            .to_account_address()
-            .and_then(|addr| addr.to_i105())
-            .expect("i105 literal");
-        let expected = i105;
-        let projection = TxProjection {
-            authority: Some(account.to_string()),
-            timestamp_ms: Some(123),
-            entrypoint_hash: "deadbeef".into(),
-            entrypoint_kind: "unknown".into(),
-            result_ok: true,
-            memo: None,
-        };
-        let items = tx_projections_to_json(&[projection]);
-        let authority = items[0]
-            .get("authority")
-            .and_then(norito::json::Value::as_str)
-            .expect("authority field");
-        assert_eq!(authority, expected);
-    }
-    routing_test! { sync projections_preserve_i105_literals_by_default
-        let account: AccountId = BOB_ID.clone();
-        let projection = TxProjection {
-            authority: Some(account.to_string()),
-            timestamp_ms: None,
-            entrypoint_hash: "cafebabe".into(),
-            entrypoint_kind: "unknown".into(),
-            result_ok: false,
-            memo: None,
-        };
-        let items = tx_projections_to_json(&[projection]);
-        let authority = items[0]
-            .get("authority")
-            .and_then(norito::json::Value::as_str)
-            .expect("authority field");
-        assert_eq!(authority, account.to_string());
-    }
-    routing_test! { sync projections_emit_entrypoint_kind
-        for kind in ["external", "sealed_commitment", "sealed_reveal"] {
-            let projection = TxProjection {
-                authority: None,
-                timestamp_ms: Some(123),
-                entrypoint_kind: kind.to_owned(),
-                entrypoint_hash: "feedbabe".into(),
-                result_ok: true,
-                memo: None,
-            };
-            let items = tx_projections_to_json(&[projection]);
-            assert_eq!(items[0]["entrypoint_kind"].as_str(), Some(kind));
-            assert_eq!(items[0]["entrypoint_hash"].as_str(), Some("feedbabe"));
-        }
-    }
-    routing_test! { sync projections_emit_memo_when_present
-        let projection = TxProjection {
-            authority: None,
-            timestamp_ms: Some(123),
-            entrypoint_hash: "feedbabe".into(),
-            entrypoint_kind: "unknown".into(),
-            result_ok: true,
-            memo: Some("QR invoice 42".to_owned()),
-        };
-        let items = tx_projections_to_json(&[projection]);
-        assert_eq!(items[0]["memo"].as_str(), Some("QR invoice 42"));
-    }
     routing_test! { sync trader_module_alias_candidates_are_parseable_contract_aliases
         for module in TRADER_MODULE_ORDER {
             for alias in trader_module_alias_candidates(module) {
@@ -48063,21 +46416,6 @@ mod tx_projection_display_tests {
                     .unwrap_or_else(|err| panic!("invalid alias candidate `{alias}`: {err}"));
             }
         }
-    }
-    routing_test! { sync projections_omit_invalid_authority_literals
-        let projection = TxProjection {
-            authority: Some("operator1@banka".to_string()),
-            timestamp_ms: Some(123),
-            entrypoint_hash: "deadbeef".into(),
-            entrypoint_kind: "unknown".into(),
-            result_ok: true,
-            memo: None,
-        };
-        let items = tx_projections_to_json(&[projection]);
-        assert!(
-            items[0].get("authority").is_none(),
-            "invalid non-i105 authority literals must not leak into explorer output"
-        );
     }
     routing_test! { sync contract_activity_projection_json_preserves_payload_and_fee_fields
         let account: AccountId = ALICE_ID.clone();
@@ -48113,147 +46451,6 @@ mod tx_projection_display_tests {
         );
         assert_eq!(items[0]["contract_payload"]["amount_in"].as_u64(), Some(10));
         assert!(items[0].get("fee_sponsor").is_none());
-    }
-    fn sample_contract_activity_index() -> ContractActivityIndex {
-        let alice: AccountId = ALICE_ID.clone();
-        let bob: AccountId = BOB_ID.clone();
-        let items = vec![
-            ContractActivityProjection {
-                authority: Some(alice.to_string()),
-                timestamp_ms: Some(100),
-                entrypoint_hash: "hash-1".into(),
-                block_height: 1,
-                result_ok: true,
-                contract_address: "router-a".into(),
-                contract_alias: Some("dlmm_router".into()),
-                contract_entrypoint: Some("route_swap".into()),
-                contract_payload: None,
-                fee_payment: None,
-            },
-            ContractActivityProjection {
-                authority: Some(alice.to_string()),
-                timestamp_ms: Some(200),
-                entrypoint_hash: "hash-2".into(),
-                block_height: 2,
-                result_ok: false,
-                contract_address: "router-a".into(),
-                contract_alias: Some("dlmm_router".into()),
-                contract_entrypoint: Some("cancel_swap".into()),
-                contract_payload: None,
-                fee_payment: None,
-            },
-            ContractActivityProjection {
-                authority: Some(bob.to_string()),
-                timestamp_ms: Some(300),
-                entrypoint_hash: "hash-3".into(),
-                block_height: 3,
-                result_ok: true,
-                contract_address: "router-b".into(),
-                contract_alias: Some("other_router".into()),
-                contract_entrypoint: Some("route_swap".into()),
-                contract_payload: None,
-                fee_payment: None,
-            },
-            ContractActivityProjection {
-                authority: Some(alice.to_string()),
-                timestamp_ms: Some(400),
-                entrypoint_hash: "hash-4".into(),
-                block_height: 4,
-                result_ok: true,
-                contract_address: "router-a".into(),
-                contract_alias: Some("dlmm_router".into()),
-                contract_entrypoint: Some("route_swap".into()),
-                contract_payload: None,
-                fee_payment: None,
-            },
-        ];
-        let mut index = ContractActivityIndex::default();
-        for projection in items {
-            append_contract_activity_projection(&mut index, projection);
-        }
-        index
-    }
-    routing_test! { sync contract_activity_index_prefers_smallest_exact_match_set
-        let index = sample_contract_activity_index();
-        let params = ContractActivityGetParams {
-            authority: Some(ALICE_ID.to_string()),
-            contract_address: Some("router-a".into()),
-            contract_alias: Some("dlmm_router".into()),
-            contract_entrypoint: Some("cancel_swap".into()),
-            result_ok: Some(false),
-            ..Default::default()
-        };
-        match contract_activity_candidate_positions(&index, &params) {
-            ContractActivityCandidatePositions::Indexed(positions) => {
-                assert_eq!(positions.as_ref(), &[1]);
-            }
-            other => panic!("expected indexed candidate set, got {other:?}"),
-        }
-    }
-    routing_test! { sync contract_activity_index_intersects_exact_match_sets
-        let index = sample_contract_activity_index();
-        let params = ContractActivityGetParams {
-            authority: Some(ALICE_ID.to_string()),
-            contract_entrypoint: Some("route_swap".into()),
-            result_ok: Some(true),
-            ..Default::default()
-        };
-        match contract_activity_candidate_positions(&index, &params) {
-            ContractActivityCandidatePositions::Indexed(positions) => {
-                assert_eq!(positions.as_ref(), &[0, 3]);
-            }
-            other => panic!("expected indexed candidate set, got {other:?}"),
-        }
-    }
-    routing_test! { sync contract_activity_indexed_pager_respects_filters_and_offset
-        let index = sample_contract_activity_index();
-        let params = ContractActivityGetParams {
-            authority: Some(ALICE_ID.to_string()),
-            contract_address: Some("router-a".into()),
-            contract_alias: Some("dlmm_router".into()),
-            contract_entrypoint: Some("route_swap".into()),
-            result_ok: Some(true),
-            ..Default::default()
-        };
-        let (items, total) = collect_contract_activity_page(
-            &index,
-            &params,
-            EffectivePagination {
-                limit: Some(1),
-                offset: 1,
-                cap: 100,
-            },
-            None,
-            |_| true,
-        );
-        assert_eq!(total, 2);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].entrypoint_hash, "hash-1");
-    }
-    routing_test! { sync contract_activity_visibility_precedes_filters_offsets_and_counts
-        let index = sample_contract_activity_index();
-        let params = ContractActivityGetParams {
-            contract_entrypoint: Some("route_swap".into()),
-            result_ok: Some(true),
-            ..Default::default()
-        };
-        let (items, total) = collect_contract_activity_page(
-            &index,
-            &params,
-            EffectivePagination {
-                limit: Some(1),
-                offset: 1,
-                cap: 100,
-            },
-            None,
-            |projection| projection.entrypoint_hash != "hash-3",
-        );
-        assert_eq!(total, 2, "hidden activity must not influence exact counts");
-        assert_eq!(items.len(), 1);
-        assert_eq!(
-            items[0].entrypoint_hash, "hash-1",
-            "offsets must be applied within the visible activity sequence"
-        );
     }
     routing_test! { sync contract_event_projection_json_preserves_generic_fields
         let account: AccountId = ALICE_ID.clone();
@@ -49031,175 +47228,45 @@ struct AccountAssetListItem {
     asset_alias: Option<String>,
     quantity: iroha_primitives::numeric::Quantity,
 }
-fn asset_definition_projection_fields(
-    world: &impl WorldReadOnly,
-    definition_id: &AssetDefinitionId,
-    cache: &mut BTreeMap<AssetDefinitionId, (String, Option<String>)>,
-) -> (String, Option<String>) {
-    cache
-        .entry(definition_id.clone())
-        .or_insert_with(|| match world.asset_definition(definition_id) {
-            Ok(definition) => (
-                definition.name().clone(),
-                definition
-                    .alias()
-                    .as_ref()
-                    .map(|alias| alias.as_ref().to_owned()),
-            ),
-            Err(_) => (definition_id.to_string(), None),
+/// Stream scoped balance candidates, retaining skipped entries for raw scan accounting.
+fn projected_account_assets<'a>(
+    world: &'a impl WorldReadOnly,
+    scoped_accounts: &'a [AccountId],
+    asset_filter: Option<&'a AssetDefinitionId>,
+    scope_filter: Option<&'a AssetBalanceScope>,
+    visibility: &'a DataspaceReadVisibility,
+) -> impl Iterator<Item = Option<AccountAssetListItem>> + 'a {
+    scoped_accounts.iter().flat_map(move |account| world.assets_in_account_iter(account))
+        .map(move |asset| {
+            if !visibility.allows_account(world, asset.id().account())
+                || !visibility.allows_asset(world, asset.id())
+                || asset_filter.is_some_and(|definition| asset.id().definition() != definition)
+                || scope_filter.is_some_and(|scope| asset.id().scope() != scope) {
+                return None;
+            }
+            let definition_id = asset.id().definition();
+            let (asset_name, asset_alias) = match world.asset_definition(definition_id) {
+                Ok(definition) => (definition.name().clone(), definition.alias().as_ref().map(|alias| alias.as_ref().to_owned())),
+                Err(_) => (definition_id.to_string(), None),
+            };
+            Some(AccountAssetListItem {
+                asset: definition_id.to_string(), account_id: asset.id().account().to_string(),
+                scope: asset_balance_scope_literal(asset.id().scope()), asset_name, asset_alias,
+                quantity: asset.value().clone().into_inner(),
+            })
         })
-        .clone()
 }
-fn push_account_asset_projection(
-    world: &impl WorldReadOnly,
-    asset_id: &AssetId,
-    asset_value: &iroha_data_model::asset::AssetValue,
-    definition_cache: &mut BTreeMap<AssetDefinitionId, (String, Option<String>)>,
-    projected_assets: &mut Vec<AccountAssetListItem>,
-) {
-    let definition_id = asset_id.definition().clone();
-    let (asset_name, asset_alias) =
-        asset_definition_projection_fields(world, &definition_id, definition_cache);
-    projected_assets.push(AccountAssetListItem {
-        asset: definition_id.to_string(),
-        account_id: asset_id.account().to_string(),
-        scope: asset_balance_scope_literal(asset_id.scope()),
-        asset_name,
-        asset_alias,
-        quantity: asset_value.clone().into_inner(),
-    });
-}
-fn collect_projected_account_assets(
-    world: &impl WorldReadOnly,
-    scoped_accounts: &[AccountId],
-    asset_filter: Option<&AssetDefinitionId>,
-    scope_filter: Option<&AssetBalanceScope>,
-    visibility: &DataspaceReadVisibility,
-) -> Vec<AccountAssetListItem> {
-    let mut definition_cache = BTreeMap::new();
-    let mut projected_assets = Vec::new();
-    for scoped_account in scoped_accounts {
-        if !visibility.allows_account(world, scoped_account) {
-            continue;
-        }
-        for asset in world.assets_in_account_iter(scoped_account) {
-            if !visibility.allows_asset(world, asset.id()) {
-                continue;
-            }
-            if asset_filter.is_some_and(|definition| asset.id().definition() != definition) {
-                continue;
-            }
-            if let Some(expected_scope) = scope_filter
-                && asset.id().scope() != expected_scope
-            {
-                continue;
-            }
-            push_account_asset_projection(
-                world,
-                asset.id(),
-                asset.value(),
-                &mut definition_cache,
-                &mut projected_assets,
-            );
-        }
-    }
-    projected_assets
-}
-struct AccountPermissionListItem {
-    name: String,
-    payload: norito::json::Value,
-}
-/// List permissions with configurable address enforcement.
+/// Test adapter for effective permission collection reads.
 #[cfg(test)]
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_account_permissions_with_policy(
+async fn handle_v1_account_permissions_with_policy(
     state: Arc<CoreState>,
-    axum::extract::Path(account_id): axum::extract::Path<String>,
-    crate::NoritoQuery(p): crate::NoritoQuery<PaginationParams>,
+    axum::extract::Path(account): axum::extract::Path<String>,
+    crate::NoritoQuery(query): crate::NoritoQuery<iroha_torii_shared::list_query::ListQuery>,
     telemetry: MaybeTelemetry,
-) -> Result<impl IntoResponse> {
-    handle_v1_account_permissions_with_visibility(
-        state,
-        axum::extract::Path(account_id),
-        crate::NoritoQuery(p),
-        telemetry,
-        DataspaceReadVisibility::all(),
-    )
-    .await
-}
-pub(crate) async fn handle_v1_account_permissions_with_visibility(
-    state: Arc<CoreState>,
-    axum::extract::Path(account_id): axum::extract::Path<String>,
-    crate::NoritoQuery(p): crate::NoritoQuery<PaginationParams>,
-    telemetry: MaybeTelemetry,
-    visibility: DataspaceReadVisibility,
-) -> Result<impl IntoResponse> {
-    use iroha_data_model::query::error::FindError;
-    let (account, _) = parse_account_path_segment_with_state(
-        state.as_ref(),
-        &account_id,
-        &telemetry,
-        ENDPOINT_ACCOUNTS_PERMISSIONS,
-    )?;
-    let cap = app_query_page_cap(&state);
-    let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ACCOUNTS_PERMISSIONS)?;
-    let count_mode = app_count_mode(p.count_mode.as_deref(), ENDPOINT_ACCOUNTS_PERMISSIONS);
-    let world = state.world_view();
-    let scoped_accounts = if visibility.allows_account(&world, &account) {
-        scoped_accounts_for_subject_sorted(&world, &account)
-    } else {
-        Vec::new()
-    };
-    let mut permissions = BTreeSet::new();
-    for account_id in &scoped_accounts {
-        match world.account_permissions_iter(account_id) {
-            Ok(iter) => permissions.extend(iter.cloned()),
-            Err(FindError::Account(_)) => {}
-            Err(err) => {
-                return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    err.into(),
-                )));
-            }
-        }
-        for role_id in world.account_roles_iter(account_id) {
-            let role = world.roles().get(role_id).ok_or_else(|| {
-                Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-                    "account `{account_id}` is assigned missing role `{role_id}`"
-                )))
-            })?;
-            permissions.extend(role.permissions().cloned());
-        }
-    }
-    let mut canonical_permissions = Vec::with_capacity(permissions.len());
-    for permission in permissions {
-        let payload = norito::json::from_str::<norito::json::Value>(permission.payload().get())
-            .map_err(|error| {
-                Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-                    "failed to decode permission payload for `{}`: {error}",
-                    permission.name()
-                )))
-            })?;
-        canonical_permissions.push((
-            (),
-            AccountPermissionListItem {
-                name: permission.name().to_string(),
-                payload,
-            },
-        ));
-    }
-    let page = collect_page_streaming(
-        canonical_permissions.into_iter(),
-        pagination.offset,
-        pagination.limit,
-        None,
-        count_mode,
-    );
-    paginated_json_map_response(&page, count_mode, |item| {
-        let mut row = Map::new();
-        row.insert("name".into(), Value::from(item.name.clone()));
-        row.insert("payload".into(), item.payload.clone());
-        row
-    })
+) -> Result<Response> {
+    collection_sources::execute_collection_response(None, &state,
+        &collection_sources::CollectionTarget::AccountPermissions(account), query,
+        &telemetry, &DataspaceReadVisibility::all()).await
 }
 // ---------------------- Repo agreement listing ----------------------
 }
@@ -49261,16 +47328,12 @@ mod pagination_enforcement_tests {
             LiveQueryStore::start_test(),
         ))
     }
-    fn zero_pagination_params() -> PaginationParams {
-        PaginationParams {
-            limit: Some(0),
-            offset: 0,
-            count_mode: None,
-        }
+    fn zero_pagination_params() -> iroha_torii_shared::list_query::ListQuery {
+        iroha_torii_shared::list_query::ListQuery { limit: Some(0), ..Default::default() }
     }
     fn assert_invalid_pagination<T>(result: Result<T>) {
         match result {
-            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
+            Err(Error::CollectionQuery(error)) => assert_eq!(error.code, "invalid_limit"),
             Err(other) => panic!("unexpected error: {other:?}"),
             Ok(_) => panic!("expected pagination error"),
         }
@@ -49364,6 +47427,7 @@ mod account_permissions_json_tests {
             }
             .into(),
         );
+        permissions.insert(CanPublishSpaceDirectoryManifest { dataspace: DataSpaceId::new(8) }.into());
         world
             .account_permissions_mut_for_testing()
             .insert(account_id.clone(), permissions);
@@ -49372,6 +47436,31 @@ mod account_permissions_json_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ))
+    }
+    routing_test! { async account_permissions_pages_keep_distinct_payloads_and_role_grants
+        let authority = AccountId::new(checked_routing_fixture_keypair(
+            0xA2, Algorithm::Ed25519, "derive paged permissions authority key").public_key().clone());
+        let state = test_state_with_permissions(&authority);
+        let mut query = iroha_torii_shared::list_query::ListQuery {
+            limit: Some(1), include_total: true, ..Default::default()
+        };
+        let mut rows = Vec::new();
+        loop {
+            let response = handle_v1_account_permissions_with_policy(state.clone(),
+                axum::extract::Path(authority.to_string()), crate::NoritoQuery(query.clone()),
+                MaybeTelemetry::disabled()).await.expect("permission page");
+            let body = response.into_body().collect().await.expect("body").to_bytes();
+            let page: Value = norito::json::from_slice(&body).expect("permission JSON");
+            assert_eq!(page["total"].as_u64(), Some(4));
+            rows.extend(page["items"].as_array().expect("items").iter().cloned());
+            let Some(next) = page["next_cursor"].as_str() else { break; };
+            query.cursor = Some(next.to_owned());
+        }
+        assert_eq!(rows.len(), 4);
+        let scopes: Vec<_> = rows.iter().filter(|row| row["name"].as_str() == Some("CanPublishSpaceDirectoryManifest"))
+            .map(|row| row["payload"]["dataspace"].as_u64().expect("scope")).collect();
+        assert_eq!(scopes, [7, 8]);
+        assert!(rows.iter().any(|row| row["name"].as_str() == Some("CanSetParameters")));
     }
     routing_test! { async account_permissions_handler_preserves_structured_payloads
         let authority = AccountId::new(
@@ -49388,10 +47477,8 @@ mod account_permissions_json_tests {
         let response = handle_v1_account_permissions_with_policy(
             state,
             axum::extract::Path(authority_literal.clone()),
-            crate::NoritoQuery(PaginationParams {
-                limit: Some(8),
-                offset: 0,
-                count_mode: None,
+            crate::NoritoQuery(iroha_torii_shared::list_query::ListQuery {
+                limit: Some(8), ..Default::default()
             }),
             MaybeTelemetry::disabled(),
         )
@@ -53722,62 +51809,11 @@ mod app_api_inline_signing_boundary_tests {
 derived_items! {
 ( Default, Debug, Clone, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
-pub struct SpaceDirectoryManifestQuery {
-    #[norito(default)]
-    pub dataspace: Option<u64>,
-    #[norito(default)]
-    pub status: Option<String>,
-    #[norito(default)]
-    pub limit: Option<u64>,
-    #[norito(default)]
-    pub offset: Option<u64>,
-    #[norito(default)]
-    pub count_mode: Option<String>,
-}
-( Default, Debug, Clone, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize,)
-#[norito(deny_unknown_fields)]
 pub struct SpaceDirectoryBindingsQuery {}
 }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SpaceDirectoryManifestStatus {
-    Active,
-    Inactive,
-    #[default]
-    All,
-}
-impl core::str::FromStr for SpaceDirectoryManifestStatus {
-    type Err = &'static str;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "active" => Ok(Self::Active),
-            "inactive" => Ok(Self::Inactive),
-            "all" => Ok(Self::All),
-            _ => Err("status must be one of: active, inactive, all"),
-        }
-    }
-}
-/// Parse and validate the optional manifest lifecycle filter before fanout.
-#[cfg(feature = "app_api")]
-pub(crate) fn space_directory_manifest_status_filter(
-    raw: Option<&str>,
-) -> Result<SpaceDirectoryManifestStatus> {
-    raw.map_or(Ok(SpaceDirectoryManifestStatus::default()), |raw| {
-        raw.parse().map_err(|_| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::InvalidSingularParameters,
-            ))
-        })
-    })
-}
 struct DataspaceAliasLookup {
     aliases: BTreeMap<DataSpaceId, String>,
-}
-#[cfg(feature = "app_api")]
-#[derive(Clone, Copy)]
-struct ManifestProjection<'a> {
-    dataspace_id: DataSpaceId,
-    record: &'a SpaceDirectoryManifestRecord,
 }
 impl DataspaceAliasLookup {
     fn new(catalog: DataSpaceCatalog) -> Self {
@@ -53829,109 +51865,17 @@ pub async fn handle_v1_space_directory_bindings(
     root.insert("dataspaces".into(), Value::Array(dataspaces));
     pretty_json_response(&Value::Object(root))
 }
-/// GET /v1/space-directory/uaids/{uaid}/manifests — UAID manifest inventory.
+/// Test adapter for UAID manifest collection reads.
 #[cfg(test)]
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_space_directory_manifests(
+pub(crate) async fn handle_v1_space_directory_manifests(
     state: Arc<CoreState>,
-    axum::extract::Path(raw_uaid): axum::extract::Path<String>,
-    crate::NoritoQuery(query): crate::NoritoQuery<SpaceDirectoryManifestQuery>,
+    axum::extract::Path(uaid): axum::extract::Path<String>,
+    crate::NoritoQuery(query): crate::NoritoQuery<iroha_torii_shared::list_query::ListQuery>,
     telemetry: MaybeTelemetry,
-) -> Result<impl IntoResponse> {
-    handle_v1_space_directory_manifests_with_visibility(
-        state,
-        axum::extract::Path(raw_uaid),
-        crate::NoritoQuery(query),
-        telemetry,
-        DataspaceReadVisibility::all(),
-    )
-    .await
-}
-pub(crate) async fn handle_v1_space_directory_manifests_with_visibility(
-    state: Arc<CoreState>,
-    axum::extract::Path(raw_uaid): axum::extract::Path<String>,
-    crate::NoritoQuery(query): crate::NoritoQuery<SpaceDirectoryManifestQuery>,
-    telemetry: MaybeTelemetry,
-    visibility: DataspaceReadVisibility,
-) -> Result<impl IntoResponse> {
-    let uaid = parse_uaid_literal(&raw_uaid)?;
-    let filter = query.dataspace.map(DataSpaceId::new);
-    let world = state.world_view();
-    let nexus = state.nexus_snapshot();
-    let alias_lookup = DataspaceAliasLookup::new(nexus.dataspace_catalog.clone());
-    let bindings = world.uaid_dataspaces().get(&uaid);
-    record_account_literal_selection(&telemetry, ENDPOINT_SPACE_DIRECTORY_MANIFESTS);
-    let mut manifests = Vec::new();
-    let status_filter = space_directory_manifest_status_filter(query.status.as_deref())?;
-    let (offset, limit) =
-        space_directory_manifest_pagination(query.limit, query.offset.unwrap_or(0))?;
-    let count_mode = app_count_mode(
-        query.count_mode.as_deref(),
-        ENDPOINT_SPACE_DIRECTORY_MANIFESTS,
-    );
-    let (projections, total, has_more) = if let Some(set) =
-        world.space_directory_manifests().get(&uaid)
-    {
-        let dataspace_filter = filter;
-        let status_filter = status_filter;
-        let iter_filter = dataspace_filter;
-        let iter = set.iter().filter_map(move |(dataspace_id, record)| {
-            if !visibility.allows_dataspace(*dataspace_id) {
-                return None;
-            }
-            if let Some(target) = iter_filter {
-                if *dataspace_id != target {
-                    return None;
-                }
-            }
-            if !manifest_status_matches(record, status_filter) {
-                return None;
-            }
-            Some((
-                dataspace_id.as_u64(),
-                ManifestProjection {
-                    dataspace_id: *dataspace_id,
-                    record,
-                },
-            ))
-        });
-        match count_mode {
-            AppCountMode::Exact => {
-                let (items, total) = collect_exact_page_streaming(
-                    iter,
-                    offset,
-                    Some(limit),
-                    Some(app_query_limits().max_fetch_size),
-                );
-                let has_more = u64::try_from(total).unwrap_or(u64::MAX)
-                    > offset.saturating_add(u64::try_from(items.len()).unwrap_or(u64::MAX));
-                (items, total, has_more)
-            }
-            AppCountMode::Bounded => {
-                // `SpaceDirectoryManifestSet` is keyed by dataspace, so filtering preserves the
-                // canonical order and a prefix plus one probe is sufficient.
-                collect_ordered_page_bounded(iter, offset, limit)
-            }
-        }
-    } else {
-        (Vec::new(), 0, false)
-    };
-    for projection in projections {
-        let entry = manifest_entry_to_json(
-            projection.dataspace_id,
-            projection.record,
-            &alias_lookup,
-            bindings,
-        )?;
-        manifests.push(entry);
-    }
-    let mut root = Map::new();
-    root.insert("uaid".into(), Value::from(uaid.to_string()));
-    root.insert("total".into(), Value::from(total as u64));
-    root.insert("has_more".into(), Value::from(has_more));
-    root.insert("count_mode".into(), Value::from(count_mode.label()));
-    root.insert("manifests".into(), Value::Array(manifests));
-    pretty_json_response(&Value::Object(root))
+) -> Result<Response> {
+    collection_sources::execute_collection_response(None, &state,
+        &collection_sources::CollectionTarget::UaidManifests(uaid), query,
+        &telemetry, &DataspaceReadVisibility::all()).await
 }
 /// POST /v1/space-directory/manifests — prepare a canonical unsigned manifest
 /// publication transaction for local signing.
@@ -54046,16 +51990,6 @@ fn manifest_status(record: &SpaceDirectoryManifestRecord) -> &'static str {
         "Active"
     } else {
         "Pending"
-    }
-}
-fn manifest_status_matches(
-    record: &SpaceDirectoryManifestRecord,
-    filter: SpaceDirectoryManifestStatus,
-) -> bool {
-    match filter {
-        SpaceDirectoryManifestStatus::All => true,
-        SpaceDirectoryManifestStatus::Active => record.is_active(),
-        SpaceDirectoryManifestStatus::Inactive => !record.is_active(),
     }
 }
 fn manifest_lifecycle_json(lifecycle: &SpaceDirectoryManifestLifecycle) -> Value {
@@ -54199,28 +52133,6 @@ mod space_directory_manifest_helper_tests {
             .expect("commit space-directory binding rebuild");
     }
     #[test]
-    fn space_directory_manifest_status_parsing_requires_exact_lowercase_values() {
-        assert_eq!(
-            "active".parse::<SpaceDirectoryManifestStatus>(),
-            Ok(SpaceDirectoryManifestStatus::Active)
-        );
-        assert_eq!(
-            "inactive".parse::<SpaceDirectoryManifestStatus>(),
-            Ok(SpaceDirectoryManifestStatus::Inactive)
-        );
-        assert_eq!(
-            "all".parse::<SpaceDirectoryManifestStatus>(),
-            Ok(SpaceDirectoryManifestStatus::All)
-        );
-        for rejected in ["ACTIVE", "Active", "AlL", " active", "active ", "stale"] {
-            assert_eq!(
-                rejected.parse::<SpaceDirectoryManifestStatus>(),
-                Err("status must be one of: active, inactive, all"),
-                "noncanonical status must be rejected: {rejected:?}",
-            );
-        }
-    }
-    #[test]
     fn space_directory_query_dtos_reject_unknown_fields() {
         assert!(
             norito::json::from_str::<SpaceDirectoryBindingsQuery>(
@@ -54230,8 +52142,8 @@ mod space_directory_manifest_helper_tests {
             "bindings query must not accept retired placeholder parameters",
         );
         assert!(
-            norito::json::from_str::<SpaceDirectoryManifestQuery>(
-                r#"{"dataspace":7,"legacy_limit":1}"#,
+            iroha_torii_shared::list_query::ListQuery::from_json_value(
+                norito::json!({"dataspace":7,"legacy_limit":1}),
             )
             .is_err(),
             "manifest query must reject unknown parameters",
@@ -54339,48 +52251,16 @@ mod space_directory_manifest_helper_tests {
     routing_test! { sync manifest_status_and_matching_cover_pending_active_expired_and_revoked_rows
         let pending = SpaceDirectoryManifestRecord::new(sample_manifest_record().manifest);
         assert_eq!(manifest_status(&pending), "Pending");
-        assert!(manifest_status_matches(
-            &pending,
-            SpaceDirectoryManifestStatus::Inactive
-        ));
-        assert!(!manifest_status_matches(
-            &pending,
-            SpaceDirectoryManifestStatus::Active
-        ));
         let active = sample_manifest_record();
         assert_eq!(manifest_status(&active), "Active");
-        assert!(manifest_status_matches(
-            &active,
-            SpaceDirectoryManifestStatus::Active
-        ));
-        assert!(!manifest_status_matches(
-            &active,
-            SpaceDirectoryManifestStatus::Inactive
-        ));
         let mut expired = sample_manifest_record();
         expired.lifecycle.mark_expired(25);
         assert_eq!(manifest_status(&expired), "Expired");
-        assert!(manifest_status_matches(
-            &expired,
-            SpaceDirectoryManifestStatus::Inactive
-        ));
-        assert!(!manifest_status_matches(
-            &expired,
-            SpaceDirectoryManifestStatus::Active
-        ));
         let mut revoked = sample_manifest_record();
         revoked
             .lifecycle
             .mark_revoked(26, Some("operator request".to_owned()));
         assert_eq!(manifest_status(&revoked), "Revoked");
-        assert!(manifest_status_matches(
-            &revoked,
-            SpaceDirectoryManifestStatus::Inactive
-        ));
-        assert!(manifest_status_matches(
-            &revoked,
-            SpaceDirectoryManifestStatus::All
-        ));
     }
     routing_test! { sync manifest_lifecycle_json_keeps_reasonless_revocation_shape
         let mut lifecycle = SpaceDirectoryManifestLifecycle::default();
@@ -54706,7 +52586,7 @@ mod space_directory_manifest_helper_tests {
         let response = handle_v1_space_directory_manifests(
             state,
             axum::extract::Path(uaid.to_string()),
-            crate::NoritoQuery(SpaceDirectoryManifestQuery::default()),
+            crate::NoritoQuery(iroha_torii_shared::list_query::ListQuery { include_total: true, ..Default::default() }),
             MaybeTelemetry::disabled(),
         )
         .await
@@ -54714,11 +52594,9 @@ mod space_directory_manifest_helper_tests {
         .into_response();
         assert_eq!(response.status(), StatusCode::OK);
         let json = response_json(response).await;
-        let uaid_literal = uaid.to_string();
-        assert_eq!(json["uaid"].as_str(), Some(uaid_literal.as_str()));
         assert_eq!(json["total"].as_u64(), Some(0));
         assert_eq!(
-            json["manifests"].as_array().expect("manifests array").len(),
+            json["items"].as_array().expect("manifests array").len(),
             0
         );
     }
@@ -54728,9 +52606,9 @@ mod space_directory_manifest_helper_tests {
         let error = match handle_v1_space_directory_manifests(
             state,
             axum::extract::Path(uaid.to_string()),
-            crate::NoritoQuery(SpaceDirectoryManifestQuery {
-                status: Some("DefinitelyNotAStatus".to_owned()),
-                ..SpaceDirectoryManifestQuery::default()
+            crate::NoritoQuery(iroha_torii_shared::list_query::ListQuery {
+                filter: Some(FilterExpr::Eq(FieldPath("missing_field".into()), Value::from("Active"))),
+                ..iroha_torii_shared::list_query::ListQuery { include_total: true, ..Default::default() }
             }),
             MaybeTelemetry::disabled(),
         )
@@ -54748,7 +52626,7 @@ mod space_directory_manifest_helper_tests {
         let error = match handle_v1_space_directory_manifests(
             state,
             axum::extract::Path(raw_hex),
-            crate::NoritoQuery(SpaceDirectoryManifestQuery::default()),
+            crate::NoritoQuery(iroha_torii_shared::list_query::ListQuery { include_total: true, ..Default::default() }),
             MaybeTelemetry::disabled(),
         )
         .await
@@ -54763,7 +52641,7 @@ mod space_directory_manifest_helper_tests {
         let error = match handle_v1_space_directory_manifests(
             state,
             axum::extract::Path("uaid:1234".to_owned()),
-            crate::NoritoQuery(SpaceDirectoryManifestQuery::default()),
+            crate::NoritoQuery(iroha_torii_shared::list_query::ListQuery { include_total: true, ..Default::default() }),
             MaybeTelemetry::disabled(),
         )
         .await
@@ -54832,9 +52710,9 @@ mod space_directory_manifest_helper_tests {
         let response = handle_v1_space_directory_manifests(
             state,
             axum::extract::Path(uaid.to_string()),
-            crate::NoritoQuery(SpaceDirectoryManifestQuery {
-                status: Some("inactive".to_owned()),
-                ..SpaceDirectoryManifestQuery::default()
+            crate::NoritoQuery(iroha_torii_shared::list_query::ListQuery {
+                filter: Some(FilterExpr::Ne(FieldPath("status".into()), Value::from("Active"))),
+                ..iroha_torii_shared::list_query::ListQuery { include_total: true, ..Default::default() }
             }),
             MaybeTelemetry::disabled(),
         )
@@ -54844,7 +52722,7 @@ mod space_directory_manifest_helper_tests {
         assert_eq!(response.status(), StatusCode::OK);
         let json = response_json(response).await;
         assert_eq!(json["total"].as_u64(), Some(2));
-        let manifests = json["manifests"].as_array().expect("manifests array");
+        let manifests = json["items"].as_array().expect("manifests array");
         assert_eq!(manifests.len(), 2);
         assert_eq!(
             manifests[0]["dataspace_id"].as_u64(),
@@ -54907,10 +52785,10 @@ mod space_directory_manifest_helper_tests {
         let error = handle_v1_space_directory_manifests(
             state,
             axum::extract::Path(uaid.to_string()),
-            crate::NoritoQuery(SpaceDirectoryManifestQuery {
-                dataspace: Some(second_dataspace.as_u64()),
+            crate::NoritoQuery(iroha_torii_shared::list_query::ListQuery {
+                filter: Some(FilterExpr::Eq(FieldPath("dataspace_id".into()), Value::from(second_dataspace.as_u64()))),
                 limit: Some(0),
-                ..SpaceDirectoryManifestQuery::default()
+                ..iroha_torii_shared::list_query::ListQuery { include_total: true, ..Default::default() }
             }),
             MaybeTelemetry::disabled(),
         )
@@ -54919,14 +52797,11 @@ mod space_directory_manifest_helper_tests {
         .expect("limit=0 must not bypass the app pagination cap");
         assert!(matches!(
             error,
-            Error::AppQueryValidation {
-                code: "invalid_pagination",
-                ..
-            }
+            Error::CollectionQuery(ref error) if error.code == "invalid_limit"
         ));
     }
     #[tokio::test]
-    async fn handle_v1_space_directory_manifests_reports_filtered_total_when_offset_clears_page()
+    async fn handle_v1_space_directory_manifests_reports_filtered_total_and_matching_rows()
      {
         let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x57; Hash::LENGTH]));
         let active_dataspace = DataSpaceId::new(7);
@@ -54980,11 +52855,10 @@ mod space_directory_manifest_helper_tests {
         let response = handle_v1_space_directory_manifests(
             state,
             axum::extract::Path(uaid.to_string()),
-            crate::NoritoQuery(SpaceDirectoryManifestQuery {
-                status: Some("active".to_owned()),
+            crate::NoritoQuery(iroha_torii_shared::list_query::ListQuery {
+                filter: Some(FilterExpr::Eq(FieldPath("status".into()), Value::from("Active"))),
                 limit: Some(1),
-                offset: Some(1),
-                ..SpaceDirectoryManifestQuery::default()
+                ..iroha_torii_shared::list_query::ListQuery { include_total: true, ..Default::default() }
             }),
             MaybeTelemetry::disabled(),
         )
@@ -54995,13 +52869,13 @@ mod space_directory_manifest_helper_tests {
         let json = response_json(response).await;
         assert_eq!(json["total"].as_u64(), Some(1));
         assert_eq!(
-            json["manifests"].as_array().expect("manifests array").len(),
-            0,
-            "offset is applied after status filtering and total counts matching rows",
+            json["items"].as_array().expect("manifests array").len(),
+            1,
+            "total and rows use the same status filter",
         );
     }
     #[tokio::test]
-    async fn handle_v1_space_directory_manifests_bounded_mode_stops_after_one_probe() {
+    async fn handle_v1_space_directory_manifests_cursor_pages_return_next_cursor() {
         let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x5E; Hash::LENGTH]));
         let mut set = SpaceDirectoryManifestSet::default();
         for dataspace_id in 7_u64..=10 {
@@ -55018,28 +52892,27 @@ mod space_directory_manifest_helper_tests {
         world
             .space_directory_manifests_mut_for_testing()
             .insert(uaid, set);
-        let response = handle_v1_space_directory_manifests(
-            manifest_state(world, None),
-            axum::extract::Path(uaid.to_string()),
-            crate::NoritoQuery(SpaceDirectoryManifestQuery {
-                limit: Some(1),
-                offset: Some(1),
-                count_mode: Some("bounded".to_owned()),
-                ..SpaceDirectoryManifestQuery::default()
-            }),
-            MaybeTelemetry::disabled(),
-        )
-        .await
-        .expect("bounded manifest query should succeed")
-        .into_response();
-        assert_eq!(response.status(), StatusCode::OK);
-        let json = response_json(response).await;
-        assert_eq!(json["count_mode"].as_str(), Some("bounded"));
-        assert_eq!(json["total"].as_u64(), Some(3));
-        assert_eq!(json["has_more"].as_bool(), Some(true));
-        let manifests = json["manifests"].as_array().expect("manifests array");
-        assert_eq!(manifests.len(), 1);
-        assert_eq!(manifests[0]["dataspace_id"].as_u64(), Some(8));
+        let state = manifest_state(world, None);
+        let mut query = iroha_torii_shared::list_query::ListQuery {
+            limit: Some(1), include_total: true, ..Default::default()
+        };
+        let mut ids = Vec::new();
+        loop {
+            let response = handle_v1_space_directory_manifests(state.clone(),
+                axum::extract::Path(uaid.to_string()), crate::NoritoQuery(query.clone()),
+                MaybeTelemetry::disabled()).await.expect("manifest page");
+            let json = response_json(response).await;
+            assert_eq!(json["total"].as_u64(), Some(4));
+            ids.extend(json["items"].as_array().expect("items").iter().map(|row| row["dataspace_id"].as_u64().expect("id")));
+            let Some(next) = json["next_cursor"].as_str() else { break; };
+            query.cursor = Some(next.to_owned());
+        }
+        assert_eq!(ids, [7, 8, 9, 10]);
+        let other = UniversalAccountId::from_hash(Hash::prehashed([0x5F; Hash::LENGTH]));
+        let error = handle_v1_space_directory_manifests(state,
+            axum::extract::Path(other.to_string()), crate::NoritoQuery(query),
+            MaybeTelemetry::disabled()).await.expect_err("cursor cannot cross UAID scope");
+        assert!(matches!(error, Error::CollectionQuery(error) if error.code == "invalid_cursor"));
     }
 }
 }
@@ -55521,15 +53394,6 @@ pub async fn handle_v1_explorer_health(
 pub enum ExplorerTransactionStatusFilter {
     Committed,
     Rejected,
-}
-pub fn parse_transaction_status_filter(
-    raw: &str,
-) -> Result<ExplorerTransactionStatusFilter, Error> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "committed" => Ok(ExplorerTransactionStatusFilter::Committed),
-        "rejected" => Ok(ExplorerTransactionStatusFilter::Rejected),
-        _ => Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)),
-    }
 }
 struct ExplorerTransactionFilters {
     authority: Option<AccountId>,
@@ -58492,23 +56356,6 @@ fn asset_definition_filter_candidate_ids(
         _ => None,
     }
 }
-fn asset_definitions_for_filter<'a>(
-    world: &'a impl WorldReadOnly,
-    filter: Option<&crate::filter::FilterExpr>,
-) -> Box<dyn Iterator<Item = iroha_data_model::asset::definition::AssetDefinition> + 'a> {
-    if let Some(candidate_ids) = asset_definition_filter_candidate_ids(world, filter) {
-        return Box::new(
-            candidate_ids
-                .into_iter()
-                .filter_map(move |definition_id| world.asset_definition(&definition_id).ok()),
-        );
-    }
-    Box::new(
-        world
-            .asset_definitions_iter()
-            .filter_map(|definition| world.asset_definition(definition.id()).ok()),
-    )
-}
 fn asset_definition_alias_binding_for(
     world: &impl WorldReadOnly,
     definition_id: &AssetDefinitionId,
@@ -59466,24 +57313,6 @@ fn nft_from_key_value(id: &NftId, value: &iroha_data_model::nft::NftValue) -> Nf
         owned_by: details.owned_by,
     }
 }
-fn nfts_for_filter<'a>(
-    world: &'a impl WorldReadOnly,
-    filter: Option<&crate::filter::FilterExpr>,
-) -> Box<dyn Iterator<Item = Nft> + 'a> {
-    if let Some(candidate_ids) = nft_filter_candidate_ids(filter) {
-        return Box::new(candidate_ids.into_iter().filter_map(move |nft_id| {
-            world
-                .nfts()
-                .get_key_value(&nft_id)
-                .map(|(id, value)| nft_from_key_value(id, value))
-        }));
-    }
-    Box::new(
-        world
-            .nfts_iter()
-            .map(|entry| nft_from_key_value(entry.id(), entry.value())),
-    )
-}
 }
 #[cfg(all(test, feature = "app_api"))]
 routing_test! { sync nft_filter_candidate_ids_extracts_safe_exact_constraints
@@ -59524,21 +57353,6 @@ app_api_items! {
 }
 app_api_items! {
 // ---------------------- Subscription API ----------------------
-fn parse_subscription_status_filter(raw: &str) -> Result<SubscriptionStatus> {
-    let status = match raw.trim().to_ascii_lowercase().as_str() {
-        "active" => SubscriptionStatus::Active,
-        "paused" => SubscriptionStatus::Paused,
-        "past_due" => SubscriptionStatus::PastDue,
-        "canceled" => SubscriptionStatus::Canceled,
-        "suspended" => SubscriptionStatus::Suspended,
-        other => {
-            return Err(conversion_error(format!(
-                "invalid subscription status `{other}`"
-            )));
-        }
-    };
-    Ok(status)
-}
 fn subscription_plan_from_metadata(metadata: &Metadata) -> Result<Option<SubscriptionPlan>> {
     let Some(value) = metadata.get(&*SUBSCRIPTION_PLAN_KEY) else {
         return Ok(None);
@@ -59883,69 +57697,14 @@ pub async fn handle_post_v1_subscription_plan(
         signing_message_b64: draft.signing_message_b64,
     }))
 }
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_subscription_plans(
+#[cfg(test)]
+async fn handle_v1_subscription_plans(
     state: Arc<CoreState>,
-    crate::NoritoQuery(params): crate::NoritoQuery<SubscriptionPlanListParams>,
-) -> Result<impl IntoResponse> {
-    let telemetry = MaybeTelemetry::disabled();
-    let provider = match params.provider {
-        Some(raw) if !raw.trim().is_empty() => Some(
-            parse_account_literal_with_state(
-                state.as_ref(),
-                &raw,
-                &telemetry,
-                ENDPOINT_SUBSCRIPTION_PLANS_LIST,
-            )
-            .map(|(account_id, _)| account_id)
-            .map_err(|err| conversion_error(format!("invalid provider id: {err}")))?,
-        ),
-        _ => None,
-    };
-    let world = state.world_view();
-    let cap = app_query_page_cap(&state);
-    let pagination = enforce_app_pagination(
-        params.limit,
-        params.offset,
-        cap,
-        ENDPOINT_SUBSCRIPTION_PLANS_LIST,
-    )?;
-    let count_mode = app_count_mode(
-        params.count_mode.as_deref(),
-        ENDPOINT_SUBSCRIPTION_PLANS_LIST,
-    );
-    let mut items_with_keys = Vec::new();
-    for def in world.asset_definitions_iter() {
-        let Some(plan) = subscription_plan_from_metadata(def.metadata())? else {
-            continue;
-        };
-        if let Some(ref provider_id) = provider {
-            if &plan.provider != provider_id {
-                continue;
-            }
-        }
-        items_with_keys.push((
-            def.id().to_string(),
-            SubscriptionPlanListItem {
-                plan_id: def.id().clone(),
-                plan,
-            },
-        ));
-    }
-    let page = collect_page_streaming(
-        items_with_keys,
-        pagination.offset,
-        pagination.limit,
-        None,
-        count_mode,
-    );
-    let payload = SubscriptionPlanListResponse {
-        items: page.items,
-        total: page.total.map(|total| total as u64),
-        has_more: page.has_more,
-        count_mode: count_mode.label().to_owned(),
-    };
-    Ok(infallible_pretty_json_response(&payload, "{}"))
+    crate::NoritoQuery(query): crate::NoritoQuery<iroha_torii_shared::list_query::ListQuery>,
+) -> Result<Response> {
+    collection_sources::execute_collection_response(None, &state,
+        &collection_sources::CollectionTarget::SubscriptionPlans, query,
+        &MaybeTelemetry::disabled(), &DataspaceReadVisibility::all()).await
 }
 #[iroha_futures::telemetry_future]
 pub async fn handle_post_v1_subscription_create(
@@ -60071,117 +57830,14 @@ pub async fn handle_post_v1_subscription_create(
         tx_instructions,
     }))
 }
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_subscriptions(
+#[cfg(test)]
+async fn handle_v1_subscriptions(
     state: Arc<CoreState>,
-    crate::NoritoQuery(params): crate::NoritoQuery<SubscriptionListParams>,
-) -> Result<impl IntoResponse> {
-    let telemetry = MaybeTelemetry::disabled();
-    let owned_by = match params.owned_by {
-        Some(raw) if !raw.trim().is_empty() => Some(
-            parse_account_literal_with_state(
-                state.as_ref(),
-                &raw,
-                &telemetry,
-                ENDPOINT_SUBSCRIPTIONS_LIST,
-            )
-            .map(|(account_id, _)| account_id)
-            .map_err(|err| conversion_error(format!("invalid subscriber id: {err}")))?,
-        ),
-        _ => None,
-    };
-    let provider = match params.provider {
-        Some(raw) if !raw.trim().is_empty() => Some(
-            parse_account_literal_with_state(
-                state.as_ref(),
-                &raw,
-                &telemetry,
-                ENDPOINT_SUBSCRIPTIONS_LIST,
-            )
-            .map(|(account_id, _)| account_id)
-            .map_err(|err| conversion_error(format!("invalid provider id: {err}")))?,
-        ),
-        _ => None,
-    };
-    let status = params
-        .status
-        .as_ref()
-        .map(|raw| parse_subscription_status_filter(raw))
-        .transpose()?;
-    let world = state.world_view();
-    let cap = app_query_page_cap(&state);
-    let pagination = enforce_app_pagination(
-        params.limit,
-        params.offset,
-        cap,
-        ENDPOINT_SUBSCRIPTIONS_LIST,
-    )?;
-    let count_mode = app_count_mode(params.count_mode.as_deref(), ENDPOINT_SUBSCRIPTIONS_LIST);
-    let mut plan_cache: std::collections::BTreeMap<AssetDefinitionId, SubscriptionPlan> =
-        std::collections::BTreeMap::new();
-    let mut items_with_keys = Vec::new();
-    let nft_iter: Box<dyn Iterator<Item = iroha_data_model::nft::NftEntry<'_>> + '_> =
-        if let Some(owner_id) = owned_by.as_ref() {
-            Box::new(world.nfts_in_account_iter(owner_id))
-        } else {
-            Box::new(world.nfts_iter())
-        };
-    for nft in nft_iter {
-        let Some(subscription) = subscription_state_from_metadata(&nft.content)? else {
-            continue;
-        };
-        if let Some(ref owner_id) = owned_by {
-            if &nft.owned_by != owner_id {
-                continue;
-            }
-        }
-        if let Some(ref provider_id) = provider {
-            if &subscription.provider != provider_id {
-                continue;
-            }
-        }
-        if let Some(status_filter) = status {
-            if subscription.status != status_filter {
-                continue;
-            }
-        }
-        let invoice = subscription_invoice_from_metadata(&nft.content)?;
-        let plan = if let Some(plan) = plan_cache.get(&subscription.plan_id) {
-            Some(plan.clone())
-        } else {
-            let plan = match world.asset_definitions().get(&subscription.plan_id) {
-                Some(def) => subscription_plan_from_metadata(def.metadata())?,
-                None => None,
-            };
-            if let Some(ref plan) = plan {
-                plan_cache.insert(subscription.plan_id.clone(), plan.clone());
-            }
-            plan
-        };
-        items_with_keys.push((
-            nft.id().to_string(),
-            SubscriptionListItem {
-                subscription_id: nft.id().clone(),
-                subscription,
-                invoice,
-                plan,
-            },
-        ));
-    }
-    let page = collect_page_streaming(
-        items_with_keys,
-        pagination.offset,
-        pagination.limit,
-        None,
-        count_mode,
-    );
-    let payload = SubscriptionListResponse {
-        items: page.items,
-        total: page.total.map(|total| total as u64),
-        has_more: page.has_more,
-        count_mode: count_mode.label().to_owned(),
-    };
-    Ok(infallible_pretty_json_response(&payload, "{}"))
+    crate::NoritoQuery(query): crate::NoritoQuery<iroha_torii_shared::list_query::ListQuery>,
+) -> Result<Response> {
+    collection_sources::execute_collection_response(None, &state,
+        &collection_sources::CollectionTarget::Subscriptions, query,
+        &MaybeTelemetry::disabled(), &DataspaceReadVisibility::all()).await
 }
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_subscription_get(

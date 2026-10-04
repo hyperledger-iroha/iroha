@@ -17,6 +17,13 @@ private struct ListQueryVectors: Decodable {
         let json: ToriiJSONValue
     }
 
+    /// A JSON-form filter that decodes to a different (normalized) tree.
+    struct NormalizedFilterCase: Decodable {
+        let json: ToriiFilter
+        let canonical: String
+        let normalized: ToriiJSONValue
+    }
+
     struct SortCase: Decodable {
         let text: String
         let canonical: String
@@ -71,6 +78,7 @@ private struct ListQueryVectors: Decodable {
     let version: Int
     let filters: [FilterCase]
     let filterErrors: [SyntaxErrorCase]
+    let jsonFilters: [NormalizedFilterCase]
     let sorts: [SortCase]
     let sortErrors: [SyntaxErrorCase]
     let queries: [QueryCase]
@@ -82,6 +90,7 @@ private struct ListQueryVectors: Decodable {
         case version
         case filters
         case filterErrors = "filter_errors"
+        case jsonFilters = "json_filters"
         case sorts
         case sortErrors = "sort_errors"
         case queries
@@ -132,6 +141,18 @@ final class ToriiCollectionQueryVectorTests: XCTestCase {
         }
     }
 
+    func testJSONFilterVectorsDecodeToTheNormalizedTree() throws {
+        let (vectors, _) = try ListQueryVectors.load()
+        XCTAssertFalse(vectors.jsonFilters.isEmpty)
+        for vector in vectors.jsonFilters {
+            let filter = vector.json
+            XCTAssertEqual(filter.description, vector.canonical)
+            XCTAssertEqual(try jsonValue(filter.jsonData()), vector.normalized, "normalized JSON for `\(vector.canonical)`")
+            XCTAssertEqual(try ToriiFilter(jsonData: filter.jsonData()), filter)
+            XCTAssertNoThrow(try filter.validate(), "vector `\(vector.canonical)` must validate")
+        }
+    }
+
     func testBuilderReproducesFilterVectors() throws {
         let (vectors, _) = try ListQueryVectors.load()
         let byCanonical = Dictionary(uniqueKeysWithValues: vectors.filters.map { ($0.canonical, $0.json) })
@@ -167,6 +188,7 @@ final class ToriiCollectionQueryVectorTests: XCTestCase {
                 ToriiField("text") == "quote \" backslash \\ newline \n unicode é",
             #"tx_hash = "hash" and tx_status in ["Approved", "Rejected"]"#:
                 ToriiEventFields.txHash == "hash" && ToriiEventFields.txStatus.in(["Approved", "Rejected"]),
+            "note = \"del\u{7F} c1\u{85}\"": ToriiField("note") == "del\u{7F} c1\u{85}",
         ]
         XCTAssertEqual(Set(built.keys), Set(byCanonical.keys), "every vector has a builder expression")
         for (canonical, filter) in built {
@@ -264,6 +286,11 @@ final class ToriiCollectionQueryVectorTests: XCTestCase {
             (ToriiListQuery(cursor: "has space"), "invalid_cursor"),
             (ToriiListQuery(select: "id,,name".split(separator: ",", omittingEmptySubsequences: false)
                 .map { ToriiFieldPath(String($0)) }), "invalid_select"),
+            (ToriiListQuery(filter: ToriiField("a`b") == 1), "invalid_filter"),
+            (ToriiListQuery(aggregate: ToriiAggregate(
+                groupBy: ["a", "b", "c", "d", "e", "f", "g", "h", "i"],
+                metrics: [.count(as: "n")]
+            )), "invalid_aggregate"),
         ]
         for (query, code) in cases {
             XCTAssertThrowsError(try query.requestBody()) { error in
@@ -307,6 +334,49 @@ final class ToriiFilterBuilderTests: XCTestCase {
             filter.description,
             "s = \"tab\\t cr\\r bs\\b ff\\f ctl\\u0001 del\u{7F} sep\u{2028} \\\"q\\\" \\\\\""
         )
+    }
+
+    func testDelAndC1CharactersRenderLiterally() {
+        // Only `"`, `\` and U+0000..U+001F are escaped; DEL and C1 stay raw, as in JSON.
+        let filter = ToriiField("note") == "x\u{7F}y\u{80}\u{85}\u{9F}z\u{1F}"
+        XCTAssertEqual(filter.description, "note = \"x\u{7F}y\u{80}\u{85}\u{9F}z\\u001f\"")
+        XCTAssertEqual(filter.jsonString, "{\"args\":[\"note\",\"x\u{7F}y\u{80}\u{85}\u{9F}z\\u001f\"],\"op\":\"eq\"}")
+    }
+
+    func testFieldPathsMustNotContainBackticks() throws {
+        XCTAssertThrowsError(try (ToriiField("metadata.a`b") == 1).validate()) { error in
+            XCTAssertEqual((error as? ToriiListQueryError)?.code, "invalid_filter")
+            XCTAssertEqual(
+                (error as? ToriiListQueryError)?.message,
+                "invalid field `metadata.a`b`: field paths must not contain backticks"
+            )
+        }
+        XCTAssertThrowsError(try ToriiFilter(jsonData: Data(#"{"op":"exists","args":["a`b"]}"#.utf8)).validate()) { error in
+            XCTAssertEqual((error as? ToriiListQueryError)?.code, "invalid_filter")
+        }
+        XCTAssertThrowsError(try ToriiListQuery(select: ["id", "a`b"]).requestBody()) { error in
+            XCTAssertEqual((error as? ToriiListQueryError)?.code, "invalid_select")
+        }
+        XCTAssertThrowsError(try ToriiListQuery(sort: [.ascending("a`b")]).requestBody()) { error in
+            XCTAssertEqual((error as? ToriiListQueryError)?.code, "invalid_sort")
+        }
+        // A backtick in the text form always opens or closes a quoted segment.
+        XCTAssertEqual(try ToriiSortKey.parseList("`a-b`.c"), [.ascending("a-b.c")])
+    }
+
+    func testSingleOperandConnectivesDecodeToTheirOperand() throws {
+        for op in ["and", "or"] {
+            let filter = try ToriiFilter(jsonData: Data(#"{"op":"\#(op)","args":[{"op":"eq","args":["a",1]}]}"#.utf8))
+            XCTAssertEqual(filter, ToriiField("a") == 1)
+            XCTAssertEqual(filter.description, "a = 1")
+        }
+        let nested = try ToriiFilter(jsonData: Data(
+            #"{"op":"and","args":[{"op":"or","args":[{"op":"and","args":[{"op":"eq","args":["a",1]},{"op":"is_null","args":["b"]}]}]},{"op":"or","args":[{"op":"eq","args":["a",1]}]}]}"#
+                .utf8
+        ))
+        XCTAssertEqual(nested, .and([.and([ToriiField("a") == 1, ToriiField("b").isNull]), ToriiField("a") == 1]))
+        XCTAssertEqual(nested.description, "(a = 1 and b is null) and a = 1")
+        XCTAssertThrowsError(try ToriiFilter(jsonData: Data(#"{"op":"or","args":[]}"#.utf8)))
     }
 
     func testStructuredMetadataLiteralsAreCompactWithSortedKeys() throws {
@@ -442,6 +512,41 @@ final class ToriiListQueryTests: XCTestCase {
         XCTAssertEqual(String(decoding: try ToriiListQuery().requestBody(), as: UTF8.self), "{}")
     }
 
+    func testAggregatesAreBoundedAndTheirPathsValidated() throws {
+        func aggregateQuery(groups: Int, metrics: Int) -> ToriiListQuery {
+            ToriiListQuery(aggregate: ToriiAggregate(
+                groupBy: (0..<groups).map { ToriiFieldPath("metadata.k\($0)") },
+                metrics: (0..<metrics).map { ToriiAggregate.Metric.count(as: "m\($0)") }
+            ))
+        }
+        XCTAssertNoThrow(
+            try aggregateQuery(groups: ToriiAggregate.maximumGroupBy, metrics: ToriiAggregate.maximumMetrics).requestBody()
+        )
+        let count = ToriiAggregate.Metric.count(as: "n")
+        let rejected: [(ToriiListQuery, String)] = [
+            (aggregateQuery(groups: ToriiAggregate.maximumGroupBy + 1, metrics: 1), "`group_by` lists at most 8 fields"),
+            (aggregateQuery(groups: 0, metrics: ToriiAggregate.maximumMetrics + 1), "`metrics` lists at most 16 metrics"),
+            (
+                ToriiListQuery(aggregate: ToriiAggregate(groupBy: ["a..b"], metrics: [count])),
+                "invalid field `a..b`: field path segments must not be empty"
+            ),
+            (
+                ToriiListQuery(aggregate: ToriiAggregate(groupBy: ["a`b"], metrics: [count])),
+                "invalid field `a`b`: field paths must not contain backticks"
+            ),
+            (
+                ToriiListQuery(aggregate: ToriiAggregate(metrics: [.sum("a b", as: "s")])),
+                "invalid field `a b`: field paths must not contain whitespace or control characters"
+            ),
+        ]
+        for (query, message) in rejected {
+            XCTAssertThrowsError(try query.requestBody(), message) { error in
+                XCTAssertEqual((error as? ToriiListQueryError)?.code, "invalid_aggregate", message)
+                XCTAssertEqual((error as? ToriiListQueryError)?.message, message)
+            }
+        }
+    }
+
     func testTextFiltersPassThroughVerbatim() throws {
         let text = #"owned_by = 'alice'   AND quantity>=10.5"#
         let query = ToriiListQuery(filterText: text, limit: 5)
@@ -482,13 +587,24 @@ final class ToriiListQueryTests: XCTestCase {
         XCTAssertNil(query.next(after: ToriiPage<Int>(items: [])))
     }
 
+    func testNewCollectionRowsDecodeStructuredPayloadsAndLedgerPositions() throws {
+        let decoder = JSONDecoder()
+        let permissions = try decoder.decode(ToriiPage<ToriiAccountPermission>.self, from: Data(#"{"items":[{"name":"CanSetParameters","payload":null},{"name":"CanSetMetadata","payload":{"scope":7}}],"next_cursor":null,"total":2}"#.utf8))
+        XCTAssertEqual(permissions.items.map(\.name), ["CanSetParameters", "CanSetMetadata"])
+        let history = try decoder.decode(ToriiAccountHistoryRow.self, from: Data(#"{"id":"movement","block_height":4,"block_index":2,"movement_index":3,"amount":"1.25"}"#.utf8))
+        XCTAssertEqual(history.blockHeight, 4)
+        XCTAssertEqual(history.blockIndex, 2)
+        XCTAssertEqual(history.movementIndex, 3)
+        XCTAssertEqual(history.amount, "1.25")
+    }
+
     func testPageDecodingIsStrictAboutTheEnvelope() throws {
         let decoder = JSONDecoder()
-        let page = try decoder.decode(ToriiPage<ToriiJSONObject>.self, from: Data(#"{"items":[{"id":"a","extra":1}],"total":null}"#.utf8))
+        let page = try decoder.decode(ToriiPage<ToriiJSONObject>.self, from: Data(#"{"items":[{"id":"a","extra":1}],"next_cursor":null,"total":null}"#.utf8))
         XCTAssertNil(page.nextCursor)
         XCTAssertNil(page.total)
         XCTAssertFalse(page.hasMore)
-        for invalid in [#"{"next_cursor":null}"#, #"{"items":[],"next_cursor":5}"#, #"{"items":[],"total":-1}"#, #"{"items":{}}"#] {
+        for invalid in [#"{"items":[]}"#, #"{"items":[],"next_cursor":""}"#, #"{"items":[],"next_cursor":null,"has_more":false}"#, #"{"items":[{}],"next_cursor":null,"total":0}"#, #"{"next_cursor":null}"#, #"{"items":[],"next_cursor":5}"#, #"{"items":[],"total":-1}"#, #"{"items":{}}"#] {
             XCTAssertThrowsError(try decoder.decode(ToriiPage<ToriiJSONObject>.self, from: Data(invalid.utf8)), invalid)
         }
     }
@@ -588,6 +704,19 @@ final class ToriiPageSequenceTests: XCTestCase {
         await XCTAssertThrowsErrorAsync(try await iterator.next())
         let afterError = try await iterator.next()
         XCTAssertNil(afterError)
+    }
+
+    func testCursorCycleStopsBeforeFetchingAnotherPage() async throws {
+        let log = FetchLog()
+        let sequence = pages(["c1", "c2", "c1"], log: log)
+        var iterator = sequence.makeAsyncIterator()
+        _ = try await iterator.next()
+        _ = try await iterator.next()
+        await XCTAssertThrowsErrorAsync(try await iterator.next())
+        let stopped = try await iterator.next()
+        XCTAssertNil(stopped)
+        let queries = await log.queries
+        XCTAssertEqual(queries.count, 3)
     }
 
     func testCancellationStopsBeforeTheNextRequest() async throws {
@@ -1173,17 +1302,59 @@ final class ToriiEventStreamPolicyTests: XCTestCase {
         }
     }
 
-    func testPlusSignsInQueryValuesArePercentEncoded() async throws {
-        let seen = NSLock()
-        var queries: [String] = []
+    func testEveryExplorerFeedUsesSharedPagesAndFixedOrder() async throws {
+        let paths = ["accounts", "domains", "asset-definitions", "assets", "nfts", "rwas", "blocks",
+                     "transactions", "transactions/latest", "instructions", "instructions/latest"]
+        let lock = NSLock()
+        var observed = 0
         let baseURL = CollectionQueryStubProtocol.register { request in
-            seen.lock()
-            queries.append(request.url?.query ?? "")
-            seen.unlock()
-            return jsonResponse(request, #"{"pagination":{"limit":10,"next_cursor":null,"has_more":false},"items":[]}"#)
+            lock.lock()
+            defer { lock.unlock() }
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertLessThan(observed, paths.count)
+            if observed < paths.count {
+                XCTAssertEqual(request.url?.path, "/v1/explorer/\(paths[observed])/query")
+            }
+            observed += 1
+            return jsonResponse(request, #"{"items":[],"next_cursor":null}"#)
         }
-        _ = try? await client(baseURL: baseURL).getExplorerInstructions(params: ToriiExplorerInstructionsParams(kind: "a+b"))
-        XCTAssertEqual(queries, ["kind=a%2Bb"])
+        let torii = try client(baseURL: baseURL)
+        _ = try await torii.explorerAccounts.page()
+        _ = try await torii.explorerDomains.page()
+        _ = try await torii.explorerAssetDefinitions.page()
+        _ = try await torii.explorerAssets.page()
+        _ = try await torii.explorerNfts.page()
+        _ = try await torii.explorerRwas.page()
+        _ = try await torii.explorerBlocks.page()
+        _ = try await torii.explorerTransactions.page()
+        _ = try await torii.explorerLatestTransactions.page()
+        _ = try await torii.explorerInstructions.page()
+        _ = try await torii.explorerLatestInstructions.page()
+        await XCTAssertThrowsErrorAsync(try await torii.explorerAccounts.page(ToriiListQuery(includeTotal: true)))
+        await XCTAssertThrowsErrorAsync(try await torii.explorerTransactions.page(ToriiListQuery(sort: [.ascending("block")])))
+    }
+
+    func testExplorerTransferHelperPreservesCallerFilter() async throws {
+        let query = ToriiListQuery(filter: ToriiField("metadata.note") == .object(["tag": .string("a+b")]), limit: 3)
+        let baseURL = CollectionQueryStubProtocol.register { request in
+            let body = try JSONSerialization.jsonObject(with: XCTUnwrap(toriiClientTestBodyData(from: request))) as! [String: Any]
+            let filterData = try JSONSerialization.data(withJSONObject: XCTUnwrap(body["filter"]))
+            let expected = (ToriiField("metadata.note") == .object(["tag": .string("a+b")])).and(ToriiField("kind") == "Transfer")
+            XCTAssertEqual(try ToriiFilter(jsonData: filterData), expected)
+            XCTAssertEqual(body["limit"] as? Int, 3)
+            return jsonResponse(request, #"{"items":[],"next_cursor":null}"#)
+        }
+        _ = try await client(baseURL: baseURL).getExplorerTransfers(query: query)
+    }
+
+    func testExplorerCollectionPreservesPlusInFilterLiteral() async throws {
+        let baseURL = CollectionQueryStubProtocol.register { request in
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions/query")
+            let body = try JSONSerialization.jsonObject(with: XCTUnwrap(toriiClientTestBodyData(from: request))) as! [String: Any]
+            XCTAssertEqual((body["filter"] as? [String: Any])?["args"] as? [String], ["kind", "a+b"])
+            return jsonResponse(request, #"{"next_cursor":null,"items":[]}"#)
+        }
+        _ = try await client(baseURL: baseURL).explorerInstructions.page(ToriiListQuery(filter: ToriiField("kind") == "a+b"))
     }
 
     func testStreamEventsSendsTheTextFilterAndDecodesEveryKind() async throws {

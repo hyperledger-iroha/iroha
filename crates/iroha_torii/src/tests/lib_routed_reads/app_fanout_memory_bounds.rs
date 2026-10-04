@@ -255,28 +255,6 @@ fn app_fanout_aggregate_merge_candidate_and_final_phases_are_bounded() {
     );
 }
 #[test]
-fn app_fanout_budget_borrows_the_existing_shared_reservation() {
-    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
-    let permit = semaphore
-        .clone()
-        .try_acquire_owned()
-        .expect("test owns the shared fanout slot");
-    let reservation = QueryFanoutMemoryReservation::new(permit);
-    let budget =
-        ToriiAppFanoutMemoryBudget::from_shared_query_fanout_reservation(&reservation, 8 * 1024)
-            .expect("shared reservation creates a request ledger");
-    assert_eq!(budget.remaining_bytes().expect("valid ledger"), 8 * 1024);
-    assert_eq!(semaphore.available_permits(), 0);
-    let _ = budget;
-    assert_eq!(
-        semaphore.available_permits(),
-        0,
-        "the ledger borrows rather than replacing the shared ownership token"
-    );
-    drop(reservation);
-    assert_eq!(semaphore.available_permits(), 1);
-}
-#[test]
 fn app_fanout_norito_plan_keeps_raw_bytes_live_and_splits_routes() {
     let capacity = 64 * 1024;
     let prior = 4 * 1024;

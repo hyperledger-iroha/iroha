@@ -103,8 +103,6 @@ profiling = []
 fastpq-gpu = ["fastpq_prover/fastpq-gpu"]
 # Enable benchmark-only helpers used by this crate's Criterion targets.
 bench = []
-# Enable IDs-only query projections
-ids_projection = ["iroha_data_model/ids_projection"]
 # ZK verifier feature flags ship enabled by default.
 zk-halo2 = ["dep:kaigi_zk"]
 zk-stark = ["iroha_core_zk/zk-stark", "iroha_core_privacy/zk-stark"]

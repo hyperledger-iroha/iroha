@@ -3,7 +3,10 @@ package org.hyperledger.iroha.sdk.nexus
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertFalse
+import org.hyperledger.iroha.sdk.json.Json
+import org.hyperledger.iroha.sdk.json.JsonObject
+import org.hyperledger.iroha.sdk.query.Page
+import org.hyperledger.iroha.sdk.query.listQuery
 import kotlin.test.assertNull
 
 class UaidJsonParserQuantityTest {
@@ -45,12 +48,12 @@ class UaidJsonParserQuantityTest {
             )
         }
         assertFailsWith<IllegalStateException> {
-            UaidJsonParser.parseManifests(
+            parseManifestPage(
                 """{"uaid":"$uaid","total":0,"manifests":[]}""".toByteArray(),
             )
         }
         assertFailsWith<IllegalStateException> {
-            UaidJsonParser.parseManifests(
+            parseManifestPage(
                 """{"uaid":"$uaid","total":0,"has_more":false,"count_mode":"EXACT","manifests":[]}"""
                     .toByteArray(),
             )
@@ -78,7 +81,7 @@ class UaidJsonParserQuantityTest {
             )
         }
         assertFailsWith<IllegalStateException> {
-            UaidJsonParser.parseManifests(
+            parseManifestPage(
                 """{"uaid":"$uaid","total":-1,"has_more":false,"count_mode":"exact","manifests":[]}"""
                     .toByteArray(),
             )
@@ -109,13 +112,12 @@ class UaidJsonParserQuantityTest {
 
     @Test
     fun `manifest response enforces current pagination and manifest json contract`() {
-        val response = UaidJsonParser.parseManifests(manifestResponse())
-        assertEquals(1, response.total)
-        assertFalse(response.hasMore)
-        assertEquals(UaidManifestCountMode.EXACT, response.countMode)
-        val record = response.manifests.single()
+        val response = parseManifestPage(manifestResponse())
+        assertEquals(1L, response.total)
+        assertNull(response.nextCursor)
+        val record = response.items.single()
         assertEquals("ab".repeat(32), record.manifestHash)
-        assertEquals(UaidManifestsResponse.UaidManifestStatus.REVOKED, record.status)
+        assertEquals(UaidManifestStatus.REVOKED, record.status)
         assertEquals(15, record.lifecycle.revocation?.epoch)
         assertNull(record.lifecycle.revocation?.reason)
         assertEquals(1L, record.manifestAsMap()["version"])
@@ -135,31 +137,26 @@ class UaidJsonParserQuantityTest {
             current.replace("\"status\":\"Revoked\"", "\"status\":\"revoked\""),
         ).forEach { payload ->
             assertFailsWith<IllegalStateException> {
-                UaidJsonParser.parseManifests(payload.toByteArray())
+                parseManifestPage(payload.toByteArray())
             }
         }
     }
 
     @Test
-    fun `manifest query uses only exact first release parameters`() {
-        assertEquals(
-            mapOf(
-                "dataspace" to "7",
-                "status" to "inactive",
-                "limit" to "25",
-                "offset" to "5",
-                "count_mode" to "exact",
-            ),
-            UaidManifestQuery(
-                dataspaceId = 7,
-                status = UaidManifestQuery.UaidManifestStatusFilter.INACTIVE,
-                limit = 25,
-                offset = 5,
-                countMode = UaidManifestCountMode.EXACT,
-            ).toQueryParameters(),
-        )
-        assertFailsWith<IllegalArgumentException> { UaidManifestQuery(limit = 0) }
+    fun `manifest query uses the shared collection controls`() {
+        val query = listQuery { filter("dataspace_id = 7 and status = \"Revoked\""); limit(25); includeTotal() }
+        assertEquals(Json.parse("""{"filter":"dataspace_id = 7 and status = \"Revoked\"","limit":25,"include_total":true}"""), query.toJson())
+        assertFailsWith<IllegalArgumentException> { listQuery { limit(0) } }
     }
+
+    private fun parseManifestPage(payload: ByteArray): Page<UaidManifestRecord> =
+        try {
+            Page.fromJson(Json.parse(payload)).map {
+                UaidJsonParser.parseManifestRecord((it as JsonObject).toJsonBytes(), uaid)
+            }
+        } catch (error: IllegalArgumentException) {
+            throw IllegalStateException(error.message, error)
+        }
 
     private fun UaidPortfolioResponse.firstQuantity(): String =
         dataspaces.single().accounts.single().assets.single().quantity
@@ -188,11 +185,9 @@ class UaidJsonParserQuantityTest {
     private fun manifestResponse(): ByteArray =
         """
         {
-          "uaid":"$uaid",
           "total":1,
-          "has_more":false,
-          "count_mode":"exact",
-          "manifests":[{
+          "next_cursor":null,
+          "items":[{
             "dataspace_id":7,
             "dataspace_alias":"primary",
             "manifest_hash":"${"ab".repeat(32)}",

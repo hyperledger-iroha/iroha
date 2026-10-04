@@ -34,7 +34,6 @@ transparent_api = ["iroha_data_model_derive/transparent_api", "iroha_model_base/
 fault_injection = []
 trybuild-tests = ["dep:trybuild"]
 bench = []
-ids_projection = []
 # Authenticate governed registries against complete Parliament proposal preimages.
 governance = []
 pqc = ["iroha_crypto/pqc", "sorafs_manifest/pqc"]

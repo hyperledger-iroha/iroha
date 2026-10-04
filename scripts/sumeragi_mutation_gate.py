@@ -702,6 +702,8 @@ CORE_MUTATIONS = [
       ["beacon::dkg_local_seat::aggregate::tests::aggregate_checked_context_refuses_nonfinal_native_tip_zero_intent_and_changed_original_checkpoint"]),
     m("HC115", "DKG aggregate production: erase original contributions and acknowledgments before durable handoff",
       ["beacon::dkg_local_seat::aggregate::tests::actual_native_h4_aggregate_stays_original_until_explicit_retirement_and_restores_small_owner"]),
+    m("HC118", "native journal source: omit the original prepared source pool binding",
+      ["sumeragi::native_journal::tests::source_tests::native_reader_rejects_foreign_prepared_source_pool_before_decode_or_control_admission"]),
 ]
 
 
@@ -723,6 +725,8 @@ DAEMON_MUTATIONS = [
       ["beacon_bootstrap::seat_attempt::aggregate_tests::original_complete_aggregate_and_four_output_heads_restore_genuine_h3_h4_ancestry_same_claim_and_exact_private_bytes"]),
     m("HC117", "DKG aggregate export restore: treat a partial output set as an empty fresh destination",
       ["beacon_bootstrap::seat_attempt::aggregate_tests::original_aggregate_head_rejects_partial_final_output_prefix_before_private_export_adoption"]),
+    m("HC119", "DKG native replay: pin a foreign charged proof source before checking its original pool",
+      ["beacon_bootstrap::seat_attempt::finality::tests::durable_native_replay_rejects_foreign_source_pool_without_pinning_or_advancing"]),
     m("HC93", "broker beacon operation: reconstruct the authenticated session at every phase",
       ["runtime_provider_broker::protocol::platform::tests::beacon_operation_reuses_original_graph_across_ingress_dispatch_and_response"]),
 ]

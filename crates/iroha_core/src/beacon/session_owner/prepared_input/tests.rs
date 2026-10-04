@@ -330,6 +330,14 @@ fn final_only_bank_moves_exact_generated_graph_without_prior_phase_or_private_pr
             )
             .unwrap();
         assert_eq!(bounds[2], frame.len());
+        let verifier_scratch_bytes = verifier
+            .retired_scratch_layouts()
+            .iter()
+            .map(std::alloc::Layout::size)
+            .sum::<usize>();
+        assert!(verifier_scratch_bytes > 0);
+        let source_pointer = frame.as_ptr();
+        let source_hash = iroha_crypto::Hash::new(&frame);
         let mut bank = None;
         let count = allocations_during(|| {
             bank = Some(
@@ -338,6 +346,8 @@ fn final_only_bank_moves_exact_generated_graph_without_prior_phase_or_private_pr
             )
         });
         let mut bank = bank.unwrap();
+        let bank_scaffolding_bytes = bank.extraction_scaffolding_bytes();
+        assert!(bank_scaffolding_bytes > 0);
         let full_pool = fixture_budget();
         let mut full = None;
         let full_count = allocations_during(|| {
@@ -365,6 +375,11 @@ fn final_only_bank_moves_exact_generated_graph_without_prior_phase_or_private_pr
             }),
             0
         );
+        let after_decode = pool
+            .limit_bytes()
+            .checked_sub(bank_scaffolding_bytes)
+            .unwrap();
+        assert_eq!(pool.reserved_bytes(), after_decode);
         let graph = graph.unwrap();
         assert_eq!(graph.get(), fixture.session.record());
         let public_pointer = graph.get().public_shares.as_ptr();
@@ -386,11 +401,18 @@ fn final_only_bank_moves_exact_generated_graph_without_prior_phase_or_private_pr
                 .as_ptr(),
             ciphertext_pointer
         );
-        assert!(matches!(
-            bank.take_final_session(),
-            Err(GlobalThresholdBeaconInputErrorV1::Phase)
-        ));
-        assert_eq!(pool.reserved_bytes(), pool.limit_bytes());
+        let after_seal = after_decode.checked_sub(verifier_scratch_bytes).unwrap();
+        assert_eq!(pool.reserved_bytes(), after_seal);
+        assert_eq!(
+            allocations_during(|| assert!(matches!(
+                bank.take_final_session(),
+                Err(GlobalThresholdBeaconInputErrorV1::Phase)
+            ))),
+            0
+        );
+        assert_eq!(pool.reserved_bytes(), after_seal);
+        assert_eq!(frame.as_ptr(), source_pointer);
+        assert_eq!(iroha_crypto::Hash::new(&frame), source_hash);
         drop(bank);
         drop(sealed);
         drop(blocker);

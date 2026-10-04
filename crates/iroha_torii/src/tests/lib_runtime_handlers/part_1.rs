@@ -2382,6 +2382,8 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
     let query_memory = query_memory_geometry(
         usize::try_from(defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES.get())
             .expect("default query memory pool fits usize"),
+        usize::try_from(defaults::torii::QUERY_FANOUT_MAX_WORKING_SET_BYTES.get())
+            .expect("default query working-set ceiling fits usize"),
         usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
             .expect("default content limit fits usize"),
         defaults::torii::QUERY_HEAVY_MAX_INFLIGHT.get(),

@@ -6,10 +6,7 @@ use crate::{
     subscriptions::{SubscriptionCreate, SubscriptionDraft, SubscriptionUsage},
 };
 use iroha_data_model::{asset::AssetDefinitionId, nft::NftId, subscription::SubscriptionPlan};
-use iroha_torii_shared::subscriptions::{
-    SubscriptionCancelMode, SubscriptionGetResponse, SubscriptionListParams,
-    SubscriptionListResponse, SubscriptionPlanListParams, SubscriptionPlanListResponse,
-};
+use iroha_torii_shared::subscriptions::{SubscriptionCancelMode, SubscriptionGetResponse};
 
 impl AccountClient {
     /// Access subscription drafts bound to this account.
@@ -48,23 +45,6 @@ impl super::Client {
 }
 
 impl Subscriptions<'_> {
-    /// List public subscription plans.
-    ///
-    /// # Errors
-    /// Returns the asynchronous operation error or a typed blocking-runtime rejection.
-    pub fn list_plans(
-        &self,
-        params: &SubscriptionPlanListParams,
-    ) -> Result<SubscriptionPlanListResponse> {
-        self.runtime.block_on(self.inner.list_plans(params))?
-    }
-    /// List public subscription state.
-    ///
-    /// # Errors
-    /// Returns the asynchronous operation error or a typed blocking-runtime rejection.
-    pub fn list(&self, params: &SubscriptionListParams) -> Result<SubscriptionListResponse> {
-        self.runtime.block_on(self.inner.list(params))?
-    }
     /// Read one subscription NFT.
     ///
     /// # Errors

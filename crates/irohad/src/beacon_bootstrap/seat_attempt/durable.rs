@@ -1276,7 +1276,7 @@ impl PreparedDurableDkg {
     pub(super) fn later_sources(
         &self,
         phase: u16,
-    ) -> Result<(&[u8], &[u8], &[u8], &[u8]), AttemptError> {
+    ) -> Result<(&[u8], &[u8], &[u8], &ChargedBuffer<u8>), AttemptError> {
         let index = usize::from(phase.checked_sub(2).ok_or(AttemptError::Phase)?);
         let later = self.later.get(index).ok_or(AttemptError::Phase)?;
         if later.record.is_none() {
@@ -1288,7 +1288,12 @@ impl PreparedDurableDkg {
                 .map(ChargedBuffer::as_slice)
                 .ok_or(AttemptError::Phase)
         };
-        Ok((source(0)?, source(1)?, source(2)?, source(3)?))
+        Ok((
+            source(0)?,
+            source(1)?,
+            source(2)?,
+            later.bytes[3].as_ref().ok_or(AttemptError::Phase)?,
+        ))
     }
     pub(super) fn sync_restored_later(
         &mut self,

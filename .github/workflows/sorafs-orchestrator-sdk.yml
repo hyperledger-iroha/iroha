@@ -18,6 +18,7 @@ on:
       - "scripts/exec_with_file_lock.py"
       - "scripts/check_mobile_sdk_artifact_pin_commit.py"
       - "scripts/check_mobile_sdk_artifacts.sh"
+      - "scripts/tests/mobile_sdk_apple_lock_workflow_test.py"
       - "scripts/norito_bridge_source_seal.py"
       - "scripts/norito_bridge_apple_slice_handoff.py"
       - "scripts/package_mobile_sdk_artifacts.sh"
@@ -229,10 +230,26 @@ jobs:
           echo "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" >> "$GITHUB_ENV"
           echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir" >> "$GITHUB_ENV"
           echo "NORITO_BRIDGE_BUILD_DIR=$build_dir" >> "$GITHUB_ENV"
+      - name: Materialize the authenticated external Apple Cargo lock
+        shell: bash
+        run: |
+          umask 077
+          source ci/privacy_sdk_cargo_lockfile.sh
+          lock_dir="$RUNNER_TEMP/iroha-mobile-apple-lock"
+          mkdir -m 0700 "$lock_dir"
+          lock_dir="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$lock_dir")"
+          release_lock="$lock_dir/Cargo.lock"
+          workspace_lock_state="present:$(privacy_sdk_file_seal "$GITHUB_WORKSPACE/Cargo.lock" "$MOBILE_SDK_PYTHON_BINARY")"
+          privacy_sdk_materialize_canonical_cargo_lock \
+            "$GITHUB_WORKSPACE" "$release_lock" "$workspace_lock_state" \
+            "$MOBILE_SDK_PYTHON_BINARY"
+          release_lock="$(IROHA_PRIVACY_CARGO_LOCKFILE_PATH="$release_lock" \
+            privacy_sdk_resolve_cargo_lockfile "$GITHUB_WORKSPACE" "$MOBILE_SDK_PYTHON_BINARY")"
+          echo "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH=$release_lock" >> "$GITHUB_ENV"
       - name: Build exact ABI-25 NoritoBridge XCFramework
-        run: scripts/build_norito_xcframework.sh --lockfile-path "$GITHUB_WORKSPACE/Cargo.lock"
+        run: scripts/build_norito_xcframework.sh --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"
       - name: Authenticate Apple native artifact
-        run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only --lockfile-path "$GITHUB_WORKSPACE/Cargo.lock"
+        run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"
       - name: Run exact Python 3.12 ABI-25 native reference parity
         env:
           SORAFS_PYTHON_SDK_EVIDENCE_DIR: ${{ runner.temp }}/iroha-sorafs-python-native-abi25-evidence

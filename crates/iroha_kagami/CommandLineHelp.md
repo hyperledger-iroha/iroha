@@ -1152,11 +1152,8 @@ Generate per-client CLI configs from a base client.toml
 
 ###### **Options:**
 
-* `--base-config <PATH>` — Base client config to copy the chain, exact network identity, Torii URL, and credentials from
+* `--base-config <PATH>` — Base client config to copy the chain, exact network identity, account network context, Torii URL, and credentials from
 * `--out-dir <DIR>` — Output directory for generated client configs (default: <base-config-dir>/clients)
-* `--domain <SCOPE>` — Account scope for generated client configs (`dataspace` or `domain.dataspace`)
-
-  Default value: `acme.universal`
 * `--seed-hex <HEX>` — A 32-byte secret master seed encoded as 64 hexadecimal characters.
 
    Per-client keys are derived with an explicit domain and client name. Omit this option for independent operating-system-random keys.

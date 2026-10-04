@@ -1,12 +1,12 @@
 //! Consume exact native grouping derivations before scoped canonical encoding.
 
 use super::super::grouped_ownership::{
-    ASSET_BALANCE_WORK_PER_ROW, ASSET_DEFINITION_WORK_PER_ROW, CONTRACT_ALIAS_WORK_PER_ROW,
-    CheckedAccountRekeys, CheckedAssetDefinitions, CheckedAssets, CheckedContractAliases,
-    CheckedContractSubjects, CheckedEscrows, CheckedNfts, CheckedProofRecords,
-    CheckedRepoAgreements, CheckedRwas, CheckedValidationFeeProposals, CheckedVerifyingKeys,
-    ESCROW_WORK_PER_ROW, GroupedOwnershipError, NFT_WORK_PER_ROW, REPO_AGREEMENT_WORK_PER_ROW,
-    RWA_WORK_PER_ROW, VALIDATION_FEE_PROPOSAL_WORK_PER_ROW,
+    ACCOUNT_REKEY_WORK_PER_ROW, ASSET_BALANCE_WORK_PER_ROW, ASSET_DEFINITION_WORK_PER_ROW,
+    CONTRACT_ALIAS_WORK_PER_ROW, CheckedAccountRekeys, CheckedAssetDefinitions, CheckedAssets,
+    CheckedContractAliases, CheckedContractSubjects, CheckedEscrows, CheckedNfts,
+    CheckedProofRecords, CheckedRepoAgreements, CheckedRwas, CheckedValidationFeeProposals,
+    CheckedVerifyingKeys, ESCROW_WORK_PER_ROW, GroupedOwnershipError, NFT_WORK_PER_ROW,
+    REPO_AGREEMENT_WORK_PER_ROW, RWA_WORK_PER_ROW, VALIDATION_FEE_PROPOSAL_WORK_PER_ROW,
 };
 use super::*;
 use mv::{PublicationPreparationError, storage::StorageReadOnly};
@@ -140,12 +140,58 @@ grouped_capture!(
     "world.governance_proposals",
     VALIDATION_FEE_PROPOSAL_WORK_PER_ROW
 );
-grouped_capture!(
-    capture_account_rekey_records_once,
-    CheckedAccountRekeys,
-    "world.account_rekey_records",
-    256
-);
+/// Capture canonical account_rekey_records through all four original native owners.
+pub(crate) fn capture_account_rekey_records_once(
+    state: &State,
+    limits: LeafLimits,
+) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
+    let generation = state.state_view_generation();
+    if generation & 1 != 0 {
+        return Ok(None);
+    }
+    let budget = state.ivm_execution_budget();
+    let checked = CheckedAccountRekeys::capture(
+        &state.world,
+        limits.max_rows.saturating_mul(ACCOUNT_REKEY_WORK_PER_ROW),
+    );
+    if !is_stable_state_view_generation(generation, state.state_view_generation()) {
+        return Ok(None);
+    }
+    let checked = match checked {
+        Ok(checked) => checked,
+        Err(GroupedOwnershipError::Publication(PublicationPreparationError::Changed)) => {
+            return Ok(None);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let snapshot = CanonicalTableLeafSet::paired_table_from_rows(
+        "world.account_rekey_records",
+        limits,
+        &budget,
+        checked.rows().iter(),
+    );
+    finish_account_rekey_records_encoding(state, generation, checked, snapshot)
+}
+fn finish_account_rekey_records_encoding(
+    state: &State,
+    generation: u64,
+    checked: CheckedAccountRekeys<'_>,
+    snapshot: Result<CanonicalTablePairedSnapshot, LeafError>,
+) -> Result<Option<CanonicalTablePairedSnapshot>, LeafError> {
+    let current = checked.matches_current();
+    drop(checked);
+    if !is_stable_state_view_generation(generation, state.state_view_generation()) {
+        return Ok(None);
+    }
+    if !current? {
+        return Ok(None);
+    }
+    Ok(Some(snapshot?))
+}
+#[cfg(test)]
+#[path = "grouped_capture/account_rekeys_fence_tests.rs"]
+mod account_rekeys_fence_tests;
+
 /// Capture canonical balances through their eight exact native dependencies.
 pub(crate) fn capture_assets_once(
     state: &State,

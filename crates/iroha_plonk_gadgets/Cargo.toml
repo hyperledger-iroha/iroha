@@ -1,0 +1,31 @@
+[package]
+name = "iroha_plonk_gadgets"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "Chips for the Iroha-native PIPA-v1 PLONKish engine: RP57 Pow5 Poseidon lanes and the KAGEMUSHA sponge, running-sum range checks, checked unsigned arithmetic, glue arithmetic and the prototype G1 statement encoding"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories = ["cryptography"]
+
+[lints]
+workspace = true
+
+# Every entry below is already in the workspace lockfile; the crate adds no
+# external package.
+[dependencies]
+# Fields and the pinned RP57 Poseidon permutation the chips reproduce.
+iroha_pasta = { workspace = true }
+# Constraint systems, the circuit frontend and the constraint checker.
+iroha_plonk = { workspace = true }
+# `Field`/`PrimeField` traits of the iroha_pasta field types.
+ff = "0.13.1"
+
+[dev-dependencies]
+# The shared KAGEMUSHA Poseidon vectors in `fixtures/native_prover/kats_v1.json`.
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
+# Deterministic recovery streams for reproducible test proofs.
+rand_chacha = "0.3.1"

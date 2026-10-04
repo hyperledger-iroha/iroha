@@ -14727,6 +14727,9 @@ pub struct Torii {
     /// Aggregate bytes for signed-query ingress and cross-dataspace fanout.
     #[config(default = "defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES")]
     pub query_fanout_max_retained_bytes: Bytes,
+    /// Maximum complete working set for one query, independent of aggregate capacity.
+    #[config(default = "defaults::torii::QUERY_FANOUT_MAX_WORKING_SET_BYTES")]
+    pub query_fanout_max_working_set_bytes: Bytes,
     /// Absolute deadline for reading one admitted App API routed-read body.
     #[config(default = "app_routed_read_config::default_body_timeout()")]
     pub app_api_routed_read_body_read_timeout_ms: DurationMs,
@@ -15100,6 +15103,14 @@ impl core::fmt::Debug for Torii {
             )
             .field("query_max_inflight", &self.query_max_inflight)
             .field("query_heavy_max_inflight", &self.query_heavy_max_inflight)
+            .field(
+                "query_fanout_max_retained_bytes",
+                &self.query_fanout_max_retained_bytes,
+            )
+            .field(
+                "query_fanout_max_working_set_bytes",
+                &self.query_fanout_max_working_set_bytes,
+            )
             .field("require_api_token", &self.require_api_token)
             .field("api_tokens", &self.api_tokens)
             .field(
@@ -16074,6 +16085,7 @@ impl Torii {
         }
         let max_content_len = self.max_content_len.get();
         let query_fanout_max_retained_bytes = self.query_fanout_max_retained_bytes.get();
+        let query_fanout_max_working_set_bytes = self.query_fanout_max_working_set_bytes.get();
         if max_content_len == 0 {
             emit_torii_config_error(emitter, "torii.max_content_len must be greater than zero");
         }
@@ -16093,6 +16105,12 @@ impl Torii {
                     "torii.query_fanout_max_retained_bytes must be at least {} bytes for four bounded ingress slots and one fanout working set",
                     defaults::torii::QUERY_FANOUT_MIN_POOL_BYTES_V1
                 ),
+            );
+        }
+        if query_fanout_max_working_set_bytes == 0 {
+            emit_torii_config_error(
+                emitter,
+                "torii.query_fanout_max_working_set_bytes must be greater than zero",
             );
         }
         app_routed_read_config::validate(&self, emitter);
@@ -16119,6 +16137,12 @@ impl Torii {
             emit_torii_config_error(
                 emitter,
                 "torii.query_fanout_max_retained_bytes must fit the platform address space",
+            );
+        }
+        if usize::try_from(query_fanout_max_working_set_bytes).is_err() {
+            emit_torii_config_error(
+                emitter,
+                "torii.query_fanout_max_working_set_bytes must fit the platform address space",
             );
         }
         if let Some(preauth_allow_cidrs) = self.preauth_allow_cidrs.as_ref() {
@@ -16184,6 +16208,7 @@ impl Torii {
             query_max_inflight: self.query_max_inflight,
             query_heavy_max_inflight: self.query_heavy_max_inflight,
             query_fanout_max_retained_bytes: self.query_fanout_max_retained_bytes,
+            query_fanout_max_working_set_bytes: self.query_fanout_max_working_set_bytes,
             app_api_routed_read_body_read_timeout,
             query_queue_timeout: self.query_queue_timeout_ms.get(),
             tx_rate_per_authority_per_sec: self

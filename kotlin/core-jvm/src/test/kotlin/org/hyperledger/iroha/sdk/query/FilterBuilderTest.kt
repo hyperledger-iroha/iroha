@@ -87,6 +87,99 @@ class FilterBuilderTest {
     }
 
     @Test
+    fun fieldPathsMustNotContainBackticks() {
+        val message = "invalid field `metadata.a`b`: field paths must not contain backticks"
+        assertEquals(message, assertFailsWith<InvalidFilterException> { field("metadata.a`b") }.message)
+        assertEquals(message, assertFailsWith<IllegalArgumentException> { FieldPath.of("metadata.a`b") }.message)
+        for (json in listOf(
+            """{"op":"eq","args":["metadata.a`b",1]}""",
+            """{"op":"in","args":["metadata.a`b",[1]]}""",
+            """{"op":"exists","args":["metadata.a`b"]}""",
+        )) {
+            assertEquals(message, assertFailsWith<InvalidFilterException>(json) { Filter.fromJson(json) }.message)
+        }
+        assertEquals("invalid_sort", assertFailsWith<ListQueryException> { SortKey.asc("a`b") }.code)
+        assertEquals("invalid_select", assertFailsWith<ListQueryException> { ListQuery.builder().select("a`b") }.code)
+        val select = assertFailsWith<ListQueryException> { ListQuery.fromJson(Json.parse("""{"select":["a`b"]}""")) }
+        assertEquals("invalid_select", select.code)
+        // A backtick in the text form always opens or closes a quoted segment.
+        assertEquals(field("a-b.c") eq 1, Filter.parse("`a-b`.c = 1"))
+    }
+
+    @Test
+    fun stringLiteralsKeepDelAndC1ButRejectC0Controls() {
+        val raw = "x\u007fy\u0080\u0085\u009fz"
+        val parsed = Filter.parse("a = \"$raw\"")
+        assertEquals(field("a") eq raw, parsed)
+        assertEquals("a = \"$raw\"", parsed.toString())
+        assertEquals(parsed, Filter.parse("a = '$raw'"))
+        for (control in listOf("\u0000", "\u0001", "\t", "\n", "\u001f")) {
+            val error = assertFailsWith<FilterSyntaxException> { Filter.parse("a = \"x${control}y\"") }
+            assertEquals("control characters must be escaped inside string literals", error.reason)
+            assertEquals(7, error.column)
+        }
+        // Only `"`, `\` and U+0000..U+001F are escaped, with JSON's short forms.
+        val value = "q\"b\\s\b\u000C\n\r\t\u0000\u001f\u007f\u0085/'"
+        val rendered = (field("a") eq value).toString()
+        assertEquals("a = \"q\\\"b\\\\s\\b\\f\\n\\r\\t\\u0000\\u001f\u007f\u0085/'\"", rendered)
+        assertEquals(field("a") eq value, Filter.parse(rendered))
+    }
+
+    @Test
+    fun singleOperandConnectivesDecodeToTheirOperand() {
+        for (op in listOf("and", "or")) {
+            val decoded = Filter.fromJson("""{"op":"$op","args":[{"op":"eq","args":["a",1]}]}""")
+            assertEquals(field("a") eq 1, decoded)
+            assertEquals("a = 1", decoded.toString())
+        }
+        val nested = Filter.fromJson(
+            """{"op":"and","args":[{"op":"or","args":[{"op":"and","args":[{"op":"eq","args":["a",1]},""" +
+                """{"op":"is_null","args":["b"]}]}]},{"op":"or","args":[{"op":"eq","args":["a",1]}]}]}""",
+        )
+        assertEquals("(a = 1 and b is null) and a = 1", nested.toString())
+        assertTrue(nested is Filter.And && nested.operands.size == 2 && nested.operands[0] is Filter.And)
+        // The collapsed connective still counts toward the depth limit.
+        var deep = """{"op":"eq","args":["a",1]}"""
+        repeat(11) { deep = """{"op":"or","args":[$deep]}""" }
+        val tooDeep = assertFailsWith<InvalidFilterException> { Filter.fromJson(deep) }
+        assertEquals("filter exceeds the nesting depth limit of 10", tooDeep.message)
+    }
+
+    @Test
+    fun aggregatesAreBoundedAndTheirPathsValidated() {
+        fun spec(groups: Int, metrics: Int): AggregateSpec.Builder {
+            val builder = AggregateSpec.builder().groupBy(*Array(groups) { "metadata.k$it" })
+            repeat(metrics) { builder.metric(AggregateMetric.count("m$it")) }
+            return builder
+        }
+        val widest = spec(AggregateSpec.MAX_GROUP_BY, AggregateSpec.MAX_METRICS).build()
+        val body = ListQuery.builder().aggregate(widest).build().toJson()
+        assertEquals(widest, ListQuery.fromJson(body).aggregate)
+        val groups = assertFailsWith<ListQueryException> { spec(AggregateSpec.MAX_GROUP_BY + 1, 1).build() }
+        assertEquals("`group_by` lists at most 8 fields", groups.message)
+        assertEquals("invalid_aggregate", groups.code)
+        val metrics = assertFailsWith<ListQueryException> { spec(0, AggregateSpec.MAX_METRICS + 1).build() }
+        assertEquals("`metrics` lists at most 16 metrics", metrics.message)
+        assertEquals("aggregate", metrics.parameter)
+        for (json in listOf(
+            """{"aggregate":{"groupby":["a"],"metrics":[{"alias":"n","fn":"count"}]}}""",
+            """{"aggregate":{"metrics":[{"alias":"n","fn":"count","feild":"a"}]}}""",
+            """{"aggregate":{"group_by":["a","b","c","d","e","f","g","h","i"],"metrics":[{"alias":"n","fn":"count"}]}}""",
+            """{"aggregate":{"metrics":""" + (0..16).joinToString(",", "[", "]") { """{"alias":"m$it","fn":"count"}""" } + "}}",
+            """{"aggregate":{"group_by":["a..b"],"metrics":[{"alias":"n","fn":"count"}]}}""",
+            """{"aggregate":{"group_by":["a`b"],"metrics":[{"alias":"n","fn":"count"}]}}""",
+            """{"aggregate":{"metrics":[{"alias":"s","fn":"sum","field":"a b"}]}}""",
+        )) {
+            val error = assertFailsWith<ListQueryException>(json) { ListQuery.fromJson(Json.parse(json)) }
+            assertEquals("invalid_aggregate", error.code, json)
+            assertEquals("aggregate", error.parameter, json)
+        }
+        val backtick = assertFailsWith<ListQueryException> { AggregateSpec.builder().groupBy("a`b") }
+        assertEquals("invalid field `a`b`: field paths must not contain backticks", backtick.message)
+        assertFailsWith<ListQueryException> { AggregateMetric.sum("s", "a`b") }
+    }
+
+    @Test
     fun treeLimitsMatchTorii() {
         var deep: Filter = field("a") eq 1
         repeat(10) { deep = !deep }

@@ -2,6 +2,9 @@
 use super::*;
 use crate::session::{CompileOutput, CompileRequest, CompilerSession};
 fn compile(source: &str, scalar: bool) -> CompileOutput {
+    compile_with_original_zeros(source, scalar, false)
+}
+fn compile_with_original_zeros(source: &str, scalar: bool, original_zeros: bool) -> CompileOutput {
     crate::session::run_with_compiler_stack(|| {
         let build = || {
             CompilerSession::default()
@@ -11,10 +14,17 @@ fn compile(source: &str, scalar: bool) -> CompileOutput {
                 })
                 .expect("complete canonical compiler pipeline")
         };
-        if scalar {
-            local_emission::with_scalar_emission(build)
+        let emit = || {
+            if scalar {
+                local_emission::with_scalar_emission(build)
+            } else {
+                build()
+            }
+        };
+        if original_zeros {
+            numeric_zero::with_original_zeros(emit)
         } else {
-            build()
+            emit()
         }
     })
     .expect("original compiler worker")
@@ -440,7 +450,27 @@ pub(super) fn split_spill(source: &str) {
     assert_eq!(frame.bytes, scalar_frame as usize);
     assert_eq!(frame.spill_base, 16);
     let offset = i16::try_from(frame.spill_base + home).unwrap();
-    for code in [&scalar, &production] {
+    let original_scalar_output = compile_with_original_zeros(source, true, true);
+    let original_production_output = compile_with_original_zeros(source, false, true);
+    single_use_private::assert_public_metadata(&before, &original_scalar_output);
+    single_use_private::assert_public_metadata(&after, &original_production_output);
+    let (original_scalar, original_scalar_frame) =
+        words(&original_scalar_output, &function.name, 13);
+    let (original_production, original_production_frame) =
+        words(&original_production_output, &function.name, 13);
+    assert_eq!(original_scalar_frame, scalar_frame);
+    assert_eq!(original_production_frame, production_frame);
+    for (code, original_zeros) in [
+        (&scalar, false),
+        (&production, false),
+        (&original_scalar, true),
+        (&original_production, true),
+    ] {
+        assert_eq!(
+            syscalls(code),
+            syscalls(&scalar),
+            "all original checked consumers stay in exact order with either zero setup"
+        );
         assert_eq!(code.iter().filter(|word| **word == add).count(), 16);
         let loads = code
             .iter()
@@ -467,16 +497,22 @@ pub(super) fn split_spill(source: &str) {
                 .iter()
                 .position(|word| *word == add)
                 .unwrap();
+        let mut inputs = vec![
+            encode_addi(10, split_register as u8, 0).unwrap(),
+            encode_addi(11, split_register as u8, 0).unwrap(),
+        ];
+        let fresh_zeros = [
+            encode_addi(12, 0, 0).unwrap(),
+            encode_addi(13, 0, 0).unwrap(),
+            encode_addi(14, 0, 0).unwrap(),
+        ];
+        if original_zeros {
+            inputs.extend(fresh_zeros);
+        }
         assert_eq!(
             &code[loads[0].0 + 1..first_call],
-            [
-                encode_addi(10, split_register as u8, 0).unwrap(),
-                encode_addi(11, split_register as u8, 0).unwrap(),
-                encode_addi(12, 0, 0).unwrap(),
-                encode_addi(13, 0, 0).unwrap(),
-                encode_addi(14, 0, 0).unwrap()
-            ],
-            "both exact original operands are consumed before the first numeric clobber"
+            inputs,
+            "both exact original operands reach the first checked consumer; production omits only the independently proven redundant zero setup"
         );
         for (reload, _) in &loads[1..] {
             let reload = *reload;
@@ -488,11 +524,11 @@ pub(super) fn split_spill(source: &str) {
                     .unwrap();
             assert_eq!(
                 &code[reload + 1..call],
-                [
-                    encode_addi(12, 0, 0).unwrap(),
-                    encode_addi(13, 0, 0).unwrap(),
-                    encode_addi(14, 0, 0).unwrap()
-                ],
+                if original_zeros {
+                    fresh_zeros.as_slice()
+                } else {
+                    &[]
+                },
                 "original a0 in r11 reaches its exact checked consumer without substitution or clobber"
             );
         }

@@ -505,6 +505,33 @@ fn check_pk_tables<C: PastaCurve>() {
         eager.constraint_system().selector_plan().compress,
         eager.vk().compress_selectors()
     );
+    // The masks are computed per coset from their closed forms and equal
+    // the coset FFT of the mask polynomials; they are not cached.
+    let (p0, p_last, p_active) = eager.mask_polys();
+    for coset in 0..pieces {
+        let masks = eager.coset_masks(coset).expect("masks");
+        let quotient = eager.quotient_domain();
+        for (closed, poly) in [
+            (&masks.l0, p0),
+            (&masks.l_last, p_last),
+            (&masks.l_active, p_active),
+        ] {
+            let fft = quotient.evaluate(domain, poly, coset).expect("fft");
+            assert_eq!(closed, &fft, "coset {coset}");
+        }
+        assert_eq!(masks, lazy.coset_masks(coset).expect("masks"));
+    }
+    assert_eq!(eager.coset_masks(pieces).err(), Some(KeyError::CosetIndex));
+    let cached_polys = fixed + sigma;
+    assert_eq!(
+        eager.coset_cache_bytes(),
+        cached_polys * pieces * n * core::mem::size_of::<C::ScalarExt>()
+    );
+    // The selector columns live once, in the fixed columns.
+    assert!(eager.constraint_system().selector_columns().is_empty());
+    let first =
+        usize::try_from(eager.binding().descriptor().selectors.first_column).expect("first column");
+    assert!(first <= fixed);
 }
 
 #[test]

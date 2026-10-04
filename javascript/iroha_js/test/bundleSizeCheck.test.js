@@ -569,7 +569,7 @@ test("public browser aggregate audits eager, lazy, and unique combined closures"
   );
   // Includes the shared Torii query core (query/*, toriiErrors.js,
   // toriiEventStream.js, toriiClientEncoding.js).
-  assert.equal(Object.keys(result.metafile.inputs).length, 113);
+  assert.equal(Object.keys(result.metafile.inputs).length, 116);
   assertSplitByteInventory(result, metrics);
   assert.deepEqual(metrics.lazyChunks.map(({ specifier }) => specifier), [
     "./sumeragiTyped.js",
@@ -612,9 +612,9 @@ test("IVM artifact browser leaf excludes Node and Buffer shims", async () => {
 
 test("bundle targets retain canonical module ownership and accurate byte inventories", async () => {
   const expected = new Map([
-    ["toriiClient.js", { modules: 136 }],
-    ["transactionCodec.js (browser)", { modules: 64 }],
-    ["nexusApp.js (browser)", { modules: 73 }],
+    ["toriiClient.js", { modules: 137 }],
+    ["transactionCodec.js (browser)", { modules: 65 }],
+    ["nexusApp.js (browser)", { modules: 74 }],
     ["canonicalRequest.js (browser)", { modules: 47 }],
   ]);
   const { build } = await import("esbuild");
@@ -716,9 +716,9 @@ test("Kotodama compiler browser export excludes Node and Buffer shims", async ()
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
-  // The canonical nominal-error module shares validation across Unit, public
-  // signatures, and cursor/page schemas while preserving the compact compiler.
-  assert.equal(Object.keys(result.metafile.inputs).length, 8);
+  // Canonical nominal errors, identifiers, and entrypoint schemas share
+  // validation across Unit, public signatures, and cursor/page schemas.
+  assert.equal(Object.keys(result.metafile.inputs).length, 10);
   assert.doesNotMatch(
     result.outputFiles[0].text,
     /(?:globalThis|window|global)\.Buffer\s*=/u,

@@ -279,12 +279,14 @@ impl FrameInput {
 
     /// Borrow only the complete original frame; decode errors cannot consume it.
     pub(super) fn frame(&self) -> Option<&[u8]> {
-        self.complete.then(|| {
-            self.body
-                .as_ref()
-                .expect("complete original frame")
-                .as_slice()
-        })
+        self.charged_frame().map(ChargedBuffer::as_slice)
+    }
+
+    /// Borrow the same actual source backing only after the original FIFO frame completes.
+    /// Its pool and immutable allocation identity remain available to native proof decoding.
+    pub(super) fn charged_frame(&self) -> Option<&ChargedBuffer<u8>> {
+        self.complete
+            .then(|| self.body.as_ref().expect("complete original frame"))
     }
 
     /// Select the next already authenticated geometry only between complete frames.

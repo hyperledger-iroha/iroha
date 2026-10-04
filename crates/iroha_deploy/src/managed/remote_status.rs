@@ -14,6 +14,8 @@ pub struct DataspaceRequest {
     pub network: String,
     /// Exact canonical SNS dataspace alias.
     pub alias: String,
+    /// Exact canonical owner label, leased as `label@alias` in the same paid request.
+    pub account_alias: String,
     /// Total bootstrap, private startup and attachment budget.
     pub timeout: Duration,
 }

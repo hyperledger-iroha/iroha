@@ -123,7 +123,7 @@ macro_rules! fixed_field {
             fn decode_field(
                 &mut self,
                 field: CanonicalField<'_, $ty>,
-            ) -> Result<(), DecodeIntoError<Infallible>> {
+            ) -> std::result::Result<(), DecodeIntoError<Infallible>> {
                 self.owner.$owner.as_mut_slice()[0].$name = field.with_payload(|bytes| {
                     let (value, used) = <$ty as DecodeFromSlice>::decode_from_slice(bytes)?;
                     if used != bytes.len() {
@@ -143,7 +143,7 @@ macro_rules! inline_field {
             fn decode_field(
                 &mut self,
                 field: CanonicalField<'_, $ty>,
-            ) -> Result<(), DecodeIntoError<Infallible>> {
+            ) -> std::result::Result<(), DecodeIntoError<Infallible>> {
                 self.0.$name = field.with_payload(|bytes| {
                     let (value, used) = <$ty as DecodeFromSlice>::decode_from_slice(bytes)?;
                     if used != bytes.len() {
@@ -163,7 +163,7 @@ macro_rules! nested_field {
             fn decode_field(
                 &mut self,
                 field: CanonicalField<'_, $ty>,
-            ) -> Result<(), DecodeIntoError<Infallible>> {
+            ) -> std::result::Result<(), DecodeIntoError<Infallible>> {
                 field.with_payload(|bytes| {
                     let (_, used) = <$ty as DecodeRecordFields<_>>::decode_fields(
                         bytes,
@@ -234,7 +234,7 @@ impl DecodeField<14, iroha_crypto::threshold_bls::checkpoint::DkgCheckpointSourc
     fn decode_field(
         &mut self,
         field: CanonicalField<'_, iroha_crypto::threshold_bls::checkpoint::DkgCheckpointSourceV1>,
-    ) -> Result<(), DecodeIntoError<Infallible>> {
+    ) -> std::result::Result<(), DecodeIntoError<Infallible>> {
         self.0.source = field.with_payload(|bytes| {
             let (value, used) =
                 iroha_crypto::threshold_bls::checkpoint::DkgCheckpointSourceV1::decode_fields(
@@ -307,12 +307,12 @@ nested_field!(
 );
 fixed_field!(AggregateHead, head, 2, [u8; 32], checkpoint_hash);
 impl SerializePayload for View<'_, AggregateIntent> {
-    fn serialize(&self, e: &mut Encoder<'_>) -> Result<(), norito::Error> {
+    fn serialize(&self, e: &mut Encoder<'_>) -> std::result::Result<(), norito::Error> {
         self.owner.intent.as_slice()[0].serialize(e)
     }
 }
 impl SerializePayload for View<'_, AggregateHead> {
-    fn serialize(&self, e: &mut Encoder<'_>) -> Result<(), norito::Error> {
+    fn serialize(&self, e: &mut Encoder<'_>) -> std::result::Result<(), norito::Error> {
         self.owner.head.as_slice()[0].serialize(e)
     }
 }
@@ -353,7 +353,7 @@ impl PreparedAggregateDurable {
     pub(super) fn new(
         expiry: DurableDeadline,
         budget: &AllocationBudget,
-    ) -> Result<Self, AttemptError> {
+    ) -> std::result::Result<Self, AttemptError> {
         let intent_len = norito::canonical_frame_len(&AggregateIntent::empty(expiry))
             .map_err(seat_export::ExportError::from)?;
         let head_len = norito::canonical_frame_len(&AggregateHead::empty())
@@ -407,7 +407,10 @@ impl PreparedAggregateDurable {
             budget: budget.clone(),
         })
     }
-    pub(super) fn tightened_deadline(&self, deadline: Instant) -> Result<Instant, AttemptError> {
+    pub(super) fn tightened_deadline(
+        &self,
+        deadline: Instant,
+    ) -> std::result::Result<Instant, AttemptError> {
         self.intent_record
             .map_or(self.expiry, |intent| intent.expiry)
             .restore(deadline)
@@ -420,7 +423,7 @@ impl PreparedAggregateDurable {
         fifo_identity: [u64; 4],
         source_hashes: [[u8; 32]; 2],
         stream_generations: [u64; 2],
-    ) -> Result<(), AttemptError> {
+    ) -> std::result::Result<(), AttemptError> {
         if binding.extraction_intent_hash != [0; 32]
             || binding.accepted_head_hash == [0; 32]
             || binding.accepted_checkpoint_hash == [0; 32]
@@ -454,7 +457,7 @@ impl PreparedAggregateDurable {
         self.intent_record = Some(record);
         Ok(())
     }
-    pub(super) fn intent_hash(&self) -> Result<[u8; 32], AttemptError> {
+    pub(super) fn intent_hash(&self) -> std::result::Result<[u8; 32], AttemptError> {
         if self.intent_record.is_none() {
             return Err(AttemptError::Phase);
         }
@@ -468,7 +471,10 @@ impl PreparedAggregateDurable {
         }
         Ok(Hash::new(bytes).into())
     }
-    pub(super) fn publish_intent(&mut self, directory: &Directory) -> Result<(), AttemptError> {
+    pub(super) fn publish_intent(
+        &mut self,
+        directory: &Directory,
+    ) -> std::result::Result<(), AttemptError> {
         if self.intent_record.is_none() {
             return Err(AttemptError::Phase);
         }
@@ -486,7 +492,7 @@ impl PreparedAggregateDurable {
         directory: &Directory,
         binding: &DkgAggregateCheckpointBindingV1,
         encrypted: &[u8],
-    ) -> Result<(), AttemptError> {
+    ) -> std::result::Result<(), AttemptError> {
         let mut original = *binding;
         original.extraction_intent_hash = [0; 32];
         if self.terminal
@@ -521,7 +527,7 @@ impl PreparedAggregateDurable {
     fn prepare_head_record(
         &mut self,
         binding: &DkgAggregateCheckpointBindingV1,
-    ) -> Result<(), AttemptError> {
+    ) -> std::result::Result<(), AttemptError> {
         if self.terminal || !self.checkpoint_progress.complete() {
             return Err(AttemptError::Phase);
         }
@@ -545,7 +551,7 @@ impl PreparedAggregateDurable {
         &mut self,
         directory: &Directory,
         binding: &DkgAggregateCheckpointBindingV1,
-    ) -> Result<(), AttemptError> {
+    ) -> std::result::Result<(), AttemptError> {
         self.prepare_head_record(binding)?;
         seat_export::publish_file(
             directory,
@@ -563,7 +569,7 @@ impl PreparedAggregateDurable {
             && self.head_progress.complete()
     }
     /// Metadata alone never authenticates this completed phase or creates a private owner.
-    pub(super) fn present(directory: &Directory) -> Result<bool, AttemptError> {
+    pub(super) fn present(directory: &Directory) -> std::result::Result<bool, AttemptError> {
         durable::file_present(directory, HEAD)
     }
     /// Admit every exact original source extent before reading or private restoration.
@@ -571,7 +577,7 @@ impl PreparedAggregateDurable {
         &mut self,
         directory: &Directory,
         bounds: [usize; 9],
-    ) -> Result<(), AttemptError> {
+    ) -> std::result::Result<(), AttemptError> {
         seat_export::revalidate_directory(directory)?;
         for (slot, (name, private)) in SOURCE_FILES.iter().enumerate() {
             open_original_file(
@@ -617,7 +623,7 @@ impl PreparedAggregateDurable {
     pub(super) fn load(
         &mut self,
         directory: &Directory,
-    ) -> Result<(AggregateIntent, AggregateHead), AttemptError> {
+    ) -> std::result::Result<(AggregateIntent, AggregateHead), AttemptError> {
         read_file(
             directory,
             INTENT,
@@ -677,7 +683,7 @@ impl PreparedAggregateDurable {
                 &mut self.loaded[slot + 2],
             )?;
         }
-        let hash = |slot: usize| -> Result<[u8; 32], AttemptError> {
+        let hash = |slot: usize| -> std::result::Result<[u8; 32], AttemptError> {
             Ok(Hash::new(self.source(slot)?).into())
         };
         if head.checkpoint_hash != hash(0)?
@@ -696,23 +702,33 @@ impl PreparedAggregateDurable {
         self.head_record = Some(head);
         Ok((intent, head))
     }
-    pub(super) fn source(&self, slot: usize) -> Result<&[u8], AttemptError> {
+    pub(super) fn source(&self, slot: usize) -> std::result::Result<&[u8], AttemptError> {
+        Ok(self.charged_source(slot)?.as_slice())
+    }
+    /// Borrow the original on-disk source bank without erasing its charged backing owner.
+    /// Complete authenticated head/context and durability checks remain the caller's duty.
+    pub(super) fn charged_source(
+        &self,
+        slot: usize,
+    ) -> std::result::Result<&ChargedBuffer<u8>, AttemptError> {
         self.sources
             .get(slot)
             .and_then(Option::as_ref)
-            .map(ChargedBuffer::as_slice)
             .ok_or(AttemptError::Phase)
     }
     /// Same held source bytes and named inode are checked on both sides of every sync.
     /// The directory barrier completes before any caller adopts private/export custody.
-    pub(super) fn sync_restored(&mut self, directory: &Directory) -> Result<(), AttemptError> {
+    pub(super) fn sync_restored(
+        &mut self,
+        directory: &Directory,
+    ) -> std::result::Result<(), AttemptError> {
         self.sync_restored_with(directory, |file| file.sync_all())
     }
     fn sync_restored_with(
         &mut self,
         directory: &Directory,
         mut sync: impl FnMut(&File) -> std::io::Result<()>,
-    ) -> Result<(), AttemptError> {
+    ) -> std::result::Result<(), AttemptError> {
         if self.intent_record.is_none() || self.head_record.is_none() {
             return Err(AttemptError::Phase);
         }

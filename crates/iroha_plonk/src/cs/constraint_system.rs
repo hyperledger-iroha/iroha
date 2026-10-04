@@ -906,6 +906,12 @@ impl<F> FinalizedConstraintSystem<F> {
     pub fn into_parts(self) -> (ConstraintSystem<F>, Vec<Vec<F>>, SelectorPlan) {
         (self.cs, self.selector_columns, self.plan)
     }
+
+    /// Moves the selector columns out (key generation appends them to the
+    /// fixed columns), leaving none.
+    pub(crate) fn take_selector_columns(&mut self) -> Vec<Vec<F>> {
+        core::mem::take(&mut self.selector_columns)
+    }
 }
 
 /// Query access while building a gate or lookup.

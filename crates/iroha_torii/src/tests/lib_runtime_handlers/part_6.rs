@@ -631,59 +631,60 @@ fn explorer_heavy_history_routes_are_bound_to_cancellation_safe_worker() {
 
     let lib_source = include_str!("../../lib.rs");
     let routing_source = include_str!("../../routing.rs");
+    let adapter_source = include_str!("../../explorer_query.rs");
     let routes = [
         (
-            "handler_explorer_accounts_list",
+            "EXPLORER_ACCOUNTS",
             "handle_v1_explorer_accounts_admitted",
             "handle_v1_explorer_accounts_sync",
         ),
         (
-            "handler_explorer_domains_list",
+            "EXPLORER_DOMAINS",
             "handle_v1_explorer_domains_admitted",
             "handle_v1_explorer_domains_sync",
         ),
         (
-            "handler_explorer_asset_definitions_list",
+            "EXPLORER_ASSET_DEFINITIONS",
             "handle_v1_explorer_asset_definitions_admitted",
             "handle_v1_explorer_asset_definitions_sync",
         ),
         (
-            "handler_explorer_assets_list",
+            "EXPLORER_ASSETS",
             "handle_v1_explorer_assets_admitted",
             "handle_v1_explorer_assets_sync",
         ),
         (
-            "handler_explorer_nfts_list",
+            "EXPLORER_NFTS",
             "handle_v1_explorer_nfts_admitted",
             "handle_v1_explorer_nfts_sync",
         ),
         (
-            "handler_explorer_rwas_list",
+            "EXPLORER_RWAS",
             "handle_v1_explorer_rwas_admitted",
             "handle_v1_explorer_rwas_sync",
         ),
         (
-            "handler_explorer_blocks_list",
+            "EXPLORER_BLOCKS",
             "handle_v1_explorer_blocks_admitted",
             "handle_v1_explorer_blocks_sync",
         ),
         (
-            "handler_explorer_transactions_list",
+            "EXPLORER_TRANSACTIONS",
             "handle_v1_explorer_transactions_admitted",
             "handle_v1_explorer_transactions_sync",
         ),
         (
-            "handler_explorer_transactions_latest",
+            "EXPLORER_TRANSACTIONS_LATEST",
             "handle_v1_explorer_transactions_latest_admitted",
             "handle_v1_explorer_transactions_latest_sync",
         ),
         (
-            "handler_explorer_instructions_list",
+            "EXPLORER_INSTRUCTIONS",
             "handle_v1_explorer_instructions_admitted",
             "handle_v1_explorer_instructions_sync",
         ),
         (
-            "handler_explorer_instructions_latest",
+            "EXPLORER_INSTRUCTIONS_LATEST",
             "handle_v1_explorer_instructions_latest_admitted",
             "handle_v1_explorer_instructions_latest_sync",
         ),
@@ -704,10 +705,12 @@ fn explorer_heavy_history_routes_are_bound_to_cancellation_safe_worker() {
     );
 
     for (http_handler, admitted_handler, sync_handler) in routes {
-        let http = compact(exact_function_source(
-            lib_source,
-            &format!("async fn {http_handler}("),
-        ));
+        let http = compact(exact_function_source(adapter_source, "async fn execute("));
+        let mounted = compact(lib_source);
+        assert!(mounted.contains(&format!(
+            "{http_handler}_GET=>optional_canonical_signature_get(explorer_query::get)"
+        )));
+        assert!(mounted.contains(&format!("{http_handler}_QUERY_POST=>limited_optional_canonical_signature_post(explorer_query::post,")));
         assert!(
             http.contains("letadmission=acquire_query_admission(app.as_ref(),true).await?;"),
             "Explorer handler `{http_handler}` must acquire heavy admission"

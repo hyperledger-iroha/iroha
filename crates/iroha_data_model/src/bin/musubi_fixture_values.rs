@@ -267,19 +267,18 @@ where
         "standalone_instruction_box_frame_hex": (encode_hex(&standalone_instruction_box_frame)),
     })
 }
-/// Concrete Musubi instruction values missing from the generated-record capture.
+/// Concrete Musubi instruction values shared with generated-record captures.
 #[allow(
     dead_code,
     reason = "the generator and grouped tests render JSON; library identity tests read these fields"
 )]
 pub struct MusubiGeneratedIdentityValues {
-    /// Fully signed provider-attestation registration fixture.
-    #[cfg(test)]
-    pub(crate) register_provider_attestation: RegisterMusubiProviderBundleAttestationV1,
     /// Namespace-binding registration fixture.
     pub(crate) register_namespace: RegisterMusubiNamespaceBindingV1,
     /// Archive-registration fixture with a verified seed-ingress receipt.
     pub(crate) register_archive: RegisterMusubiArchiveV1,
+    /// Signed provider-bundle attestation with its explicit completion signer.
+    pub(crate) register_provider_attestation: RegisterMusubiProviderBundleAttestationV1,
     /// Archive-location retirement fixture.
     pub(crate) retire_archive_location: RetireMusubiArchiveLocationV1,
     /// Package-metadata replacement fixture.
@@ -1464,10 +1463,9 @@ impl FixtureInstructions {
             set_policy,
         } = self;
         let generated_identity_values = MusubiGeneratedIdentityValues {
-            #[cfg(test)]
-            register_provider_attestation: register_provider_attestation.clone(),
             register_namespace: register_namespace.clone(),
             register_archive: register_archive.clone(),
+            register_provider_attestation: register_provider_attestation.clone(),
             retire_archive_location: retire.clone(),
             set_package_metadata: set_metadata.clone(),
             invite_package_maintainer: invite.clone(),

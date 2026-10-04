@@ -23,6 +23,141 @@ FRESH_KEY = "--sumeragi-assert-fresh-key"
 
 
 class ValidatorUnitTests(unittest.TestCase):
+    def amendment_fixture(self, directory):
+        root = Path(directory).resolve()
+        source_dir, output_dir = root / "installed", root / "next"
+        source_dir.mkdir(mode=0o700)
+        output_dir.mkdir(mode=0o700)
+        source = source_dir / "iroha3d-taira-validator-1.service"
+        output = output_dir / source.name
+        # Disposable configs stand in for native-owned files. The helper may
+        # inspect metadata, but must never open either body or any signer.
+        config, amended = root / "beacon.toml", root / "beacon.next.toml"
+        for path in (config, amended):
+            path.write_bytes(b"fixture-private-config")
+            path.chmod(0o600)
+        old_hash, new_hash = "a" * 64, "b" * 64
+        code = unit.launcher("taira-validator-1", "/absent/runtime", "/absent/mint", "/absent/beacon")
+        code = code.replace("cmd = ['/srv/taira/taira-validator-1/current/bin/iroha3d_taira', '--config', '/srv/taira/taira-validator-1/current/config/config.toml', '--sora']",
+                            f"cmd = {['/private/runtime/current/bin/iroha3d_taira', '--sora', '--config', str(config), '--config-blake3', old_hash]!r}")
+        text = unit.render("taira-validator-1", "/absent/runtime", "/absent/mint", "/absent/beacon")
+        lines = ["ExecStart=/usr/bin/python3 -c " + unit.systemd_argument(code) if line.startswith("ExecStart=") else line for line in text.splitlines()]
+        source.write_text("\n".join(lines) + "\n")
+        source.chmod(0o644)
+        info = amended.stat()
+        receipt = {
+            "schema": "iroha.taira.torii-rate-config-amend.v1", "source_path": str(config),
+            "source_config_blake3": old_hash, "output_path": str(amended),
+            "output_config_blake3": new_hash,
+            "request_budgets": {"torii.query_rate_per_authority_per_sec": 1000000,
+                                "torii.query_burst_per_authority": 10000000},
+            "unchanged_optional_sections": ["recipient-lookup"],
+            "output_metadata": {"device": info.st_dev, "inode": info.st_ino, "uid": info.st_uid,
+                                "mode": 0o600, "links": 1, "bytes": info.st_size},
+        }
+        receipt_path = root / "native-receipt.json"
+        receipt_path.write_text(json.dumps(receipt))
+        receipt_path.chmod(0o600)
+        return source, receipt_path, output, receipt, config, amended
+
+    def test_rate_amendment_changes_only_bound_hash_without_opening_private_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source, receipt_path, output, receipt, config, amended = self.amendment_fixture(directory)
+            before = source.read_bytes()
+            opened = []
+            actual_open = os.open
+            def public_only(path, flags, *arguments, **keywords):
+                opened.append(Path(path))
+                self.assertNotIn(Path(path), (config, amended))
+                self.assertFalse(str(path).startswith("/absent/"))
+                return actual_open(path, flags, *arguments, **keywords)
+            with patch.object(unit.os, "open", side_effect=public_only):
+                self.assertEqual(unit.amend_unit("taira-validator-1", source, receipt_path, output), output)
+            self.assertEqual(source.read_bytes(), before)
+            self.assertEqual(output.read_bytes(), before.replace(b"a" * 64, b"b" * 64, 1))
+            self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o644)
+            self.assertEqual(unit.unit_config_binding(output.read_bytes()), (str(config), "b" * 64))
+            self.assertEqual(set(opened), {source, receipt_path, output, output.parent})
+            with self.assertRaises(FileExistsError):
+                unit.amend_unit("taira-validator-1", source, receipt_path, output)
+            self.assertEqual(output.read_bytes(), before.replace(b"a" * 64, b"b" * 64, 1))
+
+    def test_rate_amendment_rejects_invalid_receipts_before_creating_output(self):
+        for mutation in ("schema", "unknown", "source", "hash", "uppercase", "zero", "boolean", "field",
+                         "optional", "metadata", "duplicate", "oversized", "second-hash", "second-cmd"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                source, receipt_path, output, receipt, _, _ = self.amendment_fixture(directory)
+                if mutation == "schema": receipt["schema"] = "retired"
+                elif mutation == "unknown": receipt["private_config"] = "forbidden"
+                elif mutation == "source": receipt["source_path"] = "/absent/config.toml"
+                elif mutation == "hash": receipt["source_config_blake3"] = "c" * 64
+                elif mutation == "uppercase": receipt["output_config_blake3"] = "B" * 64
+                elif mutation in ("zero", "boolean"): receipt["request_budgets"]["torii.query_burst_per_authority"] = 0 if mutation == "zero" else True
+                elif mutation == "field": receipt["request_budgets"]["torii.enabled"] = 1
+                elif mutation == "optional": receipt["unchanged_optional_sections"] = ["mcp"]
+                elif mutation == "metadata": receipt["output_metadata"]["inode"] += 1
+                elif mutation == "second-hash": source.write_text(source.read_text() + "# " + "a" * 64 + "\n")
+                elif mutation == "second-cmd":
+                    prefix = "ExecStart=/usr/bin/python3 -c "
+                    lines = source.read_text().splitlines()
+                    index = next(index for index, line in enumerate(lines) if line.startswith(prefix))
+                    code = json.loads(lines[index][len(prefix):]).replace("cmd = [", "cmd = []\ncmd = [", 1)
+                    lines[index] = prefix + unit.systemd_argument(code)
+                    source.write_text("\n".join(lines) + "\n")
+                receipt_path.write_text(json.dumps(receipt))
+                if mutation == "duplicate": receipt_path.write_text(receipt_path.read_text().replace('"schema":', '"schema": "duplicate", "schema":', 1))
+                if mutation == "oversized": receipt_path.write_bytes(b" " * (64 * 1024 + 1))
+                expected = "one literal daemon argv" if mutation == "second-cmd" else ".*"
+                with self.assertRaisesRegex(ValueError, expected):
+                    unit.amend_unit("taira-validator-1", source, receipt_path, output)
+                self.assertFalse(output.exists())
+
+    def test_rate_amendment_rejects_untrusted_public_inputs_and_config_metadata(self):
+        for target in ("unit", "receipt", "config", "amended"):
+            for mutation in ("mode", "link", "symlink", "fifo"):
+                with self.subTest(target=target, mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                    source, receipt_path, output, _, config, amended = self.amendment_fixture(directory)
+                    path = {"unit": source, "receipt": receipt_path, "config": config, "amended": amended}[target]
+                    if mutation == "mode": path.chmod(0o666)
+                    elif mutation == "link": os.link(path, str(path) + ".linked")
+                    elif mutation == "symlink":
+                        retained = Path(str(path) + ".retained")
+                        path.rename(retained)
+                        path.symlink_to(retained)
+                    else:
+                        path.unlink()
+                        os.mkfifo(path, 0o600)
+                    with self.assertRaises((ValueError, OSError)):
+                        unit.amend_unit("taira-validator-1", source, receipt_path, output)
+                    self.assertFalse(output.exists())
+
+    def test_rate_amendment_removes_owned_output_when_source_changes_during_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source, receipt_path, output, _, _, _ = self.amendment_fixture(directory)
+            actual_open = os.open
+            def mutate_before_publish(path, flags, *arguments, **keywords):
+                if Path(path) == output:
+                    with source.open("ab") as file:
+                        file.write(b"# concurrent change\n")
+                return actual_open(path, flags, *arguments, **keywords)
+            with patch.object(unit.os, "open", side_effect=mutate_before_publish), self.assertRaisesRegex(ValueError, "input changed"):
+                unit.amend_unit("taira-validator-1", source, receipt_path, output)
+            self.assertFalse(output.exists())
+
+    def test_rate_amendment_cli_is_exclusive_and_emits_only_fresh_output_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source, receipt_path, output, _, _, _ = self.amendment_fixture(directory)
+            base = [sys.executable, str(SCRIPT), "--role", "taira-validator-1", "--amend-unit", str(source),
+                    "--rate-config-receipt", str(receipt_path), "--output", str(output)]
+            for extra in (["--runtime-key", "/absent/key"], ["--config-file", "beacon.toml"], ["--arm-first-boot"]):
+                result = subprocess.run(base + extra, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertFalse(output.exists())
+            result = subprocess.run(base, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, str(output) + "\n")
+            self.assertEqual(result.stderr, "")
+
     def fixture(self, directory, name, size):
         path = Path(directory) / name
         path.write_bytes(bytes((index % 251 for index in range(size))))

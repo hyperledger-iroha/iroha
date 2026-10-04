@@ -4262,7 +4262,7 @@ impl_iter_queries! {
     FindAccountIds => crate::account::AccountId,
     FindAssets => crate::asset::value::Asset,
     asset::prelude::FindAssetsByAccountId => crate::asset::value::Asset,
-    FindAssetsDefinitions => crate::asset::definition::AssetDefinition,
+    FindAssetDefinitions => crate::asset::definition::AssetDefinition,
     repo::FindRepoAgreements => crate::repo::RepoAgreement,
     FindNfts => crate::nft::Nft,
     nft::prelude::FindNftsByAccountId => crate::nft::Nft,
@@ -4526,8 +4526,8 @@ mod trait_object_tests {
     fn iter_queries_have_projection_impls() {
         assert_predicate::<trigger::FindTriggers>();
         assert_selector::<trigger::FindTriggers>();
-        assert_predicate::<asset::FindAssetsDefinitions>();
-        assert_selector::<asset::FindAssetsDefinitions>();
+        assert_predicate::<asset::FindAssetDefinitions>();
+        assert_selector::<asset::FindAssetDefinitions>();
         assert_predicate::<nft::FindNfts>();
         assert_selector::<nft::FindNfts>();
         assert_predicate::<rwa::FindRwas>();

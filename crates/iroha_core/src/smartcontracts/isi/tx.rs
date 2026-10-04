@@ -705,6 +705,90 @@ pub(crate) fn read_finalized_execution_carrier(
     })
 }
 
+/// Read one complete native execution for an off-chain reader.
+///
+/// The carrier is authenticated by a descending walk that starts at the
+/// nearest verified history checkpoint at or above `height` (or the tip), so
+/// any height costs at most
+/// [`HISTORY_CHECKPOINT_INTERVAL`](crate::kura::history_checkpoints::HISTORY_CHECKPOINT_INTERVAL)
+/// `+ 1` source blocks, unlike [`read_finalized_execution_carrier`], which
+/// verifies the whole prefix from signed genesis. Its source work depends on
+/// node-local checkpoints, so on-chain readers must use the prefix reader.
+/// # Errors
+/// Rejects zero/exceeded bounds, unavailable or contradicted history, retired
+/// carriers and inconsistent outputs.
+pub(crate) fn read_executed_carrier_from_checkpoints(
+    state_ro: &impl StateReadOnly,
+    height: NonZeroUsize,
+    max_work: u64,
+    max_bytes: u64,
+) -> Result<
+    FinalizedExecutionCarrier,
+    crate::execution_attempt::ExecutionAttemptError<QueryExecutionFail>,
+> {
+    use crate::execution_attempt::ExecutionAttemptError;
+    if max_work == 0 || max_bytes == 0 {
+        return Err(QueryExecutionFail::GasBudgetExceeded.into());
+    }
+    let exceeded = || ExecutionAttemptError::Rejected(QueryExecutionFail::GasBudgetExceeded);
+    let mut source_blocks = 0_u64;
+    let mut wire_bytes = 0_u64;
+    let mut carrier = None;
+    state_ro
+        .canonical_history()
+        .visit_executed_backwards_from_checkpoints(
+            height,
+            height,
+            |blocks, bytes| {
+                source_blocks = source_blocks
+                    .checked_add(blocks)
+                    .filter(|work| *work <= max_work)
+                    .ok_or_else(exceeded)?;
+                wire_bytes = wire_bytes
+                    .checked_add(bytes)
+                    .filter(|size| *size <= max_bytes)
+                    .ok_or_else(exceeded)?;
+                Ok(())
+            },
+            |receipt| {
+                carrier = Some(receipt.block().clone());
+                Ok(ControlFlow::Break(()))
+            },
+        )?;
+    let block = carrier.ok_or_else(|| {
+        ExecutionAttemptError::Rejected(canonical_transaction_history_error(
+            "requested execution was absent from its authenticated interval",
+        ))
+    })?;
+    let work = u64::try_from(
+        block
+            .network_entrypoint_count()
+            .max(block.execution_outputs().len())
+            .max(1),
+    )
+    .map_err(|_| exceeded())?
+    .checked_add(source_blocks)
+    .filter(|work| *work <= max_work)
+    .ok_or_else(exceeded)?;
+    if block
+        .execution_context()
+        .is_some_and(|context| !context.has_current_version())
+    {
+        return Err(canonical_transaction_history_error(
+            "retired merge carrier is not a Network source",
+        )
+        .into());
+    }
+    block
+        .validate_output_merkle_cache()
+        .map_err(canonical_transaction_history_error)?;
+    Ok(FinalizedExecutionCarrier {
+        block,
+        wire_bytes,
+        work_items: work,
+    })
+}
+
 /// Visit borrowed Network results from one exact finalized carrier.
 ///
 /// Internal outputs never become transactions. No State read guard is needed
@@ -1199,11 +1283,20 @@ pub(crate) fn visit_committed_transactions(
         state_ro,
         filter,
         anchor,
+        HistoryStart::Tip,
         resume.map(HistoryResume::After),
         max_row_bytes,
         before_project,
         |transaction, matches, visit| visitor(transaction, matches, visit.next),
     )
+}
+/// Where a history walk authenticates its first block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HistoryStart {
+    /// The original tip: source work is deterministic, as on-chain readers require.
+    Tip,
+    /// The nearest node-local checkpoint above the interval; off-chain readers only.
+    Checkpoint,
 }
 /// Where a history walk resumes.
 #[derive(Debug, Clone, Copy)]
@@ -1252,6 +1345,7 @@ fn walk_committed_transactions(
     state_ro: &impl StateReadOnly,
     filter: &CompoundPredicate<CommittedTransaction>,
     anchor: TransactionHistoryAnchor,
+    start: HistoryStart,
     resume: Option<HistoryResume>,
     max_row_bytes: u64,
     before_project: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
@@ -1286,78 +1380,81 @@ fn walk_committed_transactions(
     // Both callbacks use the same admission owner sequentially; no charge borrow
     // survives either callback or the walker's subsequent source operation.
     let before_project = std::cell::RefCell::new(before_project);
-    state_ro
-        .canonical_history()
-        .visit_executed_backwards_until(
+    let before_read = |source_blocks, wire_len| {
+        before_project.borrow_mut()(source_blocks, wire_len)
+            .map_err(crate::execution_attempt::ExecutionAttemptError::Rejected)
+    };
+    let visit_receipt = |receipt: crate::sumeragi::certified_chain::CommittedBlock| {
+        let height = NonZeroUsize::new(
+            usize::try_from(receipt.height()).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?,
+        )
+        .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+        if candidates
+            .as_ref()
+            .is_some_and(|heights| !heights.contains(&height))
+        {
+            return Ok(ControlFlow::Continue(()));
+        }
+        let block = receipt.block().clone();
+        let work = block
+            .network_entrypoint_count()
+            .max(block.execution_outputs().len())
+            .max(1);
+        before_project.borrow_mut()(
+            u64::try_from(work - 1).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?,
+            0,
+        )?;
+        let projection = NetworkCarrierProjection::new(block)?;
+        let transaction_count = projection.count as usize;
+        let transaction_offset = resume.map_or(Ok(0), |resume| {
+            resume.offset_in(height.get(), transaction_count)
+        })?;
+        if transaction_offset > transaction_count {
+            return Err(QueryExecutionFail::CursorMismatch.into());
+        }
+        for index in transaction_offset..transaction_count {
+            let input_index = projection.count - 1 - index as u32;
+            let transaction = projection.transaction_at(input_index, max_row_bytes, |bytes| {
+                before_project.borrow_mut()(0, bytes)
+            })?;
+            let matches = transaction_filter_applies(filter, predicate_json.as_ref(), &transaction);
+            let next_cursor = if index + 1 < transaction_count {
+                TransactionHistoryCursor {
+                    height: height.get(),
+                    transaction_offset: index + 1,
+                }
+            } else {
+                TransactionHistoryCursor {
+                    height: height.get() - 1,
+                    transaction_offset: 0,
+                }
+            };
+            let visit = HistoryVisit {
+                next: next_cursor,
+                position: TransactionHistoryPosition {
+                    height: height.get(),
+                    block_index: input_index as usize,
+                },
+            };
+            if visitor(transaction, matches, visit)?.is_break() {
+                return Ok(ControlFlow::Break(()));
+            }
+        }
+        Ok(ControlFlow::Continue(()))
+    };
+    let history = state_ro.canonical_history();
+    match start {
+        HistoryStart::Tip => {
+            history.visit_executed_backwards_until(first, last, before_read, visit_receipt)
+        }
+        HistoryStart::Checkpoint => history.visit_executed_backwards_from_checkpoints(
             first,
             last,
-            |source_blocks, wire_len| {
-                before_project.borrow_mut()(source_blocks, wire_len)
-                    .map_err(crate::execution_attempt::ExecutionAttemptError::Rejected)
-            },
-            |receipt| {
-                let height = NonZeroUsize::new(
-                    usize::try_from(receipt.height())
-                        .map_err(|_| QueryExecutionFail::GasBudgetExceeded)?,
-                )
-                .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
-                if candidates
-                    .as_ref()
-                    .is_some_and(|heights| !heights.contains(&height))
-                {
-                    return Ok(ControlFlow::Continue(()));
-                }
-                let block = receipt.block().clone();
-                let work = block
-                    .network_entrypoint_count()
-                    .max(block.execution_outputs().len())
-                    .max(1);
-                before_project.borrow_mut()(
-                    u64::try_from(work - 1).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?,
-                    0,
-                )?;
-                let projection = NetworkCarrierProjection::new(block)?;
-                let transaction_count = projection.count as usize;
-                let transaction_offset = resume.map_or(Ok(0), |resume| {
-                    resume.offset_in(height.get(), transaction_count)
-                })?;
-                if transaction_offset > transaction_count {
-                    return Err(QueryExecutionFail::CursorMismatch.into());
-                }
-                for index in transaction_offset..transaction_count {
-                    let input_index = projection.count - 1 - index as u32;
-                    let transaction =
-                        projection.transaction_at(input_index, max_row_bytes, |bytes| {
-                            before_project.borrow_mut()(0, bytes)
-                        })?;
-                    let matches =
-                        transaction_filter_applies(filter, predicate_json.as_ref(), &transaction);
-                    let next_cursor = if index + 1 < transaction_count {
-                        TransactionHistoryCursor {
-                            height: height.get(),
-                            transaction_offset: index + 1,
-                        }
-                    } else {
-                        TransactionHistoryCursor {
-                            height: height.get() - 1,
-                            transaction_offset: 0,
-                        }
-                    };
-                    let visit = HistoryVisit {
-                        next: next_cursor,
-                        position: TransactionHistoryPosition {
-                            height: height.get(),
-                            block_index: input_index as usize,
-                        },
-                    };
-                    if visitor(transaction, matches, visit)?.is_break() {
-                        return Ok(ControlFlow::Break(()));
-                    }
-                }
-                Ok(ControlFlow::Continue(()))
-            },
-        )
-        .map_err(crate::smartcontracts::isi::query::query_transport_error)
+            before_read,
+            visit_receipt,
+        ),
+    }
+    .map_err(crate::smartcontracts::isi::query::query_transport_error)
 }
 /// Visit history within cumulative source/output work and byte limits.
 ///
@@ -1484,9 +1581,10 @@ pub enum TransactionHistoryPageEnd {
 
 /// Visit one page of committed transactions newest first, strictly before `resume`.
 ///
-/// Every walk authenticates history downward from the newest block, so a
-/// page's work and bytes include every block above its starting position, not
-/// only the transactions it visits. Running out of budget after visiting a
+/// Every off-chain walk authenticates history downward from the nearest verified
+/// checkpoint at or above the requested position. Its work and byte budgets
+/// include checkpoint-to-position authentication as well as visited transactions.
+/// Consensus execution retains its cache-independent accounting. Running out of budget after visiting a
 /// transaction ends the page with the position to resume from
 /// ([`TransactionHistoryPageEnd::BudgetSpent`]); running out before reaching
 /// one ends it with [`TransactionHistoryPageEnd::OutOfReach`].
@@ -1514,6 +1612,7 @@ pub fn visit_committed_transaction_page(
         state_ro,
         &CompoundPredicate::PASS,
         TransactionHistoryAnchor::capture(state_ro),
+        HistoryStart::Checkpoint,
         resume.map(HistoryResume::Before),
         max_history_bytes,
         |items, bytes| {
@@ -2708,6 +2807,13 @@ pub(crate) mod tests {
             .expect("history page");
             (page, end)
         };
+        // A cold node authenticates history from the tip, so a one-block budget
+        // cannot reach a position below the newest block.
+        state_view.kura().history_checkpoints().clear();
+        let deep = TransactionHistoryPosition::new(3, 0).expect("position");
+        let (rest, end) = walk(Some(deep), 1, usize::MAX);
+        assert!(rest.is_empty());
+        assert_eq!(end, TransactionHistoryPageEnd::OutOfReach);
         let (all, end) = walk(None, 1_000, usize::MAX);
         assert_eq!(end, TransactionHistoryPageEnd::Exhausted);
         assert!(all.len() >= 4, "fixture spans several carriers");
@@ -2766,18 +2872,21 @@ pub(crate) mod tests {
         let (rest, end) = walk(Some(oldest), 1_000, usize::MAX);
         assert!(rest.is_empty(), "nothing precedes the oldest transaction");
         assert_eq!(end, TransactionHistoryPageEnd::Exhausted);
-        // Every walk reads the newer blocks first, so a one-block budget
-        // cannot reach a position below the newest block.
-        let newest_height = all[0].1.height();
-        let deep = all
+        // Walks remember the identities they verify, so once warm the same deep
+        // position is reached within a budget far below a walk from the tip.
+        let warm = (1..16)
+            .find(|work| !walk(Some(deep), *work, usize::MAX).0.is_empty())
+            .expect("a warm walk reaches the deep position cheaply");
+        let (rest, _) = walk(Some(deep), warm, usize::MAX);
+        let first_older = all
             .iter()
-            .map(|(_, position)| *position)
-            .filter(|position| position.height() < newest_height)
-            .max()
-            .expect("history spans several blocks");
-        let (rest, end) = walk(Some(deep), 1, usize::MAX);
-        assert!(rest.is_empty());
-        assert_eq!(end, TransactionHistoryPageEnd::OutOfReach);
+            .position(|(_, position)| *position < deep)
+            .expect("history precedes the deep position");
+        assert_eq!(
+            rest[..],
+            all[first_older..first_older + rest.len()],
+            "a warm deep page continues exactly where history stands"
+        );
     }
     #[test]
     fn fallible_transaction_visitor_reads_only_carriers_needed_by_bounded_page() {

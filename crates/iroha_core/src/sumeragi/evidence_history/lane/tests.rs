@@ -1600,7 +1600,14 @@ fn funded_original_lane_slashing_scenario(complete_replacement: bool) {
     assert!(
         crate::state::validator_committee::peer_has_committee_obligation(
             view.world(),
-            view.world().peers().iter(),
+            chain
+                .committed(chain.height())
+                .commitment()
+                .schedule
+                .current
+                .committee
+                .iter()
+                .map(|seat| &seat.validator),
             &registration.peer_id,
         )
     );

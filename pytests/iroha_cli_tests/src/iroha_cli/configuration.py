@@ -123,16 +123,6 @@ class Config:
         return {**os.environ, **self._envs}
 
     @property
-    def account_domain(self):
-        """
-        Get the ACCOUNT_DOMAIN configuration value.
-
-        :return: The account domain.
-        :rtype: str
-        """
-        return self._config["account"]["domain"]
-
-    @property
     def account_signatory(self):
         """
         Get the PUBLIC_KEY configuration value.

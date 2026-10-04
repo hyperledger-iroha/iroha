@@ -253,10 +253,12 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             "crates/iroha_primitives_derive/tests/ui/fail/socket_addr_bad.stderr",
             "crates/iroha_primitives_derive/tests/ui/fail/socket_addr_missing_colon.stderr",
             "crates/iroha_schema_derive/tests/ui_fail/duplicate_binary_validation_hook.stderr",
+            "crates/iroha_schema_derive/tests/ui_fail/duplicate_prepared_field_decode.stderr",
             "crates/iroha_schema_derive/tests/ui_fail/enum_duplicate_index.stderr",
             "crates/iroha_schema_derive/tests/ui_fail/malformed_binary_validation_hook.stderr",
             "crates/iroha_schema_derive/tests/ui_fail/transparent_enum_multi_variant.stderr",
             "crates/iroha_schema_derive/tests/ui_fail/transparent_struct_multiple_fields.stderr",
+            "crates/iroha_schema_derive/tests/ui_fail/valued_prepared_field_decode.stderr",
             "crates/iroha_telemetry_derive/tests/ui_fail/args_no_wsv.stderr",
             "crates/iroha_telemetry_derive/tests/ui_fail/bare_spec.stderr",
             "crates/iroha_telemetry_derive/tests/ui_fail/doubled_plus.stderr",
@@ -276,6 +278,9 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             "crates/norito_derive/tests/ui/fail/json_deny_unknown_fields_tuple.stderr",
             "crates/norito_derive/tests/ui/fail/json_enum_missing_tag.stderr",
             "crates/norito_derive/tests/ui/fail/json_required_option_misuse.stderr",
+            "crates/norito_derive/tests/ui/fail/prepared_record_generic.stderr",
+            "crates/norito_derive/tests/ui/fail/prepared_record_tuple.stderr",
+            "crates/norito_derive/tests/ui/fail/prepared_record_validation.stderr",
             "crates/norito_derive/tests/ui/fail/schema_identity_duplicate.stderr",
             "crates/norito_derive/tests/ui/fail/schema_identity_generic_frame.stderr",
             "crates/norito_derive/tests/ui/fail/schema_identity_missing.stderr",
@@ -286,6 +291,18 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         for relative in expected:
             with self.subTest(relative=relative):
                 self.assertEqual(seal._public_source_relative(relative).as_posix(), relative)
+
+    def test_maintained_prepared_record_trybuild_diagnostics_are_complete_public_roles(self) -> None:
+        repository_root = SCRIPT.parent.parent.resolve()
+        for directory in (
+            "crates/iroha_schema_derive/tests/ui_fail",
+            "crates/norito_derive/tests/ui/fail",
+        ):
+            for source in (repository_root / directory).glob("*.stderr"):
+                with self.subTest(diagnostic=source.name):
+                    relative = source.relative_to(repository_root).as_posix()
+                    self.assertIn(relative, seal._REVIEWED_PUBLIC_RUST_DIAGNOSTIC_INPUTS)
+                    self.assertTrue(source.with_suffix(".rs").is_file())
 
     def test_trybuild_diagnostics_seal_complete_bytes_and_tracked_deletion(self) -> None:
         originals = {}
@@ -331,6 +348,9 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
     def test_trybuild_diagnostics_reject_unreviewed_filename_roles(self) -> None:
         for relative in (
             "crates/norito_derive/tests/ui/fail/unreviewed.stderr",
+            "crates/norito_derive/tests/ui/fail/prepared_record_other.stderr",
+            "crates/norito_derive/tests/ui/pass/prepared_record_generic.stderr",
+            "crates/norito_derive/tests/ui/fail/prepared_record_generic.stderr.log",
             "crates/norito_derive/tests/ui/pass/json_deny_unknown_fields_tuple.stderr",
             "crates/another_derive/tests/ui/fail/json_deny_unknown_fields_tuple.stderr",
             "crates/norito_derive/tests/ui/fail/json_deny_unknown_fields_tuple.STDERR",

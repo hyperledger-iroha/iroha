@@ -917,7 +917,14 @@ pub(super) fn finish_after_real_detector_penalty(
     assert!(
         !crate::state::validator_committee::peer_has_committee_obligation(
             view.world(),
-            view.world().peers().iter(),
+            chain
+                .committed(TARGET_FIRST)
+                .commitment()
+                .schedule
+                .current
+                .committee
+                .iter()
+                .map(|seat| &seat.validator),
             &registration.peer_id
         )
     );

@@ -293,7 +293,7 @@ impl ValidQueryRequest {
                     }
                     QueryItemKind::AssetDefinition => run_query!(
                         iroha_data_model::asset::definition::AssetDefinition,
-                        iroha_data_model::query::asset::prelude::FindAssetsDefinitions
+                        iroha_data_model::query::asset::prelude::FindAssetDefinitions
                     ),
                     QueryItemKind::RepoAgreement => run_query!(
                         iroha_data_model::repo::RepoAgreement,
@@ -700,7 +700,7 @@ impl ValidQueryRequest {
                     }
                     QueryItemKind::AssetDefinition => run_query!(
                         iroha_data_model::asset::definition::AssetDefinition,
-                        iroha_data_model::query::asset::prelude::FindAssetsDefinitions
+                        iroha_data_model::query::asset::prelude::FindAssetDefinitions
                     ),
                     QueryItemKind::RepoAgreement => run_query!(
                         iroha_data_model::repo::RepoAgreement,

@@ -247,6 +247,7 @@ struct ActiveHistory {
 /// Full bounded local operation census. Fields and all constructors stay custody-private.
 pub(super) struct BodyHistory {
     root: Arc<PrivateDirectory>,
+    body_root: Option<Arc<PrivateDirectory>>,
     selection: Selection,
     anchor: Anchor,
     root_snapshots: Arc<Snapshot>,
@@ -359,7 +360,118 @@ impl BodyHistory {
             Err(error) => return require_retained_material(Err(error.into())),
         };
         owner.authority.validate_profile()?;
-        require_retained_material(Self::read(owner, purpose, root, reference)).map(Some)
+        require_retained_material(Self::read(owner, purpose, root, reference, None)).map(Some)
+    }
+
+    // Consuming transitions keep all original Files live until the same parser has rebuilt
+    // and authenticated fresh metadata. Only previously absent paths are opened anew.
+    pub(super) fn reopen(self, owner: &ManagedStreamTokenCustody) -> Result<Self> {
+        self.read_current(owner)
+    }
+
+    fn read_current(&self, owner: &ManagedStreamTokenCustody) -> Result<Self> {
+        require_retained_material(self.revalidate_handles())?;
+        owner.authority.directory.revalidate()?;
+        if self.root.path()
+            != owner
+                .authority
+                .directory
+                .path()
+                .join(self.purpose.directory_name()?)
+        {
+            return Err(invalid("retained enrollment belongs to another authority"));
+        }
+        let reference = optional(
+            &owner.authority.directory,
+            &reference_name(self.purpose)?,
+            MAX_SELECTION_BYTES,
+        )?;
+        owner.authority.validate_profile()?;
+        let current = require_retained_material(Self::read(
+            owner,
+            self.purpose,
+            Arc::clone(&self.root),
+            reference,
+            Some(self),
+        ))?;
+        require_retained_material(self.revalidate_handles())?;
+        require_retained_material(self.require_retained_prefix(&current))?;
+        require_retained_material(current.revalidate_handles())?;
+        Ok(current)
+    }
+
+    fn revalidate_handles(&self) -> Result<()> {
+        self.root.revalidate()?;
+        if let Some(container) = &self.body_root {
+            container.revalidate()?;
+        }
+        for body in &self.bodies {
+            body.directory.revalidate()?;
+        }
+        if let Some(active) = &self.active {
+            active.history.revalidate_retained_handles()?;
+        }
+        if let Some(closure) = &self.nearest_closure {
+            closure.retained_history().revalidate_retained_handles()?;
+        }
+        Ok(())
+    }
+
+    fn require_retained_prefix(&self, current: &Self) -> Result<()> {
+        if self.purpose != current.purpose
+            || self.root.identity()? != current.root.identity()?
+            || !same(&self.selection, &current.selection, MAX_SELECTION_BYTES)?
+            || self.anchor.highest > current.anchor.highest
+            || self.anchor.active > current.anchor.active
+            || self.anchor.active == current.anchor.active
+                && self.anchor.completed.is_some()
+                && self.anchor.completed != current.anchor.completed
+            || self.bodies.len() > current.bodies.len()
+            || self.reference_present && !current.reference_present
+            || self.body_root.is_some()
+                && self
+                    .body_root
+                    .as_ref()
+                    .map(|root| root.identity())
+                    .transpose()?
+                    != current
+                        .body_root
+                        .as_ref()
+                        .map(|root| root.identity())
+                        .transpose()?
+        {
+            return Err(invalid("retained enrollment prefix was lost or changed"));
+        }
+        for (before, after) in self.bodies.iter().zip(&current.bodies) {
+            if before.directory.identity()? != after.directory.identity()?
+                || !same(&before.reservation, &after.reservation, MAX_BODY_BYTES)?
+                || before.semantic.is_some() && before.semantic != after.semantic
+                || before.activation.is_some()
+                    && !same(&before.activation, &after.activation, MAX_SELECTION_BYTES)?
+                || before.unused.is_some()
+                    && !same(&before.unused, &after.unused, MAX_SELECTION_BYTES)?
+            {
+                return Err(invalid("retained enrollment body was lost or changed"));
+            }
+        }
+        if let Some(pending) = &self.anchor.pending {
+            let retained = current
+                .bodies
+                .get(usize::from(pending.ordinal) - 1)
+                .map(|body| &body.reservation)
+                .or_else(|| {
+                    current
+                        .anchor
+                        .pending
+                        .as_ref()
+                        .filter(|r| r.ordinal == pending.ordinal)
+                })
+                .ok_or_else(|| invalid("retained enrollment reservation was lost"))?;
+            if !same(pending, retained, MAX_BODY_BYTES)? {
+                return Err(invalid("retained enrollment reservation changed"));
+            }
+        }
+        Ok(())
     }
 
     fn read(
@@ -367,6 +479,7 @@ impl BodyHistory {
         purpose: CustodyPurpose,
         root: Arc<PrivateDirectory>,
         reference: Option<Reference>,
+        retained: Option<&Self>,
     ) -> Result<Self> {
         check_names(
             &root,
@@ -417,7 +530,7 @@ impl BodyHistory {
         ];
         if reference.is_some() {
             owner.authority.directory.revalidate()?;
-            let authority_root = PrivateDirectory::open_exact(owner.authority.directory.path())?;
+            let authority_root = owner.authority.directory.retain()?;
             if authority_root.identity()? != owner.authority.directory.identity()? {
                 return Err(invalid("enrollment authority custody changed"));
             }
@@ -433,8 +546,15 @@ impl BodyHistory {
             names: vec![],
             root: Some(Arc::clone(&root)),
         });
-        let body_root = match root.open_child("bodies") {
-            Ok(value) => Some(Arc::new(value)),
+        let body_root = match retained.and_then(|prior| prior.body_root.as_ref()) {
+            Some(container) => {
+                container.revalidate()?;
+                Ok(Arc::clone(container))
+            }
+            None => root.open_child("bodies").map(Arc::new),
+        };
+        let body_root = match body_root {
+            Ok(value) => Some(value),
             Err(error)
                 if error.kind() == std::io::ErrorKind::NotFound && anchor.active.is_none() =>
             {
@@ -464,12 +584,19 @@ impl BodyHistory {
         let mut snapshots = Arc::clone(&root_snapshots);
         for ordinal in 1..=anchor.highest {
             let name = body_name(ordinal)?;
-            let directory = match body_root
-                .as_ref()
-                .map(|root| root.open_child(&name))
-                .transpose()
-            {
-                Ok(Some(value)) => Arc::new(value),
+            let directory =
+                match retained.and_then(|prior| prior.bodies.get(usize::from(ordinal) - 1)) {
+                    Some(body) => {
+                        body.directory.revalidate()?;
+                        Ok(Some(Arc::clone(&body.directory)))
+                    }
+                    None => body_root
+                        .as_ref()
+                        .map(|root| root.open_child(&name).map(Arc::new))
+                        .transpose(),
+                };
+            let directory = match directory {
+                Ok(Some(value)) => value,
                 Ok(None) => break,
                 Err(error)
                     if error.kind() == std::io::ErrorKind::NotFound
@@ -648,6 +775,7 @@ impl BodyHistory {
         }
         let mut value = Self {
             root,
+            body_root,
             selection,
             anchor,
             root_snapshots,
@@ -668,7 +796,7 @@ impl BodyHistory {
                 },
             )?;
         }
-        value.verify_histories(owner)?;
+        value.verify_histories(owner, retained)?;
         value.root_snapshots.revalidate()?;
         Ok(value)
     }
@@ -713,7 +841,23 @@ impl BodyHistory {
             },
         }))
     }
-    fn verify_histories(&mut self, owner: &ManagedStreamTokenCustody) -> Result<()> {
+    fn verify_histories(
+        &mut self,
+        owner: &ManagedStreamTokenCustody,
+        retained: Option<&Self>,
+    ) -> Result<()> {
+        let retained_graph = retained.and_then(|prior| {
+            prior
+                .active
+                .as_ref()
+                .map(|active| &active.history)
+                .or_else(|| {
+                    prior
+                        .nearest_closure
+                        .as_ref()
+                        .map(VerifiedUnsignedClosure::retained_history)
+                })
+        });
         let account = owner.wallet()?;
         let mut preceding: Option<VerifiedUnsignedClosure> = None;
         let mut previous_retirement = None;
@@ -790,12 +934,21 @@ impl BodyHistory {
                 }),
                 preceding.take(),
             )?);
-            let history = History::read(
-                &body.directory,
-                self.selection.purpose,
-                original.digest()?,
-                &scope,
-            )?;
+            let history = match retained_graph {
+                Some(prior) => History::read_retained(
+                    &body.directory,
+                    self.selection.purpose,
+                    original.digest()?,
+                    &scope,
+                    prior,
+                )?,
+                None => History::read(
+                    &body.directory,
+                    self.selection.purpose,
+                    original.digest()?,
+                    &scope,
+                )?,
+            };
             history.require_fees(&self.selection.fees)?;
             if let CustodyPurpose::Renewal(sequence) = self.purpose {
                 crate::managed::native_operation::authorization::validate_references(
@@ -980,6 +1133,23 @@ impl BodyHistory {
             &active.scope,
         ))
     }
+    pub(super) fn into_reparsed_selected(
+        self,
+        owner: &ManagedStreamTokenCustody,
+    ) -> Result<Selected<Original>> {
+        self.reopen(owner)?.into_selected()
+    }
+
+    // Genuine fixtures sometimes keep an outer history for byte/identity assertions. This
+    // uses the same native-handle lending parser, never an independent second open.
+    #[cfg(test)]
+    pub(super) fn retained_selected(
+        &self,
+        owner: &ManagedStreamTokenCustody,
+    ) -> Result<Selected<Original>> {
+        self.read_current(owner)?.into_selected()
+    }
+
     pub(super) fn into_selected(mut self) -> Result<Selected<Original>> {
         if self.anchor.pending.is_some() || self.anchor.completed.is_none() {
             return Err(ManagedBootstrapFailure::TransitionPending.into());
@@ -1068,7 +1238,7 @@ impl BodyHistory {
         let value = Self::open(owner, purpose)?
             .ok_or_else(|| invalid("new enrollment operation absent"))?;
         value.retain_reference(owner, turn, deadline)?;
-        Self::open(owner, purpose)?.ok_or_else(|| invalid("new enrollment operation absent"))
+        value.reopen(owner)
     }
     fn retain_reference(
         &self,
@@ -1256,8 +1426,7 @@ impl BodyHistory {
         };
         authorization.check(self.selection.purpose, deadline)?;
         self.replace_anchor(&next)?;
-        Self::open(owner, self.purpose)?
-            .ok_or_else(|| invalid("reserved enrollment operation disappeared"))
+        self.reopen(owner)
     }
 
     /// Complete only the anchored prefix; this never selects another interval or native sequence.
@@ -1282,8 +1451,7 @@ impl BodyHistory {
         self.verify_fresh_predecessor(owner, current)?;
         if !self.reference_present {
             self.retain_reference(owner, turn, deadline)?;
-            self = Self::open(owner, self.purpose)?
-                .ok_or_else(|| invalid("enrollment operation absent"))?;
+            self = self.reopen(owner)?;
         }
         if let Some(pending) = &self.anchor.pending {
             let bytes = encode(pending, MAX_BODY_BYTES)?;
@@ -1305,8 +1473,7 @@ impl BodyHistory {
                 }
                 Err(error) => return Err(error.into()),
             }
-            self = Self::open(owner, self.purpose)?
-                .ok_or_else(|| invalid("enrollment operation absent"))?;
+            self = self.reopen(owner)?;
             let previous_retirement = if ordinal == 1 {
                 None
             } else {
@@ -1370,7 +1537,11 @@ impl BodyHistory {
                                     .retire(&account, &attempt.wallet_path())
                             },
                         )?;
-                        Some(closed.digest())
+                        let digest = closed.digest();
+                        // Keep the actual closed History and every predecessor File alive for
+                        // retained reparsing; a digest cannot lend or authenticate custody.
+                        self.nearest_closure = Some(closed);
+                        Some(digest)
                     }
                 } else {
                     let previous = &self.bodies[previous];
@@ -1393,8 +1564,7 @@ impl BodyHistory {
                 }
             };
             // Reopen after lower History changes; only outer records participate in this CAS.
-            self = Self::open(owner, self.purpose)?
-                .ok_or_else(|| invalid("enrollment operation absent"))?;
+            self = self.reopen(owner)?;
             let pending = self
                 .anchor
                 .pending
@@ -1419,8 +1589,7 @@ impl BodyHistory {
                 completed: None,
                 pending: None,
             })?;
-            self = Self::open(owner, self.purpose)?
-                .ok_or_else(|| invalid("enrollment operation absent"))?;
+            self = self.reopen(owner)?;
         }
         // An expired unsigned reservation is activated but never signed. A generated caller can
         // retire this exact unused body through the same bounded outer chain; an explicit caller
@@ -1460,8 +1629,7 @@ impl BodyHistory {
                     completed: Some(original.digest()?),
                     ..self.anchor.clone()
                 })?;
-                return Self::open(owner, self.purpose)?
-                    .ok_or_else(|| invalid("completed enrollment operation absent"));
+                return self.reopen(owner);
             }
             return Ok(self);
         }
@@ -1548,7 +1716,7 @@ impl BodyHistory {
             completed: Some(original.digest()?),
             ..self.anchor.clone()
         })?;
-        Self::open(owner, self.purpose)?.ok_or_else(|| invalid("enrollment operation absent"))
+        self.reopen(owner)
     }
 }
 

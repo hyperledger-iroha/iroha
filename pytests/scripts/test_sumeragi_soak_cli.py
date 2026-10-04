@@ -175,7 +175,7 @@ address = "127.0.0.1:18080"
 
     def test_string_values_are_read_from_their_own_table(self) -> None:
         text = (
-            'public_key = "top"\n\n[account]\ndomain = "w"\npublic_key  = "ed0120AB"  # comment\n\n'
+            'public_key = "top"\n\n[account]\nchain_discriminant = 753\npublic_key  = "ed0120AB"  # comment\n\n'
             '[[torii.account_onboarding.credentials]]\npublic_key = "array"\n\n'
             '[torii.faucet]\nasset_definition_id = "6TEA\\"x"\nenabled = true\n'
         )
@@ -210,7 +210,7 @@ address = "127.0.0.1:18080"
             net.net_dir.mkdir(parents=True)
             (net.net_dir / "client.toml").write_text(
                 'chain = "c"\nnetwork_id_file = "genesis.expected_hash"\ntorii_url = "http://127.0.0.1:18080/"\n\n'
-                '[account]\nprivate_key = "secret"\n'
+                '[account]\nchain_discriminant = 753\nprivate_key = "secret"\n'
             )
             path = net.client_config(2)
             text = path.read_text()
