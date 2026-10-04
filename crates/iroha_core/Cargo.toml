@@ -182,6 +182,7 @@ iroha_genesis = { workspace = true }
 iroha_torii_shared = { workspace = true }
 iroha_executor_data_model = { workspace = true }
 ivm = { workspace = true }
+ivm_abi = { workspace = true }
 fastpq_prover = { path = "../fastpq_prover" }
 fastpq_isi = { path = "../fastpq_isi" }
 mv = { workspace = true }

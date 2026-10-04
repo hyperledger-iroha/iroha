@@ -134,10 +134,42 @@ privacy_sdk_materialize_canonical_cargo_lock "$2" "$3" "$state" "$4"
         self.assertEqual(self.destination.stat().st_mode & 0o777, 0o400)
         self.assertEqual(self.lock.stat(), before)
 
+    def test_real_selected_root_graph_matches_owner_and_materializes_independently(self):
+        source = ROOT / "Cargo.lock"
+        before = source.stat(), source.read_bytes()
+        self.assertEqual(hashlib.sha256(before[1]).hexdigest(), OWNER[0])
+        for selector in ("HEAD:Cargo.lock", ":Cargo.lock"):
+            committed = subprocess.run(
+                ["/usr/bin/git", "-C", str(ROOT), "show", selector],
+                capture_output=True, check=True,
+            ).stdout
+            self.assertEqual(committed, before[1], selector)
+        command = '''set -euo pipefail
+source "$1"
+state="$(privacy_sdk_capture_optional_file_state "$2/Cargo.lock" graph "$4")"
+privacy_sdk_materialize_canonical_cargo_lock "$2" "$3" "$state" "$4"
+IROHA_PRIVACY_CARGO_LOCKFILE_PATH="$3" privacy_sdk_resolve_cargo_lockfile "$2" "$4"
+'''
+        result = subprocess.run(
+            ["/bin/bash", "-c", command, "real-graph-test", str(HELPER),
+             str(ROOT), str(self.destination), sys.executable],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), str(self.destination))
+        self.assertEqual(self.destination.read_bytes(), before[1])
+        self.assertEqual(hashlib.sha256(self.destination.read_bytes()).hexdigest(), OWNER[0])
+        self.assertNotEqual((self.destination.stat().st_dev, self.destination.stat().st_ino),
+                            (before[0].st_dev, before[0].st_ino))
+        self.assertEqual(self.destination.stat().st_nlink, 1)
+        self.assertEqual(self.destination.stat().st_mode & 0o777, 0o400)
+        self.assertEqual((source.stat(), source.read_bytes()), before)
+
     def test_stale_graph_owner_rejects_current_authenticated_source(self):
         # Preceding reviewed digests are rejected fixtures, never alternate
         # selectors. Even a correct current physical seal cannot authorize them.
         stale_digests = (
+            "1c67e27eee71508ca7822f52851ec110ce1f78e74a50ec985f342f5baa91fb62",
             "c766e96ceedbad8f0a457746590ec5e5795934793bfc507aa3a5c3f2effee631",
             "6db7b8e403d3f0ceda056552ede710d5f57b2c423290640f368b51e7f4c91ddd",
             "398cd15f1b51bc25d673acc766f98c8910446246a2ba33b0e97f17332bf57d40",

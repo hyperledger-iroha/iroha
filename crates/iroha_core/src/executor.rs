@@ -3104,13 +3104,15 @@ pub(crate) fn encode_contract_argument_record(
         (Some(_), None) => Err(ValidationFail::NotPermitted(
             "parameterized entrypoint requires a payload".to_owned(),
         )),
-        (Some(schema), Some(payload)) => ivm::encode_argument_record_from_json(schema, payload)
-            .map(Some)
-            .map_err(|error| {
-                ValidationFail::NotPermitted(format!(
-                    "contract payload does not match the entrypoint argument schema: {error}"
-                ))
-            }),
+        (Some(schema), Some(payload)) => {
+            ivm_abi::arguments::encode_argument_record_from_json(schema, payload)
+                .map(Some)
+                .map_err(|error| {
+                    ValidationFail::NotPermitted(format!(
+                        "contract payload does not match the entrypoint argument schema: {error}"
+                    ))
+                })
+        }
     }
 }
 fn prepare_contract_argument_record_from_json(
@@ -20580,7 +20582,7 @@ seiyaku GuardedValue {
             })
             .and_then(|entry| entry.argument_schema.as_ref())
             .expect("write argument schema");
-        let arguments = ivm::encode_argument_record_from_json(
+        let arguments = ivm_abi::arguments::encode_argument_record_from_json(
             schema,
             &Json::from(norito::json!({ "value": "7" })),
         )
@@ -21214,7 +21216,7 @@ seiyaku OrderedBatchGuard {
             })
             .and_then(|entry| entry.argument_schema.as_ref())
             .expect("write argument schema");
-        let arguments = ivm::encode_argument_record_from_json(
+        let arguments = ivm_abi::arguments::encode_argument_record_from_json(
             schema,
             &Json::from(norito::json!({ "value": "9" })),
         )
@@ -21756,9 +21758,10 @@ seiyaku ReviewedValue {
             .and_then(|entrypoint| entrypoint.argument_schema.as_ref())
             .expect("reviewed argument schema");
         let reviewed_payload = Json::from(norito::json!({ "value": "7" }));
-        let reviewed_arguments = ivm::encode_argument_record_from_json(schema, &reviewed_payload)
-            .expect("encode reviewed arguments");
-        let swapped_arguments = ivm::encode_argument_record_from_json(
+        let reviewed_arguments =
+            ivm_abi::arguments::encode_argument_record_from_json(schema, &reviewed_payload)
+                .expect("encode reviewed arguments");
+        let swapped_arguments = ivm_abi::arguments::encode_argument_record_from_json(
             schema,
             &Json::from(norito::json!({ "value": "8" })),
         )

@@ -137,12 +137,33 @@ where
 fn torii_local_routed_read_budget(
     app: &SharedAppState,
 ) -> Result<ToriiRoutedReadMemoryBudget, Response> {
-    ToriiRoutedReadMemoryBudget::new(
-        app.query_fanout_working_set_bytes,
+    Ok(ToriiRoutedReadMemoryBudget::from_envelope(
+        current_routed_read_memory_envelope(app)?,
         app.torii_proxy_max_response_bytes,
-    )
+    ))
+}
+/// A native source entry acquires or borrows exactly one complete owner before parsing.
+fn with_query_fanout_source_owner(
+    app: &SharedAppState,
+    work: impl FnOnce() -> Response,
+) -> Response {
+    let reservation = match try_acquire_query_fanout_memory(app) {
+        Ok(owner) => owner,
+        Err(response) => return response,
+    };
+    let response = COLLECTION_READ_MEMORY_RESERVATION.sync_scope(reservation.clone(), work);
+    hold_query_fanout_memory_in_response_body(response, reservation)
 }
 fn execute_torii_account_local_source_read(
+    app: &SharedAppState,
+    account_literal: &str,
+    format: ResponseFormat,
+) -> Response {
+    with_query_fanout_source_owner(app, || {
+        execute_torii_account_local_source_read_admitted(app, account_literal, format)
+    })
+}
+fn execute_torii_account_local_source_read_admitted(
     app: &SharedAppState,
     account_literal: &str,
     format: ResponseFormat,
@@ -190,6 +211,15 @@ fn execute_torii_internal_account_local_source_read(
     account_literal: &str,
     format: ResponseFormat,
 ) -> Response {
+    with_query_fanout_source_owner(app, || {
+        execute_torii_internal_account_local_source_read_admitted(app, account_literal, format)
+    })
+}
+fn execute_torii_internal_account_local_source_read_admitted(
+    app: &SharedAppState,
+    account_literal: &str,
+    format: ResponseFormat,
+) -> Response {
     let (account_id, _) = match parse_exact_account_id_literal(account_literal) {
         Ok(parsed) => parsed,
         Err(error) => return error_response_with_format(error, format),
@@ -224,6 +254,23 @@ fn execute_torii_internal_account_local_source_read(
     .unwrap_or_else(|response| response)
 }
 fn execute_torii_internal_account_asset_local_source_read(
+    app: &SharedAppState,
+    account_literal: &str,
+    asset_definition_literal: &str,
+    scope_literal: &str,
+    format: ResponseFormat,
+) -> Response {
+    with_query_fanout_source_owner(app, || {
+        execute_torii_internal_account_asset_local_source_read_admitted(
+            app,
+            account_literal,
+            asset_definition_literal,
+            scope_literal,
+            format,
+        )
+    })
+}
+fn execute_torii_internal_account_asset_local_source_read_admitted(
     app: &SharedAppState,
     account_literal: &str,
     asset_definition_literal: &str,
@@ -437,6 +484,15 @@ fn execute_torii_asset_definition_local_source_read(
     asset_literal: &str,
     visibility: &routing::DataspaceReadVisibility,
 ) -> Response {
+    with_query_fanout_source_owner(app, || {
+        execute_torii_asset_definition_local_source_read_admitted(app, asset_literal, visibility)
+    })
+}
+fn execute_torii_asset_definition_local_source_read_admitted(
+    app: &SharedAppState,
+    asset_literal: &str,
+    visibility: &routing::DataspaceReadVisibility,
+) -> Response {
     let state_view = app.state.view();
     let world = state_view.world();
     let observation_time_ms = routing::asset_alias_observation_time_ms(app.state.as_ref());
@@ -549,6 +605,19 @@ fn execute_torii_space_directory_bindings_local_source_read(
     uaid_literal: &str,
     visibility: &routing::DataspaceReadVisibility,
 ) -> Response {
+    with_query_fanout_source_owner(app, || {
+        execute_torii_space_directory_bindings_local_source_read_admitted(
+            app,
+            uaid_literal,
+            visibility,
+        )
+    })
+}
+fn execute_torii_space_directory_bindings_local_source_read_admitted(
+    app: &SharedAppState,
+    uaid_literal: &str,
+    visibility: &routing::DataspaceReadVisibility,
+) -> Response {
     let uaid = match parse_torii_space_directory_uaid_literal(uaid_literal) {
         Ok(uaid) => uaid,
         Err(error) => return error_response_with_format(error, ResponseFormat::Json),
@@ -635,6 +704,14 @@ fn write_torii_contract_alias_binding_json(
     Ok(())
 }
 fn execute_torii_contract_alias_local_source_read(
+    app: &SharedAppState,
+    alias_input: &str,
+) -> Response {
+    with_query_fanout_source_owner(app, || {
+        execute_torii_contract_alias_local_source_read_admitted(app, alias_input)
+    })
+}
+fn execute_torii_contract_alias_local_source_read_admitted(
     app: &SharedAppState,
     alias_input: &str,
 ) -> Response {
@@ -803,6 +880,19 @@ fn execute_torii_explorer_asset_definition_local_source_read(
     definition_id: &iroha_data_model::asset::AssetDefinitionId,
     visibility: &routing::DataspaceReadVisibility,
 ) -> Response {
+    with_query_fanout_source_owner(app, || {
+        execute_torii_explorer_asset_definition_local_source_read_admitted(
+            app,
+            definition_id,
+            visibility,
+        )
+    })
+}
+fn execute_torii_explorer_asset_definition_local_source_read_admitted(
+    app: &SharedAppState,
+    definition_id: &iroha_data_model::asset::AssetDefinitionId,
+    visibility: &routing::DataspaceReadVisibility,
+) -> Response {
     let world = app.state.world_view();
     if !visibility.allows_asset_definition(&world, definition_id) {
         return error_response_with_format(routing::explorer_not_found(), ResponseFormat::Json);
@@ -881,6 +971,15 @@ fn torii_bounded_local_proof_record_payload(
     torii_bounded_routed_read_source_payload::<ProofRecord, _>(record, budget).map(Some)
 }
 fn execute_torii_proof_record_local_source_read(
+    app: &SharedAppState,
+    proof_id: &iroha_data_model::proof::ProofId,
+    format: ResponseFormat,
+) -> Response {
+    with_query_fanout_source_owner(app, || {
+        execute_torii_proof_record_local_source_read_admitted(app, proof_id, format)
+    })
+}
+fn execute_torii_proof_record_local_source_read_admitted(
     app: &SharedAppState,
     proof_id: &iroha_data_model::proof::ProofId,
     format: ResponseFormat,

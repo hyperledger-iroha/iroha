@@ -370,7 +370,7 @@ fn routed_read_source_keeps_multiroute_fanout_enabled() {
         "include!(\"torii_app_routed_read_execute.rs\")",
         "collect_torii_routed_list_json_payloads",
         "execute_torii_read_fanout_for_resolved_routes_admitted",
-        "resolve_torii_proof_record_for_supported_routes(app, routes, proof_id).await",
+        "resolve_torii_proof_record_for_supported_routes(",
         "collect_torii_alias_json_payloads",
         "collect_torii_alias_lookup_json_payloads",
     ] {

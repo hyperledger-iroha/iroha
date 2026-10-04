@@ -2285,7 +2285,7 @@ mod tests {
     }
     fn int_state_value_record(value: i128) -> Vec<u8> {
         let envelope =
-            crate::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(value))
+            ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(value))
                 .expect("encode integer state leaf");
         state_value_record(
             &EmbeddedStateType::Int,
@@ -2427,7 +2427,7 @@ mod tests {
         make_pointer_tlv(PointerType::NoritoBytes, &payload)
     }
     fn make_amount_tlv(value: Quantity) -> Vec<u8> {
-        crate::numeric_tlv::encode_quantity(&value).expect("encode quantity pointer envelope")
+        ivm_abi::numeric_tlv::encode_quantity(&value).expect("encode quantity pointer envelope")
     }
     #[test]
     fn core_host_expect_tlv_enforces_pointer_policy() {
@@ -2672,8 +2672,9 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         load_state_map_schema(&mut vm, "orders", EmbeddedStateType::Int);
         let base: Name = "orders".parse().expect("map base");
-        let key = crate::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(-7))
-            .expect("encode canonical int key");
+        let key =
+            ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(-7))
+                .expect("encode canonical int key");
         let path = crate::host::canonical_state_map_path(&base, &key).expect("canonical path");
         let page = norito::to_bytes(&vec![path]).expect("encode state key page");
         let page_ptr = vm
@@ -2764,7 +2765,7 @@ mod tests {
         use crate::numeric::PointerAbiFaultV1;
         use iroha_primitives::{bigint::BigInt, numeric::Numeric, numeric_abi::IntValueV1};
         let canonical_int =
-            crate::numeric_tlv::encode_int(&BigInt::one()).expect("encode canonical integer key");
+            ivm_abi::numeric_tlv::encode_int(&BigInt::one()).expect("encode canonical integer key");
         let mut schemaless_vm = IVM::new(u64::MAX);
         assert_eq!(
             build_typed_map_path(
@@ -2791,7 +2792,7 @@ mod tests {
                 PointerAbiFaultV1::TruncatedEnvelope
             ))
         ));
-        let decimal = crate::numeric_tlv::encode_decimal(&Numeric::one())
+        let decimal = ivm_abi::numeric_tlv::encode_decimal(&Numeric::one())
             .expect("encode cross-typed decimal key");
         assert_eq!(
             build_typed_map_path(&mut vm, &mut host, "values", &decimal),
@@ -2820,7 +2821,7 @@ mod tests {
         );
         let base: Name = "values".parse().expect("map base");
         let canonical_zero =
-            crate::numeric_tlv::encode_int(&BigInt::zero()).expect("encode canonical zero key");
+            ivm_abi::numeric_tlv::encode_int(&BigInt::zero()).expect("encode canonical zero key");
         let canonical_path = crate::host::canonical_state_map_path(&base, &canonical_zero)
             .expect("build canonical zero path");
         let canonical_value = bytes_state_value_record(b"canonical");
@@ -2903,7 +2904,7 @@ mod tests {
                 panic!("scan syscall {syscall:#x} rejected map base: {error}")
             });
         }
-        let key = crate::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::zero())
+        let key = ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::zero())
             .expect("encode canonical map key");
         let path = crate::host::canonical_state_map_path(&base, &key).expect("map child path");
         set_raw_state_path(&mut vm, &mut host, &path, &valid_value)
@@ -2925,7 +2926,7 @@ mod tests {
         let wrong_pointer = state_value_record(
             &EmbeddedStateType::Bytes,
             vec![ivm_abi::state_value::StateValueAtomV1::Pointer(
-                crate::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::one())
+                ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::one())
                     .expect("encode wrong nominal pointer"),
             )],
         );
@@ -2946,7 +2947,7 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         let mut host = CoreHost::new();
         let base: Name = "values".parse().expect("map base");
-        let key = crate::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::one())
+        let key = ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::one())
             .expect("encode canonical map key");
         let path = crate::host::canonical_state_map_path(&base, &key).expect("map child path");
         host.insert_state_value(path.as_ref(), b"preexisting-untyped");
@@ -3170,7 +3171,7 @@ mod tests {
         vm.set_host(CoreHost::new());
         let value = iroha_primitives::bigint::BigInt::from_twos_bytes(&[0x7f; 64])
             .expect("wide signed integer");
-        let inner = crate::numeric_tlv::encode_int(&value).expect("canonical Int pointer");
+        let inner = ivm_abi::numeric_tlv::encode_int(&value).expect("canonical Int pointer");
         let outer = make_pointer_tlv(PointerType::NoritoBytes, &inner);
         let ptr = vm.alloc_input_tlv(&outer).expect("allocate wrapped Int");
         let program = assemble_program(&[
@@ -3744,7 +3745,7 @@ mod tests {
         let mut host = CoreHost::new();
         load_state_map_schema(&mut vm, "orders", EmbeddedStateType::Int);
         let value = iroha_primitives::bigint::BigInt::from_i128(42);
-        let int_envelope = crate::numeric_tlv::encode_int(&value).expect("Int pointer");
+        let int_envelope = ivm_abi::numeric_tlv::encode_int(&value).expect("Int pointer");
         let int_ptr = vm.alloc_input_tlv(&int_envelope).expect("allocate Int");
         vm.set_register(10, int_ptr);
         let encode_gas = host
@@ -3774,7 +3775,7 @@ mod tests {
             .alloc_input_tlv(&make_pointer_tlv(PointerType::Name, &base_bytes))
             .expect("alloc base");
         let key_bytes =
-            crate::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(7))
+            ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(7))
                 .expect("encode canonical int key");
         let key_ptr = vm
             .alloc_input_tlv(&make_pointer_tlv(PointerType::NoritoBytes, &key_bytes))

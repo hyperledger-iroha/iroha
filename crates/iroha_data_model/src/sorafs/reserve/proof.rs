@@ -206,20 +206,17 @@ impl ReservePolicyProofV1 {
             expected_manager,
             &self.manager_permissions,
         )?;
-        let current = match &self.current {
-            Some(bytes) => {
-                let state = verify_selected_policy(&world, expected_policy, bytes)?;
-                if state.policy.activated_by != *expected_manager {
-                    return Err(invalid(
-                        "Reserve policy or activation differs from selected original and certified cut",
-                    ));
-                }
-                Some(state.policy)
+        let current = if let Some(bytes) = &self.current {
+            let state = verify_selected_policy(&world, expected_policy, bytes)?;
+            if state.policy.activated_by != *expected_manager {
+                return Err(invalid(
+                    "Reserve policy or activation differs from selected original and certified cut",
+                ));
             }
-            None => {
-                world.verify_smart_contract_state_absent(reserve_state_key())?;
-                None
-            }
+            Some(state.policy)
+        } else {
+            world.verify_smart_contract_state_absent(reserve_state_key())?;
+            None
         };
         Ok(VerifiedReservePolicyStateV1 {
             network_id: expected_network,

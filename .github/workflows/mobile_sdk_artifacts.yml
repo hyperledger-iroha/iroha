@@ -9,8 +9,8 @@ on:
       - "scripts/build_norito_xcframework.sh"
       - "scripts/archive_norito_xcframework.py"
       - "scripts/tests/archive_norito_xcframework_test.py"
-      - "scripts/render_norito_bridge_podspec.py"
-      - "scripts/tests/render_norito_bridge_podspec_test.py"
+      - "scripts/validate_norito_bridge_archive.py"
+      - "scripts/tests/validate_norito_bridge_archive_test.py"
       - "scripts/tests/norito_bridge_source_seal_test.py"
       - "scripts/norito_bridge_apple_slice_handoff.py"
       - "scripts/tests/norito_bridge_apple_slice_handoff_test.py"
@@ -36,8 +36,6 @@ on:
       - "scripts/tests/release_profile_validation_test.py"
       - "scripts/tests/mobile_sdk_android_artifacts_test.py"
       - "scripts/check_mobile_sdk_artifacts_test.sh"
-      - "ci/check_swift_pod_bridge.sh"
-      - "scripts/check_swift_pod_bridge.sh"
       - "scripts/tests/mobile_sdk_python312_contract.sh"
       - "scripts/check_android_app_native_archive.py"
       - "scripts/tests/check_android_app_native_archive_test.py"
@@ -139,15 +137,15 @@ jobs:
             echo "tagged mobile SDK releases are owned by hyperledger-iroha/iroha" >&2
             exit 1
           }
-          IFS= read -r pod_version < IrohaSwift/VERSION
-          [[ "$pod_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          IFS= read -r bridge_version < IrohaSwift/VERSION
+          [[ "$bridge_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           version_bytes="$(wc -c < IrohaSwift/VERSION | tr -d '[:space:]')"
-          [[ "$version_bytes" == "$(( ${#pod_version} + 1 ))" ]] || {
+          [[ "$version_bytes" == "$(( ${#bridge_version} + 1 ))" ]] || {
             echo "IrohaSwift/VERSION must be one canonical ASCII SemVer plus newline" >&2
             exit 1
           }
-          [[ "$GITHUB_REF_NAME" == "v${pod_version}" ]] || {
-            echo "release tag $GITHUB_REF_NAME must equal canonical SDK tag v${pod_version}" >&2
+          [[ "$GITHUB_REF_NAME" == "v${bridge_version}" ]] || {
+            echo "release tag $GITHUB_REF_NAME must equal canonical SDK tag v${bridge_version}" >&2
             exit 1
           }
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -167,13 +165,13 @@ jobs:
       - name: Install pinned checker dependencies
         run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
       - name: Shell syntax
-        run: bash -n scripts/publish_android_sdk.sh scripts/android_publish_snapshot.sh scripts/android_sbom_provenance.sh scripts/android_keystore_attestation.sh ci/check_swift_pod_bridge.sh scripts/build_norito_xcframework.sh scripts/check_kotlin_no_reflection.sh scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/check_swift_pod_bridge.sh scripts/deploy_localnet.sh scripts/package_mobile_sdk_artifacts.sh scripts/tests/mobile_sdk_python312_contract.sh
+        run: bash -n scripts/publish_android_sdk.sh scripts/android_publish_snapshot.sh scripts/android_sbom_provenance.sh scripts/android_keystore_attestation.sh scripts/build_norito_xcframework.sh scripts/check_kotlin_no_reflection.sh scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/deploy_localnet.sh scripts/package_mobile_sdk_artifacts.sh scripts/tests/mobile_sdk_python312_contract.sh
       - name: Python syntax
-        run: PYTHONPYCACHEPREFIX="$RUNNER_TEMP/mobile-sdk-pycache" python3 -I -S -B -m py_compile scripts/archive_norito_xcframework.py scripts/tests/archive_norito_xcframework_test.py scripts/render_norito_bridge_podspec.py scripts/tests/render_norito_bridge_podspec_test.py scripts/tests/norito_bridge_source_seal_test.py scripts/norito_bridge_apple_slice_handoff.py scripts/tests/norito_bridge_apple_slice_handoff_test.py scripts/tests/package_mobile_sdk_artifacts_test.py scripts/update_norito_bridge_swift_pins.py scripts/tests/update_norito_bridge_swift_pins_test.py scripts/validate_norito_bridge_xcframework.py scripts/tests/validate_norito_bridge_xcframework_test.py scripts/check_android_app_native_archive.py scripts/tests/check_android_app_native_archive_test.py scripts/check_native_sdk_artifact.py scripts/tests/check_native_sdk_artifact_test.py scripts/exec_with_file_lock.py scripts/tests/exec_with_file_lock_test.py scripts/norito_bridge_source_seal.py scripts/run_mobile_hermetic_command.py scripts/mobile_sdk_android_package_inputs.py scripts/mobile_sdk_android_publication.py scripts/tests/android_publication_contract_test.py
+        run: PYTHONPYCACHEPREFIX="$RUNNER_TEMP/mobile-sdk-pycache" python3 -I -S -B -m py_compile scripts/archive_norito_xcframework.py scripts/tests/archive_norito_xcframework_test.py scripts/validate_norito_bridge_archive.py scripts/tests/validate_norito_bridge_archive_test.py scripts/tests/norito_bridge_source_seal_test.py scripts/norito_bridge_apple_slice_handoff.py scripts/tests/norito_bridge_apple_slice_handoff_test.py scripts/tests/package_mobile_sdk_artifacts_test.py scripts/update_norito_bridge_swift_pins.py scripts/tests/update_norito_bridge_swift_pins_test.py scripts/validate_norito_bridge_xcframework.py scripts/tests/validate_norito_bridge_xcframework_test.py scripts/check_android_app_native_archive.py scripts/tests/check_android_app_native_archive_test.py scripts/check_native_sdk_artifact.py scripts/tests/check_native_sdk_artifact_test.py scripts/exec_with_file_lock.py scripts/tests/exec_with_file_lock_test.py scripts/norito_bridge_source_seal.py scripts/run_mobile_hermetic_command.py scripts/mobile_sdk_android_package_inputs.py scripts/mobile_sdk_android_publication.py scripts/tests/android_publication_contract_test.py
       - name: Deterministic NoritoBridge archive owner fixtures
         run: python3 -I -S -B scripts/tests/archive_norito_xcframework_test.py
-      - name: NoritoBridge CocoaPods spec renderer fixtures
-        run: python3 -I -S -B scripts/tests/render_norito_bridge_podspec_test.py
+      - name: NoritoBridge authenticated SwiftPM archive fixtures
+        run: python3 -I -S -B scripts/tests/validate_norito_bridge_archive_test.py
       - name: NoritoBridge source seal fixtures
         run: python3 -I -S -B scripts/tests/norito_bridge_source_seal_test.py
       - name: NoritoBridge Apple slice handoff fixtures
@@ -262,7 +260,7 @@ jobs:
             echo "tagged mobile SDK releases are owned by hyperledger-iroha/iroha" >&2
             exit 1
           }
-          pod_version="$(python3 -I -S -B - <<'PY'
+          bridge_version="$(python3 -I -S -B - <<'PY'
           from pathlib import Path
           import re
           raw = Path("IrohaSwift/VERSION").read_bytes()
@@ -272,8 +270,8 @@ jobs:
           print(raw[:-1].decode("ascii"))
           PY
           )"
-          [[ "$GITHUB_REF_NAME" == "v${pod_version}" ]] || {
-            echo "release tag $GITHUB_REF_NAME must equal canonical SDK tag v${pod_version}" >&2
+          [[ "$GITHUB_REF_NAME" == "v${bridge_version}" ]] || {
+            echo "release tag $GITHUB_REF_NAME must equal canonical SDK tag v${bridge_version}" >&2
             exit 1
           }
       - name: Prepare external Apple build and artifact roots
@@ -350,14 +348,10 @@ jobs:
           --scratch-path "$MOBILE_SDK_SWIFT_SCRATCH_DIR"
       - name: Package Apple mobile SDK artifact
         run: bash scripts/package_mobile_sdk_artifacts.sh --apple --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH" --version "$MOBILE_SDK_VERSION"
-      - name: CocoaPods authenticated archive and source lint (no capability skip)
-        env:
-          SWIFT_POD_REPORT_DIR: ${{ runner.temp }}/iroha-swift-pod-report
-        run: ci/check_swift_pod_bridge.sh
       - name: Consume packaged XCFramework archive with SwiftPM
         shell: bash
         run: |
-          pod_version="$(python3 -I -S -B - <<'PY'
+          bridge_version="$(python3 -I -S -B - <<'PY'
           from pathlib import Path
           import re
           raw = Path("IrohaSwift/VERSION").read_bytes()
@@ -367,7 +361,29 @@ jobs:
           print(raw[:-1].decode("ascii"))
           PY
           )"
-          archive="$MOBILE_SDK_PACKAGE_OUT_DIR/NoritoBridge-v${pod_version}.xcframework.zip"
+          archive="$MOBILE_SDK_PACKAGE_OUT_DIR/NoritoBridge-v${bridge_version}.xcframework.zip"
+          cargo_path="$("$MOBILE_SDK_RUSTUP_BINARY" which --toolchain 1.93.1 cargo)"
+          developer_dir="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$(/usr/bin/xcode-select -p)")"
+          env -i \
+            HOME="$HOME" \
+            PATH="${MOBILE_SDK_PYTHON_BINARY%/*}:${cargo_path%/*}:${RUSTC%/*}:${RUSTDOC%/*}:/usr/bin:/bin" \
+            TMPDIR=/tmp LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+            NORITO_BRIDGE_SEAL_HOME="$HOME" \
+            NORITO_BRIDGE_SEAL_CARGO_HOME="${MOBILE_SDK_CARGO_HOME:-$HOME/.cargo}" \
+            NORITO_BRIDGE_SEAL_CARGO_INVOCATION_DIR="${MOBILE_SDK_CARGO_INVOCATION_DIR:-$GITHUB_WORKSPACE}" \
+            NORITO_BRIDGE_SEAL_RUSTUP_HOME="$HOME/.rustup" \
+            NORITO_BRIDGE_SEAL_TMPDIR=/tmp \
+            NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" \
+            NORITO_BRIDGE_SEAL_CARGO="$cargo_path" \
+            NORITO_BRIDGE_SEAL_RUSTC="$RUSTC" \
+            NORITO_BRIDGE_SEAL_RUSTDOC="$RUSTDOC" \
+            NORITO_BRIDGE_SEAL_RUSTUP="$MOBILE_SDK_RUSTUP_BINARY" \
+            NORITO_BRIDGE_SEAL_DEVELOPER_DIR="$developer_dir" \
+            "$MOBILE_SDK_PYTHON_BINARY" -I -S -B scripts/validate_norito_bridge_archive.py \
+              --root "$GITHUB_WORKSPACE" \
+              --archive "$archive" \
+              --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH" \
+              --scratch-dir "$NORITO_BRIDGE_BUILD_DIR"
           /usr/bin/unzip -t "$archive"
           consumer="$(mktemp -d "$RUNNER_TEMP/norito-bridge-archive-consumer.XXXXXXXX")"
           trap 'rm -rf "$consumer"' EXIT
@@ -388,7 +404,17 @@ jobs:
                       name: "NoritoBridge",
                       path: "NoritoBridge.xcframework.zip"
                   ),
-                  .target(name: "ArchiveConsumer", dependencies: ["NoritoBridge"]),
+                  .target(
+                      name: "ArchiveConsumer",
+                      dependencies: ["NoritoBridge"],
+                      linkerSettings: [
+                          .linkedFramework("Foundation", .when(platforms: [.iOS, .macOS])),
+                          .linkedFramework("Security", .when(platforms: [.iOS, .macOS])),
+                          .linkedFramework("Metal", .when(platforms: [.iOS, .macOS])),
+                          .linkedFramework("CoreGraphics", .when(platforms: [.iOS, .macOS])),
+                          .linkedFramework("Accelerate", .when(platforms: [.iOS, .macOS])),
+                      ]
+                  ),
               ]
           )
           SWIFT
@@ -464,7 +490,7 @@ jobs:
             echo "tagged mobile SDK releases are owned by hyperledger-iroha/iroha" >&2
             exit 1
           }
-          pod_version="$(python3 -I -S -B - <<'PY'
+          bridge_version="$(python3 -I -S -B - <<'PY'
           from pathlib import Path
           import re
           raw = Path("IrohaSwift/VERSION").read_bytes()
@@ -474,8 +500,8 @@ jobs:
           print(raw[:-1].decode("ascii"))
           PY
           )"
-          [[ "$GITHUB_REF_NAME" == "v${pod_version}" ]] || {
-            echo "release tag $GITHUB_REF_NAME must equal canonical SDK tag v${pod_version}" >&2
+          [[ "$GITHUB_REF_NAME" == "v${bridge_version}" ]] || {
+            echo "release tag $GITHUB_REF_NAME must equal canonical SDK tag v${bridge_version}" >&2
             exit 1
           }
       - name: Install Android SDK and NDK packages
@@ -643,7 +669,7 @@ jobs:
             echo "release publication is restricted to hyperledger-iroha/iroha" >&2
             exit 1
           }
-          pod_version="$(python3 -I -S -B - <<'PY'
+          bridge_version="$(python3 -I -S -B - <<'PY'
           from pathlib import Path
           import re
           raw = Path("IrohaSwift/VERSION").read_bytes()
@@ -653,8 +679,8 @@ jobs:
           print(raw[:-1].decode("ascii"))
           PY
           )"
-          if [[ "$GITHUB_REF_NAME" != "v${pod_version}" ]]; then
-            echo "release tag $GITHUB_REF_NAME must equal canonical SDK tag v${pod_version}" >&2
+          if [[ "$GITHUB_REF_NAME" != "v${bridge_version}" ]]; then
+            echo "release tag $GITHUB_REF_NAME must equal canonical SDK tag v${bridge_version}" >&2
             exit 1
           fi
           candidate_inventory="$(

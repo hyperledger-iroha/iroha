@@ -16095,7 +16095,7 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
         XCTAssertNoThrow(try AccountAddress.parseEncoded(fixtureAuthority))
         let authority = self.authority
         XCTAssertEqual(fixture["codec"] as? String, "EntrypointArgumentRecordV1")
-        XCTAssertEqual(fixture["generator"] as? String, "ivm::encode_argument_record_from_json")
+        XCTAssertEqual(fixture["generator"] as? String, "ivm_abi::arguments::encode_argument_record_from_json")
         XCTAssertNotNil(schemaHash.range(of: "^[0-9a-f]{64}$", options: .regularExpression))
         XCTAssertNotNil(recordHex.range(of: "^(?:[0-9a-f]{2})+$", options: .regularExpression))
         XCTAssertEqual(

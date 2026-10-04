@@ -12,7 +12,7 @@ use iroha_primitives::{
         QuantityValueV1,
     },
 };
-use ivm::{PointerType, numeric_tlv};
+use ivm_abi::pointer_abi::PointerType;
 use norito::json::{Map, Value};
 fn object(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Value {
     let mut map = Map::new();
@@ -77,7 +77,7 @@ fn int_vector(id: &'static str, value: BigInt) -> Value {
         .expect("bounded fixture integer")
         .encode_frame()
         .expect("fixture int frame");
-    let envelope = numeric_tlv::encode_int(&value).expect("fixture int envelope");
+    let envelope = ivm_abi::numeric_tlv::encode_int(&value).expect("fixture int envelope");
     valid(
         id,
         "int",
@@ -94,7 +94,7 @@ fn decimal_vector(id: &'static str, value: Numeric) -> Value {
         .expect("canonical decimal")
         .encode_frame()
         .expect("fixture decimal frame");
-    let envelope = numeric_tlv::encode_decimal(&value).expect("fixture decimal envelope");
+    let envelope = ivm_abi::numeric_tlv::encode_decimal(&value).expect("fixture decimal envelope");
     valid(
         id,
         "decimal",
@@ -109,7 +109,8 @@ fn quantity_vector(id: &'static str, value: Quantity) -> Value {
     let frame = QuantityValueV1::new(value.clone())
         .encode_frame()
         .expect("fixture quantity frame");
-    let envelope = numeric_tlv::encode_quantity(&value).expect("fixture quantity envelope");
+    let envelope =
+        ivm_abi::numeric_tlv::encode_quantity(&value).expect("fixture quantity envelope");
     valid(
         id,
         "quantity",
@@ -273,7 +274,8 @@ pub fn render_fixture() -> String {
     let mut bad_crc_frame = canonical_int_frame.clone();
     let last = bad_crc_frame.len() - 1;
     bad_crc_frame[last] ^= 1;
-    let canonical_int_envelope = numeric_tlv::encode_int(&BigInt::one()).expect("attack envelope");
+    let canonical_int_envelope =
+        ivm_abi::numeric_tlv::encode_int(&BigInt::one()).expect("attack envelope");
     let frame_too_short = canonical_int_frame[..NUMERIC_FRAME_HEADER_BYTES_V1 - 1].to_vec();
     let mut invalid_header_frame = canonical_int_frame.clone();
     invalid_header_frame[0] ^= 1;
@@ -722,7 +724,7 @@ pub fn render_fixture() -> String {
         ("format", Value::from("iroha.numeric.v1")),
         (
             "generator",
-            Value::from("ivm::numeric_tlv + iroha_primitives::numeric_abi"),
+            Value::from("ivm_abi::numeric_tlv + iroha_primitives::numeric_abi"),
         ),
         (
             "signed_bits",

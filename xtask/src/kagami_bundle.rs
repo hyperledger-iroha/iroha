@@ -229,7 +229,7 @@ fn publish_checked(
     let runtime = staging.create_child("bin")?;
     let mut retained_outputs = Vec::new();
     for (filename, file, snapshot, hash) in &mut programs {
-        let mut copied = runtime.open_append(filename)?;
+        let mut copied = runtime.open_append(filename.as_str())?;
         file.file_mut().seek(SeekFrom::Start(0))?;
         io::copy(file.file_mut(), &mut copied)?;
         #[cfg(unix)]
@@ -239,7 +239,7 @@ fn publish_checked(
         }
         copied.sync_all()?;
         drop(copied);
-        let mut copied = RetainedFile::open_regular(runtime.path().join(filename))?;
+        let mut copied = RetainedFile::open_regular(runtime.path().join(filename.as_str()))?;
         let copied_snapshot = copied.snapshot()?;
         admit_native_program(&mut copied)?;
         if digest(&mut copied)? != *hash

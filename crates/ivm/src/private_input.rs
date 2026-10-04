@@ -3,7 +3,7 @@
 //! Private-input records are bounded before Norito decoding. Successful
 //! decoding yields an opaque private numeric TLV; only the explicitly approved
 //! full-width commitment path below may declassify it.
-use crate::{PointerType, VMError, numeric_tlv, pointer_abi};
+use crate::{PointerType, VMError, pointer_abi};
 use blstrs::Scalar;
 use crypto_bigint::{
     Encoding, U256,
@@ -134,7 +134,8 @@ pub(crate) fn decode_record(
         return Err(VMError::NoritoInvalid);
     }
     validate_frame(record.kind, &record.payload)?;
-    let envelope = numeric_tlv::encode_envelope(record.kind.pointer_type(), &record.payload)?;
+    let envelope =
+        ivm_abi::numeric_tlv::encode_envelope(record.kind.pointer_type(), &record.payload)?;
     Ok(ValidatedPrivateInput {
         kind: record.kind,
         envelope,

@@ -7,11 +7,11 @@ publication, including slices restored from CI. Its host macOS consumer also
 checks SHA3-256/SHAKE256 known answers, ML-DSA signing/verification and tamper
 rejection, and ML-KEM encapsulation/decapsulation.
 
-Current source ABI: 24. ABI 14 added
+Current source ABI: 25. ABI 14 added
 `connect_norito_encode_transfer_instruction_box` for native multisig proposal
 instruction boxes; later additive revisions include the bounded KAGEMUSHA V1
 wire validators and SoraFS Governance DAG block/head-chain reference
-validators consumed by the C# SDK. The ABI-24 Kotlin/JVM and Java/Android
+validators consumed by the C# SDK. The ABI-25 Kotlin/JVM and Java/Android
 `NativeSignerBridge` surface additionally requires native-signer JNI contract
 revision 7. Revision 4 sealed the removal of generic `Shield`, `ZkTransfer`, and
 `Unshield` transaction encoders plus native anonymous-escrow and authority-free
@@ -41,7 +41,7 @@ test engine, host flag, or shape-valid reply grants monetary authority.
 `RegisterZkAsset`
 now carries exactly
 `asset` and optional `vk_unshield`; the retired shield verifier is absent from
-both native signatures and the encoded instruction. Bridge ABI 24 and native
+both native signatures and the encoded instruction. Bridge ABI 25 and native
 signer contract revision 7 reject older packages with incompatible signatures.
 Revision 5 hard-cuts native transaction signing from human chain labels to the
 exact genesis-derived `NetworkId`: JNI accepts exactly 32 marked hash bytes,
@@ -66,7 +66,7 @@ attempt trust anchors. They verify finality, the fixed witness, membership,
 archive replay, and exact compact binding before borrowing a wallet seed.
 
 The archive checksums below are historical and do not establish a current
-ABI-24/revision-7 artifact. Regenerate, verify, and republish the bridge
+ABI-25/revision-7 artifact. Regenerate, verify, and republish the bridge
 artifacts before cutting an SDK release that depends on the current source
 surface.
 
@@ -77,11 +77,14 @@ surface.
 
 Instructions:
 1. Package the authenticated archive with
-   `scripts/package_mobile_sdk_artifacts.sh --apple`; do not reuse the historical
-   hashes above.
+   `scripts/package_mobile_sdk_artifacts.sh --apple --lockfile-path <canonical-external-Cargo.lock>`;
+   retain exact source, lock, tool and package provenance. Do not reuse the
+   historical hashes above.
 2. Publish the generated canonical
-   `NoritoBridge-v<version>.xcframework.zip`. The package owner invokes
-   `scripts/render_norito_bridge_podspec.py` to compute its exact SHA-256 and
-   create `NoritoBridge-<version>.podspec`; do not hand-edit template tokens.
-3. Publish the generated binary spec before the same-version `IrohaSwift` source
-   spec and retain the signed artifact/provenance inventory.
+   `NoritoBridge-v<version>.xcframework.zip`, whose version comes only from
+   `IrohaSwift/VERSION`, with its authenticated manifest and checksum inventory.
+3. Qualify the ZIP with SwiftPM and an ordinary `IrohaSwift` dependency in
+   Release, including native execution without unsafe linker flags. SwiftPM is
+   the sole supported Swift packaging path. Public installation and signed
+   release evidence remain distinct from local host/simulator validation; see
+   [the release contract](../../docs/norito_bridge_release.md).

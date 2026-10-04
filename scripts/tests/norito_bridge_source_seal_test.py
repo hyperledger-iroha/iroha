@@ -172,9 +172,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             "Cargo.lock": "# locked\n",
             "ci/check_connect_norito_bridge_header.sh": "#!/bin/sh\n",
             "rust-toolchain.toml": "[toolchain]\nchannel = 'stable'\n",
-            "crates/connect_norito_bridge/NoritoBridge.podspec.template": "# podspec\n",
             "crates/connect_norito_bridge/RELEASE_NOTES.md": "# release\n",
-            "IrohaSwift/IrohaSwift.podspec": "Pod::Spec.new {}\n",
             "IrohaSwift/Package.swift": "// package\n",
             "IrohaSwift/Package.resolved": '{"pins":[],"version":3}\n',
             "IrohaSwift/VERSION": "0.1.0\n",
@@ -198,7 +196,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             "scripts/norito_bridge_local_integration.py": "# local integration policy fixture\n",
             "scripts/norito_bridge_apple_slice_handoff.py": "#!/usr/bin/env python3\n",
             "scripts/package_mobile_sdk_artifacts.sh": "#!/bin/sh\n",
-            "scripts/render_norito_bridge_podspec.py": "#!/usr/bin/env python3\n",
+            "scripts/validate_norito_bridge_archive.py": "#!/usr/bin/env python3\n",
             "scripts/update_norito_bridge_swift_pins.py": "#!/usr/bin/env python3\n",
             "scripts/validate_norito_bridge_xcframework.py": "#!/usr/bin/env python3\n",
             "kotlin/client-android/build.gradle.kts": "// android\n",
@@ -816,9 +814,13 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
 
     def test_apple_seal_includes_package_lock_and_mobile_transports(self) -> None:
         apple = self.inputs("apple")
-        self.assertIn("crates/connect_norito_bridge/NoritoBridge.podspec.template", apple)
+        for retired in (
+            "IrohaSwift/IrohaSwift.podspec",
+            "crates/connect_norito_bridge/NoritoBridge.podspec.template",
+            "scripts/render_norito_bridge_podspec.py",
+        ):
+            self.assertNotIn(retired, seal.APPLE_ROOT_INPUTS)
         self.assertIn("crates/connect_norito_bridge/RELEASE_NOTES.md", apple)
-        self.assertIn("IrohaSwift/IrohaSwift.podspec", apple)
         self.assertIn("IrohaSwift/Package.swift", apple)
         self.assertIn("IrohaSwift/Package.resolved", apple)
         self.assertIn("IrohaSwift/Sources/IrohaSwift", apple)
@@ -830,7 +832,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         self.assertIn("scripts/normalize_pqcrypto_archive.py", apple)
         self.assertIn("scripts/norito_bridge_local_integration.py", apple)
         self.assertIn("scripts/package_mobile_sdk_artifacts.sh", apple)
-        self.assertIn("scripts/render_norito_bridge_podspec.py", apple)
+        self.assertIn("scripts/validate_norito_bridge_archive.py", apple)
         self.assertIn("scripts/update_norito_bridge_swift_pins.py", apple)
         self.assertIn("scripts/validate_norito_bridge_xcframework.py", apple)
         self.assertIn("scripts/check_mobile_sdk_artifact_pin_commit.py", apple)

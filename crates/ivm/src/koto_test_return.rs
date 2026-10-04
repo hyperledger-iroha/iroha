@@ -413,7 +413,7 @@ mod tests {
         let option = SumLayoutV1::option(1).unwrap();
         let mut source = IVM::new(0);
         let integer = source
-            .alloc_host_tlv(&crate::numeric_tlv::encode_int(&30.into()).unwrap())
+            .alloc_host_tlv(&ivm_abi::numeric_tlv::encode_int(&30.into()).unwrap())
             .unwrap();
         let ok = crate::sum::allocate_words(&mut source, sum, 1, &[integer]).unwrap();
         let err = crate::sum::allocate_words(&mut source, sum, 0, &[1]).unwrap();
@@ -513,7 +513,7 @@ mod tests {
         source.store_u64(source_table, 1).unwrap();
         assert!(transfer_return(&source, &mut destination, &schema, 2, result_table).is_err());
         let integer = source
-            .alloc_host_tlv(&crate::numeric_tlv::encode_int(&7.into()).unwrap())
+            .alloc_host_tlv(&ivm_abi::numeric_tlv::encode_int(&7.into()).unwrap())
             .unwrap();
         source.store_u64(source_table + 8, integer).unwrap();
         transfer_return(&source, &mut destination, &schema, 2, result_table).unwrap();

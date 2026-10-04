@@ -98,8 +98,8 @@ fn run_parameterized_int_entrypoint(program: &[u8], index: i64) -> (IVM, u64) {
         u64::try_from(metadata.prefix_len()).expect("prefix fits u64") + entrypoint.entry_pc;
     let payload =
         Json::from_str_norito(&format!(r#"{{"index":"{index}"}}"#)).expect("valid List arguments");
-    let record =
-        ivm::encode_argument_record_from_json(schema, &payload).expect("encode List arguments");
+    let record = ivm_abi::arguments::encode_argument_record_from_json(schema, &payload)
+        .expect("encode List arguments");
     let key: Name = "trigger_event_json".parse().expect("public input key");
     let host = DefaultHost::new().with_public_inputs(BTreeMap::from([(
         key,
@@ -139,8 +139,8 @@ fn run_multiword_mutation_failure_case(
         r#"{{"index":"{index}","operation":"{operation}"}}"#
     ))
     .expect("valid multiword List arguments");
-    let record =
-        ivm::encode_argument_record_from_json(schema, &payload).expect("encode List arguments");
+    let record = ivm_abi::arguments::encode_argument_record_from_json(schema, &payload)
+        .expect("encode List arguments");
     let key: Name = "trigger_event_json".parse().expect("public input key");
     let host = DefaultHost::new().with_public_inputs(BTreeMap::from([(
         key,

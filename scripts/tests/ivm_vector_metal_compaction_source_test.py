@@ -17,6 +17,7 @@ OWNER_PATHS = {
     "buffers": "crates/ivm/src/vector/metal_buffers.rs",
     "runtime": "crates/ivm/src/vector/metal_runtime.rs",
     "aes": "crates/ivm/src/vector/metal_aes.rs",
+    "merkle": "crates/ivm/src/vector/metal_merkle.rs",
 }
 
 
@@ -67,10 +68,25 @@ def _require_order(source: str, anchors: tuple[str, ...], label: str) -> None:
         cursor = position + len(_compact(anchor))
 
 
+def _require_fallible_call(source: str, name: str, label: str) -> None:
+    """Require the sole real call to propagate refusal before reading output."""
+    masked = mask_rust_comments(source)
+    matches = list(re.finditer(r"\b" + re.escape(name) + r"\s*\(", masked))
+    _require(len(matches) == 1, label + " lacks one actual call: " + name)
+    end, depth = matches[0].end(), 1
+    while end < len(masked) and depth:
+        depth += (masked[end] == "(") - (masked[end] == ")")
+        end += 1
+    _require(depth == 0 and masked[end:].lstrip().startswith("?;"),
+             label + " must propagate refusal: " + name)
+
+
 def _validate_sources(sources: dict[str, str]) -> None:
     """Require real funded backing, physical completion and public GPU geometry."""
     _require(set(sources) == set(OWNER_PATHS), "Metal owner inventory differs")
-    vector, buffers, runtime, aes = (sources[name] for name in ("vector", "buffers", "runtime", "aes"))
+    vector, buffers, runtime, aes, merkle = (
+        sources[name] for name in ("vector", "buffers", "runtime", "aes", "merkle")
+    )
     for module in ("metal_buffers", "metal_runtime"):
         _require(vector.count("mod " + module + ";") == 1, "Metal module edge differs: " + module)
     _require(vector.count('#[path = "vector/metal_aes.rs"]\nmod metal_aes;') == 1,
@@ -153,10 +169,43 @@ def _validate_sources(sources: dict[str, str]) -> None:
     ), "bounded AES batch")
     _require("blocks != destination.len() || !buffer.usable()" in _function(aes, "copy_into"),
              "AES publishes a foreign, failed or unbounded output")
-    merkle = _function(vector, "metal_sha256_pairs_reduce_with_receipt")
-    _require(merkle.count("if canonical_merkle {") == 3, "canonical Merkle marker sites differ")
-    _require("node[31] |= 1;" in merkle and merkle.count("root[31] |= 1;") == 2,
+    _require(vector.count('#[path = "vector/metal_merkle.rs"]\nmod metal_merkle;') == 1,
+             "Merkle source owner edge differs")
+    _require_order(_function(runtime, "metal_root_from_bytes_auto"), (
+        "select(&MERKLE_ROOT_PROGRESS", "run(|| metal_merkle::root_from_bytes(data, chunk))",
+    ), "selected canonical Merkle producer")
+    _require_order(_function(merkle, "root_from_bytes"), (
+        "metal_runtime::current_selection()?", "chunk_leaves(data, chunk)?",
+        "metal_merkle_root(&digests)?", "drop(digests)",
+        "Readback {", "selection,", "value: root,", ".publish()",
+    ), "canonical root readback owner")
+    _require("reduce(digests,true)" in _compact(_function(merkle, "metal_merkle_root")),
+             "canonical Merkle producer lost its domain policy")
+    _require("reduce(digests,false)" in _compact(_function(merkle, "metal_sha256_pairs_reduce")),
+             "raw SHA pair producer gained canonical Merkle markers")
+    reduction = _function(merkle, "reduce")
+    attempt = _function(merkle, "reduce_attempt")
+    _require("reduce_attempt(digests,canonical_merkle)?.publish()" in _compact(reduction),
+             "Merkle reduction bypassed accepted readback")
+    _require(reduction.count("if canonical_merkle {") == 1
+             and attempt.count("if canonical_merkle {") == 2,
+             "canonical Merkle marker sites differ")
+    _require(reduction.count("root[31] |= 1;") == 1
+             and attempt.count("node[31] |= 1;") == 1
+             and attempt.count("root[31] |= 1;") == 1,
              "canonical Merkle domain markers missing")
+    _require_fallible_call(attempt, "metal_dispatch", "accepted Merkle completion")
+    _require_order(attempt, (
+        "metal_runtime::current_selection()?", "metal_dispatch(",
+        "Some(MetalKernel::Sha256Pairs)", "std::slice::from_raw_parts(",
+        "root.copy_from_slice(&cur[..32])", "Some(Readback {", "selection,", "value: root,",
+    ), "completed Merkle bytes retain original physical owner")
+    _require("self.selection.run(||self.value)" in _compact(_function(merkle, "publish")),
+             "Merkle readback bypassed original owner acceptance")
+    _require_order(_function(runtime, "run"), (
+        "!metal_runtime_allowed()", "!record_allowed(&self.lease)",
+        "self.lease.value().is_none()", "return None;", "bind(&self.lease, || Some(call()))",
+    ), "original physical owner acceptance")
     for retired in ("newLibraryWithSource_options_error", "bit_pipe_compile_count"):
         _require(retired not in vector, "retired Metal implementation returned")
 
@@ -183,7 +232,7 @@ class IvmVectorMetalCompactionSourceTest(unittest.TestCase):
             ("vector", "if gpu_launch_eligible(FIXED_VECTOR_TRANSFER_BYTES)", "if true"),
             ("vector", "transfer_bytes >= MIN_GPU_TRANSFER_BYTES", "transfer_bytes < MIN_GPU_TRANSFER_BYTES"),
             ("vector", "crate::cuda::vadd32_cuda_into", "crate::cuda::wrong_order"),
-            ("vector", "node[31] |= 1;", "node[31] |= 0;"),
+            ("merkle", "node[31] |= 1;", "node[31] |= 0;"),
             ("buffers", "buffer.pending.set(true)", "buffer.pending.set(false)"),
             ("buffers", "MTLCommandBufferStatus::Completed => true", "MTLCommandBufferStatus::Completed => false"),
             ("buffers", "self.health.quarantine(true)", "self.health.quarantine(false)"),
@@ -199,6 +248,44 @@ class IvmVectorMetalCompactionSourceTest(unittest.TestCase):
                 changed[owner] = changed[owner].replace(old, new, 1)
                 with self.assertRaises(GuardError):
                     _validate_sources(changed)
+
+    def test_merkle_readback_call_edges_are_rejected(self) -> None:
+        _validate_sources(self.sources)
+        changed = dict(self.sources)
+        changed["vector"] = changed["vector"].replace(
+            'mod metal_merkle;', 'mod disconnected_merkle;', 1
+        )
+        with self.assertRaisesRegex(GuardError, "Merkle source owner edge"):
+            _validate_sources(changed)
+        mutations = (
+            ("runtime", "metal_root_from_bytes_auto", "metal_merkle::root_from_bytes(data, chunk)",
+             "metal_merkle::disconnected_root(data, chunk)"),
+            ("merkle", "root_from_bytes", "metal_merkle_root(&digests)?",
+             "metal_sha256_pairs_reduce(&digests)?"),
+            ("merkle", "metal_merkle_root", "reduce(digests, true)", "reduce(digests, false)"),
+            ("merkle", "metal_sha256_pairs_reduce", "reduce(digests, false)", "reduce(digests, true)"),
+            ("merkle", "reduce", "root[31] |= 1;", "root[31] |= 0;"),
+            ("merkle", "reduce_attempt", "root[31] |= 1;", "root[31] |= 0;"),
+            ("merkle", "reduce", "reduce_attempt(digests, canonical_merkle)?.publish()",
+             "Some(reduce_attempt(digests, canonical_merkle)?.value)"),
+            ("merkle", "reduce_attempt", "let selection = metal_runtime::current_selection()?;",
+             "let selection = foreign_selection()?;"),
+            ("merkle", "reduce_attempt", "Some(MetalKernel::Sha256Pairs)", "None"),
+            ("merkle", "reduce_attempt", 'Some(MetalKernel::Sha256Pairs),\n                )?;',
+             'Some(MetalKernel::Sha256Pairs),\n                );'),
+            ("merkle", "publish", "self.selection.run(|| self.value)", "Some(self.value)"),
+            ("runtime", "run", "!record_allowed(&self.lease)", "false"),
+        )
+        for owner, function, old, new in mutations:
+            with self.subTest(owner=owner, function=function, marker=old):
+                body = _function(self.sources[owner], function)
+                self.assertEqual(body.count(old), 1)
+                changed = dict(self.sources)
+                changed[owner] = changed[owner].replace(body, body.replace(old, new, 1), 1)
+                with self.assertRaises(GuardError):
+                    _validate_sources(changed)
+        with self.assertRaisesRegex(GuardError, "owner inventory"):
+            _validate_sources({name: text for name, text in self.sources.items() if name != "merkle"})
 
     def test_missing_owner_is_rejected(self) -> None:
         with self.assertRaisesRegex(GuardError, "owner inventory"):

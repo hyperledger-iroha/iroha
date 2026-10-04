@@ -4659,6 +4659,7 @@ dependencies = [
  "iroha_torii_shared",
  "irohad_lib",
  "ivm",
+ "ivm_abi",
  "kotodama_lang",
  "mint_rose_trigger_data_model",
  "nonzero_ext",
@@ -4829,6 +4830,7 @@ dependencies = [
  "iroha_wallet",
  "iroha_zkp_halo2",
  "ivm",
+ "ivm_abi",
  "kotodama_lang",
  "norito",
  "pathdiff",
@@ -4919,7 +4921,6 @@ dependencies = [
  "iroha_primitives",
  "iroha_torii_shared",
  "iroha_version",
- "ivm",
  "ivm_abi",
  "ivm_artifact_admission",
  "kotodama_lang",
@@ -4982,6 +4983,7 @@ dependencies = [
  "iroha_version",
  "iroha_zkp_halo2",
  "ivm",
+ "ivm_abi",
  "kaigi_zk",
  "kotodama_lang",
  "mv",
@@ -5440,6 +5442,7 @@ dependencies = [
  "iroha_torii_shared",
  "iroha_version",
  "ivm",
+ "ivm_abi",
  "kaigi_zk",
  "kotodama_lang",
  "napi",
@@ -6001,6 +6004,7 @@ dependencies = [
  "iroha_version",
  "iroha_zkp_halo2",
  "ivm",
+ "ivm_abi",
  "jsonwebtoken",
  "kotodama_lang",
  "libc",
@@ -6346,10 +6350,12 @@ dependencies = [
 name = "ivm_abi"
 version = "2.0.0-rc.2.0"
 dependencies = [
+ "hex",
  "iroha_allocation",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_model_base",
+ "iroha_primitives",
  "norito",
 ]
 

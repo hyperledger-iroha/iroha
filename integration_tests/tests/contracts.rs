@@ -1217,7 +1217,7 @@ fn dynamic_counter_call_intent(
         .find(|descriptor| descriptor.name == entrypoint)
         .and_then(|descriptor| descriptor.argument_schema.as_ref())
         .unwrap_or_else(|| panic!("missing argument schema for `{entrypoint}`"));
-    let argument_bytes = ivm::encode_argument_record_from_json(
+    let argument_bytes = ivm_abi::arguments::encode_argument_record_from_json(
         schema,
         &iroha_primitives::json::Json::from(payload.clone()),
     )

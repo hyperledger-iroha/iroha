@@ -133,8 +133,7 @@ pub use crate::field_dispatch::{clear_field_impl_for_tests, set_field_impl_for_t
 pub use crate::stack_policy::IvmStackPolicy;
 // Publicly expose gas schedule helper for tests and tooling.
 pub use crate::argument_record::{
-    PreparedArgumentRecord, argument_record_decode_count, argument_record_from_json,
-    encode_argument_record_from_json, prepare_argument_record_with_gas_limit,
+    PreparedArgumentRecord, argument_record_decode_count, prepare_argument_record_with_gas_limit,
     reset_argument_record_decode_count, validate_argument_record,
 };
 pub use crate::gas::{cost_of, cost_of_with_vector_len};

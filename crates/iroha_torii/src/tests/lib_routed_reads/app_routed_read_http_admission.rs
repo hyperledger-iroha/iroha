@@ -158,7 +158,7 @@ mod app_routed_read_http_admission_tests {
                 app_routed_read_http_endpoint(entry.route.stable_route_id())
                     .expect("catalog route must resolve")
                     .endpoint,
-                entry.endpoint
+                AppReadHttpIdentity::Routed(entry.endpoint)
             );
             match entry.decoder {
                 AppRoutedReadHttpDecoder::None
@@ -174,8 +174,114 @@ mod app_routed_read_http_admission_tests {
                 }
             }
         }
-        assert_eq!(route_ids.len(), 46);
+        assert_eq!(route_ids.len(), expected.len());
     }
+    #[test]
+    fn every_direct_collection_get_and_post_has_the_same_closed_owner_path() {
+        let mut ids = std::collections::BTreeSet::new();
+        for entry in APP_LOCAL_COLLECTION_HTTP_ROUTES_V1 {
+            assert!(ids.insert(entry.route.stable_route_id()));
+            let resolved = app_routed_read_http_endpoint(entry.route.stable_route_id()).unwrap();
+            assert_eq!(resolved.endpoint, entry.endpoint);
+            assert_eq!(resolved.decoder, entry.decoder);
+            assert_eq!(entry.decoder.typed_request_name(), Some("ListQuery"));
+            assert!(
+                APP_ROUTED_READ_HTTP_ENDPOINTS_V1
+                    .iter()
+                    .all(|routed| routed.route.stable_route_id() != entry.route.stable_route_id())
+            );
+        }
+        for pair in APP_LOCAL_COLLECTION_HTTP_ROUTES_V1.chunks_exact(2) {
+            assert_eq!(pair[0].endpoint, pair[1].endpoint);
+            assert_eq!(
+                pair[0].decoder,
+                AppRoutedReadHttpDecoder::Query("ListQuery")
+            );
+            assert_eq!(pair[1].decoder, AppRoutedReadHttpDecoder::Json("ListQuery"));
+        }
+        assert_eq!(ids.len(), 32);
+    }
+
+    #[tokio::test]
+    async fn collection_execution_refuses_configuration_without_an_owner() {
+        let app = mk_app_state_for_tests();
+        assert!(current_routed_read_memory_envelope(&app).is_err());
+        assert!(torii_routed_read_request_decode_plan(&app).is_err());
+        assert!(routing::collection_sources::collection_execution_limits(Some(&app)).is_err());
+        assert!(torii_routed_read_request_preflight_plan(&app).is_ok());
+    }
+
+    #[tokio::test]
+    async fn every_direct_collection_rejects_busy_memory_before_body_polling() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app).unwrap().query_queue_timeout = Duration::ZERO;
+        let _occupied = occupy_fanout_pool(&app);
+        for entry in APP_LOCAL_COLLECTION_HTTP_ROUTES_V1 {
+            let polls = Arc::new(AtomicUsize::new(0));
+            let request = if entry.decoder.body_type_name().is_some() {
+                json_request(entry.route.path(), pending_body(&polls))
+            } else {
+                Request::builder()
+                    .uri(entry.route.path())
+                    .body(Body::empty())
+                    .unwrap()
+            };
+            let response = admission_router(Arc::clone(&app), entry.route, false)
+                .oneshot(request)
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::TOO_MANY_REQUESTS,
+                "{}",
+                entry.route.stable_route_id()
+            );
+            assert_eq!(polls.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn detached_collection_worker_keeps_its_actual_memory_owner() {
+        let app = mk_app_state_for_tests();
+        let before = app.query_fanout_inflight.available_bytes();
+        let owner = try_acquire_new_query_fanout_memory(&app).unwrap();
+        let admission = COLLECTION_READ_MEMORY_RESERVATION
+            .scope(owner.clone(), acquire_query_admission(app.as_ref(), true))
+            .await
+            .unwrap();
+        drop(owner);
+        assert_eq!(
+            app.query_fanout_inflight.available_bytes(),
+            before - 48_000_000
+        );
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (finish_tx, finish_rx) = std::sync::mpsc::channel();
+        let work = tokio::spawn(routing::run_admitted_blocking(
+            admission,
+            "test worker",
+            move || {
+                let _ = started_tx.send(());
+                finish_rx.recv().unwrap();
+                Ok(())
+            },
+        ));
+        started_rx.await.unwrap();
+        work.abort();
+        let _ = work.await;
+        assert_eq!(
+            app.query_fanout_inflight.available_bytes(),
+            before - 48_000_000
+        );
+        finish_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while app.query_fanout_inflight.available_bytes() != before {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("completed worker returns its owner");
+    }
+
     #[test]
     fn catalog_bounds_axum_url_parameter_topology() {
         let mut maximum = 0;
@@ -268,7 +374,7 @@ mod app_routed_read_http_admission_tests {
         let reservation = try_acquire_new_query_fanout_memory(&app).expect("test reservation");
         let admission = AppRoutedReadHttpAdmission {
             reservation: reservation.clone(),
-            decode_plan: torii_routed_read_request_decode_plan(&app).expect("test request plan"),
+            decode_plan: torii_routed_read_request_preflight_plan(&app).expect("test request plan"),
         };
         let extension = APP_ROUTED_READ_HTTP_ADMISSION
             .scope(admission, async {
@@ -479,7 +585,7 @@ mod app_routed_read_http_admission_tests {
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(polls.load(Ordering::SeqCst), 0);
         assert_eq!(app.query_fanout_inflight.available_permits(), occupied);
-        let plan = torii_routed_read_request_decode_plan(&app).expect("test request plan");
+        let plan = torii_routed_read_request_preflight_plan(&app).expect("test request plan");
         let admission = AppRoutedReadHttpAdmission {
             reservation: reservation.clone(),
             decode_plan: plan,
@@ -688,7 +794,7 @@ mod app_routed_read_http_admission_tests {
     fn dynamic_raw_target_exact_and_plus_one_precede_permit_acquisition() {
         let app = mk_app_state_for_tests();
         let before = app.query_fanout_inflight.available_permits();
-        let mut plan = torii_routed_read_request_decode_plan(&app).expect("test request plan");
+        let mut plan = torii_routed_read_request_preflight_plan(&app).expect("test request plan");
         // `http::Uri` itself has a u16-sized textual ceiling. A small synthetic
         // admission cap exercises exact/+1 accounting without hitting that
         // independent parser boundary first.

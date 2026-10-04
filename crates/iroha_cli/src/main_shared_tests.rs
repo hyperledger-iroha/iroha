@@ -227,7 +227,7 @@ fn cli_quantities_accept_canonical_boundaries_and_reject_signed_or_oversized_val
         assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
     }
 }
-fn test_context(output_format: CliOutputFormat) -> PrintJsonContext<Vec<u8>, Vec<u8>> {
+pub(crate) fn test_context(output_format: CliOutputFormat) -> PrintJsonContext<Vec<u8>, Vec<u8>> {
     PrintJsonContext {
         write: Vec::new(),
         err_write: Vec::new(),

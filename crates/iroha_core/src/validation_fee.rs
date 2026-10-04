@@ -1203,7 +1203,7 @@ pub(crate) fn encode_conversion_quantity_state_value(
 ) -> Result<Vec<u8>, ivm::VMError> {
     let schema_payload = norito::to_bytes(&conversion_quantity_state_schema())
         .map_err(|_| ivm::VMError::NoritoInvalid)?;
-    let envelope = ivm::numeric_tlv::encode_quantity(value)?;
+    let envelope = ivm_abi::numeric_tlv::encode_quantity(value)?;
     norito::to_bytes(&StateValueRecordV1 {
         schema_hash: state_value_schema_hash_v1(&schema_payload),
         atoms: vec![StateValueAtomV1::Pointer(envelope)],

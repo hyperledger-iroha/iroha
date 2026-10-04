@@ -6,6 +6,7 @@ import importlib.util
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -71,10 +72,10 @@ def initialize_tracked_release_surface(destination: Path) -> None:
         "cliff.toml": '[changelog]\nbody = "reviewed"\n',
         "flake.lock": '{"nodes":{},"root":"root","version":7}\n',
         "flake.nix": "{ outputs = _: {}; }\n",
-        "IrohaSwift/IrohaSwift.podspec": "Pod::Spec.new do |spec|\nend\n",
+        "IrohaSwift/VERSION": "0.1.0\n",
         "IrohaSwift/Package.swift": "// swift-tools-version: 6.0\n",
         "IrohaSwift/Tests/IrohaSwiftTests/ArtifactTests.swift": "// reviewed\n",
-        "crates/connect_norito_bridge/NoritoBridge.podspec.template": "Pod::Spec.new do |spec|\nend\n",
+        "scripts/validate_norito_bridge_archive.py": "# reviewed SwiftPM archive owner\n",
         "crates/demo/Cargo.toml": '[package]\nname = "demo"\nversion = "0.1.0"\n',
         "crates/demo/build.rs": 'fn main() { println!("cargo:rerun-if-changed=build_input.txt"); }\n',
         "crates/demo/build_input.txt": "reviewed build input\n",
@@ -140,6 +141,140 @@ def test_trusted_release_surface_matches_reviewed_seal() -> None:
         checker.trusted_release_surface_digest(REPO)
         == checker.TRUSTED_RELEASE_SURFACE_SHA256
     )
+
+
+def load_native_pin_reference():
+    """Load the reviewed native pin grammar for regression comparison only."""
+
+    path = REPO / "scripts/norito_bridge_source_seal.py"
+    spec = importlib.util.spec_from_file_location("native_pin_reference", path)
+    assert spec is not None and spec.loader is not None
+    owner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = owner
+    spec.loader.exec_module(owner)
+    return owner
+
+
+def initialize_native_pin_surface(destination: Path) -> tuple[Path, bytes]:
+    """Add the real loader and a non-executable candidate helper to the fixture."""
+
+    initialize_tracked_release_surface(destination)
+    relative = Path("IrohaSwift/Sources/IrohaSwift/NativeBridge.swift")
+    original = (REPO / relative).read_bytes()
+    loader = destination / relative
+    loader.parent.mkdir(parents=True, exist_ok=True)
+    loader.write_bytes(original)
+    # The release guard must use its own pure grammar, never execute this
+    # candidate-controlled helper before deciding whether the source is trusted.
+    (destination / "scripts/norito_bridge_source_seal.py").write_text(
+        'raise AssertionError("candidate native pin helper executed before admission")\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "."], cwd=destination, check=True)
+    return loader, original
+
+
+def test_generated_native_pin_projection_preserves_reviewed_release_surface(
+    tmp_path: Path,
+) -> None:
+    checker = load_checker()
+    native = load_native_pin_reference()
+    loader, original = initialize_native_pin_surface(tmp_path)
+    projected = native.rewrite_swift_native_bridge_hash_pins(
+        original,
+        {
+            "macos-arm64_x86_64": "1" * 64,
+            "ios-arm64": "2" * 64,
+            "ios-arm64_x86_64-simulator": "3" * 64,
+        },
+    )
+    assert projected != original
+    relative = loader.relative_to(tmp_path)
+    normalized = native.normalize_swift_native_bridge_hash_pins(original)
+    assert checker._release_surface_contents(relative, original) == normalized
+    assert checker._release_surface_contents(relative, projected) == normalized
+    baseline = checker.trusted_release_surface_digest(tmp_path)
+    loader.write_bytes(projected)
+    checker.validate_trusted_release_surface(tmp_path, baseline)
+    assert checker.trusted_release_surface_digest(tmp_path) == baseline
+
+    # Changing a real hash-verification branch remains source drift, even when
+    # the generated pin values themselves are a valid mechanical projection.
+    changed = projected.replace(
+        b"if actualHash != expectedHash {", b"if actualHash == expectedHash {", 1
+    )
+    assert changed != projected
+    loader.write_bytes(changed)
+    assert_seal_rejects(checker, tmp_path, baseline)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "missing-block", "duplicate-block", "wrong-key", "duplicate-key",
+        "uppercase-digest", "short-digest", "extra-entry", "trailing-comma",
+        "malformed-duplicate-block", "reordered-keys", "digest-outside-block",
+    ),
+)
+def test_native_pin_normalization_refuses_every_non_pin_loader_change(
+    tmp_path: Path, mutation: str,
+) -> None:
+    checker = load_checker()
+    native = load_native_pin_reference()
+    loader, original = initialize_native_pin_surface(tmp_path)
+    block, matches = native._swift_native_bridge_hash_block(original)
+    body = block.group("body")
+    block_bytes = block.group(0)
+    first_digest = matches[0].group("digest")
+    baseline = checker.trusted_release_surface_digest(tmp_path)
+    if mutation == "missing-block":
+        changed = original.replace(block_bytes, b"", 1)
+    elif mutation == "duplicate-block":
+        changed = original + b"\n" + block_bytes + b"\n"
+    elif mutation == "wrong-key":
+        changed = original.replace(b'"ios-arm64":', b'"ios-armv7":', 1)
+    elif mutation == "duplicate-key":
+        changed = original.replace(b'"ios-arm64":', b'"macos-arm64_x86_64":', 1)
+    elif mutation == "uppercase-digest":
+        changed = original.replace(first_digest, b"A" * 64, 1)
+    elif mutation == "short-digest":
+        changed = original.replace(first_digest, first_digest[:-1], 1)
+    elif mutation == "extra-entry":
+        extra = b'        "other-slice": "' + (b"4" * 64) + b'",\n'
+        changed = original.replace(body, extra + body, 1)
+    elif mutation == "trailing-comma":
+        changed = original.replace(body, body[:-1] + b",\n", 1)
+    elif mutation == "malformed-duplicate-block":
+        changed = original + b"\n" + block_bytes.replace(b'"ios-arm64":', b'"other":') + b"\n"
+    elif mutation == "reordered-keys":
+        lines = body.splitlines(keepends=True)
+        changed = original.replace(body, lines[1] + lines[0] + lines[2], 1)
+    elif mutation == "digest-outside-block":
+        changed = original + b'\n// "ios-arm64": "' + (b"4" * 64) + b'"\n'
+    else:  # pragma: no cover - the parameter inventory above is closed.
+        raise AssertionError(mutation)
+    assert changed != original
+    loader.write_bytes(changed)
+    assert_seal_rejects(checker, tmp_path, baseline)
+
+
+def test_native_pin_normalization_is_confined_to_the_exact_loader_path(
+    tmp_path: Path,
+) -> None:
+    checker = load_checker()
+    native = load_native_pin_reference()
+    _loader, original = initialize_native_pin_surface(tmp_path)
+    other = tmp_path / "IrohaSwift/Sources/OtherSDK/NativeBridge.swift"
+    other.parent.mkdir(parents=True)
+    other.write_bytes(original)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    baseline = checker.trusted_release_surface_digest(tmp_path)
+    projected = native.rewrite_swift_native_bridge_hash_pins(
+        original, {key: "5" * 64 for key in native.SWIFT_NATIVE_BRIDGE_HASH_KEYS}
+    )
+    assert checker._release_surface_contents(other.relative_to(tmp_path), projected) == projected
+    other.write_bytes(projected)
+    assert_seal_rejects(checker, tmp_path, baseline)
 
 
 @pytest.mark.parametrize("entrypoint", ["shipping_profiles", "declared_shipping_targets"])
@@ -495,28 +630,17 @@ def test_trusted_release_surface_seal_rejects_drift_addition_and_removal(
     assert_seal_rejects(checker, tmp_path, baseline)
     swift_test.write_bytes(swift_test_original)
 
-    source_podspec = tmp_path / "IrohaSwift" / "IrohaSwift.podspec"
-    source_podspec_original = source_podspec.read_bytes()
-    source_podspec.write_bytes(
-        source_podspec_original
-        + b"spec.prepare_command = 'cp /tmp/fixture artifact'\n"
-    )
+    swift_version = tmp_path / "IrohaSwift" / "VERSION"
+    swift_version_original = swift_version.read_bytes()
+    swift_version.write_bytes(b"0.1.1\n")
     assert_seal_rejects(checker, tmp_path, baseline)
-    source_podspec.write_bytes(source_podspec_original)
+    swift_version.write_bytes(swift_version_original)
 
-    binary_podspec_template = (
-        tmp_path
-        / "crates"
-        / "connect_norito_bridge"
-        / "NoritoBridge.podspec.template"
-    )
-    binary_podspec_template_original = binary_podspec_template.read_bytes()
-    binary_podspec_template.write_bytes(
-        binary_podspec_template_original
-        + b"spec.prepare_command = 'cp /tmp/fixture artifact'\n"
-    )
+    archive_owner = tmp_path / "scripts" / "validate_norito_bridge_archive.py"
+    archive_owner_original = archive_owner.read_bytes()
+    archive_owner.write_bytes(archive_owner_original + b"# bypass archive source authentication\n")
     assert_seal_rejects(checker, tmp_path, baseline)
-    binary_podspec_template.write_bytes(binary_podspec_template_original)
+    archive_owner.write_bytes(archive_owner_original)
 
     csharp_project = (
         tmp_path
@@ -688,10 +812,10 @@ def test_trusted_release_surface_covers_all_tracked_release_support() -> None:
         Path("cliff.toml"),
         Path("dashboards/alerts/fastpq_acceleration_rules.yml"),
         Path("dashboards/alerts/tests/fastpq_acceleration_rules.test.yml"),
-        Path("IrohaSwift/IrohaSwift.podspec"),
+        Path("IrohaSwift/VERSION"),
         Path("IrohaSwift/Package.swift"),
         Path("IrohaSwift/Package.resolved"),
-        Path("crates/connect_norito_bridge/NoritoBridge.podspec.template"),
+        Path("scripts/validate_norito_bridge_archive.py"),
         Path("crates/build-support/script.rs"),
         Path("crates/build-support/src/lib.rs"),
         Path("crates/sorafs_manifest/include/sorafs_reference.h"),

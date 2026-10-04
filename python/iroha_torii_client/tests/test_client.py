@@ -3345,7 +3345,7 @@ def test_call_contract_preserves_shared_rust_argument_record_fixture() -> None:
     )
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
     assert fixture["codec"] == "EntrypointArgumentRecordV1"
-    assert fixture["generator"] == "ivm::encode_argument_record_from_json"
+    assert fixture["generator"] == "ivm_abi::arguments::encode_argument_record_from_json"
     assert re.fullmatch(
         r"[0-9a-f]{64}",
         fixture["entrypoint_argument_schema_v1"]["schema_hash_hex"],

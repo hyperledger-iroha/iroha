@@ -1914,8 +1914,9 @@ prepare_python_guard_root() {
   cp "${SOURCE_ROOT}/Cargo.toml" "${root}/Cargo.toml"
   mkdir -p "${root}/python/iroha_python/iroha_python_rs"
   cp "${SOURCE_ROOT}/python/iroha_python/iroha_python_rs/Cargo.toml" "${root}/python/iroha_python/iroha_python_rs/Cargo.toml"
-  cp "${SOURCE_ROOT}/python/iroha_python/requirements-ci.lock" "${root}/python/iroha_python/requirements-ci.lock"
-  cp "${SOURCE_ROOT}/.cargo/config.toml" "${root}/.cargo/config.toml"
+  # Mutation controls own these private copies, even when source is read-only.
+  install -m 600 "${SOURCE_ROOT}/python/iroha_python/requirements-ci.lock" "${root}/python/iroha_python/requirements-ci.lock"
+  install -m 600 "${SOURCE_ROOT}/.cargo/config.toml" "${root}/.cargo/config.toml"
   write_test_rust_toolchain "${root}"
   printf '%s\n' "sealed checkout native extension fixture" >"${root}/python/iroha_python/src/iroha_python/_crypto.abi3.so"
   for relative in scripts/check_privacy_python_witness_boundary.py python/iroha_python/iroha_python_rs/src/lib.rs python/iroha_python/iroha_python_rs/src/privacy_wallet_worker.rs python/iroha_python/src/iroha_python/tx.py python/iroha_python/src/iroha_python/privacy_wallet_worker.py python/iroha_python/src/iroha_python/crypto.py python/iroha_python/src/iroha_python/__init__.py; do

@@ -42,7 +42,7 @@
     "schema_hash_hex": "bdc43c7b0a919cc87c61ebca711069a9839f9b59f7e768cb7e4a4fb9486f5891"
   },
   "fixture_version": 1,
-  "generator": "ivm::encode_argument_record_from_json",
+  "generator": "ivm_abi::arguments::encode_argument_record_from_json",
   "torii_boundary": {
     "authority": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
     "contract_alias": "argument-record-fixture::universal",

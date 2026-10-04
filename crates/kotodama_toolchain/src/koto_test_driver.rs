@@ -2114,7 +2114,9 @@ impl KotoTestHost {
         };
         let mut nested_inputs = self.base_public_inputs.clone();
         let encoded_payload = match runtime_entrypoint.argument_schema.as_ref() {
-            Some(schema) => ivm::encode_argument_record_from_json(schema, &payload).map(Some),
+            Some(schema) => {
+                ivm_abi::arguments::encode_argument_record_from_json(schema, &payload).map(Some)
+            }
             None if payload.get() == "{}" => Ok(None),
             None => Err(ivm::VMError::DecodeError),
         };
@@ -2530,7 +2532,7 @@ fn eval_state_payload_expr(expr: &Expr) -> Result<Vec<u8>, String> {
         Expr::IntLiteral(value) => (
             StateValueKindV1::Int,
             StateValueAtomV1::Pointer(
-                ivm::numeric_tlv::encode_int(value)
+                ivm_abi::numeric_tlv::encode_int(value)
                     .map_err(|error| format!("invalid int state fixture: {error:?}"))?,
             ),
         ),
@@ -2544,7 +2546,7 @@ fn eval_state_payload_expr(expr: &Expr) -> Result<Vec<u8>, String> {
             (
                 StateValueKindV1::Decimal,
                 StateValueAtomV1::Pointer(
-                    ivm::numeric_tlv::encode_decimal(value.as_numeric())
+                    ivm_abi::numeric_tlv::encode_decimal(value.as_numeric())
                         .map_err(|error| format!("invalid decimal state fixture: {error:?}"))?,
                 ),
             )
@@ -2599,14 +2601,14 @@ fn encode_state_leaf(kind: StateValueKindV1, atom: StateValueAtomV1) -> Result<V
 fn eval_envelope_expr(expr: &Expr) -> Result<Vec<u8>, String> {
     match expr {
         Expr::Bool(value) => make_norito_envelope(value),
-        Expr::IntLiteral(value) => ivm::numeric_tlv::encode_int(value)
+        Expr::IntLiteral(value) => ivm_abi::numeric_tlv::encode_int(value)
             .map_err(|error| format!("invalid int fixture value: {error:?}")),
         Expr::DecimalLiteral(raw) => {
             let value = raw
                 .replace('_', "")
                 .parse::<Numeric>()
                 .map_err(|_| format!("invalid decimal fixture value `{raw}`"))?;
-            ivm::numeric_tlv::encode_decimal(&value)
+            ivm_abi::numeric_tlv::encode_decimal(&value)
                 .map_err(|error| format!("invalid decimal fixture value: {error:?}"))
         }
         Expr::String(raw) | Expr::Ident(raw) => Ok(make_tlv(PointerType::Blob, raw.as_bytes())),

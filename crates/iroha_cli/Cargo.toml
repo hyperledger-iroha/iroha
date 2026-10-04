@@ -51,6 +51,7 @@ iroha_sccp_wallet = { workspace = true }
 iroha_petal = { workspace = true }
 iroha_primitives = { workspace = true }
 ivm = { workspace = true }
+ivm_abi = { workspace = true }
 kotodama_lang = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["sm", "consensus"] }
 iroha_core = { workspace = true, default-features = false, features = ["node"] }

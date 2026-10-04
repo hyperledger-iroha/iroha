@@ -27397,7 +27397,7 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
     let_row! { (code, mut manifest) = KotodamaCompiler::new() .compile_source_with_manifest(src) .expect("compile contract-call trigger probe") };
     let parsed = ivm::ProgramMetadata::parse(&code).expect("parse trigger contract artifact");
     let_row! { argument_schema = parsed .contract_interface .as_ref() .and_then(|interface| { interface .entrypoints .iter() .find(|entrypoint| entrypoint.name == "run") }) .and_then(|entrypoint| entrypoint.argument_schema.as_ref()) .expect("parameterized trigger callback schema") };
-    let_row! { callback_arguments = ivm::encode_argument_record_from_json( argument_schema, &Json::from(norito::json!({ "marker": "9" })), ) .expect("encode trigger callback arguments") };
+    let_row! { callback_arguments = ivm_abi::arguments::encode_argument_record_from_json( argument_schema, &Json::from(norito::json!({ "marker": "9" })), ) .expect("encode trigger callback arguments") };
     let_row! { callback_arguments = ContractArgumentRecord::try_new(callback_arguments) .expect("bounded trigger callback arguments") };
     let trigger_id: TriggerId = "contract_call_payload_probe".parse().unwrap();
     let_row! { contract_address = ContractAddress::derive(state.network_id_ref(), &ALICE_ID, 0, DataSpaceId::UNIVERSAL) .expect("derive contract address") };

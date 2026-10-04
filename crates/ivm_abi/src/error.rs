@@ -548,6 +548,29 @@ pub fn preserve_execution_deferral(error: VMError, malformed: VMError) -> VMErro
     }
 }
 
+// Numeric pointer faults have one canonical conversion for all ABI producers and runtime consumers.
+impl From<iroha_primitives::numeric_abi::NumericAbiError> for VMError {
+    fn from(error: iroha_primitives::numeric_abi::NumericAbiError) -> Self {
+        use iroha_primitives::numeric_abi::NumericAbiError;
+        let fault = match error {
+            NumericAbiError::SchemaMismatch => PointerAbiFaultV1::SchemaMismatch,
+            NumericAbiError::NonCanonicalMantissa
+            | NumericAbiError::NonCanonicalDecimal
+            | NumericAbiError::MantissaOverflow
+            | NumericAbiError::InvalidScale
+            | NumericAbiError::NegativeQuantity => PointerAbiFaultV1::NonCanonical,
+            NumericAbiError::FrameTooLarge => PointerAbiFaultV1::OversizedLength,
+            NumericAbiError::FrameTooShort
+            | NumericAbiError::InvalidHeader
+            | NumericAbiError::CompressionNotAllowed
+            | NumericAbiError::LayoutFlagsNotAllowed
+            | NumericAbiError::LengthMismatch
+            | NumericAbiError::Norito(_) => PointerAbiFaultV1::MalformedFrame,
+        };
+        VMError::PointerAbiFault(fault)
+    }
+}
+
 #[cfg(test)]
 mod execution_deferral_tests {
     use super::{ExecutionDeferral, VMError, preserve_execution_deferral};

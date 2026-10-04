@@ -5550,7 +5550,7 @@ mod tests_null_decode {
             .into_quantity();
         assert_eq!(decoded, Quantity::from(41_u64));
         let canonical =
-            crate::numeric_tlv::encode_quantity(&decoded).expect("canonical quantity envelope");
+            ivm_abi::numeric_tlv::encode_quantity(&decoded).expect("canonical quantity envelope");
         assert_eq!(
             vm.memory
                 .load_region(vm.register(10), u64::try_from(canonical.len()).unwrap())
@@ -6238,7 +6238,7 @@ mod tests_null_decode {
         vm.set_register(10, alice_ptr);
         vm.set_register(11, bob_ptr);
         vm.set_register(12, asset_ptr);
-        let amount_tlv = crate::numeric_tlv::encode_quantity(&Quantity::from(10_u64))
+        let amount_tlv = ivm_abi::numeric_tlv::encode_quantity(&Quantity::from(10_u64))
             .expect("encode quantity pointer envelope");
         let amount_ptr = vm.alloc_input_tlv(&amount_tlv).expect("alloc amount");
         vm.set_register(13, amount_ptr);
@@ -6386,7 +6386,7 @@ mod tests_null_decode {
         vm.set_host(host);
         let value = iroha_primitives::bigint::BigInt::from_twos_bytes(&[0x7f; 64])
             .expect("wide signed integer");
-        let inner = crate::numeric_tlv::encode_int(&value).expect("Int pointer");
+        let inner = ivm_abi::numeric_tlv::encode_int(&value).expect("Int pointer");
         let outer = make_tlv(PointerType::NoritoBytes, &inner);
         let ptr = vm.alloc_input_tlv(&outer).expect("allocate wrapped Int");
         vm.set_register(10, ptr);
@@ -6410,7 +6410,7 @@ mod tests_null_decode {
         vm.set_host(host);
         load_int_state_map_schema(&mut vm, "orders");
         let value = iroha_primitives::bigint::BigInt::from_i128(42);
-        let int_envelope = crate::numeric_tlv::encode_int(&value).expect("Int pointer");
+        let int_envelope = ivm_abi::numeric_tlv::encode_int(&value).expect("Int pointer");
         let int_ptr = vm.alloc_input_tlv(&int_envelope).expect("allocate Int");
         vm.set_register(10, int_ptr);
         let encode_gas = call_syscall_with_quote(&mut vm, syscalls::SYSCALL_POINTER_TO_NORITO)
@@ -6436,7 +6436,7 @@ mod tests_null_decode {
             .alloc_input_tlv(&make_tlv(PointerType::Name, &base_bytes))
             .expect("alloc base");
         let key_bytes =
-            crate::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(7))
+            ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(7))
                 .expect("encode canonical int key");
         let key_ptr = vm
             .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &key_bytes))

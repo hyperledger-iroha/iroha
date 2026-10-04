@@ -30,8 +30,8 @@ fn argument_record_tlv(entrypoint: &ivm::EmbeddedEntrypointDescriptor, payload: 
         .argument_schema
         .as_ref()
         .expect("parameterized VRF entrypoint argument schema");
-    let record =
-        ivm::encode_argument_record_from_json(schema, payload).expect("encode argument record");
+    let record = ivm_abi::arguments::encode_argument_record_from_json(schema, payload)
+        .expect("encode argument record");
     tlv(PointerType::NoritoBytes, &record)
 }
 struct ObservedVrfHost {

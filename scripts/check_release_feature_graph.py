@@ -498,8 +498,60 @@ def trusted_release_surface_paths(repo: Path) -> tuple[Path, ...]:
     return ordered
 
 
+def _normalize_swift_native_bridge_hash_pins(contents: bytes) -> bytes:
+    """Normalize only the three canonical generated Swift fallback digests.
+
+    Keep this byte grammar aligned with the native source-seal owner. Importing
+    that candidate-owned module here would execute it before release admission.
+    Native artifact validation independently authenticates all three pin values;
+    every other loader byte remains part of the reviewed source digest.
+    """
+
+    block_pattern = re.compile(
+        rb'^    private static let expectedHashes: \[String: String\] = \[\n'
+        rb'(?P<body>(?:[ \t]+"(?:macos-arm64_x86_64|ios-arm64|ios-arm64_x86_64-simulator)"'
+        rb': "[0-9a-f]{64}",\n){2}'
+        rb'[ \t]+"(?:macos-arm64_x86_64|ios-arm64|ios-arm64_x86_64-simulator)"'
+        rb': "[0-9a-f]{64}"\n)'
+        rb'^    \]$',
+        re.MULTILINE,
+    )
+    pin_pattern = re.compile(
+        rb'^(?P<prefix>[ \t]+)"(?P<key>macos-arm64_x86_64|ios-arm64|ios-arm64_x86_64-simulator)"'
+        rb': "(?P<digest>[0-9a-f]{64})"(?P<suffix>,?)$',
+        re.MULTILINE,
+    )
+    blocks = list(block_pattern.finditer(contents))
+    if len(blocks) != 1:
+        raise RuntimeError(
+            "trusted release source surface drifted: NativeBridge.swift must "
+            "contain exactly one canonical expectedHashes block"
+        )
+    block = blocks[0]
+    body = block.group("body")
+    matches = list(pin_pattern.finditer(body))
+    if (
+        len(matches) != 3
+        or {match.group("key") for match in matches}
+        != {b"macos-arm64_x86_64", b"ios-arm64", b"ios-arm64_x86_64-simulator"}
+        or [match.group("suffix") for match in matches] != [b",", b",", b""]
+    ):
+        raise RuntimeError(
+            "trusted release source surface drifted: NativeBridge.swift must "
+            "contain exactly one canonical fallback hash for every Apple artifact slice"
+        )
+    for match in reversed(matches):
+        start, end = match.span("digest")
+        body = body[:start] + (b"0" * 64) + body[end:]
+    start, end = block.span("body")
+    return contents[:start] + body + contents[end:]
+
+
 def _release_surface_contents(relative: Path, contents: bytes) -> bytes:
-    """Normalize the seal value embedded in this guard before hashing it."""
+    """Normalize exact generated pins and this guard's own embedded seal."""
+
+    if relative == Path("IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"):
+        return _normalize_swift_native_bridge_hash_pins(contents)
 
     if relative != Path("scripts/check_release_feature_graph.py"):
         return contents

@@ -51,7 +51,7 @@ fn wrong_type_for_asset_def_rejected() {
     let tlv_from = tlv_envelope(PointerType::AccountId as u16, &from);
     let tlv_to = tlv_envelope(PointerType::AccountId as u16, &to);
     let tlv_wrong = tlv_envelope(PointerType::Name as u16, &wrong);
-    let tlv_amount = ivm::numeric_tlv::encode_quantity(&Quantity::from(1_u64))
+    let tlv_amount = ivm_abi::numeric_tlv::encode_quantity(&Quantity::from(1_u64))
         .expect("encode quantity pointer envelope");
     let align8 = |n: u64| (n + 7) & !7;
     let off_from = 0u64;

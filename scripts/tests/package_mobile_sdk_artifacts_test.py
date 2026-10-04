@@ -21,11 +21,7 @@ import zipfile
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_OWNER = REPOSITORY_ROOT / "scripts/package_mobile_sdk_artifacts.sh"
 LOCK_RUNNER = REPOSITORY_ROOT / "scripts/exec_with_file_lock.py"
-PODSPEC_RENDERER = REPOSITORY_ROOT / "scripts/render_norito_bridge_podspec.py"
-PODSPEC_TEMPLATE = (
-    REPOSITORY_ROOT
-    / "crates/connect_norito_bridge/NoritoBridge.podspec.template"
-)
+ARCHIVE_VALIDATOR = REPOSITORY_ROOT / "scripts/validate_norito_bridge_archive.py"
 VERSION = "1.0.0"
 
 
@@ -135,13 +131,10 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
             encoding="utf-8",
         )
         shutil.copy2(LOCK_RUNNER, scripts / LOCK_RUNNER.name)
-        shutil.copy2(PODSPEC_RENDERER, scripts / PODSPEC_RENDERER.name)
+        shutil.copy2(ARCHIVE_VALIDATOR, scripts / ARCHIVE_VALIDATOR.name)
         swift_root = self.repository / "IrohaSwift"
         swift_root.mkdir()
         (swift_root / "VERSION").write_text(f"{VERSION}\n", encoding="ascii")
-        template_parent = self.repository / "crates/connect_norito_bridge"
-        template_parent.mkdir(parents=True)
-        shutil.copy2(PODSPEC_TEMPLATE, template_parent / PODSPEC_TEMPLATE.name)
         checker = scripts / "check_mobile_sdk_artifacts.sh"
         checker.write_text(
             textwrap.dedent(
@@ -369,6 +362,35 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
                         "NoritoBridge.xcframework/NoritoBridge.artifacts.json",
                         payload,
                     )
+                """
+            ),
+            encoding="utf-8",
+        )
+        # Package-publisher fixtures isolate native provenance/physical-tool
+        # ownership; the generic ZIP bounds/extraction remain the real code.
+        archive_fixture = owner.read_text(encoding="utf-8")
+        owner.write_text(
+            "def _validate_native_binaries(snapshot, validator):\n"
+            "    assert snapshot.name == 'NoritoBridge.xcframework'\n"
+            "    assert (snapshot / 'NoritoBridge.artifacts.json').is_file()\n\n"
+            "if __name__ == '__main__':\n" + textwrap.indent(archive_fixture, "    "),
+            encoding="utf-8",
+        )
+        (self.repository / "scripts/validate_norito_bridge_xcframework.py").write_text(
+            textwrap.dedent(
+                """\
+                import json
+                import os
+                from pathlib import Path
+
+                def validate(**arguments):
+                    root = arguments['root']
+                    assert arguments['verify_repository_provenance'] is True
+                    assert arguments['swift_loader'] == root / 'IrohaSwift/Sources/IrohaSwift/NativeBridge.swift'
+                    assert arguments['lockfile_path'] == root.parent / 'graph/Cargo.lock'
+                    assert arguments['expected_link_target'] == 'NoritoBridge.xcframework/NoritoBridge.artifacts.json'
+                    assert os.readlink(arguments['manifest_link']) == arguments['expected_link_target']
+                    return json.loads(arguments['manifest_path'].read_bytes())
                 """
             ),
             encoding="utf-8",
@@ -672,23 +694,13 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         archive = self.output / f"NoritoBridge-v{VERSION}.xcframework.zip"
         versioned_manifest = self.output / f"NoritoBridge-v{VERSION}.artifacts.json"
-        podspec = self.output / f"NoritoBridge-{VERSION}.podspec"
         self.assertTrue(
             archive.is_file()
         )
         self.assertTrue(versioned_manifest.is_file())
-        self.assertTrue(podspec.is_file())
+        self.assertEqual(len(list(self.output.iterdir())), 4)
         self.assertFalse((self.output / ".NoritoBridge.archive.lockfile").exists())
         self._assert_no_publish_stage()
-
-        rendered = podspec.read_text(encoding="utf-8")
-        archive_sha256 = hashlib.sha256(archive.read_bytes()).hexdigest()
-        self.assertIn(f"s.version          = '{VERSION}'", rendered)
-        self.assertIn(
-            f"releases/download/v{VERSION}/NoritoBridge-v{VERSION}.xcframework.zip",
-            rendered,
-        )
-        self.assertIn(f":sha256 => '{archive_sha256}'", rendered)
 
         package_manifest = (
             self.output / f"mobile-sdk-apple-{diagnostic_version}.artifacts.json"
@@ -701,12 +713,11 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
             [
                 "apple-xcframework",
                 "apple-manifest",
-                "apple-cocoapods-podspec",
             ],
         )
         self.assertEqual(
             {entry["name"] for entry in package_payload["artifacts"]},
-            {archive.name, versioned_manifest.name, podspec.name},
+            {archive.name, versioned_manifest.name},
         )
         checksums = self.output / f"SHA256SUMS-apple-{diagnostic_version}.txt"
         checksum_paths = {
@@ -715,7 +726,7 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
         }
         self.assertEqual(
             checksum_paths,
-            {archive.name, versioned_manifest.name, podspec.name, package_manifest.name},
+            {archive.name, versioned_manifest.name, package_manifest.name},
         )
 
     def test_apple_package_accepts_canonical_mobile_rustup_fallback(self) -> None:
@@ -772,7 +783,26 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
         )
         self.assertFalse(self.output.exists())
 
-    def test_apple_manifest_version_must_match_pod_version(self) -> None:
+    def test_missing_apple_archive_validator_fails_without_publication(self) -> None:
+        seal_environment = self._write_fake_apple_owner()
+        missing_validator = self.repository / "scripts/validate_norito_bridge_archive.py"
+        missing_validator.unlink()
+        result = self._package(
+            mode="apple", version="pr-8-missing-validator",
+            SOURCE_DATE_EPOCH="1700000000", **seal_environment,
+        )
+        self.assertEqual(result.returncode, 66, result.stderr)
+        self.assertIn("Apple archive validator is unavailable", result.stderr)
+        self.assertIn(str(missing_validator), result.stderr)
+        self.assertNotIn("unbound variable", result.stderr)
+        self.assertFalse(self.output.exists())
+        artifact_root = Path(seal_environment["MOBILE_SDK_APPLE_ARTIFACT_DIR"])
+        self.assertEqual(
+            (artifact_root / "NoritoBridge.xcframework/Info.plist").read_bytes(),
+            b"canonical plist fixture\n",
+        )
+
+    def test_apple_manifest_version_must_match_sdk_version(self) -> None:
         seal_environment = self._write_fake_apple_owner()
         artifact_root = Path(seal_environment["MOBILE_SDK_APPLE_ARTIFACT_DIR"])
         drifted = b'{"schema_version":1,"version":"9.9.9"}\n'

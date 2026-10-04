@@ -42,15 +42,15 @@ fn zk_vm_for(syscall: u32, gas: u64) -> IVM {
     vm
 }
 fn install_int(vm: &mut IVM, value: &BigInt) -> u64 {
-    let envelope = ivm::numeric_tlv::encode_int(value).expect("encode int envelope");
+    let envelope = ivm_abi::numeric_tlv::encode_int(value).expect("encode int envelope");
     vm.alloc_host_tlv(&envelope).expect("install int")
 }
 fn install_decimal(vm: &mut IVM, value: &Numeric) -> u64 {
-    let envelope = ivm::numeric_tlv::encode_decimal(value).expect("encode decimal envelope");
+    let envelope = ivm_abi::numeric_tlv::encode_decimal(value).expect("encode decimal envelope");
     vm.alloc_host_tlv(&envelope).expect("install decimal")
 }
 fn install_quantity(vm: &mut IVM, value: &Quantity) -> u64 {
-    let envelope = ivm::numeric_tlv::encode_quantity(value).expect("encode quantity envelope");
+    let envelope = ivm_abi::numeric_tlv::encode_quantity(value).expect("encode quantity envelope");
     vm.alloc_host_tlv(&envelope).expect("install quantity")
 }
 fn numeric_envelope_from_frame(pointer_type: ivm::PointerType, frame: &[u8]) -> Vec<u8> {
@@ -584,8 +584,8 @@ fn actual_staged_contexts_match_the_normative_gas_identity_and_width_boundaries(
         let syscall = syscalls::SYSCALL_INT_ADD;
         let mut vm = vm_for(syscall, u64::MAX);
         let lhs_value = positive_int_with_limbs(limbs);
-        let lhs_envelope = ivm::numeric_tlv::encode_int(&lhs_value).expect("lhs envelope");
-        let rhs_envelope = ivm::numeric_tlv::encode_int(&BigInt::one()).expect("rhs envelope");
+        let lhs_envelope = ivm_abi::numeric_tlv::encode_int(&lhs_value).expect("lhs envelope");
+        let rhs_envelope = ivm_abi::numeric_tlv::encode_int(&BigInt::one()).expect("rhs envelope");
         let lhs = vm.alloc_host_tlv(&lhs_envelope).expect("lhs");
         let rhs = vm.alloc_host_tlv(&rhs_envelope).expect("rhs");
         vm.set_register(10, lhs);
@@ -649,8 +649,8 @@ fn actual_staged_contexts_match_the_normative_gas_identity_and_width_boundaries(
         .parse()
         .expect("scale-28 decimal");
     let mut compare = vm_for(syscalls::SYSCALL_DECIMAL_GT, u64::MAX);
-    let lhs_envelope = ivm::numeric_tlv::encode_decimal(&maximum).expect("maximum decimal");
-    let rhs_envelope = ivm::numeric_tlv::encode_decimal(&tiny).expect("tiny decimal");
+    let lhs_envelope = ivm_abi::numeric_tlv::encode_decimal(&maximum).expect("maximum decimal");
+    let rhs_envelope = ivm_abi::numeric_tlv::encode_decimal(&tiny).expect("tiny decimal");
     let lhs = compare.alloc_host_tlv(&lhs_envelope).expect("lhs");
     let rhs = compare.alloc_host_tlv(&rhs_envelope).expect("rhs");
     compare.set_register(10, lhs);
@@ -688,8 +688,8 @@ fn actual_staged_contexts_match_the_normative_gas_identity_and_width_boundaries(
     );
     let zero = Numeric::zero();
     let mut zero_compare = vm_for(syscalls::SYSCALL_DECIMAL_LT, u64::MAX);
-    let zero_envelope = ivm::numeric_tlv::encode_decimal(&zero).expect("zero decimal");
-    let tiny_envelope = ivm::numeric_tlv::encode_decimal(&tiny).expect("tiny decimal");
+    let zero_envelope = ivm_abi::numeric_tlv::encode_decimal(&zero).expect("zero decimal");
+    let tiny_envelope = ivm_abi::numeric_tlv::encode_decimal(&tiny).expect("tiny decimal");
     let zero_pointer = zero_compare
         .alloc_host_tlv(&zero_envelope)
         .expect("zero pointer");
@@ -725,7 +725,7 @@ fn actual_staged_contexts_match_the_normative_gas_identity_and_width_boundaries(
         zero_expected,
     );
     let mut product = vm_for(syscalls::SYSCALL_DECIMAL_MUL, u64::MAX);
-    let lhs_envelope = ivm::numeric_tlv::encode_decimal(&maximum).expect("lhs");
+    let lhs_envelope = ivm_abi::numeric_tlv::encode_decimal(&maximum).expect("lhs");
     let rhs_envelope = lhs_envelope.clone();
     let lhs = product.alloc_host_tlv(&lhs_envelope).expect("lhs");
     let rhs = product.alloc_host_tlv(&rhs_envelope).expect("rhs");
@@ -780,8 +780,8 @@ fn actual_staged_contexts_match_the_normative_gas_identity_and_width_boundaries(
             }
         }
         let mut vm = vm_for(syscall, u64::MAX);
-        let lhs_envelope = ivm::numeric_tlv::encode_decimal(&lhs_value).expect("lhs envelope");
-        let rhs_envelope = ivm::numeric_tlv::encode_decimal(&rhs_value).expect("rhs envelope");
+        let lhs_envelope = ivm_abi::numeric_tlv::encode_decimal(&lhs_value).expect("lhs envelope");
+        let rhs_envelope = ivm_abi::numeric_tlv::encode_decimal(&rhs_value).expect("rhs envelope");
         let lhs = vm.alloc_host_tlv(&lhs_envelope).expect("lhs");
         let rhs = vm.alloc_host_tlv(&rhs_envelope).expect("rhs");
         vm.set_register(10, lhs);
@@ -792,7 +792,7 @@ fn actual_staged_contexts_match_the_normative_gas_identity_and_width_boundaries(
             decimal_validation_work_for_envelope(lhs_envelope.len() as u64, &lhs_value)
                 + decimal_validation_work_for_envelope(rhs_envelope.len() as u64, &rhs_value);
         if let Some(scale) = scale {
-            let scale_envelope = ivm::numeric_tlv::encode_int(&BigInt::from_i128(scale.into()))
+            let scale_envelope = ivm_abi::numeric_tlv::encode_int(&BigInt::from_i128(scale.into()))
                 .expect("scale envelope");
             let scale_pointer = vm.alloc_host_tlv(&scale_envelope).expect("scale");
             vm.set_register(12, scale_pointer);
@@ -826,8 +826,9 @@ fn actual_staged_contexts_match_the_normative_gas_identity_and_width_boundaries(
 #[test]
 fn both_signs_have_exact_gas_at_every_logical_limb_transition() {
     fn add_zero_gas(value: &BigInt, expected_mantissa_bytes: usize) -> (u64, u64) {
-        let value_envelope = ivm::numeric_tlv::encode_int(value).expect("boundary envelope");
-        let zero_envelope = ivm::numeric_tlv::encode_int(&BigInt::zero()).expect("zero envelope");
+        let value_envelope = ivm_abi::numeric_tlv::encode_int(value).expect("boundary envelope");
+        let zero_envelope =
+            ivm_abi::numeric_tlv::encode_int(&BigInt::zero()).expect("zero envelope");
         // 39 pointer-envelope bytes + 40 frame-header bytes + 4 length bytes.
         assert_eq!(value_envelope.len(), 83 + expected_mantissa_bytes);
         assert_eq!(zero_envelope.len(), 83);
@@ -1228,7 +1229,7 @@ fn negative_quantity_factors_report_negative_quantity_in_trap_and_status_modes()
 #[test]
 fn malformed_operand_precedes_invalid_controls_and_control_faults_are_distinct() {
     let mut malformed = vm_for(syscalls::SYSCALL_INT_ADD, u64::MAX);
-    let mut envelope = ivm::numeric_tlv::encode_int(&BigInt::one()).expect("int envelope");
+    let mut envelope = ivm_abi::numeric_tlv::encode_int(&BigInt::one()).expect("int envelope");
     *envelope.last_mut().expect("hash byte") ^= 1;
     let bad = malformed
         .alloc_host_tlv(&envelope)
@@ -1288,7 +1289,8 @@ fn malformed_operand_precedes_invalid_controls_and_control_faults_are_distinct()
     let mut bad_scale_pointer = vm_for(syscalls::SYSCALL_DECIMAL_DIV_ROUND, u64::MAX);
     let lhs = install_decimal(&mut bad_scale_pointer, &Numeric::new(1, 0));
     let rhs = install_decimal(&mut bad_scale_pointer, &Numeric::new(2, 0));
-    let mut scale_envelope = ivm::numeric_tlv::encode_int(&BigInt::zero()).expect("scale envelope");
+    let mut scale_envelope =
+        ivm_abi::numeric_tlv::encode_int(&BigInt::zero()).expect("scale envelope");
     *scale_envelope.last_mut().expect("scale hash") ^= 1;
     let scale = bad_scale_pointer
         .alloc_host_tlv(&scale_envelope)
@@ -1434,7 +1436,7 @@ fn every_decode_and_output_phase_has_a_charge_before_work() {
         .last_staged_syscall_context()
         .expect("baseline staged context")
         .clone();
-    let frame_bytes = ivm::numeric_tlv::encode_int(&BigInt::one())
+    let frame_bytes = ivm_abi::numeric_tlv::encode_int(&BigInt::one())
         .expect("reference envelope")
         .len()
         - 39;
@@ -1487,7 +1489,7 @@ fn every_decode_and_output_phase_has_a_charge_before_work() {
 fn maximum_frame_hash_and_output_traversals_are_pinned_and_oog_safe() {
     let syscall = syscalls::SYSCALL_INT_NEG;
     let value = max_int();
-    let envelope = ivm::numeric_tlv::encode_int(&value).expect("maximum envelope");
+    let envelope = ivm_abi::numeric_tlv::encode_int(&value).expect("maximum envelope");
     let frame_bytes = frame_len_for_envelope(envelope.len() as u64);
     assert_eq!(frame_bytes, 108);
     let mut baseline = vm_for(syscall, u64::MAX);
@@ -1840,7 +1842,7 @@ fn numeric_failure_paths_charge_completed_work_without_output_and_oog_precedes_c
 fn allocation_failure_is_fully_charged_and_never_publishes_result_registers() {
     let syscall = syscalls::SYSCALL_INT_NEG;
     let mut vm = vm_for(syscall, u64::MAX);
-    let operand_envelope = ivm::numeric_tlv::encode_int(&BigInt::one()).expect("operand");
+    let operand_envelope = ivm_abi::numeric_tlv::encode_int(&BigInt::one()).expect("operand");
     let operand = vm
         .alloc_host_tlv(&operand_envelope)
         .expect("install operand before filling input");

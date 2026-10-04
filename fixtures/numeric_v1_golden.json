@@ -1,6 +1,6 @@
 {
   "format": "iroha.numeric.v1",
-  "generator": "ivm::numeric_tlv + iroha_primitives::numeric_abi",
+  "generator": "ivm_abi::numeric_tlv + iroha_primitives::numeric_abi",
   "invalid": [
     {
       "decode_as": "int",

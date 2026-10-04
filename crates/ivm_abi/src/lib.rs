@@ -3,6 +3,7 @@
 //! This crate hosts the canonical opcode tables, metadata layout, pointer-ABI helpers, syscall
 //! numbering, and related error types used by both the VM and the Kotodama compiler.
 pub mod access_hints;
+pub mod arguments;
 pub mod axt;
 pub mod call;
 pub mod codec;
@@ -18,6 +19,7 @@ pub mod json;
 pub mod list;
 pub mod metadata;
 pub mod numeric;
+pub mod numeric_tlv;
 pub mod pointer_abi;
 pub mod private_input;
 pub mod state_cursor;

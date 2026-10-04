@@ -114,7 +114,7 @@ fn private_tlv_snapshot_preserves_header_and_complete_envelope_refusals() {
         let (mut vm, budget) = funded();
         vm.zk_mode = true;
         let tlv =
-            crate::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from(17)).unwrap();
+            ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from(17)).unwrap();
         let address = vm.alloc_host_private_tlv(&tlv).unwrap();
         exhaust_at_read(&vm, &budget, header_succeeds);
         let occupied = budget.reserved_bytes();
@@ -132,7 +132,7 @@ fn private_tlv_snapshot_preserves_header_and_complete_envelope_refusals() {
 #[test]
 fn staged_numeric_envelope_reads_keep_operational_errors_and_fault_semantics() {
     let integer = iroha_primitives::bigint::BigInt::from(17);
-    let envelope = crate::numeric_tlv::encode_int(&integer).unwrap();
+    let envelope = ivm_abi::numeric_tlv::encode_int(&integer).unwrap();
     for header_succeeds in [false, true] {
         let (mut vm, budget) = funded();
         vm.memory.preload_input(0, &envelope).unwrap();

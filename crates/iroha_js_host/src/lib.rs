@@ -6367,8 +6367,8 @@ pub fn encode_contract_argument_record_json(
         json::from_value(schema_value).map_err(norito_to_napi)?;
     let payload_value = json::parse_value(&payload_json).map_err(norito_to_napi)?;
     let payload: Json = json::from_value(payload_value).map_err(norito_to_napi)?;
-    let record =
-        ivm::encode_argument_record_from_json(&schema, &payload).map_err(norito_to_napi)?;
+    let record = ivm_abi::arguments::encode_argument_record_from_json(&schema, &payload)
+        .map_err(norito_to_napi)?;
     Ok(Buffer::from(record))
 }
 /// Validate and return the exact canonical `VersionedSignedTransaction` V1 wire.

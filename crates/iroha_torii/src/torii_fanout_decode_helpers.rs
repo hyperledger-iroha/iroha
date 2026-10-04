@@ -1295,6 +1295,32 @@ impl QueryFanoutMemoryReservation {
             })
     }
 }
+/// Bind asynchronous CPU admission to its outer HTTP or collection memory owner.
+fn current_query_fanout_memory_for_state(app: &AppState) -> Option<QueryFanoutMemoryReservation> {
+    #[cfg(feature = "app_api")]
+    {
+        let matches_pool = |reservation: &QueryFanoutMemoryReservation| {
+            reservation.admission.is_some_and(|admission| {
+                admission.pool_generation == app.query_fanout_inflight.generation()
+            })
+        };
+        return COLLECTION_READ_MEMORY_RESERVATION
+            .try_with(Clone::clone)
+            .ok()
+            .filter(matches_pool)
+            .or_else(|| {
+                APP_ROUTED_READ_HTTP_ADMISSION
+                    .try_with(|admission| admission.reservation.clone())
+                    .ok()
+                    .filter(matches_pool)
+            });
+    }
+    #[cfg(not(feature = "app_api"))]
+    {
+        let _ = app;
+        None
+    }
+}
 /// Cloneable response-only owner for a move-only ordinary-query lease.
 #[derive(Clone, Debug)]
 struct OrdinaryQueryResponseMemory {

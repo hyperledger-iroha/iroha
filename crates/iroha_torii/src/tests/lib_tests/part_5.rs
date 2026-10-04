@@ -642,7 +642,7 @@ async fn zk_attachment_route_authenticates_before_decode_and_rejects_replay() {
     let reservation = try_acquire_new_query_fanout_memory(&app).expect("test fanout reservation");
     let admission = AppRoutedReadHttpAdmission {
         reservation: reservation.clone(),
-        decode_plan: torii_routed_read_request_decode_plan(&app).expect("test decode plan"),
+        decode_plan: torii_routed_read_request_preflight_plan(&app).expect("test decode plan"),
     };
     let accepted = APP_ROUTED_READ_HTTP_ADMISSION
         .scope(admission, router.clone().oneshot(admitted_request))

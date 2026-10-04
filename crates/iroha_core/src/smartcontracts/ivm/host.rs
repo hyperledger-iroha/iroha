@@ -7046,8 +7046,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn handle_call_contract_quantity2(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
         let amount_in = Self::decode_quantity(vm, vm.register(12))?;
         let min_out = Self::decode_quantity(vm, vm.register(13))?;
-        let amount_in_envelope = ivm::numeric_tlv::encode_quantity(&amount_in)?;
-        let min_out_envelope = ivm::numeric_tlv::encode_quantity(&min_out)?;
+        let amount_in_envelope = ivm_abi::numeric_tlv::encode_quantity(&amount_in)?;
+        let min_out_envelope = ivm_abi::numeric_tlv::encode_quantity(&min_out)?;
         let schema = Self::quantity2_argument_schema();
         let schema_bytes = Self::encode_norito_payload(&schema)?;
         let record = EntrypointArgumentRecordV1 {
@@ -15598,7 +15598,7 @@ seiyaku StaleRuntimeBinding {
             .find(|descriptor| descriptor.name == entrypoint)
             .expect("installed contract entrypoint");
         descriptor.argument_schema.as_ref().map(|schema| {
-            ivm::encode_argument_record_from_json(schema, payload)
+            ivm_abi::arguments::encode_argument_record_from_json(schema, payload)
                 .expect("encode test contract arguments")
         })
     }
@@ -17239,8 +17239,9 @@ seiyaku BurnWithMemo {
             r#"{{"amount":"1","memo":"{memo_hex}","sender":"{authority_literal}","settlement_asset":"{settlement_asset_literal}"}}"#,
         ))
         .expect("memo payload JSON");
-        let canonical = ivm::encode_argument_record_from_json(argument_schema, &args)
-            .expect("encode canonical burn_with_memo arguments");
+        let canonical =
+            ivm_abi::arguments::encode_argument_record_from_json(argument_schema, &args)
+                .expect("encode canonical burn_with_memo arguments");
         let prepared = ivm::prepare_argument_record_with_gas_limit(
             argument_schema,
             Arc::from(canonical),
@@ -18929,7 +18930,7 @@ seiyaku Callee {
         else {
             panic!("exact Int return must contain one canonical pointer atom");
         };
-        let expected_envelope = ivm::numeric_tlv::encode_int(&BigInt::from_i128(42))
+        let expected_envelope = ivm_abi::numeric_tlv::encode_int(&BigInt::from_i128(42))
             .expect("encode canonical V1 int atom");
         assert_eq!(
             envelope, &expected_envelope,
@@ -19108,7 +19109,7 @@ seiyaku Callee {
             &norito::to_bytes(&int_schema).expect("encode Int schema"),
         );
         let int_envelope =
-            ivm::numeric_tlv::encode_int(&BigInt::from_i128(1)).expect("encode Int TLV");
+            ivm_abi::numeric_tlv::encode_int(&BigInt::from_i128(1)).expect("encode Int TLV");
         let malformed = [
             (
                 "wrong schema",
@@ -23129,7 +23130,7 @@ seiyaku DurableOwner {
             })
             .expect("compiler-emitted bytes record")
             .clone();
-        let key = ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(1))
+        let key = ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(1))
             .expect("encode canonical map key");
         let wrong_path: StatePath = format!("IntMap/{}", hex::encode(key))
             .parse()
@@ -23182,7 +23183,7 @@ seiyaku DurableOwner {
         };
         let base: iroha_model_base::name::Name = "ValidationFeeConversion".parse().expect("base");
         let encoded_key =
-            ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(0))
+            ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(0))
                 .expect("integer key");
         let relative_key =
             ivm::host::canonical_state_map_path(&base, &encoded_key).expect("canonical map path");
@@ -23296,7 +23297,7 @@ seiyaku DurableOwner {
         let mut host = CoreHost::new(authority);
         let mut vm = IVM::new(10_000);
         let value = BigInt::from_i128(42);
-        let envelope = ivm::numeric_tlv::encode_int(&value).expect("canonical Int envelope");
+        let envelope = ivm_abi::numeric_tlv::encode_int(&value).expect("canonical Int envelope");
         let source = vm.alloc_input_tlv(&envelope).expect("allocate Int");
         vm.set_register(10, source);
         let encode_gas = host

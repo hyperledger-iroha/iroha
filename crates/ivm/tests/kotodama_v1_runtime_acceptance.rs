@@ -105,7 +105,7 @@ fn argument_host(
 ) -> DefaultHost {
     let payload = Json::from_str_norito(&format!(r#"{{"left":"{left}","right":"{right}"}}"#))
         .expect("valid comparison arguments");
-    let payload = ivm::encode_argument_record_from_json(schema, &payload)
+    let payload = ivm_abi::arguments::encode_argument_record_from_json(schema, &payload)
         .expect("encode comparison argument record");
     let key: Name = "trigger_event_json".parse().expect("public input key");
     DefaultHost::new().with_public_inputs(BTreeMap::from([(
@@ -413,7 +413,7 @@ fn state_map_iteration_uses_canonical_norito_byte_order_for_sixty_four_items() {
     );
     let mut expected = inserted;
     expected.sort_by_key(|key| {
-        ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(i128::from(
+        ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(i128::from(
             *key,
         )))
         .expect("encode canonical pointer-backed int key")

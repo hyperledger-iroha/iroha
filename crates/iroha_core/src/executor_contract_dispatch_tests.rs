@@ -43,7 +43,7 @@ fn trigger_dispatch_encodes_event_args_as_one_canonical_record() {
         .argument_schema
         .as_ref()
         .expect("run argument schema");
-    let expected = ivm::encode_argument_record_from_json(schema, &event_args)
+    let expected = ivm_abi::arguments::encode_argument_record_from_json(schema, &event_args)
         .expect("encode expected canonical record");
     assert_eq!(context.argument_record(), Some(expected.as_slice()));
     ivm::validate_argument_record(
@@ -60,9 +60,11 @@ fn malformed_invocation_arguments_fail_during_context_preparation() {
         .entrypoint_descriptor("run")
         .and_then(|descriptor| descriptor.argument_schema.as_ref())
         .expect("run argument schema");
-    let mut malformed =
-        ivm::encode_argument_record_from_json(schema, &Json::from(norito::json!({"val": "1.25"})))
-            .expect("encode valid argument fixture");
+    let mut malformed = ivm_abi::arguments::encode_argument_record_from_json(
+        schema,
+        &Json::from(norito::json!({"val": "1.25"})),
+    )
+    .expect("encode valid argument fixture");
     *malformed.last_mut().expect("record hash byte") ^= 0x80;
     let contract_address = ContractAddress::derive(
         &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
