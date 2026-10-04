@@ -6,6 +6,28 @@ import sys
 from pathlib import Path
 
 
+def test_validation_fee_exports_match_current_governance_types() -> None:
+    from iroha_torii_client import governance_proposals
+
+    import iroha_python
+    from iroha_python import client
+
+    for module in (iroha_python, client):
+        for name in (
+            "GovernanceValidationFeeChargingMode",
+            "GovernanceValidationFeePayoutBinding",
+            "GovernanceValidationFeePolicy",
+            "GovernanceProposalValidationFeePayoutLifecycle",
+            "GovernanceProposalValidationFeePolicy",
+        ):
+            assert name in module.__all__
+            assert getattr(module, name) is getattr(governance_proposals, name)
+
+        retired = "GovernanceValidationFeePayoutRecipient"
+        assert retired not in module.__all__
+        assert not hasattr(module, retired)
+
+
 def test_privacy_wallet_worker_contract_is_a_base_export() -> None:
     import iroha_python
     from iroha_python import privacy_wallet_worker

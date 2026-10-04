@@ -153,7 +153,6 @@ from iroha_torii_client.governance_proposals import (
     GovernanceSorafsProviderActionKind,
     GovernanceValidationFeeChargingMode,
     GovernanceValidationFeePayoutBinding,
-    GovernanceValidationFeePayoutRecipient,
     GovernanceValidationFeePolicy,
 )
 
@@ -11510,7 +11509,6 @@ __all__ = [
     "GovernanceSorafsProviderActionKind",
     "GovernanceValidationFeeChargingMode",
     "GovernanceValidationFeePayoutBinding",
-    "GovernanceValidationFeePayoutRecipient",
     "GovernanceValidationFeePolicy",
     "ToriiCanonicalRequestAuth",
     "canonical_query_string",
