@@ -94,6 +94,7 @@ pub enum LocalnetServiceProfile {
     norito::Decode,
     norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_deploy::localnet::service_authorities::StreamTokenAuthorityRole")]
 #[norito(
     tag = "role",
     content = "value",
@@ -168,6 +169,7 @@ const ROLES: [StreamTokenAuthorityRole; 10] = [
     norito::Decode,
     norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_deploy::localnet::service_authorities::StreamTokenAuthority")]
 #[norito(deny_unknown_fields)]
 pub struct StreamTokenAuthority {
     /// Purpose whose fixed filename is exposed by [`StreamTokenAuthorityRole::credential_filename`].
@@ -191,6 +193,7 @@ pub struct StreamTokenAuthority {
     norito::Decode,
     norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_deploy::localnet::service_authorities::StreamTokenReserveAccounts")]
 #[norito(deny_unknown_fields)]
 pub struct StreamTokenReserveAccounts {
     /// Pooled native reserve custody, initially unfunded.
@@ -236,6 +239,7 @@ fn reserve_accounts(operations: &AccountId) -> Result<StreamTokenReserveAccounts
     norito::Decode,
     norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_deploy::localnet::service_authorities::NetworkServiceAuthorityRole")]
 #[norito(
     tag = "role",
     content = "value",
@@ -274,6 +278,7 @@ const NETWORK_ROLES: [NetworkServiceAuthorityRole; 2] = [
     norito::Decode,
     norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_deploy::localnet::service_authorities::NetworkServiceAuthority")]
 #[norito(deny_unknown_fields)]
 pub struct NetworkServiceAuthority {
     /// Fixed signing purpose.
@@ -293,6 +298,7 @@ pub struct NetworkServiceAuthority {
     norito::Decode,
     norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_deploy::localnet::service_authorities::NetworkServiceInventory")]
 #[norito(deny_unknown_fields)]
 pub struct NetworkServiceInventory {
     /// Exactly two original accounts in canonical network-role order.
@@ -346,6 +352,7 @@ impl NetworkServiceInventory {
     norito::Decode,
     norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_deploy::localnet::service_authorities::ProviderServiceInventory")]
 #[norito(deny_unknown_fields)]
 pub struct ProviderServiceInventory {
     /// Fixed slot, equal to its original validator peer index (zero, one or two).
@@ -421,7 +428,39 @@ pub struct StreamTokenAuthorityManifest {
     /// One network-wide inventory, pricing/council and reserve account selection.
     pub network: NetworkServiceInventory,
     /// Exactly three provider inventories in fixed original peer order.
+    #[norito(json = "provider_inventories_json")]
     pub providers: [ProviderServiceInventory; PROVIDER_COUNT],
+}
+/// JSON array form of the fixed provider inventory array; any other length is refused.
+mod provider_inventories_json {
+    use super::{PROVIDER_COUNT, ProviderServiceInventory};
+    use norito::json::{self, JsonDeserialize as _, JsonSerialize as _};
+
+    pub(super) fn serialize(
+        value: &[ProviderServiceInventory; PROVIDER_COUNT],
+        output: &mut String,
+    ) {
+        value.to_vec().json_serialize(output);
+    }
+
+    pub(super) fn serialize_bounded(
+        value: &[ProviderServiceInventory; PROVIDER_COUNT],
+        output: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        value.to_vec().json_serialize_to(output)
+    }
+
+    pub(super) fn deserialize(
+        parser: &mut json::Parser<'_>,
+    ) -> Result<[ProviderServiceInventory; PROVIDER_COUNT], json::Error> {
+        Vec::<ProviderServiceInventory>::json_deserialize(parser)?
+            .try_into()
+            .map_err(|_: Vec<ProviderServiceInventory>| {
+                json::Error::Message(format!(
+                    "expected exactly {PROVIDER_COUNT} provider inventories"
+                ))
+            })
+    }
 }
 impl StreamTokenAuthorityManifest {
     /// Select exact public original provider intent, without manufacturing native authority.

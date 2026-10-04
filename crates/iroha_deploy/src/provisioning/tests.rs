@@ -101,7 +101,6 @@ impl Fixture {
                 torii_url = "http://127.0.0.1:8080/"
                 [account]
                 chain_discriminant = 753
-                domain = "app.acme"
                 public_key = (owner.public_key().to_string())
                 private_key = (ExposedPrivateKey(owner.private_key().clone()).to_string())
             },

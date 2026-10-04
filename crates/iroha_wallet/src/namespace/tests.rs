@@ -333,7 +333,7 @@ fn private_dataspace_preparation_does_not_dispatch_after_deadline_or_for_invalid
         network_id = (network.to_string())
         torii_url = "https://unreachable.invalid/"
         [account]
-        domain = "tests.universal"
+        chain_discriminant = 753
         public_key = (key.public_key().to_string())
         private_key = (iroha_crypto::ExposedPrivateKey(key.private_key().clone()).to_string())
     };

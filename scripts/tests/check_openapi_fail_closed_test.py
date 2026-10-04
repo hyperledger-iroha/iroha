@@ -607,42 +607,37 @@ def test_explorer_openapi_matches_dataspace_auth_and_history_cursor_contract() -
     for path in dataspace_paths:
         assert document["paths"][path]["get"]["security"] == optional_canonical_security
 
-    history_pages = {
-        "/v1/explorer/blocks": "ExplorerBlocksHistoryPage",
-        "/v1/explorer/transactions": "ExplorerTransactionsHistoryPage",
-        "/v1/explorer/instructions": "ExplorerInstructionsHistoryPage",
+    feeds = {
+        "accounts": "Accounts", "domains": "Domains", "asset-definitions": "AssetDefinitions",
+        "assets": "Assets", "nfts": "Nfts", "rwas": "Rwas", "blocks": "Blocks",
+        "transactions": "Transactions", "transactions/latest": "Transactions",
+        "instructions": "Instructions", "instructions/latest": "Instructions",
     }
-    for path, component in history_pages.items():
+    schemas = document["components"]["schemas"]
+    for feed, row in feeds.items():
+        path = f"/v1/explorer/{feed}"
         operation = document["paths"][path]["get"]
         parameters = {parameter["name"]: parameter for parameter in operation["parameters"]}
-        assert not {"page", "per_page", "offset"} & parameters.keys()
-        assert parameters["cursor"]["schema"] == {
-            "maxLength": 1424,
-            "minLength": 1,
-            "pattern": "^[A-Za-z0-9_-]+$",
-            "type": "string",
-        }
-        assert parameters["limit"]["schema"] == {
-            "default": 25,
-            "format": "uint32",
-            "maximum": 100,
-            "minimum": 1,
-            "type": "integer",
-        }
+        assert set(parameters) == {"filter", "select", "limit", "cursor"}
+        assert parameters["cursor"]["schema"]["maxLength"] == 4096
+        assert parameters["limit"]["schema"]["default"] == 25
+        assert parameters["limit"]["schema"]["maximum"] == 100
+        assert parameters["limit"]["schema"]["minimum"] == 1
         assert operation["responses"]["200"]["content"]["application/json"]["schema"] == {
-            "$ref": f"#/components/schemas/{component}"
+            "$ref": f"#/components/schemas/Explorer{row}Page"
         }
-
-    schemas = document["components"]["schemas"]
-    cursor_meta = schemas["ExplorerHistoryCursorMeta"]
-    assert cursor_meta["additionalProperties"] is False
-    assert set(cursor_meta["required"]) == {
-        "limit",
-        "snapshot_height",
-        "snapshot_hash",
-        "next_cursor",
-        "has_more",
-    }
+        page = schemas[f"Explorer{row}Page"]
+        assert page["additionalProperties"] is False
+        assert set(page["required"]) == {"items", "next_cursor"}
+        assert set(page["properties"]) == {"items", "next_cursor"}
+        post = document["paths"][path + "/query"]["post"]
+        assert post["security"] == optional_canonical_security
+        assert post["x-iroha-tool-effect"] == "read"
+        assert post["requestBody"]["content"]["application/json"]["schema"] == {
+            "$ref": "#/components/schemas/ExplorerListQuery"
+        }
+    assert "ExplorerCursorMeta" not in schemas
+    assert "ExplorerHistoryCursorMeta" not in schemas
     lifecycle = schemas["GovernedContractLifecycleV1"]
     assert lifecycle["properties"]["version"] == {
         "format": "uint16",

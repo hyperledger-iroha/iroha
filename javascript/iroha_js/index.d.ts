@@ -6,44 +6,19 @@ import type { RepoAgreementLifecycleFields } from "./repo-agreement.js";
 import type { ToriiBlockMerkleCommitment, ToriiBlockMerkleProof, ToriiBlockProofs, ToriiBlockProofTrustedAnchor, ToriiBlockProofVerification } from "./dist/blockProofTypes.js";
 import type { BufferEncoding } from "./dist/nodeBufferTypes.js";
 import type {
-  ToriiBrowserExplorerAccountsOptions,
   ToriiBrowserExplorerAssetDefinition,
-  ToriiBrowserExplorerAssetDefinitionsOptions,
-  ToriiBrowserExplorerAssetsOptions,
   ToriiBrowserExplorerBlock,
-  ToriiBrowserExplorerCursorPage,
-  ToriiBrowserExplorerDomainsOptions,
-  ToriiBrowserExplorerHistoryOptions,
-  ToriiBrowserExplorerHistoryPage,
   ToriiBrowserExplorerInstruction,
-  ToriiBrowserExplorerInstructionHistoryOptions,
-  ToriiBrowserExplorerLatestHistoryPage,
-  ToriiBrowserExplorerOwnedDomainOptions,
   ToriiBrowserExplorerTransaction,
-  ToriiBrowserExplorerTransactionHistoryOptions,
 } from "./dist/toriiBrowserExplorerTypes.js";
 export type {
-  ToriiBrowserExplorerAccountsOptions,
   ToriiBrowserExplorerAssetDefinition,
-  ToriiBrowserExplorerAssetDefinitionsOptions,
-  ToriiBrowserExplorerAssetsOptions,
   ToriiBrowserExplorerBlock,
-  ToriiBrowserExplorerCursorMeta,
-  ToriiBrowserExplorerCursorOptions,
-  ToriiBrowserExplorerCursorPage,
-  ToriiBrowserExplorerDomainsOptions,
-  ToriiBrowserExplorerHistoryCursorMeta,
-  ToriiBrowserExplorerHistoryOptions,
-  ToriiBrowserExplorerHistoryPage,
   ToriiBrowserExplorerInstruction,
   ToriiBrowserExplorerInstructionBox,
-  ToriiBrowserExplorerInstructionHistoryOptions,
-  ToriiBrowserExplorerLatestHistoryPage,
-  ToriiBrowserExplorerOwnedDomainOptions,
   ToriiBrowserExplorerTransaction,
-  ToriiBrowserExplorerTransactionHistoryOptions,
 } from "./dist/toriiBrowserExplorerTypes.js";
-import type { SubscriptionActionResponse, SubscriptionAuthorityActionRequest, SubscriptionCancelActionRequest, SubscriptionChargeActionRequest, SubscriptionCreateRequest, SubscriptionCreateResponse, SubscriptionGetResponse, SubscriptionListItem, SubscriptionListResponse, SubscriptionPlanCreateRequest, SubscriptionPlanCreateResponse, SubscriptionPlanListItem, SubscriptionPlanListResponse, SubscriptionUsageDraft, SubscriptionUsageRequest } from "./dist/subscriptionTypes.js";
+import type { SubscriptionActionResponse, SubscriptionAuthorityActionRequest, SubscriptionCancelActionRequest, SubscriptionChargeActionRequest, SubscriptionCreateRequest, SubscriptionCreateResponse, SubscriptionGetResponse, SubscriptionPlanCreateRequest, SubscriptionPlanCreateResponse, SubscriptionUsageDraft, SubscriptionUsageRequest } from "./dist/subscriptionTypes.js";
 import type { SorafsOrderbookSignedTransaction, SorafsOrderbookSubmissionReceipt, SorafsOrderbookTransactionSubmitOptions } from "./dist/sorafsOrderbookSubmission.js";
 import { NetworkId } from "./dist/networkId.js";
 export { NetworkId, OperatorSigningContext };
@@ -1038,12 +1013,6 @@ export function extractConfidentialGasConfig(
   input?: { config?: unknown } | unknown,
 ): ConfidentialGasSchedule | null;
 
-export interface BlockListOptions {
-  cursor?: string;
-  limit?: NumericLike;
-  signal?: AbortSignal;
-}
-
 export interface ContractEventStreamOptions {
   authority?: string;
   contractAddress?: string;
@@ -1078,42 +1047,7 @@ export interface PermissionedIterableOptions {
 
 export type ToriiCountMode = "bounded" | "exact";
 
-export interface ToriiBrowserCountedListOptions {
-  limit?: NumericLike;
-  offset?: NumericLike;
-  countMode?: ToriiCountMode;
-  count_mode?: ToriiCountMode;
-  signal?: AbortSignal;
-}
-
-export type ToriiBrowserAccountPermissionsListOptions =
-  ToriiBrowserCountedListOptions;
-
-export interface ToriiBrowserAccountHistoryListOptions
-  extends ToriiBrowserCountedListOptions {
-  assetId?: string;
-  asset_id?: string;
-}
-
-export interface ToriiBrowserContractActivityListOptions
-  extends ToriiBrowserCountedListOptions {
-  authority?: string;
-  contractAddress?: string;
-  contract_address?: string;
-  contractAlias?: string;
-  contract_alias?: string;
-  contractEntrypoint?: string;
-  contract_entrypoint?: string;
-  sinceTimestampMs?: NumericLike;
-  since_timestamp_ms?: NumericLike;
-  untilTimestampMs?: NumericLike;
-  until_timestamp_ms?: NumericLike;
-  resultOk?: boolean;
-  result_ok?: boolean;
-}
-
-export interface ToriiBrowserContractEventListOptions
-  extends ToriiBrowserCountedListOptions {
+export interface ToriiBrowserContractEventStreamOptions {
   authority?: string;
   contractAddress?: string;
   contract_address?: string;
@@ -1132,10 +1066,6 @@ export interface ToriiBrowserContractEventListOptions
   until_timestamp_ms?: NumericLike;
   resultOk?: boolean;
   result_ok?: boolean;
-}
-
-export interface ToriiBrowserContractEventStreamOptions
-  extends Omit<ToriiBrowserContractEventListOptions, keyof ToriiBrowserCountedListOptions> {
   signal?: AbortSignal;
 }
 
@@ -1149,30 +1079,6 @@ export interface IterableListOptions extends PermissionedIterableOptions {
   signal?: AbortSignal;
 }
 
-export interface ContractActivityListOptions extends IterableListOptions {
-  authority?: string;
-  contractAddress?: string;
-  contractAlias?: string;
-  contractEntrypoint?: string;
-  sinceTimestampMs?: NumericLike;
-  untilTimestampMs?: NumericLike;
-  resultOk?: boolean;
-}
-
-export interface ContractEventListOptions extends IterableListOptions {
-  authority?: string;
-  contractAddress?: string;
-  contractAlias?: string;
-  module?: string;
-  eventKind?: string;
-  participant?: string;
-  assetId?: string;
-  provenance?: string;
-  sinceTimestampMs?: NumericLike;
-  untilTimestampMs?: NumericLike;
-  resultOk?: boolean;
-}
-
 export interface IterableQueryOptions extends IterableListOptions {
   fetch_size?: NumericLike;
   queryName?: string;
@@ -1182,30 +1088,6 @@ export interface IterableQueryOptions extends IterableListOptions {
 
 export interface PaginationIteratorOptions extends IterableListOptions {
   pageSize?: NumericLike;
-  maxItems?: NumericLike;
-}
-
-export interface ExplorerNftListOptions {
-  limit?: NumericLike;
-  cursor?: string;
-  ownedBy?: string;
-  domainId?: string;
-  signal?: AbortSignal;
-}
-
-export interface ExplorerNftIteratorOptions extends ExplorerNftListOptions {
-  maxItems?: NumericLike;
-}
-
-export interface ExplorerRwaListOptions {
-  limit?: NumericLike;
-  cursor?: string;
-  ownedBy?: string;
-  domainId?: string;
-  signal?: AbortSignal;
-}
-
-export interface ExplorerRwaIteratorOptions extends ExplorerRwaListOptions {
   maxItems?: NumericLike;
 }
 
@@ -1270,66 +1152,10 @@ export type SubscriptionStatus =
   | "canceled"
   | "suspended";
 
-export interface SubscriptionPlanListOptions {
-  provider?: string;
-  limit?: NumericLike;
-  offset?: NumericLike;
-  signal?: AbortSignal;
-}
-
-export interface SubscriptionPlanIteratorOptions
-  extends SubscriptionPlanListOptions {
-  pageSize?: NumericLike;
-  maxItems?: NumericLike;
-}
-
-export interface SubscriptionListOptions {
-  ownedBy?: string;
-  provider?: string;
-  status?: SubscriptionStatus | string;
-  limit?: NumericLike;
-  offset?: NumericLike;
-  signal?: AbortSignal;
-}
-
-export interface SubscriptionIteratorOptions extends SubscriptionListOptions {
-  pageSize?: NumericLike;
-  maxItems?: NumericLike;
-}
-
 export interface ToriiIterableListResponse<T = unknown> {
   items: ReadonlyArray<T>;
   total: number;
 }
-
-/** Exact wire shape returned by Torii app-list routes. */
-export interface ToriiBrowserCountedListResponse<T = unknown> {
-  items: ReadonlyArray<T>;
-  /** Present only when `count_mode` is `exact`. */
-  total?: number;
-  has_more: boolean;
-  count_mode: ToriiCountMode;
-}
-
-export type ToriiBrowserAccountPermissionsListResponse<
-  T = ToriiAccountPermissionItem,
-> = ToriiBrowserCountedListResponse<T>;
-
-export interface ToriiBrowserAccountHistoryListResponse<
-  T = ToriiAccountHistoryItem,
-> extends ToriiBrowserCountedListResponse<T> {
-  indexed_height: number;
-  indexed_block_hash: string | null;
-  query_source: "account_history_index";
-}
-
-export type ToriiBrowserContractActivityListResponse<
-  T = ToriiContractActivityItem,
-> = ToriiBrowserCountedListResponse<T>;
-
-export type ToriiBrowserContractEventListResponse<
-  T = ToriiContractEventItem,
-> = ToriiBrowserCountedListResponse<T>;
 
 export interface AliasResolutionDto {
   alias: string;
@@ -1704,6 +1530,9 @@ export interface ToriiAssetDefinitionAliasBinding {
 }
 
 export interface ToriiAccountHistoryItem {
+  block_height: number;
+  block_index: number;
+  movement_index: number;
   id: string;
   source: string;
   type: string;
@@ -1724,6 +1553,8 @@ export interface ToriiAccountHistoryItem {
 }
 
 export interface ToriiContractActivityItem {
+  block_height: number;
+  block_index: number;
   authority?: string;
   timestamp_ms?: number;
   entrypoint_hash: string;
@@ -1736,6 +1567,7 @@ export interface ToriiContractActivityItem {
 }
 
 export interface ToriiContractEventItem {
+  block_index: number;
   event_id: string;
   schema_version: number;
   provenance: "emitted" | "derived";
@@ -1982,30 +1814,11 @@ export interface ToriiExplorerMetricsSnapshot {
 }
 
 /** Snapshot-bound seek metadata for Explorer chain-history collections. */
-export interface ToriiExplorerHistoryCursorMeta {
-  limit: number;
-  snapshotHeight: number;
-  snapshotHash: string | null;
-  nextCursor: string | null;
-  hasMore: boolean;
-}
-
 /** Seek-pagination metadata for canonical Explorer world collections. */
-export interface ToriiExplorerCursorMeta {
-  limit: number;
-  nextCursor: string | null;
-  hasMore: boolean;
-}
-
 export interface ToriiExplorerNft {
   id: string;
   ownedBy: string;
   metadata: Record<string, unknown>;
-}
-
-export interface ToriiExplorerNftsPage {
-  pagination: ToriiExplorerCursorMeta;
-  items: ReadonlyArray<ToriiExplorerNft>;
 }
 
 export interface ToriiExplorerRwa {
@@ -2020,11 +1833,6 @@ export interface ToriiExplorerRwa {
   raw: Record<string, JsonValue>;
 }
 
-export interface ToriiExplorerRwasPage {
-  pagination: ToriiExplorerCursorMeta;
-  items: ReadonlyArray<ToriiExplorerRwa>;
-}
-
 export interface ToriiExplorerBlock {
   hash: string;
   height: number;
@@ -2033,11 +1841,6 @@ export interface ToriiExplorerBlock {
   transactionsHash: string | null;
   transactionsRejected: number;
   transactionsTotal: number;
-}
-
-export interface ToriiExplorerBlocksPage {
-  pagination: ToriiExplorerHistoryCursorMeta;
-  items: ReadonlyArray<ToriiExplorerBlock>;
 }
 
 export interface ToriiExplorerAccountQrSnapshot {
@@ -2530,13 +2333,6 @@ export interface ToriiWebSocketEvent<T = unknown> {
   event: string | null;
   data: T | string;
   raw: string;
-}
-
-export interface AccountPermissionsListOptions {
-  limit?: NumericLike;
-  offset?: NumericLike;
-  signal?: AbortSignal;
-  canonicalAuth?: CanonicalRequestAuth | null;
 }
 
 /** An effective permission, including grants inherited from assigned roles. */
@@ -3496,6 +3292,11 @@ type NoritoRuntimeNamespaceExport =
   | "encodeRetailFeeAssessmentV1"
   | "retailFeeAssessmentMarkerMessage"
   | "decodeRetailFeeAssessmentMarkerMessage"
+  | "encodeValidatorStakingPreparationFrameV1"
+  | "decodeValidatorStakingPreparationFrameV1"
+  | "validateValidatorStakingPreparationV1"
+  | "encodeValidatorStakingValueV1"
+  | "decodeValidatorStakingValueV1"
   | "CONFIDENTIAL_MEMO_MAX_CIPHERTEXT_BYTES_V1"
   | "CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1"
   | "CONFIDENTIAL_MEMO_WIRE_MAGIC_V1"
@@ -9260,14 +9061,6 @@ export interface UaidManifestRecord {
   manifest: UaidAssetPermissionManifest;
 }
 
-export interface UaidManifestsResponse {
-  uaid: string;
-  total: number;
-  has_more: boolean;
-  count_mode: ToriiCountMode;
-  manifests: ReadonlyArray<UaidManifestRecord>;
-}
-
 export interface PublishSpaceDirectoryManifestRequest {
   authority: string;
   manifest: UaidAssetPermissionManifest;
@@ -9283,15 +9076,6 @@ export interface RevokeSpaceDirectoryManifestRequest {
 }
 
 export interface UaidBindingsQueryOptions {
-  signal?: AbortSignal;
-}
-
-export interface UaidManifestQueryOptions {
-  dataspaceId?: number;
-  status?: "active" | "inactive" | "all";
-  limit?: number;
-  offset?: number;
-  countMode?: ToriiCountMode;
   signal?: AbortSignal;
 }
 
@@ -10086,7 +9870,7 @@ export declare class ToriiCollection<
   );
   /** The collection path, e.g. `/v1/assets/definitions`. */
   readonly path: string;
-  /** Whether this is a transaction history collection (see `ToriiHistoryCollection`). */
+  /** Whether this is a bounded collection with fixed server ordering (see `ToriiHistoryCollection`). */
   readonly history: boolean;
   list<K extends string>(
     query: ListQueryInput & { select: ReadonlyArray<K>; aggregate?: undefined },
@@ -10121,9 +9905,9 @@ export declare class ToriiCollection<
 export type HistoryQueryInput = Omit<ListQueryInput, "sort" | "includeTotal" | "aggregate">;
 
 /**
- * A transaction history collection: rows come newest first (by block height,
- * then position in the block) and `sort`, `includeTotal` and `aggregate` are
- * rejected. Each page has a bounded scan budget, so a page may hold fewer
+ * A bounded collection with fixed server ordering. Chain history is newest
+ * first by block coordinates; Explorer world rows use their collection key.
+ * `sort`, `includeTotal` and `aggregate` are rejected. Each page has a bounded scan budget, so a page may hold fewer
  * than `limit` items, even none, together with a `nextCursor`; `pages()` and
  * `iterate()` keep following it until it is `null`.
  */
@@ -10159,6 +9943,21 @@ export const TORII_COLLECTION_PATHS: {
   readonly rwas: "/v1/rwas";
   readonly repoAgreements: "/v1/repo/agreements";
   readonly transactions: "/v1/transactions";
+  readonly subscriptionPlans: "/v1/subscriptions/plans";
+  readonly subscriptions: "/v1/subscriptions";
+  readonly contractActivity: "/v1/contracts/activity";
+  readonly contractEvents: "/v1/contracts/events";
+  readonly explorerAccounts: "/v1/explorer/accounts";
+  readonly explorerDomains: "/v1/explorer/domains";
+  readonly explorerAssetDefinitions: "/v1/explorer/asset-definitions";
+  readonly explorerAssets: "/v1/explorer/assets";
+  readonly explorerNfts: "/v1/explorer/nfts";
+  readonly explorerRwas: "/v1/explorer/rwas";
+  readonly explorerBlocks: "/v1/explorer/blocks";
+  readonly explorerTransactions: "/v1/explorer/transactions";
+  readonly explorerLatestTransactions: "/v1/explorer/transactions/latest";
+  readonly explorerInstructions: "/v1/explorer/instructions";
+  readonly explorerLatestInstructions: "/v1/explorer/instructions/latest";
 };
 
 /**
@@ -10170,6 +9969,23 @@ export interface ToriiCollectionRowExtras {
 }
 
 /** `/v1/domains` row. */
+/** Flat subscription-plan row returned by the collection endpoint. */
+export interface ToriiSubscriptionPlanRow extends ToriiCollectionRowExtras {
+  id: string;
+  provider: string;
+  billing: JsonValue;
+  pricing: JsonValue;
+}
+
+/** Flat subscription-state row returned by the collection endpoint. */
+export interface ToriiSubscriptionRow extends ToriiCollectionRowExtras {
+  id: string;
+  owned_by: string;
+  status: SubscriptionStatus;
+  invoice: JsonValue | null;
+  plan: JsonValue | null;
+}
+
 export interface ToriiDomainRow extends ToriiCollectionRowExtras {
   readonly id: string;
   readonly owned_by?: string | null;
@@ -10527,6 +10343,25 @@ export declare class ToriiBrowserClient {
   readonly rwas: ToriiCollection<ToriiRwaRow, ToriiBrowserCollectionRequestOptions>;
   /** Repo agreements (`POST /v1/repo/agreements/query`). */
   readonly repoAgreements: ToriiCollection<ToriiRepoAgreementRow, ToriiBrowserCollectionRequestOptions>;
+  /** Plans and subscriptions use the same query controls and cursor envelope. */
+  readonly subscriptionPlans: ToriiCollection<ToriiSubscriptionPlanRow, ToriiBrowserCollectionRequestOptions>;
+  readonly subscriptions: ToriiCollection<ToriiSubscriptionRow, ToriiBrowserCollectionRequestOptions>;
+  accountHistory(accountId: string): ToriiHistoryCollection<ToriiAccountHistoryItem, ToriiBrowserCollectionRequestOptions>;
+  accountPermissions(accountId: string): ToriiCollection<ToriiAccountPermissionItem, ToriiBrowserCollectionRequestOptions>;
+  uaidManifests(uaid: string): ToriiCollection<UaidManifestRecord, ToriiBrowserCollectionRequestOptions>;
+  readonly explorerAccounts: ToriiHistoryCollection<ToriiJsonObject, ToriiBrowserCollectionRequestOptions>;
+  readonly explorerDomains: ToriiHistoryCollection<ToriiJsonObject, ToriiBrowserCollectionRequestOptions>;
+  readonly explorerAssetDefinitions: ToriiHistoryCollection<ToriiJsonObject, ToriiBrowserCollectionRequestOptions>;
+  readonly explorerAssets: ToriiHistoryCollection<ToriiJsonObject, ToriiBrowserCollectionRequestOptions>;
+  readonly explorerNfts: ToriiHistoryCollection<ToriiJsonObject, ToriiBrowserCollectionRequestOptions>;
+  readonly explorerRwas: ToriiHistoryCollection<ToriiJsonObject, ToriiBrowserCollectionRequestOptions>;
+  readonly explorerBlocks: ToriiHistoryCollection<ToriiJsonObject, ToriiBrowserCollectionRequestOptions>;
+  readonly explorerTransactions: ToriiHistoryCollection<ToriiJsonObject, ToriiBrowserCollectionRequestOptions>;
+  readonly explorerLatestTransactions: ToriiHistoryCollection<ToriiJsonObject, ToriiBrowserCollectionRequestOptions>;
+  readonly explorerInstructions: ToriiHistoryCollection<ToriiJsonObject, ToriiBrowserCollectionRequestOptions>;
+  readonly explorerLatestInstructions: ToriiHistoryCollection<ToriiJsonObject, ToriiBrowserCollectionRequestOptions>;
+  readonly contractActivity: ToriiHistoryCollection<ToriiContractActivityItem, ToriiBrowserCollectionRequestOptions>;
+  readonly contractEvents: ToriiHistoryCollection<ToriiContractEventItem, ToriiBrowserCollectionRequestOptions>;
   /** Asset balances of one account (`POST /v1/accounts/{account_id}/assets/query`). */
   accountAssets(accountId: string): ToriiCollection<ToriiAccountAssetRow, ToriiBrowserCollectionRequestOptions>;
   /** Holders of one asset definition (`POST /v1/assets/{definition_id}/holders/query`). */
@@ -10583,42 +10418,19 @@ export declare class ToriiBrowserClient {
     operationId: string | ArrayBuffer | ArrayBufferView,
     options?: { signal?: AbortSignal },
   ): Promise<UnverifiedKagemushaOperationStatusV1>;
-  listExplorerAccounts<T = unknown>(
-    options?: ToriiBrowserExplorerAccountsOptions,
-  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerAccount(
     accountId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerDomains<T = unknown>(
-    options?: ToriiBrowserExplorerDomainsOptions,
-  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerDomain(
     domainId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerAssets<T = unknown>(
-    options?: ToriiBrowserExplorerAssetsOptions,
-  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerAsset(
     assetId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
   /** List effective direct and role-inherited permissions for an account. */
-  listAccountPermissions<T = ToriiAccountPermissionItem>(
-    accountId: string,
-    options?: ToriiBrowserAccountPermissionsListOptions,
-  ): Promise<ToriiBrowserAccountPermissionsListResponse<T>>;
-  listAccountHistory<T = ToriiAccountHistoryItem>(
-    accountId: string,
-    options?: ToriiBrowserAccountHistoryListOptions,
-  ): Promise<ToriiBrowserAccountHistoryListResponse<T>>;
-  listContractActivity<T = ToriiContractActivityItem>(
-    options?: ToriiBrowserContractActivityListOptions,
-  ): Promise<ToriiBrowserContractActivityListResponse<T>>;
-  listContractEvents<T = ToriiContractEventItem>(
-    options?: ToriiBrowserContractEventListOptions,
-  ): Promise<ToriiBrowserContractEventListResponse<T>>;
   streamContractEvents<T = ToriiContractEventItem>(
     options?: ToriiBrowserContractEventStreamOptions,
   ): AsyncGenerator<ToriiSseEvent<T>, void, unknown>;
@@ -10641,9 +10453,6 @@ export declare class ToriiBrowserClient {
     aliasOrRequest: string | Record<string, unknown>,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerAssetDefinitions<T = ToriiBrowserExplorerAssetDefinition>(
-    options?: ToriiBrowserExplorerAssetDefinitionsOptions,
-  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerAssetDefinitionEconometrics(
     assetDefinitionId: string,
     options?: Record<string, unknown>,
@@ -10652,23 +10461,14 @@ export declare class ToriiBrowserClient {
     assetDefinitionId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerNfts<T = unknown>(
-    options?: ToriiBrowserExplorerOwnedDomainOptions,
-  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerNft(
     nftId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerRwas<T = unknown>(
-    options?: ToriiBrowserExplorerOwnedDomainOptions,
-  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerRwa(
     rwaId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerBlocks<T = ToriiBrowserExplorerBlock>(
-    options?: ToriiBrowserExplorerHistoryOptions,
-  ): Promise<ToriiBrowserExplorerHistoryPage<T>>;
   getExplorerBlock(
     identifier: string | number | bigint,
     options?: Record<string, unknown>,
@@ -10694,22 +10494,10 @@ export declare class ToriiBrowserClient {
   ): Promise<ToriiBlockProofs>;
   getExplorerMetrics(options?: Record<string, unknown>): Promise<unknown>;
   getExplorerHealth(options?: Record<string, unknown>): Promise<unknown>;
-  listExplorerTransactions<T = ToriiBrowserExplorerTransaction>(
-    options?: ToriiBrowserExplorerTransactionHistoryOptions,
-  ): Promise<ToriiBrowserExplorerHistoryPage<T>>;
-  listLatestExplorerTransactions<T = ToriiBrowserExplorerTransaction>(
-    options?: ToriiBrowserExplorerTransactionHistoryOptions,
-  ): Promise<ToriiBrowserExplorerLatestHistoryPage<T>>;
   getExplorerTransaction(
     hash: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerInstructions<T = ToriiBrowserExplorerInstruction>(
-    options?: ToriiBrowserExplorerInstructionHistoryOptions,
-  ): Promise<ToriiBrowserExplorerHistoryPage<T>>;
-  listLatestExplorerInstructions<T = ToriiBrowserExplorerInstruction>(
-    options?: ToriiBrowserExplorerInstructionHistoryOptions,
-  ): Promise<ToriiBrowserExplorerLatestHistoryPage<T>>;
   getExplorerInstruction(
     transactionHash: string,
     index: number,
@@ -10859,6 +10647,25 @@ export declare class ToriiClient {
   readonly rwas: ToriiCollection<ToriiRwaRow, ToriiCollectionRequestOptions>;
   /** Repo agreements (`POST /v1/repo/agreements/query`). */
   readonly repoAgreements: ToriiCollection<ToriiRepoAgreementRow, ToriiCollectionRequestOptions>;
+  /** Plans and subscriptions use the same query controls and cursor envelope. */
+  readonly subscriptionPlans: ToriiCollection<ToriiSubscriptionPlanRow, ToriiCollectionRequestOptions>;
+  readonly subscriptions: ToriiCollection<ToriiSubscriptionRow, ToriiCollectionRequestOptions>;
+  accountHistory(accountId: string): ToriiHistoryCollection<ToriiAccountHistoryItem, ToriiCollectionRequestOptions>;
+  accountPermissions(accountId: string): ToriiCollection<ToriiAccountPermissionItem, ToriiCollectionRequestOptions>;
+  uaidManifests(uaid: string): ToriiCollection<UaidManifestRecord, ToriiCollectionRequestOptions>;
+  readonly explorerAccounts: ToriiHistoryCollection<ToriiJsonObject, ToriiCollectionRequestOptions>;
+  readonly explorerDomains: ToriiHistoryCollection<ToriiJsonObject, ToriiCollectionRequestOptions>;
+  readonly explorerAssetDefinitions: ToriiHistoryCollection<ToriiJsonObject, ToriiCollectionRequestOptions>;
+  readonly explorerAssets: ToriiHistoryCollection<ToriiJsonObject, ToriiCollectionRequestOptions>;
+  readonly explorerNfts: ToriiHistoryCollection<ToriiJsonObject, ToriiCollectionRequestOptions>;
+  readonly explorerRwas: ToriiHistoryCollection<ToriiJsonObject, ToriiCollectionRequestOptions>;
+  readonly explorerBlocks: ToriiHistoryCollection<ToriiJsonObject, ToriiCollectionRequestOptions>;
+  readonly explorerTransactions: ToriiHistoryCollection<ToriiJsonObject, ToriiCollectionRequestOptions>;
+  readonly explorerLatestTransactions: ToriiHistoryCollection<ToriiJsonObject, ToriiCollectionRequestOptions>;
+  readonly explorerInstructions: ToriiHistoryCollection<ToriiJsonObject, ToriiCollectionRequestOptions>;
+  readonly explorerLatestInstructions: ToriiHistoryCollection<ToriiJsonObject, ToriiCollectionRequestOptions>;
+  readonly contractActivity: ToriiHistoryCollection<ToriiContractActivityItem, ToriiCollectionRequestOptions>;
+  readonly contractEvents: ToriiHistoryCollection<ToriiContractEventItem, ToriiCollectionRequestOptions>;
   /** Asset balances of one account (`POST /v1/accounts/{account_id}/assets/query`). */
   accountAssets(accountId: string): ToriiCollection<ToriiAccountAssetRow, ToriiCollectionRequestOptions>;
   /** Holders of one asset definition (`POST /v1/assets/{definition_id}/holders/query`). */
@@ -10884,52 +10691,10 @@ export declare class ToriiClient {
     operationId: string | ArrayBuffer | ArrayBufferView,
     options?: { signal?: AbortSignal },
   ): Promise<UnverifiedKagemushaOperationStatusV1>;
-  listExplorerRwas<T = ToriiExplorerRwa>(
-    options?: ExplorerRwaListOptions,
-  ): Promise<ToriiExplorerRwasPage>;
   getExplorerRwaDetail<T = ToriiExplorerRwa>(
     rwaId: string,
     options?: { signal?: AbortSignal },
   ): Promise<T | null>;
-  iterateExplorerRwas<T = ToriiExplorerRwa>(
-    options?: ExplorerRwaIteratorOptions,
-  ): AsyncGenerator<T, void, unknown>;
-  listAccountRwas<T = ToriiExplorerRwa>(
-    accountId: string,
-    options?: ExplorerRwaListOptions,
-  ): Promise<ToriiExplorerRwasPage>;
-  iterateAccountRwas<T = ToriiExplorerRwa>(
-    accountId: string,
-    options?: ExplorerRwaIteratorOptions,
-  ): AsyncGenerator<T, void, unknown>;
-  listExplorerNfts<T = ToriiExplorerNft>(
-    options?: ExplorerNftListOptions,
-  ): Promise<ToriiExplorerNftsPage>;
-  iterateExplorerNfts<T = ToriiExplorerNft>(
-    options?: ExplorerNftIteratorOptions,
-  ): AsyncGenerator<T, void, unknown>;
-  listAccountNfts<T = ToriiExplorerNft>(
-    accountId: string,
-    options?: ExplorerNftListOptions,
-  ): Promise<ToriiExplorerNftsPage>;
-  iterateAccountNfts<T = ToriiExplorerNft>(
-    accountId: string,
-    options?: ExplorerNftIteratorOptions,
-  ): AsyncGenerator<T, void, unknown>;
-  listContractActivity<T = ToriiContractActivityItem>(
-    options?: ContractActivityListOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
-  listContractEvents<T = ToriiContractEventItem>(
-    options?: ContractEventListOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
-  listAccountPermissions<T = ToriiAccountPermissionItem>(
-    accountId: string,
-    options?: AccountPermissionsListOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
-  iterateAccountPermissions<T = ToriiAccountPermissionItem>(
-    accountId: string,
-    options?: PaginationIteratorOptions,
-  ): AsyncGenerator<T, void, unknown>;
   uploadAttachment(
     data: ArrayBufferView | ArrayBuffer | string,
     options: { contentType: string; signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
@@ -11228,10 +10993,6 @@ export declare class ToriiClient {
     uaid: string,
     options?: UaidBindingsQueryOptions,
   ): Promise<UaidBindingsResponse>;
-  getUaidManifests(
-    uaid: string,
-    options?: UaidManifestQueryOptions,
-  ): Promise<UaidManifestsResponse>;
   publishSpaceDirectoryManifest(
     request: PublishSpaceDirectoryManifestRequest,
     options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
@@ -11526,7 +11287,6 @@ export declare class ToriiClient {
     height: number | string | bigint,
     options?: { signal?: AbortSignal },
   ): Promise<ToriiExplorerBlock | null>;
-  listBlocks(options?: BlockListOptions): Promise<ToriiExplorerBlocksPage>;
   /**
    * Stream `/v1/events/sse`; `options.filter` uses the collection-query text
    * grammar over event fields. Abort with `options.signal` or by leaving the loop.
@@ -11766,22 +11526,10 @@ export declare class ToriiClient {
   iterateTriggersQuery(
     options?: TriggerQueryIteratorOptions,
   ): AsyncGenerator<ToriiTriggerRecord, void, unknown>;
-  listSubscriptionPlans(
-    options?: SubscriptionPlanListOptions,
-  ): Promise<SubscriptionPlanListResponse>;
-  iterateSubscriptionPlans(
-    options?: SubscriptionPlanIteratorOptions,
-  ): AsyncGenerator<SubscriptionPlanListItem, void, unknown>;
   createSubscriptionPlan(
     request: SubscriptionPlanCreateRequest,
     options: RequiredCanonicalRequestOptions,
   ): Promise<SubscriptionPlanCreateResponse>;
-  listSubscriptions(
-    options?: SubscriptionListOptions,
-  ): Promise<SubscriptionListResponse>;
-  iterateSubscriptions(
-    options?: SubscriptionIteratorOptions,
-  ): AsyncGenerator<SubscriptionListItem, void, unknown>;
   createSubscription(
     request: SubscriptionCreateRequest,
     options: RequiredCanonicalRequestOptions,

@@ -22,6 +22,10 @@ export const SELECT_MAX_FIELDS = 64;
 export const CURSOR_MAX_BYTES = 4096;
 /** Largest accepted page size (`u32`). */
 const LIMIT_MAX = 4_294_967_295;
+/** Maximum number of `group_by` fields in one aggregate. */
+const AGGREGATE_MAX_GROUP_BY = 8;
+/** Maximum number of metrics in one aggregate. */
+const AGGREGATE_MAX_METRICS = 16;
 /** JSON members accepted in a list-query body, in canonical order. */
 export const LIST_QUERY_MEMBERS = Object.freeze([
   "filter",
@@ -61,6 +65,7 @@ const INPUT_MEMBERS = Object.freeze([
   "includeTotal",
 ]);
 const AGGREGATE_INPUT_MEMBERS = Object.freeze(["groupBy", "metrics", "having"]);
+const AGGREGATE_MEMBERS = Object.freeze(["group_by", "metrics", "having"]);
 const METRIC_INPUT_MEMBERS = Object.freeze(["alias", "fn", "field"]);
 const CURSOR_PATTERN = /^[A-Za-z0-9_-]+$/u;
 const LIMIT_TEXT = /^\+?[0-9]+$/u;
@@ -325,6 +330,28 @@ function validateQuery(query) {
   if (query.aggregate !== undefined) {
     if (query.aggregate.metrics.length === 0) {
       throw new ListQueryError("aggregate", "`metrics` must list at least one metric");
+    }
+    if (query.aggregate.groupBy.length > AGGREGATE_MAX_GROUP_BY) {
+      throw new ListQueryError(
+        "aggregate",
+        `\`group_by\` lists at most ${AGGREGATE_MAX_GROUP_BY} fields`,
+      );
+    }
+    if (query.aggregate.metrics.length > AGGREGATE_MAX_METRICS) {
+      throw new ListQueryError(
+        "aggregate",
+        `\`metrics\` lists at most ${AGGREGATE_MAX_METRICS} metrics`,
+      );
+    }
+    const paths = [
+      ...query.aggregate.groupBy,
+      ...query.aggregate.metrics
+        .filter((metric) => metric.field !== undefined)
+        .map((metric) => metric.field),
+    ];
+    for (const path of paths) {
+      const error = fieldError("aggregate", path);
+      if (error) throw error;
     }
     if (query.aggregate.having instanceof Filter) {
       try {
@@ -675,6 +702,7 @@ function decodeAggregateMember(value) {
   if (!isPlainRecord(value)) {
     throw new ListQueryError("aggregate", "`aggregate` must be an object");
   }
+  rejectUnknownMembers(value, AGGREGATE_MEMBERS, "aggregate", "member");
   const groupByValue = value.group_by ?? [];
   if (!Array.isArray(groupByValue) || groupByValue.some((path) => typeof path !== "string")) {
     throw new ListQueryError("aggregate", "`group_by` must be an array of field names");
@@ -687,6 +715,7 @@ function decodeAggregateMember(value) {
     if (!isPlainRecord(metric)) {
       throw new ListQueryError("aggregate", `metrics[${index}] must be an object`);
     }
+    rejectUnknownMembers(metric, METRIC_INPUT_MEMBERS, "aggregate", `metrics[${index}] member`);
     if (typeof metric.alias !== "string") {
       throw new ListQueryError("aggregate", `metrics[${index}].alias must be a string`);
     }

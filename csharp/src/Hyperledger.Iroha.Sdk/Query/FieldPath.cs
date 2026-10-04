@@ -15,8 +15,8 @@ public sealed class FieldPath : IEquatable<FieldPath>
     public const int MaxUtf8Length = 256;
 
     /// <summary>Creates a field path from its dotted spelling.</summary>
-    /// <exception cref="ArgumentException">The path is empty, too long, contains whitespace or
-    /// control characters, or has an empty segment.</exception>
+    /// <exception cref="ArgumentException">The path is empty, too long, contains whitespace,
+    /// control characters or backticks, or has an empty segment.</exception>
     public FieldPath(string path)
     {
         var reason = ValidationError(path);
@@ -75,6 +75,12 @@ public sealed class FieldPath : IEquatable<FieldPath>
         if (path[0] == '.' || path[^1] == '.' || path.Contains("..", StringComparison.Ordinal))
         {
             return "field path segments must not be empty";
+        }
+
+        // The text form quotes segments with backticks and has no escape.
+        if (path.Contains('`', StringComparison.Ordinal))
+        {
+            return "field paths must not contain backticks";
         }
 
         return null;

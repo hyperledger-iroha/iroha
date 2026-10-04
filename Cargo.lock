@@ -6170,6 +6170,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "iroha",
  "iroha_allocation",
  "iroha_config",
  "iroha_config_base",

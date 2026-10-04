@@ -1076,13 +1076,12 @@ passes 28 tests. The [query capture record](../crates/iroha_data_model/tests/fix
 records immutable fixture and pre-declaration source digests.
 
 The [generic query captures](../crates/iroha_data_model/tests/fixtures/query_generic_identity_frames.md)
-add 96 default-feature and 116 `ids_projection` frames. Five generic owners,
-four concrete query records and two typed-hash markers now declare their
-captured nominal identities. Permanent tests preserve complete frames, marker
-composition and membership decode budgets. The default query selection passes
-202 tests and `ids_projection` passes 203, with zero failures or ignored tests
-and 5,109 unchanged selected inputs in each run. Active codec dispatch and
-schema export behavior remain unchanged.
+add 92 frames across 23 families. `SelectorTuple<T>` has one data-free wire layout,
+so a single capture covers every build. Five generic owners, three concrete
+query records and two typed-hash markers declare their captured nominal
+identities. Permanent tests preserve complete frames, marker composition and
+membership decode budgets. Active codec dispatch and schema export behavior
+remain unchanged.
 
 The [generic model fixtures](../crates/iroha_data_model/tests/fixtures/model_generic_identity_frames.md)
 preserve another 68 complete frames and five actual FHE signing preimages.

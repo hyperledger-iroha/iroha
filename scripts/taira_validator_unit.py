@@ -13,6 +13,11 @@ The public beacon credential path is optional only during initial key setup;
 configured beacon custody uses FD 200 and is required for beacon readiness.
 Initial units use config.toml; --config-file beacon.toml selects the separately
 authenticated provider-config transition without changing the initial artifacts.
+--amend-unit with --rate-config-receipt instead creates a fresh public unit from
+an installed unit and the native torii-rate-config-amend receipt. Only its sole
+literal --config-blake3 value changes; config and signer bodies are never read.
+Install the separately validated native config at its original path before
+activating this unit. This helper never installs or restarts a validator.
 
 First boot (Sumeragi record provenance, specs/sumeragi.md section 7.4): every
 unit starts iroha3d_taira --config ... --sora and adds
@@ -26,8 +31,11 @@ sits beside existing history, and removes the token durably before it execs the
 daemon, so no restart repeats the assertion and no lost record store renews it.
 """
 import argparse
+import ast
+import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import stat
 
 CUSTODY = '''reserved_fds = (198, 199, 200)
@@ -191,6 +199,194 @@ FIRST_BOOT_TOKEN = "sumeragi-first-boot"
 # config (`iroha taira public-reset materialize-validator-config`), inside the
 # validator state root.
 SUMERAGI_HISTORY = ("sumeragi-records", "sumeragi-installation.log")
+RATE_BUDGETS = frozenset({
+    "torii.query_rate_per_authority_per_sec", "torii.query_burst_per_authority",
+    "torii.tx_rate_per_authority_per_sec", "torii.tx_burst_per_authority",
+    "torii.deploy_rate_per_origin_per_sec", "torii.deploy_burst_per_origin",
+    "torii.preauth_rate_per_ip_per_sec", "torii.preauth_burst_per_ip",
+    "torii.soracloud_public_rate_per_ip_per_sec", "torii.soracloud_public_burst_per_ip",
+    "torii.soracloud_mutation_rate_per_account_origin_per_sec",
+    "torii.soracloud_mutation_burst_per_account_origin", "torii.proof_rate_per_minute",
+    "torii.proof_burst", "torii.mcp.rate_per_minute", "torii.mcp.burst",
+    "torii.push.rate_per_minute", "torii.push.burst", "content.max_requests_per_second",
+    "content.request_burst", "torii.connect.ws_rate_per_ip_per_min",
+    "sorafs.gateway.rate_limit.max_requests", "torii.operator_auth.rate_per_minute",
+    "torii.operator_auth.burst", "torii.soranet_privacy_ingest.rate_per_sec",
+    "torii.soranet_privacy_ingest.burst", "torii.recipient_lookup.requests_per_minute",
+})
+STABLE_FIELDS = ("st_dev", "st_ino", "st_uid", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+
+
+def snapshot(info):
+    return tuple(getattr(info, field) for field in STABLE_FIELDS)
+
+
+def public_input(path, limit):
+    """Retain a bounded, owner-controlled public input; never used for config bodies."""
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) not in (0o400, 0o444, 0o600, 0o644)
+                or info.st_nlink != 1 or not 0 < info.st_size <= limit
+                or snapshot(os.lstat(path)) != snapshot(info)):
+            raise ValueError("untrusted public amendment input")
+        content = bytearray()
+        while len(content) <= limit:
+            chunk = os.read(descriptor, min(65536, limit + 1 - len(content)))
+            if not chunk:
+                break
+            content.extend(chunk)
+        if len(content) != info.st_size or snapshot(os.fstat(descriptor)) != snapshot(info):
+            raise ValueError("public amendment input changed while reading")
+        return descriptor, info, bytes(content)
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def unique_json(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate public receipt key")
+        result[key] = value
+    return result
+
+
+def rate_config_receipt(content):
+    receipt = json.loads(content, object_pairs_hook=unique_json)
+    fields = {"schema", "source_path", "source_config_blake3", "output_path", "output_config_blake3",
+              "request_budgets", "unchanged_optional_sections", "output_metadata"}
+    if not isinstance(receipt, dict) or set(receipt) != fields or receipt["schema"] != "iroha.taira.torii-rate-config-amend.v1":
+        raise ValueError("unsupported public rate-config receipt")
+    for name in ("source_path", "output_path"):
+        if not isinstance(receipt[name], str):
+            raise ValueError("invalid public config path")
+        checked_path(receipt[name], name)
+    if (receipt["source_path"] == receipt["output_path"]
+            or PurePosixPath(receipt["source_path"]).parent != PurePosixPath(receipt["output_path"]).parent):
+        raise ValueError("native output must be fresh beside its source")
+    for name in ("source_config_blake3", "output_config_blake3"):
+        if not isinstance(receipt[name], str) or not re.fullmatch(r"[0-9a-f]{64}", receipt[name]):
+            raise ValueError("invalid native config fingerprint")
+    budgets = receipt["request_budgets"]
+    if (not isinstance(budgets, dict) or not set(budgets) <= RATE_BUDGETS
+            or any(type(value) is not int or not 0 < value <= 0xffffffff for value in budgets.values())):
+        raise ValueError("invalid public request budgets")
+    optional = receipt["unchanged_optional_sections"]
+    if optional not in ([], ["recipient-lookup"]) or (optional and "torii.recipient_lookup.requests_per_minute" in budgets):
+        raise ValueError("invalid optional section receipt")
+    metadata = receipt["output_metadata"]
+    if (not isinstance(metadata, dict) or set(metadata) != {"device", "inode", "uid", "mode", "links", "bytes"}
+            or any(type(value) is not int or value < 0 for value in metadata.values())
+            or metadata["uid"] != os.geteuid() or metadata["mode"] != 0o600
+            or metadata["links"] != 1 or not 0 < metadata["bytes"] <= 1024 * 1024):
+        raise ValueError("unsafe native config output metadata")
+    return receipt
+
+
+def unit_config_binding(content):
+    lines = content.decode("utf-8").splitlines()
+    starts = [line for line in lines if line.lstrip().startswith("ExecStart=")]
+    prefix = "ExecStart=/usr/bin/python3 -c "
+    if len(starts) != 1 or not starts[0].startswith(prefix):
+        raise ValueError("unit must have one inline custody launcher")
+    code = json.loads(starts[0][len(prefix):])
+    if not isinstance(code, str):
+        raise ValueError("invalid inline custody launcher")
+    tree = ast.parse(code.replace("%%", "%").replace("$$", "$"))
+    stores = [node for node in ast.walk(tree) if isinstance(node, ast.Name) and node.id == "cmd" and isinstance(node.ctx, ast.Store)]
+    assignments = [node for node in tree.body if isinstance(node, ast.Assign) and len(node.targets) == 1
+                   and isinstance(node.targets[0], ast.Name) and node.targets[0].id == "cmd"]
+    if len(stores) != 1 or len(assignments) != 1:
+        raise ValueError("unit must contain one literal daemon argv")
+    cmd = ast.literal_eval(assignments[0].value)
+    if (not isinstance(cmd, list) or len(cmd) != 6 or any(not isinstance(value, str) for value in cmd)
+            or cmd[1:].count("--sora") != 1 or cmd[1:].count("--config") != 1
+            or cmd[1:].count("--config-blake3") != 1):
+        raise ValueError("unit argv must bind exactly one config fingerprint")
+    config_index, hash_index = cmd.index("--config"), cmd.index("--config-blake3")
+    if config_index == 5 or hash_index == 5 or set((1, 2, 3, 4, 5)) != {config_index, config_index + 1, hash_index, hash_index + 1, cmd.index("--sora")}:
+        raise ValueError("invalid fingerprint-bound daemon argv")
+    checked_path(cmd[0], "daemon executable")
+    checked_path(cmd[config_index + 1], "unit config")
+    if PurePosixPath(cmd[0]).name != "iroha3d_taira" or not re.fullmatch(r"[0-9a-f]{64}", cmd[hash_index + 1]):
+        raise ValueError("invalid fingerprint-bound daemon argv")
+    return cmd[config_index + 1], cmd[hash_index + 1]
+
+
+def amend_unit(role, source, receipt_path, output):
+    """Replace one public fingerprint; retain all custody bytes and read no config body."""
+    for path in (source, receipt_path, output):
+        checked_path(str(path), "public amendment path")
+    if role not in ROLES or Path(source).name != f"iroha3d-{role}.service" or Path(output).name != f"iroha3d-{role}.service":
+        raise ValueError("source and output filenames must match the canonical role unit name")
+    held = []
+    created = None
+    output = Path(output)
+    try:
+        for path, limit in ((source, 256 * 1024), (receipt_path, 64 * 1024)):
+            descriptor, info, content = public_input(path, limit)
+            held.append((path, descriptor, info, content))
+        receipt = rate_config_receipt(held[1][3])
+        binding = unit_config_binding(held[0][3])
+        if binding != (receipt["source_path"], receipt["source_config_blake3"]):
+            raise ValueError("native receipt does not match the installed unit config binding")
+        old, new = (receipt[name].encode("ascii") for name in ("source_config_blake3", "output_config_blake3"))
+        if old == new or held[0][3].count(old) != 1:
+            raise ValueError("unit must contain exactly one changed config fingerprint")
+        config_stats = []
+        for name in ("source_path", "output_path"):
+            info = os.lstat(receipt[name])
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                    or stat.S_IMODE(info.st_mode) not in (0o400, 0o600) or info.st_nlink != 1
+                    or not 0 < info.st_size <= 1024 * 1024):
+                raise ValueError("untrusted native config metadata")
+            config_stats.append((receipt[name], info))
+        info = config_stats[1][1]
+        actual = dict(zip(("device", "inode", "uid", "mode", "links", "bytes"),
+                          (info.st_dev, info.st_ino, info.st_uid, stat.S_IMODE(info.st_mode), info.st_nlink, info.st_size)))
+        if actual != receipt["output_metadata"]:
+            raise ValueError("native output metadata no longer matches its receipt")
+        parent = os.lstat(output.parent)
+        if not stat.S_ISDIR(parent.st_mode) or parent.st_uid != os.geteuid() or parent.st_mode & 0o022:
+            raise ValueError("untrusted public unit output directory")
+        def unchanged():
+            for path, descriptor, before, _ in held:
+                if snapshot(os.fstat(descriptor)) != snapshot(before) or snapshot(os.lstat(path)) != snapshot(before):
+                    raise ValueError("public amendment input changed")
+            for path, before in config_stats:
+                if snapshot(os.lstat(path)) != snapshot(before):
+                    raise ValueError("native config metadata changed")
+        unchanged()
+        descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, "wb") as file:
+            created = os.fstat(file.fileno())
+            file.write(held[0][3].replace(old, new, 1))
+            file.flush()
+            unchanged()
+            os.fchmod(file.fileno(), 0o644)
+            os.fsync(file.fileno())
+        unchanged()
+        directory = os.open(output.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        return output
+    except BaseException:
+        if created is not None:
+            try:
+                current = os.lstat(output)
+                if (current.st_dev, current.st_ino) == (created.st_dev, created.st_ino):
+                    os.unlink(output)
+            except FileNotFoundError:
+                pass
+        raise
+    finally:
+        for _, descriptor, _, _ in held:
+            os.close(descriptor)
 
 
 def checked_path(value, label):
@@ -310,13 +506,16 @@ def main():
     parser.add_argument("--mint-finality-seed", help="Required to render. Actual retained owner-0600, single-link, 32-byte raw mint-finality seed path on the approved guest; never read here")
     parser.add_argument("--global-beacon-credential", help="Retained owner-0600, single-link native beacon credential on the approved guest; consumed launch copy at FD 200; omit only for initial key setup; never read here")
     parser.add_argument("--config-file", choices=CONFIG_FILES, help="Exact retained initial config (config.toml, the default) or authenticated beacon provider transition")
-    parser.add_argument("--output", type=Path, help="Required to render. Fresh iroha3d-ROLE.service file; never overwritten")
+    parser.add_argument("--amend-unit", type=Path, help="Installed public unit whose sole native config fingerprint is to be amended; config and custody bytes stay unchanged")
+    parser.add_argument("--rate-config-receipt", type=Path, help="Public native torii-rate-config-amend receipt binding the installed config path and old/new fingerprints")
+    parser.add_argument("--output", type=Path, help="Required to render or amend. Fresh iroha3d-ROLE.service file; never overwritten")
     args = parser.parse_args()
     rendering = {"--runtime-key": args.runtime_key, "--mint-finality-seed": args.mint_finality_seed,
                  "--global-beacon-credential": args.global_beacon_credential,
                  "--config-file": args.config_file, "--output": args.output}
     if args.arm_first_boot:
         given = [flag for flag, value in rendering.items() if value is not None]
+        given += [flag for flag, value in (("--amend-unit", args.amend_unit), ("--rate-config-receipt", args.rate_config_receipt)) if value is not None]
         if given:
             parser.error("--arm-first-boot takes only --role, not " + ", ".join(given))
         try:
@@ -324,6 +523,16 @@ def main():
         except (OSError, RuntimeError) as error:
             parser.exit(1, f"{parser.prog}: first boot not armed: {error}\n")
         print(token)
+        return
+    if args.amend_unit is not None or args.rate_config_receipt is not None:
+        missing = [flag for flag, value in (("--amend-unit", args.amend_unit), ("--rate-config-receipt", args.rate_config_receipt), ("--output", args.output)) if value is None]
+        given = [flag for flag, value in rendering.items() if flag != "--output" and value is not None]
+        if missing or given:
+            parser.error("amendment requires --amend-unit, --rate-config-receipt and --output, with no rendering inputs")
+        try:
+            print(amend_unit(args.role, args.amend_unit, args.rate_config_receipt, args.output))
+        except (OSError, ValueError, SyntaxError, RecursionError) as error:
+            parser.exit(1, f"{parser.prog}: unit not amended: {error}\n")
         return
     missing = [flag for flag in ("--runtime-key", "--mint-finality-seed", "--output") if rendering[flag] is None]
     if missing:

@@ -209,6 +209,13 @@ internal static class FilterJsonReader
                 location.RemoveAt(location.Count - 1);
             }
 
+            // A one-operand `and`/`or` is its operand: the text form cannot spell it, and both
+            // forms must decode to the same tree.
+            if (operands.Count == 1)
+            {
+                return operands[0];
+            }
+
             return name == "and"
                 ? new AndFilter(operands.MoveToImmutable(), validated: true)
                 : new OrFilter(operands.MoveToImmutable(), validated: true);

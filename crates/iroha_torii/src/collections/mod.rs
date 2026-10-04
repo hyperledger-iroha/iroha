@@ -18,7 +18,7 @@ pub(crate) use specs::CollectionSpec;
 pub(crate) fn aggregate_collections() -> impl Iterator<Item = &'static str> {
     specs::ALL
         .into_iter()
-        .filter(|spec| !spec.positioned)
+        .filter(|spec| spec.positioned == 0)
         .map(|spec| spec.id)
 }
 

@@ -8,7 +8,7 @@ use iroha_data_model::{
     query::{
         QueryItemKind, QueryOutput, QueryOutputBatchBox, QueryRequest, QueryWithParams,
         account::prelude::FindAccounts,
-        asset::prelude::{FindAssets, FindAssetsDefinitions},
+        asset::prelude::{FindAssetDefinitions, FindAssets},
         domain::prelude::FindDomains,
         dsl::{CompoundPredicate, SelectorTuple},
         parameters::{FetchSize, ForwardCursor, Pagination, QueryParams, Sorting},
@@ -85,7 +85,7 @@ impl StateQueryKind {
             },
             StateQueryKind::AssetDefinitions => QueryWithParams {
                 query: (),
-                query_payload: norito::codec::Encode::encode(&FindAssetsDefinitions),
+                query_payload: norito::codec::Encode::encode(&FindAssetDefinitions),
                 item: QueryItemKind::AssetDefinition,
                 predicate_bytes: norito::codec::Encode::encode(
                     &CompoundPredicate::<AssetDefinition>::PASS,

@@ -20,7 +20,9 @@ REQUIRED_OUTPUTS = (
     "strictLosslessJson.js", "boundedByteSnapshot.js", "validationFeeTrust.js", "sorafsOrderbookPreflight.js", "sorafsOrderbookSubmission.js", "sorafsOrderbookSubmission.d.ts",
     "smartContractDeploymentSubmit.js", "sumeragiTyped.js", "tairaTestnetProfile.js",
     "toriiBrowserClient.js", "toriiClient.js", "toriiOptional.js", "kotodamaCompiler/index.js",
-    "kotodamaCompiler/browser.js", "kotodamaCompiler/client.js", "kotodamaCompiler/nativeBridge.js",
+    "kotodamaCompiler/browser.js", "kotodamaCompiler/client.js",
+    "kotodamaCompiler/embeddedCallSchema.js", "kotodamaCompiler/embeddedNorito.js",
+    "kotodamaCompiler/nativeBridge.js",
     "kotodamaCompiler/normalize.js",
 )
 

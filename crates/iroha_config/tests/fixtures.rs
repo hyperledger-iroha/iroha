@@ -147,19 +147,20 @@ fn minimal_config_snapshot() {
 }
 /// A minimal node config inherits application-sized budgets without deployment overrides.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn minimal_config_inherits_large_application_rate_budgets() {
     let config = load_config_from_fixtures("minimal_with_trusted_peers.toml")
         .expect("minimal node configuration");
     let content = &config.content.limits;
-    assert_eq!(content.max_requests_per_second.get(), 10_000);
-    assert_eq!(content.request_burst.get(), 100_000);
+    assert_eq!(content.max_requests_per_second.get(), 1_000_000);
+    assert_eq!(content.request_burst.get(), 10_000_000);
     assert_eq!(content.max_egress_bytes_per_second.get(), 256 * 1024 * 1024);
     assert_eq!(content.egress_burst_bytes.get(), 1024 * 1024 * 1024);
     let torii = config.torii;
     let gateway = &torii.sorafs_gateway.rate_limit;
     assert_eq!(
         gateway.max_requests.map(std::num::NonZeroU32::get),
-        Some(600_000)
+        Some(60_000_000)
     );
     assert_eq!(gateway.window, Duration::from_secs(60));
     for rate in [
@@ -169,8 +170,9 @@ fn minimal_config_inherits_large_application_rate_budgets() {
         torii.preauth_rate_per_ip_per_sec,
         torii.soracloud_public_rate_per_ip_per_sec,
         torii.soracloud_mutation_rate_per_account_origin_per_sec,
+        torii.soranet_privacy_ingest.rate_per_sec,
     ] {
-        assert_eq!(rate.map(std::num::NonZeroU32::get), Some(10_000));
+        assert_eq!(rate.map(std::num::NonZeroU32::get), Some(1_000_000));
     }
     for burst in [
         torii.query_burst_per_authority,
@@ -182,19 +184,23 @@ fn minimal_config_inherits_large_application_rate_budgets() {
         torii.proof_api.burst,
         torii.mcp.burst,
         torii.push.burst,
+        torii.operator_auth.burst,
+        torii.soranet_privacy_ingest.burst,
     ] {
-        assert_eq!(burst.map(std::num::NonZeroU32::get), Some(100_000));
+        assert_eq!(burst.map(std::num::NonZeroU32::get), Some(10_000_000));
     }
-    assert_eq!(torii.connect.ws_rate_per_ip_per_min, 600_000);
+    assert_eq!(torii.connect.ws_rate_per_ip_per_min, 60_000_000);
     assert_eq!(torii.connect.ws_per_ip_max_sessions, 10);
     assert_eq!(torii.connect.ws_max_sessions, 10_000);
     for rate in [
         torii.proof_api.rate_per_minute,
         torii.mcp.rate_per_minute,
         torii.push.rate_per_minute,
+        torii.operator_auth.rate_per_minute,
     ] {
-        assert_eq!(rate.map(std::num::NonZeroU32::get), Some(600_000));
+        assert_eq!(rate.map(std::num::NonZeroU32::get), Some(60_000_000));
     }
+    assert_eq!(torii.recipient_lookup.requests_per_minute, 60_000_000);
     assert_eq!(
         torii
             .proof_api
@@ -209,6 +215,51 @@ fn minimal_config_inherits_large_application_rate_budgets() {
             .map(std::num::NonZeroU64::get),
         Some(1024 * 1024 * 1024)
     );
+
+    // Raising defaults must still respect budgets deliberately chosen by the operator.
+    let overrides = r#"
+[torii]
+tx_rate_per_authority_per_sec = 3
+tx_burst_per_authority = 7
+preauth_rate_per_ip_per_sec = 3
+preauth_burst_per_ip = 7
+[torii.operator_auth]
+rate_per_minute = 5
+burst = 9
+[torii.recipient_lookup]
+policy_id = "cbuae_aed_sbp_pkr"
+requests_per_minute = 30
+request_timeout_ms = 4000
+routes = []
+[torii.soranet_privacy_ingest]
+rate_per_sec = 2
+burst = 4
+"#;
+    let explicit = ConfigReader::new()
+        .without_env()
+        .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+        .expect("minimal node fixture")
+        .with_toml_source(TomlSource::inline(
+            overrides.parse().expect("rate overrides"),
+        ))
+        .read_and_complete::<UserConfig>()
+        .expect("explicit budgets")
+        .parse()
+        .expect("small operator-selected budgets remain valid")
+        .torii;
+    for (configured, expected) in [
+        (explicit.tx_rate_per_authority_per_sec, 3),
+        (explicit.tx_burst_per_authority, 7),
+        (explicit.preauth_rate_per_ip_per_sec, 3),
+        (explicit.preauth_burst_per_ip, 7),
+        (explicit.operator_auth.rate_per_minute, 5),
+        (explicit.operator_auth.burst, 9),
+        (explicit.soranet_privacy_ingest.rate_per_sec, 2),
+        (explicit.soranet_privacy_ingest.burst, 4),
+    ] {
+        assert_eq!(configured.map(std::num::NonZeroU32::get), Some(expected));
+    }
+    assert_eq!(explicit.recipient_lookup.requests_per_minute, 30);
 }
 #[test]
 fn torii_receipt_signer_parses() {

@@ -30,6 +30,8 @@ const FILTERS: &[&str] = &[
     "metadata.null = 1",
     r#"text = "quote \" backslash \\ newline \n unicode é""#,
     "tx_hash = \"hash\" and tx_status in [\"Approved\", \"Rejected\"]",
+    // As in JSON, DEL and C1 characters stay literal inside strings.
+    "note = \"del\u{7f} c1\u{85}\"",
 ];
 
 const FILTER_ERRORS: &[&str] = &[
@@ -54,6 +56,7 @@ const FILTER_ERRORS: &[&str] = &[
     "and = 1",
     "a <= null",
     "a = 1\nand b ~ 2",
+    "a = \"raw\u{1}control\"",
 ];
 
 const SORTS: &[&str] = &[
@@ -89,7 +92,17 @@ const QUERY_BODY_ERRORS: &[&str] = &[
     r#"{"limit": 0}"#,
     r#"{"cursor": "has space"}"#,
     r#"{"include_total": "yes"}"#,
+    r#"{"filter": {"op": "eq", "args": ["a`b", 1]}}"#,
+    r#"{"aggregate": {"groupby": ["a"], "metrics": [{"alias": "n", "fn": "count"}]}}"#,
+    r#"{"aggregate": {"metrics": [{"alias": "n", "fn": "count", "feild": "a"}]}}"#,
+    r#"{"aggregate": {"group_by": ["a", "b", "c", "d", "e", "f", "g", "h", "i"], "metrics": [{"alias": "n", "fn": "count"}]}}"#,
     "[]",
+];
+
+/// JSON-form filters that decode to a different (normalized) tree.
+const JSON_FILTERS: &[&str] = &[
+    r#"{"op": "and", "args": [{"op": "eq", "args": ["a", 1]}]}"#,
+    r#"{"op": "or", "args": [{"op": "not", "args": [{"op": "or", "args": [{"op": "is_null", "args": ["b"]}]}]}]}"#,
 ];
 
 const QUERY_PAIR_ERRORS: &[&[(&str, &str)]] = &[
@@ -210,6 +223,18 @@ fn generate() -> Value {
             ])
         })
         .collect();
+    let json_filters = JSON_FILTERS
+        .iter()
+        .map(|text| {
+            let value = norito::json::parse_value(text).expect("vector filter is JSON");
+            let parsed = FilterExpr::from_json_value(value.clone()).expect("vector filter decodes");
+            object(vec![
+                ("json", value),
+                ("canonical", Value::from(parsed.to_string())),
+                ("normalized", parsed.to_json_value()),
+            ])
+        })
+        .collect();
     let pages = [
         Page {
             items: vec![object(vec![("id", Value::from("a"))])],
@@ -233,6 +258,7 @@ fn generate() -> Value {
         ("version", Value::from(1u64)),
         ("filters", Value::Array(filters)),
         ("filter_errors", Value::Array(filter_errors)),
+        ("json_filters", Value::Array(json_filters)),
         ("sorts", Value::Array(sorts)),
         ("sort_errors", Value::Array(sort_errors)),
         ("queries", Value::Array(queries)),

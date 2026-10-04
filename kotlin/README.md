@@ -86,7 +86,8 @@ private standalone elections.
 Every Torii collection (`specs/torii/collection_queries.md`) is read with one
 query language and returns one page envelope. `HttpClientTransport` exposes the
 collections: `domains`, `accounts`, `assetDefinitions`, `nfts`, `rwas`,
-`repoAgreements`, `accountAssets(accountId)`, `assetHolders(definitionId)`,
+`subscriptionPlans`, `subscriptions`, `contractActivity`, `contractEvents`,
+`repoAgreements`, `accountAssets(accountId)`, `accountPermissions(accountId)`, `accountHistory(accountId)`, `uaidManifests(uaid)`, `assetHolders(definitionId)`,
 `transactions` and `accountTransactions(accountId)`. Each one has `page(query)` (one page),
 `iterate(query)` (a lazy iterator that follows `next_cursor`; `close()` cancels
 the request in flight), `pages(query)` and `fetchAll(query)` (every page,
@@ -149,6 +150,13 @@ Java uses the same API: `Filter.field("owned_by").eq(alice).and(...)`,
 `ListQuery.builder().filter(filter).sort("-quantity,id").limit(50).build()`,
 `client.domains().page(query)`, and try-with-resources around
 `client.domains().iterate(query)`.
+
+Explorer feeds also use the shared collection contract through `explorerAccounts`,
+`explorerDomains`, `explorerAssetDefinitions`, `explorerAssets`, `explorerNfts`,
+`explorerRwas`, `explorerBlocks`, `explorerTransactions`, `explorerLatestTransactions`,
+`explorerInstructions`, and `explorerLatestInstructions`. Rows are `JsonObject` values.
+All eleven feeds follow opaque cursors in fixed bounded order; they reject sort,
+aggregate, and exact-total controls. Empty pages can still carry `nextCursor`.
 
 - `toString()` of a `Filter` is the canonical text (`owned_by = "alice" and
   quantity >= "10.5"`) and `toJson()` the JSON form; `Filter.parse(text)`

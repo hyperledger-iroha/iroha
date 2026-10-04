@@ -595,7 +595,7 @@ class FakeRuntime:
         self.failed_recovery_kind: str | None = None
         self.ping_stdout = json.dumps(
             {
-                "hash": "hash:" + "a" * 63 + "b#ABCD",
+                "hash": "a" * 63 + "b",
                 "transaction": {},
                 "fee_quote": fake_fee_quote(),
             }

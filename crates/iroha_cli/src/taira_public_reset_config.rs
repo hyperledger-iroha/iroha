@@ -8,6 +8,357 @@ const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 // Checked NetworkId display (74 ASCII bytes) plus exactly one LF.
 const MAX_CLIENT_NETWORK_ID_BYTES: u64 = 75;
 
+/// Request budgets that can be amended independently without changing authentication policy.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum ToriiRateSection {
+    Torii,
+    Mcp,
+    Push,
+    Content,
+    Connect,
+    Gateway,
+    OperatorAuth,
+    PrivacyIngest,
+    RecipientLookup,
+}
+
+/// Amend only named HTTP request budgets through native private-file custody.
+#[derive(clap::Args, Debug)]
+pub(super) struct ToriiRateConfigAmend {
+    /// Inherited read-only owner-private regular configuration descriptor.
+    #[arg(long, value_name = "FD", value_parser = clap::value_parser!(u32).range(3..=65535))]
+    config_fd: u32,
+    /// Absolute original path; checked against the held descriptor without reopening its body.
+    #[arg(long, value_name = "PATH")]
+    config_source_path: PathBuf,
+    /// Positive steady request budget; minute budgets are derived with checked arithmetic.
+    #[arg(long, value_name = "REQUESTS", value_parser = clap::value_parser!(u32).range(1..))]
+    rate_per_second: u32,
+    /// Positive request-token burst capacity.
+    #[arg(long, value_name = "REQUESTS", value_parser = clap::value_parser!(u32).range(1..))]
+    burst: u32,
+    /// Repeat to select budgets; omission selects all. Torii includes query/tx/deploy/preauth/proof/Soracloud.
+    #[arg(long, value_enum)]
+    section: Vec<ToriiRateSection>,
+    /// Fresh 0600 runtime file beside the source, outside repositories; never overwritten.
+    #[arg(long, value_name = "PATH")]
+    output: PathBuf,
+}
+
+/// Materialize and report an offline amendment. Activation still requires daemon check-config
+/// and a supervised restart: existing Torii token buckets do not reload from disk.
+pub(super) fn torii_rate_config_amend(
+    args: &ToriiRateConfigAmend,
+    writer: &mut impl Write,
+) -> Result<()> {
+    #[cfg(unix)]
+    {
+        torii_rate_config_amend_unix(args, writer)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (args, writer);
+        Err(eyre!(
+            "Torii rate amendment requires Unix private-file custody"
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn torii_rate_config_amend_unix(
+    args: &ToriiRateConfigAmend,
+    writer: &mut impl Write,
+) -> Result<()> {
+    use std::os::fd::AsRawFd as _;
+    validate_absolute_normal_path(&args.config_source_path, "validator source path")?;
+    validate_absolute_normal_path(&args.output, "amended validator output")?;
+    let source_path = args
+        .config_source_path
+        .to_str()
+        .ok_or_else(|| eyre!("validator source path must be UTF-8"))?;
+    let output_path = args
+        .output
+        .to_str()
+        .ok_or_else(|| eyre!("amended validator output must be UTF-8"))?;
+    if args.output == args.config_source_path
+        || args.output.parent() != args.config_source_path.parent()
+    {
+        return Err(eyre!(
+            "rate amendment requires a fresh output beside its source"
+        ));
+    }
+    let mut directories = retain_client_input_directories(&args.config_source_path, true)?;
+    // Publication changes the shared private parent timestamps, but not its core identity.
+    for directory in &mut directories {
+        if Some(directory.path.as_path()) == args.output.parent() {
+            directory.private = false;
+        }
+    }
+    let retained = crate::client_config::duplicate_inherited_descriptor(args.config_fd)?;
+    let before = retained.metadata()?;
+    let check = || -> Result<()> {
+        check_client_source_directories(&directories)?;
+        let opened = retained.metadata()?;
+        let named = fs::symlink_metadata(&args.config_source_path)?;
+        if private_client_snapshot(&opened) != private_client_snapshot(&before)
+            || private_client_snapshot(&named) != private_client_snapshot(&before)
+            || !named.is_file()
+            || named.file_type().is_symlink()
+        {
+            return Err(eyre!(
+                "validator source custody changed during rate amendment"
+            ));
+        }
+        Ok(())
+    };
+    check()?;
+    let source = inherited_config(retained.as_raw_fd() as u32)?;
+    check()?;
+    let text = std::str::from_utf8(&source).map_err(|_| eyre!("validator config is not UTF-8"))?;
+    let mut table: toml::Table =
+        toml::from_str(text).map_err(|_| eyre!("validator config is not valid TOML"))?;
+    let result = (|| -> Result<()> {
+        if table.contains_key("extends") || table.contains_key("profile") {
+            return Err(eyre!(
+                "rate amendment requires a self-contained flat validator config"
+            ));
+        }
+        let original = validate_rate_node_config(&table, &args.config_source_path)?;
+        let gateway_window = original.torii.sorafs_gateway.rate_limit.window;
+        drop(original);
+        let rates = amend_request_rates(
+            &mut table,
+            &args.section,
+            args.rate_per_second,
+            args.burst,
+            gateway_window,
+        )?;
+        let recipient_unchanged = (args.section.is_empty()
+            || args.section.contains(&ToriiRateSection::RecipientLookup))
+            && !rates.contains_key("torii.recipient_lookup.requests_per_minute");
+        drop(validate_rate_node_config(&table, &args.output)?);
+        let rendered = Zeroizing::new(
+            toml::to_string_pretty(&table)
+                .map_err(|_| eyre!("cannot materialize amended validator config"))?,
+        );
+        if rendered.len() as u64 > MAX_CONFIG_BYTES {
+            return Err(eyre!("amended validator config exceeds its bound"));
+        }
+        check()?;
+        write_projected_client_private(&args.output, rendered.as_bytes(), check)?;
+        let metadata = fs::symlink_metadata(&args.output)?;
+        let mut report = Map::new();
+        report.insert(
+            "schema".into(),
+            Value::String("iroha.taira.torii-rate-config-amend.v1".into()),
+        );
+        report.insert("source_path".into(), Value::String(source_path.into()));
+        report.insert(
+            "source_config_blake3".into(),
+            Value::String(blake3::hash(&source).to_hex().to_string()),
+        );
+        report.insert("output_path".into(), Value::String(output_path.into()));
+        report.insert(
+            "output_config_blake3".into(),
+            Value::String(blake3::hash(rendered.as_bytes()).to_hex().to_string()),
+        );
+        report.insert("request_budgets".into(), Value::Object(rates));
+        report.insert(
+            "unchanged_optional_sections".into(),
+            if recipient_unchanged {
+                norito::json!(["recipient-lookup"])
+            } else {
+                norito::json!([])
+            },
+        );
+        let mut output_metadata = Map::new();
+        for (field, value) in [
+            ("device", metadata.dev()),
+            ("inode", metadata.ino()),
+            ("uid", u64::from(metadata.uid())),
+            ("mode", u64::from(metadata.mode() & 0o7777)),
+            ("links", metadata.nlink()),
+            ("bytes", metadata.len()),
+        ] {
+            output_metadata.insert(field.into(), Value::from(value));
+        }
+        report.insert("output_metadata".into(), Value::Object(output_metadata));
+        writeln!(writer, "{}", json::to_json(&Value::Object(report))?)?;
+        Ok(())
+    })();
+    crate::soracloud::zeroize_taira_toml_table(&mut table);
+    result
+}
+
+/// Use the daemon's environment-free loader and actual schema; diagnostics never include values.
+fn validate_rate_node_config(
+    table: &toml::Table,
+    path: &Path,
+) -> Result<iroha_config::parameters::actual::Root> {
+    use iroha_config::node_config::{NodeConfigOptions, NodeFile, open_node_config};
+    let (user, _) = open_node_config(
+        NodeFile::Verified {
+            path: path.to_owned(),
+            table: table.clone(),
+        },
+        NodeConfigOptions { sora: true },
+    )
+    .map_err(|_| eyre!("validator configuration cannot be loaded by the native node schema"))?
+    .read()
+    .map_err(|_| eyre!("validator configuration does not match the native node schema"))?;
+    user.parse()
+        .map_err(|_| eyre!("validator configuration fails native runtime validation"))
+}
+
+/// Preserve every non-budget value, including feature switches, byte limits and window durations.
+fn amend_request_rates(
+    table: &mut toml::Table,
+    sections: &[ToriiRateSection],
+    rate: u32,
+    burst: u32,
+    gateway_window: std::time::Duration,
+) -> Result<Map> {
+    use ToriiRateSection::*;
+    if rate == 0 || burst == 0 {
+        return Err(eyre!("request rate and burst must be positive"));
+    }
+    let selected = |section| sections.is_empty() || sections.contains(&section);
+    let recipient_present = table
+        .get("torii")
+        .and_then(toml::Value::as_table)
+        .is_some_and(|torii| torii.contains_key("recipient_lookup"));
+    let minute = if [Torii, Mcp, Push, Connect, OperatorAuth]
+        .into_iter()
+        .any(selected)
+        || (selected(RecipientLookup) && recipient_present)
+    {
+        rate.checked_mul(60)
+            .ok_or_else(|| eyre!("request rate per minute exceeds u32"))?
+    } else {
+        1 // Unselected minute fields are never written.
+    };
+    let gateway = if selected(Gateway) {
+        let tokens = u128::from(rate)
+            .checked_mul(gateway_window.as_nanos())
+            .and_then(|value| value.checked_add(999_999_999))
+            .map(|value| value / 1_000_000_000)
+            .and_then(|value| u32::try_from(value).ok())
+            .filter(|value| *value > 0)
+            .ok_or_else(|| eyre!("gateway request budget cannot represent its retained window"))?;
+        Some(tokens)
+    } else {
+        None
+    };
+    let mut budgets = Map::new();
+    for (section, path, value) in [
+        (
+            Torii,
+            &["torii", "query_rate_per_authority_per_sec"][..],
+            rate,
+        ),
+        (Torii, &["torii", "query_burst_per_authority"][..], burst),
+        (Torii, &["torii", "tx_rate_per_authority_per_sec"][..], rate),
+        (Torii, &["torii", "tx_burst_per_authority"][..], burst),
+        (
+            Torii,
+            &["torii", "deploy_rate_per_origin_per_sec"][..],
+            rate,
+        ),
+        (Torii, &["torii", "deploy_burst_per_origin"][..], burst),
+        (Torii, &["torii", "preauth_rate_per_ip_per_sec"][..], rate),
+        (Torii, &["torii", "preauth_burst_per_ip"][..], burst),
+        (
+            Torii,
+            &["torii", "soracloud_public_rate_per_ip_per_sec"][..],
+            rate,
+        ),
+        (
+            Torii,
+            &["torii", "soracloud_public_burst_per_ip"][..],
+            burst,
+        ),
+        (
+            Torii,
+            &[
+                "torii",
+                "soracloud_mutation_rate_per_account_origin_per_sec",
+            ][..],
+            rate,
+        ),
+        (
+            Torii,
+            &["torii", "soracloud_mutation_burst_per_account_origin"][..],
+            burst,
+        ),
+        (Torii, &["torii", "proof_rate_per_minute"][..], minute),
+        (Torii, &["torii", "proof_burst"][..], burst),
+        (Mcp, &["torii", "mcp", "rate_per_minute"][..], minute),
+        (Mcp, &["torii", "mcp", "burst"][..], burst),
+        (Push, &["torii", "push", "rate_per_minute"][..], minute),
+        (Push, &["torii", "push", "burst"][..], burst),
+        (Content, &["content", "max_requests_per_second"][..], rate),
+        (Content, &["content", "request_burst"][..], burst),
+        (
+            Connect,
+            &["torii", "connect", "ws_rate_per_ip_per_min"][..],
+            minute,
+        ),
+        (
+            Gateway,
+            &["sorafs", "gateway", "rate_limit", "max_requests"][..],
+            gateway.unwrap_or(1),
+        ),
+        (
+            OperatorAuth,
+            &["torii", "operator_auth", "rate_per_minute"][..],
+            minute,
+        ),
+        (
+            OperatorAuth,
+            &["torii", "operator_auth", "burst"][..],
+            burst,
+        ),
+        (
+            PrivacyIngest,
+            &["torii", "soranet_privacy_ingest", "rate_per_sec"][..],
+            rate,
+        ),
+        (
+            PrivacyIngest,
+            &["torii", "soranet_privacy_ingest", "burst"][..],
+            burst,
+        ),
+        (
+            RecipientLookup,
+            &["torii", "recipient_lookup", "requests_per_minute"][..],
+            minute,
+        ),
+    ] {
+        if !selected(section) {
+            continue;
+        }
+        // Recipient lookup is an optional whole typed leaf. Preserve its absence and inherited
+        // runtime defaults rather than creating a partial configuration or inventing route policy.
+        if section == RecipientLookup && !recipient_present {
+            continue;
+        }
+        let (field, parents) = path
+            .split_last()
+            .ok_or_else(|| eyre!("empty budget path"))?;
+        let mut cursor = &mut *table;
+        for parent in parents {
+            cursor = cursor
+                .entry((*parent).to_owned())
+                .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+                .as_table_mut()
+                .ok_or_else(|| eyre!("request budget parent must be a table"))?;
+        }
+        cursor.insert((*field).to_owned(), toml::Value::Integer(i64::from(value)));
+        budgets.insert(path.join("."), Value::from(value));
+    }
+    Ok(budgets)
+}
+
 #[derive(clap::Args, Debug)]
 pub(super) struct ConfigRebase {
     /// Inherited owner-controlled regular config descriptor; contents never enter argv/stdout.
@@ -1051,6 +1402,283 @@ mod tests {
 
     const FIXTURE: &[u8] = b"private_key = 'fixture-secret-not-runtime'\nsoranet_transport_private_key = 'transport-fixture'\n[genesis]\nfile = '/retained/genesis.nrt'\nexpected_hash = 'public-hash'\n[streaming]\nidentity_private_key = 'streaming-fixture'\n";
 
+    #[test]
+    fn torii_rate_amendment_preserves_non_budget_values_and_optional_service_absence() {
+        let mut table: toml::Table = toml::from_str(
+            "private_key='fixture-secret-not-runtime'\n[torii]\npreauth_cooldown_ms=250\napi_tokens=['fixture-token']\nproof_egress_bytes_per_sec=2048\n[torii.push]\nrate_limit_enabled=false\n[torii.operator_auth]\nenabled=false\n[content]\nmax_egress_bytes_per_second=1024\n[sorafs.gateway.rate_limit]\nwindow='2s'\nban='1s'\n",
+        ).unwrap();
+        let retained = table.clone();
+        let budgets = amend_request_rates(
+            &mut table,
+            &[],
+            1000,
+            10000,
+            std::time::Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(
+            table["torii"]["query_rate_per_authority_per_sec"].as_integer(),
+            Some(1000)
+        );
+        assert_eq!(
+            table["torii"]["mcp"]["rate_per_minute"].as_integer(),
+            Some(60000)
+        );
+        assert_eq!(table["content"]["request_burst"].as_integer(), Some(10000));
+        assert_eq!(
+            table["torii"]["connect"]["ws_rate_per_ip_per_min"].as_integer(),
+            Some(60000)
+        );
+        assert_eq!(
+            table["sorafs"]["gateway"]["rate_limit"]["max_requests"].as_integer(),
+            Some(2000)
+        );
+        assert!(
+            !table["torii"]
+                .as_table()
+                .unwrap()
+                .contains_key("recipient_lookup")
+        );
+        assert!(!budgets.contains_key("torii.recipient_lookup.requests_per_minute"));
+        // Every preexisting leaf except an explicit request budget remains identical.
+        fn compare(old: &toml::Table, new: &toml::Table, prefix: &str, budgets: &Map) {
+            for (field, value) in old {
+                let path = if prefix.is_empty() {
+                    field.clone()
+                } else {
+                    format!("{prefix}.{field}")
+                };
+                if let Some(nested) = value.as_table() {
+                    compare(nested, new[field].as_table().unwrap(), &path, budgets);
+                } else if !budgets.contains_key(&path) {
+                    assert_eq!(value, &new[field], "{path}");
+                }
+            }
+        }
+        compare(&retained, &table, "", &budgets);
+        let mut optional: toml::Table = toml::from_str("[torii.recipient_lookup]\nrequests_per_minute=30\npolicy_id='cbuae_aed_sbp_pkr'\nrequest_timeout_ms=4000\nroutes=[]\n").unwrap();
+        amend_request_rates(
+            &mut optional,
+            &[ToriiRateSection::RecipientLookup],
+            1000,
+            10000,
+            std::time::Duration::from_secs(60),
+        )
+        .unwrap();
+        assert_eq!(
+            optional["torii"]["recipient_lookup"]["requests_per_minute"].as_integer(),
+            Some(60000)
+        );
+        assert_eq!(
+            optional["torii"]["recipient_lookup"]["policy_id"].as_str(),
+            Some("cbuae_aed_sbp_pkr")
+        );
+    }
+
+    #[test]
+    fn torii_rate_amendment_sections_and_checked_arithmetic_are_exact() {
+        let mut table = toml::Table::new();
+        let budgets = amend_request_rates(
+            &mut table,
+            &[ToriiRateSection::Mcp],
+            5,
+            10,
+            std::time::Duration::ZERO,
+        )
+        .unwrap();
+        assert_eq!(budgets.len(), 2);
+        assert_eq!(table.len(), 1);
+        assert_eq!(table["torii"].as_table().unwrap().len(), 1);
+        assert_eq!(
+            table["torii"]["mcp"]["rate_per_minute"].as_integer(),
+            Some(300)
+        );
+        for (rate, burst, window) in [
+            (0, 1, 60),
+            (1, 0, 60),
+            (u32::MAX, 1, 60),
+            (1, 1, 0),
+            (1_000_000, 1, u64::MAX),
+        ] {
+            let mut empty = toml::Table::new();
+            assert!(
+                amend_request_rates(
+                    &mut empty,
+                    &[],
+                    rate,
+                    burst,
+                    std::time::Duration::from_secs(window)
+                )
+                .is_err()
+            );
+            assert!(empty.is_empty());
+        }
+        let mut partial = toml::Table::new();
+        let budget = amend_request_rates(
+            &mut partial,
+            &[ToriiRateSection::Gateway],
+            3,
+            4,
+            std::time::Duration::from_millis(500),
+        )
+        .unwrap();
+        assert_eq!(
+            budget["sorafs.gateway.rate_limit.max_requests"],
+            Value::from(2_u32)
+        );
+        let mut seconds_only = toml::Table::new();
+        let budgets = amend_request_rates(
+            &mut seconds_only,
+            &[ToriiRateSection::Content, ToriiRateSection::PrivacyIngest],
+            100_000_000,
+            1,
+            std::time::Duration::ZERO,
+        )
+        .unwrap();
+        assert_eq!(budgets.len(), 4);
+        assert_eq!(
+            budgets["content.max_requests_per_second"],
+            Value::from(100_000_000_u32)
+        );
+    }
+
+    #[test]
+    fn torii_rate_amendment_cli_requires_explicit_positive_values_and_provenance() {
+        use clap::Parser as _;
+        let arguments = [
+            "iroha",
+            "--machine",
+            "taira",
+            "public-reset",
+            "torii-rate-config-amend",
+            "--config-fd",
+            "3",
+            "--config-source-path",
+            "/private/runtime/validator/config.toml",
+            "--rate-per-second",
+            "1000000",
+            "--burst",
+            "10000000",
+            "--output",
+            "/private/runtime/validator/config.next.toml",
+        ];
+        assert!(crate::Args::try_parse_from(arguments).is_ok());
+        for (index, invalid) in [(6, "2"), (10, "0"), (12, "0")] {
+            let mut args = arguments;
+            args[index] = invalid;
+            assert!(crate::Args::try_parse_from(args).is_err());
+        }
+        let mut scoped = arguments.to_vec();
+        scoped.extend(["--section", "torii", "--section", "mcp"]);
+        assert!(crate::Args::try_parse_from(scoped).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn torii_rate_amendment_native_fd_custody_emits_only_public_receipt() {
+        use std::os::fd::AsRawFd as _;
+        let directory = operator_runtime_fixture();
+        let root = directory.path().canonicalize().unwrap();
+        let source = root.join("config.toml");
+        let bytes = include_bytes!("../../iroha_config/tests/fixtures/base.toml");
+        fs::write(&source, bytes).unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
+        let file = File::open(&source).unwrap();
+        let args = ToriiRateConfigAmend {
+            config_fd: file.as_raw_fd() as u32,
+            config_source_path: source.clone(),
+            rate_per_second: 1_000_000,
+            burst: 10_000_000,
+            section: Vec::new(),
+            output: root.join("config.next.toml"),
+        };
+        let mut stdout = Vec::new();
+        torii_rate_config_amend(&args, &mut stdout).unwrap();
+        assert_eq!(fs::read(&source).unwrap(), bytes);
+        assert_eq!(args.output.metadata().unwrap().mode() & 0o7777, 0o600);
+        let rendered = fs::read(&args.output).unwrap();
+        let report: Value = json::from_slice(&stdout).unwrap();
+        assert_eq!(report["source_path"].as_str(), source.to_str());
+        assert_eq!(
+            report["source_config_blake3"].as_str(),
+            Some(blake3::hash(bytes).to_hex().as_str())
+        );
+        assert_eq!(
+            report["output_config_blake3"].as_str(),
+            Some(blake3::hash(&rendered).to_hex().as_str())
+        );
+        assert_eq!(
+            report["request_budgets"]["torii.query_rate_per_authority_per_sec"],
+            Value::from(1_000_000_u32)
+        );
+        let text = String::from_utf8(stdout).unwrap();
+        for secret in ["892620", "802620", "private_key", "api_tokens"] {
+            assert!(!text.contains(secret));
+        }
+        assert!(torii_rate_config_amend(&args, &mut Vec::new()).is_err());
+        assert_eq!(fs::read(&args.output).unwrap(), rendered);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn torii_rate_amendment_refuses_unbound_invalid_or_unsafe_inputs_before_write() {
+        use std::os::fd::AsRawFd as _;
+        let directory = operator_runtime_fixture();
+        let root = directory.path().canonicalize().unwrap();
+        let source = root.join("config.toml");
+        let output = root.join("config.next.toml");
+        for bytes in [
+            FIXTURE.to_vec(),
+            [
+                b"extends='fixture-secret-not-runtime'\n".as_slice(),
+                FIXTURE,
+            ]
+            .concat(),
+            b"private_key = 'fixture-secret-not-runtime\n".to_vec(),
+        ] {
+            fs::write(&source, bytes).unwrap();
+            fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
+            let file = File::open(&source).unwrap();
+            let args = ToriiRateConfigAmend {
+                config_fd: file.as_raw_fd() as u32,
+                config_source_path: source.clone(),
+                rate_per_second: 1_000_000,
+                burst: 10_000_000,
+                section: Vec::new(),
+                output: output.clone(),
+            };
+            let error = torii_rate_config_amend(&args, &mut Vec::new()).unwrap_err();
+            assert!(!format!("{error:#}").contains("fixture-secret"));
+            assert!(!output.exists());
+        }
+        fs::write(
+            &source,
+            include_bytes!("../../iroha_config/tests/fixtures/base.toml"),
+        )
+        .unwrap();
+        let file = File::open(&source).unwrap();
+        let mut args = ToriiRateConfigAmend {
+            config_fd: file.as_raw_fd() as u32,
+            config_source_path: source.clone(),
+            rate_per_second: 1_000_000,
+            burst: 10_000_000,
+            section: Vec::new(),
+            output: output.clone(),
+        };
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(torii_rate_config_amend(&args, &mut Vec::new()).is_err());
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::hard_link(&source, root.join("linked.toml")).unwrap();
+        assert!(torii_rate_config_amend(&args, &mut Vec::new()).is_err());
+        fs::remove_file(root.join("linked.toml")).unwrap();
+        args.config_source_path = root.join("different.toml");
+        assert!(torii_rate_config_amend(&args, &mut Vec::new()).is_err());
+        args.config_source_path = source.clone();
+        args.output = root.join("elsewhere").join("next.toml");
+        assert!(torii_rate_config_amend(&args, &mut Vec::new()).is_err());
+        assert!(!output.exists());
+    }
+
     fn network_fixture(seed: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
             seed,
@@ -1065,7 +1693,7 @@ mod tests {
     }
 
     fn client_network_fixture(network: &NetworkId) -> Vec<u8> {
-        format!("network_id = '{network}'\ntorii_url = 'https://taira.sora.org'\n[account]\nprivate_key = 'fixture-secret-not-runtime'\npublic_key = 'retained-public-fixture'\n").into_bytes()
+        format!("network_id = '{network}'\ntorii_url = 'https://taira.sora.org'\n[account]\nprofile = 'taira'\nprivate_key = 'fixture-secret-not-runtime'\npublic_key = 'retained-public-fixture'\n").into_bytes()
     }
 
     fn route_fixture(network: &NetworkId) -> Vec<u8> {
@@ -1075,7 +1703,6 @@ network_id = "{network}"
 torii_url = "http://127.0.0.1:8080/"
 api_token = "fixture-token-not-runtime"
 [account]
-domain = "wonderland.universal"
 profile = "taira"
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
 private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"

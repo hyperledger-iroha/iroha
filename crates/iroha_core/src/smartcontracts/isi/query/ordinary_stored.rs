@@ -13,7 +13,7 @@ use iroha_data_model::{
     account::AccountId,
     query::{
         QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple,
-        dsl::{EvaluateSelector, HasProjection, SelectorMarker, SelectorTuple},
+        dsl::{HasProjection, SelectorMarker},
         error::QueryExecutionFail as Error,
         parameters::QueryParams,
     },
@@ -44,7 +44,6 @@ where
 #[allow(clippy::too_many_arguments)]
 pub(super) fn handle<I>(
     mut iter: I,
-    selector: SelectorTuple<I::Item>,
     params: &QueryParams,
     limits: QueryLimits,
     ordinary: OrdinaryQueryExecutionLimits,
@@ -56,20 +55,19 @@ pub(super) fn handle<I>(
 where
     I: Iterator,
     I::Item: HasProjection<SelectorMarker, AtomType = ()> + NoritoSerialize + Send + Sync + 'static,
-    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
     if limits.count_mode != QueryCountMode::Bounded
         || params.pagination.offset_value() != 0
         || params.sorting.sort_by_metadata_key.is_some()
-        || selector.iter().next().is_some()
     {
-        return Err(Error::Conversion(
-            "ordinary stored source requires an unprojected, unsorted, zero-offset bounded shape"
-                .to_owned(),
+        // Admission refuses these shapes before execution; this is the
+        // fail-closed backstop for the bounded stored adapters.
+        return Err(super::ordinary_memory::signed_query_shape_not_admitted(
+            "the stored iterable start",
+            "requires bounded counting, zero offset and no sorting",
         ));
     }
-    drop(selector);
     let fetch = params
         .fetch_size
         .fetch_size
@@ -195,7 +193,7 @@ mod tests {
         query::{
             ErasedIterQuery, QueryBox, QueryRequest, QueryResponse, QueryWithParams,
             account::prelude::FindAccountIds,
-            dsl::CompoundPredicate,
+            dsl::{CompoundPredicate, SelectorTuple},
             parameters::{FetchSize, Pagination},
         },
     };

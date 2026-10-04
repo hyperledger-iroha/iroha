@@ -38,15 +38,24 @@ extension ToriiPage: Decodable where Item: Decodable {
     }
 
     public init(from decoder: Decoder) throws {
+        try requireExactJSONFields(from: decoder, required: ["items", "next_cursor"], optional: ["total"], debugName: "collection page")
         let container = try decoder.container(keyedBy: CodingKeys.self)
         items = try container.decode([Item].self, forKey: .items)
         if container.contains(.nextCursor), try !container.decodeNil(forKey: .nextCursor) {
             nextCursor = try container.decode(String.self, forKey: .nextCursor)
+            guard nextCursor?.isEmpty == false else {
+                throw DecodingError.dataCorruptedError(forKey: .nextCursor, in: container,
+                    debugDescription: "next_cursor must be non-empty or null")
+            }
         } else {
             nextCursor = nil
         }
         if container.contains(.total), try !container.decodeNil(forKey: .total) {
             total = try container.decode(UInt64.self, forKey: .total)
+            guard total! >= UInt64(items.count) else {
+                throw DecodingError.dataCorruptedError(forKey: .total, in: container,
+                    debugDescription: "total cannot be smaller than this page")
+            }
         } else {
             total = nil
         }
@@ -81,10 +90,12 @@ public struct ToriiPageSequence<Item: Sendable>: AsyncSequence, Sendable {
 
     public struct AsyncIterator: AsyncIteratorProtocol {
         private var pending: ToriiListQuery?
+        private var seenCursors: Set<String> = []
         private let fetchPage: ToriiPageFetcher<Item>
 
         init(pending: ToriiListQuery?, fetchPage: @escaping ToriiPageFetcher<Item>) {
             self.pending = pending
+            if let cursor = pending?.cursor { seenCursors.insert(cursor) }
             self.fetchPage = fetchPage
         }
 
@@ -96,9 +107,9 @@ public struct ToriiPageSequence<Item: Sendable>: AsyncSequence, Sendable {
             try Task.checkCancellation()
             let page = try await fetchPage(query)
             if let nextCursor = page.nextCursor {
-                guard nextCursor != query.cursor else {
+                guard seenCursors.insert(nextCursor).inserted else {
                     throw ToriiClientError.invalidPayload(
-                        "Torii returned the request cursor as `next_cursor`; the page sequence cannot advance."
+                        "Torii repeated a cursor as `next_cursor`; the page sequence cannot advance."
                     )
                 }
                 var following = query

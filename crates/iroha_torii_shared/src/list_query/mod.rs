@@ -723,7 +723,7 @@ impl<T: JsonDeserialize> JsonDeserialize for Page<T> {
         let Value::Object(mut map) = Value::json_deserialize(parser)? else {
             return Err(json::Error::Message("a page must be a JSON object".into()));
         };
-        let items = match map.remove("items") {
+        let items: Vec<T> = match map.remove("items") {
             Some(Value::Array(items)) => items
                 .into_iter()
                 .map(json::from_value::<T>)
@@ -735,11 +735,11 @@ impl<T: JsonDeserialize> JsonDeserialize for Page<T> {
             }
         };
         let next_cursor = match map.remove("next_cursor") {
-            None | Some(Value::Null) => None,
-            Some(Value::String(cursor)) => Some(cursor),
-            Some(_) => {
+            Some(Value::Null) => None,
+            Some(Value::String(cursor)) if !cursor.is_empty() => Some(cursor),
+            _ => {
                 return Err(json::Error::Message(
-                    "`next_cursor` must be a string or null".into(),
+                    "a page must contain `next_cursor` as a nonempty string or null".into(),
                 ));
             }
         };
@@ -749,6 +749,16 @@ impl<T: JsonDeserialize> JsonDeserialize for Page<T> {
                 json::Error::Message("`total` must be a non-negative integer".into())
             })?),
         };
+        if !map.is_empty() {
+            return Err(json::Error::Message(
+                "a page contains unknown envelope fields".into(),
+            ));
+        }
+        if total.is_some_and(|total| total < items.len() as u64) {
+            return Err(json::Error::Message(
+                "a page total cannot be smaller than its items".into(),
+            ));
+        }
         Ok(Self {
             items,
             next_cursor,
@@ -902,6 +912,23 @@ mod tests {
             assert!(err.message.contains(needle), "{pairs:?}: {err}");
         }
         assert_eq!(ListQueryError::new("filter", "x").code(), "invalid_filter");
+    }
+
+    #[test]
+    fn page_envelope_rejects_retired_or_ambiguous_continuation() {
+        for value in [
+            r#"{"items":[]}"#,
+            r#"{"items":[],"next_cursor":""}"#,
+            r#"{"items":[],"next_cursor":7}"#,
+            r#"{"items":[],"has_more":false,"count_mode":"exact","total":0}"#,
+            r#"{"items":[],"next_cursor":null,"has_more":false}"#,
+            r#"{"items":[1],"next_cursor":null,"total":0}"#,
+        ] {
+            assert!(
+                json::from_str::<Page<Value>>(value).is_err(),
+                "accepted {value}"
+            );
+        }
     }
 
     #[test]

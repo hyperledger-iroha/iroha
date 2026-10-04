@@ -3978,16 +3978,19 @@ pub mod application_api {
         .with_projections(RouteProjections::OPENAPI_AND_SDK)
         .with_cors_options(true)
     }
+    const fn app_compute_post(id: &'static str, path: &'static str) -> RouteDescriptor {
+        app_post(id, path).with_effect(RouteEffect::ExpensiveCompute)
+    }
     const fn app_sdk_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_get(id, path).with_projections(RouteProjections::SDK)
     }
-    const fn authenticated_account_get(id: &'static str, path: &'static str) -> RouteDescriptor {
-        app_get(id, path)
-            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
-            .with_admission(AdmissionPolicy::AuthenticatedAccount)
-    }
     const fn dataspace_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_get(id, path)
+            .with_admission(AdmissionPolicy::DataspaceVisible)
+            .with_authentication(AuthenticationPolicy::OptionalCanonicalAccountSignature)
+    }
+    const fn dataspace_post(id: &'static str, path: &'static str) -> RouteDescriptor {
+        app_post(id, path)
             .with_admission(AdmissionPolicy::DataspaceVisible)
             .with_authentication(AuthenticationPolicy::OptionalCanonicalAccountSignature)
     }
@@ -4144,8 +4147,10 @@ pub mod application_api {
         INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_GET => internal_get("application.internal_accounts_by_account_id_get", "/v1/internal/accounts/{account_id}");
         INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_BY_ENTRYPOINT_HASH_GET => internal_get("application.internal_accounts_by_account_id_transactions_by_entrypoint_hash_get", "/v1/internal/accounts/{account_id}/transactions/{entrypoint_hash}");
         INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_ASSETS_BY_ASSET_DEFINITION_ID_GET => internal_get("application.internal_accounts_by_account_id_assets_by_asset_definition_id_get", "/v1/internal/accounts/{account_id}/assets/{asset_definition_id}");
+        ACCOUNTS_BY_ACCOUNT_ID_HISTORY_QUERY_POST => dataspace_compute_post("application.accounts_by_account_id_history_query_post", "/v1/accounts/{account_id}/history/query");
         ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST => dataspace_compute_post("application.accounts_by_account_id_transactions_query_post", "/v1/accounts/{account_id}/transactions/query");
-        TRANSACTIONS_HISTORY_GET => authenticated_account_get("application.transactions_history_get", "/v1/transactions/history");
+        CONTRACTS_ACTIVITY_QUERY_POST => dataspace_compute_post("application.contracts_activity_query_post", "/v1/contracts/activity/query");
+        CONTRACTS_EVENTS_QUERY_POST => dataspace_compute_post("application.contracts_events_query_post", "/v1/contracts/events/query");
         CONTRACTS_ACTIVITY_GET => dataspace_get("application.contracts_activity_get", "/v1/contracts/activity");
         CONTRACTS_EVENTS_GET => dataspace_get("application.contracts_events_get", "/v1/contracts/events");
         CONTRACTS_ROLLUPS_SWAPS_FILLS_GET => dataspace_get("application.contracts_rollups_swaps_fills_get", "/v1/contracts/rollups/swaps/fills");
@@ -4162,6 +4167,7 @@ pub mod application_api {
         ACCOUNTS_BY_ACCOUNT_ID_ASSETS_GET => dataspace_get("application.accounts_by_account_id_assets_get", "/v1/accounts/{account_id}/assets");
         ACCOUNTS_BY_ACCOUNT_ID_ASSETS_QUERY_POST => dataspace_compute_post("application.accounts_by_account_id_assets_query_post", "/v1/accounts/{account_id}/assets/query");
         ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET => dataspace_get("application.accounts_by_account_id_permissions_get", "/v1/accounts/{account_id}/permissions");
+        ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_QUERY_POST => dataspace_compute_post("application.accounts_by_account_id_permissions_query_post", "/v1/accounts/{account_id}/permissions/query");
         ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_GET => dataspace_get("application.accounts_by_account_id_transactions_get", "/v1/accounts/{account_id}/transactions");
         ACCOUNTS_BY_ACCOUNT_ID_HISTORY_GET => dataspace_get("application.accounts_by_account_id_history_get", "/v1/accounts/{account_id}/history");
         PROOFS_QUERY_POST => signed_compute_post("application.proofs_query_post", "/v1/proofs/query");
@@ -4189,6 +4195,7 @@ pub mod application_api {
         NEXUS_DATASPACES_ACCOUNTS_BY_LITERAL_SUMMARY_GET => dataspace_get("application.nexus_dataspaces_accounts_by_literal_summary_get", "/v1/nexus/dataspaces/accounts/{literal}/summary");
         SPACE_DIRECTORY_UAIDS_BY_UAID_GET => dataspace_get("application.space_directory_uaids_by_uaid_get", "/v1/space-directory/uaids/{uaid}");
         SPACE_DIRECTORY_UAIDS_BY_UAID_MANIFESTS_GET => dataspace_get("application.space_directory_uaids_by_uaid_manifests_get", "/v1/space-directory/uaids/{uaid}/manifests");
+        SPACE_DIRECTORY_UAIDS_BY_UAID_MANIFESTS_QUERY_POST => dataspace_compute_post("application.space_directory_uaids_by_uaid_manifests_query_post", "/v1/space-directory/uaids/{uaid}/manifests/query");
         SPACE_DIRECTORY_MANIFESTS_POST => account_compute_post("application.space_directory_manifests_post", "/v1/space-directory/manifests");
         SPACE_DIRECTORY_MANIFESTS_REVOKE_POST => account_compute_post("application.space_directory_manifests_revoke_post", "/v1/space-directory/manifests/revoke");
         RAM_LFE_PROGRAM_POLICIES_GET => app_get("application.ram_lfe_program_policies_get", "/v1/ram-lfe/program-policies");
@@ -4264,8 +4271,10 @@ pub mod application_api {
         RWAS_GET => dataspace_get("application.rwas_get", "/v1/rwas");
         RWAS_QUERY_POST => dataspace_compute_post("application.rwas_query_post", "/v1/rwas/query");
         SUBSCRIPTIONS_PLANS_GET => app_get("application.subscriptions_plans_get", "/v1/subscriptions/plans");
+        SUBSCRIPTIONS_PLANS_QUERY_POST => app_post("application.subscriptions_plans_query_post", "/v1/subscriptions/plans/query");
         SUBSCRIPTIONS_PLANS_POST => account_mutation_post("application.subscriptions_plans_post", "/v1/subscriptions/plans");
         SUBSCRIPTIONS_GET => app_get("application.subscriptions_get", "/v1/subscriptions");
+        SUBSCRIPTIONS_QUERY_POST => app_post("application.subscriptions_query_post", "/v1/subscriptions/query");
         SUBSCRIPTIONS_POST => account_mutation_post("application.subscriptions_post", "/v1/subscriptions");
         SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_GET => app_get("application.subscriptions_by_subscription_id_get", "/v1/subscriptions/{subscription_id}");
         SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_PAUSE_POST => account_mutation_post("application.subscriptions_by_subscription_id_pause_post", "/v1/subscriptions/{subscription_id}/pause");
@@ -4276,19 +4285,30 @@ pub mod application_api {
         SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_CHARGE_NOW_POST => account_mutation_post("application.subscriptions_by_subscription_id_charge_now_post", "/v1/subscriptions/{subscription_id}/charge-now");
         PARAMETERS_GET => app_get("application.parameters_get", "/v1/parameters");
         EXPLORER_ACCOUNTS_GET => dataspace_get("application.explorer_accounts_get", "/v1/explorer/accounts");
+        EXPLORER_ACCOUNTS_QUERY_POST => dataspace_post("application.explorer_accounts_query_post", "/v1/explorer/accounts/query");
         EXPLORER_DOMAINS_GET => dataspace_get("application.explorer_domains_get", "/v1/explorer/domains");
+        EXPLORER_DOMAINS_QUERY_POST => dataspace_post("application.explorer_domains_query_post", "/v1/explorer/domains/query");
         EXPLORER_ASSET_DEFINITIONS_GET => dataspace_get("application.explorer_asset_definitions_get", "/v1/explorer/asset-definitions");
+        EXPLORER_ASSET_DEFINITIONS_QUERY_POST => dataspace_post("application.explorer_asset_definitions_query_post", "/v1/explorer/asset-definitions/query");
         EXPLORER_ASSETS_GET => dataspace_get("application.explorer_assets_get", "/v1/explorer/assets");
+        EXPLORER_ASSETS_QUERY_POST => dataspace_post("application.explorer_assets_query_post", "/v1/explorer/assets/query");
         EXPLORER_NFTS_GET => dataspace_get("application.explorer_nfts_get", "/v1/explorer/nfts");
+        EXPLORER_NFTS_QUERY_POST => dataspace_post("application.explorer_nfts_query_post", "/v1/explorer/nfts/query");
         EXPLORER_RWAS_GET => dataspace_get("application.explorer_rwas_get", "/v1/explorer/rwas");
+        EXPLORER_RWAS_QUERY_POST => dataspace_post("application.explorer_rwas_query_post", "/v1/explorer/rwas/query");
         EXPLORER_BLOCKS_GET => dataspace_get("application.explorer_blocks_get", "/v1/explorer/blocks");
+        EXPLORER_BLOCKS_QUERY_POST => dataspace_post("application.explorer_blocks_query_post", "/v1/explorer/blocks/query");
         EXPLORER_HEALTH_GET => app_sdk_get("application.explorer_health_get", "/v1/explorer/health");
         EXPLORER_BLOCKS_STREAM_GET => dataspace_protocol_get("application.explorer_blocks_stream_get", "/v1/explorer/blocks/stream");
         EXPLORER_TRANSACTIONS_GET => dataspace_get("application.explorer_transactions_get", "/v1/explorer/transactions");
-        EXPLORER_TRANSACTIONS_LATEST_GET => dataspace_sdk_get("application.explorer_transactions_latest_get", "/v1/explorer/transactions/latest");
+        EXPLORER_TRANSACTIONS_QUERY_POST => dataspace_post("application.explorer_transactions_query_post", "/v1/explorer/transactions/query");
+        EXPLORER_TRANSACTIONS_LATEST_GET => dataspace_get("application.explorer_transactions_latest_get", "/v1/explorer/transactions/latest");
+        EXPLORER_TRANSACTIONS_LATEST_QUERY_POST => dataspace_post("application.explorer_transactions_latest_query_post", "/v1/explorer/transactions/latest/query");
         EXPLORER_TRANSACTIONS_STREAM_GET => dataspace_protocol_get("application.explorer_transactions_stream_get", "/v1/explorer/transactions/stream");
         EXPLORER_INSTRUCTIONS_GET => dataspace_get("application.explorer_instructions_get", "/v1/explorer/instructions");
-        EXPLORER_INSTRUCTIONS_LATEST_GET => dataspace_sdk_get("application.explorer_instructions_latest_get", "/v1/explorer/instructions/latest");
+        EXPLORER_INSTRUCTIONS_QUERY_POST => dataspace_post("application.explorer_instructions_query_post", "/v1/explorer/instructions/query");
+        EXPLORER_INSTRUCTIONS_LATEST_GET => dataspace_get("application.explorer_instructions_latest_get", "/v1/explorer/instructions/latest");
+        EXPLORER_INSTRUCTIONS_LATEST_QUERY_POST => dataspace_post("application.explorer_instructions_latest_query_post", "/v1/explorer/instructions/latest/query");
         SORACLES_DEFI_ATTESTATIONS_LATEST_GET => app_sdk_get("application.soracles_defi_attestations_latest_get", "/v1/soracles/defi/attestations/latest");
         SORACLES_FEEDS_GET => app_sdk_get("application.soracles_feeds_get", "/v1/soracles/feeds");
         SORACLES_FEEDS_BY_FEED_ID_HISTORY_GET => app_sdk_get("application.soracles_feeds_by_feed_id_history_get", "/v1/soracles/feeds/{feed_id}/history");

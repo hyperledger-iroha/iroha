@@ -1,4 +1,4 @@
-//! Validation, evaluation, ordering, keyset paging, aggregation and fan-out merging.
+//! Validation, evaluation, ordering, keyset paging and aggregation.
 use super::{
     CollectionError,
     cursor::{self, CursorError, DIGEST_BYTES},
@@ -11,7 +11,7 @@ use iroha_torii_shared::list_query::{
 };
 use norito::json::{Map, Value};
 use std::{
-    cmp::{Ordering, Reverse},
+    cmp::Ordering,
     collections::{BTreeMap, BTreeSet, BinaryHeap},
 };
 
@@ -22,8 +22,12 @@ pub(crate) struct Limits {
     pub(crate) default_limit: u32,
     /// Largest accepted `limit`.
     pub(crate) max_limit: u32,
-    /// Rows one request may examine.
+    /// Rows one request may examine when it must sort the whole match set
+    /// (custom sorts, aggregates, totals).
     pub(crate) max_scanned_rows: usize,
+    /// Rows one identity-ordered page may examine before it ends early with
+    /// a cursor at the last examined row.
+    pub(crate) ordered_page_scan_budget: usize,
     /// Groups (and distinct values) one aggregate may hold.
     pub(crate) max_groups: usize,
 }
@@ -37,6 +41,7 @@ impl Limits {
             default_limit: clamp(default_limit).min(max_limit),
             max_limit,
             max_scanned_rows: 1 << 20,
+            ordered_page_scan_budget: 1 << 16,
             max_groups: 1 << 16,
         }
     }
@@ -61,25 +66,6 @@ impl RowPage {
             next_cursor: self.next_cursor,
             total: self.total,
         }
-    }
-
-    /// Parse a route's page envelope.
-    pub(crate) fn from_json(value: Value) -> Result<Self, String> {
-        let page: Page<Value> =
-            norito::json::from_value(value).map_err(|err| format!("invalid route page: {err}"))?;
-        let items = page
-            .items
-            .into_iter()
-            .map(|item| match item {
-                Value::Object(map) => Ok(map),
-                _ => Err("route page items must be objects".to_owned()),
-            })
-            .collect::<Result<_, _>>()?;
-        Ok(Self {
-            items,
-            next_cursor: page.next_cursor,
-            total: page.total,
-        })
     }
 }
 
@@ -680,8 +666,22 @@ pub(crate) struct Prepared<'q> {
     sort: Vec<SortField>,
     limit: usize,
     after: Option<RowKey>,
-    after_position: Option<Position>,
+    after_position: Option<Vec<u64>>,
+    /// Identity-ordered read: descending or not.
+    ordered: Option<bool>,
+    /// The cursor's `id` for an identity-ordered read.
+    after_id: Option<String>,
     digest: [u8; DIGEST_BYTES],
+}
+
+/// Where an identity-ordered page starts: strictly after `after` in
+/// canonical identifier order (strictly before it when `descending`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OrderedScan<'a> {
+    /// The previous page's last examined `id`.
+    pub(crate) after: Option<&'a str>,
+    /// Whether rows are read in descending identifier order.
+    pub(crate) descending: bool,
 }
 
 /// Block coordinates `(block_height, block_index)` of a positioned row.
@@ -716,7 +716,7 @@ pub(crate) fn prepare<'q>(
             }
         }
     }
-    if spec.positioned {
+    if spec.positioned > 0 {
         reject_unpositioned_controls(spec, query)?;
     }
     let aggregate = query
@@ -752,20 +752,33 @@ pub(crate) fn prepare<'q>(
         &sort_to_string(&query.sort),
         &aggregate_text,
     ]);
+    let ordered = (spec.ordered && aggregate.is_none())
+        .then(|| match query.sort.as_slice() {
+            [] => Some(false),
+            [key] if key.key.0 == "id" => Some(!key.order.is_ascending()),
+            _ => None,
+        })
+        .flatten();
+    let mut after_id = None;
     let (after, after_position) = match query.cursor.as_deref() {
         None => (None, None),
-        Some(token) if spec.positioned => (
+        Some(token) if spec.positioned > 0 => (
             None,
             Some(decode_position(spec, &digest, token).map_err(cursor_error)?),
         ),
-        Some(token) => (
-            Some(
-                cursor::decode(token, spec.tag, &digest, sort.len())
-                    .map(|values| key_from_values(&sort, &values))
-                    .map_err(cursor_error)?,
-            ),
-            None,
-        ),
+        Some(token) => {
+            let values =
+                cursor::decode(token, spec.tag, &digest, sort.len()).map_err(cursor_error)?;
+            if ordered.is_some() {
+                after_id = Some(
+                    values[0]
+                        .as_str()
+                        .ok_or_else(|| cursor_error(CursorError::Malformed))?
+                        .to_owned(),
+                );
+            }
+            (Some(key_from_values(&sort, &values)), None)
+        }
     };
     Ok(Prepared {
         spec,
@@ -776,6 +789,8 @@ pub(crate) fn prepare<'q>(
         limit: usize::try_from(limit).unwrap_or(usize::MAX),
         after,
         after_position,
+        ordered,
+        after_id,
         digest,
     })
 }
@@ -784,12 +799,15 @@ fn decode_position(
     spec: &CollectionSpec,
     digest: &[u8; DIGEST_BYTES],
     token: &str,
-) -> Result<Position, CursorError> {
-    let values = cursor::decode(token, spec.tag, digest, POSITION_FIELDS.len())?;
-    match (values[0].as_u64(), values[1].as_u64()) {
-        (Some(height), Some(index)) => Ok((height, index)),
-        _ => Err(CursorError::Malformed),
+) -> Result<Vec<u64>, CursorError> {
+    let position: Vec<u64> = cursor::decode(token, spec.tag, digest, spec.positioned)?
+        .iter()
+        .map(|value| value.as_u64().ok_or(CursorError::Malformed))
+        .collect::<Result<_, _>>()?;
+    if position.first() == Some(&0) {
+        return Err(CursorError::Malformed);
     }
+    Ok(position)
 }
 
 fn narrow_height_range(expr: &FilterExpr, range: &mut (u64, u64)) {
@@ -830,13 +848,6 @@ fn narrow_height_range(expr: &FilterExpr, range: &mut (u64, u64)) {
         }
         _ => {}
     }
-}
-
-fn row_position(row: &Map) -> Option<Position> {
-    Some((
-        row.get(POSITION_FIELDS[0])?.as_u64()?,
-        row.get(POSITION_FIELDS[1])?.as_u64()?,
-    ))
 }
 
 fn reject_unpositioned_controls(
@@ -1114,6 +1125,38 @@ impl Prepared<'_> {
     /// Coordinates a positioned read resumes strictly before.
     pub(crate) fn resume_position(&self) -> Option<Position> {
         self.after_position
+            .as_ref()
+            .map(|position| (position[0], position[1]))
+    }
+
+    /// Movement coordinates a multi-row transaction read resumes strictly before.
+    pub(crate) fn resume_movement_position(&self) -> Option<(u64, u64, u64)> {
+        self.after_position
+            .as_ref()
+            .map(|position| (position[0], position[1], position[2]))
+    }
+
+    /// Encode the last examined account movement without skipping its transaction's remaining rows.
+    pub(crate) fn movement_page(
+        &self,
+        items: Vec<Map>,
+        resume: Option<(u64, u64, u64)>,
+    ) -> RowPage {
+        RowPage {
+            items,
+            next_cursor: resume.map(|(height, index, movement)| {
+                cursor::encode(
+                    self.spec.tag,
+                    &self.digest,
+                    &[
+                        Value::from(height),
+                        Value::from(index),
+                        Value::from(movement),
+                    ],
+                )
+            }),
+            total: None,
+        }
     }
 
     /// Inclusive `block_height` range implied by the filter's top-level
@@ -1132,7 +1175,12 @@ impl Prepared<'_> {
     /// Rejects sort values too large to fit in a cursor: issuing one would
     /// only make the next request fail.
     fn cursor_after(&self, row: &Map) -> Result<String, CollectionError> {
-        let token = cursor::encode(self.spec.tag, &self.digest, &self.key_values(row));
+        self.cursor_from_values(&self.key_values(row))
+    }
+
+    /// Encode a cursor from sort values, refusing ones too large to accept.
+    fn cursor_from_values(&self, values: &[Value]) -> Result<String, CollectionError> {
+        let token = cursor::encode(self.spec.tag, &self.digest, values);
         if token.len() > CURSOR_MAX_BYTES {
             return Err(CollectionError::new(
                 "invalid_sort",
@@ -1202,6 +1250,115 @@ impl Prepared<'_> {
             .is_none_or(|after| key.cmp(after) == Ordering::Greater)
     }
 
+    /// The seek of an identity-ordered read, when this read is one: the
+    /// producer then streams rows in canonical identifier order from the
+    /// cursor into [`Self::execute_ordered`].
+    pub(crate) fn ordered_scan(&self) -> Option<OrderedScan<'_>> {
+        self.ordered.map(|descending| OrderedScan {
+            after: self.after_id.as_deref(),
+            descending,
+        })
+    }
+
+    /// Execute an identity-ordered read over storage entries in the requested
+    /// order. Each entry carries whether its key is past the cursor and its
+    /// visible row, if any. Hidden entries still consume the scan budget.
+    ///
+    /// The page stops after `limit` matches, or once it has examined
+    /// [`Limits::ordered_page_scan_budget`] rows; a short page then carries a
+    /// cursor at the last examined visible row, so sparse matches stay reachable
+    /// page by page without revealing hidden keys. Totals require entries from
+    /// the start of the collection, including those before the cursor, within
+    /// [`Limits::max_scanned_rows`].
+    ///
+    /// # Errors
+    /// Fails when a total exceeds the scan limit, no visible continuation can
+    /// be established within the page budget, or a visible row lacks its `id`.
+    pub(crate) fn execute_ordered<I>(
+        &self,
+        rows: I,
+        limits: &Limits,
+    ) -> Result<RowPage, CollectionError>
+    where
+        I: IntoIterator<Item = (bool, Option<Map>)>,
+    {
+        debug_assert!(self.ordered.is_some(), "only identity-ordered reads stream");
+        let mut items = Vec::new();
+        let mut scanned = 0usize;
+        let mut total = 0u64;
+        let mut has_more = false;
+        let mut last_examined = None;
+        let mut stopped_early = false;
+        for (after_cursor, row) in rows {
+            scanned += 1;
+            if self.query.include_total && scanned > limits.max_scanned_rows {
+                return Err(CollectionError::new(
+                    "query_scan_limit_exceeded",
+                    "include_total",
+                    format!(
+                        "counting would examine more than {} rows; add a more selective filter or omit `include_total`",
+                        limits.max_scanned_rows
+                    ),
+                ));
+            }
+            if let Some(row) = row {
+                let id = row
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        CollectionError::new("invalid_query", "query", "a row has no `id`")
+                    })?
+                    .to_owned();
+                if self.matches(&row) {
+                    total += 1;
+                    if after_cursor {
+                        if items.len() < self.limit {
+                            items.push(row);
+                        } else {
+                            has_more = true;
+                            if !self.query.include_total {
+                                break;
+                            }
+                        }
+                    }
+                }
+                if after_cursor {
+                    last_examined = Some(id);
+                }
+            }
+            if !self.query.include_total && scanned >= limits.ordered_page_scan_budget {
+                if last_examined.is_none() {
+                    return Err(CollectionError::new(
+                        "query_scan_limit_exceeded",
+                        "filter",
+                        "the page scan budget was exhausted before a visible continuation; narrow the query",
+                    ));
+                }
+                stopped_early = true;
+                break;
+            }
+        }
+        let resume_id = if has_more {
+            items
+                .last()
+                .and_then(|row| row.get("id"))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        } else if stopped_early {
+            last_examined
+        } else {
+            None
+        };
+        let next_cursor = resume_id
+            .map(|id| self.cursor_from_values(&[Value::from(id)]))
+            .transpose()?;
+        Ok(RowPage {
+            items,
+            next_cursor,
+            total: self.query.include_total.then_some(total),
+        })
+    }
+
     /// Execute against the collection's candidate rows (unordered).
     ///
     /// # Errors
@@ -1210,12 +1367,25 @@ impl Prepared<'_> {
     where
         I: IntoIterator<Item = Map>,
     {
+        self.execute_entries(rows.into_iter().map(Some), limits)
+    }
+
+    /// Execute an unordered storage scan, charging skipped and hidden entries
+    /// to the same budget as visible rows.
+    pub(crate) fn execute_entries<I>(
+        &self,
+        rows: I,
+        limits: &Limits,
+    ) -> Result<RowPage, CollectionError>
+    where
+        I: IntoIterator<Item = Option<Map>>,
+    {
         debug_assert!(
-            !self.spec.positioned,
+            self.spec.positioned == 0,
             "positioned rows are paged by their producer"
         );
         let mut scanned = 0usize;
-        let mut admit = |row: &Map| -> Result<bool, CollectionError> {
+        let mut admit = |row: &Option<Map>| -> Result<bool, CollectionError> {
             scanned += 1;
             if scanned > limits.max_scanned_rows {
                 return Err(CollectionError::new(
@@ -1227,7 +1397,7 @@ impl Prepared<'_> {
                     ),
                 ));
             }
-            Ok(self.matches(row))
+            Ok(row.as_ref().is_some_and(|row| self.matches(row)))
         };
         match &self.aggregate {
             None => {
@@ -1238,8 +1408,10 @@ impl Prepared<'_> {
                     if !admit(&row)? {
                         continue;
                     }
-                    total += 1;
-                    self.keep(&mut kept, &mut seq, row);
+                    if let Some(row) = row {
+                        total += 1;
+                        self.keep(&mut kept, &mut seq, row);
+                    }
                 }
                 self.finish(kept, self.query.include_total.then_some(total))
             }
@@ -1248,7 +1420,7 @@ impl Prepared<'_> {
                 let grouped = aggregate_rows(
                     plan,
                     rows.into_iter()
-                        .map(|row| admit(&row).map(|keep| keep.then_some(row))),
+                        .map(|row| admit(&row).map(|keep| if keep { row } else { None })),
                     limits.max_groups,
                     &mut groups,
                 );
@@ -1313,146 +1485,6 @@ impl Prepared<'_> {
             next_cursor,
             total,
         })
-    }
-
-    /// The query each fan-out route executes: full rows (projection happens
-    /// after merging), the effective page size, the caller's cursor.
-    pub(crate) fn route_query(&self) -> ListQuery {
-        let mut route = self.query.clone();
-        if route.aggregate.is_none() {
-            route.select = None;
-        }
-        route.limit = Some(u32::try_from(self.limit).unwrap_or(u32::MAX));
-        route
-    }
-
-    /// Merge the pages returned by fan-out routes into one page.
-    ///
-    /// # Errors
-    /// Aggregates span a single route; totals need every route's count and
-    /// routes whose rows cannot overlap.
-    pub(crate) fn merge(&self, mut pages: Vec<RowPage>) -> Result<RowPage, CollectionError> {
-        if pages.len() == 1 {
-            return Ok(pages.remove(0));
-        }
-        if self.spec.positioned {
-            return self.merge_positioned(pages);
-        }
-        if self.aggregate.is_some() {
-            // TODO: merge exact partial aggregates once fan-out routes serve
-            // disjoint row partitions; overlapping routes cannot be summed.
-            return Err(CollectionError::new(
-                "invalid_aggregate",
-                "aggregate",
-                format!(
-                    "aggregates are computed within one dataspace route, but this read spans {} routes",
-                    pages.len()
-                ),
-            )
-            .with_hint("page through the rows without `aggregate` and aggregate them client-side"));
-        }
-        let more_upstream = pages.iter().any(|page| page.next_cursor.is_some());
-        if self.query.include_total && !self.spec.disjoint_routes {
-            // TODO: count distinct rows across routes once fan-out routes serve
-            // disjoint row partitions; overlapping routes cannot be summed.
-            return Err(CollectionError::new(
-                "invalid_include_total",
-                "include_total",
-                format!(
-                    "`{}` rows may appear on several dataspace routes, and this read spans {}, so their counts cannot be added",
-                    self.spec.id,
-                    pages.len()
-                ),
-            )
-            .with_hint("page through the rows without `include_total` and count them client-side"));
-        }
-        let total = if self.query.include_total {
-            Some(
-                pages
-                    .iter()
-                    .try_fold(0u64, |sum, page| {
-                        page.total.map(|total| sum.saturating_add(total))
-                    })
-                    .ok_or_else(|| {
-                        CollectionError::new(
-                            "invalid_include_total",
-                            "include_total",
-                            "a dataspace route did not report a total",
-                        )
-                    })?,
-            )
-        } else {
-            None
-        };
-        let mut entries = Vec::new();
-        let mut seq = 0u64;
-        for page in pages {
-            for row in page.items {
-                let key = self.key_of(&row);
-                if !self.after_cursor(&key) {
-                    continue;
-                }
-                entries.push(Entry { key, seq, row });
-                seq += 1;
-            }
-        }
-        entries.sort();
-        entries.dedup_by(|later, earlier| later.key == earlier.key);
-        let has_more = entries.len() > self.limit || more_upstream;
-        entries.truncate(self.limit);
-        let next_cursor = has_more
-            .then(|| entries.last())
-            .flatten()
-            .map(|last| self.cursor_after(&last.row))
-            .transpose()?;
-        Ok(RowPage {
-            items: entries.into_iter().map(|entry| entry.row).collect(),
-            next_cursor,
-            total,
-        })
-    }
-
-    /// Merge positioned pages. Each route has delivered every match at or
-    /// newer than the position its cursor resumes before, so rows are final
-    /// down to the newest such frontier; older rows wait for the next page.
-    fn merge_positioned(&self, pages: Vec<RowPage>) -> Result<RowPage, CollectionError> {
-        let route_error = |message: &str| {
-            CollectionError::new(
-                "invalid_cursor",
-                "cursor",
-                format!("dataspace route {message}"),
-            )
-        };
-        let mut frontier: Option<Position> = None;
-        for page in &pages {
-            if let Some(token) = &page.next_cursor {
-                let position = decode_position(self.spec, &self.digest, token)
-                    .map_err(|_| route_error("returned a cursor for another query"))?;
-                frontier = frontier.max(Some(position));
-            }
-        }
-        let mut rows = BTreeMap::new();
-        for page in pages {
-            for row in page.items {
-                let position = row_position(&row)
-                    .ok_or_else(|| route_error("returned a row without coordinates"))?;
-                if frontier.is_some_and(|frontier| position < frontier) {
-                    continue;
-                }
-                rows.entry(Reverse(position)).or_insert(row);
-            }
-        }
-        let mut rows: Vec<(Position, Map)> = rows
-            .into_iter()
-            .map(|(Reverse(position), row)| (position, row))
-            .collect();
-        let next = if rows.len() > self.limit {
-            rows.truncate(self.limit);
-            rows.last().map(|(position, _)| *position)
-        } else {
-            frontier
-        };
-        Ok(self.positioned_page(rows.into_iter().map(|(_, row)| row).collect(), next))
     }
 
     /// Apply `select` to a page of full rows.
@@ -1696,6 +1728,7 @@ mod tests {
         default_limit: 2,
         max_limit: 10,
         max_scanned_rows: 1000,
+        ordered_page_scan_budget: 1000,
         max_groups: 100,
     };
 
@@ -1893,38 +1926,6 @@ mod tests {
         .unwrap_err();
         assert!(err.message.contains("numeric field"), "{err}");
     }
-
-    #[test]
-    fn merge_combines_route_pages_by_key() {
-        let query = ListQuery::new().limit(3);
-        let prepared = prepare(&DOMAINS, "", &query, &LIMITS).unwrap();
-        let split = |names: &[&str]| -> Vec<Map> {
-            domains()
-                .into_iter()
-                .filter(|row| names.contains(&row["id"].as_str().unwrap()))
-                .collect()
-        };
-        let left = prepared
-            .execute(split(&["alpha", "delta", "echo"]), &LIMITS)
-            .unwrap();
-        let right = prepared
-            .execute(split(&["bravo", "charlie", "alpha"]), &LIMITS)
-            .unwrap();
-        let merged = prepared.merge(vec![left, right]).unwrap();
-        assert_eq!(ids(&merged), ["alpha", "bravo", "charlie"]);
-        let next = query.clone().cursor(merged.next_cursor.unwrap());
-        let prepared = prepare(&DOMAINS, "", &next, &LIMITS).unwrap();
-        let left = prepared
-            .execute(split(&["alpha", "delta", "echo"]), &LIMITS)
-            .unwrap();
-        let right = prepared
-            .execute(split(&["bravo", "charlie", "alpha"]), &LIMITS)
-            .unwrap();
-        let merged = prepared.merge(vec![left, right]).unwrap();
-        assert_eq!(ids(&merged), ["delta", "echo"]);
-        assert_eq!(merged.next_cursor, None);
-    }
-
     fn transaction(height: u64, index: u64, authority: &str) -> Map {
         let mut row = Map::new();
         row.insert(
@@ -1935,6 +1936,13 @@ mod tests {
         row.insert("block_index".into(), Value::from(index));
         row.insert("authority".into(), Value::from(authority));
         row
+    }
+
+    fn row_position(row: &Map) -> Option<Position> {
+        Some((
+            row.get(POSITION_FIELDS[0])?.as_u64()?,
+            row.get(POSITION_FIELDS[1])?.as_u64()?,
+        ))
     }
 
     fn hashes(rows: &[Map]) -> Vec<String> {
@@ -1971,7 +1979,7 @@ mod tests {
     }
 
     #[test]
-    fn positioned_reads_page_and_merge_by_block_coordinates() {
+    fn positioned_reads_page_by_block_coordinates() {
         let history: Vec<Map> = (1..=6)
             .flat_map(|height| {
                 (0..3).map(move |index| {
@@ -1984,15 +1992,6 @@ mod tests {
                 })
             })
             .collect();
-        let without = |index: u64| -> Vec<Map> {
-            history
-                .iter()
-                .filter(|row| row["block_index"].as_u64() != Some(index))
-                .cloned()
-                .collect()
-        };
-        // The routes overlap on index-1 rows and jointly hold every row.
-        let (left, right) = (without(2), without(0));
         let expected: Vec<String> = hashes(&history)
             .into_iter()
             .rev()
@@ -2007,12 +2006,7 @@ mod tests {
             let (mut seen, mut current) = (Vec::new(), query.clone());
             for _ in 0..100 {
                 let prepared = prepare(&ACCOUNT_TRANSACTIONS, "", &current, &LIMITS).unwrap();
-                let page = prepared
-                    .merge(vec![
-                        walk(&prepared, &left, budget),
-                        walk(&prepared, &right, budget),
-                    ])
-                    .unwrap();
+                let page = walk(&prepared, &history, budget);
                 assert!(page.items.len() <= 2);
                 seen.extend(hashes(&page.items));
                 match page.next_cursor {
@@ -2027,6 +2021,64 @@ mod tests {
         let next = query.clone().cursor(page.next_cursor.unwrap());
         let resumed = prepare(&ACCOUNT_TRANSACTIONS, "", &next, &LIMITS).unwrap();
         assert_eq!(resumed.resume_position(), row_position(&page.items[1]));
+    }
+
+    #[test]
+    fn movement_cursors_keep_the_intra_transaction_position_and_scope() {
+        // Both collections accept the filter, so cross-collection replay reaches
+        // cursor validation instead of stopping at an unknown field.
+        let query = ListQuery::new().filter(FilterExpr::parse("block_height >= 1").unwrap());
+        let prepared = prepare(
+            &super::super::specs::ACCOUNT_HISTORY,
+            "alice",
+            &query,
+            &LIMITS,
+        )
+        .unwrap();
+        let page = prepared.movement_page(Vec::new(), Some((70, 2, 8)));
+        let next = query.clone().cursor(page.next_cursor.unwrap());
+        let resumed = prepare(
+            &super::super::specs::ACCOUNT_HISTORY,
+            "alice",
+            &next,
+            &LIMITS,
+        )
+        .unwrap();
+        assert_eq!(resumed.resume_position(), Some((70, 2)));
+        assert_eq!(resumed.resume_movement_position(), Some((70, 2, 8)));
+        assert_eq!(resumed.movement_page(Vec::new(), None).next_cursor, None);
+        assert_eq!(
+            prepare(&super::super::specs::ACCOUNT_HISTORY, "bob", &next, &LIMITS)
+                .err()
+                .unwrap()
+                .code,
+            "invalid_cursor"
+        );
+        assert_eq!(
+            prepare(&ACCOUNT_TRANSACTIONS, "alice", &next, &LIMITS)
+                .err()
+                .unwrap()
+                .code,
+            "invalid_cursor"
+        );
+        let zero_height = query.clone().cursor(
+            prepared
+                .movement_page(Vec::new(), Some((0, 2, 8)))
+                .next_cursor
+                .unwrap(),
+        );
+        assert_eq!(
+            prepare(
+                &super::super::specs::ACCOUNT_HISTORY,
+                "alice",
+                &zero_height,
+                &LIMITS,
+            )
+            .err()
+            .unwrap()
+            .code,
+            "invalid_cursor"
+        );
     }
 
     #[test]
@@ -2115,7 +2167,10 @@ mod tests {
     fn page_json_roundtrip() {
         let page = run(&ListQuery::new().include_total()).unwrap();
         let json = norito::json::to_value(&page.clone().into_page()).unwrap();
-        assert_eq!(RowPage::from_json(json).unwrap(), page);
+        let decoded: Page<Value> = norito::json::from_value(json).unwrap();
+        assert_eq!(decoded.items.len(), page.items.len());
+        assert_eq!(decoded.next_cursor, page.next_cursor);
+        assert_eq!(decoded.total, page.total);
     }
 
     fn asset_row(account: &str, asset: &str, scope: &str) -> Map {
@@ -2140,31 +2195,6 @@ mod tests {
             field: None,
         }
     }
-
-    #[test]
-    fn totals_add_only_across_disjoint_routes() {
-        let query = ListQuery::new().include_total();
-        let prepared = prepare(&DOMAINS, "", &query, &LIMITS).unwrap();
-        let left = prepared.execute(domains(), &LIMITS).unwrap();
-        let right = prepared.execute(domains(), &LIMITS).unwrap();
-        let err = prepared.merge(vec![left, right]).unwrap_err();
-        assert_eq!(err.code, "invalid_include_total");
-        let prepared = prepare(&ACCOUNT_ASSETS, "alice", &query, &LIMITS).unwrap();
-        let left = prepared
-            .execute(
-                vec![
-                    asset_row("alice", "a", "ds1"),
-                    asset_row("alice", "b", "ds1"),
-                ],
-                &LIMITS,
-            )
-            .unwrap();
-        let right = prepared
-            .execute(vec![asset_row("alice", "c", "ds2")], &LIMITS)
-            .unwrap();
-        assert_eq!(prepared.merge(vec![left, right]).unwrap().total, Some(3));
-    }
-
     #[test]
     fn cursors_bind_the_collection_path() {
         let rows = || {
@@ -2284,5 +2314,226 @@ mod tests {
         });
         let err = prepare(&DOMAINS, "", &having, &LIMITS).err().unwrap();
         assert_eq!(err.code, "invalid_aggregate");
+    }
+
+    /// Rows in canonical order, strictly after `after` (or before it,
+    /// descending): what an identity-ordered producer streams.
+    fn seek(rows: &[Map], scan: OrderedScan<'_>) -> Vec<(bool, Option<Map>)> {
+        let mut sorted = rows.to_vec();
+        sorted.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+        if scan.descending {
+            sorted.reverse();
+        }
+        sorted
+            .into_iter()
+            .filter(|row| {
+                scan.after.is_none_or(|after| {
+                    let id = row["id"].as_str().unwrap();
+                    if scan.descending {
+                        id < after
+                    } else {
+                        id > after
+                    }
+                })
+            })
+            .map(|row| (true, Some(row)))
+            .collect()
+    }
+
+    fn ordered_pages(query: &ListQuery, limits: &Limits) -> Vec<(Vec<String>, bool)> {
+        let mut pages = Vec::new();
+        let mut current = query.clone();
+        for _ in 0..20 {
+            let prepared = prepare(&DOMAINS, "", &current, limits).unwrap();
+            let scan = prepared.ordered_scan().expect("identity-ordered read");
+            let page = prepared
+                .execute_ordered(seek(&domains(), scan), limits)
+                .unwrap();
+            let more = page.next_cursor.is_some();
+            pages.push((ids(&page), more));
+            match page.next_cursor {
+                Some(cursor) => current = query.clone().cursor(cursor),
+                None => break,
+            }
+        }
+        pages
+    }
+
+    #[test]
+    fn identity_ordered_reads_seek_from_the_cursor() {
+        let pages = ordered_pages(&ListQuery::new(), &LIMITS);
+        let all: Vec<String> = pages.iter().flat_map(|(ids, _)| ids.clone()).collect();
+        assert_eq!(all, ["alpha", "bravo", "charlie", "delta", "echo"]);
+        assert!(pages.iter().all(|(ids, _)| ids.len() <= 2));
+        let descending = ordered_pages(&ListQuery::new().sort_by(SortKey::desc("id")), &LIMITS);
+        let all: Vec<String> = descending.iter().flat_map(|(ids, _)| ids.clone()).collect();
+        assert_eq!(all, ["echo", "delta", "charlie", "bravo", "alpha"]);
+    }
+
+    #[test]
+    fn identity_ordered_pages_end_early_at_the_scan_budget() {
+        let limits = Limits {
+            ordered_page_scan_budget: 2,
+            ..LIMITS
+        };
+        // Only `echo` (the last row in identifier order) matches.
+        let query = ListQuery::new().filter(field("metadata.tier").eq(3));
+        let pages = ordered_pages(&query, &limits);
+        assert_eq!(
+            pages,
+            [
+                (vec![], true),
+                (vec![], true),
+                (vec!["echo".to_owned()], false)
+            ],
+            "short pages carry a cursor at the last examined row"
+        );
+    }
+
+    #[test]
+    fn identity_ordered_totals_count_every_match() {
+        let query = ListQuery::new()
+            .filter(field("owned_by").eq("alice"))
+            .include_total()
+            .limit(1);
+        let prepared = prepare(&DOMAINS, "", &query, &LIMITS).unwrap();
+        let scan = prepared.ordered_scan().unwrap();
+        let page = prepared
+            .execute_ordered(seek(&domains(), scan), &LIMITS)
+            .unwrap();
+        assert_eq!(ids(&page), ["alpha"]);
+        assert_eq!(page.total, Some(3));
+        assert!(page.next_cursor.is_some());
+    }
+
+    #[test]
+    fn ordered_lookahead_stops_after_a_full_page_with_sparse_matches() {
+        let limits = Limits {
+            ordered_page_scan_budget: 2,
+            ..LIMITS
+        };
+        let query = ListQuery::new().filter(field("id").eq("alpha")).limit(1);
+        let prepared = prepare(&DOMAINS, "", &query, &limits).unwrap();
+        let examined = std::cell::Cell::new(0);
+        let rows = seek(&domains(), prepared.ordered_scan().unwrap())
+            .into_iter()
+            .inspect(|_| examined.set(examined.get() + 1));
+        let page = prepared.execute_ordered(rows, &limits).unwrap();
+        assert_eq!(ids(&page), ["alpha"]);
+        assert_eq!(
+            examined.get(),
+            2,
+            "a full page must not disable the scan budget"
+        );
+        assert!(page.next_cursor.is_some());
+    }
+
+    #[test]
+    fn ordered_scans_charge_hidden_entries_without_exposing_their_keys() {
+        let limits = Limits {
+            ordered_page_scan_budget: 2,
+            ..LIMITS
+        };
+        let query = ListQuery::new().filter(field("id").eq("echo"));
+        let prepared = prepare(&DOMAINS, "", &query, &limits).unwrap();
+        let visible = seek(&domains(), prepared.ordered_scan().unwrap())[0].clone();
+        let page = prepared
+            .execute_ordered([visible, (true, None)], &limits)
+            .unwrap();
+        assert!(page.items.is_empty());
+        let continuation = query.clone().cursor(page.next_cursor.unwrap());
+        let resumed = prepare(&DOMAINS, "", &continuation, &limits).unwrap();
+        assert_eq!(resumed.ordered_scan().unwrap().after, Some("alpha"));
+        let err = prepared
+            .execute_ordered([(true, None), (true, None)], &limits)
+            .unwrap_err();
+        assert_eq!(err.code, "query_scan_limit_exceeded");
+    }
+
+    #[test]
+    fn ordered_totals_include_matches_before_the_cursor() {
+        for descending in [false, true] {
+            let query = ListQuery::new()
+                .include_total()
+                .limit(1)
+                .sort_by(if descending {
+                    SortKey::desc("id")
+                } else {
+                    SortKey::asc("id")
+                });
+            let prepared = prepare(&DOMAINS, "", &query, &LIMITS).unwrap();
+            let rows = seek(&domains(), prepared.ordered_scan().unwrap());
+            let first = prepared.execute_ordered(rows.clone(), &LIMITS).unwrap();
+            let after = ids(&first)[0].clone();
+            let query = query.cursor(first.next_cursor.unwrap());
+            let prepared = prepare(&DOMAINS, "", &query, &LIMITS).unwrap();
+            let second = prepared
+                .execute_ordered(
+                    rows.into_iter().map(|(_, row)| {
+                        let id = row.as_ref().unwrap()["id"].as_str().unwrap();
+                        (
+                            if descending {
+                                id < after.as_str()
+                            } else {
+                                id > after.as_str()
+                            },
+                            row,
+                        )
+                    }),
+                    &LIMITS,
+                )
+                .unwrap();
+            assert_eq!(
+                second.total,
+                Some(5),
+                "total describes the entire query on every page"
+            );
+            assert_eq!(ids(&second), if descending { ["delta"] } else { ["bravo"] });
+        }
+    }
+
+    #[test]
+    fn unordered_and_aggregate_scans_charge_hidden_entries() {
+        let limits = Limits {
+            max_scanned_rows: 1,
+            ..LIMITS
+        };
+        for query in [
+            ListQuery::new(),
+            ListQuery::new().aggregate(AggregateSpec {
+                group_by: vec![],
+                metrics: vec![count_metric("n")],
+                having: None,
+            }),
+        ] {
+            let prepared = prepare(&DOMAINS, "", &query, &limits).unwrap();
+            let err = prepared.execute_entries([None, None], &limits).unwrap_err();
+            assert_eq!(err.code, "query_scan_limit_exceeded");
+        }
+    }
+
+    #[test]
+    fn only_identity_orders_stream() {
+        let ordered = |query: ListQuery| {
+            prepare(&DOMAINS, "", &query, &LIMITS)
+                .unwrap()
+                .ordered_scan()
+                .is_some()
+        };
+        assert!(ordered(ListQuery::new()));
+        assert!(ordered(ListQuery::new().sort_by(SortKey::asc("id"))));
+        assert!(ordered(ListQuery::new().sort_by(SortKey::desc("id"))));
+        assert!(!ordered(ListQuery::new().sort_by(SortKey::asc("owned_by"))));
+        assert!(!ordered(
+            ListQuery::new()
+                .sort_by(SortKey::asc("id"))
+                .sort_by(SortKey::asc("owned_by"))
+        ));
+        let everything = ListQuery::new();
+        let assets = prepare(&ACCOUNT_ASSETS, "alice", &everything, &LIMITS).unwrap();
+        assert!(
+            assets.ordered_scan().is_none(),
+            "only id-keyed collections stream"
+        );
     }
 }

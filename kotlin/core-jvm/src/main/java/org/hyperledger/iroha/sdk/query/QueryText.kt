@@ -402,7 +402,9 @@ internal object QueryText {
                         }
                         continue
                     }
-                    Character.isISOControl(ch) ->
+                    // As in JSON, only U+0000..U+001F must be escaped; DEL and C1 characters stay
+                    // literal, so every rendered literal parses.
+                    ch < ' ' ->
                         throw error(index, "control characters must be escaped inside string literals")
                     else -> {
                         out.append(ch)

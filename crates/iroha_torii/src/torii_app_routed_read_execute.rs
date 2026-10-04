@@ -10,25 +10,6 @@ where
     }
 }
 #[cfg(feature = "app_api")]
-fn bounded_space_directory_manifest_shard_query(
-    mut query: routing::SpaceDirectoryManifestQuery,
-    page_offset: u64,
-    page_limit: u64,
-) -> Result<(routing::SpaceDirectoryManifestQuery, &'static str), Error> {
-    let (page_offset, page_limit) =
-        routing::space_directory_manifest_pagination(Some(page_limit), page_offset)?;
-    if query.dataspace.is_none() {
-        let _ = routing::space_directory_manifest_fanout_window(page_offset, page_limit)?;
-    }
-    let requested_count_mode = routed_read_count_mode_label(query.count_mode.as_deref());
-    // The coordinator envelope is authoritative for global pagination. Every route is responsible
-    // for exactly one dataspace, so its complete local page contains at most one manifest.
-    query.offset = Some(0);
-    query.limit = Some(1);
-    query.count_mode = Some("bounded".to_owned());
-    Ok((query, requested_count_mode))
-}
-#[cfg(feature = "app_api")]
 async fn resolve_torii_proof_record_for_routes(
     app: &SharedAppState,
     routes: Vec<RoutingDecision>,
@@ -572,261 +553,6 @@ async fn execute_torii_account_read_for_resolved_routes(
     })
 }
 #[cfg(feature = "app_api")]
-fn account_history_payload_has_more(payload: &Value, item_count: usize, page_limit: u64) -> bool {
-    payload
-        .as_object()
-        .and_then(|object| object.get("has_more"))
-        .and_then(Value::as_bool)
-        .unwrap_or_else(|| u64::try_from(item_count).unwrap_or(u64::MAX) >= page_limit)
-}
-#[cfg(feature = "app_api")]
-async fn execute_torii_account_history_read_for_resolved_routes(
-    app: &SharedAppState,
-    routes: Vec<RoutingDecision>,
-    route_scope: ToriiFanoutRouteScopeV1,
-    path_args: Vec<String>,
-    query_string: Option<String>,
-    proxy_memory: Option<ToriiProxyMemoryReservation>,
-) -> Response {
-    if routes.is_empty() {
-        return with_torii_fanout_headers(
-            torii_proxy_error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "route_unavailable",
-                "no Nexus dataspace routes are configured",
-            ),
-            ToriiFanoutDiagnostics::default(),
-        );
-    }
-    let Some(account_id) = path_args.get(0).cloned() else {
-        return torii_proxy_error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_proxy_request",
-            "missing proxied path argument `account_id`",
-        );
-    };
-    let request_decode_plan = match torii_routed_read_request_decode_plan(app) {
-        Ok(plan) => plan,
-        Err(response) => return response,
-    };
-    let mut params = match decode_torii_proxy_query::<routing::AccountHistoryGetParams>(
-        request_decode_plan,
-        query_string.as_deref(),
-    ) {
-        Ok(params) => params,
-        Err(response) => return response,
-    };
-    let limits = routing::app_query_limits();
-    let page_limit = match limits.clamp_page_limit(params.limit) {
-        Ok(0) => {
-            return Error::AppQueryValidation {
-                code: "invalid_pagination",
-                message: format!(
-                    "limit must be between 1 and {} for {}",
-                    limits.max_page_limit,
-                    routing::ENDPOINT_ACCOUNTS_HISTORY
-                ),
-            }
-            .into_response();
-        }
-        Ok(limit) => limit,
-        Err(error) => return error.into_response(),
-    };
-    params.limit = Some(page_limit);
-    let count_mode_label = routed_read_count_mode_label(params.count_mode.as_deref());
-    let routed_by = routed_by_for_routes(app, &routes);
-    if routes.len() == 1 {
-        let query_string = match encode_torii_proxy_query(&params) {
-            Ok(query_string) => query_string,
-            Err(error) => return error.into_response(),
-        };
-        let mut diagnostics = ToriiFanoutDiagnostics::default();
-        diagnostics.record_attempt();
-        let response = execute_torii_read_for_route(
-            app,
-            routes[0],
-            torii_read_request(
-                ToriiReadEndpointV1::AccountHistoryGet,
-                route_scope.clone(),
-                routes[0],
-                vec![account_id],
-                query_string,
-                Vec::new(),
-            ),
-            proxy_memory,
-        )
-        .await;
-        if response.status().is_success() {
-            diagnostics.record_success();
-        } else {
-            diagnostics.record_skipped_response(&response);
-        }
-        return with_torii_fanout_headers(response, diagnostics);
-    }
-    let (payloads, diagnostics, budget) = match collect_torii_account_history_json_payloads(
-        &routes,
-        &params,
-        page_limit,
-        count_mode_label,
-        app.query_fanout_working_set_bytes,
-        app.torii_proxy_max_response_bytes,
-        |route, page_query_string| {
-            let account_id = account_id.clone();
-            let proxy_memory = proxy_memory.clone();
-            let route_scope = route_scope.clone();
-            async move {
-                execute_torii_read_for_route(
-                    app,
-                    route,
-                    torii_read_request(
-                        ToriiReadEndpointV1::AccountHistoryGet,
-                        route_scope,
-                        route,
-                        vec![account_id],
-                        page_query_string,
-                        Vec::new(),
-                    ),
-                    proxy_memory,
-                )
-                .await
-            }
-        },
-    )
-    .await
-    {
-        Ok(collected) => collected,
-        Err(response) => return response,
-    };
-    merge_with_torii_fanout_headers(diagnostics, || {
-        merged_account_history_response(
-            payloads,
-            params.offset,
-            page_limit,
-            count_mode_label,
-            routed_by,
-            budget,
-        )
-    })
-}
-#[cfg(feature = "app_api")]
-async fn collect_torii_account_history_json_payloads<F, Fut>(
-    routes: &[RoutingDecision],
-    params: &routing::AccountHistoryGetParams,
-    page_limit: u64,
-    count_mode_label: &'static str,
-    working_set_bytes: usize,
-    max_body_bytes: usize,
-    mut fetch: F,
-) -> Result<
-    (
-        Vec<Value>,
-        ToriiFanoutDiagnostics,
-        ToriiRoutedReadMemoryBudget,
-    ),
-    Response,
->
-where
-    F: FnMut(RoutingDecision, Option<String>) -> Fut,
-    Fut: core::future::Future<Output = Response>,
-{
-    let per_route_target = (count_mode_label == "bounded")
-        .then(|| params.offset.saturating_add(page_limit).saturating_add(1));
-    let limits = routing::app_query_limits();
-    let chunk_limit = limits.max_page_limit.max(1);
-    let mut diagnostics = ToriiFanoutDiagnostics::default();
-    let mut last_not_found = None;
-    let mut last_route_unavailable = None;
-    let mut budget = ToriiRoutedReadMemoryBudget::new(working_set_bytes, max_body_bytes)?;
-    let mut payloads = budget.try_retained_vec(routes.len())?;
-    for route in routes {
-        diagnostics.record_attempt();
-        let mut route_offset = 0_u64;
-        let mut route_items_seen = 0_u64;
-        let mut route_succeeded = false;
-        loop {
-            let mut page_params = params.clone();
-            page_params.offset = route_offset;
-            let next_limit = per_route_target
-                .map(|target| {
-                    target
-                        .saturating_sub(route_items_seen)
-                        .max(1)
-                        .min(chunk_limit)
-                })
-                .unwrap_or(chunk_limit);
-            page_params.limit = Some(next_limit);
-            let page_query_string = match encode_torii_proxy_query(&page_params) {
-                Ok(query_string) => query_string,
-                Err(error) => return Err(error.into_response()),
-            };
-            let response = fetch(*route, page_query_string).await;
-            if response.status() == StatusCode::NOT_FOUND {
-                diagnostics.record_skipped_response(&response);
-                if route_succeeded {
-                    return Err(with_torii_fanout_headers(response, diagnostics));
-                } else {
-                    last_not_found = Some(summarize_skipped_torii_route_response(response));
-                }
-                break;
-            }
-            if torii_response_has_reject_code(&response, "route_unavailable") {
-                diagnostics.record_skipped_response(&response);
-                if route_succeeded {
-                    return Err(with_torii_fanout_headers(response, diagnostics));
-                } else {
-                    last_route_unavailable = Some(summarize_skipped_torii_route_response(response));
-                }
-                break;
-            }
-            let payload = match torii_json_body_value(response, &mut budget).await {
-                Ok(payload) => payload,
-                Err(response) => {
-                    diagnostics.record_skipped_response(&response);
-                    return Err(with_torii_fanout_headers(response, diagnostics));
-                }
-            };
-            let item_count = match list_items_from_payload(
-                &payload,
-                "expected account history JSON object with `items`",
-            ) {
-                Ok(items) => items.len(),
-                Err(response) => {
-                    diagnostics.record_skipped_response(&response);
-                    return Err(with_torii_fanout_headers(response, diagnostics));
-                }
-            };
-            let has_more = account_history_payload_has_more(&payload, item_count, next_limit);
-            budget.push_retained(&mut payloads, payload)?;
-            route_succeeded = true;
-            let item_count_u64 = u64::try_from(item_count).unwrap_or(u64::MAX);
-            route_items_seen = route_items_seen.saturating_add(item_count_u64);
-            if item_count == 0
-                || !has_more
-                || per_route_target.is_some_and(|target| route_items_seen >= target)
-            {
-                break;
-            }
-            route_offset = route_offset.saturating_add(item_count_u64);
-        }
-        if route_succeeded {
-            diagnostics.record_success();
-        }
-    }
-    if payloads.is_empty() {
-        let response = last_not_found.unwrap_or_else(|| {
-            last_route_unavailable.unwrap_or_else(|| {
-                torii_proxy_error_response(
-                    StatusCode::NOT_FOUND,
-                    "not_found",
-                    "no dataspace returned a matching result",
-                )
-            })
-        });
-        return Err(with_torii_fanout_headers(response, diagnostics));
-    }
-    Ok((payloads, diagnostics, budget))
-}
-#[cfg(feature = "app_api")]
 async fn execute_torii_read_fanout_for_resolved_routes(
     app: &SharedAppState,
     routes: Vec<RoutingDecision>,
@@ -969,45 +695,36 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
     response_format: ToriiProxyResponseFormatV1,
     proxy_memory: Option<ToriiProxyMemoryReservation>,
 ) -> Response {
+    if let Some(target) = collection_target_for_read(endpoint, &path_args) {
+        let plan = match torii_routed_read_request_decode_plan(app) {
+            Ok(plan) => plan,
+            Err(response) => return response,
+        };
+        let query =
+            match decode_routed_collection_query(plan, endpoint, query_string.as_deref(), &body) {
+                Ok(query) => query,
+                Err(response) => return response,
+            };
+        let (query, _) = match prepare_collection_forward(app, &target, query) {
+            Ok(prepared) => prepared,
+            Err(error) => return error.into_response(),
+        };
+        let Some(route) = collection_execution_route(app.as_ref(), &routes) else {
+            return empty_collection_page_response(
+                routed_by_for_routes(app, &[]),
+                query.include_total,
+            );
+        };
+        return execute_torii_read_for_route(
+            app,
+            route,
+            torii_read_request(endpoint, route_scope, route, path_args, query_string, body),
+            proxy_memory,
+        )
+        .await;
+    }
     match merge {
         ToriiReadFanoutMergeV1::List => {
-            if let Some(target) = collection_target_for_read(endpoint, &path_args) {
-                return execute_collection_fanout(
-                    app,
-                    routes,
-                    route_scope,
-                    endpoint,
-                    target,
-                    path_args,
-                    query_string,
-                    body,
-                    proxy_memory,
-                )
-                .await;
-            }
-            if endpoint == ToriiReadEndpointV1::AccountAssetsGet
-                && matches!(&route_scope, ToriiFanoutRouteScopeV1::TargetAccount { .. })
-            {
-                return execute_torii_account_assets_list_fanout_for_resolved_routes(
-                    app,
-                    routes,
-                    route_scope,
-                    path_args,
-                    query_string,
-                    proxy_memory,
-                )
-                .await;
-            }
-            if endpoint == ToriiReadEndpointV1::AccountsList {
-                return execute_torii_accounts_list_fanout_for_resolved_routes(
-                    app,
-                    routes,
-                    route_scope,
-                    query_string,
-                    proxy_memory,
-                )
-                .await;
-            }
             match execute_torii_fanout_json_payloads_resolved_routes(
                 app,
                 routes,
@@ -1154,17 +871,6 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
             )
             .await
         }
-        ToriiReadFanoutMergeV1::AccountHistory => {
-            execute_torii_account_history_read_for_resolved_routes(
-                app,
-                routes,
-                route_scope,
-                path_args,
-                query_string,
-                proxy_memory,
-            )
-            .await
-        }
         ToriiReadFanoutMergeV1::Portfolio => {
             match execute_torii_fanout_json_payloads_resolved_routes(
                 app,
@@ -1223,81 +929,6 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
                 Ok((payloads, diagnostics, routed_by, budget)) => {
                     merge_with_torii_fanout_headers(diagnostics, || {
                         merged_space_directory_bindings_response(payloads, routed_by, budget)
-                    })
-                }
-                Err(response) => response,
-            }
-        }
-        ToriiReadFanoutMergeV1::SpaceDirectoryManifests {
-            page_offset,
-            page_limit,
-        } => {
-            let Some(page_limit) = page_limit else {
-                return torii_proxy_error_response(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_proxy_request",
-                    "space-directory manifest fanout requires a page limit",
-                );
-            };
-            let request_decode_plan = match torii_routed_read_request_decode_plan(app) {
-                Ok(plan) => plan,
-                Err(response) => return response,
-            };
-            let query = match decode_torii_proxy_query::<routing::SpaceDirectoryManifestQuery>(
-                request_decode_plan,
-                query_string.as_deref(),
-            ) {
-                Ok(query) => query,
-                Err(response) => return response,
-            };
-            let requested_dataspace = query.dataspace;
-            let requested_status =
-                match routing::space_directory_manifest_status_filter(query.status.as_deref()) {
-                    Ok(status) => status,
-                    Err(error) => return error.into_response(),
-                };
-            let (shard_query, requested_count_mode) =
-                match bounded_space_directory_manifest_shard_query(query, page_offset, page_limit) {
-                    Ok(bound) => bound,
-                    Err(error) => return error.into_response(),
-                };
-            let expected_uaid = match path_args.first() {
-                Some(raw) => match routing::canonical_routed_uaid_literal(raw) {
-                    Ok(uaid) => uaid,
-                    Err(error) => return error.into_response(),
-                },
-                None => {
-                    return torii_internal_json_error(
-                        "space-directory manifest fanout requires a UAID path argument",
-                    );
-                }
-            };
-            match execute_torii_fanout_space_directory_manifest_payloads_resolved_routes(
-                app,
-                routes,
-                route_scope,
-                path_args,
-                shard_query,
-                body,
-                proxy_memory,
-            )
-            .await
-            {
-                Ok((payloads, diagnostics, routed_by, budget)) => {
-                    let fanout_incomplete = diagnostics.failed_routes() > 0;
-                    merge_with_torii_fanout_headers(diagnostics, || {
-                        merged_space_directory_manifests_response(
-                            payloads,
-                            page_offset,
-                            Some(page_limit),
-                            fanout_incomplete,
-                            requested_count_mode,
-                            requested_dataspace,
-                            requested_status,
-                            &expected_uaid,
-                            routed_by,
-                            budget,
-                        )
                     })
                 }
                 Err(response) => response,
@@ -1406,103 +1037,6 @@ async fn execute_torii_read_via_nexus_for_supported_routes(
         ToriiProxyRequestKindV1::ReadFanout(request),
     )
     .await
-}
-#[cfg(feature = "app_api")]
-async fn execute_torii_visible_fanout_list_read(
-    app: &SharedAppState,
-    caller: Option<&AccountId>,
-    endpoint: ToriiReadEndpointV1,
-    path_args: Vec<String>,
-    query_string: Option<String>,
-    body: Vec<u8>,
-) -> Response {
-    execute_torii_read_fanout_via_nexus(
-        app,
-        ToriiFanoutRouteScopeV1::VisibleAccount {
-            caller_account_id: caller.map(ToString::to_string),
-        },
-        ToriiReadFanoutMergeV1::List,
-        endpoint,
-        path_args,
-        query_string,
-        body,
-        ToriiProxyResponseFormatV1::Json,
-    )
-    .await
-}
-#[cfg(feature = "app_api")]
-async fn execute_torii_list_read_for_routes(
-    app: &SharedAppState,
-    routes: Vec<RoutingDecision>,
-    route_scope: ToriiFanoutRouteScopeV1,
-    endpoint: ToriiReadEndpointV1,
-    path_args: Vec<String>,
-    query_string: Option<String>,
-    body: Vec<u8>,
-) -> Response {
-    if routes.len() > 1 {
-        execute_torii_read_fanout_via_nexus(
-            app,
-            route_scope,
-            ToriiReadFanoutMergeV1::List,
-            endpoint,
-            path_args,
-            query_string,
-            body,
-            ToriiProxyResponseFormatV1::Json,
-        )
-        .await
-    } else {
-        execute_torii_read_fanout_for_resolved_routes(
-            app,
-            routes,
-            route_scope,
-            ToriiReadFanoutMergeV1::List,
-            endpoint,
-            path_args,
-            query_string,
-            body,
-            ToriiProxyResponseFormatV1::Json,
-            None,
-        )
-        .await
-    }
-}
-#[cfg(feature = "app_api")]
-async fn execute_torii_account_history_read_for_routes(
-    app: &SharedAppState,
-    routes: Vec<RoutingDecision>,
-    route_scope: ToriiFanoutRouteScopeV1,
-    path_args: Vec<String>,
-    query_string: Option<String>,
-) -> Response {
-    if routes.len() > 1 {
-        execute_torii_read_fanout_via_nexus(
-            app,
-            route_scope,
-            ToriiReadFanoutMergeV1::AccountHistory,
-            ToriiReadEndpointV1::AccountHistoryGet,
-            path_args,
-            query_string,
-            Vec::new(),
-            ToriiProxyResponseFormatV1::Json,
-        )
-        .await
-    } else {
-        execute_torii_read_fanout_for_resolved_routes(
-            app,
-            routes,
-            route_scope,
-            ToriiReadFanoutMergeV1::AccountHistory,
-            ToriiReadEndpointV1::AccountHistoryGet,
-            path_args,
-            query_string,
-            Vec::new(),
-            ToriiProxyResponseFormatV1::Json,
-            None,
-        )
-        .await
-    }
 }
 #[cfg(feature = "app_api")]
 async fn execute_torii_public_pipeline_status_fanout(
@@ -1676,32 +1210,6 @@ async fn execute_torii_visible_fanout_space_directory_bindings_read(
         },
         ToriiReadFanoutMergeV1::SpaceDirectoryBindings,
         ToriiReadEndpointV1::SpaceDirectoryBindingsGet,
-        vec![uaid_literal],
-        query_string,
-        Vec::new(),
-        ToriiProxyResponseFormatV1::Json,
-    )
-    .await
-}
-#[cfg(feature = "app_api")]
-async fn execute_torii_visible_fanout_space_directory_manifests_read(
-    app: &SharedAppState,
-    caller: Option<&AccountId>,
-    uaid_literal: String,
-    query_string: Option<String>,
-    offset: u64,
-    limit: Option<u64>,
-) -> Response {
-    execute_torii_read_fanout_via_nexus(
-        app,
-        ToriiFanoutRouteScopeV1::VisibleAccount {
-            caller_account_id: caller.map(ToString::to_string),
-        },
-        ToriiReadFanoutMergeV1::SpaceDirectoryManifests {
-            page_offset: offset,
-            page_limit: limit,
-        },
-        ToriiReadEndpointV1::SpaceDirectoryManifestsGet,
         vec![uaid_literal],
         query_string,
         Vec::new(),

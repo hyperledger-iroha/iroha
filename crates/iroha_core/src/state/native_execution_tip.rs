@@ -173,14 +173,32 @@ impl NativeExecutionTipSnapshot {
         }
         let chain = CertifiedChain::from_pinned(chain_id, network, hashes, kura, budget)
             .map_err(|error| error.to_string())?;
-        let current = chain
-            .authenticated_execution(height)
-            .map_err(|error| error.to_string())?;
-        let previous = chain
-            .authenticated_execution(height - 1)
-            .map_err(|error| error.to_string())?;
-        let current = record(current.committed());
-        let previous = record(previous.committed());
+        // One verified walk over the native prefix authenticates the tip and its
+        // predecessor and records history checkpoints for off-chain readers.
+        let checkpoints = kura.history_checkpoints();
+        let mut previous = if height == 2 {
+            Some(record(
+                chain
+                    .authenticated_execution(1)
+                    .map_err(|error| error.to_string())?
+                    .committed(),
+            ))
+        } else {
+            None
+        };
+        let mut current = None;
+        for certified in chain.walk(2, height) {
+            let block = certified
+                .map_err(|error| error.to_string())?
+                .into_authenticated_execution()
+                .map_err(|error| error.to_string())?;
+            let block = record(block.committed());
+            checkpoints.record_sparse(block.height, checkpoint_of(block));
+            previous = current.replace(block).or(previous);
+        }
+        let (Some(current), Some(previous)) = (current, previous) else {
+            return Err("verified native prefix ended before the snapshot tip".into());
+        };
         if self.blocks != Some(current)
             || self.revert.as_ref().map(|undo| undo.value) != Some(Some(previous))
         {
@@ -197,6 +215,16 @@ impl NativeExecutionTipSnapshot {
     }
 }
 
+/// The history checkpoint of an authenticated native execution identity.
+fn checkpoint_of(
+    record: NativeExecutionTipRecord,
+) -> crate::kura::history_checkpoints::HistoryCheckpoint {
+    crate::kura::history_checkpoints::HistoryCheckpoint {
+        iroha_hash: record.iroha_hash,
+        core_hash: Hash32(record.core_hash),
+        result: Hash32(record.result),
+    }
+}
 fn record(block: &CommittedBlock) -> NativeExecutionTipRecord {
     NativeExecutionTipRecord {
         height: block.height(),
@@ -278,6 +306,11 @@ impl StateBlock<'_> {
             return Err("native execution tip changed during metadata preparation".into());
         }
         *self.native_execution_tip.get_mut() = Some(NativeExecutionTip(next));
+        // An abandoned block's checkpoint is harmless: readers trust a checkpoint
+        // only while it matches their committed hash journal.
+        self.kura
+            .history_checkpoints()
+            .record_sparse(next.height, checkpoint_of(next));
         Ok(())
     }
 }

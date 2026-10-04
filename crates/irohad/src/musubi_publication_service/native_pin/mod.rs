@@ -33,7 +33,7 @@ use iroha_core::{
         begin_musubi_pin_outbox_check_v1,
     },
     queue::Queue,
-    state::{State, StateReadOnly as _, WorldReadOnly as _},
+    state::{State, StateReadOnly as _, WorldReadOnly as _, WorldStateSnapshot as _},
     tx::AcceptedTransaction,
 };
 use iroha_crypto::KeyPair;

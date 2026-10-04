@@ -3,41 +3,11 @@ use iroha_data_model::{
     prelude::SelectorTuple,
     query::{
         QueryOutputBatchBox, QueryOutputBatchBoxTuple,
-        dsl::{EvaluateSelector, HasProjection, SelectorMarker},
+        dsl::{HasProjection, SelectorMarker},
         error::QueryExecutionFail,
     },
 };
 use std::{fmt::Debug, iter::Peekable, num::NonZeroU64};
-fn evaluate_selector_tuple<T>(
-    batch: Vec<T>,
-    selector: &SelectorTuple<T>,
-) -> Result<QueryOutputBatchBoxTuple, QueryExecutionFail>
-where
-    T: HasProjection<SelectorMarker, AtomType = ()> + 'static,
-    T::Projection: EvaluateSelector<T>,
-    QueryOutputBatchBox: From<Vec<T>>,
-{
-    let mut batch_tuple = Vec::new();
-    let mut iter = selector.iter().peekable();
-    // If no projection was requested, return the entire items as a single tuple element
-    if iter.peek().is_none() {
-        return Ok(QueryOutputBatchBoxTuple::from_batch(
-            QueryOutputBatchBox::from(batch),
-        ));
-    }
-    while let Some(item) = iter.next() {
-        if iter.peek().is_none() {
-            // do not clone the last item
-            batch_tuple.push(item.project(batch.into_iter())?);
-            return QueryOutputBatchBoxTuple::new(batch_tuple)
-                .map_err(|error| QueryExecutionFail::Conversion(error.to_string()));
-        }
-        batch_tuple.push(item.project_clone(batch.iter())?);
-    }
-    // unreachable: handled empty selector above
-    QueryOutputBatchBoxTuple::new(batch_tuple)
-        .map_err(|error| QueryExecutionFail::Conversion(error.to_string()))
-}
 trait BatchedTrait {
     fn next_batch(
         &mut self,
@@ -51,7 +21,6 @@ where
     I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync,
 {
     iter: I,
-    selector: SelectorTuple<I::Item>,
     batch_size: NonZeroU64,
     cursor: Option<u64>,
 }
@@ -59,7 +28,6 @@ impl<I> BatchedTrait for BatchedInner<I>
 where
     I: ExactSizeIterator + Send + Sync,
     I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
-    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
     fn next_batch(
@@ -86,8 +54,7 @@ where
                     .expect("`u32` should always fit into `usize`"),
             )
             .collect();
-        // evaluate the requested projections
-        let batch = evaluate_selector_tuple(batch, &self.selector)?;
+        let batch = QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::from(batch));
         // determine if there are elements left after this batch
         let remaining_after = self.iter.len();
         if remaining_after > 0 {
@@ -115,7 +82,6 @@ where
     I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync,
 {
     iter: Peekable<I>,
-    selector: SelectorTuple<I::Item>,
     batch_size: NonZeroU64,
     cursor: Option<u64>,
 }
@@ -123,7 +89,6 @@ impl<I> BatchedTrait for StreamingBatchedInner<I>
 where
     I: Iterator + Send + Sync,
     I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
-    <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
     fn next_batch(
@@ -148,7 +113,7 @@ where
                     .expect("`u32` should always fit into `usize`"),
             )
             .collect();
-        let batch = evaluate_selector_tuple(batch, &self.selector)?;
+        let batch = QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::from(batch));
         if self.iter.peek().is_some() {
             let batch_len =
                 u64::try_from(current_batch_size).expect("batch size must fit into u64");
@@ -166,7 +131,10 @@ where
         None
     }
 }
-/// A query output iterator that combines evaluating selectors, batching and type erasure.
+/// A query output iterator that combines batching and type erasure.
+///
+/// Selectors have a single data-free layout and never project, so every batch is one column of
+/// whole items.
 pub struct ErasedQueryIterator {
     inner: Box<dyn BatchedTrait + Send + Sync>,
 }
@@ -177,12 +145,12 @@ impl Debug for ErasedQueryIterator {
 }
 impl ErasedQueryIterator {
     /// Creates a new erased query iterator. Boxes the inner iterator to erase its type.
+    ///
+    /// The selector only binds the item type: it has a single data-free layout and never projects.
     pub fn new<I>(iter: I, selector: SelectorTuple<I::Item>, batch_size: NonZeroU64) -> Self
     where
         I: ExactSizeIterator + Send + Sync + 'static,
         I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
-        <I::Item as HasProjection<SelectorMarker>>::Projection:
-            EvaluateSelector<I::Item> + Send + Sync,
         QueryOutputBatchBox: From<Vec<I::Item>>,
     {
         Self::new_with_cursor(iter, selector, batch_size, 0)
@@ -190,21 +158,18 @@ impl ErasedQueryIterator {
     /// Creates a new erased query iterator with a custom initial cursor value.
     pub(crate) fn new_with_cursor<I>(
         iter: I,
-        selector: SelectorTuple<I::Item>,
+        _selector: SelectorTuple<I::Item>,
         batch_size: NonZeroU64,
         initial_cursor: u64,
     ) -> Self
     where
         I: ExactSizeIterator + Send + Sync + 'static,
         I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
-        <I::Item as HasProjection<SelectorMarker>>::Projection:
-            EvaluateSelector<I::Item> + Send + Sync,
         QueryOutputBatchBox: From<Vec<I::Item>>,
     {
         Self {
             inner: Box::new(BatchedInner {
                 iter,
-                selector,
                 batch_size,
                 cursor: Some(initial_cursor),
             }),
@@ -214,21 +179,18 @@ impl ErasedQueryIterator {
     /// report an exact remaining length.
     pub(crate) fn new_streaming_with_cursor<I>(
         iter: I,
-        selector: SelectorTuple<I::Item>,
+        _selector: SelectorTuple<I::Item>,
         batch_size: NonZeroU64,
         initial_cursor: u64,
     ) -> Self
     where
         I: Iterator + Send + Sync + 'static,
         I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
-        <I::Item as HasProjection<SelectorMarker>>::Projection:
-            EvaluateSelector<I::Item> + Send + Sync,
         QueryOutputBatchBox: From<Vec<I::Item>>,
     {
         Self {
             inner: Box::new(StreamingBatchedInner {
                 iter: iter.peekable(),
-                selector,
                 batch_size,
                 cursor: Some(initial_cursor),
             }),

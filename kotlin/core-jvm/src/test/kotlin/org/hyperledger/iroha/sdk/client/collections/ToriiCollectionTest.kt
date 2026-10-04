@@ -41,6 +41,76 @@ import kotlin.test.assertTrue
 
 class ToriiCollectionTest {
     @Test
+    fun explorerFeedsUseTheSharedEnvelopeAndHistoryControls() {
+        val executor = ScriptedExecutor()
+        val client = client(executor)
+        val feeds = listOf(
+            "accounts" to client.explorerAccounts,
+            "domains" to client.explorerDomains,
+            "asset-definitions" to client.explorerAssetDefinitions,
+            "assets" to client.explorerAssets,
+            "nfts" to client.explorerNfts,
+            "rwas" to client.explorerRwas,
+            "blocks" to client.explorerBlocks,
+            "transactions" to client.explorerTransactions,
+            "transactions/latest" to client.explorerLatestTransactions,
+            "instructions" to client.explorerInstructions,
+            "instructions/latest" to client.explorerLatestInstructions
+        )
+        for ((path, feed) in feeds) {
+            executor.reply(200, """{"items":[{"id":"row"}],"next_cursor":null}""")
+            assertEquals(Json.of("row"), feed.page(listQuery { limit(1) }).join().items.single()["id"])
+            assertEquals("/api/v1/explorer/$path/query", executor.requests.last().uri.path)
+            val before = executor.requests.size
+            assertFailsWith<IllegalArgumentException> { feed.page(listQuery { includeTotal() }).join() }
+            assertEquals(before, executor.requests.size)
+        }
+    }
+
+    @Test
+    fun migratedCollectionsUseSharedPostPagesAndPreserveRows() {
+        val executor = ScriptedExecutor()
+        val client = client(executor)
+        executor.reply(200, """{"items":[{"name":"CanSetParameters","payload":null}],"next_cursor":"permission-next","total":2}""")
+        executor.reply(200, """{"items":[{"name":"CanSetParameters","payload":{"scope":7}}],"next_cursor":null}""")
+        val permissions = client.accountPermissions("alice@wonderland").fetchAll(listQuery { limit(1); includeTotal() }).join()
+        assertEquals(2, permissions.size)
+        assertEquals(Json.NULL, permissions[0].payload)
+        assertEquals(Json.parse("""{"scope":7}"""), permissions[1].payload)
+        assertEquals("/api/v1/accounts/alice@wonderland/permissions/query", executor.requests[0].uri.path)
+        assertEquals(Json.of("permission-next"), (Json.parse(executor.requests[1].body) as JsonObject)["cursor"])
+        executor.reply(200, """{"items":[{"id":"plan","provider":"alice","pricing":{"Fixed":1}}],"next_cursor":null}""")
+        assertEquals("plan", client.subscriptionPlans.page().join().items.single().id)
+        executor.reply(200, """{"items":[{"id":"subscription","status":"active","plan_id":"plan","invoice":null}],"next_cursor":null}""")
+        assertEquals("active", client.subscriptions.page().join().items.single().status)
+        executor.reply(200, """{"items":[{"block_height":9,"block_index":2,"entrypoint_hash":"tx"}],"next_cursor":null}""")
+        assertEquals(2L, client.contractActivity.page().join().items.single().blockIndex)
+        executor.reply(200, """{"items":[{"block_height":9,"block_index":2,"event_id":"tx:0","tx_hash_hex":"tx"}],"next_cursor":null}""")
+        assertEquals("tx:0", client.contractEvents.page().join().items.single().eventId)
+        executor.reply(200, """{"items":[{"id":"movement","block_height":9,"block_index":2,"movement_index":3,"amount":"1.25"}],"next_cursor":null}""")
+        assertEquals(3L, client.accountHistory("alice@wonderland").page().join().items.single().movementIndex)
+        assertTrue(executor.requests.all { it.method == "POST" })
+        assertEquals(listOf("/api/v1/subscriptions/plans/query", "/api/v1/subscriptions/query", "/api/v1/contracts/activity/query", "/api/v1/contracts/events/query", "/api/v1/accounts/alice@wonderland/history/query"), executor.requests.drop(2).map { it.uri.path })
+    }
+
+    @Test
+    fun uaidManifestsCheckScopeAndRejectRetiredPages() {
+        val uaid = "uaid:" + "ab".repeat(32)
+        val executor = ScriptedExecutor()
+        val client = client(executor)
+        val row = """{"dataspace_id":7,"dataspace_alias":null,"manifest_hash":"${"ab".repeat(32)}","status":"Pending","lifecycle":{"activated_epoch":null,"expired_epoch":null,"revocation":null},"accounts":[],"manifest":{"version":1,"uaid":"$uaid","dataspace":7,"issued_ms":0,"activation_epoch":1,"entries":[]}}"""
+        executor.reply(200, """{"items":[$row],"next_cursor":null}""")
+        assertEquals(7L, client.uaidManifests(uaid).page().join().items.single().dataspaceId)
+        assertEquals("/api/v1/space-directory/uaids/$uaid/manifests/query", executor.requests.last().uri.path)
+        executor.reply(200, """{"items":[${row.replace(uaid, "uaid:" + "cd".repeat(32))}],"next_cursor":null}""")
+        assertFailsWith<CompletionException> { client.uaidManifests(uaid).page().join() }
+        for (body in listOf("""{"items":[],"has_more":false}""", """{"items":[]}""", """{"items":[],"next_cursor":""}""")) {
+            executor.reply(200, body)
+            assertFailsWith<CompletionException> { client.subscriptions.page().join() }
+        }
+    }
+
+    @Test
     fun pagePostsTheCanonicalBodyAndDecodesTypedRows() {
         val executor = ScriptedExecutor()
         executor.reply(
@@ -53,7 +123,7 @@ class ToriiCollectionTest {
                  "metadata":{"display-name":"XOR"}},
                 {"id":"6TEAJqbb8oEPmLncoNiMRbLEK6tw","name":"ds","alias":null,"owned_by":"bob@wonderland",
                  "owning_domain":"boi","mintable":"Once"}
-               ],"next_cursor":"q1_next","total":2,"query_source":"index"}""",
+               ],"next_cursor":"q1_next","total":2}""",
         )
         val client = client(executor)
         val query = listQuery {

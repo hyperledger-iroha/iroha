@@ -9739,10 +9739,6 @@ impl NetworkPeer {
             port = %self.port_api,
             "TEST_NETWORK client"
         );
-        let default_account_domain =
-            iroha_model_base::domain::DomainId::try_new("default", "universal")
-                .expect("explicit client convenience domain")
-                .to_string();
         let identity = self
             .client_config
             .get()
@@ -9757,7 +9753,6 @@ impl NetworkPeer {
                 Table::new()
                     .write("chain", identity.chain.to_string())
                     .write("network_id", identity.network_id.to_string())
-                    .write(["account", "domain"], default_account_domain)
                     .write(
                         ["account", "chain_discriminant"],
                         i64::from(identity.chain_discriminant),

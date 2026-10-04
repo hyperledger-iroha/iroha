@@ -633,7 +633,7 @@ fn appended_genesis_transaction_is_instruction_only() {
 fn citizen_client_config_signs_from_the_key_file_and_the_published_identity() {
     let template: toml::Table = toml::from_str(
         "chain = \"c\"\nnetwork_id = \"stale\"\ntorii_url = \"http://127.0.0.1:8080/\"\n\
-         [account]\ndomain = \"wonderland.universal\"\npublic_key = \"old\"\nprivate_key = \"old\"\n",
+         [account]\nchain_discriminant = 369\npublic_key = \"old\"\nprivate_key = \"old\"\n",
     )
     .unwrap();
     let key = KeyPair::try_from_seed(vec![7; 32], Algorithm::Ed25519).unwrap();
@@ -658,7 +658,11 @@ fn citizen_client_config_signs_from_the_key_file_and_the_published_identity() {
         Some("/network/genesis.expected_hash")
     );
     let account = rendered["account"].as_table().unwrap();
-    assert_eq!(account["domain"].as_str(), Some("wonderland.universal"));
+    assert_eq!(
+        account["chain_discriminant"].as_integer(),
+        Some(369),
+        "the template's network context is retained"
+    );
     assert_eq!(
         account["public_key"].as_str(),
         Some(key.public_key().to_string().as_str())
@@ -772,7 +776,7 @@ fn seat_parliament_seats_a_generated_network_once() {
         localnet.join("client.toml"),
         format!(
             "chain = \"{TAIRA_CHAIN_ID}\"\ntorii_url = \"http://127.0.0.1:8080/\"\n[account]\n\
-             domain = \"wonderland.universal\"\npublic_key = \"{}\"\nprivate_key = \"{}\"\n",
+             chain_discriminant = 369\npublic_key = \"{}\"\nprivate_key = \"{}\"\n",
             client_key.public_key(),
             ExposedPrivateKey(client_key.private_key().clone())
                 .try_to_multihash_string()

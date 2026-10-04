@@ -379,19 +379,19 @@ fn wait_for_multisig_cancel_action(
         ))
     }
 }
-fn cli_envs_for_signatory(
-    client: &Client,
-    account_domain: &DomainId,
-    key_pair: &KeyPair,
-) -> Vec<(&'static str, String)> {
+fn cli_envs_for_signatory(client: &Client, key_pair: &KeyPair) -> Vec<(&'static str, String)> {
     let ttl = client
         .client()
         .transaction_ttl()
         .unwrap_or(DEFAULT_TRANSACTION_TIME_TO_LIVE);
     vec![
         ("CHAIN", client.client().chain().to_string()),
+        ("NETWORK_ID", client.client().network_id().to_string()),
         ("TORII_URL", client.client().endpoint().to_string()),
-        ("ACCOUNT_DOMAIN", account_domain.to_string()),
+        (
+            "ACCOUNT_CHAIN_DISCRIMINANT",
+            client.client().account_chain_discriminant().to_string(),
+        ),
         ("ACCOUNT_PUBLIC_KEY", key_pair.public_key().to_string()),
         (
             "ACCOUNT_PRIVATE_KEY",
@@ -463,7 +463,6 @@ fn wait_for_multisig_proposals(
 fn run_multisig_list_all_cli(
     cli_program: &Path,
     client: &Client,
-    account_domain: &DomainId,
     key_pair: &KeyPair,
     multisig_selector: &str,
     extra_args: &[&str],
@@ -472,7 +471,7 @@ fn run_multisig_list_all_cli(
     let mut command = std::process::Command::new(cli_program);
     command
         .current_dir(cli_dir.path())
-        .envs(cli_envs_for_signatory(client, account_domain, key_pair));
+        .envs(cli_envs_for_signatory(client, key_pair));
     let mut list_args = Vec::new();
     let mut index = 0;
     while index < extra_args.len() {
@@ -799,7 +798,6 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
     let json_output = run_multisig_list_all_cli(
         &cli_program,
         &proposer_client,
-        &domain,
         &proposer.1,
         &multisig_selector,
         &["--output-format", "json"],
@@ -862,7 +860,6 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
     let text_output = run_multisig_list_all_cli(
         &cli_program,
         &proposer_client,
-        &domain,
         &proposer.1,
         &multisig_selector,
         &["--output-format", "text"],
@@ -895,7 +892,6 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
     let paged_output = run_multisig_list_all_cli(
         &cli_program,
         &proposer_client,
-        &domain,
         &proposer.1,
         &multisig_selector,
         &[

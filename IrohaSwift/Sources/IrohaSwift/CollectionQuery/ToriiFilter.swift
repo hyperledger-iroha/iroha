@@ -78,8 +78,8 @@ public struct ToriiFieldPath: Hashable, Sendable, CustomStringConvertible, Expre
     }
 
     /// Check the path syntax: non-empty segments, bounded length, no
-    /// whitespace or control characters. Whether a collection exposes the
-    /// field is decided by Torii.
+    /// whitespace, control characters or backticks. Whether a collection
+    /// exposes the field is decided by Torii.
     func validate(parameter: String) throws {
         func invalid(_ reason: String) -> ToriiListQueryError {
             ToriiListQueryError(parameter: parameter, message: "invalid field `\(rawValue)`: \(reason)")
@@ -97,6 +97,10 @@ public struct ToriiFieldPath: Hashable, Sendable, CustomStringConvertible, Expre
         }
         guard !segments.contains(where: \.isEmpty) else {
             throw invalid("field path segments must not be empty")
+        }
+        // The text form quotes segments with backticks and has no escape.
+        guard !rawValue.contains("`") else {
+            throw invalid("field paths must not contain backticks")
         }
     }
 }
@@ -940,7 +944,13 @@ extension ToriiFilter: Codable {
             guard !operands.isEmpty else {
                 throw malformed("`\(op)` needs at least one operand")
             }
-            self = op == "and" ? .and(operands) : .or(operands)
+            // A one-operand `and`/`or` is its operand: the text form cannot
+            // spell it, and both forms must decode to the same tree.
+            if operands.count == 1 {
+                self = operands[0]
+            } else {
+                self = op == "and" ? .and(operands) : .or(operands)
+            }
         case "not":
             let operands = try container.decode([ToriiFilter].self, forKey: .args)
             guard operands.count == 1 else {

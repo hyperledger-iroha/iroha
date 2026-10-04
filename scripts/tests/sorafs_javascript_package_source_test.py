@@ -37,7 +37,7 @@ def test_actual_candidate_sources_have_the_complete_reviewed_projection(captured
     sources, lock, _ = captured
     projected = project(sources, lock)
     expected = expected_files(sources)
-    assert len(sources) == 212 and len(projected.members) == 209
+    assert len(sources) == 240 and len(projected.members) == 237
     assert projected.version == "0.0.3"
     rows = {row.name: row for row in projected.members}
     ordinary = rows["dist/crc64Xz.js"]
@@ -47,7 +47,7 @@ def test_actual_candidate_sources_have_the_complete_reviewed_projection(captured
     assert "src/retailFeeAssessment.js" in sources and "dist/retailFeeAssessment.js" in rows
     assert "src/validationFeeHijiriQuote.js" not in sources and "dist/validationFeeHijiriQuote.js" not in rows
     assert {row.name: row.content for row in projected.members} == expected
-    assert sum(row.name.startswith("dist/") for row in projected.members) == 171
+    assert sum(row.name.startswith("dist/") for row in projected.members) == 198
     assert projected.source_sha256 == tuple((name, hashlib.sha256(body).hexdigest()) for name, body in sorted(sources.items()))
     for row in projected.members:
         if row.name == package.CHECKSUM_MEMBER:
@@ -227,11 +227,14 @@ def test_projection_and_original_content_perform_no_io_or_execution(captured, mo
                              (subprocess, ("run", "Popen")), (socket, ("create_connection",))):
             for name in names: patch.setattr(owner, name, forbidden)
         observed = verify(raw, sources, lock)
-    assert len(observed.projection.members) == 210
+    assert len(observed.projection.members) == 237
 
 
 @pytest.mark.parametrize("name", ("src/._hidden.js", "src/CVS/a.js", "src/.git/a.js", "src/a.orig/b.js",
-                                   "src/foreign/a.js", "src/public/nested/a.js", "src/a.json", "src/program.wasm"))
+                                   "src/foreign/a.js", "src/public/nested/a.js", "src/a.json", "src/program.wasm",
+                                   "src/petal/._hidden.js", "src/query/._hidden.js",
+                                   "src/petal/nested/a.js", "src/query/nested/a.js",
+                                   "src/petal/a.json", "src/query/a.json", "src/Petal/a.js", "src/Query/a.js"))
 def test_source_recipe_refuses_npm_ignored_or_unreviewed_layouts(captured, name):
     sources, lock, _ = captured
     changed = dict(sources); changed[name] = b"inert"

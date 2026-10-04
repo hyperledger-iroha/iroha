@@ -420,7 +420,7 @@ async fn asset_definition_exists(
     read_on_dedicated_thread(move || {
         let found = client
             .client()
-            .query(FindAssetsDefinitions)
+            .query(FindAssetDefinitions)
             .filter_with(|item| {
                 item.equals("id", asset_definition_id.clone())
                     .into_predicate()

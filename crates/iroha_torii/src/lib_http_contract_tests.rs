@@ -1571,6 +1571,48 @@ mod typed_error_contract_tests {
         assert!(wrong_status.details.is_none());
     }
     #[tokio::test]
+    async fn signed_query_shape_refusal_reaches_clients_verbatim() {
+        use iroha_core::smartcontracts::isi::query::{
+            SIGNED_QUERY_SHAPE_NOT_ADMITTED, TORII_COLLECTION_ENDPOINTS,
+            signed_query_shape_not_admitted,
+        };
+        use iroha_data_model::ValidationFail;
+        let refusal =
+            signed_query_shape_not_admitted("FindDomains", "has no bounded signed-query source");
+        let iroha_data_model::query::error::QueryExecutionFail::Conversion(expected_message) =
+            refusal.clone()
+        else {
+            panic!("signed-query shape refusals are conversion failures");
+        };
+        assert!(expected_message.starts_with(&format!(
+            "{SIGNED_QUERY_SHAPE_NOT_ADMITTED}: FindDomains has no bounded signed-query source. "
+        )));
+        for format in [ResponseFormat::Norito, ResponseFormat::Json] {
+            let failure = ValidationFail::QueryFailed(refusal.clone());
+            let response = utils::with_current_response_format(format, async {
+                Error::Query(failure).into_response()
+            })
+            .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let body = body_bytes(response).await;
+            let decoded = match format {
+                ResponseFormat::Norito => norito::decode_canonical_with_limits::<ErrorEnvelope>(
+                    &body,
+                    norito::canonical_decode_limits(body.len()),
+                )
+                .expect("canonical refusal response"),
+                ResponseFormat::Json => {
+                    norito::json::from_slice::<ErrorEnvelope>(&body).expect("typed refusal JSON")
+                }
+            };
+            assert_eq!(decoded.code(), "query_validation_failed");
+            assert_eq!(decoded.message(), expected_message);
+            for endpoint in TORII_COLLECTION_ENDPOINTS {
+                assert!(decoded.message().contains(endpoint), "{endpoint}");
+            }
+        }
+    }
+    #[tokio::test]
     async fn canonical_error_response_keeps_asset_selector_only_for_exact_contract() {
         let asset = iroha_data_model::asset::AssetId::new(
             AssetDefinitionId::derive_from_components(

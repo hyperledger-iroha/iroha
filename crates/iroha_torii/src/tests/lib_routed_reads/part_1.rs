@@ -171,77 +171,59 @@ fn torii_fanout_route_discovery_excludes_inactive_autoscale_range_lane() {
     );
 }
 #[test]
-fn torii_proxy_query_roundtrip_preserves_numeric_and_string_scalars() {
-    let params = routing::AccountAssetsGetParams {
-        limit: Some(25),
-        offset: 3,
-        asset: Some("xor#sora".to_owned()),
-        scope: Some("dataspace:7".to_owned()),
-        count_mode: Some("exact".to_owned()),
-    };
-    let encoded = encode_torii_proxy_query(&params)
-        .expect("query encoding should succeed")
-        .expect("non-empty params should produce a query string");
-    let plan = routed_read_test_budget()
-        .request_decode_plan()
-        .expect("request decode plan");
-    let decoded = decode_torii_proxy_query::<routing::AccountAssetsGetParams>(plan, Some(&encoded))
-        .expect("query decoding should succeed");
-    assert_eq!(decoded.limit, params.limit);
-    assert_eq!(decoded.offset, params.offset);
-    assert_eq!(decoded.asset, params.asset);
-    assert_eq!(decoded.scope, params.scope);
-    assert_eq!(decoded.count_mode, params.count_mode);
+fn collection_ingress_and_routed_decoders_preserve_controls_and_reject_offset() {
+    for (endpoint, route) in [
+        (
+            ToriiReadEndpointV1::AccountPermissionsGet,
+            route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET,
+        ),
+        (
+            ToriiReadEndpointV1::AccountHistoryGet,
+            route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_HISTORY_GET,
+        ),
+        (
+            ToriiReadEndpointV1::AccountAssetsGet,
+            route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_ASSETS_GET,
+        ),
+    ] {
+        let entry =
+            app_routed_read_http_endpoint(route.stable_route_id()).expect("collection admission");
+        assert_eq!(entry.endpoint, endpoint);
+        assert_eq!(entry.decoder, AppRoutedReadHttpDecoder::Query("ListQuery"));
+        let plan = routed_read_test_budget()
+            .request_decode_plan()
+            .expect("decode plan");
+        let query = "filter=name%20%3D%20%27permission%27&select=name&limit=17";
+        let outer = list_query_from_query_string(Some(query)).expect("ingress query");
+        let inner =
+            decode_routed_collection_query(plan, endpoint, Some(query), &[]).expect("routed query");
+        assert_eq!(outer, inner);
+        assert_eq!(inner.limit, Some(17));
+        for retired in ["offset=0", "count_mode=exact"] {
+            assert!(list_query_from_query_string(Some(retired)).is_err());
+            assert!(decode_routed_collection_query(plan, endpoint, Some(retired), &[]).is_err());
+        }
+    }
 }
 #[test]
-fn account_permissions_handler_query_preserves_signed_pagination_and_count_mode() {
-    // Infer the outer DTO from the production handler, so choosing a correct
-    // inner DTO here cannot hide a field dropped by the HTTP extractor.
-    fn decode_handler_query<Q, H, F>(handler: H, query: &str) -> Q
-    where
-        Q: norito::json::JsonDeserializeOwned,
-        H: Fn(
-            State<SharedAppState>,
-            axum::http::Method,
-            axum::http::Uri,
-            axum::http::HeaderMap,
-            axum::extract::ConnectInfo<std::net::SocketAddr>,
-            AxPath<String>,
-            AxQuery<Q>,
-        ) -> F,
-    {
-        let _ = handler;
-        let plan = routed_read_test_budget()
-            .request_decode_plan()
-            .expect("request decode plan");
-        decode_torii_proxy_query::<Q>(plan, Some(query)).expect("outer permission query")
+fn collection_get_and_post_accept_the_same_control_character_literals() {
+    for codepoint in [0x7f, 0x80, 0x85, 0x9f] {
+        let literal = char::from_u32(codepoint).unwrap();
+        let text = format!("metadata.label = \"a{literal}b\"");
+        let encoded = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("filter", &text)
+            .finish();
+        let get = list_query_from_query_string(Some(&encoded)).expect("GET text literal");
+        let post =
+            list_query_from_json(norito::json!({"filter": text})).expect("POST text literal");
+        assert_eq!(get, post);
     }
-
-    let entry = app_routed_read_http_endpoint(
-        route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET.stable_route_id(),
-    )
-    .expect("permission endpoint admission");
-    assert_eq!(entry.endpoint, ToriiReadEndpointV1::AccountPermissionsGet);
-    assert_eq!(
-        entry.decoder,
-        AppRoutedReadHttpDecoder::Query("PaginationParams")
-    );
-    for (query, limit, offset, count_mode) in [
-        ("limit=500&offset=0&count_mode=exact", 500, 0, "exact"),
-        ("limit=17&offset=34&count_mode=bounded", 17, 34, "bounded"),
-    ] {
-        let outer = decode_handler_query(handler_account_permissions, query);
-        let forwarded = encode_torii_proxy_query(&outer)
-            .expect("forward permission query")
-            .expect("nonempty permission query");
-        let plan = routed_read_test_budget()
-            .request_decode_plan()
-            .expect("request decode plan");
-        let inner = decode_torii_proxy_query::<routing::PaginationParams>(plan, Some(&forwarded))
-            .expect("inner permission handler query");
-        assert_eq!(inner.limit, Some(limit));
-        assert_eq!(inner.offset, offset);
-        assert_eq!(inner.count_mode.as_deref(), Some(count_mode));
+    for text in ["metadata.label = \"a\0b\"", "metadata.label = \"a\u{1f}b\""] {
+        let encoded = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("filter", text)
+            .finish();
+        assert!(list_query_from_query_string(Some(&encoded)).is_err());
+        assert!(list_query_from_json(norito::json!({"filter": text})).is_err());
     }
 }
 #[test]
@@ -261,29 +243,6 @@ fn torii_proxy_pipeline_status_query_preserves_decimal_hash_and_whitespace() {
         .expect("pipeline-status string query decoding should succeed");
     assert_eq!(decoded.hash, params.hash);
     assert_eq!(decoded.scope, params.scope);
-}
-#[test]
-fn torii_proxy_query_roundtrip_preserves_json_filter_literals_as_strings() {
-    let params = routing::ListFilterParams {
-        filter: Some(r#"{"op":"eq","args":["id","alice.i105.invalid"]}"#.to_owned()),
-        limit: Some(8),
-        offset: 0,
-        sort: Some("id:asc".to_owned()),
-        count_mode: Some("exact".to_owned()),
-    };
-    let encoded = encode_torii_proxy_query(&params)
-        .expect("query encoding should succeed")
-        .expect("non-empty params should produce a query string");
-    let plan = routed_read_test_budget()
-        .request_decode_plan()
-        .expect("request decode plan");
-    let decoded = decode_torii_proxy_query::<routing::ListFilterParams>(plan, Some(&encoded))
-        .expect("query decoding should succeed");
-    assert_eq!(decoded.filter, params.filter);
-    assert_eq!(decoded.limit, params.limit);
-    assert_eq!(decoded.offset, params.offset);
-    assert_eq!(decoded.sort, params.sort);
-    assert_eq!(decoded.count_mode, params.count_mode);
 }
 fn checked_routed_read_test_keypair(seed: Vec<u8>, algorithm: iroha_crypto::Algorithm) -> KeyPair {
     KeyPair::try_from_seed(seed, algorithm).expect("derive routed-read fixture key")
@@ -325,9 +284,6 @@ fn fanout_route_scan_query_request_is_bounded_by_signed_window() {
                 fetch_size: Some(1),
                 sort_by_metadata_key: None,
                 order: None,
-                ids_projection: None,
-                lane_id: None,
-                dsid: None,
             },
             predicate: None,
         }
@@ -359,9 +315,6 @@ fn fanout_route_scan_without_client_limit_uses_configured_fetch_budget() {
                 fetch_size: Some(1),
                 sort_by_metadata_key: None,
                 order: None,
-                ids_projection: None,
-                lane_id: None,
-                dsid: None,
             },
             predicate: None,
         }
@@ -635,125 +588,93 @@ async fn collect_torii_singleton_json_payloads_keeps_one_route_body_live_at_a_ti
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn collect_torii_account_history_json_payloads_fails_on_mid_route_unavailable() {
-    let route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
-    let params = routing::AccountHistoryGetParams {
-        limit: Some(10),
-        count_mode: Some("bounded".to_owned()),
-        ..Default::default()
-    };
-    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let response = collect_torii_account_history_json_payloads(
-        &[route],
-        &params,
-        10,
-        "bounded",
-        routed_read_test_working_set_bytes(),
-        ROUTED_READ_TEST_BODY_BYTES,
-        {
-            let calls = std::sync::Arc::clone(&calls);
-            move |_route, _query| {
-                let calls = std::sync::Arc::clone(&calls);
-                async move {
-                    match calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
-                        0 => crate::utils::respond_value_with_format(
-                            norito::json!({
-                                "items": [{"id": "first", "timestamp_ms": 100}],
-                                "has_more": true
-                            }),
-                            ResponseFormat::Json,
-                        ),
-                        _ => torii_proxy_error_response(
-                            StatusCode::SERVICE_UNAVAILABLE,
-                            "route_unavailable",
-                            "authoritative peers offline",
-                        ),
-                    }
-                }
-            }
-        },
+async fn collection_coordinator_counts_global_rows_once_across_routes() {
+    use iroha_torii_shared::list_query::{AggregateFn, AggregateMetric, AggregateSpec, field};
+    let authority = routed_read_test_account(0x90);
+    let app = crate::tests_runtime_handlers::native_ingress_with_offline_foreign_app_for_test(
+        world_with_account(&authority),
+    );
+    let routes = torii_all_dataspace_routes(app.as_ref());
+    assert!(
+        routes.len() > 1,
+        "the fixture must include an offline foreign route"
+    );
+    let base = ListQuery::new().filter(field("id").eq(authority.to_string()));
+    for aggregate in [false, true] {
+        let query = if aggregate {
+            base.clone().aggregate(AggregateSpec {
+                group_by: vec![],
+                metrics: vec![AggregateMetric {
+                    alias: "accounts".into(),
+                    r#fn: AggregateFn::Count,
+                    field: None,
+                }],
+                having: None,
+            })
+        } else {
+            base.clone().include_total()
+        };
+        let response = execute_torii_read_fanout_for_resolved_routes(
+            &app,
+            routes.clone(),
+            ToriiFanoutRouteScopeV1::AllDataspaces,
+            ToriiReadFanoutMergeV1::List,
+            ToriiReadEndpointV1::AccountsQuery,
+            vec![],
+            None,
+            collection_query_body(&query).unwrap(),
+            ToriiProxyResponseFormatV1::Json,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(json["items"].as_array().unwrap().len(), 1);
+        assert!(json["next_cursor"].is_null());
+        if aggregate {
+            assert_eq!(json["items"][0]["accounts"].as_u64(), Some(1));
+        } else {
+            assert_eq!(json["total"].as_u64(), Some(1));
+        }
+    }
+    let response = execute_torii_read_fanout_for_resolved_routes(
+        &app,
+        vec![],
+        ToriiFanoutRouteScopeV1::AllDataspaces,
+        ToriiReadFanoutMergeV1::List,
+        ToriiReadEndpointV1::AccountsQuery,
+        vec![],
+        None,
+        collection_query_body(&base.include_total()).unwrap(),
+        ToriiProxyResponseFormatV1::Json,
+        None,
     )
-    .await
-    .expect_err("mid-route pagination failure must fail the fanout");
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
-        Some("route_unavailable")
-    );
-    assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-fanout-routes-succeeded")
-            .and_then(|value| value.to_str().ok()),
-        Some("0")
-    );
-    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = response_json(response).await;
+    assert!(json["items"].as_array().unwrap().is_empty());
+    assert_eq!(json["total"].as_u64(), Some(0));
+    assert!(json["next_cursor"].is_null());
 }
+
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn collect_torii_account_history_json_payloads_fails_on_mid_route_not_found() {
-    let route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
-    let params = routing::AccountHistoryGetParams {
-        limit: Some(10),
-        count_mode: Some("bounded".to_owned()),
-        ..Default::default()
-    };
-    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let response = collect_torii_account_history_json_payloads(
-        &[route],
-        &params,
-        10,
-        "bounded",
-        routed_read_test_working_set_bytes(),
-        ROUTED_READ_TEST_BODY_BYTES,
-        {
-            let calls = std::sync::Arc::clone(&calls);
-            move |_route, _query| {
-                let calls = std::sync::Arc::clone(&calls);
-                async move {
-                    match calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
-                        0 => crate::utils::respond_value_with_format(
-                            norito::json!({
-                                "items": [{"id": "first", "timestamp_ms": 100}],
-                                "has_more": true
-                            }),
-                            ResponseFormat::Json,
-                        ),
-                        _ => torii_proxy_error_response(
-                            StatusCode::NOT_FOUND,
-                            "not_found",
-                            "account history page missing",
-                        ),
-                    }
-                }
-            }
-        },
-    )
-    .await
-    .expect_err("mid-route not_found must not merge partial history");
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
-        Some("not_found")
-    );
-    assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-fanout-routes-succeeded")
-            .and_then(|value| value.to_str().ok()),
-        Some("0")
-    );
-    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+async fn empty_collection_response_only_counts_when_requested() {
+    for include_total in [false, true] {
+        let response = empty_collection_page_response("local", include_total);
+        let json = response_json(response).await;
+        assert!(json["items"].as_array().unwrap().is_empty());
+        assert!(json["next_cursor"].is_null());
+        assert_eq!(
+            json.get("total").and_then(Value::as_u64),
+            include_total.then_some(0)
+        );
+    }
 }
+
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn execute_account_history_single_route_preserves_index_metadata() {
+async fn execute_account_history_single_route_returns_shared_page() {
     let authority = routed_read_test_account(0x91);
     let app = crate::tests_runtime_handlers::native_ingress_with_offline_foreign_app_for_test(
         world_with_account(&authority),
@@ -764,30 +685,31 @@ async fn execute_account_history_single_route_preserves_index_metadata() {
         is_local_authoritative_for_route(app.as_ref(), route),
         "the local-read fixture must be a current member of the exact committee"
     );
-    let response = execute_torii_account_history_read_for_routes(
+    let response = execute_collection_on_route(
         &app,
-        vec![route],
+        route,
         ToriiFanoutRouteScopeV1::AllDataspaces,
+        ToriiReadEndpointV1::AccountHistoryQuery,
         vec![authority.to_string()],
-        Some("limit=10&count_mode=exact".to_owned()),
+        collection_query_body(&ListQuery::new().limit(10)).expect("query body"),
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
     let json = response_json(response).await;
-    assert_eq!(
-        json.get("query_source").and_then(Value::as_str),
-        Some("account_history_index")
-    );
-    assert!(json.get("indexed_height").and_then(Value::as_u64).is_some());
-    assert!(
-        json.as_object()
-            .is_some_and(|object| object.contains_key("indexed_block_hash"))
-    );
-    assert_eq!(
-        json.get("count_mode").and_then(Value::as_str),
-        Some("exact")
-    );
-    assert_eq!(json.get("has_more").and_then(Value::as_bool), Some(false));
+    assert!(json["items"].as_array().is_some());
+    assert!(json["next_cursor"].is_null());
+    for retired in [
+        "query_source",
+        "indexed_height",
+        "indexed_block_hash",
+        "count_mode",
+        "has_more",
+    ] {
+        assert!(
+            json.get(retired).is_none(),
+            "retired envelope field {retired}"
+        );
+    }
 }
 #[cfg(feature = "app_api")]
 #[test]
@@ -2175,139 +2097,12 @@ async fn merged_list_response_preserves_first_seen_order() {
         .collect();
     assert_eq!(ids, vec!["b", "a", "c"]);
 }
-#[tokio::test]
-async fn paginated_accounts_fanout_drains_deduplicates_and_pages_globally() {
-    let routes = [
-        RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1)),
-        RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2)),
-    ];
-    let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let collected = collect_torii_paginated_list_json_payloads(
-        &routes,
-        2,
-        routed_read_test_working_set_bytes(),
-        ROUTED_READ_TEST_BODY_BYTES,
-        {
-            let calls = std::sync::Arc::clone(&calls);
-            move |route, offset, limit| {
-                let calls = std::sync::Arc::clone(&calls);
-                async move {
-                    calls.lock().expect("call log lock").push((
-                        route.dataspace_id.as_u64(),
-                        offset,
-                        limit,
-                    ));
-                    let payload = match (route.dataspace_id.as_u64(), offset) {
-                        (1, 0) => norito::json!({
-                            "items": [{"id": "a"}, {"id": "b"}],
-                            "total": 3,
-                            "has_more": true,
-                            "count_mode": "exact"
-                        }),
-                        (1, 2) => norito::json!({
-                            "items": [{"id": "c"}],
-                            "total": 3,
-                            "has_more": false,
-                            "count_mode": "exact"
-                        }),
-                        (2, 0) => norito::json!({
-                            "items": [{"id": "b"}, {"id": "d"}],
-                            "total": 2,
-                            "has_more": false,
-                            "count_mode": "exact"
-                        }),
-                        other => panic!("unexpected routed page request: {other:?}"),
-                    };
-                    crate::utils::respond_value_with_format(payload, ResponseFormat::Json)
-                }
-            }
-        },
-    )
-    .await
-    .expect("all routed pages should validate");
-    assert_eq!(collected.diagnostics.succeeded_routes, 2);
-    assert_eq!(
-        *calls.lock().expect("call log lock"),
-        vec![(1, 0, 2), (1, 2, 2), (2, 0, 2)]
-    );
-    let response = merged_paginated_list_response(
-        collected.payloads,
-        1,
-        2,
-        "exact",
-        "proxy",
-        collected.budget,
-    )
-    .expect("drained account pages should merge");
-    let json = response_json(response).await;
-    let root = json.as_object().expect("merged response object");
-    assert_eq!(root.len(), 4);
-    assert_eq!(root.get("total").and_then(Value::as_u64), Some(4));
-    assert_eq!(root.get("has_more").and_then(Value::as_bool), Some(true));
-    assert_eq!(
-        root.get("count_mode").and_then(Value::as_str),
-        Some("exact")
-    );
-    let ids = root
-        .get("items")
-        .and_then(Value::as_array)
-        .expect("merged items")
-        .iter()
-        .map(|item| item["id"].as_str().expect("item id"))
-        .collect::<Vec<_>>();
-    assert_eq!(ids, vec!["b", "c"]);
-}
 #[test]
-fn routed_account_page_rejects_missing_pagination_metadata() {
-    let response =
-        validate_torii_exact_list_page(&norito::json!({"items": [], "total": 0}), 0, 100, None)
-            .expect_err("fanout must not accept an unverifiable partial account inventory");
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
-        Some("invalid_proxy_response")
+fn routed_collection_page_rejects_missing_cursor_metadata() {
+    let payload = norito::json!({"items": [], "total": 0});
+    assert!(
+        norito::json::from_value::<iroha_torii_shared::list_query::Page<Value>>(payload).is_err()
     );
-}
-#[tokio::test]
-async fn merged_account_history_response_sorts_deduplicates_and_pages_globally() {
-    let response = merged_account_history_response(
-        vec![
-            norito::json!({
-                "items": [
-                    {"id": "old", "timestamp_ms": 100, "account_id": "alice"},
-                    {"id": "new", "timestamp_ms": 300, "account_id": "alice"}
-                ],
-                "total": 2
-            }),
-            norito::json!({
-                "items": [
-                    {"id": "mid", "timestamp_ms": 200, "account_id": "alice"},
-                    {"id": "old", "timestamp_ms": 100, "account_id": "alice"}
-                ],
-                "total": 2
-            }),
-        ],
-        1,
-        2,
-        "exact",
-        "proxy",
-        routed_read_test_budget(),
-    )
-    .expect("account history merge should succeed");
-    let json = response_json(response).await;
-    let ids = json["items"]
-        .as_array()
-        .expect("merged account history should include items")
-        .iter()
-        .map(|item| item["id"].as_str().expect("item id should be present"))
-        .collect::<Vec<_>>();
-    assert_eq!(ids, vec!["mid", "old"]);
-    assert_eq!(json["total"].as_u64(), Some(3));
-    assert_eq!(json["has_more"].as_bool(), Some(false));
-    assert_eq!(json["count_mode"].as_str(), Some("exact"));
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -3137,39 +2932,59 @@ async fn pipeline_status_fanout_requires_exact_scoped_absence() {
 
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn permission_fanout_preserves_route_exhaustion_after_deduplication() {
-    for second_has_more in [false, true] {
-        let response = merged_list_response(
-            vec![
-                norito::json!({"items": [{"name": "CanSetParameters", "payload": null}], "total": 1, "has_more": false}),
-                norito::json!({"items": [{"name": "CanSetParameters", "payload": null}], "total": 2, "has_more": second_has_more}),
-            ],
-            ToriiReadEndpointV1::AccountPermissionsGet,
-            "fanout",
-            routed_read_test_budget(),
-        ).unwrap();
+async fn permission_collection_counts_deduplicated_grants_once_across_routes() {
+    use iroha_core::state::World;
+    use iroha_data_model::{account::Account, permission::Permission, role::Role};
+    for has_second_permission in [false, true] {
+        let authority = routed_read_test_account(0xa0);
+        let permission = |name: &str| Permission::new(name.to_owned(), iroha_primitives::json::Json::new(()));
+        let first_id: iroha_data_model::role::RoleId = "first_permission_role".parse().unwrap();
+        let second_id: iroha_data_model::role::RoleId = "second_permission_role".parse().unwrap();
+        let first = Role::new(first_id.clone(), authority.clone())
+            .add_permission(permission("CanSetParameters"))
+            .build(&authority);
+        let mut second = Role::new(second_id.clone(), authority.clone())
+            .add_permission(permission("CanSetParameters"));
+        if has_second_permission {
+            second = second.add_permission(permission("CanRegisterDomain"));
+        }
+        let mut world = World::with_assets_and_roles(
+            [], [Account::new(authority.clone()).build(&authority)], [], [], [],
+            [first, second.build(&authority)],
+        );
+        world.grant_role_for_tests(authority.clone(), first_id);
+        world.grant_role_for_tests(authority.clone(), second_id);
+        let app = crate::tests_runtime_handlers::native_ingress_with_offline_foreign_app_for_test(world);
+        let routes = torii_all_dataspace_routes(app.as_ref());
+        assert!(routes.len() > 1);
+        let response = execute_torii_read_fanout_for_resolved_routes(
+            &app, routes, ToriiFanoutRouteScopeV1::AllDataspaces,
+            ToriiReadFanoutMergeV1::List, ToriiReadEndpointV1::AccountPermissionsQuery,
+            vec![authority.to_string()], None,
+            collection_query_body(&ListQuery::new().limit(1).include_total()).unwrap(),
+            ToriiProxyResponseFormatV1::Json, None,
+        ).await;
+        assert_eq!(response.status(), StatusCode::OK);
         let json = response_json(response).await;
-        assert_eq!(json["total"].as_u64(), Some(1));
-        assert_eq!(json["has_more"].as_bool(), Some(second_has_more));
+        let page: iroha_torii_shared::list_query::Page<Value> =
+            norito::json::from_value(json.clone()).expect("shared permission page");
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.total, Some(if has_second_permission { 2 } else { 1 }));
+        assert_eq!(page.has_more(), has_second_permission);
+        assert!(json.get("has_more").is_none(), "retired envelope is absent");
     }
 }
 
 #[cfg(feature = "app_api")]
 #[test]
-fn permission_fanout_rejects_missing_or_nonprogressing_exhaustion_evidence() {
+fn permission_collection_rejects_retired_or_missing_continuation_evidence() {
     for payload in [
         norito::json!({"items": [], "total": 0}),
         norito::json!({"items": [], "total": 0, "has_more": "false"}),
         norito::json!({"items": [], "total": 1, "has_more": true}),
+        norito::json!({"items": [], "total": 0, "next_cursor": null, "has_more": false}),
     ] {
-        let response = merged_list_response(
-            vec![payload],
-            ToriiReadEndpointV1::AccountPermissionsGet,
-            "fanout",
-            routed_read_test_budget(),
-        )
-        .unwrap_err();
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(norito::json::from_value::<iroha_torii_shared::list_query::Page<Value>>(payload).is_err());
     }
 }
 

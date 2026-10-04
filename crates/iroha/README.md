@@ -153,10 +153,15 @@ async fn list_definitions() -> eyre::Result<()> {
 and `.list(..)` add the account's canonical request signature, which only widens
 visibility into restricted dataspaces; multisignature member contexts read
 publicly. Parameterised collections carry their subject:
-`Collection::AccountAssets(account_id)`, `Collection::AssetHolders(definition_id)`
-and `Collection::AccountTransactions(account_id)`.
+`Collection::AccountAssets(account_id)`, `Collection::AccountPermissions(account_id)`,
+`Collection::AssetHolders(definition_id)`, `Collection::AccountTransactions(account_id)`
+and `Collection::UaidManifests(uaid)`. Subscription plans and states use
+`Collection::SubscriptionPlans` and `Collection::Subscriptions` with the same query
+and page types. Pages require an explicit `next_cursor`; retired offset/count-mode
+envelopes are rejected.
 
-`Collection::Transactions` and `Collection::AccountTransactions` are history
+`Collection::Transactions`, `Collection::AccountTransactions`,
+`Collection::ContractActivity`, and `Collection::ContractEvents` are history
 collections (`Collection::is_history`): rows arrive newest first by
 `block_height`, then `block_index`, and `sort`, `include_total` and `aggregate`
 are rejected. A page may hold fewer rows than `limit`, or none, and still carry
@@ -300,3 +305,11 @@ an explicit address prefix. Obtain it from an immutable client with
 context. Concurrent clients can render different networks without changing
 process-global settings. The SDK helper module exposes no global prefix setter
 or getter; the data model's remaining default-formatting API is separate work.
+
+Explorer feeds use `Collection::ExplorerAccounts`, `ExplorerDomains`,
+`ExplorerAssetDefinitions`, `ExplorerAssets`, `ExplorerNfts`, `ExplorerRwas`,
+`ExplorerBlocks`, `ExplorerTransactions`, `ExplorerTransactionsLatest`,
+`ExplorerInstructions` and `ExplorerInstructionsLatest`. They retain bounded
+fixed-order reads with shared filter/select/limit/cursor controls. Iterate
+until the cursor ends, including after empty pages. Account movements use
+`Collection::AccountHistory(account_id)` with the same history controls.

@@ -57,9 +57,24 @@ const FIXED_COLLECTIONS = [
   ["nfts", "/v1/nfts"],
   ["rwas", "/v1/rwas"],
   ["repoAgreements", "/v1/repo/agreements"],
+  ["subscriptionPlans", "/v1/subscriptions/plans"],
+  ["subscriptions", "/v1/subscriptions"],
 ];
 const HISTORY_COLLECTIONS = [
   ["transactions", "/v1/transactions"],
+  ["contractActivity", "/v1/contracts/activity"],
+  ["contractEvents", "/v1/contracts/events"],
+  ["explorerAccounts", "/v1/explorer/accounts"],
+  ["explorerDomains", "/v1/explorer/domains"],
+  ["explorerAssetDefinitions", "/v1/explorer/asset-definitions"],
+  ["explorerAssets", "/v1/explorer/assets"],
+  ["explorerNfts", "/v1/explorer/nfts"],
+  ["explorerRwas", "/v1/explorer/rwas"],
+  ["explorerBlocks", "/v1/explorer/blocks"],
+  ["explorerTransactions", "/v1/explorer/transactions"],
+  ["explorerLatestTransactions", "/v1/explorer/transactions/latest"],
+  ["explorerInstructions", "/v1/explorer/instructions"],
+  ["explorerLatestInstructions", "/v1/explorer/instructions/latest"],
 ];
 
 for (const [name, makeClient] of CLIENTS) {
@@ -69,6 +84,8 @@ for (const [name, makeClient] of CLIENTS) {
     );
     const client = makeClient(fetchImpl);
     const scoped = [
+      [client.accountPermissions(ALIAS_ACCOUNT), "/v1/accounts/alice%40wonderland/permissions"],
+      [client.uaidManifests("uaid:" + "cd".repeat(32)), "/v1/space-directory/uaids/uaid%3A" + "cd".repeat(32) + "/manifests"],
       [client.accountAssets("sorauﾛ1Pacct"), "/v1/accounts/sorau%EF%BE%9B1Pacct/assets"],
       [client.assetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), "/v1/assets/62Fk4FPcMuLvW5QjDGNF2a4jAmjM/holders"],
     ];
@@ -107,6 +124,7 @@ for (const [name, makeClient] of CLIENTS) {
     const client = makeClient(fetchImpl);
     const collections = [
       ...HISTORY_COLLECTIONS.map(([property, path]) => [client[property], path]),
+      [client.accountHistory(ALIAS_ACCOUNT), "/v1/accounts/alice%40wonderland/history"],
       [client.accountTransactions("bob@wonderland"), "/v1/accounts/bob%40wonderland/transactions"],
     ];
     for (const [collection, path] of collections) {
@@ -133,7 +151,7 @@ for (const [name, makeClient] of CLIENTS) {
   test(`${name}: transaction history rejects sort, totals and aggregates before any request`, async () => {
     const { calls, fetchImpl } = recordingFetch(() => jsonResponse({ items: [], next_cursor: null }));
     const client = makeClient(fetchImpl);
-    for (const collection of [client.transactions, client.accountTransactions("bob@wonderland")]) {
+    for (const collection of [...HISTORY_COLLECTIONS.map(([name]) => client[name]), client.accountHistory(ALIAS_ACCOUNT), client.accountTransactions("bob@wonderland")]) {
       for (const [query, code] of [
         [{ sort: "-block_height" }, "invalid_sort"],
         [{ includeTotal: true }, "invalid_include_total"],
@@ -320,7 +338,7 @@ for (const [name, makeClient] of CLIENTS) {
   });
 
   test(`${name}: malformed pages are protocol errors`, async () => {
-    for (const body of ['{"items":{}}', "[]", '{"items":[],"next_cursor":5}', "not json", ""]) {
+    for (const body of ['{"items":{}}', '{"items":[]}', '{"items":[],"next_cursor":""}', '{"items":[],"next_cursor":null,"total":null}', '{"items":[1],"next_cursor":null,"total":0}', '{"items":[],"next_cursor":null,"has_more":false}', "[]", '{"items":[],"next_cursor":5}', "not json", ""]) {
       const client = makeClient(recordingFetch(() =>
         new Response(body, { status: 200, headers: { "content-type": "application/json" } }),
       ).fetchImpl);
@@ -404,3 +422,20 @@ test("ListQuery instances can be reused across clients", async () => {
     assert.equal(calls[0].body, '{"filter":{"op":"eq","args":["owned_by","x"]},"limit":5}');
   }
 });
+
+for (const [name, makeClient] of CLIENTS) {
+  test(`${name}: Explorer pages retain wire rows and reject retired envelopes and oversized pages`, async () => {
+    const row = { height: 9, created_at: "today", transactions_total: 2 };
+    const { fetchImpl } = recordingFetch(() => jsonResponse({ items: [row], next_cursor: null }));
+    assert.deepEqual((await makeClient(fetchImpl).explorerBlocks.list()).items, [row]);
+    for (const payload of [
+      { items: [], pagination: { next_cursor: null, has_more: false } },
+      { items: [], next_cursor: null, sampled_at: "today" },
+      { items: [], next_cursor: null, total: 0 },
+      { items: [{}, {}], next_cursor: null },
+    ]) {
+      const { fetchImpl: invalid } = recordingFetch(() => jsonResponse(payload));
+      await assert.rejects(makeClient(invalid).explorerAccounts.list({ limit: 1 }), error => error.code === "invalid_response");
+    }
+  });
+}

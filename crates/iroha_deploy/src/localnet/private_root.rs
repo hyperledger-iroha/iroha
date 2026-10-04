@@ -572,14 +572,6 @@ fn prepare_fresh(
         "api_token".into(),
         toml::Value::String(api_token.as_str().into()),
     );
-    table
-        .get_mut("account")
-        .and_then(toml::Value::as_table_mut)
-        .ok_or_else(|| eyre!("private-root client account is absent"))?
-        .insert(
-            "domain".into(),
-            toml::Value::String(format!("app.{}", spec.dataspace_alias)),
-        );
     custody::replace(
         &client_path,
         Zeroizing::new(toml::to_string(&*table)?).as_bytes(),

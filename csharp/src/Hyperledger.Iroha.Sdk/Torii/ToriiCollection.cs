@@ -1,12 +1,12 @@
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Hyperledger.Iroha.Query;
 
 namespace Hyperledger.Iroha.Torii;
 
 /// <summary>
-/// One Torii collection (domains, accounts, asset definitions, NFTs, RWA lots, account assets,
-/// asset holders, transactions, account transactions or repo agreements), read with <see cref="ListQuery"/>.
+/// One Torii collection, read with <see cref="ListQuery"/>.
 /// </summary>
 /// <remarks>
 /// <para>Every method sends <c>POST {Path}/query</c>. Reads are public; when the client has
@@ -23,10 +23,10 @@ namespace Hyperledger.Iroha.Torii;
 /// <para>Typed items are full rows. Projections (<see cref="ListQuery.Select"/>) and aggregates
 /// (<see cref="ListQuery.Aggregate"/>) return partial or computed rows; read them through
 /// <see cref="Rows"/>.</para>
-/// <para>Transaction collections are history collections: rows come newest first, and
+/// <para>History and Explorer collections use fixed server order, and
 /// <see cref="ListQuery.Sort"/>, <see cref="ListQuery.IncludeTotal"/> and
 /// <see cref="ListQuery.Aggregate"/> are rejected (<c>invalid_sort</c>, <c>invalid_include_total</c>,
-/// <c>invalid_aggregate</c>) because each would scan the whole history. Each history page has a
+/// <c>invalid_aggregate</c>) because each would exceed the scan budget. Each bounded page has a
 /// bounded scan budget, so a page may hold fewer than <see cref="ListQuery.Limit"/> items, even none,
 /// while <see cref="Page{T}.NextCursor"/> is set; the iterators keep following the cursor until it is
 /// <see langword="null"/>.</para>
@@ -44,8 +44,7 @@ public sealed class ToriiCollection<T>
     /// <param name="readRow">Decodes one item.</param>
     /// <param name="typedRows">Whether items are full typed rows, which excludes projections and aggregates.</param>
     /// <param name="historyId">
-    /// The Torii collection id (<c>transactions</c>, <c>account_transactions</c>) of a history
-    /// collection, which rejects re-sorting, totals and aggregates; <see langword="null"/> otherwise.
+    /// The Torii collection id of a history or Explorer feed, which rejects re-sorting, totals and aggregates; <see langword="null"/> otherwise.
     /// </param>
     internal ToriiCollection(
         ToriiClient client,
@@ -75,11 +74,13 @@ public sealed class ToriiCollection<T>
     /// <param name="cancellationToken">Cancels the request.</param>
     /// <exception cref="ListQueryException">A control is invalid; nothing was sent.</exception>
     /// <exception cref="ToriiApiException">Torii rejected the query; <see cref="IrohaException.Code"/> names the control.</exception>
-    public Task<Page<T>> GetPageAsync(ListQuery? query = null, CancellationToken cancellationToken = default)
+    public async Task<Page<T>> GetPageAsync(ListQuery? query = null, CancellationToken cancellationToken = default)
     {
         query ??= ListQuery.Empty;
         Prepare(query);
-        return client.QueryCollectionPageAsync(Path, query, readRow, cancellationToken);
+        var page = await client.QueryCollectionPageAsync(Path, query, readRow, cancellationToken).ConfigureAwait(false);
+        ValidatePage(page, query);
+        return page;
     }
 
     /// <summary>Reads every page, following <see cref="Page{T}.NextCursor"/> until the last page.</summary>
@@ -102,6 +103,7 @@ public sealed class ToriiCollection<T>
         {
             var page = await client.QueryCollectionPageAsync(Path, current, readRow, cancellationToken)
                 .ConfigureAwait(false);
+            ValidatePage(page, current);
             yield return page;
             if (page.NextCursor is null)
             {
@@ -135,6 +137,14 @@ public sealed class ToriiCollection<T>
         }
     }
 
+    private void ValidatePage(Page<T> page, ListQuery query)
+    {
+        if (query.Limit is { } limit && page.Items.Length > limit)
+            throw new JsonException($"Torii page for `{Path}` contains more items than the requested limit.");
+        if (historyId is not null && page.Total is not null)
+            throw new JsonException($"Torii page for `{Path}` must omit total for a bounded collection.");
+    }
+
     private void Prepare(ListQuery query)
     {
         query.Validate();
@@ -158,21 +168,21 @@ public sealed class ToriiCollection<T>
         {
             throw new ListQueryException(
                 "sort",
-                $"`{id}` rows are returned newest first and cannot be re-sorted; omit `sort` and filter on `block_height` or `timestamp_ms` to select a range");
+                $"`{id}` rows use fixed server order and cannot be re-sorted; omit `sort` and use `filter` to select rows");
         }
 
         if (query.IncludeTotal)
         {
             throw new ListQueryException(
                 "include_total",
-                $"totals are not available for `{id}`: counting would scan the whole history");
+                $"totals are not available for `{id}`: counting would exceed the bounded scan");
         }
 
         if (query.Aggregate is not null)
         {
             throw new ListQueryException(
                 "aggregate",
-                $"aggregates are not available for `{id}`: they would scan the whole history");
+                $"aggregates are not available for `{id}`: they would exceed the bounded scan");
         }
     }
 }

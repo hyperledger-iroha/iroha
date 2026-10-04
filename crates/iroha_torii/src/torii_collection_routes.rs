@@ -1,11 +1,12 @@
-// Collection reads through the routed-read fan-out (`specs/torii/collection_queries.md`).
+// Collection reads (`specs/torii/collection_queries.md`).
 //
 // The ingress handler decodes one `ListQuery` (GET parameters or POST body),
-// validates it, canonicalises account literals and forwards it as the JSON
-// body of the collection's `*Query` endpoint. The fan-out coordinator sends
-// every route the same query without `select`, merges the routes' pages
-// (by keyset, or by block coordinates for transaction history) and applies
-// `select` last, so cursors compose across dataspaces.
+// validates it and canonicalises account literals, then executes it once, on
+// one route, as the JSON body of the collection's `*Query` endpoint. On a
+// global root every route reads the same World under the caller's visibility
+// (dataspaces are routing labels over one global block), so one execution
+// answers the whole read: totals and aggregates are exact and no route
+// repeats another's scan. The executing node applies `select` itself.
 #[cfg(feature = "app_api")]
 use iroha_torii_shared::list_query::ListQuery;
 
@@ -38,6 +39,13 @@ fn collection_target_for_read(
         ToriiReadEndpointV1::AccountTransactionsGet
         | ToriiReadEndpointV1::AccountTransactionsQuery => T::AccountTransactions(first()),
         ToriiReadEndpointV1::TransactionsQuery => T::Transactions,
+        ToriiReadEndpointV1::AccountHistoryGet | ToriiReadEndpointV1::AccountHistoryQuery => {
+            T::AccountHistory(first())
+        }
+        ToriiReadEndpointV1::AccountPermissionsGet
+        | ToriiReadEndpointV1::AccountPermissionsQuery => T::AccountPermissions(first()),
+        ToriiReadEndpointV1::SpaceDirectoryManifestsGet
+        | ToriiReadEndpointV1::UaidManifestsQuery => T::UaidManifests(first()),
         _ => return None,
     })
 }
@@ -60,19 +68,20 @@ fn list_query_from_query_string(query: Option<&str>) -> Result<ListQuery, Error>
     let pairs: Vec<(String, String)> = url::form_urlencoded::parse(raw.as_bytes())
         .map(|(key, value)| (key.into_owned(), value.into_owned()))
         .collect();
-    // Values may span lines (multi-line filters); other control characters
-    // are rejected.
+    // Match the shared text/JSON grammar: C0 controls must be escaped inside
+    // literals, while DEL and C1 may appear literally. Tabs and line breaks
+    // are also legal between tokens in a multiline filter.
     if let Some((key, _)) = pairs.iter().find(|(key, value)| {
         key.chars().any(char::is_control)
             || value
                 .chars()
-                .any(|ch| ch.is_control() && !matches!(ch, '\t' | '\n' | '\r'))
+                .any(|ch| ch < '\u{20}' && !matches!(ch, '\t' | '\n' | '\r'))
     }) {
         return Err(collections::CollectionError::new(
             "invalid_query",
             "query",
             format!(
-                "parameter `{key}` contains control characters other than tabs and line breaks"
+                "parameter `{key}` contains C0 control characters other than tabs and line breaks"
             ),
         )
         .into());
@@ -116,7 +125,7 @@ fn prepare_collection_forward(
     Ok((query, body))
 }
 
-/// Forward a validated collection read through the visible-account fan-out.
+/// Execute a validated collection read under the caller's visible routes.
 #[cfg(feature = "app_api")]
 async fn forward_visible_collection_read(
     app: &SharedAppState,
@@ -126,8 +135,87 @@ async fn forward_visible_collection_read(
     path_args: Vec<String>,
     query: ListQuery,
 ) -> Result<Response, Error> {
-    let (_, body) = prepare_collection_forward(app, &target, query)?;
-    Ok(execute_torii_visible_fanout_list_read(app, caller, endpoint, path_args, None, body).await)
+    let (query, body) = prepare_collection_forward(app, &target, query)?;
+    let routes = torii_visible_account_read_routes(app.as_ref(), caller);
+    let Some(route) = collection_execution_route(app.as_ref(), &routes) else {
+        return Ok(empty_collection_page_response(
+            routed_by_for_routes(app, &[]),
+            query.include_total,
+        ));
+    };
+    let scope = ToriiFanoutRouteScopeV1::VisibleAccount {
+        caller_account_id: caller.map(ToString::to_string),
+    };
+    Ok(execute_collection_on_route(app, route, scope, endpoint, path_args, body).await)
+}
+
+/// The one route a collection read executes on.
+///
+/// Every route of a global root reads the same World under the read's scope,
+/// so the choice only decides where the read runs: preferably on this node,
+/// and on a route without a public upstream, whose answer could not use the
+/// caller's credentials.
+#[cfg(feature = "app_api")]
+fn collection_execution_route(
+    app: &AppState,
+    routes: &[RoutingDecision],
+) -> Option<RoutingDecision> {
+    routes.iter().copied().min_by_key(|route| {
+        (
+            app.public_dataspace_upstreams
+                .contains_key(&route.dataspace_id),
+            !should_execute_route_locally(app, *route),
+            route.dataspace_id,
+            route.lane_id,
+        )
+    })
+}
+
+/// Execute one collection read on `route` with the read's `scope`.
+#[cfg(feature = "app_api")]
+async fn execute_collection_on_route(
+    app: &SharedAppState,
+    route: RoutingDecision,
+    scope: ToriiFanoutRouteScopeV1,
+    endpoint: ToriiReadEndpointV1,
+    path_args: Vec<String>,
+    body: Vec<u8>,
+) -> Response {
+    let reservation = match try_acquire_query_fanout_memory(app) {
+        Ok(reservation) => reservation,
+        Err(response) => return response,
+    };
+    let mut budget = match ToriiRoutedReadMemoryBudget::new(
+        app.query_fanout_working_set_bytes,
+        app.torii_proxy_max_response_bytes,
+    ) {
+        Ok(budget) => budget,
+        Err(response) => return hold_query_fanout_memory_in_response_body(response, reservation),
+    };
+    let request_bytes = match torii_routed_read_request_bytes(
+        &path_args,
+        path_args.capacity(),
+        None,
+        body.capacity(),
+    ) {
+        Ok(bytes) => bytes,
+        Err(response) => return hold_query_fanout_memory_in_response_body(response, reservation),
+    };
+    if let Err(response) = budget.admit_request_bytes(request_bytes) {
+        return hold_query_fanout_memory_in_response_body(response, reservation);
+    }
+    let request = torii_read_request(endpoint, scope, route, path_args, None, body);
+    let response = execute_torii_read_for_route(app, route, request, None).await;
+    let response = match bound_torii_single_route_response(
+        response,
+        ToriiProxyResponseFormatV1::Json,
+        &mut budget,
+    )
+    .await
+    {
+        Ok(response) | Err(response) => response,
+    };
+    hold_query_fanout_memory_in_response_body(response, reservation)
 }
 
 /// Page size used to price a collection read for rate limiting.
@@ -144,11 +232,13 @@ fn collection_page_limit(query: &ListQuery) -> u64 {
 
 /// An empty page for reads with no authoritative route.
 #[cfg(feature = "app_api")]
-fn empty_collection_page_response(routed_by: &'static str) -> Response {
-    let body = norito::json::to_json(
-        &iroha_torii_shared::list_query::Page::<norito::json::Value>::last(Vec::new()),
-    )
-    .unwrap_or_else(|_| "{\"items\":[],\"next_cursor\":null}".to_owned());
+fn empty_collection_page_response(routed_by: &'static str, include_total: bool) -> Response {
+    let page = iroha_torii_shared::list_query::Page::<norito::json::Value> {
+        items: Vec::new(),
+        next_cursor: None,
+        total: include_total.then_some(0),
+    };
+    let body = norito::json::to_json(&page).expect("an empty collection page is valid JSON");
     let mut response = Response::new(axum::body::Body::from(body));
     response.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
@@ -176,6 +266,9 @@ fn decode_routed_collection_query(
             | ToriiReadEndpointV1::AccountAssetsGet
             | ToriiReadEndpointV1::AssetHoldersGet
             | ToriiReadEndpointV1::AccountTransactionsGet
+            | ToriiReadEndpointV1::AccountHistoryGet
+            | ToriiReadEndpointV1::AccountPermissionsGet
+            | ToriiReadEndpointV1::SpaceDirectoryManifestsGet
     );
     if is_get {
         return list_query_from_query_string(query_string).map_err(IntoResponse::into_response);
@@ -185,7 +278,7 @@ fn decode_routed_collection_query(
     list_query_from_json(value).map_err(IntoResponse::into_response)
 }
 
-/// Execute one route's share of a collection read on this node (full rows).
+/// Execute a routed collection read on this node and apply its `select`.
 #[cfg(feature = "app_api")]
 async fn execute_routed_collection_read(
     app: &SharedAppState,
@@ -206,95 +299,16 @@ async fn execute_routed_collection_read(
         Err(response) => return response,
     };
     let telemetry = app.telemetry_handle();
-    let result = routing::collection_sources::execute_collection_local(
+    let result = routing::collection_sources::execute_collection_response(
         Some(app),
         &app.state,
         &target,
         query,
         &telemetry,
         visibility,
-        Some(routing_decision),
     )
-    .await
-    .and_then(routing::collection_sources::row_page_response);
+    .await;
     finish_torii_read_result(result, routing_decision, routed_by)
-}
-
-/// Fan a collection read out to `routes` and merge their keyset pages.
-#[cfg(feature = "app_api")]
-#[allow(clippy::too_many_arguments)]
-async fn execute_collection_fanout(
-    app: &SharedAppState,
-    routes: Vec<RoutingDecision>,
-    route_scope: ToriiFanoutRouteScopeV1,
-    endpoint: ToriiReadEndpointV1,
-    target: routing::collection_sources::CollectionTarget,
-    path_args: Vec<String>,
-    query_string: Option<String>,
-    body: Vec<u8>,
-    proxy_memory: Option<ToriiProxyMemoryReservation>,
-) -> Response {
-    let plan = match torii_routed_read_request_decode_plan(app) {
-        Ok(plan) => plan,
-        Err(response) => return response,
-    };
-    let query = match decode_routed_collection_query(plan, endpoint, query_string.as_deref(), &body)
-    {
-        Ok(query) => query,
-        Err(response) => return response,
-    };
-    let limits = routing::collection_sources::collection_limits();
-    let prepared = match collections::prepare(target.spec(), target.scope(), &query, &limits) {
-        Ok(prepared) => prepared,
-        Err(err) => return Error::from(err).into_response(),
-    };
-    let route_body = match collection_query_body(&prepared.route_query()) {
-        Ok(body) => body,
-        Err(err) => return err.into_response(),
-    };
-    let route_endpoint = match endpoint {
-        ToriiReadEndpointV1::DomainsList => ToriiReadEndpointV1::DomainsQuery,
-        ToriiReadEndpointV1::AccountsList => ToriiReadEndpointV1::AccountsQuery,
-        ToriiReadEndpointV1::AssetDefinitionsList => ToriiReadEndpointV1::AssetDefinitionsQuery,
-        ToriiReadEndpointV1::NftsList => ToriiReadEndpointV1::NftsQuery,
-        ToriiReadEndpointV1::RwasList => ToriiReadEndpointV1::RwasQuery,
-        ToriiReadEndpointV1::AccountAssetsGet => ToriiReadEndpointV1::AccountAssetsQuery,
-        ToriiReadEndpointV1::AssetHoldersGet => ToriiReadEndpointV1::AssetHoldersQuery,
-        ToriiReadEndpointV1::AccountTransactionsGet => {
-            ToriiReadEndpointV1::AccountTransactionsQuery
-        }
-        other => other,
-    };
-    let (payloads, diagnostics, routed_by, _budget) =
-        match execute_torii_fanout_json_payloads_resolved_routes(
-            app,
-            routes,
-            route_scope,
-            route_endpoint,
-            path_args,
-            None,
-            route_body,
-            proxy_memory,
-        )
-        .await
-        {
-            Ok(collected) => collected,
-            Err(response) => return response,
-        };
-    merge_with_torii_fanout_headers(diagnostics, || {
-        let pages = payloads
-            .into_iter()
-            .map(collections::RowPage::from_json)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(torii_internal_json_error)?;
-        let merged = prepared
-            .merge(pages)
-            .map_err(|err| Error::from(err).into_response())?;
-        let mut response = routing::collection_sources::row_page_response(prepared.project(merged))
-            .map_err(IntoResponse::into_response)?;
-        insert_routed_by_header(&mut response, routed_by);
-        Ok(response)
-    })
 }
 
 /// Execute a collection read served by this node alone (no fan-out).

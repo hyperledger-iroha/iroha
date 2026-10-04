@@ -2,7 +2,7 @@
 //!
 //! Each collection turns this node's state into JSON rows whose fields match
 //! its [`CollectionSpec`]; the engine then filters, orders and pages them.
-//! Execution here returns full rows: projection happens after fan-out merging.
+//! Execution here returns full rows: projection happens before returning the page.
 use super::*;
 use crate::collections::{self, CollectionError, CollectionSpec, Limits, RowPage, specs};
 use iroha_torii_shared::list_query::ListQuery;
@@ -26,10 +26,24 @@ pub(crate) enum CollectionTarget {
     AssetHolders(String),
     /// `/v1/accounts/{account_id}/transactions` (path literal: I105 id or alias)
     AccountTransactions(String),
+    /// `/v1/accounts/{account_id}/history`
+    AccountHistory(String),
     /// `/v1/transactions/query`
     Transactions,
+    /// `/v1/contracts/activity`
+    ContractActivity,
+    /// `/v1/contracts/events`
+    ContractEvents,
     /// `/v1/repo/agreements`
     RepoAgreements,
+    /// `/v1/accounts/{account_id}/permissions`
+    AccountPermissions(String),
+    /// `/v1/subscriptions/plans`
+    SubscriptionPlans,
+    /// `/v1/subscriptions`
+    Subscriptions,
+    /// `/v1/space-directory/uaids/{uaid}/manifests`
+    UaidManifests(String),
 }
 
 impl CollectionTarget {
@@ -44,8 +58,15 @@ impl CollectionTarget {
             Self::AccountAssets(_) => &specs::ACCOUNT_ASSETS,
             Self::AssetHolders(_) => &specs::ASSET_HOLDERS,
             Self::AccountTransactions(_) => &specs::ACCOUNT_TRANSACTIONS,
+            Self::AccountHistory(_) => &specs::ACCOUNT_HISTORY,
             Self::Transactions => &specs::TRANSACTIONS,
+            Self::ContractActivity => &specs::CONTRACT_ACTIVITY,
+            Self::ContractEvents => &specs::CONTRACT_EVENTS,
             Self::RepoAgreements => &specs::REPO_AGREEMENTS,
+            Self::AccountPermissions(_) => &specs::ACCOUNT_PERMISSIONS,
+            Self::SubscriptionPlans => &specs::SUBSCRIPTION_PLANS,
+            Self::Subscriptions => &specs::SUBSCRIPTIONS,
+            Self::UaidManifests(_) => &specs::UAID_MANIFESTS,
         }
     }
 
@@ -55,14 +76,21 @@ impl CollectionTarget {
         match self {
             Self::AccountAssets(literal)
             | Self::AssetHolders(literal)
-            | Self::AccountTransactions(literal) => literal,
+            | Self::AccountTransactions(literal)
+            | Self::AccountHistory(literal)
+            | Self::AccountPermissions(literal)
+            | Self::UaidManifests(literal) => literal,
             Self::Domains
             | Self::Accounts
             | Self::AssetDefinitions
             | Self::Nfts
             | Self::Rwas
             | Self::Transactions
-            | Self::RepoAgreements => "",
+            | Self::ContractActivity
+            | Self::ContractEvents
+            | Self::RepoAgreements
+            | Self::SubscriptionPlans
+            | Self::Subscriptions => "",
         }
     }
 
@@ -77,8 +105,15 @@ impl CollectionTarget {
             Self::AccountAssets(_) => ENDPOINT_ACCOUNTS_ASSETS_QUERY,
             Self::AssetHolders(_) => ENDPOINT_ASSET_HOLDERS_QUERY,
             Self::AccountTransactions(_) => ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
+            Self::AccountHistory(_) => ENDPOINT_ACCOUNTS_HISTORY,
             Self::Transactions => ENDPOINT_TRANSACTIONS_QUERY,
+            Self::ContractActivity => ENDPOINT_CONTRACTS_ACTIVITY,
+            Self::ContractEvents => ENDPOINT_CONTRACTS_EVENTS,
             Self::RepoAgreements => ENDPOINT_REPO_AGREEMENTS_QUERY,
+            Self::AccountPermissions(_) => ENDPOINT_ACCOUNTS_PERMISSIONS,
+            Self::SubscriptionPlans => ENDPOINT_SUBSCRIPTION_PLANS_LIST,
+            Self::Subscriptions => ENDPOINT_SUBSCRIPTIONS_LIST,
+            Self::UaidManifests(_) => ENDPOINT_SPACE_DIRECTORY_MANIFESTS,
         }
     }
 }
@@ -87,6 +122,105 @@ impl CollectionTarget {
 pub(crate) fn collection_limits() -> Limits {
     let limits = app_query_limits();
     Limits::from_page_limits(limits.default_page_limit, limits.max_page_limit)
+}
+
+/// Storage entries in canonical key order strictly after `after` (strictly
+/// before it when `descending`): the seek behind identity-ordered pages.
+fn seek_entries<'a, K, V, S>(
+    storage: &'a S,
+    after: Option<&K>,
+    descending: bool,
+) -> Box<dyn Iterator<Item = (&'a K, &'a V)> + 'a>
+where
+    K: mv::Key,
+    V: mv::Value,
+    S: mv::storage::StorageReadOnly<K, V>,
+{
+    use std::ops::Bound::{Excluded, Unbounded};
+    match (after, descending) {
+        (None, false) => Box::new(storage.iter()),
+        (None, true) => Box::new(storage.iter().rev()),
+        (Some(after), false) => Box::new(storage.range::<K>((Excluded(after), Unbounded))),
+        (Some(after), true) => Box::new(storage.range::<K>((Unbounded, Excluded(after))).rev()),
+    }
+}
+
+/// [`seek_entries`] restricted to exact-`id` candidates from the filter, so a
+/// point lookup reads only its keys.
+fn seek_keys<'a, K, V, S>(
+    storage: &'a S,
+    candidates: Option<BTreeSet<K>>,
+    after: Option<&K>,
+    descending: bool,
+) -> Box<dyn Iterator<Item = (&'a K, &'a V)> + 'a>
+where
+    K: mv::Key,
+    V: mv::Value,
+    S: mv::storage::StorageReadOnly<K, V>,
+{
+    let Some(candidates) = candidates else {
+        return seek_entries(storage, after, descending);
+    };
+    let mut keys: Vec<K> = candidates
+        .into_iter()
+        .filter(|key| after.is_none_or(|after| if descending { key < after } else { key > after }))
+        .collect();
+    if descending {
+        keys.reverse();
+    }
+    let entries: Vec<(&'a K, &'a V)> = keys
+        .iter()
+        .filter_map(|key| storage.get_key_value(key))
+        .collect();
+    Box::new(entries.into_iter())
+}
+
+/// Whether a storage key follows the cursor in the requested order. Totals
+/// scan earlier entries too, but only later entries can appear in the page.
+fn entry_after_cursor<K: Ord>(key: &K, after: Option<&K>, descending: bool) -> bool {
+    after.is_none_or(|after| if descending { key < after } else { key > after })
+}
+
+/// The typed key of an identity-ordered cursor.
+fn cursor_key<K>(after: Option<&str>, parse: impl Fn(&str) -> Option<K>) -> Result<Option<K>> {
+    after
+        .map(|id| {
+            parse(id).ok_or_else(|| {
+                Error::from(CollectionError::new(
+                    "invalid_cursor",
+                    "cursor",
+                    "`cursor` is not a `next_cursor` value returned by this endpoint",
+                ))
+            })
+        })
+        .transpose()
+}
+
+/// Exact `id` literals of the filter as typed keys.
+fn id_candidates<K: Ord>(
+    query: &ListQuery,
+    parse: impl Fn(&str) -> Option<K>,
+) -> Option<BTreeSet<K>> {
+    exact_field_filter_candidates(query.filter.as_ref(), "id", &|value: &Value| {
+        value.as_str().and_then(&parse)
+    })
+}
+
+/// Feed fallible rows to the engine, keeping the first error.
+fn until_error<'a, T: 'a, I>(
+    rows: I,
+    failure: &'a mut Option<Error>,
+) -> impl Iterator<Item = T> + 'a
+where
+    I: Iterator<Item = Result<T>> + 'a,
+{
+    rows.map_while(move |row| match row {
+        Ok(row) => Some(row),
+        Err(error) => {
+            *failure = Some(error);
+            None
+        }
+    })
 }
 
 /// Rewrite account literals in the filter (aliases, alternate spellings) to
@@ -120,49 +254,7 @@ pub(crate) fn canonicalize_collection_query(
     Ok(())
 }
 
-/// Drops global-scope asset rows a fan-out route is not authoritative for
-/// before paging, so every row is served by exactly one route and route pages
-/// merge without gaps or double counts.
-struct RouteAuthority<'a> {
-    route: Option<(&'a crate::AppState, iroha_core::queue::RoutingDecision)>,
-    failure: Option<Error>,
-}
-
-impl<'a> RouteAuthority<'a> {
-    fn new(
-        app: Option<&'a crate::SharedAppState>,
-        route: Option<iroha_core::queue::RoutingDecision>,
-    ) -> Self {
-        Self {
-            route: app.zip(route).map(|(app, route)| (app.as_ref(), route)),
-            failure: None,
-        }
-    }
-
-    fn keeps(&mut self, row: &Map) -> bool {
-        let Some((app, route)) = self.route else {
-            return true;
-        };
-        if self.failure.is_some() {
-            return false;
-        }
-        crate::should_keep_authoritative_global_row(app, route, row).unwrap_or_else(|err| {
-            self.failure = Some(err);
-            false
-        })
-    }
-
-    fn finish(self, page: std::result::Result<RowPage, CollectionError>) -> Result<RowPage> {
-        match self.failure {
-            Some(err) => Err(err),
-            None => page.map_err(Error::from),
-        }
-    }
-}
-
 /// Validate and execute `query` against this node's state, returning full rows.
-///
-/// `route` is the fan-out route this execution serves, if any.
 pub(crate) async fn execute_collection_local(
     app: Option<&crate::SharedAppState>,
     state: &Arc<CoreState>,
@@ -170,62 +262,184 @@ pub(crate) async fn execute_collection_local(
     mut query: ListQuery,
     telemetry: &MaybeTelemetry,
     visibility: &DataspaceReadVisibility,
-    route: Option<iroha_core::queue::RoutingDecision>,
 ) -> Result<RowPage> {
     canonicalize_collection_query(state, target, &mut query, telemetry)?;
     let limits = collection_limits();
     let prepared = collections::prepare(target.spec(), target.scope(), &query, &limits)?;
     let page = match target {
+        // Identity-ordered reads seek in storage order from the cursor; exact
+        // `id` (and alias) constraints become direct lookups. The engine still
+        // applies the whole filter.
         CollectionTarget::Domains => {
             let world = state.world_view();
-            let rows = world
-                .domains_iter()
-                .filter(|domain| visibility.allows_domain(&world, domain.id()))
-                .map(domain_row);
-            prepared.execute(rows, &limits)
+            let scan = prepared.ordered_scan();
+            let after = cursor_key(scan.and_then(|scan| scan.after), |id| {
+                DomainId::parse_fully_qualified(id).ok()
+            })?;
+            let candidates = id_candidates(&query, |id| DomainId::parse_fully_qualified(id).ok());
+            let rows = seek_keys(
+                world.domains(),
+                candidates,
+                after.as_ref().filter(|_| !query.include_total),
+                scan.is_some_and(|scan| scan.descending),
+            )
+            .map(|(id, domain)| {
+                (
+                    entry_after_cursor(
+                        id,
+                        after.as_ref(),
+                        scan.is_some_and(|scan| scan.descending),
+                    ),
+                    visibility
+                        .allows_domain(&world, id)
+                        .then(|| domain_row(domain)),
+                )
+            });
+            if scan.is_some() {
+                prepared.execute_ordered(rows, &limits)
+            } else {
+                prepared.execute_entries(rows.map(|(_, row)| row), &limits)
+            }
         }
         CollectionTarget::Accounts => {
             let world = state.world_view();
             let catalog = state.nexus_snapshot().dataspace_catalog;
-            let accounts = collect_subject_accounts(&world);
-            let rows = accounts
-                .iter()
-                .filter(|account| visibility.allows_account(&world, account.id()))
-                .map(|account| account_row(account, &catalog));
-            prepared.execute(rows, &limits)
+            let scan = prepared.ordered_scan();
+            let after = cursor_key(scan.and_then(|scan| scan.after), |id| {
+                AccountId::parse_encoded(id).ok()
+            })?;
+            let candidates = id_candidates(&query, |id| AccountId::parse_encoded(id).ok());
+            let rows = seek_keys(
+                world.accounts(),
+                candidates,
+                after.as_ref().filter(|_| !query.include_total),
+                scan.is_some_and(|scan| scan.descending),
+            )
+            .map(|(id, value)| {
+                (
+                    entry_after_cursor(
+                        id,
+                        after.as_ref(),
+                        scan.is_some_and(|scan| scan.descending),
+                    ),
+                    visibility
+                        .allows_account(&world, id)
+                        .then(|| account_row(&account_from_key_value(id, value), &catalog)),
+                )
+            });
+            if scan.is_some() {
+                prepared.execute_ordered(rows, &limits)
+            } else {
+                prepared.execute_entries(rows.map(|(_, row)| row), &limits)
+            }
         }
         CollectionTarget::AssetDefinitions => {
             let world = state.world_view();
             let now_ms = asset_alias_observation_time_ms(state);
             let world_ref = &world;
-            // Exact `id`/alias constraints become direct lookups; the engine
-            // still applies the whole filter.
-            let rows = asset_definitions_for_filter(world_ref, query.filter.as_ref())
-                .filter(|definition| visibility.allows_asset_definition(world_ref, definition.id()))
-                .map(|definition| {
-                    let binding =
-                        asset_definition_alias_binding_for(world_ref, definition.id(), now_ms);
-                    asset_definition_to_json_value(&definition, binding.as_ref())
-                        .and_then(object_row_from_value)
-                })
-                .collect::<Result<Vec<_>>>()?;
-            prepared.execute(rows, &limits)
+            let scan = prepared.ordered_scan();
+            let after = cursor_key(scan.and_then(|scan| scan.after), |id| {
+                AssetDefinitionId::parse_address_literal(id).ok()
+            })?;
+            let candidates =
+                asset_definition_filter_candidate_ids(world_ref, query.filter.as_ref());
+            let rows = seek_keys(
+                world_ref.asset_definitions(),
+                candidates,
+                after.as_ref().filter(|_| !query.include_total),
+                scan.is_some_and(|scan| scan.descending),
+            )
+            .map(|(id, _)| {
+                let after_cursor = entry_after_cursor(
+                    id,
+                    after.as_ref(),
+                    scan.is_some_and(|scan| scan.descending),
+                );
+                if !visibility.allows_asset_definition(world_ref, id) {
+                    return Ok((after_cursor, None));
+                }
+                let Some(definition) = world_ref.asset_definition(id).ok() else {
+                    return Ok((after_cursor, None));
+                };
+                let binding =
+                    asset_definition_alias_binding_for(world_ref, definition.id(), now_ms);
+                asset_definition_to_json_value(&definition, binding.as_ref())
+                    .and_then(object_row_from_value)
+                    .map(|row| (after_cursor, Some(row)))
+            });
+            let mut failure = None;
+            let rows = until_error(rows, &mut failure);
+            let page = if scan.is_some() {
+                prepared.execute_ordered(rows, &limits)
+            } else {
+                prepared.execute_entries(rows.map(|(_, row)| row), &limits)
+            };
+            if let Some(error) = failure {
+                return Err(error);
+            }
+            page
         }
         CollectionTarget::Nfts => {
             let world = state.world_view();
             let world_ref = &world;
-            let rows = nfts_for_filter(world_ref, query.filter.as_ref())
-                .filter(|nft| visibility.allows_nft(world_ref, nft.id()))
-                .map(|nft| nft_row(&nft));
-            prepared.execute(rows, &limits)
+            let scan = prepared.ordered_scan();
+            let after = cursor_key(scan.and_then(|scan| scan.after), |id| {
+                id.parse::<NftId>().ok()
+            })?;
+            let rows = seek_keys(
+                world_ref.nfts(),
+                nft_filter_candidate_ids(query.filter.as_ref()),
+                after.as_ref().filter(|_| !query.include_total),
+                scan.is_some_and(|scan| scan.descending),
+            )
+            .map(|(id, value)| {
+                (
+                    entry_after_cursor(
+                        id,
+                        after.as_ref(),
+                        scan.is_some_and(|scan| scan.descending),
+                    ),
+                    visibility
+                        .allows_nft(world_ref, id)
+                        .then(|| nft_row(&nft_from_key_value(id, value))),
+                )
+            });
+            if scan.is_some() {
+                prepared.execute_ordered(rows, &limits)
+            } else {
+                prepared.execute_entries(rows.map(|(_, row)| row), &limits)
+            }
         }
         CollectionTarget::Rwas => {
             let world = state.world_view();
-            let rows = world
-                .rwas_iter()
-                .filter(|rwa| visibility.allows_rwa(&world, rwa.id()))
-                .map(|rwa| dto_row(&crate::explorer::ExplorerRwaDto::from_entry(rwa)));
-            prepared.execute(rows, &limits)
+            let scan = prepared.ordered_scan();
+            let parse = |id: &str| id.parse::<iroha_data_model::rwa::RwaId>().ok();
+            let after = cursor_key(scan.and_then(|scan| scan.after), parse)?;
+            let rows = seek_keys(
+                world.rwas(),
+                id_candidates(&query, parse),
+                after.as_ref().filter(|_| !query.include_total),
+                scan.is_some_and(|scan| scan.descending),
+            )
+            .map(|(id, value)| {
+                (
+                    entry_after_cursor(
+                        id,
+                        after.as_ref(),
+                        scan.is_some_and(|scan| scan.descending),
+                    ),
+                    visibility.allows_rwa(&world, id).then(|| {
+                        dto_row(&crate::explorer::ExplorerRwaDto::from_entry(
+                            iroha_data_model::rwa::RwaEntry::new(id, value),
+                        ))
+                    }),
+                )
+            });
+            if scan.is_some() {
+                prepared.execute_ordered(rows, &limits)
+            } else {
+                prepared.execute_entries(rows.map(|(_, row)| row), &limits)
+            }
         }
         CollectionTarget::AccountAssets(account_literal) => {
             let (account, _) = parse_account_path_segment_with_state(
@@ -239,16 +453,11 @@ pub(crate) async fn execute_collection_local(
                 || scoped_accounts_for_subject_sorted(&world, &account),
                 |exact| vec![exact.clone()],
             );
-            let items =
-                collect_projected_account_assets(&world, &scoped_accounts, None, None, visibility);
-            drop(world);
-            let mut authority = RouteAuthority::new(app, route);
-            let rows = items
-                .iter()
-                .map(account_asset_row)
-                .filter(|row| authority.keeps(row));
-            let page = prepared.execute(rows, &limits);
-            return authority.finish(page);
+            let items = projected_account_assets(&world, &scoped_accounts, None, None, visibility);
+            prepared.execute_entries(
+                items.map(|item| item.map(|item| account_asset_row(&item))),
+                &limits,
+            )
         }
         CollectionTarget::AssetHolders(definition_literal) => {
             let now_ms = asset_alias_observation_time_ms(state);
@@ -278,10 +487,7 @@ pub(crate) async fn execute_collection_local(
                 )
                 .await?
                 {
-                    let mut authority = RouteAuthority::new(app, route);
-                    let rows = rows.into_iter().filter(|row| authority.keeps(row));
-                    let page = prepared.execute(rows, &limits);
-                    return authority.finish(page);
+                    return prepared.execute(rows, &limits).map_err(Error::from);
                 }
                 if !asset_holder_live_aggregate_enabled() {
                     return Err(projection_archive_unavailable_error(
@@ -291,21 +497,19 @@ pub(crate) async fn execute_collection_local(
             }
             let world = state.world_view();
             let asset_literal = definition.to_string();
-            let mut authority = RouteAuthority::new(app, route);
             let rows = world
                 .asset_entries_by_definition_iter(&definition)
-                .filter(|entry| visibility.allows_asset(&world, entry.id()))
                 .map(|entry| {
-                    asset_holder_row(&live_asset_holder_item(
-                        entry.id(),
-                        entry.value().as_ref(),
-                        &asset_literal,
-                        asset_alias.as_ref(),
-                    ))
-                })
-                .filter(|row| authority.keeps(row));
-            let page = prepared.execute(rows, &limits);
-            return authority.finish(page);
+                    visibility.allows_asset(&world, entry.id()).then(|| {
+                        asset_holder_row(&live_asset_holder_item(
+                            entry.id(),
+                            entry.value().as_ref(),
+                            &asset_literal,
+                            asset_alias.as_ref(),
+                        ))
+                    })
+                });
+            prepared.execute_entries(rows, &limits)
         }
         CollectionTarget::AccountTransactions(account_literal) => {
             let (account, _) = parse_account_path_segment_with_state(
@@ -327,6 +531,7 @@ pub(crate) async fn execute_collection_local(
                 Some(&account),
                 allowed.as_ref(),
                 visibility,
+                |transaction, position| Some(transaction_row(transaction, position)),
             );
         }
         CollectionTarget::Transactions => {
@@ -334,19 +539,373 @@ pub(crate) async fn execute_collection_local(
                 .map(|app| crate::resolve_tx_history_allowed_asset_definition_id(app))
                 .transpose()?
                 .flatten();
-            return transaction_page(state, &prepared, None, allowed.as_ref(), visibility);
+            return transaction_page(
+                state,
+                &prepared,
+                None,
+                allowed.as_ref(),
+                visibility,
+                |transaction, position| Some(transaction_row(transaction, position)),
+            );
+        }
+        CollectionTarget::AccountPermissions(account_literal) => {
+            let (account, _) = parse_account_path_segment_with_state(
+                state,
+                account_literal,
+                telemetry,
+                target.endpoint(),
+            )?;
+            let world = state.world_view();
+            let permissions = if visibility.allows_account(&world, &account) {
+                collect_effective_account_permissions(&world, &account, limits.max_scanned_rows)?
+            } else {
+                BTreeSet::new()
+            };
+            let rows = permissions.iter().map(|permission| {
+                let payload = norito::json::from_str::<Value>(permission.payload().get()).map_err(
+                    |error| conversion_error(format!("invalid permission payload: {error}")),
+                )?;
+                Ok(Map::from_iter([
+                    ("name".to_owned(), Value::from(permission.name().to_owned())),
+                    ("payload".to_owned(), payload),
+                ]))
+            });
+            let mut failure = None;
+            let page = prepared.execute(until_error(rows, &mut failure), &limits);
+            if let Some(error) = failure {
+                return Err(error);
+            }
+            page
+        }
+        CollectionTarget::SubscriptionPlans => {
+            let world = state.world_view();
+            let scan = prepared.ordered_scan();
+            let after = cursor_key(scan.and_then(|scan| scan.after), |id| {
+                AssetDefinitionId::parse_address_literal(id).ok()
+            })?;
+            let descending = scan.is_some_and(|scan| scan.descending);
+            let mut failure = None;
+            let rows = seek_keys(
+                world.asset_definitions(),
+                id_candidates(&query, |id| {
+                    AssetDefinitionId::parse_address_literal(id).ok()
+                }),
+                after.as_ref().filter(|_| !query.include_total),
+                descending,
+            )
+            .map_while(|(id, definition)| {
+                let row = if visibility.allows_asset_definition(&world, id) {
+                    subscription_plan_from_metadata(definition.metadata()).map(|plan| {
+                        plan.map(|plan| {
+                            let mut row = dto_row(&plan);
+                            row.insert("id".to_owned(), Value::from(id.to_string()));
+                            row
+                        })
+                    })
+                } else {
+                    Ok(None)
+                };
+                match row {
+                    Ok(row) => Some((entry_after_cursor(id, after.as_ref(), descending), row)),
+                    Err(error) => {
+                        failure = Some(error);
+                        None
+                    }
+                }
+            });
+            let page = if scan.is_some() {
+                prepared.execute_ordered(rows, &limits)
+            } else {
+                prepared.execute_entries(rows.map(|(_, row)| row), &limits)
+            };
+            if let Some(error) = failure {
+                return Err(error);
+            }
+            page
+        }
+        CollectionTarget::Subscriptions => {
+            let world = state.world_view();
+            let scan = prepared.ordered_scan();
+            let after = cursor_key(scan.and_then(|scan| scan.after), |id| {
+                id.parse::<NftId>().ok()
+            })?;
+            let descending = scan.is_some_and(|scan| scan.descending);
+            let mut failure = None;
+            let rows = seek_keys(
+                world.nfts(),
+                nft_filter_candidate_ids(query.filter.as_ref()),
+                after.as_ref().filter(|_| !query.include_total),
+                descending,
+            )
+            .map_while(|(id, nft)| {
+                let row = if visibility.allows_nft(&world, id) {
+                    subscription_collection_row(&world, id, &nft.owned_by, &nft.content)
+                } else {
+                    Ok(None)
+                };
+                match row {
+                    Ok(row) => Some((entry_after_cursor(id, after.as_ref(), descending), row)),
+                    Err(error) => {
+                        failure = Some(error);
+                        None
+                    }
+                }
+            });
+            let page = if scan.is_some() {
+                prepared.execute_ordered(rows, &limits)
+            } else {
+                prepared.execute_entries(rows.map(|(_, row)| row), &limits)
+            };
+            if let Some(error) = failure {
+                return Err(error);
+            }
+            page
+        }
+        CollectionTarget::UaidManifests(raw_uaid) => {
+            let uaid = parse_uaid_literal(raw_uaid)?;
+            let world = state.world_view();
+            let aliases = DataspaceAliasLookup::new(state.nexus_snapshot().dataspace_catalog);
+            let bindings = world.uaid_dataspaces().get(&uaid);
+            let rows = world
+                .space_directory_manifests()
+                .get(&uaid)
+                .into_iter()
+                .flat_map(|set| set.iter())
+                .map(|(id, record)| {
+                    if !visibility.allows_dataspace(*id) {
+                        return Ok(None);
+                    }
+                    manifest_entry_to_json(*id, record, &aliases, bindings)
+                        .and_then(object_row_from_value)
+                        .map(Some)
+                });
+            let mut failure = None;
+            let rows = rows.map_while(|row| match row {
+                Ok(row) => Some(row),
+                Err(error) => {
+                    failure = Some(error);
+                    None
+                }
+            });
+            let page = prepared.execute_entries(rows, &limits);
+            if let Some(error) = failure {
+                return Err(error);
+            }
+            page
+        }
+        CollectionTarget::AccountHistory(literal) => {
+            let (account, _) = parse_account_path_segment_with_state(
+                state,
+                literal,
+                telemetry,
+                target.endpoint(),
+            )?;
+            if !visibility.allows_account(&state.world_view(), &account) {
+                return Ok(prepared.movement_page(Vec::new(), None));
+            }
+            let allowed = app
+                .map(|app| crate::resolve_tx_history_allowed_asset_definition_id(app))
+                .transpose()?
+                .flatten();
+            return account_movement_page(state, &prepared, &account, allowed.as_ref(), visibility);
+        }
+        CollectionTarget::ContractActivity => {
+            return transaction_page(
+                state,
+                &prepared,
+                None,
+                None,
+                visibility,
+                contract_activity_row,
+            );
+        }
+        CollectionTarget::ContractEvents => {
+            return transaction_page(state, &prepared, None, None, visibility, contract_event_row);
         }
         CollectionTarget::RepoAgreements => {
             let world = state.world_view();
-            let rows = repo_agreements_for_filter(&world, query.filter.as_ref()).map(|agreement| {
-                repo_agreement_projection_to_query_row(&RepoAgreementProjection::from_agreement(
-                    agreement,
-                ))
+            let scan = prepared.ordered_scan();
+            let after = cursor_key(scan.and_then(|scan| scan.after), |id| {
+                id.parse::<RepoAgreementId>().ok()
+            })?;
+            let rows = seek_keys(
+                world.repo_agreements(),
+                repo_filter_candidate_ids(&world, query.filter.as_ref()),
+                after.as_ref().filter(|_| !query.include_total),
+                scan.is_some_and(|scan| scan.descending),
+            )
+            .map(|(id, agreement)| {
+                (
+                    entry_after_cursor(
+                        id,
+                        after.as_ref(),
+                        scan.is_some_and(|scan| scan.descending),
+                    ),
+                    Some(repo_agreement_projection_to_query_row(
+                        &RepoAgreementProjection::from_agreement(agreement),
+                    )),
+                )
             });
-            prepared.execute(rows, &limits)
+            if scan.is_some() {
+                prepared.execute_ordered(rows, &limits)
+            } else {
+                prepared.execute_entries(rows.map(|(_, row)| row), &limits)
+            }
         }
     };
     Ok(page?)
+}
+
+/// Page movements inside authenticated transactions without indexing the full chain.
+/// The third cursor coordinate keeps multiple movements from one transaction on
+/// separate pages; only caller-visible movements may provide a continuation.
+fn account_movement_page(
+    state: &Arc<CoreState>,
+    prepared: &collections::Prepared<'_>,
+    account: &AccountId,
+    allowed_definition: Option<&AssetDefinitionId>,
+    visibility: &DataspaceReadVisibility,
+) -> Result<RowPage> {
+    use iroha_core::smartcontracts::isi::tx::{
+        TransactionHistoryPageEnd, TransactionHistoryPosition, transaction_history_byte_limit,
+        visit_committed_transaction_page,
+    };
+    let after = prepared.resume_movement_position();
+    // Revisit the cursor transaction, then skip movements at or above its
+    // exclusive coordinate. A transaction-only cursor would lose its tail.
+    let resume = after
+        .map(|(height, index, _)| {
+            index
+                .checked_add(1)
+                .and_then(|index| TransactionHistoryPosition::new(height, index))
+                .ok_or_else(|| {
+                    Error::from(CollectionError::new(
+                        "invalid_cursor",
+                        "cursor",
+                        "invalid history position",
+                    ))
+                })
+        })
+        .transpose()?;
+    let (lowest, highest) = prepared.height_range();
+    if lowest > highest {
+        return Ok(prepared.movement_page(Vec::new(), None));
+    }
+    let ceiling = highest
+        .checked_add(1)
+        .and_then(|height| TransactionHistoryPosition::new(height, 0));
+    let resume = match (resume, ceiling) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    };
+    let allowed = allowed_definition
+        .cloned()
+        .map(TxHistoryAssetSelector::DefinitionId);
+    let view = state.view();
+    let reads = HistoryVisibilityReads::new(Arc::clone(state));
+    let mut items = Vec::new();
+    let mut last_visible = None;
+    let mut below_range = false;
+    let mut expansion_exceeded = false;
+    let mut scanned = 0u64;
+    let account_literal = account.to_string();
+    let work = app_query_limits().max_fetch_size;
+    let end = visit_committed_transaction_page(
+        &view,
+        resume,
+        work,
+        transaction_history_byte_limit(work),
+        |transaction, position| {
+            if scanned >= work {
+                return std::ops::ControlFlow::Break(());
+            }
+            if position.height() < lowest {
+                below_range = true;
+                return std::ops::ControlFlow::Break(());
+            }
+            if !(visibility.can_read_all()
+                || reads.allows(
+                    visibility,
+                    position.height(),
+                    Some(transaction.block_hash),
+                    *transaction.entrypoint_hash(),
+                ))
+            {
+                return std::ops::ControlFlow::Continue(());
+            }
+            let mut projected = AccountHistoryIndex::default();
+            append_account_history_projections_for_tx(
+                &mut projected,
+                &transaction,
+                position.height(),
+            );
+            // Carrier bytes bound decoding, including movements at or above the
+            // resume coordinate that are decoded again but not examined again.
+            // Bound each expansion before JSON projection; `scanned` charges all
+            // later coordinates, including rows excluded by account or filters.
+            if projected.items.len() as u64 > work {
+                expansion_exceeded = true;
+                return std::ops::ControlFlow::Break(());
+            }
+            for (index, projection) in projected.items.iter().enumerate().rev() {
+                let coordinate = (position.height(), position.block_index(), index as u64);
+                if after.is_some_and(|after| coordinate >= after) {
+                    continue;
+                }
+                if scanned >= work {
+                    return std::ops::ControlFlow::Break(());
+                }
+                scanned += 1;
+                if projection.account_id != account_literal
+                    || allowed.as_ref().is_some_and(|selector| {
+                        !account_history_projection_matches_asset_selector(projection, selector)
+                    })
+                {
+                    continue;
+                }
+                let Value::Object(mut row) =
+                    account_history_projections_to_json(std::slice::from_ref(projection)).remove(0)
+                else {
+                    unreachable!("movement projection is an object")
+                };
+                row.insert("block_height".into(), Value::from(position.height()));
+                row.insert("block_index".into(), Value::from(position.block_index()));
+                row.insert("movement_index".into(), Value::from(index as u64));
+                if prepared.matches(&row) {
+                    if items.len() == prepared.limit() {
+                        return std::ops::ControlFlow::Break(());
+                    }
+                    items.push(row);
+                }
+                last_visible = Some(coordinate);
+            }
+            std::ops::ControlFlow::Continue(())
+        },
+    )
+    .map_err(|error| Error::Query(iroha_data_model::ValidationFail::QueryFailed(error)))?;
+    drop(view);
+    reads.finish()?;
+    if expansion_exceeded {
+        return Err(CollectionError::new(
+            "query_scan_limit_exceeded",
+            "filter",
+            "one transaction's movement projection exceeds the page's raw-row scan budget",
+        )
+        .into());
+    }
+    let continuation = match end {
+        TransactionHistoryPageEnd::Exhausted => None,
+        TransactionHistoryPageEnd::Stopped(_) if below_range => None,
+        TransactionHistoryPageEnd::Stopped(_) | TransactionHistoryPageEnd::BudgetSpent(_) => {
+            Some(last_visible.ok_or_else(|| Error::from(CollectionError::new(
+                "query_scan_limit_exceeded", "filter", "the history scan budget ended before a visible movement could provide a continuation",
+            )))?)
+        }
+        TransactionHistoryPageEnd::OutOfReach => return Err(CollectionError::new(
+            "query_scan_limit_exceeded", "cursor", "reaching this history page exceeds the node's history scan budget",
+        ).into()),
+    };
+    Ok(prepared.movement_page(items, continuation))
 }
 
 /// One page of committed transactions, newest first, strictly before the
@@ -354,15 +913,18 @@ pub(crate) async fn execute_collection_local(
 ///
 /// Every page has its own history-scan budget. A page that spends it before
 /// filling up ends early with a cursor at the last examined transaction.
-/// History is authenticated downward from the newest block, so the budget
-/// also pays for every block above the page's starting position; a start
-/// deeper than the budget reaches is rejected as `query_scan_limit_exceeded`.
+/// Reads start at the nearest verified history checkpoint above the page, so
+/// the budget pays for at most a checkpoint interval of extra blocks.
 fn transaction_page(
     state: &Arc<CoreState>,
     prepared: &collections::Prepared<'_>,
     subject: Option<&AccountId>,
     allowed_definition: Option<&AssetDefinitionId>,
     visibility: &DataspaceReadVisibility,
+    project: impl Fn(
+        &iroha_data_model::query::CommittedTransaction,
+        iroha_core::smartcontracts::isi::tx::TransactionHistoryPosition,
+    ) -> Option<Map>,
 ) -> Result<RowPage> {
     use iroha_core::smartcontracts::isi::tx::{
         TransactionHistoryPageEnd, TransactionHistoryPosition, transaction_history_byte_limit,
@@ -401,7 +963,7 @@ fn transaction_page(
     let reads = HistoryVisibilityReads::new(Arc::clone(state));
     let limit = prepared.limit();
     let mut items = Vec::new();
-    let mut last_kept = None;
+    let mut last_visible = None;
     let mut below_range = false;
     let work = app_query_limits().max_fetch_size;
     let end = visit_committed_transaction_page(
@@ -431,15 +993,17 @@ fn transaction_page(
             {
                 return std::ops::ControlFlow::Continue(());
             }
-            let row = transaction_row(&transaction, position);
-            if !prepared.matches(&row) {
+            let Some(row) = project(&transaction, position) else {
                 return std::ops::ControlFlow::Continue(());
-            }
-            if items.len() == limit {
+            };
+            let matches = prepared.matches(&row);
+            if matches && items.len() == limit {
                 return std::ops::ControlFlow::Break(());
             }
-            items.push(row);
-            last_kept = Some(position);
+            last_visible = Some(position);
+            if matches {
+                items.push(row);
+            }
             std::ops::ControlFlow::Continue(())
         },
     )
@@ -448,8 +1012,12 @@ fn transaction_page(
     reads.finish()?;
     let resume = match end {
         TransactionHistoryPageEnd::Stopped(_) if below_range => None,
-        TransactionHistoryPageEnd::Stopped(_) => last_kept,
-        TransactionHistoryPageEnd::BudgetSpent(position) => Some(position),
+        TransactionHistoryPageEnd::Stopped(_) | TransactionHistoryPageEnd::BudgetSpent(_) => {
+            Some(last_visible.ok_or_else(|| Error::from(CollectionError::new(
+                "query_scan_limit_exceeded", "filter",
+                "the history scan budget ended before a visible row could provide a continuation",
+            )))?)
+        }
         TransactionHistoryPageEnd::OutOfReach => {
             return Err(CollectionError::new(
                 "query_scan_limit_exceeded",
@@ -459,13 +1027,13 @@ fn transaction_page(
                     "filter"
                 },
                 format!(
-                    "this page would start deeper in history than one page's scan budget \
-                     ({work} blocks and transactions) reaches below the newest block"
+                    "reaching this page's position needs more history reads than one page's \
+                     scan budget ({work} blocks and transactions)"
                 ),
             )
             .with_hint(
-                "history is read newest first from the newest block; \
-                 deeper transactions are not reachable through this collection",
+                "the per-page budget is the node's `torii.app_api_max_fetch_size`; \
+                 history blocks larger than it cannot be paged",
             )
             .into());
         }
@@ -475,6 +1043,33 @@ fn transaction_page(
         items,
         resume.map(|position| (position.height(), position.block_index())),
     ))
+}
+
+/// Project one committed contract call without constructing a history-wide index.
+fn contract_activity_row(
+    transaction: &iroha_data_model::query::CommittedTransaction,
+    position: iroha_core::smartcontracts::isi::tx::TransactionHistoryPosition,
+) -> Option<Map> {
+    let projection = contract_activity_projection_from_tx(position.height() as usize, transaction)?;
+    let Value::Object(mut row) = contract_activity_projections_to_json(&[projection]).pop()? else {
+        return None;
+    };
+    row.insert("block_height".into(), Value::from(position.height()));
+    row.insert("block_index".into(), Value::from(position.block_index()));
+    Some(row)
+}
+
+/// Project one committed event using the same authenticated cursor coordinates.
+fn contract_event_row(
+    transaction: &iroha_data_model::query::CommittedTransaction,
+    position: iroha_core::smartcontracts::isi::tx::TransactionHistoryPosition,
+) -> Option<Map> {
+    let projection = contract_event_projection_from_tx(position.height() as usize, transaction)?;
+    let Value::Object(mut row) = contract_event_projection_to_json_value(&projection) else {
+        return None;
+    };
+    row.insert("block_index".into(), Value::from(position.block_index()));
+    Some(row)
 }
 
 /// The row of one committed transaction (`specs/torii/collection_queries.md`).
@@ -542,16 +1137,8 @@ pub(crate) async fn execute_collection_response(
 ) -> Result<Response> {
     let limits = collection_limits();
     let prepared = collections::prepare(target.spec(), target.scope(), &query, &limits)?;
-    let page = execute_collection_local(
-        app,
-        state,
-        target,
-        query.clone(),
-        telemetry,
-        visibility,
-        None,
-    )
-    .await?;
+    let page =
+        execute_collection_local(app, state, target, query.clone(), telemetry, visibility).await?;
     row_page_response(prepared.project(page))
 }
 
@@ -627,6 +1214,49 @@ fn nft_row(nft: &iroha_data_model::nft::Nft) -> Map {
     row
 }
 
+/// Flatten subscription state into the common collection row contract.
+fn subscription_collection_row(
+    world: &impl WorldReadOnly,
+    id: &NftId,
+    owner: &AccountId,
+    metadata: &Metadata,
+) -> Result<Option<Map>> {
+    let Some(subscription) = subscription_state_from_metadata(metadata)? else {
+        return Ok(None);
+    };
+    let invoice = subscription_invoice_from_metadata(metadata)?;
+    let plan = world
+        .asset_definitions()
+        .get(&subscription.plan_id)
+        .map(|definition| subscription_plan_from_metadata(definition.metadata()))
+        .transpose()?
+        .flatten();
+    let mut row = dto_row(&subscription);
+    row.insert("id".into(), Value::from(id.to_string()));
+    row.insert("owned_by".into(), Value::from(owner.to_string()));
+    row.insert(
+        "status".into(),
+        Value::from(match subscription.status {
+            SubscriptionStatus::Active => "active",
+            SubscriptionStatus::Paused => "paused",
+            SubscriptionStatus::PastDue => "past_due",
+            SubscriptionStatus::Canceled => "canceled",
+            SubscriptionStatus::Suspended => "suspended",
+        }),
+    );
+    row.insert(
+        "invoice".into(),
+        norito::json::to_value(&invoice)
+            .map_err(|error| conversion_error(format!("invalid subscription invoice: {error}")))?,
+    );
+    row.insert(
+        "plan".into(),
+        norito::json::to_value(&plan)
+            .map_err(|error| conversion_error(format!("invalid subscription plan: {error}")))?,
+    );
+    Ok(Some(row))
+}
+
 fn dto_row<T: norito::json::JsonSerialize>(dto: &T) -> Map {
     match norito::json::to_value(dto) {
         Ok(Value::Object(map)) => map,
@@ -663,6 +1293,64 @@ fn asset_holder_row(item: &AssetHolderListItem) -> Map {
     row.insert("scope".into(), Value::from(item.scope.clone()));
     row.insert("quantity".into(), Value::from(item.quantity.to_string()));
     row
+}
+
+/// Bound every account membership, role membership and expanded permission before
+/// materializing the deduplicated effective permission rows.
+fn collect_effective_account_permissions(
+    world: &impl WorldReadOnly,
+    account: &AccountId,
+    max_scanned_rows: usize,
+) -> Result<BTreeSet<iroha_data_model::permission::Permission>> {
+    let mut examined = 0usize;
+    let mut charge = || -> Result<()> {
+        if examined >= max_scanned_rows {
+            return Err(CollectionError::new(
+                "query_scan_limit_exceeded",
+                "filter",
+                "effective permission expansion exceeds the collection scan budget",
+            )
+            .into());
+        }
+        examined += 1;
+        Ok(())
+    };
+    let subject = account.subject_id();
+    let mut accounts = world
+        .accounts_for_subject_iter(&subject)
+        .map(|entry| entry.id().clone());
+    let first = accounts.next().unwrap_or_else(|| account.clone());
+    let mut permissions = BTreeSet::new();
+    for account_id in std::iter::once(first).chain(accounts) {
+        charge()?;
+        match world.account_permissions_iter(&account_id) {
+            Ok(direct) => {
+                for permission in direct {
+                    charge()?;
+                    permissions.insert(permission.clone());
+                }
+            }
+            Err(iroha_data_model::query::error::FindError::Account(_)) => {}
+            Err(error) => {
+                return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    error.into(),
+                )));
+            }
+        }
+        for role_id in world.account_roles_iter(&account_id) {
+            charge()?;
+            let role = world.roles().get(role_id).ok_or_else(|| {
+                conversion_error(format!(
+                    "account `{account_id}` has missing role `{role_id}`"
+                ))
+            })?;
+            for permission in role.permissions() {
+                charge()?;
+                permissions.insert(permission.clone());
+            }
+        }
+    }
+    Ok(permissions)
 }
 
 #[cfg(test)]
@@ -719,6 +1407,35 @@ mod tests {
         (state, alice, bob)
     }
 
+    #[test]
+    fn effective_permissions_charge_empty_role_and_account_memberships() {
+        let alice = authority(0xC1);
+        let account = dm::Account::new(alice.clone()).build(&alice);
+        let role_ids: Vec<dm::RoleId> = (0..8)
+            .map(|index| format!("empty_role_{index}").parse().expect("role id"))
+            .collect();
+        let roles = role_ids
+            .iter()
+            .map(|id| dm::Role::new(id.clone(), alice.clone()).build(&alice));
+        let mut world = World::with_assets_and_roles([], [account], [], [], [], roles);
+        for role_id in role_ids {
+            world.grant_role_for_tests(alice.clone(), role_id);
+        }
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let world = state.world_view();
+        // Eight empty role bindings still require work, plus the account itself.
+        assert!(collect_effective_account_permissions(&world, &alice, 8).is_err());
+        assert!(
+            collect_effective_account_permissions(&world, &alice, 9)
+                .expect("exact account and role membership budget")
+                .is_empty()
+        );
+    }
+
     async fn run(
         state: &Arc<CoreState>,
         target: &CollectionTarget,
@@ -731,7 +1448,6 @@ mod tests {
             query,
             &MaybeTelemetry::for_tests(),
             &DataspaceReadVisibility::all_for_tests(),
-            None,
         )
         .await
     }
@@ -769,6 +1485,113 @@ mod tests {
         let mut expected = names(&["alpha", "bravo", "charlie", "delta", "echo"]);
         expected.sort();
         assert_eq!(seen, expected);
+    }
+
+    async fn pages(
+        state: &Arc<CoreState>,
+        target: &CollectionTarget,
+        query: &ListQuery,
+    ) -> Vec<String> {
+        let mut seen = Vec::new();
+        let mut current = query.clone();
+        for _ in 0..20 {
+            let page = run(state, target, current.clone()).await.expect("page");
+            seen.extend(ids(&page));
+            match page.next_cursor {
+                Some(cursor) => current = query.clone().cursor(cursor),
+                None => break,
+            }
+        }
+        seen
+    }
+
+    #[tokio::test]
+    async fn identity_order_seeks_in_both_directions() {
+        let (state, _, _) = fixture();
+        let descending = ListQuery::new().sort_by(SortKey::desc("id")).limit(2);
+        assert_eq!(
+            pages(&state, &CollectionTarget::Domains, &descending).await,
+            names(&["echo", "delta", "charlie", "bravo", "alpha"])
+        );
+    }
+
+    #[tokio::test]
+    async fn exact_id_filters_read_only_their_keys() {
+        let (state, _, _) = fixture();
+        let point = ListQuery::new().filter(field("id").eq(domain_id("charlie").to_string()));
+        assert_eq!(
+            pages(&state, &CollectionTarget::Domains, &point).await,
+            names(&["charlie"])
+        );
+        let several = ListQuery::new()
+            .filter(field("id").is_in([
+                domain_id("echo").to_string(),
+                domain_id("alpha").to_string(),
+                domain_id("missing").to_string(),
+            ]))
+            .sort_by(SortKey::desc("id"))
+            .limit(1);
+        assert_eq!(
+            pages(&state, &CollectionTarget::Domains, &several).await,
+            names(&["echo", "alpha"])
+        );
+    }
+
+    #[tokio::test]
+    async fn accounts_stream_in_identifier_order() {
+        let (state, alice, bob) = fixture();
+        let mut expected = vec![alice, bob];
+        expected.sort();
+        let expected: Vec<String> = expected.iter().map(ToString::to_string).collect();
+        let query = ListQuery::new().limit(1);
+        assert_eq!(
+            pages(&state, &CollectionTarget::Accounts, &query).await,
+            expected
+        );
+    }
+
+    #[tokio::test]
+    async fn ordered_totals_stay_constant_across_pages() {
+        let (state, _, _) = fixture();
+        for descending in [false, true] {
+            let query = ListQuery::new()
+                .include_total()
+                .limit(2)
+                .sort_by(if descending {
+                    SortKey::desc("id")
+                } else {
+                    SortKey::asc("id")
+                });
+            let mut current = query.clone();
+            let mut seen = Vec::new();
+            for _ in 0..4 {
+                let page = run(&state, &CollectionTarget::Domains, current)
+                    .await
+                    .expect("page");
+                assert_eq!(page.total, Some(5));
+                seen.extend(ids(&page));
+                let Some(cursor) = page.next_cursor else {
+                    break;
+                };
+                current = query.clone().cursor(cursor);
+            }
+            let mut expected = names(&["alpha", "bravo", "charlie", "delta", "echo"]);
+            if descending {
+                expected.reverse();
+            }
+            assert_eq!(seen, expected);
+        }
+    }
+
+    #[test]
+    fn cursor_direction_uses_the_storage_key_order() {
+        assert!(entry_after_cursor(&2, None, false));
+        assert!(entry_after_cursor(&2, None, true));
+        assert!(entry_after_cursor(&2, Some(&1), false));
+        assert!(entry_after_cursor(&1, Some(&2), true));
+        assert!(!entry_after_cursor(&1, Some(&1), false));
+        assert!(!entry_after_cursor(&1, Some(&1), true));
+        assert!(!entry_after_cursor(&1, Some(&2), false));
     }
 
     #[tokio::test]
@@ -823,8 +1646,9 @@ mod tests {
         .await
         .expect("page");
         assert_eq!(page.total, Some(2));
-        let mut expected = vec![alice.to_string(), bob.to_string()];
+        let mut expected = vec![alice, bob];
         expected.sort();
+        let expected: Vec<String> = expected.iter().map(ToString::to_string).collect();
         assert_eq!(ids(&page), expected);
         for row in &page.items {
             assert!(row.contains_key("label"));
@@ -947,6 +1771,54 @@ mod tests {
         .await
         .expect_err("history order is fixed");
         assert!(matches!(err, Error::CollectionQuery(err) if err.code == "invalid_sort"));
+
+        let mut builder = dm::TransactionBuilder::new(
+            network_id,
+            alice.clone().into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        builder.set_creation_time(core::time::Duration::from_millis(4_000));
+        let movement_tx = builder
+            .with_instructions::<dm::InstructionBox>([
+                dm::SetKeyValue::account(alice.clone(), "first".parse().unwrap(), "one").into(),
+                dm::SetKeyValue::account(alice.clone(), "second".parse().unwrap(), "two").into(),
+            ])
+            .sign(keys.private_key());
+        crate::test_utils::commit_native_accepted_inputs(
+            &mut chain,
+            vec![AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(
+                movement_tx,
+            ))],
+        );
+        let movements = CollectionTarget::AccountHistory(alice.to_string());
+        let base = ListQuery::new()
+            .filter(field("block_height").eq(chain.height()))
+            .limit(1);
+        let first = run(&state, &movements, base.clone())
+            .await
+            .expect("movement first page");
+        assert_eq!(first.items.len(), 1);
+        assert_eq!(first.items[0]["movement_index"].as_u64(), Some(1));
+        let second = run(
+            &state,
+            &movements,
+            base.clone()
+                .cursor(first.next_cursor.expect("second movement")),
+        )
+        .await
+        .expect("movement second page");
+        assert_eq!(second.items.len(), 1);
+        assert_eq!(second.items[0]["movement_index"].as_u64(), Some(0));
+        assert_ne!(first.items[0]["id"], second.items[0]["id"]);
+        assert_eq!(second.next_cursor, None);
+        let filtered = run(
+            &state,
+            &movements,
+            base.filter(field("movement_index").eq(0)),
+        )
+        .await
+        .expect("movement filter");
+        assert_eq!(filtered.items[0]["id"], second.items[0]["id"]);
     }
 
     #[tokio::test]
@@ -977,19 +1849,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn projection_happens_after_execution() {
+    async fn responses_apply_the_selection() {
         let (state, _, _) = fixture();
         let query = ListQuery::new().select(["id"]).limit(1);
-        let limits = collection_limits();
-        let prepared = collections::prepare(&specs::DOMAINS, "", &query, &limits).expect("valid");
-        let page = run(&state, &CollectionTarget::Domains, prepared.route_query())
+        let page = run(&state, &CollectionTarget::Domains, query.clone())
             .await
             .expect("page");
         assert!(
             page.items[0].contains_key("owned_by"),
-            "routes return full rows"
+            "execution returns full rows"
         );
-        let projected = prepared.project(page);
-        assert_eq!(projected.items[0].len(), 1);
+        let response = execute_collection_response(
+            None,
+            &state,
+            &CollectionTarget::Domains,
+            query,
+            &MaybeTelemetry::for_tests(),
+            &DataspaceReadVisibility::all_for_tests(),
+        )
+        .await
+        .expect("response");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let page: norito::json::Value = norito::json::from_slice(&body).expect("json");
+        let item = page["items"][0].as_object().expect("item");
+        assert_eq!(item.keys().collect::<Vec<_>>(), ["id"]);
     }
 }

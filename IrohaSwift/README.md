@@ -30,6 +30,7 @@ Features:
 ### Collection queries
 
 Every Torii collection (domains, accounts, asset definitions, NFTs, RWA lots,
+permissions, subscription plans, subscriptions, UAID manifests, account history, contract activity/events,
 account assets, asset holders, account transactions, repo agreements) is read
 with one query language and returns one page envelope; see
 [`specs/torii/collection_queries.md`](../specs/torii/collection_queries.md).
@@ -985,14 +986,14 @@ commits; only a receipt read from committed WSV state uses `settled`. Exact
 
 ### UAID portfolio and Space Directory
 
-`getUaidPortfolio`, `getUaidBindings`, and `getUaidManifests` accept only the
+`getUaidPortfolio`, `getUaidBindings`, and `uaidManifests(of:)` accept only the
 canonical `uaid:<64 lowercase hex>` literal with its low bit set. Portfolio and
 binding responses require the exact current field sets, canonical I105 accounts,
 and full asset ids bound to their returned definition, account, and dataspace;
 nullable labels and aliases are preserved exactly and are never trimmed.
-Manifest queries expose only exact `dataspace`, `status`, `limit`, `offset`, and
-`count_mode`. Responses require `uaid`, `total`, `has_more`, `count_mode`, and
-`manifests`, with lifecycle-derived status and lowercase manifest hashes. The
+Manifest queries use `ToriiListQuery` filters (`dataspace_id`, `status`), cursor
+pages and optional exact totals. Responses require `items` and `next_cursor`;
+manifest rows retain lifecycle-derived status and lowercase hashes. The
 embedded `ToriiUaidAssetPermissionManifest` is numeric V1, requires `issued_ms`,
 `activation_epoch`, and `entries`, and rejects null for fields whose canonical
 JSON representation is omission.
@@ -1162,11 +1163,11 @@ Use `getExplorerTransfers` to fetch a page and derive transfer records:
 
 ```swift
 if #available(iOS 15.0, macOS 12.0, *) {
-    let params = ToriiExplorerInstructionsParams(limit: 50,
-                                                 kind: "Transfer",
-                                                 assetDefinitionId: "<base58-asset-definition-id>")
-    let transfers = try await torii.getExplorerTransfers(params: params,
-                                                         matchingAccount: "<account_i105>")
+    let transfers = try await torii.getExplorerTransfers(
+        query: ToriiListQuery(limit: 50),
+        matchingAccount: "<account_i105>",
+        assetDefinitionId: "<base58-asset-definition-id>"
+    )
     for record in transfers {
         switch record.details {
         case .asset(let asset):
@@ -1186,16 +1187,18 @@ if #available(iOS 15.0, macOS 12.0, *) {
 }
 ```
 
-Raw `getExplorerInstructions` and `getExplorerTransactions` history pages use snapshot-bound seek
-cursors. Omit `cursor` for the first request, then pass the exact
-`page.pagination.nextCursor` into the next request while keeping the same filters. Pagination
-metadata exposes `limit`, `snapshotHeight`, `snapshotHash`, `nextCursor`, and `hasMore`; page
-numbers and aggregate totals are not part of the first-release contract. Treat cursor strings as
-opaque. `iterateAccountTransferHistory` advances these cursors for you.
+Explorer collections use `ToriiListQuery` and `ToriiPage`, with `items` and an explicit
+`nextCursor`. Read `explorerInstructions`, `explorerTransactions`, `explorerRwas`,
+`explorerAccounts`, `explorerDomains`, `explorerAssetDefinitions`, `explorerAssets`,
+`explorerNfts`, `explorerBlocks`, `explorerLatestTransactions`, and
+`explorerLatestInstructions` through `.page(query)`, `.pages(query)`, or `.items(query)`.
+They use fixed bounded order and reject `sort`, `includeTotal`, and `aggregate`. Cursors
+are opaque; empty pages may still have a continuation. The shared iterator follows them
+and rejects repeated cursors. The `IrohaSDK.collections` accessor exposes the same API.
 
 Explorer list/detail/stream calls and contract activity/event reads are public-dataspace requests
 when the client has no `canonicalRequestAuth`. If the client was initialized with a default
-canonical request signer, the SDK signs those exact GET requests automatically so Torii can add
+canonical request signer, the SDK signs the exact requests automatically so Torii can add
 restricted dataspaces visible to that account. Invalid or partial authentication fails at Torii;
 it never falls back to anonymous visibility.
 
@@ -1204,7 +1207,7 @@ If you prefer a flattened, UI-ready shape, ask for transfer summaries:
 ```swift
 if #available(iOS 15.0, macOS 12.0, *) {
     let summaries = try await torii.getExplorerTransferSummaries(
-        params: ToriiExplorerInstructionsParams(limit: 50, kind: "Transfer"),
+        query: ToriiListQuery(limit: 50),
         matchingAccount: "<account_i105>"
     )
     for summary in summaries {
@@ -1257,9 +1260,7 @@ You can also list transaction summaries or fetch a transaction detail payload:
 
 ```swift
 if #available(iOS 15.0, macOS 12.0, *) {
-    let txPage = try await torii.getExplorerTransactions(
-        params: ToriiExplorerTransactionsParams(limit: 25)
-    )
+    let txPage = try await torii.explorerTransactions.page(ToriiListQuery(limit: 25))
     if let first = txPage.items.first {
         let detail = try await torii.getExplorerTransactionDetail(hashHex: first.hash)
         print("transaction status:", detail.status)
@@ -1279,13 +1280,11 @@ For RWA lots, use the dedicated explorer and chain-state helpers:
 
 ```swift
 if #available(iOS 15.0, macOS 12.0, *) {
-    let lots = try await torii.getExplorerRwas(
-        params: ToriiExplorerRwasParams(
-            limit: 25,
-            ownedBy: "<account_i105>",
-            domain: "commodities"
-        )
-    )
+    let lots = try await torii.explorerRwas.page(ToriiListQuery(
+        filter: (ToriiField("owned_by") == "<account_i105>")
+            .and(ToriiField("domain") == "commodities"),
+        limit: 25
+    ))
     if let first = lots.items.first {
         let detail = try await torii.getExplorerRwaDetail(rwaId: first.id)
         print(detail.quantity, detail.heldQuantity, detail.primaryReference)

@@ -30199,6 +30199,33 @@ impl State {
         Ok(wire)
     }
 
+    /// Read one complete native execution for an off-chain reader, starting the
+    /// authenticating walk at the nearest verified history checkpoint instead of
+    /// signed genesis (see
+    /// [`read_executed_carrier_from_checkpoints`](crate::smartcontracts::isi::tx::read_executed_carrier_from_checkpoints)).
+    /// Source work depends on node-local checkpoints: on-chain readers must use
+    /// [`Self::read_finalized_execution_carrier`].
+    /// # Errors
+    /// Rejects absent/replaced canonical history, invalid body/cache, or exceeded limits.
+    pub fn read_executed_carrier_from_checkpoints(
+        &self,
+        height: NonZeroUsize,
+        max_work: u64,
+        max_bytes: u64,
+    ) -> Result<
+        crate::smartcontracts::isi::tx::FinalizedExecutionCarrier,
+        crate::execution_attempt::ExecutionAttemptError<
+            iroha_data_model::query::error::QueryExecutionFail,
+        >,
+    > {
+        crate::smartcontracts::isi::tx::read_executed_carrier_from_checkpoints(
+            &self.view(),
+            height,
+            max_work,
+            max_bytes,
+        )
+    }
+
     /// Read one complete finalized execution carrier without holding a World view.
     ///
     /// Captures only the canonical height/hash journal before I/O and rechecks

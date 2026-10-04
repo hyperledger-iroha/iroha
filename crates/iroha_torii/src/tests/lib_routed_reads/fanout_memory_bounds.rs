@@ -11,9 +11,6 @@ fn fanout_memory_test_request(
                 fetch_size: Some(1),
                 sort_by_metadata_key: None,
                 order: None,
-                ids_projection: None,
-                lane_id: None,
-                dsid: None,
             },
             predicate: None,
         }

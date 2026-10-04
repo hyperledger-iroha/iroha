@@ -372,7 +372,7 @@ impl GeneratedServiceRuntime {
                 != revision
                     .required
                     .as_ref()
-                    .map_or(&[], RequiredTransactions::identities)
+                    .map_or(&[][..], RequiredTransactions::identities)
             || revision.manifest.intent.components
                 != revision
                     .components
@@ -443,7 +443,7 @@ impl GeneratedServiceRuntime {
     fn publication_intent(
         &self,
         selection: &RuntimeSelection,
-        originals: &[Vec<u8>],
+        originals: &[impl AsRef<[u8]>],
         components: Option<[[u8; 32]; 3]>,
         required: Option<&RequiredTransactions>,
     ) -> Result<Intent> {
@@ -457,7 +457,9 @@ impl GeneratedServiceRuntime {
         Ok(Intent {
             network: self.authority.config.network_id,
             genesis: *self.authority.genesis.genesis.hash().as_ref(),
-            originals: std::array::from_fn(|index| *blake3::hash(&originals[index]).as_bytes()),
+            originals: std::array::from_fn(|index| {
+                *blake3::hash(originals[index].as_ref()).as_bytes()
+            }),
             policies: *Hash::new(encode(&selection.policies, MAX_POLICY_BYTES)?).as_ref(),
             providers: identities
                 .try_into()

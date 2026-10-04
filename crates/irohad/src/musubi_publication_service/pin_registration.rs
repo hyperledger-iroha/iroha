@@ -260,7 +260,7 @@ pub(super) fn validate_signed_pin_intent(
         return Err(Invalid);
     }
     let manifest = sorafs_manifest::decode_manifest_v1_canonical(&register.manifest_payload)
-        .map_err(codec_refusal)?;
+        .map_err(manifest_codec_refusal)?;
     if ManifestDigest::from_manifest(&manifest).map_err(codec_refusal)? != expected_digest {
         return Err(Invalid);
     }
@@ -289,6 +289,15 @@ pub(super) fn validate_pin_manifest(
         return Err(Invalid);
     }
     Ok(())
+}
+
+pub(super) fn manifest_codec_refusal(
+    error: sorafs_manifest::ManifestDecodeError,
+) -> MusubiPublicationFinalizedPinRegistrationReadErrorV1 {
+    match error {
+        sorafs_manifest::ManifestDecodeError::Decode { source } => codec_refusal(source),
+        _ => MusubiPublicationFinalizedPinRegistrationReadErrorV1::Invalid,
+    }
 }
 
 pub(super) fn codec_refusal(

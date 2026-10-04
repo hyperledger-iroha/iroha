@@ -1213,6 +1213,8 @@ mod event;
 #[cfg(feature = "app_api")]
 pub mod explorer;
 #[cfg(feature = "app_api")]
+mod explorer_query;
+#[cfg(feature = "app_api")]
 pub mod filter;
 #[cfg(test)]
 mod frame_test_support;
@@ -1300,15 +1302,12 @@ pub use routing::{
 // Admission-free handler entry points kept only for integration tests.
 #[cfg(all(feature = "app_api", any(feature = "test-fixtures", feature = "bench")))]
 pub use routing::handle_queries_with_opts;
+#[cfg(all(feature = "app_api", feature = "bench"))]
+pub use routing::handle_v1_contracts_activity_get_for_bench;
 #[cfg(feature = "test-fixtures")]
 pub use routing::handle_v1_zk_roots;
 #[cfg(feature = "connect")]
 pub use routing::{ConnectSessionRequest, ConnectSessionResponse, ConnectWsQuery};
-#[cfg(all(feature = "app_api", feature = "bench"))]
-pub use routing::{
-    ContractActivityGetParams as ContractActivityGetParamsForBench,
-    handle_v1_contracts_activity_get_for_bench,
-};
 pub use routing::{QueryOptions, SignedQueryAdmission};
 #[cfg(feature = "telemetry")]
 pub use routing::{
@@ -2308,17 +2307,6 @@ fn resolve_alias_index_via_service(
 #[derive(Clone, Default)]
 struct TxHistoryAccessPolicy {
     allowed_asset_definition_id: Option<String>,
-}
-#[cfg(feature = "app_api")]
-fn is_exact_tx_history_dataspace_alias(
-    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-    dataspace: &str,
-) -> bool {
-    !dataspace.is_empty()
-        && !dataspace.contains('.')
-        && iroha_model_base::name::canonicalize_domain_label(dataspace)
-            .is_ok_and(|canonical| canonical == dataspace)
-        && catalog.by_alias(dataspace).is_some()
 }
 #[cfg(feature = "app_api")]
 fn load_public_dataspace_upstreams(
@@ -8455,28 +8443,28 @@ async fn handler_account_transactions_query(
     crate::JsonOnly(body): crate::JsonOnly<norito::json::Value>,
 ) -> Result<Response, Error> {
     let query = list_query_from_json(body)?;
-    account_transactions_collection_read(
+    account_history_collection_read(
         &app,
         &headers,
         remote.ip(),
         caller.caller(),
-        account_id,
+        routing::collection_sources::CollectionTarget::AccountTransactions(account_id),
         query,
-        routing::ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
     )
     .await
 }
-/// Shared ingress for `GET`/`POST` account transaction history.
+/// Shared ingress for committed account transactions and movements.
 #[cfg(feature = "app_api")]
-async fn account_transactions_collection_read(
+async fn account_history_collection_read(
     app: &SharedAppState,
     headers: &HeaderMap,
     remote_ip: std::net::IpAddr,
     caller: Option<&AccountId>,
-    account_literal: String,
+    target: routing::collection_sources::CollectionTarget,
     query: iroha_torii_shared::list_query::ListQuery,
-    endpoint_label: &'static str,
 ) -> Result<Response, Error> {
+    let account_literal = target.scope();
+    let endpoint_label = target.endpoint();
     let limits = crate::routing::app_query_limits();
     if !limits::is_allowed_by_cidr(headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
@@ -8505,13 +8493,21 @@ async fn account_transactions_collection_read(
             Ok(parsed) => parsed,
             Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
         };
-    let (_, body) = prepare_collection_forward(
-        app,
-        &routing::collection_sources::CollectionTarget::AccountTransactions(
-            canonical_account_id.to_string(),
+    let (target, endpoint) = match target {
+        routing::collection_sources::CollectionTarget::AccountHistory(_) => (
+            routing::collection_sources::CollectionTarget::AccountHistory(
+                canonical_account_id.to_string(),
+            ),
+            ToriiReadEndpointV1::AccountHistoryQuery,
         ),
-        query,
-    )?;
+        _ => (
+            routing::collection_sources::CollectionTarget::AccountTransactions(
+                canonical_account_id.to_string(),
+            ),
+            ToriiReadEndpointV1::AccountTransactionsQuery,
+        ),
+    };
+    let (query, body) = prepare_collection_forward(app, &target, query)?;
     let use_target_account_routes =
         torii_should_use_target_account_routes(app.as_ref(), &parsed_account_id, caller);
     let route_scope =
@@ -8526,18 +8522,23 @@ async fn account_transactions_collection_read(
         Err(response) => return Ok(response),
     };
     if routes.is_empty() {
-        return Ok(empty_collection_page_response(routed_by_for_routes(
-            app,
-            &[],
-        )));
+        return Ok(empty_collection_page_response(
+            routed_by_for_routes(app, &[]),
+            query.include_total,
+        ));
     }
-    Ok(execute_torii_list_read_for_routes(
+    let Some(route) = collection_execution_route(app.as_ref(), &routes) else {
+        return Ok(empty_collection_page_response(
+            routed_by_for_routes(app, &[]),
+            query.include_total,
+        ));
+    };
+    Ok(execute_collection_on_route(
         app,
-        routes,
+        route,
         route_scope,
-        ToriiReadEndpointV1::AccountTransactionsQuery,
+        endpoint,
         vec![canonical_account_id.to_string()],
-        None,
         body,
     )
     .await)
@@ -8614,7 +8615,7 @@ async fn handler_account_assets(
         };
     // Reject an invalid query before routing: a read without a visible
     // route must not answer it with an empty page.
-    let (_, body) = prepare_collection_forward(
+    let (query, body) = prepare_collection_forward(
         &app,
         &routing::collection_sources::CollectionTarget::AccountAssets(
             canonical_account_id.to_string(),
@@ -8644,16 +8645,21 @@ async fn handler_account_assets(
                 "signed account-assets read has no authoritative target route",
             )
         } else {
-            empty_collection_page_response(routed_by_for_routes(&app, &[]))
+            empty_collection_page_response(routed_by_for_routes(&app, &[]), query.include_total)
         });
     }
-    Ok(execute_torii_list_read_for_routes(
+    let Some(route) = collection_execution_route(app.as_ref(), &routes) else {
+        return Ok(empty_collection_page_response(
+            routed_by_for_routes(&app, &[]),
+            query.include_total,
+        ));
+    };
+    Ok(execute_collection_on_route(
         &app,
-        routes,
+        route,
         route_scope,
         ToriiReadEndpointV1::AccountAssetsQuery,
         vec![canonical_account_id.to_string()],
-        None,
         body,
     )
     .await)
@@ -8666,69 +8672,91 @@ async fn handler_account_permissions(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
-    AxQuery(p): AxQuery<routing::PaginationParams>,
-) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    let rate_limit_bypassed =
-        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-    let key_hint = account_id.clone();
-    let tel = app.telemetry_handle();
-    if !rate_limit_bypassed {
-        let enforce =
-            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        check_access_enforced(&app, &headers, Some(remote_ip), &key_hint, enforce).await?;
-    }
-    let (parsed_account_id, canonical_account_id) =
-        match routing::parse_account_path_segment_with_state(
-            app.state.as_ref(),
-            &key_hint,
-            &tel,
-            "/v1/accounts/{account_id}/permissions",
-        ) {
-            Ok(parsed) => parsed,
-            Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
-        };
+) -> Result<Response, Error> {
     let caller = torii_visibility_account_from_headers(
         &app,
         &headers,
         &method,
         &uri,
         &[],
-        "/v1/accounts/{account_id}/permissions",
+        routing::ENDPOINT_ACCOUNTS_PERMISSIONS,
     )?;
-    let use_target_account_routes =
-        torii_should_use_target_account_routes(app.as_ref(), &parsed_account_id, caller.caller());
-    let route_scope = torii_account_permissions_route_scope(
-        &parsed_account_id,
-        caller.caller(),
-        use_target_account_routes,
-    );
+    if !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        check_access_enforced(&app, &headers, Some(remote.ip()), &account_id, enforce).await?;
+    }
+    account_permissions_collection_read(
+        &app,
+        &caller,
+        account_id,
+        list_query_from_query_string(uri.query())?,
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_account_permissions_query(
+    State(app): State<SharedAppState>,
+    Extension(caller): Extension<ToriiAccountReadVisibility>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(account_id): AxPath<String>,
+    crate::JsonOnly(body): crate::JsonOnly<norito::json::Value>,
+) -> Result<Response, Error> {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
+        check_access_enforced(&app, &headers, Some(remote.ip()), &account_id, true).await?;
+    }
+    account_permissions_collection_read(&app, &caller, account_id, list_query_from_json(body)?)
+        .await
+}
+
+#[cfg(feature = "app_api")]
+async fn account_permissions_collection_read(
+    app: &SharedAppState,
+    caller: &ToriiAccountReadVisibility,
+    account_id: String,
+    query: ListQuery,
+) -> Result<Response, Error> {
+    let (account, canonical) = routing::parse_account_path_segment_with_state(
+        app.state.as_ref(),
+        &account_id,
+        &app.telemetry_handle(),
+        routing::ENDPOINT_ACCOUNTS_PERMISSIONS,
+    )?;
+    let (query, body) = prepare_collection_forward(
+        app,
+        &routing::collection_sources::CollectionTarget::AccountPermissions(canonical.to_string()),
+        query,
+    )?;
+    let use_target =
+        torii_should_use_target_account_routes(app.as_ref(), &account, caller.caller());
+    let scope = torii_account_permissions_route_scope(&account, caller.caller(), use_target);
     let routes = match torii_account_permissions_read_routes(
         app.as_ref(),
-        &parsed_account_id,
+        &account,
         caller.caller(),
-        use_target_account_routes,
+        use_target,
     ) {
         Ok(routes) => routes,
         Err(response) => return Ok(response),
     };
-    if routes.is_empty() {
-        return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
-    }
-    let query_string = encode_torii_proxy_query(&p)?;
-    let mut response = execute_torii_list_read_for_routes(
-        &app,
-        routes,
-        route_scope,
-        ToriiReadEndpointV1::AccountPermissionsGet,
-        vec![canonical_account_id.to_string()],
-        query_string,
-        Vec::new(),
-    )
-    .await;
+    let mut response = if let Some(route) = collection_execution_route(app.as_ref(), &routes) {
+        execute_collection_on_route(
+            app,
+            route,
+            scope,
+            ToriiReadEndpointV1::AccountPermissionsQuery,
+            vec![canonical.to_string()],
+            body,
+        )
+        .await
+    } else {
+        empty_collection_page_response(routed_by_for_routes(app, &[]), query.include_total)
+    };
     response.headers_mut().insert(
         "x-iroha-account-permission-semantics",
-        axum::http::HeaderValue::from_static("effective-v1"),
+        HeaderValue::from_static("effective-v1"),
     );
     Ok(response)
 }
@@ -8766,7 +8794,7 @@ async fn handler_account_assets_query(
         };
     // Reject an invalid query before routing: a read without a visible
     // route must not answer it with an empty page.
-    let (_, body) = prepare_collection_forward(
+    let (query, body) = prepare_collection_forward(
         &app,
         &routing::collection_sources::CollectionTarget::AccountAssets(
             canonical_account_id.to_string(),
@@ -8788,16 +8816,21 @@ async fn handler_account_assets_query(
                 "signed account-assets query has no authoritative target route",
             )
         } else {
-            empty_collection_page_response(routed_by_for_routes(&app, &[]))
+            empty_collection_page_response(routed_by_for_routes(&app, &[]), query.include_total)
         });
     }
-    Ok(execute_torii_list_read_for_routes(
+    let Some(route) = collection_execution_route(app.as_ref(), &routes) else {
+        return Ok(empty_collection_page_response(
+            routed_by_for_routes(&app, &[]),
+            query.include_total,
+        ));
+    };
+    Ok(execute_collection_on_route(
         &app,
-        routes,
+        route,
         route_scope,
         ToriiReadEndpointV1::AccountAssetsQuery,
         vec![canonical_account_id.to_string()],
-        None,
         body,
     )
     .await)
@@ -8820,14 +8853,13 @@ async fn handler_account_transactions_get(
         &[],
         routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
     )?;
-    account_transactions_collection_read(
+    account_history_collection_read(
         &app,
         &headers,
         remote.ip(),
         caller.caller(),
-        account_id,
+        routing::collection_sources::CollectionTarget::AccountTransactions(account_id),
         query,
-        routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
     )
     .await
 }
@@ -8839,35 +8871,7 @@ async fn handler_account_history_get(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
-    AxQuery(params): AxQuery<crate::routing::AccountHistoryGetParams>,
 ) -> Result<Response, Error> {
-    let remote_ip = remote.ip();
-    let rate_limit_bypassed =
-        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-    let key_hint = account_id.clone();
-    let limits = crate::routing::app_query_limits();
-    let mut params = params;
-    let page_limit = limits.clamp_page_limit(params.limit)?;
-    params.limit = Some(page_limit);
-    let allowed_asset_definition_id = resolve_tx_history_allowed_asset_definition_id(&app)?;
-    if !rate_limit_bypassed {
-        let enforce =
-            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        let cost = limits.rate_limit_cost(page_limit);
-        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &key_hint, enforce, cost)
-            .await?;
-    }
-    let telemetry = app.telemetry.clone();
-    let (parsed_account_id, canonical_account_id) =
-        match routing::parse_account_path_segment_with_state(
-            app.state.as_ref(),
-            &key_hint,
-            &telemetry,
-            routing::ENDPOINT_ACCOUNTS_HISTORY,
-        ) {
-            Ok(parsed) => parsed,
-            Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
-        };
     let caller = torii_visibility_account_from_headers(
         &app,
         &headers,
@@ -8876,190 +8880,34 @@ async fn handler_account_history_get(
         &[],
         routing::ENDPOINT_ACCOUNTS_HISTORY,
     )?;
-    let use_target_account_routes =
-        torii_should_use_target_account_routes(app.as_ref(), &parsed_account_id, caller.caller());
-    let route_scope = torii_account_read_route_scope(
-        &parsed_account_id,
-        caller.caller(),
-        use_target_account_routes,
-    );
-    let routes = match torii_account_read_routes(
-        app.as_ref(),
-        &parsed_account_id,
-        caller.caller(),
-        use_target_account_routes,
-    ) {
-        Ok(routes) => routes,
-        Err(response) => return Ok(response),
-    };
-    if routes.is_empty() {
-        return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
-    }
-    let query_string = encode_torii_proxy_query(&params)?;
-    let _ = allowed_asset_definition_id;
-    Ok(execute_torii_account_history_read_for_routes(
-        &app,
-        routes,
-        route_scope,
-        vec![canonical_account_id.to_string()],
-        query_string,
-    )
-    .await)
-}
-#[cfg(feature = "app_api")]
-fn signed_tx_history_dataspace_from_headers(
-    app: &SharedAppState,
-    headers: &HeaderMap,
-    caller: &AccountId,
-    signed_alias: &str,
-) -> Result<String, AxResponse> {
-    let mut values = headers.get_all("x-dataspace-id").iter();
-    let Some(value) = values.next() else {
-        return Err(tx_history_reject(
-            StatusCode::BAD_REQUEST,
-            "tx_history_dataspace_required",
-            "X-Dataspace-Id is required for a signed transaction history feed",
-        ));
-    };
-    if values.next().is_some() {
-        return Err(tx_history_reject(
-            StatusCode::BAD_REQUEST,
-            "tx_history_dataspace_ambiguous",
-            "X-Dataspace-Id must appear exactly once",
-        ));
-    }
-    let alias = value.to_str().map_err(|_| {
-        tx_history_reject(
-            StatusCode::BAD_REQUEST,
-            "tx_history_dataspace_invalid",
-            "X-Dataspace-Id must be an exact configured dataspace alias",
-        )
-    })?;
-    if alias != signed_alias {
-        return Err(tx_history_reject(
-            StatusCode::BAD_REQUEST,
-            "tx_history_dataspace_mismatch",
-            "X-Dataspace-Id must match the canonical signed dataspace_id query selector",
-        ));
-    }
-    let nexus = app.state.nexus_snapshot();
-    if !is_exact_tx_history_dataspace_alias(&nexus.dataspace_catalog, alias) {
-        return Err(tx_history_reject(
-            StatusCode::BAD_REQUEST,
-            "tx_history_dataspace_invalid",
-            "X-Dataspace-Id must be an exact configured dataspace alias",
-        ));
-    }
-    let dataspace = nexus
-        .dataspace_catalog
-        .by_alias(alias)
-        .expect("exact configured dataspace alias was checked above")
-        .id;
-    if !torii_all_dataspace_routes(app.as_ref())
-        .iter()
-        .any(|route| route.dataspace_id == dataspace)
-    {
-        return Err(tx_history_reject(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "tx_history_route_unavailable",
-            "the selected dataspace has no active Torii route",
-        ));
-    }
-    let state_view = app.state.view();
-    let world = state_view.world();
-    let exact_permission: Permission = CanReadRestrictedDataspace { dataspace }.into();
-    let global_permission: Permission = CanReadAllLedgerData.into();
-    if !torii_account_has_permission(world, caller, &exact_permission)
-        && !torii_account_has_permission(world, caller, &global_permission)
-    {
-        return Err(tx_history_reject(
-            StatusCode::FORBIDDEN,
-            "tx_history_dataspace_permission_denied",
-            "the signed account lacks read permission for the selected dataspace",
-        ));
-    }
-    Ok(alias.to_owned())
-}
-#[cfg(feature = "app_api")]
-async fn handler_transactions_history_get(
-    State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
-    AxQuery(params): AxQuery<crate::routing::AccountTransactionsGetParams>,
-) -> Result<Response, Error> {
-    let tel = app.telemetry.clone();
-    let limits = crate::routing::app_query_limits();
-    let mut params = params;
-    let page_limit = limits.clamp_page_limit(params.limit)?;
-    params.limit = Some(page_limit);
-    let caller = torii_visibility_account_from_headers(
+    account_history_collection_read(
         &app,
         &headers,
-        &method,
-        &uri,
-        &[],
-        "v1/transactions/history",
-    )?
-    .caller()
-    .cloned()
-    .ok_or_else(|| Error::AppUnauthorized {
-        code: "tx_history_signature_required",
-        message: "canonical signed account headers are required for transaction history".to_owned(),
-    })?;
-    let Some(signed_dataspace_alias) = params.dataspace_id.as_deref() else {
-        return Ok(tx_history_reject(
-            StatusCode::BAD_REQUEST,
-            "tx_history_dataspace_required",
-            "the signed dataspace_id query selector is required for transaction history",
-        ));
-    };
-    let dataspace_alias = match signed_tx_history_dataspace_from_headers(
-        &app,
-        &headers,
-        &caller,
-        signed_dataspace_alias,
-    ) {
-        Ok(alias) => alias,
-        Err(response) => return Ok(response),
-    };
-    let allowed_asset_definition_id = match resolve_tx_history_allowed_asset_definition_id(&app) {
-        Ok(Some(id)) => id,
-        Ok(None) => {
-            return Ok(tx_history_reject(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "tx_history_asset_policy_unavailable",
-                "the transaction history asset restriction is not configured",
-            ));
-        }
-        Err(error) => return Ok(tx_history_alias_resolution_reject(error)),
-    };
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    let cost = limits.rate_limit_cost(page_limit);
-    let rate_key = format!("tx-history:{caller}:{dataspace_alias}");
-    if !limits::allow_cost_conditionally(&app.rate_limiter, &rate_key, cost.max(1), enforce).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    let dataspace_visibility = torii_dataspace_read_visibility(app.as_ref(), Some(&caller));
-    let visibility = crate::routing::TxHistoryVisibilityScope {
-        viewer_account_ids: vec![caller],
-        viewer_dataspace_id: dataspace_alias,
-        allow_dataspace_wide: true,
-        asset_definition_domains: asset_definition_domain_snapshot(&app),
-    };
-    routing::handle_v1_transactions_history_get(
-        app.state.clone(),
-        crate::NoritoQuery(params),
-        tel,
-        visibility,
-        dataspace_visibility,
-        Some(allowed_asset_definition_id),
+        remote.ip(),
+        caller.caller(),
+        routing::collection_sources::CollectionTarget::AccountHistory(account_id),
+        list_query_from_query_string(uri.query())?,
     )
     .await
-    .map(IntoResponse::into_response)
+}
+#[cfg(feature = "app_api")]
+async fn handler_account_history_query(
+    State(app): State<SharedAppState>,
+    Extension(caller): Extension<ToriiAccountReadVisibility>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(account_id): AxPath<String>,
+    crate::JsonOnly(body): crate::JsonOnly<norito::json::Value>,
+) -> Result<Response, Error> {
+    account_history_collection_read(
+        &app,
+        &headers,
+        remote.ip(),
+        caller.caller(),
+        routing::collection_sources::CollectionTarget::AccountHistory(account_id),
+        list_query_from_json(body)?,
+    )
+    .await
 }
 #[cfg(feature = "app_api")]
 async fn handler_contracts_activity_get(
@@ -9068,7 +8916,6 @@ async fn handler_contracts_activity_get(
     method: axum::http::Method,
     uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(params): AxQuery<crate::routing::ContractActivityGetParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     let visibility = torii_dataspace_context_from_headers(
@@ -9081,27 +8928,20 @@ async fn handler_contracts_activity_get(
     let rate_limit_bypassed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
-    let mut params = params;
-    let page_limit = limits.clamp_page_limit(params.limit)?;
-    params.limit = Some(page_limit);
+    let query = list_query_from_query_string(uri.query())?;
+    let page_limit = collection_page_limit(&query);
     if !rate_limit_bypassed {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
-        let key_hint = params
-            .contract_alias
-            .as_deref()
-            .or(params.contract_address.as_deref())
-            .or(params.contract_entrypoint.as_deref())
-            .or(params.authority.as_deref())
-            .unwrap_or("contracts-activity");
+        let key_hint = "contracts-activity";
         check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
             .await?;
     }
     routing::handle_v1_contracts_activity_get(
         app.state.clone(),
         visibility.current_visibility(),
-        crate::NoritoQuery(params),
+        query,
         app.telemetry.clone(),
     )
     .await
@@ -9114,7 +8954,6 @@ async fn handler_contracts_events_get(
     method: axum::http::Method,
     uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     let visibility =
@@ -9122,32 +8961,134 @@ async fn handler_contracts_events_get(
     let rate_limit_bypassed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
-    let mut params = params;
-    let page_limit = limits.clamp_page_limit(params.limit)?;
-    params.limit = Some(page_limit);
+    let query = list_query_from_query_string(uri.query())?;
+    let page_limit = collection_page_limit(&query);
     if !rate_limit_bypassed {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
-        let key_hint = params
-            .contract_alias
-            .as_deref()
-            .or(params.contract_address.as_deref())
-            .or(params.module.as_deref())
-            .or(params.event_kind.as_deref())
-            .or(params.authority.as_deref())
-            .unwrap_or("contracts-events");
+        let key_hint = "contracts-events";
         check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
             .await?;
     }
     routing::handle_v1_contracts_events_get(
         app.state.clone(),
         visibility.current_visibility(),
-        crate::NoritoQuery(params),
+        query,
         app.telemetry.clone(),
     )
     .await
     .map(IntoResponse::into_response)
+}
+#[cfg(feature = "app_api")]
+async fn handler_contracts_activity_query(
+    State(app): State<SharedAppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<Response, Error> {
+    let caller = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        "v1/contracts/activity/query",
+    )?;
+    let plan = match torii_routed_read_request_decode_plan(&app) {
+        Ok(plan) => plan,
+        Err(response) => return Ok(response),
+    };
+    let value = match decode_torii_proxy_json_body::<norito::json::Value>(
+        plan,
+        body.as_ref(),
+        "history collection query",
+    ) {
+        Ok(value) => value,
+        Err(response) => return Ok(response),
+    };
+    let query = list_query_from_json(value)?;
+    if !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
+        let cost = routing::app_query_limits().rate_limit_cost(collection_page_limit(&query));
+        check_access_enforced_with_cost(
+            &app,
+            &headers,
+            Some(remote.ip()),
+            "contracts-activity",
+            true,
+            cost,
+        )
+        .await?;
+    }
+    let visibility = caller
+        .into_dataspace_context(Arc::clone(&app))
+        .current_visibility();
+    routing::collection_sources::execute_collection_response(
+        Some(&app),
+        &app.state,
+        &routing::collection_sources::CollectionTarget::ContractActivity,
+        query,
+        &app.telemetry_handle(),
+        &visibility,
+    )
+    .await
+}
+#[cfg(feature = "app_api")]
+async fn handler_contracts_events_query(
+    State(app): State<SharedAppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<Response, Error> {
+    let caller = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        "v1/contracts/events/query",
+    )?;
+    let plan = match torii_routed_read_request_decode_plan(&app) {
+        Ok(plan) => plan,
+        Err(response) => return Ok(response),
+    };
+    let value = match decode_torii_proxy_json_body::<norito::json::Value>(
+        plan,
+        body.as_ref(),
+        "history collection query",
+    ) {
+        Ok(value) => value,
+        Err(response) => return Ok(response),
+    };
+    let query = list_query_from_json(value)?;
+    if !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
+        let cost = routing::app_query_limits().rate_limit_cost(collection_page_limit(&query));
+        check_access_enforced_with_cost(
+            &app,
+            &headers,
+            Some(remote.ip()),
+            "contracts-events",
+            true,
+            cost,
+        )
+        .await?;
+    }
+    let visibility = caller
+        .into_dataspace_context(Arc::clone(&app))
+        .current_visibility();
+    routing::collection_sources::execute_collection_response(
+        Some(&app),
+        &app.state,
+        &routing::collection_sources::CollectionTarget::ContractEvents,
+        query,
+        &app.telemetry_handle(),
+        &visibility,
+    )
+    .await
 }
 #[cfg(feature = "app_api")]
 async fn handler_contracts_rollups_swaps_fills_get(
@@ -10125,33 +10066,15 @@ async fn handler_space_directory_bindings(
     .await)
 }
 #[cfg(feature = "app_api")]
-fn space_directory_manifest_fanout_query(
-    query: &crate::routing::SpaceDirectoryManifestQuery,
-    fetch_limit: u64,
-) -> crate::routing::SpaceDirectoryManifestQuery {
-    // Preserve the client's count intent in the coordinator request. Nexus rewrites only the
-    // per-shard query to bounded mode after decoding this value.
-    crate::routing::SpaceDirectoryManifestQuery {
-        dataspace: query.dataspace,
-        status: query.status.clone(),
-        limit: Some(fetch_limit),
-        offset: Some(0),
-        count_mode: query.count_mode.clone(),
-    }
-}
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
 async fn handler_space_directory_manifests(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
     uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxPath(uaid_literal): AxPath<String>,
-    AxQuery(query): AxQuery<crate::routing::SpaceDirectoryManifestQuery>,
-) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    let visibility = torii_visibility_account_from_headers(
+    AxPath(uaid): AxPath<String>,
+) -> Result<Response, Error> {
+    let caller = torii_visibility_account_from_headers(
         &app,
         &headers,
         &method,
@@ -10159,36 +10082,59 @@ async fn handler_space_directory_manifests(
         &[],
         routing::ENDPOINT_SPACE_DIRECTORY_MANIFESTS,
     )?;
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(
             &app,
             &headers,
-            Some(remote_ip),
-            routing::ENDPOINT_SPACE_DIRECTORY_MANIFESTS.trim_start_matches('/'),
+            Some(remote.ip()),
+            routing::ENDPOINT_SPACE_DIRECTORY_MANIFESTS,
             enforce,
         )
         .await?;
     }
-    let uaid_literal = routing::canonical_routed_uaid_literal(&uaid_literal)?;
-    let _ = routing::space_directory_manifest_status_filter(query.status.as_deref())?;
-    let (client_offset, client_page_limit) =
-        routing::space_directory_manifest_pagination(query.limit, query.offset.unwrap_or(0))?;
-    let client_limit = Some(client_page_limit);
-    let fetch_limit =
-        routing::space_directory_manifest_fanout_window(client_offset, client_page_limit)?;
-    let fanout_query = space_directory_manifest_fanout_query(&query, fetch_limit);
-    let query_string = encode_torii_proxy_query(&fanout_query)?;
-    Ok(execute_torii_visible_fanout_space_directory_manifests_read(
+    let uaid = routing::canonical_routed_uaid_literal(&uaid)?;
+    forward_visible_collection_read(
         &app,
-        visibility.caller(),
-        uaid_literal,
-        query_string,
-        client_offset,
-        client_limit,
+        caller.caller(),
+        ToriiReadEndpointV1::UaidManifestsQuery,
+        routing::collection_sources::CollectionTarget::UaidManifests(uaid.clone()),
+        vec![uaid],
+        list_query_from_query_string(uri.query())?,
     )
-    .await)
+    .await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_space_directory_manifests_query(
+    State(app): State<SharedAppState>,
+    Extension(caller): Extension<ToriiAccountReadVisibility>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(uaid): AxPath<String>,
+    crate::JsonOnly(body): crate::JsonOnly<norito::json::Value>,
+) -> Result<Response, Error> {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote.ip()),
+            routing::ENDPOINT_SPACE_DIRECTORY_MANIFESTS,
+            true,
+        )
+        .await?;
+    }
+    let uaid = routing::canonical_routed_uaid_literal(&uaid)?;
+    forward_visible_collection_read(
+        &app,
+        caller.caller(),
+        ToriiReadEndpointV1::UaidManifestsQuery,
+        routing::collection_sources::CollectionTarget::UaidManifests(uaid.clone()),
+        vec![uaid],
+        list_query_from_json(body)?,
+    )
+    .await
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
@@ -10674,137 +10620,12 @@ async fn handler_kagemusha_operation_status(
 }
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-struct ExplorerAccountsQuery {
-    #[norito(flatten)]
-    pagination: explorer::ExplorerCursorQuery,
-    #[norito(default)]
-    domain: Option<String>,
-    #[norito(default)]
-    with_asset: Option<String>,
-}
-#[cfg(feature = "app_api")]
-#[derive(JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-struct ExplorerDomainsQuery {
-    #[norito(flatten)]
-    pagination: explorer::ExplorerCursorQuery,
-    #[norito(default)]
-    owned_by: Option<String>,
-}
-#[cfg(feature = "app_api")]
-#[derive(JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-struct ExplorerPaginationOnly {
-    #[norito(flatten)]
-    pagination: explorer::ExplorerCursorQuery,
-}
-#[cfg(feature = "app_api")]
-#[derive(JsonDeserialize)]
 struct DefiOracleAttestationLatestQuery {
     domain: u32,
     subject_id: u64,
     #[norito(default)]
     status: Option<u32>,
 }
-#[cfg(feature = "app_api")]
-#[derive(JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-struct ExplorerAssetDefinitionsQuery {
-    #[norito(flatten)]
-    pagination: explorer::ExplorerCursorQuery,
-    #[norito(default)]
-    owning_domain: Option<String>,
-    #[norito(default)]
-    owned_by: Option<String>,
-}
-#[cfg(feature = "app_api")]
-#[derive(JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-struct ExplorerAssetsQuery {
-    #[norito(flatten)]
-    pagination: explorer::ExplorerCursorQuery,
-    #[norito(default)]
-    owned_by: Option<String>,
-    #[norito(default)]
-    definition: Option<String>,
-    #[norito(default)]
-    asset_id: Option<String>,
-}
-#[cfg(feature = "app_api")]
-#[derive(JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-struct ExplorerNftsQuery {
-    #[norito(flatten)]
-    pagination: explorer::ExplorerCursorQuery,
-    #[norito(default)]
-    owned_by: Option<String>,
-    #[norito(default)]
-    domain: Option<String>,
-}
-#[cfg(feature = "app_api")]
-#[derive(JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-struct ExplorerRwasQuery {
-    #[norito(flatten)]
-    pagination: explorer::ExplorerCursorQuery,
-    #[norito(default)]
-    owned_by: Option<String>,
-    #[norito(default)]
-    domain: Option<String>,
-}
-#[cfg(feature = "app_api")]
-#[derive(JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-struct ExplorerTransactionsQuery {
-    #[norito(flatten)]
-    pagination: explorer::ExplorerCursorQuery,
-    #[norito(default)]
-    authority: Option<String>,
-    #[norito(default)]
-    block: Option<u64>,
-    #[norito(default)]
-    status: Option<String>,
-    #[norito(default)]
-    asset_id: Option<String>,
-}
-#[cfg(feature = "app_api")]
-#[derive(JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-struct ExplorerInstructionsQuery {
-    #[norito(flatten)]
-    pagination: explorer::ExplorerCursorQuery,
-    #[norito(default)]
-    account: Option<String>,
-    #[norito(default)]
-    authority: Option<String>,
-    #[norito(default)]
-    transaction_hash: Option<String>,
-    #[norito(default)]
-    transaction_status: Option<String>,
-    #[norito(default)]
-    block: Option<u64>,
-    #[norito(default)]
-    kind: Option<String>,
-    #[norito(default)]
-    asset_id: Option<String>,
-}
-#[cfg(feature = "app_api")]
-const CONTEXT_EXPLORER_DOMAINS_OWNED_BY: &str = "/v1/explorer/domains?owned_by";
-#[cfg(feature = "app_api")]
-const CONTEXT_EXPLORER_ASSET_DEFINITIONS_OWNED_BY: &str = "/v1/explorer/asset-definitions?owned_by";
-#[cfg(feature = "app_api")]
-const CONTEXT_EXPLORER_ASSETS_OWNED_BY: &str = "/v1/explorer/assets?owned_by";
-#[cfg(feature = "app_api")]
-const CONTEXT_EXPLORER_NFTS_OWNED_BY: &str = "/v1/explorer/nfts?owned_by";
-#[cfg(feature = "app_api")]
-const CONTEXT_EXPLORER_RWAS_OWNED_BY: &str = "/v1/explorer/rwas?owned_by";
-#[cfg(feature = "app_api")]
-const CONTEXT_EXPLORER_TRANSACTIONS_AUTHORITY: &str = "/v1/explorer/transactions?authority";
-#[cfg(feature = "app_api")]
-const CONTEXT_EXPLORER_INSTRUCTIONS_AUTHORITY: &str = "/v1/explorer/instructions?authority";
-#[cfg(feature = "app_api")]
-const CONTEXT_EXPLORER_INSTRUCTIONS_ACCOUNT: &str = "/v1/explorer/instructions?account";
 #[cfg(feature = "app_api")]
 const CONTEXT_EXPLORER_ACCOUNT_DETAIL: &str = "/v1/explorer/accounts/{account_id}";
 #[cfg(feature = "app_api")]
@@ -11282,12 +11103,6 @@ fn parse_asset_id(raw: &str) -> Result<AssetId, Error> {
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
 }
 #[cfg(feature = "app_api")]
-fn parse_transaction_hash(raw: &str) -> Result<HashOf<TransactionEntrypoint>, Error> {
-    raw.trim()
-        .parse::<HashOf<TransactionEntrypoint>>()
-        .map_err(|_| conversion_error("invalid transaction hash".to_owned()))
-}
-#[cfg(feature = "app_api")]
 fn parse_nft_id(raw: &str) -> Result<NftId, Error> {
     raw.parse::<NftId>()
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
@@ -11296,322 +11111,6 @@ fn parse_nft_id(raw: &str) -> Result<NftId, Error> {
 fn parse_rwa_id(raw: &str) -> Result<RwaId, Error> {
     raw.parse::<RwaId>()
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
-}
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_explorer_accounts_list(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(query): AxQuery<ExplorerAccountsQuery>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let visibility = torii_dataspace_context_from_headers(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        "v1/explorer/accounts",
-    )?;
-    let ExplorerAccountsQuery {
-        pagination,
-        domain,
-        with_asset,
-    } = query;
-    let domain = match domain {
-        Some(raw) => Some(parse_domain_id(&raw)?),
-        None => None,
-    };
-    let asset_filter = match with_asset {
-        Some(raw) => Some(parse_asset_definition_id(app.as_ref(), &raw)?),
-        None => None,
-    };
-    let allowed =
-        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-    if !allowed {
-        check_access(&app, &headers, Some(remote_ip), "v1/explorer/accounts").await?;
-    }
-    let admission = acquire_query_admission(app.as_ref(), true).await?;
-    routing::handle_v1_explorer_accounts_admitted(
-        app.state.clone(),
-        visibility.current_visibility(),
-        pagination,
-        domain,
-        asset_filter,
-        admission,
-    )
-    .await
-}
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_explorer_domains_list(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(query): AxQuery<ExplorerDomainsQuery>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let visibility =
-        torii_dataspace_context_from_headers(&app, &headers, &method, &uri, "v1/explorer/domains")?;
-    let ExplorerDomainsQuery {
-        pagination,
-        owned_by,
-    } = query;
-    let owned_by = match owned_by {
-        Some(raw) => Some(parse_account_id_for_endpoint(
-            &app,
-            &raw,
-            CONTEXT_EXPLORER_DOMAINS_OWNED_BY,
-        )?),
-        None => None,
-    };
-    let allowed =
-        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-    if !allowed {
-        check_access(&app, &headers, Some(remote_ip), "v1/explorer/domains").await?;
-    }
-    let admission = acquire_query_admission(app.as_ref(), true).await?;
-    routing::handle_v1_explorer_domains_admitted(
-        app.state.clone(),
-        visibility.current_visibility(),
-        pagination,
-        owned_by,
-        admission,
-    )
-    .await
-}
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_explorer_asset_definitions_list(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(query): AxQuery<ExplorerAssetDefinitionsQuery>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let visibility = torii_dataspace_context_from_headers(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        "v1/explorer/asset-definitions",
-    )?;
-    let ExplorerAssetDefinitionsQuery {
-        pagination,
-        owning_domain,
-        owned_by,
-    } = query;
-    let owning_domain = match owning_domain {
-        Some(raw) => Some(parse_domain_id(&raw)?),
-        None => None,
-    };
-    let owned_by = match owned_by {
-        Some(raw) => Some(parse_account_id_for_endpoint(
-            &app,
-            &raw,
-            CONTEXT_EXPLORER_ASSET_DEFINITIONS_OWNED_BY,
-        )?),
-        None => None,
-    };
-    let allowed =
-        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-    if !allowed {
-        check_access(
-            &app,
-            &headers,
-            Some(remote_ip),
-            "v1/explorer/asset-definitions",
-        )
-        .await?;
-    }
-    let admission = acquire_query_admission(app.as_ref(), true).await?;
-    routing::handle_v1_explorer_asset_definitions_admitted(
-        app.state.clone(),
-        visibility.current_visibility(),
-        pagination,
-        owning_domain,
-        owned_by,
-        admission,
-    )
-    .await
-}
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_explorer_assets_list(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(query): AxQuery<ExplorerAssetsQuery>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let visibility =
-        torii_dataspace_context_from_headers(&app, &headers, &method, &uri, "v1/explorer/assets")?;
-    let ExplorerAssetsQuery {
-        pagination,
-        owned_by,
-        definition,
-        asset_id,
-    } = query;
-    let owned_by = match owned_by {
-        Some(raw) => Some(parse_account_id_for_endpoint(
-            &app,
-            &raw,
-            CONTEXT_EXPLORER_ASSETS_OWNED_BY,
-        )?),
-        None => None,
-    };
-    let definition = match definition {
-        Some(raw) => Some(parse_asset_definition_id(app.as_ref(), &raw)?),
-        None => None,
-    };
-    let asset_id = match asset_id {
-        Some(raw) => Some(parse_asset_id(&raw)?),
-        None => None,
-    };
-    let allowed =
-        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-    if !allowed {
-        check_access(&app, &headers, Some(remote_ip), "v1/explorer/assets").await?;
-    }
-    let admission = acquire_query_admission(app.as_ref(), true).await?;
-    routing::handle_v1_explorer_assets_admitted(
-        app.state.clone(),
-        visibility.current_visibility(),
-        pagination,
-        owned_by,
-        definition,
-        asset_id,
-        admission,
-    )
-    .await
-}
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_explorer_nfts_list(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(query): AxQuery<ExplorerNftsQuery>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let visibility =
-        torii_dataspace_context_from_headers(&app, &headers, &method, &uri, "v1/explorer/nfts")?;
-    let ExplorerNftsQuery {
-        pagination,
-        owned_by,
-        domain,
-    } = query;
-    let owned_by = match owned_by {
-        Some(raw) => Some(parse_account_id_for_endpoint(
-            &app,
-            &raw,
-            CONTEXT_EXPLORER_NFTS_OWNED_BY,
-        )?),
-        None => None,
-    };
-    let domain = match domain {
-        Some(raw) => Some(parse_domain_id(&raw)?),
-        None => None,
-    };
-    let allowed =
-        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-    if !allowed {
-        check_access(&app, &headers, Some(remote_ip), "v1/explorer/nfts").await?;
-    }
-    let admission = acquire_query_admission(app.as_ref(), true).await?;
-    routing::handle_v1_explorer_nfts_admitted(
-        app.state.clone(),
-        visibility.current_visibility(),
-        pagination,
-        owned_by,
-        domain,
-        admission,
-    )
-    .await
-}
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_explorer_rwas_list(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(query): AxQuery<ExplorerRwasQuery>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let visibility =
-        torii_dataspace_context_from_headers(&app, &headers, &method, &uri, "v1/explorer/rwas")?;
-    let ExplorerRwasQuery {
-        pagination,
-        owned_by,
-        domain,
-    } = query;
-    let owned_by = match owned_by {
-        Some(raw) => Some(parse_account_id_for_endpoint(
-            &app,
-            &raw,
-            CONTEXT_EXPLORER_RWAS_OWNED_BY,
-        )?),
-        None => None,
-    };
-    let domain = match domain {
-        Some(raw) => Some(parse_domain_id(&raw)?),
-        None => None,
-    };
-    let allowed =
-        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-    if !allowed {
-        check_access(&app, &headers, Some(remote_ip), "v1/explorer/rwas").await?;
-    }
-    let admission = acquire_query_admission(app.as_ref(), true).await?;
-    routing::handle_v1_explorer_rwas_admitted(
-        app.state.clone(),
-        visibility.current_visibility(),
-        pagination,
-        owned_by,
-        domain,
-        admission,
-    )
-    .await
-}
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_explorer_blocks_list(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(query): AxQuery<ExplorerPaginationOnly>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let visibility =
-        torii_dataspace_context_from_headers(&app, &headers, &method, &uri, "v1/explorer/blocks")?;
-    let allowed =
-        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-    if !allowed {
-        check_access(&app, &headers, Some(remote_ip), "v1/explorer/blocks").await?;
-    }
-    let admission = acquire_query_admission(app.as_ref(), true).await?;
-    routing::handle_v1_explorer_blocks_admitted(
-        app.state.clone(),
-        app.telemetry.clone(),
-        visibility.current_visibility(),
-        query.pagination,
-        admission,
-    )
-    .await
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
@@ -11628,350 +11127,6 @@ async fn handler_explorer_health(
     }
     routing::handle_v1_explorer_health(app.state.clone(), app.kura.clone(), app.telemetry.clone())
         .await
-}
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_explorer_transactions_list(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(query): AxQuery<ExplorerTransactionsQuery>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let visibility = torii_dataspace_context_from_headers(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        "v1/explorer/transactions",
-    )?;
-    let ExplorerTransactionsQuery {
-        pagination,
-        authority,
-        block,
-        status,
-        asset_id,
-    } = query;
-    if let Some(block_height) = block {
-        if block_height == 0 {
-            return Err(conversion_error("block must be at least 1".to_owned()));
-        }
-    }
-    let authority = match authority {
-        Some(raw) => {
-            match parse_account_id_for_endpoint(&app, &raw, CONTEXT_EXPLORER_TRANSACTIONS_AUTHORITY)
-            {
-                Ok(account) => Some(account),
-                Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
-            }
-        }
-        None => None,
-    };
-    let status = match status {
-        Some(raw) => Some(crate::routing::parse_transaction_status_filter(&raw)?),
-        None => None,
-    };
-    let asset_id = match asset_id {
-        Some(raw) if raw.trim().is_empty() => None,
-        Some(raw) => Some(parse_asset_id(&raw)?),
-        None => None,
-    };
-    let allowed =
-        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-    if !allowed {
-        check_access(&app, &headers, Some(remote_ip), "v1/explorer/transactions").await?;
-    }
-    let admission = acquire_query_admission(app.as_ref(), true).await?;
-    crate::routing::handle_v1_explorer_transactions_admitted(
-        app.state.clone(),
-        app.telemetry.clone(),
-        visibility.current_visibility(),
-        pagination,
-        authority,
-        block,
-        status,
-        asset_id,
-        admission,
-    )
-    .await
-}
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_explorer_transactions_latest(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(query): AxQuery<ExplorerTransactionsQuery>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let visibility = torii_dataspace_context_from_headers(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        "v1/explorer/transactions/latest",
-    )?;
-    let ExplorerTransactionsQuery {
-        pagination,
-        authority,
-        block,
-        status,
-        asset_id,
-    } = query;
-    if let Some(block_height) = block {
-        if block_height == 0 {
-            return Err(conversion_error("block must be at least 1".to_owned()));
-        }
-    }
-    let authority = match authority {
-        Some(raw) => {
-            match parse_account_id_for_endpoint(&app, &raw, CONTEXT_EXPLORER_TRANSACTIONS_AUTHORITY)
-            {
-                Ok(account) => Some(account),
-                Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
-            }
-        }
-        None => None,
-    };
-    let status = match status {
-        Some(raw) => Some(crate::routing::parse_transaction_status_filter(&raw)?),
-        None => None,
-    };
-    let asset_id = match asset_id {
-        Some(raw) if raw.trim().is_empty() => None,
-        Some(raw) => Some(parse_asset_id(&raw)?),
-        None => None,
-    };
-    let allowed =
-        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-    if !allowed {
-        check_access(
-            &app,
-            &headers,
-            Some(remote_ip),
-            "v1/explorer/transactions/latest",
-        )
-        .await?;
-    }
-    let admission = acquire_query_admission(app.as_ref(), true).await?;
-    crate::routing::handle_v1_explorer_transactions_latest_admitted(
-        app.state.clone(),
-        app.telemetry.clone(),
-        visibility.current_visibility(),
-        pagination,
-        authority,
-        block,
-        status,
-        asset_id,
-        admission,
-    )
-    .await
-}
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_explorer_instructions_list(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(query): AxQuery<ExplorerInstructionsQuery>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let visibility = torii_dataspace_context_from_headers(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        "v1/explorer/instructions",
-    )?;
-    let ExplorerInstructionsQuery {
-        pagination,
-        account,
-        authority,
-        transaction_hash,
-        transaction_status,
-        block,
-        kind,
-        asset_id,
-    } = query;
-    if let Some(block_height) = block {
-        if block_height == 0 {
-            return Err(conversion_error("block must be at least 1".to_owned()));
-        }
-    }
-    let authority = match authority {
-        Some(raw) if !raw.trim().is_empty() => {
-            match parse_account_id_for_endpoint(&app, &raw, CONTEXT_EXPLORER_INSTRUCTIONS_AUTHORITY)
-            {
-                Ok(account) => Some(account),
-                Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
-            }
-        }
-        _ => None,
-    };
-    let account = match account {
-        Some(raw) if !raw.trim().is_empty() => {
-            match parse_account_id_for_endpoint(&app, &raw, CONTEXT_EXPLORER_INSTRUCTIONS_ACCOUNT) {
-                Ok(account) => Some(account),
-                Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
-            }
-        }
-        _ => None,
-    };
-    let transaction_hash = match transaction_hash {
-        Some(raw) if !raw.trim().is_empty() => Some(parse_transaction_hash(&raw)?),
-        _ => None,
-    };
-    let status = match transaction_status {
-        Some(raw) => Some(crate::routing::parse_transaction_status_filter(&raw)?),
-        None => None,
-    };
-    let kind = match kind {
-        Some(raw) if raw.trim().is_empty() => None,
-        Some(raw) if raw.trim().eq_ignore_ascii_case("all") => None,
-        Some(raw) => Some(
-            raw.parse::<explorer::ExplorerInstructionKind>()
-                .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?,
-        ),
-        None => None,
-    };
-    let asset_id = match asset_id {
-        Some(raw) if raw.trim().is_empty() => None,
-        Some(raw) => Some(parse_asset_id(&raw)?),
-        None => None,
-    };
-    let allowed =
-        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-    if !allowed {
-        check_access(&app, &headers, Some(remote_ip), "v1/explorer/instructions").await?;
-    }
-    let admission = acquire_query_admission(app.as_ref(), true).await?;
-    crate::routing::handle_v1_explorer_instructions_admitted(
-        app.state.clone(),
-        app.telemetry.clone(),
-        visibility.current_visibility(),
-        pagination,
-        crate::routing::ExplorerInstructionQuery {
-            account,
-            authority,
-            transaction_hash,
-            status,
-            block,
-            kind,
-            asset_id,
-        },
-        admission,
-    )
-    .await
-}
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_explorer_instructions_latest(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(query): AxQuery<ExplorerInstructionsQuery>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let visibility = torii_dataspace_context_from_headers(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        "v1/explorer/instructions/latest",
-    )?;
-    let ExplorerInstructionsQuery {
-        pagination,
-        account,
-        authority,
-        transaction_hash,
-        transaction_status,
-        block,
-        kind,
-        asset_id,
-    } = query;
-    if let Some(block_height) = block {
-        if block_height == 0 {
-            return Err(conversion_error("block must be at least 1".to_owned()));
-        }
-    }
-    let authority = match authority {
-        Some(raw) if !raw.trim().is_empty() => {
-            match parse_account_id_for_endpoint(&app, &raw, CONTEXT_EXPLORER_INSTRUCTIONS_AUTHORITY)
-            {
-                Ok(account) => Some(account),
-                Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
-            }
-        }
-        _ => None,
-    };
-    let account = match account {
-        Some(raw) if !raw.trim().is_empty() => {
-            match parse_account_id_for_endpoint(&app, &raw, CONTEXT_EXPLORER_INSTRUCTIONS_ACCOUNT) {
-                Ok(account) => Some(account),
-                Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
-            }
-        }
-        _ => None,
-    };
-    let transaction_hash = match transaction_hash {
-        Some(raw) if !raw.trim().is_empty() => Some(parse_transaction_hash(&raw)?),
-        _ => None,
-    };
-    let status = match transaction_status {
-        Some(raw) => Some(crate::routing::parse_transaction_status_filter(&raw)?),
-        None => None,
-    };
-    let kind = match kind {
-        Some(raw) if raw.trim().is_empty() => None,
-        Some(raw) if raw.trim().eq_ignore_ascii_case("all") => None,
-        Some(raw) => Some(
-            raw.parse::<explorer::ExplorerInstructionKind>()
-                .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?,
-        ),
-        None => None,
-    };
-    let asset_id = match asset_id {
-        Some(raw) if raw.trim().is_empty() => None,
-        Some(raw) => Some(parse_asset_id(&raw)?),
-        None => None,
-    };
-    let allowed =
-        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-    if !allowed {
-        check_access(
-            &app,
-            &headers,
-            Some(remote_ip),
-            "v1/explorer/instructions/latest",
-        )
-        .await?;
-    }
-    let admission = acquire_query_admission(app.as_ref(), true).await?;
-    crate::routing::handle_v1_explorer_instructions_latest_admitted(
-        app.state.clone(),
-        app.telemetry.clone(),
-        visibility.current_visibility(),
-        pagination,
-        crate::routing::ExplorerInstructionQuery {
-            account,
-            authority,
-            transaction_hash,
-            status,
-            block,
-            kind,
-            asset_id,
-        },
-        admission,
-    )
-    .await
 }
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 #[axum::debug_handler]
@@ -13073,18 +12228,53 @@ async fn handler_subscription_plans_create(
 #[cfg(feature = "app_api")]
 async fn handler_subscriptions_list(
     State(app): State<SharedAppState>,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(p): AxQuery<iroha_torii_shared::subscriptions::SubscriptionListParams>,
-) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
-        return routing::handle_v1_subscriptions(app.state.clone(), AxQuery(p)).await;
+) -> Result<Response, Error> {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote.ip()),
+            "/v1/subscriptions",
+            enforce,
+        )
+        .await?;
     }
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, Some(remote_ip), "v1/subscriptions", enforce).await?;
-    routing::handle_v1_subscriptions(app.state.clone(), AxQuery(p)).await
+    execute_direct_collection_read(
+        &app,
+        routing::collection_sources::CollectionTarget::Subscriptions,
+        list_query_from_query_string(uri.query())?,
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_subscriptions_query(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    crate::JsonOnly(body): crate::JsonOnly<norito::json::Value>,
+) -> Result<Response, Error> {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote.ip()),
+            "/v1/subscriptions/query",
+            true,
+        )
+        .await?;
+    }
+    execute_direct_collection_read(
+        &app,
+        routing::collection_sources::CollectionTarget::Subscriptions,
+        list_query_from_json(body)?,
+    )
+    .await
 }
 #[cfg(feature = "app_api")]
 async fn handler_subscriptions_create(
@@ -16974,8 +16164,9 @@ fn torii_account_assets_route_visibility(
             if !routes.contains(&route) {
                 return Err(torii_signed_query_permission_denied_response(&caller, 1));
             }
+            // One execution answers for every authorized route of the account.
             Ok(routing::DataspaceReadVisibility::exact_account(
-                route.dataspace_id,
+                routes.iter().map(|route| route.dataspace_id).collect(),
                 path_account,
             ))
         }
@@ -17738,17 +16929,6 @@ fn resolve_asset_definition_scope(
             (definition.balance_scope_policy == iroha_data_model::asset::AssetBalancePolicy::Global)
                 .then(|| SignedQueryScope::UniversalAssetDefinition(asset_definition_id.clone()))
         })
-}
-#[cfg(feature = "app_api")]
-fn asset_definition_domain_snapshot(
-    app: &AppState,
-) -> BTreeMap<iroha_data_model::asset::AssetDefinitionId, iroha_model_base::domain::DomainId> {
-    app.state
-        .world_view()
-        .asset_definition_domains()
-        .iter()
-        .map(|(definition_id, domain_id)| (definition_id.clone(), domain_id.clone()))
-        .collect()
 }
 fn target_account_iterable_query(
     query: &iroha_data_model::query::QueryWithParams,
@@ -19840,16 +19020,6 @@ fn torii_contract_target_read_route(
         })
         .transpose()
 }
-#[cfg(feature = "app_api")]
-fn torii_empty_list_response(routed_by: &'static str) -> Response {
-    let mut root = norito::json::Map::new();
-    root.insert("items".into(), Value::Array(Vec::new()));
-    root.insert("total".into(), Value::from(0_u64));
-    let mut response =
-        crate::utils::respond_value_with_format(Value::Object(root), ResponseFormat::Json);
-    insert_routed_by_header(&mut response, routed_by);
-    response
-}
 // Textual inclusion keeps routed-read test names and paths unchanged.
 include!("tests/lib_routed_reads.rs");
 include!("torii_proxy_response_bounds.rs");
@@ -21025,6 +20195,9 @@ fn torii_read_http_method(endpoint: ToriiReadEndpointV1) -> reqwest::Method {
     match endpoint {
         ToriiReadEndpointV1::AccountAssetsQuery
         | ToriiReadEndpointV1::AccountTransactionsQuery
+        | ToriiReadEndpointV1::AccountHistoryQuery
+        | ToriiReadEndpointV1::AccountPermissionsQuery
+        | ToriiReadEndpointV1::UaidManifestsQuery
         | ToriiReadEndpointV1::TransactionsQuery
         | ToriiReadEndpointV1::AccountsQuery
         | ToriiReadEndpointV1::AssetDefinitionsQuery
@@ -21089,8 +20262,20 @@ fn torii_external_read_path(request: &ToriiReadProxyRequestV1) -> Result<String,
             "/v1/accounts/{}/permissions",
             torii_read_path_arg_encoded(request, 0, "account_id")?
         ),
+        ToriiReadEndpointV1::AccountPermissionsQuery => format!(
+            "/v1/accounts/{}/permissions/query",
+            torii_read_path_arg_encoded(request, 0, "account_id")?
+        ),
+        ToriiReadEndpointV1::UaidManifestsQuery => format!(
+            "/v1/space-directory/uaids/{}/manifests/query",
+            torii_read_path_arg_encoded(request, 0, "uaid")?
+        ),
         ToriiReadEndpointV1::AccountTransactionsGet => format!(
             "/v1/accounts/{}/transactions",
+            torii_read_path_arg_encoded(request, 0, "account_id")?
+        ),
+        ToriiReadEndpointV1::AccountHistoryQuery => format!(
+            "/v1/accounts/{}/history/query",
             torii_read_path_arg_encoded(request, 0, "account_id")?
         ),
         ToriiReadEndpointV1::AccountHistoryGet => format!(
@@ -21563,6 +20748,12 @@ async fn execute_torii_read_request_locally(
         | ToriiReadEndpointV1::AssetHoldersQuery
         | ToriiReadEndpointV1::AccountTransactionsGet
         | ToriiReadEndpointV1::AccountTransactionsQuery
+        | ToriiReadEndpointV1::AccountHistoryGet
+        | ToriiReadEndpointV1::AccountHistoryQuery
+        | ToriiReadEndpointV1::AccountPermissionsGet
+        | ToriiReadEndpointV1::AccountPermissionsQuery
+        | ToriiReadEndpointV1::SpaceDirectoryManifestsGet
+        | ToriiReadEndpointV1::UaidManifestsQuery
         | ToriiReadEndpointV1::TransactionsQuery => {
             let Some(target) = collection_target_for_read(request.endpoint, &request.path_args)
             else {
@@ -21594,60 +20785,6 @@ async fn execute_torii_read_request_locally(
                 &visibility,
             )
             .await
-        }
-        ToriiReadEndpointV1::AccountPermissionsGet => {
-            let Ok(account_id) = torii_proxy_path_arg(&request, 0, "account_id") else {
-                return torii_proxy_path_arg(&request, 0, "account_id").unwrap_err();
-            };
-            let params = match decode_torii_proxy_query::<routing::PaginationParams>(
-                request_decode_plan,
-                request.query_string.as_deref(),
-            ) {
-                Ok(params) => params,
-                Err(response) => return response,
-            };
-            finish_torii_read_result(
-                routing::handle_v1_account_permissions_with_visibility(
-                    app.state.clone(),
-                    AxPath(account_id),
-                    crate::NoritoQuery(params),
-                    app.telemetry_handle(),
-                    visibility.clone(),
-                )
-                .await,
-                routing_decision,
-                routed_by,
-            )
-        }
-        ToriiReadEndpointV1::AccountHistoryGet => {
-            let Ok(account_id) = torii_proxy_path_arg(&request, 0, "account_id") else {
-                return torii_proxy_path_arg(&request, 0, "account_id").unwrap_err();
-            };
-            let params = match decode_torii_proxy_query::<routing::AccountHistoryGetParams>(
-                request_decode_plan,
-                request.query_string.as_deref(),
-            ) {
-                Ok(params) => params,
-                Err(response) => return response,
-            };
-            let allowed_asset_definition_id =
-                match resolve_tx_history_allowed_asset_definition_id(app) {
-                    Ok(value) => value,
-                    Err(error) => return error.into_response(),
-                };
-            finish_torii_read_result(
-                routing::handle_v1_account_history_get_with_visibility_policy(
-                    app.state.clone(),
-                    AxPath(account_id),
-                    crate::NoritoQuery(params),
-                    app.telemetry.clone(),
-                    allowed_asset_definition_id,
-                    visibility.clone(),
-                )
-                .await,
-                routing_decision,
-                routed_by,
-            )
         }
         ToriiReadEndpointV1::PipelineTransactionStatusGet => {
             let query = match decode_torii_proxy_string_query::<PipelineStatusQuery>(
@@ -21903,30 +21040,6 @@ async fn execute_torii_read_request_locally(
             );
             insert_routing_headers(&mut response, routing_decision, routed_by);
             response
-        }
-        ToriiReadEndpointV1::SpaceDirectoryManifestsGet => {
-            let Ok(uaid_literal) = torii_proxy_path_arg(&request, 0, "uaid") else {
-                return torii_proxy_path_arg(&request, 0, "uaid").unwrap_err();
-            };
-            let params = match decode_torii_proxy_query::<routing::SpaceDirectoryManifestQuery>(
-                request_decode_plan,
-                request.query_string.as_deref(),
-            ) {
-                Ok(params) => params,
-                Err(response) => return response,
-            };
-            finish_torii_read_result(
-                routing::handle_v1_space_directory_manifests_with_visibility(
-                    app.state.clone(),
-                    AxPath(uaid_literal),
-                    crate::NoritoQuery(params),
-                    app.telemetry.clone(),
-                    visibility.clone(),
-                )
-                .await,
-                routing_decision,
-                routed_by,
-            )
         }
         ToriiReadEndpointV1::AliasResolve => {
             let request = match decode_torii_proxy_json_body::<routing::AliasResolveRequestDto>(
@@ -34237,48 +33350,6 @@ fn normalise_alias(input: &str) -> String {
         .map(|c| c.to_ascii_uppercase())
         .collect()
 }
-#[cfg(feature = "app_api")]
-fn tx_history_reject(
-    status: StatusCode,
-    code: &'static str,
-    message: impl Into<String>,
-) -> AxResponse {
-    let payload = ErrorEnvelope::new(code, message.into());
-    (status, utils::NoritoBody(payload)).into_response()
-}
-#[cfg(feature = "app_api")]
-fn tx_history_alias_resolution_error_message(err: &Error) -> String {
-    match err {
-        Error::AppConflict { message, .. } if !message.trim().is_empty() => message.clone(),
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
-        ))
-        | Error::Query(iroha_data_model::ValidationFail::InternalError(message))
-            if !message.trim().is_empty() =>
-        {
-            message.clone()
-        }
-        _ => err.to_string(),
-    }
-}
-#[cfg(feature = "app_api")]
-fn tx_history_alias_resolution_reject(err: Error) -> AxResponse {
-    let (status, code) = match &err {
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(_),
-        )) => (StatusCode::BAD_REQUEST, "tx_history_alias_invalid"),
-        Error::AppConflict { .. } => (StatusCode::CONFLICT, "tx_history_alias_conflict"),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "tx_history_alias_resolution_failed",
-        ),
-    };
-    tx_history_reject(
-        status,
-        code,
-        tx_history_alias_resolution_error_message(&err),
-    )
-}
 const LEDGER_HEADER_PAGE_CAP: u64 = 512;
 async fn handler_ledger_headers(
     State(app): State<SharedAppState>,
@@ -38782,10 +37853,12 @@ impl Torii {
             INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_ASSETS_BY_ASSET_DEFINITION_ID_GET => public_get(handler_internal_account_asset_get);
         );
         mount_account_transactions_query(builder, app_state.clone(), transaction_max_content_len);
+        mount_account_history_query(builder, app_state.clone(), transaction_max_content_len);
         mount_catalog_route_rows!(
             builder, application_api;
-            TRANSACTIONS_HISTORY_GET => canonical_signature_get(handler_transactions_history_get);
             CONTRACTS_ACTIVITY_GET => optional_canonical_signature_get(handler_contracts_activity_get);
+            CONTRACTS_ACTIVITY_QUERY_POST => limited_optional_canonical_signature_post(handler_contracts_activity_query, transaction_max_content_len);
+            CONTRACTS_EVENTS_QUERY_POST => limited_optional_canonical_signature_post(handler_contracts_events_query, transaction_max_content_len);
             CONTRACTS_EVENTS_GET => optional_canonical_signature_get(handler_contracts_events_get);
             CONTRACTS_ROLLUPS_SWAPS_FILLS_GET => optional_canonical_signature_get(handler_contracts_rollups_swaps_fills_get);
             CONTRACTS_ROLLUPS_SWAPS_CANDLES_GET => optional_canonical_signature_get(handler_contracts_rollups_swaps_candles_get);
@@ -38801,6 +37874,8 @@ impl Torii {
             ACCOUNTS_BY_ACCOUNT_ID_ASSETS_GET => optional_canonical_signature_get(handler_account_assets);
         );
         mount_account_assets_query(builder, app_state.clone(), transaction_max_content_len);
+        mount_account_permissions_query(builder, app_state.clone(), transaction_max_content_len);
+        mount_uaid_manifests_query(builder, app_state.clone(), transaction_max_content_len);
         mount_catalog_route_rows!(
             builder, application_api;
             ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET => optional_canonical_signature_get(handler_account_permissions);
@@ -39030,6 +38105,8 @@ impl Torii {
         mount_catalog_route_rows!(
             builder, application_api;
             SUBSCRIPTIONS_PLANS_GET => public_get(handler_subscription_plans_list);
+            SUBSCRIPTIONS_PLANS_QUERY_POST => limited_public_post(handler_subscription_plans_query, transaction_max_content_len);
+            SUBSCRIPTIONS_QUERY_POST => limited_public_post(handler_subscriptions_query, transaction_max_content_len);
         );
         macro_rules! mount_subscription_mutation {
             ($route:ident, $handler:path) => {
@@ -39081,20 +38158,31 @@ impl Torii {
         mount_catalog_route_rows!(
             builder, application_api;
             PARAMETERS_GET => public_get(handler_parameters);
-            EXPLORER_ACCOUNTS_GET => optional_canonical_signature_get(handler_explorer_accounts_list);
-            EXPLORER_DOMAINS_GET => optional_canonical_signature_get(handler_explorer_domains_list);
-            EXPLORER_ASSET_DEFINITIONS_GET => optional_canonical_signature_get(handler_explorer_asset_definitions_list);
-            EXPLORER_ASSETS_GET => optional_canonical_signature_get(handler_explorer_assets_list);
-            EXPLORER_NFTS_GET => optional_canonical_signature_get(handler_explorer_nfts_list);
-            EXPLORER_RWAS_GET => optional_canonical_signature_get(handler_explorer_rwas_list);
-            EXPLORER_BLOCKS_GET => optional_canonical_signature_get(handler_explorer_blocks_list);
+            EXPLORER_ACCOUNTS_GET => optional_canonical_signature_get(explorer_query::get);
+            EXPLORER_ACCOUNTS_QUERY_POST => limited_optional_canonical_signature_post(explorer_query::post, transaction_max_content_len);
+            EXPLORER_DOMAINS_GET => optional_canonical_signature_get(explorer_query::get);
+            EXPLORER_DOMAINS_QUERY_POST => limited_optional_canonical_signature_post(explorer_query::post, transaction_max_content_len);
+            EXPLORER_ASSET_DEFINITIONS_GET => optional_canonical_signature_get(explorer_query::get);
+            EXPLORER_ASSET_DEFINITIONS_QUERY_POST => limited_optional_canonical_signature_post(explorer_query::post, transaction_max_content_len);
+            EXPLORER_ASSETS_GET => optional_canonical_signature_get(explorer_query::get);
+            EXPLORER_ASSETS_QUERY_POST => limited_optional_canonical_signature_post(explorer_query::post, transaction_max_content_len);
+            EXPLORER_NFTS_GET => optional_canonical_signature_get(explorer_query::get);
+            EXPLORER_NFTS_QUERY_POST => limited_optional_canonical_signature_post(explorer_query::post, transaction_max_content_len);
+            EXPLORER_RWAS_GET => optional_canonical_signature_get(explorer_query::get);
+            EXPLORER_RWAS_QUERY_POST => limited_optional_canonical_signature_post(explorer_query::post, transaction_max_content_len);
+            EXPLORER_BLOCKS_GET => optional_canonical_signature_get(explorer_query::get);
+            EXPLORER_BLOCKS_QUERY_POST => limited_optional_canonical_signature_post(explorer_query::post, transaction_max_content_len);
             EXPLORER_HEALTH_GET => public_get(handler_explorer_health);
             EXPLORER_BLOCKS_STREAM_GET => optional_canonical_signature_get(handler_explorer_blocks_stream);
-            EXPLORER_TRANSACTIONS_GET => optional_canonical_signature_get(handler_explorer_transactions_list);
-            EXPLORER_TRANSACTIONS_LATEST_GET => optional_canonical_signature_get(handler_explorer_transactions_latest);
+            EXPLORER_TRANSACTIONS_GET => optional_canonical_signature_get(explorer_query::get);
+            EXPLORER_TRANSACTIONS_QUERY_POST => limited_optional_canonical_signature_post(explorer_query::post, transaction_max_content_len);
+            EXPLORER_TRANSACTIONS_LATEST_GET => optional_canonical_signature_get(explorer_query::get);
+            EXPLORER_TRANSACTIONS_LATEST_QUERY_POST => limited_optional_canonical_signature_post(explorer_query::post, transaction_max_content_len);
             EXPLORER_TRANSACTIONS_STREAM_GET => optional_canonical_signature_get(handler_explorer_transactions_stream);
-            EXPLORER_INSTRUCTIONS_GET => optional_canonical_signature_get(handler_explorer_instructions_list);
-            EXPLORER_INSTRUCTIONS_LATEST_GET => optional_canonical_signature_get(handler_explorer_instructions_latest);
+            EXPLORER_INSTRUCTIONS_GET => optional_canonical_signature_get(explorer_query::get);
+            EXPLORER_INSTRUCTIONS_QUERY_POST => limited_optional_canonical_signature_post(explorer_query::post, transaction_max_content_len);
+            EXPLORER_INSTRUCTIONS_LATEST_GET => optional_canonical_signature_get(explorer_query::get);
+            EXPLORER_INSTRUCTIONS_LATEST_QUERY_POST => limited_optional_canonical_signature_post(explorer_query::post, transaction_max_content_len);
             SORACLES_DEFI_ATTESTATIONS_LATEST_GET => public_get(handler_defi_oracle_attestation_latest);
             SORACLES_FEEDS_GET => public_get(handler_oracle_feeds);
             SORACLES_FEEDS_BY_FEED_ID_HISTORY_GET => public_get(handler_oracle_feed_history);

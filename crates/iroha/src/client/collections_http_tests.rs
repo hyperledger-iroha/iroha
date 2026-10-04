@@ -695,3 +695,65 @@ async fn blocking_reads_reject_entry_from_an_async_runtime() {
     assert!(rows.next().is_none(), "the first error ends the iteration");
     assert!(requests.lock().unwrap().is_empty());
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn permission_subscription_and_manifest_collections_share_query_transport() {
+    use crate::data_model::nexus::UniversalAccountId;
+    let base = client_with_base_url(base_url());
+    let uaid = UniversalAccountId::from_hash(iroha_crypto::Hash::new(b"manifest-collection"));
+    for collection in [
+        Collection::AccountPermissions(base.account.clone()),
+        Collection::SubscriptionPlans,
+        Collection::Subscriptions,
+        Collection::UaidManifests(uaid),
+    ] {
+        let mut reply = page(&["row"], Some("following-page"), Some(2));
+        reply.headers_mut().insert(
+            "x-iroha-account-permission-semantics",
+            "effective-v1".parse().unwrap(),
+        );
+        let (client, requests) = attach(&base, vec![reply]);
+        let query = ListQuery::new().limit(1).include_total();
+        let result = client.list_page(&collection, &query).await.unwrap();
+        assert_eq!(result.next_cursor.as_deref(), Some("following-page"));
+        assert_eq!(result.total, Some(2));
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests[0].method, Method::POST);
+        assert_eq!(
+            requests[0].url,
+            collection
+                .query_url(&base.torii_url, client.account_chain_discriminant)
+                .unwrap()
+        );
+        assert_eq!(body(&requests[0]), query.to_json_value());
+        assert_unsigned(&requests[0]);
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn permission_pages_reject_absent_wrong_or_duplicate_effective_semantics() {
+    for semantics in [
+        vec![],
+        vec!["direct-only"],
+        vec!["effective-v1", "effective-v1"],
+    ] {
+        let mut reply = page(&[], None, None);
+        for value in semantics {
+            reply.headers_mut().append(
+                "x-iroha-account-permission-semantics",
+                value.parse().unwrap(),
+            );
+        }
+        let (client, requests) = public_client(vec![reply]);
+        assert!(matches!(
+            client
+                .list_page(
+                    &Collection::AccountPermissions(client.account.clone()),
+                    &ListQuery::new(),
+                )
+                .await,
+            Err(Error::Decode { .. })
+        ));
+        assert_eq!(requests.lock().unwrap().len(), 1);
+    }
+}

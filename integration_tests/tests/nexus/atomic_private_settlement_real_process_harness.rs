@@ -3684,7 +3684,6 @@ fn read_owner_only_bounded(path: &Path) -> Result<Vec<u8>> {
 
 fn coordinator_client_config(client: &Client) -> Result<Vec<u8>> {
     let client = client.client();
-    let domain = iroha_model_base::domain::DomainId::try_new("default", "universal")?;
     let private_key = iroha_crypto::ExposedPrivateKey(client.key_pair().private_key().clone());
     let mut root = Table::new();
     root.insert(
@@ -3704,7 +3703,10 @@ fn coordinator_client_config(client: &Client) -> Result<Vec<u8>> {
         TomlValue::Integer(i64::try_from(client.torii_request_timeout().as_millis())?),
     );
     let mut account = Table::new();
-    account.insert("domain".to_owned(), TomlValue::String(domain.to_string()));
+    account.insert(
+        "chain_discriminant".to_owned(),
+        TomlValue::Integer(i64::from(client.account_chain_discriminant())),
+    );
     account.insert(
         "public_key".to_owned(),
         TomlValue::String(client.key_pair().public_key().to_string()),
@@ -8697,10 +8699,7 @@ fn release_client_context_preserves_carrier_authority_and_preparation_errors() -
         (
             "account".to_owned(),
             TomlValue::Table(Table::from_iter([
-                (
-                    "domain".to_owned(),
-                    TomlValue::String("default.universal".to_owned()),
-                ),
+                ("chain_discriminant".to_owned(), TomlValue::Integer(753)),
                 (
                     "public_key".to_owned(),
                     TomlValue::String(key_pair.public_key().to_string()),

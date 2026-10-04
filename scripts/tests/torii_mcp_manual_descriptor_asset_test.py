@@ -14,9 +14,9 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_torii/src/mcp.rs"
 ASSET_PATH = ROOT / "crates/iroha_torii/src/mcp/manual_tool_descriptors_v1.json"
 # Manual asset formatting owner: one-space JSON indentation, enforced below.
-EXPECTED_ASSET_LENGTH = 108_863
-EXPECTED_ASSET_SHA256 = "0e47d1ac4b3b54a3c7e3f89f638e5604768147fbd13ba00bdc8ce76647bc5a38"
-EXPECTED_SEMANTIC_SHA256 = "ec11b42c21b8f09666b2b0b96b058b9ad1202b0c90efe8e70af705e391bec643"
+EXPECTED_ASSET_LENGTH = 130_560
+EXPECTED_ASSET_SHA256 = "a47c72217e1a611cedddaabf934f371a8323caccad421fdfa4639243f1cf0eb4"
+EXPECTED_SEMANTIC_SHA256 = "250f4f6c13cdb90820345bdf2995a4a413f4cd302ae4ec197ae611faeb33075b"
 EXPECTED_HISTORICAL_RUST_PREIMAGE_SHA256 = (
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4"
 )
@@ -24,7 +24,7 @@ EXPECTED_RETAINED_DIRECT_SHA256 = (
     "82bd748c1058777b8bfd8dda6947c3dd556d4c383bed07ea9830664f78170f6e"
 )
 EXPECTED_LOADER_SOURCE_SHA256 = (
-    "43d633a1ddced4591e42f4515d3d16bc60a2a83dc110bfaaeb4e8027ebadffa5"
+    "891244ad6592675d9bf1eb8bba0163ac631c54a2b46d5ef9fe269c8e6faabecd"
 )
 EXPECTED_WRAPPERS = (
     ('iroha_connect_ws_ticket_tool', 'iroha.connect.ws.ticket'),
@@ -53,10 +53,29 @@ EXPECTED_WRAPPERS = (
     ('iroha_accounts_onboard_submit_tool', 'iroha.accounts.onboard.submit'),
     ('iroha_account_transactions_tool', 'iroha.accounts.transactions'),
     ('iroha_account_history_tool', 'iroha.accounts.history'),
+    ('iroha_account_history_query_tool', 'iroha.accounts.history.query'),
+    ('iroha_contracts_activity_query_tool', 'iroha.contracts.activity.query'),
+    ('iroha_contracts_events_query_tool', 'iroha.contracts.events.query'),
+    ('iroha_explorer_accounts_query_tool', 'iroha.explorer.accounts.query'),
+    ('iroha_explorer_domains_query_tool', 'iroha.explorer.domains.query'),
+    ('iroha_explorer_asset_definitions_query_tool', 'iroha.explorer.asset_definitions.query'),
+    ('iroha_explorer_assets_query_tool', 'iroha.explorer.assets.query'),
+    ('iroha_explorer_nfts_query_tool', 'iroha.explorer.nfts.query'),
+    ('iroha_explorer_rwas_query_tool', 'iroha.explorer.rwas.query'),
+    ('iroha_explorer_blocks_query_tool', 'iroha.explorer.blocks.query'),
+    ('iroha_explorer_transactions_query_tool', 'iroha.explorer.transactions.query'),
+    ('iroha_explorer_transactions_latest_query_tool', 'iroha.explorer.transactions.latest.query'),
+    ('iroha_explorer_instructions_query_tool', 'iroha.explorer.instructions.query'),
+    ('iroha_explorer_instructions_latest_query_tool', 'iroha.explorer.instructions.latest.query'),
     ('iroha_account_transactions_query_tool', 'iroha.accounts.transactions.query'),
     ('iroha_account_assets_tool', 'iroha.accounts.assets'),
     ('iroha_account_assets_query_tool', 'iroha.accounts.assets.query'),
     ('iroha_account_permissions_tool', 'iroha.accounts.permissions'),
+    ('iroha_account_permissions_query_tool', 'iroha.accounts.permissions.query'),
+    ('iroha_subscriptions_plans_query_tool', 'iroha.subscriptions.plans.query'),
+    ('iroha_subscriptions_query_tool', 'iroha.subscriptions.query'),
+    ('iroha_uaid_manifests_tool', 'iroha.space_directory.manifests'),
+    ('iroha_uaid_manifests_query_tool', 'iroha.space_directory.manifests.query'),
     ('iroha_account_portfolio_tool', 'iroha.accounts.portfolio'),
     ('iroha_domains_list_tool', 'iroha.domains.list'),
     ('iroha_domains_get_tool', 'iroha.domains.get'),
@@ -120,6 +139,39 @@ EXPECTED_COLLECTION_SHAPES = {
     "iroha.accounts.assets.query": ("post", "account_id"),
     "iroha.assets.holders": ("get", "definition_id"),
     "iroha.assets.holders.query": ("post", "definition_id"),
+    "iroha.accounts.history": ("history_get", "account_id"),
+    "iroha.accounts.history.query": ("history_post", "account_id"),
+    "iroha.contracts.activity.query": ("history_post", None),
+    "iroha.contracts.events.query": ("history_post", None),
+    "iroha.accounts.permissions": ("get", "account_id"),
+    "iroha.accounts.permissions.query": ("post", "account_id"),
+    "iroha.subscriptions.plans.list": ("get", None),
+    "iroha.subscriptions.plans.query": ("post", None),
+    "iroha.subscriptions.list": ("get", None),
+    "iroha.subscriptions.query": ("post", None),
+    "iroha.space_directory.manifests": ("get", "uaid"),
+    "iroha.space_directory.manifests.query": ("post", "uaid"),
+    "iroha.explorer.accounts.query": ("history_post", None),
+    "iroha.explorer.domains.query": ("history_post", None),
+    "iroha.explorer.asset_definitions.query": ("history_post", None),
+    "iroha.explorer.assets.query": ("history_post", None),
+    "iroha.explorer.nfts.query": ("history_post", None),
+    "iroha.explorer.rwas.query": ("history_post", None),
+    "iroha.explorer.blocks.query": ("history_post", None),
+    "iroha.explorer.transactions.query": ("history_post", None),
+    "iroha.explorer.transactions.latest.query": ("history_post", None),
+    "iroha.explorer.instructions.query": ("history_post", None),
+    "iroha.explorer.instructions.latest.query": ("history_post", None),
+}
+# A history shape restricts controls; Explorer index feeds use it too. Ordering
+# comes from the row owner, independently of the shared input-schema shape.
+EXPECTED_NEWEST_FIRST_COLLECTIONS = {
+    "iroha.accounts.transactions", "iroha.accounts.transactions.query",
+    "iroha.accounts.history", "iroha.accounts.history.query",
+    "iroha.contracts.activity.query", "iroha.contracts.events.query",
+    "iroha.explorer.blocks.query",
+    "iroha.explorer.transactions.query", "iroha.explorer.transactions.latest.query",
+    "iroha.explorer.instructions.query", "iroha.explorer.instructions.latest.query",
 }
 EXPECTED_RECORD_KEYS = (
     "function",
@@ -607,8 +659,12 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
                 for needle in ("Fields:", "Example:", "`next_cursor` as `cursor`"):
                     self.assertIn(needle, record["description"])
                 self.assertEqual(
-                    "newest first" in record["description"], shape.startswith("history")
+                    "newest first" in record["description"],
+                    name in EXPECTED_NEWEST_FIRST_COLLECTIONS,
                 )
+                if name.startswith("iroha.explorer."):
+                    for needle in ("Fixed bounded order:", "default limit 25, maximum 100"):
+                        self.assertIn(needle, record["description"])
         for name, record in descriptors.items():
             if name not in EXPECTED_COLLECTION_SHAPES:
                 self.assertNotIn(COLLECTION_QUERY_MARKER, record["input_schema"], name)
@@ -644,6 +700,18 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
 
     def test_source_mutations_fail_closed(self) -> None:
         mutations = (
+            (
+                'iroha_account_history_query_tool => "iroha.accounts.history.query";',
+                'iroha_account_history_query_tool => "iroha.accounts.transactions.query";',
+            ),
+            (
+                'iroha_explorer_accounts_query_tool => "iroha.explorer.accounts.query";',
+                '',
+            ),
+            (
+                'MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 79;',
+                'MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 60;',
+            ),
             (
                 'iroha_connect_ws_ticket_tool => "iroha.connect.ws.ticket";',
                 'iroha_connect_ws_ticket_tool => "iroha.connect.session.create";',

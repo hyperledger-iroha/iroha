@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+
+from iroha_python import F
+
 from iroha_python.client import ToriiClient
 
 from .helpers import RecordingSession, StubResponse
@@ -8,15 +12,11 @@ SAMPLE_RWA_ID = "lot-001$commodities"
 SAMPLE_OWNER = "ed0120111111111111111111111111111111111111111111111111111111111111@wonderland"
 
 
-def test_list_explorer_rwas_typed_encodes_filters_and_decodes_page() -> None:
+def test_explorer_rwas_collection_encodes_filters_and_decodes_page() -> None:
     session = RecordingSession(
         StubResponse(
             payload={
-                "pagination": {
-                    "limit": 25,
-                    "next_cursor": "bmV4dC1yd2EtY3Vyc29y",
-                    "has_more": True,
-                },
+                "next_cursor": "bmV4dC1yd2EtY3Vyc29y",
                 "items": [
                     {
                         "id": SAMPLE_RWA_ID,
@@ -34,23 +34,23 @@ def test_list_explorer_rwas_typed_encodes_filters_and_decodes_page() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    page = client.list_explorer_rwas_typed(
+    page = client.explorer_rwas.list(
         cursor="cHJldmlvdXMtcndhLWN1cnNvcg",
         limit=25,
-        owned_by=SAMPLE_OWNER,
-        domain="commodities",
+        filter=(F.owned_by == SAMPLE_OWNER) & (F.domain == "commodities"),
     )
 
-    params = session.calls[0]["params"]
+    params = json.loads(session.calls[0]["data"])
     assert params == {
         "cursor": "cHJldmlvdXMtcndhLWN1cnNvcg",
         "limit": 25,
-        "owned_by": SAMPLE_OWNER,
-        "domain": "commodities",
+        "filter": {"op": "and", "args": [
+            {"op": "eq", "args": ["owned_by", SAMPLE_OWNER]},
+            {"op": "eq", "args": ["domain", "commodities"]},
+        ]},
     }
-    assert page.pagination.limit == 25
-    assert page.pagination.next_cursor == "bmV4dC1yd2EtY3Vyc29y"
-    assert page.pagination.has_more is True
+    assert page.next_cursor == "bmV4dC1yd2EtY3Vyc29y"
+    assert page.has_more is True
     assert page.items[0].id == SAMPLE_RWA_ID
     assert page.items[0].status is None
     assert page.items[0].metadata == {"grade": "AA"}

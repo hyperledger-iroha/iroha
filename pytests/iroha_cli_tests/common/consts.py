@@ -9,6 +9,10 @@ from faker import Faker
 
 fake = Faker()
 
+# Genesis domain of the default client account. Client configurations carry no account
+# domain (accounts are domainless), so the suite names the domain it works in explicitly.
+DEFAULT_ACCOUNT_DOMAIN = "wonderland.universal"
+
 
 class Stderr(Enum):
     """

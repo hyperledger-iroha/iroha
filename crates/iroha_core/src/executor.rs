@@ -433,7 +433,7 @@ fn native_iterable_query_access(
         iroha_data_model::asset::definition::AssetDefinition,
         AssetDefinition
     ) {
-        if any_exact!(payload; data_model_query::asset::prelude::FindAssetsDefinitions) {
+        if any_exact!(payload; data_model_query::asset::prelude::FindAssetDefinitions) {
             return Ok(NativeQueryAccess::Registered);
         }
         return Err(invalid_native_iterable_query());

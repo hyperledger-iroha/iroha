@@ -472,7 +472,9 @@ internal static class FilterTextParser
                     }
                 }
 
-                if (char.IsControl(character))
+                // As in JSON, only U+0000..U+001F must be escaped; DEL and C1 characters stay
+                // literal, so every rendered literal parses.
+                if (character < ' ')
                 {
                     throw Error(index, "control characters must be escaped inside string literals");
                 }

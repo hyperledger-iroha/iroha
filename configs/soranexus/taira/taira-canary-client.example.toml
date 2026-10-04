@@ -12,7 +12,6 @@ network_id = "hash:0466DA18C70CA8CBD51B8CC60B1D4A4802FC5D7F928D505806D7CD6CB61D6
 torii_url = "https://taira.sora.org/"
 
 [account]
-domain = "universal"
 profile = "taira"
 public_key = "REPLACE_WITH_CANARY_PUBLIC_KEY"
 private_key = "REPLACE_WITH_CANARY_PRIVATE_KEY"

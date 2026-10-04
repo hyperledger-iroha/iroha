@@ -51,3 +51,91 @@ pub(super) fn values() -> Vec<Value> {
     };
     vec![capacity, initializer, capture(assertion)]
 }
+
+/// Capture the three instructions containing the current governed completion signer.
+pub(super) fn completion_authority_values() -> Vec<Value> {
+    use crate::{
+        account::AccountId,
+        isi::sorafs::{
+            CompleteReplicationOrder, RevokeProviderIngestCompletionAuthority,
+            SetProviderIngestCompletionAuthority,
+        },
+        sorafs::{
+            capacity::ProviderId,
+            pin_registry::{
+                ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
+                ProviderIngestFinalizedAnchorV1, ReplicationOrderId,
+            },
+        },
+    };
+    let account = |seed| {
+        AccountId::new(
+            iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("capture completion authority key")
+                .public_key()
+                .clone(),
+        )
+    };
+    let authority = ProviderIngestCompletionAuthorityV1::new(
+        account(0x51),
+        account(0x52),
+        ProviderIngestCompletionSignerPolicyV1 {
+            policy_id: [0x91; 32],
+            revision: 1,
+            predecessor_digest: None,
+            policy_digest: [0x92; 32],
+        },
+    );
+    assert!(authority.is_valid());
+    assert_ne!(authority.provider_owner, authority.completion_signer);
+    let provider = ProviderId::new([0x35; 32]);
+    vec![
+        capture(CompleteReplicationOrder::new(
+            ReplicationOrderId::new([0x44; 32]),
+            provider,
+            88,
+            authority.clone(),
+            1,
+            ProviderIngestFinalizedAnchorV1 {
+                height: 87,
+                block_hash: [0x93; 32],
+            },
+        )),
+        capture(SetProviderIngestCompletionAuthority::new(
+            provider,
+            None,
+            authority.clone(),
+        )),
+        capture(RevokeProviderIngestCompletionAuthority::new(
+            provider, authority,
+        )),
+    ]
+}
+
+#[test]
+fn completion_instruction_captures_keep_owner_and_signer_distinct() {
+    use crate::isi::sorafs::{
+        CompleteReplicationOrder, RevokeProviderIngestCompletionAuthority,
+        SetProviderIngestCompletionAuthority,
+    };
+    fn decode<T: for<'de> norito::NoritoDeserialize<'de>>(row: &Value) -> T {
+        let frame = hex::decode(row.get("frame").and_then(Value::as_str).unwrap()).unwrap();
+        norito::decode_from_bytes(&frame).unwrap()
+    }
+    let rows = completion_authority_values();
+    assert_eq!(rows.len(), 3);
+    let complete: CompleteReplicationOrder = decode(&rows[0]);
+    let set: SetProviderIngestCompletionAuthority = decode(&rows[1]);
+    let revoke: RevokeProviderIngestCompletionAuthority = decode(&rows[2]);
+    assert!(complete.expected_authority.is_valid());
+    assert_ne!(
+        complete.expected_authority.provider_owner,
+        complete.expected_authority.completion_signer
+    );
+    assert_eq!(complete.expected_authority, set.next);
+    assert_eq!(complete.expected_authority, revoke.expected_current);
+    assert_eq!(complete.provider_id, set.provider_id);
+    assert_eq!(complete.provider_id, revoke.provider_id);
+    assert!(set.expected_current.is_none());
+    assert!(complete.finalized_anchor.is_valid());
+}

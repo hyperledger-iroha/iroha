@@ -74,11 +74,8 @@ from iroha_torii_client.client import (
     SorafsOrderbookSubmissionReceiptPayload,
     SubscriptionActionResult,
     SubscriptionCreateResult,
-    SubscriptionListItem,
-    SubscriptionListPage,
+    SubscriptionGetResponse,
     SubscriptionPlanCreateResult,
-    SubscriptionPlanListItem,
-    SubscriptionPlanListPage,
     ToriiCanonicalRequestAuth,
     VpnProfile,
     VpnQuote,
@@ -109,7 +106,7 @@ from iroha_torii_client.client_status_models import (
     TransportNoritoRpcConfig,
     parse_sumeragi_json_object,
 )
-from iroha_torii_client.collection import Collection, Domain
+from iroha_torii_client.collection import Account, AccountsCollection, Collection, Domain, HistoryCollection
 from iroha_torii_client.list_query import (
     F,
     Filter,
@@ -225,10 +222,6 @@ from .torii_client_config_normalization import (
     _normalize_headers,
     _parse_retry_methods,
     _parse_retry_statuses,
-)
-from .torii_client_explorer_pagination import (
-    _normalize_explorer_cursor,
-    _normalize_explorer_limit,
 )
 from .torii_client_governance_ballots import (
     bind_governance_ballot_network_id,
@@ -4389,45 +4382,6 @@ class ExplorerAccountQrSnapshot:
 
 
 @dataclass(frozen=True)
-class ExplorerCursorMeta:
-    """Strict seek-cursor metadata returned by world-backed Explorer lists."""
-
-    limit: int
-    next_cursor: Optional[str]
-    has_more: bool
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ExplorerCursorMeta":
-        if not isinstance(payload, Mapping):
-            raise TypeError("explorer cursor pagination payload must be an object")
-        expected = {"limit", "next_cursor", "has_more"}
-        actual = set(payload)
-        if actual != expected:
-            unknown = sorted(str(key) for key in actual - expected)
-            missing = sorted(expected - actual)
-            raise TypeError(
-                "explorer cursor pagination fields must be exactly "
-                f"{sorted(expected)}; missing={missing}, unknown={unknown}"
-            )
-        limit = _normalize_explorer_limit(
-            payload["limit"],
-            "explorer_cursor_pagination.limit",
-        )
-        if limit is None:
-            raise TypeError("explorer_cursor_pagination.limit must be an integer")
-        next_cursor = _normalize_explorer_cursor(
-            payload["next_cursor"],
-            "explorer_cursor_pagination.next_cursor",
-        )
-        has_more = payload["has_more"]
-        if not isinstance(has_more, bool):
-            raise TypeError("explorer_cursor_pagination.has_more must be a boolean")
-        if has_more != (next_cursor is not None):
-            raise ValueError("explorer_cursor_pagination.has_more must match next_cursor presence")
-        return cls(limit=limit, next_cursor=next_cursor, has_more=has_more)
-
-
-@dataclass(frozen=True)
 class ExplorerRwaRecord:
     """Explorer RWA lot projection returned by `/v1/explorer/rwas`."""
 
@@ -4497,42 +4451,6 @@ class ExplorerRwaRecord:
             is_frozen=is_frozen,
             metadata=metadata,
             raw=dict(payload),
-        )
-
-
-@dataclass(frozen=True)
-class ExplorerRwasPage:
-    """Bounded cursor page returned by `/v1/explorer/rwas`."""
-
-    pagination: ExplorerCursorMeta
-    items: List[ExplorerRwaRecord]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ExplorerRwasPage":
-        if not isinstance(payload, Mapping):
-            raise TypeError("explorer RWA page payload must be an object")
-        expected = {"pagination", "items"}
-        actual = set(payload)
-        if actual != expected:
-            unknown = sorted(str(key) for key in actual - expected)
-            missing = sorted(expected - actual)
-            raise TypeError(
-                "explorer RWA page fields must be exactly "
-                f"{sorted(expected)}; missing={missing}, unknown={unknown}"
-            )
-        pagination_payload = payload.get("pagination")
-        if not isinstance(pagination_payload, Mapping):
-            raise TypeError("explorer RWA page missing object `pagination` field")
-        pagination = ExplorerCursorMeta.from_payload(pagination_payload)
-        items_payload = payload.get("items")
-        if not isinstance(items_payload, list):
-            raise TypeError("explorer RWA page `items` must be a list")
-        if len(items_payload) > pagination.limit:
-            raise ValueError("explorer RWA page contains more items than its limit")
-        items = [ExplorerRwaRecord.from_payload(entry) for entry in items_payload]
-        return cls(
-            pagination=pagination,
-            items=items,
         )
 
 
@@ -8605,30 +8523,6 @@ class AccountPermissionRecord:
         return cls(name=name, payload=permission_payload, raw=dict(payload))
 
 
-@dataclass(frozen=True)
-class AccountPermissionListPage:
-    """Paginated account permission result."""
-
-    items: List[AccountPermissionRecord]
-    total: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "AccountPermissionListPage":
-        if not isinstance(payload, Mapping):
-            raise TypeError("account permission payload must be an object")
-        items_payload = payload.get("items", [])
-        if items_payload is None:
-            items_payload = []
-        if not isinstance(items_payload, list):
-            raise TypeError("account permission `items` must be a list")
-        try:
-            total = int(payload.get("total", len(items_payload)))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("account permission `total` must be numeric") from exc
-        items = [AccountPermissionRecord.from_payload(entry) for entry in items_payload]
-        return cls(items=items, total=total)
-
-
 # ---------------------------------------------------------------------------
 # UAID portfolio & Space Directory helpers
 # ---------------------------------------------------------------------------
@@ -8979,53 +8873,6 @@ class SpaceDirectoryManifestRecord:
             lifecycle=lifecycle,
             accounts=accounts,
             manifest=manifest,
-        )
-
-
-@dataclass(frozen=True)
-class SpaceDirectoryManifestList:
-    uaid: str
-    total: int
-    has_more: bool
-    count_mode: str
-    manifests: List[SpaceDirectoryManifestRecord]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SpaceDirectoryManifestList":
-        if not isinstance(payload, Mapping):
-            raise TypeError("manifest list payload must be an object")
-        _require_wire_fields(
-            payload,
-            required={"uaid", "total", "has_more", "count_mode", "manifests"},
-            context="manifest list payload",
-        )
-        uaid = _normalize_uaid_literal(
-            payload["uaid"],
-            context="manifest list payload.uaid",
-        )
-        total = _require_u64(payload["total"], "manifest list payload.total")
-        has_more = payload["has_more"]
-        if not isinstance(has_more, bool):
-            raise TypeError("manifest list payload.has_more must be a boolean")
-        count_mode = _require_exact_non_empty_string(
-            payload["count_mode"],
-            "manifest list payload.count_mode",
-        )
-        if count_mode not in {"bounded", "exact"}:
-            raise ValueError("manifest list payload.count_mode must be bounded or exact")
-        manifests_payload = payload["manifests"]
-        if not isinstance(manifests_payload, list):
-            raise TypeError("manifest list `manifests` must be a list")
-        manifests = [SpaceDirectoryManifestRecord.from_payload(item) for item in manifests_payload]
-        for record in manifests:
-            if record.manifest["uaid"] != uaid:
-                raise ValueError("manifest list UAID differs from a record manifest")
-        return cls(
-            uaid=uaid,
-            total=total,
-            has_more=has_more,
-            count_mode=count_mode,
-            manifests=manifests,
         )
 
 
@@ -11429,13 +11276,9 @@ __all__ = [
     "IsoMessageTimeoutError",
     "VerifiedCommittedTransaction",
     "AccountPermissionRecord",
-    "AccountPermissionListPage",
     "SubscriptionPlanCreateResult",
-    "SubscriptionPlanListItem",
-    "SubscriptionPlanListPage",
     "SubscriptionCreateResult",
-    "SubscriptionListItem",
-    "SubscriptionListPage",
+    "SubscriptionGetResponse",
     "SubscriptionActionResult",
     "SumeragiEvidencePenaltyDetails",
     "SumeragiEvidencePendingPenaltyStatus",
@@ -11776,6 +11619,19 @@ def _fetch_authenticated_privacy_capabilities_archive_v1(
         response.close()
 
 
+class _AccountCollections(AccountsCollection):
+    """Facade account scope with its configured identity and strict permission decoder."""
+
+    def permissions(self, account_id: str) -> Collection[Dict[str, Any]]:
+        canonical = self._transport._normalize_canonical_account_id(account_id, "account_id")
+        return Collection(
+            self._transport,
+            f"/v1/accounts/{quote(canonical, safe='')}/permissions",
+            lambda payload: AccountPermissionRecord.from_payload(payload).raw,
+            "account permissions",
+        )
+
+
 class ToriiClient(
     _ToriiClientSpaceDirectoryMixin,
     ToriiClientIsoOperatorContextMixin,
@@ -11922,6 +11778,20 @@ class ToriiClient(
         self._last_sorafs_alias_evaluation: Optional[SorafsAliasEvaluation] = None
         self._data_model_validation = "unknown"
         self._data_model_actual: Optional[int] = None
+
+    @property
+    def accounts(self) -> AccountsCollection:
+        """Accounts and their scoped collections, with configured account identity validation."""
+
+        return _AccountCollections(self, "/v1/accounts", Account.from_json, "accounts")
+
+    @property
+    def explorer_rwas(self) -> HistoryCollection[ExplorerRwaRecord]:
+        """Bounded Explorer RWA rows with shared queries and strict quantity decoding."""
+
+        return HistoryCollection(
+            self, "/v1/explorer/rwas", ExplorerRwaRecord.from_payload, "Explorer RWAs", "explorer_rwas"
+        )
 
     @property
     def repo_agreements(self) -> Collection[RepoAgreementRecord]:
@@ -12876,60 +12746,6 @@ class ToriiClient(
 
         payload = self.get_explorer_account_qr(account_id)
         return ExplorerAccountQrSnapshot.from_payload(payload)
-
-    def list_explorer_rwas(
-        self,
-        *,
-        cursor: Optional[str] = None,
-        limit: Optional[int] = None,
-        owned_by: Optional[str] = None,
-        domain: Optional[str] = None,
-    ) -> Mapping[str, Any]:
-        """Fetch one bounded seek page from `GET /v1/explorer/rwas`."""
-
-        params: Dict[str, Any] = {}
-        cursor_value = _normalize_explorer_cursor(cursor, "list_explorer_rwas.cursor")
-        if cursor_value is not None:
-            params["cursor"] = cursor_value
-        limit_value = _normalize_explorer_limit(limit, "list_explorer_rwas.limit")
-        if limit_value is not None:
-            params["limit"] = limit_value
-        owned_by_value = _normalize_optional_string(owned_by, "list_explorer_rwas.owned_by")
-        if owned_by_value is not None:
-            params["owned_by"] = owned_by_value
-        domain_value = _normalize_optional_string(domain, "list_explorer_rwas.domain")
-        if domain_value is not None:
-            params["domain"] = domain_value
-        response = self._get_explorer_response(
-            "/v1/explorer/rwas",
-            params=params or None,
-        )
-        self._expect_status(response, (200,))
-        payload = self._maybe_json(response)
-        if payload is None:
-            raise RuntimeError("explorer RWA endpoint returned no payload")
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("explorer RWA endpoint returned malformed payload")
-        ExplorerRwasPage.from_payload(payload)
-        return payload
-
-    def list_explorer_rwas_typed(
-        self,
-        *,
-        cursor: Optional[str] = None,
-        limit: Optional[int] = None,
-        owned_by: Optional[str] = None,
-        domain: Optional[str] = None,
-    ) -> ExplorerRwasPage:
-        """Typed wrapper for :meth:`list_explorer_rwas`."""
-
-        payload = self.list_explorer_rwas(
-            cursor=cursor,
-            limit=limit,
-            owned_by=owned_by,
-            domain=domain,
-        )
-        return ExplorerRwasPage.from_payload(payload)
 
     def get_explorer_rwa_detail(self, rwa_id: str) -> Mapping[str, Any]:
         """Fetch a single explorer RWA detail via `GET /v1/explorer/rwas/{rwa_id}`."""
@@ -14532,18 +14348,6 @@ class ToriiClient(
             raise RuntimeError("por ingestion endpoint returned an invalid payload")
         return SorafsPorIngestionStatus.from_payload(payload)
 
-    @staticmethod
-    def _pagination_params(
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        params: Dict[str, Any] = {}
-        if limit is not None:
-            params["limit"] = int(limit)
-        if offset is not None:
-            params["offset"] = int(offset)
-        return params
-
     def get_status(self) -> Optional[Any]:
         """Return Torii node status from the canonical ``GET /status`` route."""
 
@@ -15135,21 +14939,6 @@ class ToriiClient(
 
         return self.request_json("GET", f"/v1/blocks/{height}", expected_status=(200, 404))
 
-    def list_blocks(
-        self,
-        *,
-        offset_height: Optional[int] = None,
-        limit: Optional[int] = None,
-    ) -> Optional[Any]:
-        """List blocks via `GET /v1/blocks` with optional pagination."""
-
-        params: Dict[str, Any] = {}
-        if offset_height is not None:
-            params["offset_height"] = int(offset_height)
-        if limit is not None:
-            params["limit"] = int(limit)
-        return self.request_json("GET", "/v1/blocks", params=params or None, expected_status=(200,))
-
     def get_pipeline_recovery(self, height: int) -> Optional[Any]:
         """Fetch an operator-authenticated pipeline recovery sidecar for `height`."""
 
@@ -15475,83 +15264,23 @@ class ToriiClient(
         payload = self.get_uaid_bindings(uaid)
         return UaidBindingsSnapshot.from_payload(payload)
 
-    def list_space_directory_manifests(
-        self,
-        uaid: str,
-        *,
-        dataspace: Optional[int] = None,
-        status: Optional[str] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        count_mode: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """List Space Directory manifests bound to a UAID (`GET /v1/space-directory/uaids/{uaid}/manifests`)."""
+    def uaid_manifests(self, uaid: str) -> Collection[SpaceDirectoryManifestRecord]:
+        """Manifest records for one UAID, with shared filters and cursor pages."""
 
-        literal = _normalize_uaid_literal(uaid)
-        params: Dict[str, Any] = {}
-        if dataspace is not None:
-            params["dataspace"] = _require_u64(
-                dataspace,
-                "list_space_directory_manifests.dataspace",
-            )
-        if status is not None:
-            exact_status = _require_exact_non_empty_string(
-                status,
-                "list_space_directory_manifests.status",
-            )
-            if exact_status not in {"active", "inactive", "all"}:
-                raise ValueError("status must be one of {'active', 'inactive', 'all'}")
-            params["status"] = exact_status
-        if limit is not None:
-            checked_limit = _require_u64(limit, "list_space_directory_manifests.limit")
-            if checked_limit == 0:
-                raise ValueError("list_space_directory_manifests.limit must be positive")
-            params["limit"] = checked_limit
-        if offset is not None:
-            params["offset"] = _require_u64(
-                offset,
-                "list_space_directory_manifests.offset",
-            )
-        if count_mode is not None:
-            exact_count_mode = _require_exact_non_empty_string(
-                count_mode,
-                "list_space_directory_manifests.count_mode",
-            )
-            if exact_count_mode not in {"bounded", "exact"}:
-                raise ValueError("count_mode must be 'bounded' or 'exact'")
-            params["count_mode"] = exact_count_mode
-        response = self._request(
-            "GET",
-            f"/v1/space-directory/uaids/{literal}/manifests",
-            params=params or None,
+        canonical = _normalize_uaid_literal(uaid)
+
+        def parse(row: Any) -> SpaceDirectoryManifestRecord:
+            record = SpaceDirectoryManifestRecord.from_payload(row)
+            if record.manifest["uaid"] != canonical:
+                raise ValueError("manifest record UAID differs from the requested UAID")
+            return record
+
+        return Collection(
+            self,
+            f"/v1/space-directory/uaids/{quote(canonical, safe='')}/manifests",
+            parse,
+            "uaid manifests",
         )
-        self._expect_status(response, {200})
-        payload = self._maybe_json(response)
-        if not isinstance(payload, dict):
-            raise RuntimeError("unexpected Space Directory manifests response")
-        return payload
-
-    def list_space_directory_manifests_typed(
-        self,
-        uaid: str,
-        *,
-        dataspace: Optional[int] = None,
-        status: Optional[str] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        count_mode: Optional[str] = None,
-    ) -> SpaceDirectoryManifestList:
-        """Typed wrapper for :meth:`list_space_directory_manifests`."""
-
-        payload = self.list_space_directory_manifests(
-            uaid,
-            dataspace=dataspace,
-            status=status,
-            limit=limit,
-            offset=offset,
-            count_mode=count_mode,
-        )
-        return SpaceDirectoryManifestList.from_payload(payload)
 
     def _handle_sorafs_alias_warning(self, warning: SorafsAliasWarning) -> None:
         """Internal hook for alias-proof warnings."""
@@ -18388,13 +18117,14 @@ class ToriiClient(
         *,
         expected_payload: Optional[Mapping[str, Any]] = None,
     ) -> bool:
-        """Return whether an account has a direct permission token."""
+        """Find an effective direct or role-granted permission, following every page."""
 
         expected_payload_value = (
             _json_safe_value(dict(expected_payload)) if expected_payload is not None else None
         )
-        permissions = self.list_account_permissions_typed(account_id)
-        for permission in permissions.items:
+        permissions = self.accounts.permissions(account_id).iter(filter=F.name == permission_name)
+        for row in permissions:
+            permission = AccountPermissionRecord.from_payload(row)
             if permission.name != permission_name:
                 continue
             if expected_payload is None or permission.payload == expected_payload_value:
@@ -18433,40 +18163,6 @@ class ToriiClient(
         if not isinstance(payload, dict):
             raise RuntimeError("unexpected asset transfer control response")
         return payload
-
-    def list_account_permissions(
-        self,
-        account_id: str,
-        *,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-    ) -> Optional[Any]:
-        """List account permissions via `GET /v1/accounts/{account_id}/permissions`."""
-
-        canonical_account_id = self._normalize_canonical_account_id(account_id, "account_id")
-        params = self._pagination_params(limit=limit, offset=offset)
-        response = self._get_dataspace_visible_response(
-            f"/v1/accounts/{quote(canonical_account_id, safe='')}/permissions",
-            params=params or None,
-        )
-        self._expect_status(response, (200,))
-        return self._maybe_json(response)
-
-    def list_account_permissions_typed(
-        self,
-        account_id: str,
-        *,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-    ) -> AccountPermissionListPage:
-        """Typed wrapper for :meth:`list_account_permissions`."""
-
-        payload = self.list_account_permissions(account_id, limit=limit, offset=offset)
-        if payload is None:
-            return AccountPermissionListPage(items=[], total=0)
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("account permissions endpoint returned non-object payload")
-        return AccountPermissionListPage.from_payload(payload)
 
     # ------------------------------------------------------------------
     # Contracts API

@@ -443,11 +443,14 @@ fn routed_read_source_status(endpoint: ToriiReadEndpointV1) -> RoutedReadSourceS
         | ContractViewPost
         | ContractViewBatchPost
         | AccountHistoryGet
-        | InternalAccountTransactionGet => Residual,
+        | InternalAccountTransactionGet
+        | AccountPermissionsQuery
+        | UaidManifestsQuery
+        | AccountHistoryQuery => Residual,
     }
 }
 #[test]
-fn routed_read_source_inventory_classifies_all_46_endpoints() {
+fn routed_read_source_inventory_classifies_all_49_endpoints() {
     use ToriiReadEndpointV1::*;
     let endpoints = [
         AccountGet,
@@ -496,15 +499,18 @@ fn routed_read_source_inventory_classifies_all_46_endpoints() {
         InternalAccountAssetGet,
         ContractDeploymentState,
         AccountOnboardingCurrentState,
+        AccountPermissionsQuery,
+        UaidManifestsQuery,
+        AccountHistoryQuery,
     ];
     let proven = endpoints
         .iter()
         .copied()
         .filter(|endpoint| routed_read_source_status(*endpoint) == RoutedReadSourceStatus::Proven)
         .count();
-    assert_eq!(endpoints.len(), 46);
+    assert_eq!(endpoints.len(), 49);
     assert_eq!(proven, 19);
-    assert_eq!(endpoints.len() - proven, 27);
+    assert_eq!(endpoints.len() - proven, 30);
 }
 #[test]
 fn routed_read_blanket_rejection_is_absent_repo_wide() {

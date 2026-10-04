@@ -745,7 +745,7 @@ pub mod content {
     /// Force immutable cache-control by default.
     pub const IMMUTABLE_BUNDLES: bool = true;
     /// Maximum served requests per second for the content gateway.
-    pub const MAX_REQUESTS_PER_SECOND: u32 = 10_000;
+    pub const MAX_REQUESTS_PER_SECOND: u32 = super::torii::DEFAULT_REQUEST_RATE_PER_SEC;
     /// Maximum served egress bytes per second for the content gateway.
     pub const MAX_EGRESS_BYTES_PER_SECOND: u32 = 256 * 1024 * 1024;
     /// Target p50 latency (milliseconds) for content responses.
@@ -753,7 +753,7 @@ pub mod content {
     /// Target p99 latency (milliseconds) for content responses.
     pub const TARGET_P99_LATENCY_MS: u32 = 250;
     /// Burst size for the content request token bucket.
-    pub const REQUEST_BURST: u32 = 100_000;
+    pub const REQUEST_BURST: u32 = super::torii::DEFAULT_REQUEST_BURST;
     /// Burst size for the egress token bucket.
     pub const EGRESS_BURST_BYTES: u64 = 1024 * 1024 * 1024;
     /// Target availability in basis points (10000 = 100%).
@@ -2237,7 +2237,8 @@ pub mod sorafs {
         pub mod rate_limit {
             use std::time::Duration;
             /// Maximum burst and tokens replenished per window.
-            pub const MAX_REQUESTS: Option<u32> = Some(600_000);
+            pub const MAX_REQUESTS: Option<u32> =
+                Some(crate::parameters::defaults::torii::DEFAULT_REQUEST_RATE_PER_MINUTE);
             /// Time required to replenish the complete token budget.
             pub const WINDOW: Duration = Duration::from_secs(60);
             /// Temporary ban duration applied after repeated violations.
@@ -2427,38 +2428,47 @@ pub mod torii {
     // Request-rate budgets accommodate sustained application traffic and large
     // deployment/proof walks. Actual work is bounded separately by admission,
     // memory, payload and execution limits.
+    /// Shared steady-state HTTP request budget; rate tokens do not reserve memory.
+    pub const DEFAULT_REQUEST_RATE_PER_SEC: u32 = 1_000_000;
+    /// Minute-based form of the shared HTTP request budget.
+    pub const DEFAULT_REQUEST_RATE_PER_MINUTE: u32 = 60 * DEFAULT_REQUEST_RATE_PER_SEC;
+    /// Shared HTTP burst budget for clients, wallets and tooling behind one origin.
+    pub const DEFAULT_REQUEST_BURST: u32 = 10_000_000;
     /// Default steady-state query rate tokens issued per authority every second.
-    pub const QUERY_RATE_PER_AUTHORITY_PER_SEC: Option<u32> = Some(10_000);
+    pub const QUERY_RATE_PER_AUTHORITY_PER_SEC: Option<u32> = Some(DEFAULT_REQUEST_RATE_PER_SEC);
     /// Maximum burst tokens accumulated per authority.
-    pub const QUERY_BURST_PER_AUTHORITY: Option<u32> = Some(100_000);
+    pub const QUERY_BURST_PER_AUTHORITY: Option<u32> = Some(DEFAULT_REQUEST_BURST);
     /// Default steady-state transaction submission rate tokens per authority every second.
-    pub const TX_RATE_PER_AUTHORITY_PER_SEC: Option<u32> = Some(10_000);
+    pub const TX_RATE_PER_AUTHORITY_PER_SEC: Option<u32> = Some(DEFAULT_REQUEST_RATE_PER_SEC);
     /// Default transaction submission burst tokens per authority.
-    pub const TX_BURST_PER_AUTHORITY: Option<u32> = Some(100_000);
+    pub const TX_BURST_PER_AUTHORITY: Option<u32> = Some(DEFAULT_REQUEST_BURST);
     /// Default steady-state deploy rate tokens issued per origin every second.
-    pub const DEPLOY_RATE_PER_ORIGIN_PER_SEC: Option<u32> = Some(10_000);
+    pub const DEPLOY_RATE_PER_ORIGIN_PER_SEC: Option<u32> = Some(DEFAULT_REQUEST_RATE_PER_SEC);
     /// Maximum burst tokens accumulated per origin for deploy endpoints.
-    pub const DEPLOY_BURST_PER_ORIGIN: Option<u32> = Some(100_000);
+    pub const DEPLOY_BURST_PER_ORIGIN: Option<u32> = Some(DEFAULT_REQUEST_BURST);
     /// Default public Soracloud local-read rate per remote IP every second.
-    pub const SORACLOUD_PUBLIC_RATE_PER_IP_PER_SEC: Option<u32> = Some(10_000);
+    pub const SORACLOUD_PUBLIC_RATE_PER_IP_PER_SEC: Option<u32> =
+        Some(DEFAULT_REQUEST_RATE_PER_SEC);
     /// Default public Soracloud local-read burst capacity per remote IP.
-    pub const SORACLOUD_PUBLIC_BURST_PER_IP: Option<u32> = Some(100_000);
+    pub const SORACLOUD_PUBLIC_BURST_PER_IP: Option<u32> = Some(DEFAULT_REQUEST_BURST);
     /// Default maximum number of concurrent public Soracloud local-read executions.
     pub const SORACLOUD_PUBLIC_MAX_INFLIGHT: NonZeroUsize = nonzero!(32usize);
     /// Maximum hosted Soracloud response body buffered for P2P proxy forwarding.
     pub const SORACLOUD_PUBLIC_MAX_RESPONSE_BYTES: Bytes = Bytes(64 * 1024 * 1024);
     /// Default signed Soracloud mutation rate per account+origin every second.
-    pub const SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC: Option<u32> = Some(10_000);
+    pub const SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC: Option<u32> =
+        Some(DEFAULT_REQUEST_RATE_PER_SEC);
     /// Default signed Soracloud mutation burst per account+origin.
-    pub const SORACLOUD_MUTATION_BURST_PER_ACCOUNT_ORIGIN: Option<u32> = Some(100_000);
+    pub const SORACLOUD_MUTATION_BURST_PER_ACCOUNT_ORIGIN: Option<u32> =
+        Some(DEFAULT_REQUEST_BURST);
     /// Default maximum number of concurrent signed Soracloud mutation executions.
     pub const SORACLOUD_MUTATION_MAX_INFLIGHT: NonZeroUsize = nonzero!(64usize);
     /// Maximum body size for signed Soracloud control-plane mutations before signature verification.
     pub const SORACLOUD_MUTATION_MAX_BODY_BYTES: Bytes = Bytes(8 * 1024 * 1024);
     /// Steady-state proof endpoint rate (requests per minute). None disables.
-    pub const PROOF_RATE_PER_MIN: Option<u32> = Some(600_000);
+    pub const PROOF_RATE_PER_MIN: Option<u32> = Some(DEFAULT_REQUEST_RATE_PER_MINUTE);
     /// Burst tokens for proof endpoints (requests).
-    pub const PROOF_BURST: Option<u32> = Some(100_000);
+    pub const PROOF_BURST: Option<u32> = Some(DEFAULT_REQUEST_BURST);
     /// Maximum proof request payload size (bytes).
     pub const PROOF_MAX_BODY_BYTES: Bytes = Bytes(8 * 1024 * 1024); // 8 MiB
     /// Maximum proof-bearing request bodies buffered concurrently before handler admission.
@@ -2493,9 +2503,9 @@ pub mod torii {
         /// Require an explicit allow-list before accepting signed privacy telemetry.
         pub const ENABLED: bool = false;
         /// Requests per second budget for privacy ingest (None disables).
-        pub const RATE_PER_SEC: Option<u32> = Some(8);
+        pub const RATE_PER_SEC: Option<u32> = Some(DEFAULT_REQUEST_RATE_PER_SEC);
         /// Burst budget for privacy ingest (tokens).
-        pub const BURST: Option<u32> = Some(16);
+        pub const BURST: Option<u32> = Some(DEFAULT_REQUEST_BURST);
         /// CIDR allow-list for privacy ingest (empty => deny).
         pub fn allow_cidrs() -> Vec<String> {
             Vec::new()
@@ -2552,7 +2562,7 @@ pub mod torii {
         /// Governed FX corridor policy used to authorize retail recipient reads.
         pub const POLICY_ID: &str = "cbuae_aed_sbp_pkr";
         /// Maximum retail recipient route/lookup requests accepted per signer each minute.
-        pub const REQUESTS_PER_MINUTE: u32 = 30;
+        pub const REQUESTS_PER_MINUTE: u32 = super::DEFAULT_REQUEST_RATE_PER_MINUTE;
     }
     /// Operator request-signature defaults for Torii operator endpoints.
     pub mod operator_signatures {
@@ -2588,9 +2598,9 @@ pub mod torii {
             Vec::new()
         }
         /// Auth attempt rate (per minute). None disables.
-        pub const RATE_PER_MIN: Option<u32> = Some(30);
+        pub const RATE_PER_MIN: Option<u32> = Some(super::DEFAULT_REQUEST_RATE_PER_MINUTE);
         /// Burst budget for auth attempts (tokens).
-        pub const BURST: Option<u32> = Some(10);
+        pub const BURST: Option<u32> = Some(super::DEFAULT_REQUEST_BURST);
         /// Per-kind capacity for expiry-bound challenges, sessions, and lockout identities.
         pub const EPHEMERAL_STATE_CAPACITY: usize = 4_096;
         /// Maximum accepted per-kind ephemeral-state capacity.
@@ -2708,9 +2718,9 @@ pub mod torii {
     /// Enable push-notification rate limiting.
     pub const PUSH_RATE_LIMIT_ENABLED: bool = true;
     /// Steady-state rate (requests per minute) for push notifications.
-    pub const PUSH_RATE_PER_MINUTE: NonZeroU32 = nonzero!(600_000_u32);
+    pub const PUSH_RATE_PER_MINUTE: NonZeroU32 = nonzero!(DEFAULT_REQUEST_RATE_PER_MINUTE);
     /// Burst tokens for push notifications.
-    pub const PUSH_BURST: NonZeroU32 = nonzero!(100_000_u32);
+    pub const PUSH_BURST: NonZeroU32 = nonzero!(DEFAULT_REQUEST_BURST);
     /// HTTP connect timeout (milliseconds) for push delivery.
     pub const PUSH_CONNECT_TIMEOUT_MS: u64 = 5_000;
     /// HTTP request timeout (milliseconds) for push delivery.
@@ -2777,9 +2787,9 @@ pub mod torii {
     // accommodate the downstream application budgets, including multiple tools
     // or wallets sharing one external IP.
     /// Steady-state rate for pre-authorization attempts per IP.
-    pub const PREAUTH_RATE_PER_IP_PER_SEC: Option<u32> = Some(10_000);
+    pub const PREAUTH_RATE_PER_IP_PER_SEC: Option<u32> = Some(DEFAULT_REQUEST_RATE_PER_SEC);
     /// Burst tokens allowed for pre-authorization attempts per IP.
-    pub const PREAUTH_BURST_PER_IP: Option<u32> = Some(100_000);
+    pub const PREAUTH_BURST_PER_IP: Option<u32> = Some(DEFAULT_REQUEST_BURST);
     /// Optional extra cooldown after pre-auth rate exhaustion; disabled by default.
     pub const PREAUTH_BAN_DURATION: Duration = Duration::ZERO;
     /// Maximum number of temporary pre-auth bans retained in memory.
@@ -3081,9 +3091,9 @@ pub mod torii {
         // Match the HTTP application budget; dispatch concurrency and payload
         // limits bound actual work independently.
         /// Optional steady-state MCP request budget (requests/minute). None disables.
-        pub const RATE_PER_MINUTE: Option<u32> = Some(600_000);
+        pub const RATE_PER_MINUTE: Option<u32> = Some(super::DEFAULT_REQUEST_RATE_PER_MINUTE);
         /// Optional MCP request burst budget.
-        pub const BURST: Option<u32> = Some(100_000);
+        pub const BURST: Option<u32> = Some(super::DEFAULT_REQUEST_BURST);
     }
     /// Account-onboarding defaults surfaced via `torii.account_onboarding`.
     pub mod account_onboarding {
@@ -3754,7 +3764,7 @@ pub mod connect {
     /// Max concurrent WS sessions per remote IP.
     pub const WS_PER_IP_MAX_SESSIONS: usize = 10;
     /// Per-IP WS handshake rate (requests per minute).
-    pub const WS_RATE_PER_IP_PER_MIN: u32 = 600_000;
+    pub const WS_RATE_PER_IP_PER_MIN: u32 = super::torii::DEFAULT_REQUEST_RATE_PER_MINUTE;
     /// Session inactivity TTL (milliseconds).
     pub const SESSION_TTL: Duration = Duration::from_millis(300_000); // 5 minutes
     /// Maximum WS frame size accepted for Connect frames (bytes).

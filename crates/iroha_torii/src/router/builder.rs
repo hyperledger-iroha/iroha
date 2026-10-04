@@ -1240,10 +1240,25 @@ mod tests {
             catalog_post(|| async { StatusCode::NO_CONTENT })
                 .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
+        builder.route(
+            &kagemusha::ORDINARY_MINT_ISSUER_PURPOSE,
+            catalog_post(|| async { StatusCode::NO_CONTENT })
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &kagemusha::ORDINARY_MINT_FINALIZED,
+            catalog_post(|| async { StatusCode::NO_CONTENT })
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &kagemusha::ORDINARY_MINT_CREDIT,
+            catalog_post(|| async { StatusCode::NO_CONTENT })
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
         let (router, manifest) = builder
             .finish()
             .expect("every build requires and accepts the complete KAGEMUSHA family");
-        assert_eq!(kagemusha::ROUTES.len(), 8);
+        assert_eq!(kagemusha::ROUTES.len(), 11);
         assert_eq!(manifest.explicit_routes(), kagemusha::ROUTES);
         let response = router
             .clone()
@@ -1286,6 +1301,9 @@ mod tests {
         assert!(!mcp.contains(&&kagemusha::RESOURCE_NAMES_STATE));
         assert!(!mcp.contains(&&kagemusha::AUTHORITY_ORIGINALS));
         assert!(!mcp.contains(&&kagemusha::ORDINARY_WALLET_CURRENT));
+        assert!(!mcp.contains(&&kagemusha::ORDINARY_MINT_ISSUER_PURPOSE));
+        assert!(!mcp.contains(&&kagemusha::ORDINARY_MINT_FINALIZED));
+        assert!(!mcp.contains(&&kagemusha::ORDINARY_MINT_CREDIT));
     }
     #[cfg(feature = "app_api")]
     async fn short_circuit_success(

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import copy
+import json
 from typing import Any, Callable, Optional
 
 import pytest
 
+from iroha_python import F
 from iroha_python.address import AccountAddress
 from iroha_python.client import ToriiClient
 from iroha_python.crypto import Ed25519KeyPair
@@ -18,11 +20,9 @@ ACCOUNT_ID = AccountAddress.from_account(public_key=ACCOUNT_PUBLIC_KEY).to_i105(
 def _manifest_list_payload() -> dict[str, Any]:
     uaid = "uaid:" + "cd" * 32
     return {
-        "uaid": uaid,
         "total": 1,
-        "has_more": False,
-        "count_mode": "exact",
-        "manifests": [
+        "next_cursor": None,
+        "items": [
             {
                 "dataspace_id": 7,
                 "dataspace_alias": "alpha",
@@ -190,38 +190,40 @@ def test_space_directory_manifest_query_and_response_are_exact_v1() -> None:
     session = RecordingSession(StubResponse(200, payload))
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
-    result = client.list_space_directory_manifests_typed(
-        payload["uaid"],
-        dataspace=7,
-        status="active",
+    result = client.uaid_manifests("uaid:" + "cd" * 32).list(
+        filter=(F.dataspace_id == 7) & (F.status == "Active"),
         limit=25,
-        offset=2,
-        count_mode="exact",
+        cursor="more",
+        include_total=True,
     )
 
     assert result.total == 1
     assert result.has_more is False
-    assert result.count_mode == "exact"
-    assert result.manifests[0].manifest["version"] == 1
-    assert session.calls[0]["params"] == {
-        "dataspace": 7,
-        "status": "active",
+    assert result.items[0].manifest["version"] == 1
+    assert session.calls[0]["method"] == "POST"
+    assert session.calls[0]["url"].endswith("/manifests/query")
+    assert json.loads(session.calls[0]["data"]) == {
+        "filter": {"op": "and", "args": [
+            {"op": "eq", "args": ["dataspace_id", 7]},
+            {"op": "eq", "args": ["status", "Active"]},
+        ]},
         "limit": 25,
-        "offset": 2,
-        "count_mode": "exact",
+        "cursor": "more",
+        "include_total": True,
     }
+
 
 
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
-        ({"dataspace": "7"}, "unsigned 64-bit integer"),
-        ({"status": "Active"}, "status must be one of"),
-        ({"status": " active"}, "surrounding whitespace"),
-        ({"limit": 0}, "limit must be positive"),
-        ({"offset": True}, "unsigned 64-bit integer"),
-        ({"count_mode": "Exact"}, "count_mode must be"),
-        ({"count_mode": "exact "}, "surrounding whitespace"),
+        ({"dataspace": "7"}, "unexpected keyword"),
+        ({"status": "Active"}, "unexpected keyword"),
+        ({"status": " active"}, "unexpected keyword"),
+        ({"limit": 0}, "limit"),
+        ({"offset": True}, "unexpected keyword"),
+        ({"count_mode": "Exact"}, "unexpected keyword"),
+        ({"count_mode": "exact "}, "unexpected keyword"),
     ],
 )
 def test_space_directory_manifest_query_rejects_noncanonical_options(
@@ -233,7 +235,7 @@ def test_space_directory_manifest_query_rejects_noncanonical_options(
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
     with pytest.raises((TypeError, ValueError), match=message):
-        client.list_space_directory_manifests(payload["uaid"], **kwargs)
+        client.uaid_manifests("uaid:" + "cd" * 32).list(**kwargs)
 
     assert session.calls == []
 
@@ -241,15 +243,15 @@ def test_space_directory_manifest_query_rejects_noncanonical_options(
 @pytest.mark.parametrize(
     "mutation",
     [
-        lambda payload: payload.pop("has_more"),
+        lambda payload: payload.pop("next_cursor"),
         lambda payload: payload.__setitem__("legacy_total", 1),
-        lambda payload: payload["manifests"][0]["manifest"].__setitem__(
+        lambda payload: payload["items"][0]["manifest"].__setitem__(
             "version", "1"
         ),
-        lambda payload: payload["manifests"][0]["manifest"].__setitem__(
+        lambda payload: payload["items"][0]["manifest"].__setitem__(
             "expiry_epoch", None
         ),
-        lambda payload: payload["manifests"][0].__setitem__(
+        lambda payload: payload["items"][0].__setitem__(
             "manifest_hash", "0x" + "ab" * 32
         ),
     ],
@@ -270,4 +272,11 @@ def test_space_directory_manifest_typed_response_rejects_legacy_shapes(
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
     with pytest.raises((TypeError, ValueError)):
-        client.list_space_directory_manifests_typed(payload["uaid"])
+        client.uaid_manifests("uaid:" + "cd" * 32).list()
+
+
+def test_manifest_collection_binds_records_to_requested_uaid() -> None:
+    payload = _manifest_list_payload()
+    client = ToriiClient("http://torii.example", session=RecordingSession(StubResponse(200, payload)), max_retries=0)
+    with pytest.raises(ValueError, match="requested UAID"):
+        client.uaid_manifests("uaid:" + "ab" * 32).list()

@@ -128,16 +128,6 @@ where
             phantom: PhantomData,
         }
     }
-    /// Experimental: override the selector tuple directly.
-    ///
-    /// Note: In the canonical DSL, selectors are not evaluated; this method
-    /// simply forwards the tuple to the server. Once server-side projection is restored, the
-    /// selector will take effect. The type parameter `T` remains `Q::Item` here; when projection
-    /// starts returning tuples, callers should prefer `select_with` to preserve typed results.
-    #[must_use]
-    pub fn with_selector_tuple(self, selector: SelectorTuple<Q::Item>) -> Self {
-        Self { selector, ..self }
-    }
 }
 impl<'a, E, Q, T> QueryBuilder<'a, E, Q, T>
 where

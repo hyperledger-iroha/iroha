@@ -1051,7 +1051,7 @@
           "approvals": [
             {
               "public_key": "ed012017CB79FB2B4120F2B1EC65E4198D6E08B28E813FEB01E4A400839B85E18080CE",
-              "signature": "EE150328C7BA6C99D522AAF3080AB17167FDBB7AE51AE4450D3CC88E802722D42E7AFDF7EBA678AD79F80B3815C373969F354A57896F771D416ABCBC21109109"
+              "signature": "FDFA36D5DDA5D798910FB01183E444E45D4D668253AC2F8C44DE3981E071E3CA2C8106E1B06EC5B09916225AB74B9896F454CDAB5BD1C09C78DD4CF3EFED780B"
             }
           ],
           "payload": {
@@ -1131,6 +1131,7 @@
               ],
               "completed_by": "sorauﾛ1Nuｱeﾌ4Tﾂg84yxｸL8dk6zｻｱﾛ2ﾖﾘNﾆﾔﾄrCﾐﾃ88FFzXLA2L4",
               "completion_authority": {
+                "completion_signer": "sorauﾛ1Nuｱeﾌ4Tﾂg84yxｸL8dk6zｻｱﾛ2ﾖﾘNﾆﾔﾄrCﾐﾃ88FFzXLA2L4",
                 "provider_owner": "sorauﾛ1Nuｱeﾌ4Tﾂg84yxｸL8dk6zｻｱﾛ2ﾖﾘNﾆﾔﾄrCﾐﾃ88FFzXLA2L4",
                 "signer_policy": {
                   "policy_digest": [
@@ -1433,38 +1434,38 @@
         },
         "attestation_digest": [
           [
-            170,
-            32,
-            58,
-            208,
-            241,
-            36,
-            33,
-            95,
-            242,
-            11,
-            58,
-            229,
-            98,
-            28,
-            100,
-            37,
-            149,
-            25,
-            55,
-            190,
-            148,
-            37,
-            78,
-            11,
-            86,
-            121,
-            164,
+            163,
+            160,
+            152,
+            196,
+            124,
+            45,
+            3,
+            102,
+            171,
+            6,
+            117,
+            236,
             31,
-            209,
-            74,
-            51,
-            128
+            15,
+            33,
+            77,
+            222,
+            213,
+            110,
+            94,
+            9,
+            94,
+            220,
+            96,
+            122,
+            225,
+            115,
+            104,
+            71,
+            216,
+            41,
+            214
           ]
         ],
         "key": {

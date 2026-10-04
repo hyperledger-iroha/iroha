@@ -642,13 +642,8 @@ fn preflight<C: RunContext>(
         "native account read differs from the deployment owner",
     )?;
     if require_write_permissions {
-        let permissions = crate::account::list_effective_permissions(
-            client.client(),
-            &manifest.owner,
-            None,
-            0,
-            None,
-        )?;
+        let permissions =
+            crate::account::list_effective_permissions(client.client(), &manifest.owner)?;
         for name in ["CanSetParameters", "CanReadAllLedgerData"] {
             require(
                 permissions

@@ -1966,11 +1966,9 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
         let uaidHex = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543211"
         let payload = """
         {
-          "uaid":"uaid:\(uaidHex)",
           "total":1,
-          "has_more":false,
-          "count_mode":"exact",
-          "manifests":[
+          "next_cursor":null,
+          "items":[
             {
               "dataspace_id":11,
               "dataspace_alias":"cbdc",
@@ -1994,13 +1992,11 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
         StubURLProtocol.handler = { request in
             // URL.path always returns decoded path. Check absoluteString to verify encoding.
             XCTAssertTrue(request.url!.absoluteString.contains("/v1/space-directory/uaids/uaid%3A\(uaidHex)/manifests"))
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let items = Dictionary(uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
-            XCTAssertEqual(items["dataspace"], "11")
-            XCTAssertEqual(items["status"], "inactive")
-            XCTAssertEqual(items["limit"], "2")
-            XCTAssertEqual(items["offset"], "1")
-            XCTAssertEqual(items["count_mode"], "exact")
+            XCTAssertEqual(request.httpMethod, "POST")
+            let query = try JSONSerialization.jsonObject(with: XCTUnwrap(self.bodyData(from: request))) as! [String: Any]
+            XCTAssertEqual(query["limit"] as? Int, 2)
+            XCTAssertEqual(query["include_total"] as? Bool, true)
+            XCTAssertNotNil(query["filter"])
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -2008,32 +2004,23 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
             return (response, payload)
         }
 
-        let query = ToriiUaidManifestQuery(
-            dataspaceId: 11,
-            status: .inactive,
-            limit: 2,
-            offset: 1,
-            countMode: .exact
-        )
-        let response = try await makeClient().getUaidManifests(uaid: "uaid:\(uaidHex)", query: query)
+        let query = ToriiListQuery(filterText: #"dataspace_id = 11 and status = "Active""#, limit: 2, includeTotal: true)
+        let response = try await makeClient().uaidManifests(of: "uaid:\(uaidHex)").page(query)
         XCTAssertEqual(response.total, 1)
         XCTAssertFalse(response.hasMore)
-        XCTAssertEqual(response.countMode, .exact)
-        XCTAssertEqual(response.manifests.first?.status, .active)
-        XCTAssertEqual(response.manifests.first?.manifest.version, 1)
-        XCTAssertEqual(response.manifests.first?.manifest.issuedMs, 100)
-        XCTAssertEqual(response.manifests.first?.accounts.first, "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D")
+        XCTAssertEqual(response.items.first?.status, .active)
+        XCTAssertEqual(response.items.first?.manifest.version, 1)
+        XCTAssertEqual(response.items.first?.manifest.issuedMs, 100)
+        XCTAssertEqual(response.items.first?.accounts.first, "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D")
     }
 
     func testUaidManifestModelsRequireExactFirstReleaseWireShape() throws {
         let uaid = "uaid:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543211"
         let valid = """
         {
-          "uaid":"\(uaid)",
           "total":1,
-          "has_more":false,
-          "count_mode":"exact",
-          "manifests":[{
+          "next_cursor":null,
+          "items":[{
             "dataspace_id":11,
             "dataspace_alias":null,
             "manifest_hash":"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
@@ -2053,22 +2040,22 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
         """
         let decoder = JSONDecoder()
         XCTAssertNoThrow(
-            try decoder.decode(ToriiUaidManifestsResponse.self, from: Data(valid.utf8))
+            try decoder.decode(ToriiPage<ToriiUaidManifestRecord>.self, from: Data(valid.utf8))
         )
 
         let invalidPayloads = [
-            valid.replacingOccurrences(of: "\"has_more\":false,", with: ""),
-            valid.replacingOccurrences(of: "\"count_mode\":\"exact\",", with: ""),
+            valid.replacingOccurrences(of: "\"next_cursor\":null,", with: ""),
+            valid.replacingOccurrences(of: "\"next_cursor\":null,", with: "\"next_cursor\":\"\","),
             valid.replacingOccurrences(of: "\"version\":1", with: "\"version\":\"V1\""),
             valid.replacingOccurrences(of: "\"entries\":[]", with: "\"expiry_epoch\":null,\"entries\":[]"),
             valid.replacingOccurrences(of: "\"status\":\"Active\"", with: "\"status\":\"active\""),
             valid.replacingOccurrences(of: "\"status\":\"Active\"", with: "\"status\":\"Pending\""),
             valid.replacingOccurrences(of: "\"total\":1", with: "\"total\":0"),
-            valid.replacingOccurrences(of: "\"count_mode\":\"exact\"", with: "\"count_mode\":\"exact\",\"next_cursor\":null"),
+            valid.replacingOccurrences(of: "\"next_cursor\":null", with: "\"has_more\":false,\"next_cursor\":null"),
         ]
         for payload in invalidPayloads {
             XCTAssertThrowsError(
-                try decoder.decode(ToriiUaidManifestsResponse.self, from: Data(payload.utf8))
+                try decoder.decode(ToriiPage<ToriiUaidManifestRecord>.self, from: Data(payload.utf8))
             )
         }
     }

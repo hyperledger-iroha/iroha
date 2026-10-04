@@ -2699,7 +2699,7 @@ fn openapi_governance_mcp_catalog_requires_inspectable_json_bodies() {
     }
 }
 /// Every collection tool with its query shape and single path parameter.
-const COLLECTION_TOOL_SHAPES: [(&str, CollectionQueryShape, Option<&str>); 17] = [
+const COLLECTION_TOOL_SHAPES: [(&str, CollectionQueryShape, Option<&str>); 40] = [
     ("iroha.accounts.list", CollectionQueryShape::Get, None),
     ("iroha.accounts.query", CollectionQueryShape::Post, None),
     ("iroha.domains.list", CollectionQueryShape::Get, None),
@@ -2746,6 +2746,117 @@ const COLLECTION_TOOL_SHAPES: [(&str, CollectionQueryShape, Option<&str>); 17] =
     ),
     (
         "iroha.transactions.query",
+        CollectionQueryShape::HistoryPost,
+        None,
+    ),
+    (
+        "iroha.accounts.permissions",
+        CollectionQueryShape::Get,
+        Some("account_id"),
+    ),
+    (
+        "iroha.accounts.permissions.query",
+        CollectionQueryShape::Post,
+        Some("account_id"),
+    ),
+    (
+        "iroha.subscriptions.plans.list",
+        CollectionQueryShape::Get,
+        None,
+    ),
+    (
+        "iroha.subscriptions.plans.query",
+        CollectionQueryShape::Post,
+        None,
+    ),
+    ("iroha.subscriptions.list", CollectionQueryShape::Get, None),
+    (
+        "iroha.subscriptions.query",
+        CollectionQueryShape::Post,
+        None,
+    ),
+    (
+        "iroha.space_directory.manifests",
+        CollectionQueryShape::Get,
+        Some("uaid"),
+    ),
+    (
+        "iroha.space_directory.manifests.query",
+        CollectionQueryShape::Post,
+        Some("uaid"),
+    ),
+    (
+        "iroha.accounts.history",
+        CollectionQueryShape::HistoryGet,
+        Some("account_id"),
+    ),
+    (
+        "iroha.accounts.history.query",
+        CollectionQueryShape::HistoryPost,
+        Some("account_id"),
+    ),
+    (
+        "iroha.contracts.activity.query",
+        CollectionQueryShape::HistoryPost,
+        None,
+    ),
+    (
+        "iroha.contracts.events.query",
+        CollectionQueryShape::HistoryPost,
+        None,
+    ),
+    (
+        "iroha.explorer.accounts.query",
+        CollectionQueryShape::HistoryPost,
+        None,
+    ),
+    (
+        "iroha.explorer.domains.query",
+        CollectionQueryShape::HistoryPost,
+        None,
+    ),
+    (
+        "iroha.explorer.asset_definitions.query",
+        CollectionQueryShape::HistoryPost,
+        None,
+    ),
+    (
+        "iroha.explorer.assets.query",
+        CollectionQueryShape::HistoryPost,
+        None,
+    ),
+    (
+        "iroha.explorer.nfts.query",
+        CollectionQueryShape::HistoryPost,
+        None,
+    ),
+    (
+        "iroha.explorer.rwas.query",
+        CollectionQueryShape::HistoryPost,
+        None,
+    ),
+    (
+        "iroha.explorer.blocks.query",
+        CollectionQueryShape::HistoryPost,
+        None,
+    ),
+    (
+        "iroha.explorer.transactions.query",
+        CollectionQueryShape::HistoryPost,
+        None,
+    ),
+    (
+        "iroha.explorer.transactions.latest.query",
+        CollectionQueryShape::HistoryPost,
+        None,
+    ),
+    (
+        "iroha.explorer.instructions.query",
+        CollectionQueryShape::HistoryPost,
+        None,
+    ),
+    (
+        "iroha.explorer.instructions.latest.query",
         CollectionQueryShape::HistoryPost,
         None,
     ),
@@ -2807,20 +2918,25 @@ fn collection_tools_advertise_the_shared_collection_query_controls() {
             CollectionQueryShape::Post | CollectionQueryShape::HistoryPost => Method::POST,
         };
         assert_eq!(method, &expected_method, "{name}");
-        for needle in ["Fields:", "Example:", "`next_cursor` as `cursor`"] {
+        for needle in ["next_cursor", "cursor", "null"] {
             assert!(
                 tool.description.contains(needle),
                 "{name} description must include {needle:?}"
             );
         }
-        assert_eq!(
-            tool.description.contains("newest first"),
-            matches!(
-                shape,
-                CollectionQueryShape::HistoryGet | CollectionQueryShape::HistoryPost
-            ),
-            "{name} must state the history order exactly when rows are history"
+        // Bounded Explorer world feeds share the history control shape but use
+        // canonical entity order. The shape promises fixed order, not chronology.
+        let fixed_order = matches!(
+            shape,
+            CollectionQueryShape::HistoryGet | CollectionQueryShape::HistoryPost
         );
+        if fixed_order {
+            assert!(
+                tool.description.contains("newest")
+                    || tool.description.contains("Fixed bounded order"),
+                "{name} must state its fixed order"
+            );
+        }
 
         let mut arguments = Map::new();
         if let Some(path_key) = path_key {
@@ -2834,6 +2950,23 @@ fn collection_tools_advertise_the_shared_collection_query_controls() {
         arguments.insert("cursor".to_owned(), Value::from("c1_A-z"));
         validate_tool_arguments(tool, &arguments)
             .unwrap_or_else(|error| panic!("{name} rejected canonical arguments: {error}"));
+        if fixed_order {
+            for (control, value) in [
+                ("sort", norito::json!(["-id"])),
+                ("include_total", Value::Bool(true)),
+                (
+                    "aggregate",
+                    norito::json!({"metrics": [{"alias": "n", "fn": "count"}]}),
+                ),
+            ] {
+                let mut unsupported = arguments.clone();
+                unsupported.insert(control.to_owned(), value);
+                assert!(
+                    validate_tool_arguments(tool, &unsupported).is_err(),
+                    "{name} must reject unsupported `{control}`"
+                );
+            }
+        }
         for retired in ["offset", "pagination", "fetch_size", "count_mode", "query"] {
             let mut retired_arguments = arguments.clone();
             retired_arguments.insert(retired.to_owned(), Value::from(1_u64));

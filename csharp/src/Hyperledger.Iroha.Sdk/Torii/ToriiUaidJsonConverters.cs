@@ -209,27 +209,6 @@ internal static class ToriiUaidJson
         }
     }
 
-    internal static void ValidateUaidManifestsResponse(ToriiUaidManifestsResponse response, string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-
-        ValidateCanonicalUaidLiteral(response.Uaid, $"{context}.uaid");
-        ValidateManifestCountMode(response.CountMode, $"{context}.count_mode");
-        ValidateItems(response.Manifests, $"{context}.manifests", ValidateUaidManifestRecord);
-        if (response.Total < (ulong)response.Manifests.Count)
-        {
-            throw new JsonException($"{context}.total cannot be smaller than the page.");
-        }
-        for (var index = 0; index < response.Manifests.Count; index++)
-        {
-            var manifestUaid = response.Manifests[index].Manifest["uaid"]!.GetValue<string>();
-            if (!string.Equals(manifestUaid, response.Uaid, StringComparison.Ordinal))
-            {
-                throw new JsonException($"{context}.manifests[{index}].manifest.uaid must match {context}.uaid.");
-            }
-        }
-    }
-
     internal static void ValidateAssetPermissionManifest(JsonNode? value, string context)
     {
         var manifest = RequireJsonObject(value, context);
@@ -1013,81 +992,6 @@ internal static class ToriiUaidJson
         throw new JsonException($"{context} JSON object is incomplete.");
     }
 
-    internal static ToriiUaidManifestsResponse ReadUaidManifestsResponse(ref Utf8JsonReader reader, string context)
-    {
-        if (reader.TokenType == JsonTokenType.Null)
-        {
-            throw new JsonException($"{context} must not be null.");
-        }
-
-        if (reader.TokenType != JsonTokenType.StartObject)
-        {
-            throw new JsonException($"{context} must be an object.");
-        }
-
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        string? uaid = null;
-        ulong? total = null;
-        bool? hasMore = null;
-        ToriiUaidManifestCountMode? countMode = null;
-        List<ToriiUaidManifestRecord>? manifests = null;
-
-        while (reader.Read())
-        {
-            if (reader.TokenType == JsonTokenType.EndObject)
-            {
-                var response = CreateWithDirectMetadataContext(
-                    () => new ToriiUaidManifestsResponse
-                    {
-                        Uaid = RequireString(uaid, $"{context}.uaid"),
-                        Total = RequireTotal(total, context),
-                        HasMore = RequireBoolean(hasMore, $"{context}.has_more"),
-                        CountMode = RequireManifestCountMode(countMode, $"{context}.count_mode"),
-                        Manifests = RequireList(manifests, context, "manifests"),
-                    },
-                    context);
-                ValidateUaidManifestsResponse(response, context);
-                RequireExactFields(seen, context, "uaid", "total", "has_more", "count_mode", "manifests");
-                return response;
-            }
-
-            if (reader.TokenType != JsonTokenType.PropertyName)
-            {
-                throw new JsonException($"{context} property name expected.");
-            }
-
-            var propertyName = reader.GetString() ?? throw new JsonException($"{context} property name must be a string.");
-            ToriiIdentifierJson.RequireUniqueProperty(seen, propertyName, context);
-            if (!reader.Read())
-            {
-                throw new JsonException($"{context}.{propertyName} is truncated.");
-            }
-
-            switch (propertyName)
-            {
-                case "uaid":
-                    uaid = ReadOptionalString(ref reader, $"{context}.uaid");
-                    break;
-                case "total":
-                    total = ReadUInt64(ref reader, $"{context}.total");
-                    break;
-                case "has_more":
-                    hasMore = ReadBoolean(ref reader, $"{context}.has_more");
-                    break;
-                case "count_mode":
-                    countMode = ReadManifestCountMode(ref reader, $"{context}.count_mode");
-                    break;
-                case "manifests":
-                    manifests = ReadItems(ref reader, $"{context}.manifests", ReadUaidManifestRecord);
-                    break;
-                default:
-                    throw new JsonException($"{context} contains unknown field `{propertyName}`.");
-            }
-        }
-
-        throw new JsonException($"{context} JSON object is incomplete.");
-    }
-
     internal static void WriteUaidPortfolioTotals(
         Utf8JsonWriter writer,
         ToriiUaidPortfolioTotals response,
@@ -1264,28 +1168,6 @@ internal static class ToriiUaidJson
         writer.WriteEndObject();
     }
 
-    internal static void WriteUaidManifestsResponse(
-        Utf8JsonWriter writer,
-        ToriiUaidManifestsResponse response,
-        string context)
-    {
-        ValidateUaidManifestsResponse(response, context);
-
-        writer.WriteStartObject();
-        writer.WriteString("uaid", response.Uaid);
-        writer.WriteNumber("total", response.Total);
-        writer.WriteBoolean("has_more", response.HasMore);
-        writer.WriteString("count_mode", FormatManifestCountMode(response.CountMode));
-        writer.WritePropertyName("manifests");
-        writer.WriteStartArray();
-        for (var index = 0; index < response.Manifests.Count; index++)
-        {
-            WriteUaidManifestRecord(writer, response.Manifests[index], $"{context}.manifests[{index}]");
-        }
-        writer.WriteEndArray();
-        writer.WriteEndObject();
-    }
-
     internal static JsonException DirectMetadataErrorToJsonException(ArgumentException error, string context)
     {
         return new JsonException($"{context}.{MapDirectMetadataField(error.ParamName ?? "metadata")}: {error.Message}", error);
@@ -1312,7 +1194,6 @@ internal static class ToriiUaidJson
             _ when TryMapCollectionField(paramName, nameof(ToriiUaidPortfolioResponse.Dataspaces), "dataspaces", out var mapped) => mapped,
             _ when TryMapCollectionField(paramName, nameof(ToriiUaidBindingsResponse.Dataspaces), "dataspaces", out var mapped) => mapped,
             _ when TryMapCollectionField(paramName, nameof(ToriiUaidManifestRecord.Accounts), "accounts", out var mapped) => mapped,
-            _ when TryMapCollectionField(paramName, nameof(ToriiUaidManifestsResponse.Manifests), "manifests", out var mapped) => mapped,
             _ when TryMapNestedField(paramName, nameof(ToriiUaidPortfolioResponse.Totals), "totals", out var mapped) => mapped,
             _ when TryMapNestedField(paramName, nameof(ToriiUaidManifestLifecycle.Revocation), "revocation", out var mapped) => mapped,
             _ when TryMapNestedField(paramName, nameof(ToriiUaidManifestRecord.Lifecycle), "lifecycle", out var mapped) => mapped,
@@ -1338,10 +1219,6 @@ internal static class ToriiUaidJson
             nameof(ToriiUaidManifestRecord.Status) => "status",
             nameof(ToriiUaidManifestRecord.Lifecycle) => "lifecycle",
             nameof(ToriiUaidManifestRecord.Manifest) => "manifest",
-            nameof(ToriiUaidManifestsResponse.Total) => "total",
-            nameof(ToriiUaidManifestsResponse.HasMore) => "has_more",
-            nameof(ToriiUaidManifestsResponse.CountMode) => "count_mode",
-            nameof(ToriiUaidManifestsResponse.Manifests) => "manifests",
             _ => paramName,
         };
     }
@@ -1543,14 +1420,6 @@ internal static class ToriiUaidJson
         }
     }
 
-    private static void ValidateManifestCountMode(ToriiUaidManifestCountMode value, string context)
-    {
-        if (value is not (ToriiUaidManifestCountMode.Exact or ToriiUaidManifestCountMode.Bounded))
-        {
-            throw new JsonException($"{context} must be exact or bounded.");
-        }
-    }
-
     private static string FormatManifestStatus(ToriiUaidManifestStatus value)
     {
         return value switch
@@ -1560,16 +1429,6 @@ internal static class ToriiUaidJson
             ToriiUaidManifestStatus.Expired => "Expired",
             ToriiUaidManifestStatus.Revoked => "Revoked",
             _ => throw new JsonException("Unknown UAID manifest status."),
-        };
-    }
-
-    private static string FormatManifestCountMode(ToriiUaidManifestCountMode value)
-    {
-        return value switch
-        {
-            ToriiUaidManifestCountMode.Exact => "exact",
-            ToriiUaidManifestCountMode.Bounded => "bounded",
-            _ => throw new JsonException("Unknown UAID manifest count mode."),
         };
     }
 
@@ -1721,18 +1580,6 @@ internal static class ToriiUaidJson
         };
     }
 
-    private static ToriiUaidManifestCountMode ReadManifestCountMode(ref Utf8JsonReader reader, string field)
-    {
-        var value = ReadOptionalString(ref reader, field)
-            ?? throw new JsonException($"{field} must not be null.");
-        return value switch
-        {
-            "exact" => ToriiUaidManifestCountMode.Exact,
-            "bounded" => ToriiUaidManifestCountMode.Bounded,
-            _ => throw new JsonException($"{field} must be exact or bounded."),
-        };
-    }
-
     private static ulong ReadUInt64(ref Utf8JsonReader reader, string field)
     {
         if (reader.TokenType != JsonTokenType.Number || !reader.TryGetUInt64(out var value))
@@ -1790,13 +1637,6 @@ internal static class ToriiUaidJson
 
     private static ToriiUaidManifestStatus RequireManifestStatus(
         ToriiUaidManifestStatus? value,
-        string field)
-    {
-        return value ?? throw new JsonException($"{field} must not be null.");
-    }
-
-    private static ToriiUaidManifestCountMode RequireManifestCountMode(
-        ToriiUaidManifestCountMode? value,
         string field)
     {
         return value ?? throw new JsonException($"{field} must not be null.");
@@ -2084,23 +1924,5 @@ internal sealed class ToriiUaidManifestRecordJsonConverter : JsonConverter<Torii
     public override void Write(Utf8JsonWriter writer, ToriiUaidManifestRecord value, JsonSerializerOptions options)
     {
         ToriiUaidJson.WriteUaidManifestRecord(writer, value, "UAID manifest record");
-    }
-}
-
-internal sealed class ToriiUaidManifestsResponseJsonConverter : JsonConverter<ToriiUaidManifestsResponse>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiUaidManifestsResponse Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        return ToriiUaidJson.ReadUaidManifestsResponse(ref reader, "UAID manifests response");
-    }
-
-    public override void Write(Utf8JsonWriter writer, ToriiUaidManifestsResponse value, JsonSerializerOptions options)
-    {
-        ToriiUaidJson.WriteUaidManifestsResponse(writer, value, "UAID manifests response");
     }
 }

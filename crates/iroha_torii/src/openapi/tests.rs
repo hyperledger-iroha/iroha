@@ -17,6 +17,68 @@ use iroha_torii_shared::{
 use sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+#[cfg(feature = "app_api")]
+#[test]
+fn explorer_feeds_share_list_query_and_page_contract() {
+    let spec = compiled_spec();
+    for feed in [
+        "accounts",
+        "domains",
+        "asset-definitions",
+        "assets",
+        "nfts",
+        "rwas",
+        "blocks",
+        "transactions",
+        "transactions/latest",
+        "instructions",
+        "instructions/latest",
+    ] {
+        let path = format!("/v1/explorer/{feed}");
+        let get = &spec["paths"][path.as_str()]["get"];
+        let query_path = format!("{path}/query");
+        let post = &spec["paths"][query_path.as_str()]["post"];
+        let parameters = get["parameters"].as_array().expect("GET controls");
+        assert_eq!(
+            parameters
+                .iter()
+                .map(|value| value["name"].as_str().unwrap())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["filter", "select", "limit", "cursor"])
+        );
+        assert_eq!(
+            post["requestBody"]["content"]["application/json"]["schema"]["$ref"].as_str(),
+            Some("#/components/schemas/ExplorerListQuery")
+        );
+        let reference = get["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
+            .as_str()
+            .expect("page schema");
+        let page = &spec["components"]["schemas"]
+            [reference.strip_prefix("#/components/schemas/").unwrap()];
+        assert_eq!(
+            page["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|value| value.as_str().unwrap())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["items", "next_cursor"])
+        );
+        assert!(page["properties"].get("pagination").is_none());
+        assert_eq!(post["x-iroha-tool-effect"].as_str(), Some("read"));
+    }
+    assert!(
+        spec["components"]["schemas"]
+            .get("ExplorerCursorMeta")
+            .is_none()
+    );
+    assert!(
+        spec["components"]["schemas"]
+            .get("ExplorerHistoryCursorMeta")
+            .is_none()
+    );
+}
+
 #[test]
 fn canonical_output_contract_has_one_details_owner_and_header_without_result_root() {
     let schemas = openapi_schemas();
@@ -1977,8 +2039,8 @@ fn public_lane_reward_claim_schema_requires_exact_fee_consent() {
     assert_eq!(
         schemas["PublicLaneFeeRewardClaimV1"]["properties"]["lifecycle_seal"],
         norito::json!({
-            "type": "array", "minItems": 32, "maxItems": 32,
-            "items": {"type": "integer", "minimum": 0, "maximum": 255}
+            "type": "string", "minLength": 64, "maxLength": 64,
+            "pattern": "^[0-9A-Fa-f]{64}$"
         })
     );
     let xor = SumeragiNposParameters::default().xor_asset_definition_id;
@@ -2022,11 +2084,8 @@ fn public_lane_reward_claim_schema_requires_exact_fee_consent() {
                 BTreeSet::from(claim_fields)
             );
             assert_eq!(
-                encoded["fee_claim"]["lifecycle_seal"]
-                    .as_array()
-                    .unwrap()
-                    .len(),
-                32
+                encoded["fee_claim"]["lifecycle_seal"],
+                Value::String("A5".repeat(32))
             );
         } else {
             assert_eq!(encoded["fee_claim"], Value::Null);

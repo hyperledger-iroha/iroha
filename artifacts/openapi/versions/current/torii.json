@@ -488,6 +488,96 @@
         ],
         "type": "object"
       },
+      "AccountHistoryPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AccountHistoryRow"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` to read the next page; `null` on the last page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "AccountHistoryRow": {
+        "additionalProperties": false,
+        "description": "Account movements; select may omit any field.",
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "string"
+          },
+          "asset_definition_id": {
+            "type": "string"
+          },
+          "asset_id": {
+            "type": "string"
+          },
+          "block_height": {
+            "type": "integer"
+          },
+          "block_index": {
+            "type": "integer"
+          },
+          "counterparty_account_id": {
+            "type": "string"
+          },
+          "direction": {
+            "type": "string"
+          },
+          "expires_at_ms": {
+            "type": "integer"
+          },
+          "finalized_at_ms": {
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "movement_index": {
+            "type": "integer"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "requesting_fi_id": {
+            "type": "string"
+          },
+          "result_ok": {
+            "type": "boolean"
+          },
+          "source": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "timestamp_ms": {
+            "type": "integer"
+          },
+          "tx_hash": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "AccountOnboardingAliasIntentV1": {
         "additionalProperties": false,
         "description": "Exact account-alias intent embedded in a sponsored onboarding receipt.",
@@ -956,6 +1046,48 @@
         ],
         "type": "object"
       },
+      "AccountPermissionPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AccountPermissionRow"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` to read the next page; `null` on the last page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total": {
+            "description": "Exact match count; present only with `include_total`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "AccountPermissionRow": {
+        "additionalProperties": false,
+        "description": "Fields may be omitted by select projections.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/JsonValue"
+          }
+        },
+        "type": "object"
+      },
       "AccountReadResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1006,6 +1138,12 @@
             "pattern": "^[0-9a-f]{64}$",
             "type": "string"
           },
+          "request_generation": {
+            "description": "Exact immutable generation of the alias-bound native recovery request.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
           "signature_b64": {
             "maxLength": 88,
             "minLength": 88,
@@ -1019,7 +1157,51 @@
         "required": [
           "account_alias",
           "signer_account_id",
-          "fee_payment"
+          "fee_payment",
+          "request_generation"
+        ],
+        "type": "object"
+      },
+      "AccountRecoveryCancelRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "account_alias": {
+            "maxLength": 512,
+            "minLength": 3,
+            "type": "string"
+          },
+          "creation_time_ms": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
+          },
+          "public_key_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "request_generation": {
+            "description": "Exact immutable generation of the alias-bound native recovery request.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "signature_b64": {
+            "maxLength": 88,
+            "minLength": 88,
+            "type": "string"
+          },
+          "signer_account_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_alias",
+          "signer_account_id",
+          "fee_payment",
+          "request_generation"
         ],
         "type": "object"
       },
@@ -1042,6 +1224,12 @@
             "pattern": "^[0-9a-f]{64}$",
             "type": "string"
           },
+          "request_generation": {
+            "description": "Exact immutable generation of the alias-bound native recovery request.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
           "signature_b64": {
             "maxLength": 88,
             "minLength": 88,
@@ -1055,7 +1243,8 @@
         "required": [
           "account_alias",
           "signer_account_id",
-          "fee_payment"
+          "fee_payment",
+          "request_generation"
         ],
         "type": "object"
       },
@@ -1184,7 +1373,8 @@
               "SET_POLICY",
               "PROPOSE",
               "APPROVE",
-              "FINALIZE"
+              "FINALIZE",
+              "CANCEL"
             ],
             "type": "string"
           },
@@ -1363,6 +1553,12 @@
             "pattern": "^[0-9a-f]{64}$",
             "type": "string"
           },
+          "request_generation": {
+            "description": "Exact immutable generation of the alias-bound native recovery request.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
           "signature_b64": {
             "maxLength": 88,
             "minLength": 88,
@@ -1377,7 +1573,8 @@
           "account_alias",
           "signer_account_id",
           "fee_payment",
-          "new_controller"
+          "new_controller",
+          "request_generation"
         ],
         "type": "object"
       },
@@ -6240,6 +6437,65 @@
         ],
         "type": "object"
       },
+      "ContractActivityPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ContractActivityRow"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` to read the next page; `null` on the last page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "ContractActivityRow": {
+        "additionalProperties": false,
+        "description": "Committed contract calls; select may omit any field.",
+        "properties": {
+          "authority": {
+            "type": "string"
+          },
+          "block_height": {
+            "type": "integer"
+          },
+          "block_index": {
+            "type": "integer"
+          },
+          "contract_address": {
+            "type": "string"
+          },
+          "contract_alias": {
+            "type": "string"
+          },
+          "contract_entrypoint": {
+            "type": "string"
+          },
+          "contract_payload": {},
+          "entrypoint_hash": {
+            "type": "string"
+          },
+          "fee_payment": {},
+          "result_ok": {
+            "type": "boolean"
+          },
+          "timestamp_ms": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "ContractAliasBinding": {
         "additionalProperties": false,
         "properties": {
@@ -7402,6 +7658,93 @@
           "ledger_time_ms",
           "chain_discriminant"
         ],
+        "type": "object"
+      },
+      "ContractEventPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ContractEventRow"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` to read the next page; `null` on the last page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "ContractEventRow": {
+        "additionalProperties": false,
+        "description": "Committed contract events; select may omit any field.",
+        "properties": {
+          "asset_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "authority": {
+            "type": "string"
+          },
+          "block_hash_hex": {
+            "type": "string"
+          },
+          "block_height": {
+            "type": "integer"
+          },
+          "block_index": {
+            "type": "integer"
+          },
+          "contract_address": {
+            "type": "string"
+          },
+          "contract_alias": {
+            "type": "string"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "event_kind": {
+            "type": "string"
+          },
+          "fee_payment": {},
+          "module": {
+            "type": "string"
+          },
+          "numeric_fields": {},
+          "participants": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "payload": {},
+          "provenance": {
+            "type": "string"
+          },
+          "result_ok": {
+            "type": "boolean"
+          },
+          "schema_version": {
+            "type": "integer"
+          },
+          "timestamp_ms": {
+            "type": "integer"
+          },
+          "tx_hash_hex": {
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "ControlPlaneAuditEvent": {
@@ -9712,7 +10055,7 @@
           }
         ]
       },
-      "ExplorerAccountsCursorPage": {
+      "ExplorerAccountsPage": {
         "additionalProperties": false,
         "properties": {
           "items": {
@@ -9722,13 +10065,17 @@
             "maxItems": 100,
             "type": "array"
           },
-          "pagination": {
-            "$ref": "#/components/schemas/ExplorerCursorMeta"
+          "next_cursor": {
+            "maxLength": 4096,
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
-          "pagination",
-          "items"
+          "items",
+          "next_cursor"
         ],
         "type": "object"
       },
@@ -9801,27 +10148,7 @@
         ],
         "type": "object"
       },
-      "ExplorerAssetDefinitionsCursorPage": {
-        "additionalProperties": false,
-        "properties": {
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/ExplorerAssetDefinition"
-            },
-            "maxItems": 100,
-            "type": "array"
-          },
-          "pagination": {
-            "$ref": "#/components/schemas/ExplorerCursorMeta"
-          }
-        },
-        "required": [
-          "pagination",
-          "items"
-        ],
-        "type": "object"
-      },
-      "ExplorerAssetsCursorPage": {
+      "ExplorerAssetDefinitionsPage": {
         "additionalProperties": false,
         "properties": {
           "items": {
@@ -9830,71 +10157,22 @@
             },
             "maxItems": 100,
             "type": "array"
-          },
-          "pagination": {
-            "$ref": "#/components/schemas/ExplorerCursorMeta"
-          }
-        },
-        "required": [
-          "pagination",
-          "items"
-        ],
-        "type": "object"
-      },
-      "ExplorerBlocksHistoryPage": {
-        "additionalProperties": false,
-        "properties": {
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
-            "maxItems": 100,
-            "type": "array"
-          },
-          "pagination": {
-            "$ref": "#/components/schemas/ExplorerHistoryCursorMeta"
-          }
-        },
-        "required": [
-          "pagination",
-          "items"
-        ],
-        "type": "object"
-      },
-      "ExplorerCursorMeta": {
-        "additionalProperties": false,
-        "properties": {
-          "has_more": {
-            "type": "boolean"
-          },
-          "limit": {
-            "format": "uint32",
-            "maximum": 100,
-            "minimum": 1,
-            "type": "integer"
           },
           "next_cursor": {
-            "oneOf": [
-              {
-                "maxLength": 1424,
-                "minLength": 1,
-                "pattern": "^[A-Za-z0-9_-]+$",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
+            "maxLength": 4096,
+            "type": [
+              "string",
+              "null"
             ]
           }
         },
         "required": [
-          "limit",
-          "next_cursor",
-          "has_more"
+          "items",
+          "next_cursor"
         ],
         "type": "object"
       },
-      "ExplorerDomainsCursorPage": {
+      "ExplorerAssetsPage": {
         "additionalProperties": false,
         "properties": {
           "items": {
@@ -9904,66 +10182,65 @@
             "maxItems": 100,
             "type": "array"
           },
-          "pagination": {
-            "$ref": "#/components/schemas/ExplorerCursorMeta"
+          "next_cursor": {
+            "maxLength": 4096,
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
-          "pagination",
-          "items"
+          "items",
+          "next_cursor"
         ],
         "type": "object"
       },
-      "ExplorerHistoryCursorMeta": {
+      "ExplorerBlocksPage": {
         "additionalProperties": false,
-        "description": "Snapshot-bound seek metadata for one bounded Explorer history page. The opaque cursor is bound to the collection, committed snapshot, normalized filters, and the caller's visible-route-set digest.",
         "properties": {
-          "has_more": {
-            "type": "boolean"
-          },
-          "limit": {
-            "format": "uint32",
-            "maximum": 100,
-            "minimum": 1,
-            "type": "integer"
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "maxItems": 100,
+            "type": "array"
           },
           "next_cursor": {
-            "oneOf": [
-              {
-                "maxLength": 1424,
-                "minLength": 1,
-                "pattern": "^[A-Za-z0-9_-]+$",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
+            "maxLength": 4096,
+            "type": [
+              "string",
+              "null"
             ]
-          },
-          "snapshot_hash": {
-            "description": "Hash of the committed block at snapshot_height, or null when the chain is empty.",
-            "oneOf": [
-              {
-                "pattern": "^[0-9a-f]{64}$",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "snapshot_height": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
           }
         },
         "required": [
-          "limit",
-          "snapshot_height",
-          "snapshot_hash",
-          "next_cursor",
-          "has_more"
+          "items",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "ExplorerDomainsPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "next_cursor": {
+            "maxLength": 4096,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
         ],
         "type": "object"
       },
@@ -10076,27 +10353,7 @@
         ],
         "description": "Typed public explorer payload when a dedicated schema is available; otherwise the canonical public instruction projection."
       },
-      "ExplorerInstructionsHistoryPage": {
-        "additionalProperties": false,
-        "properties": {
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/ExplorerInstructionDetail"
-            },
-            "maxItems": 100,
-            "type": "array"
-          },
-          "pagination": {
-            "$ref": "#/components/schemas/ExplorerHistoryCursorMeta"
-          }
-        },
-        "required": [
-          "pagination",
-          "items"
-        ],
-        "type": "object"
-      },
-      "ExplorerNftsCursorPage": {
+      "ExplorerInstructionsPage": {
         "additionalProperties": false,
         "properties": {
           "items": {
@@ -10106,17 +10363,52 @@
             "maxItems": 100,
             "type": "array"
           },
-          "pagination": {
-            "$ref": "#/components/schemas/ExplorerCursorMeta"
+          "next_cursor": {
+            "maxLength": 4096,
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
-          "pagination",
-          "items"
+          "items",
+          "next_cursor"
         ],
         "type": "object"
       },
-      "ExplorerRwasCursorPage": {
+      "ExplorerListQuery": {
+        "additionalProperties": false,
+        "description": "Bounded Explorer feed query. Shared filter, select, limit and cursor; sort, aggregate and include_total are rejected. Empty pages can carry a continuation. See specs/torii/collection_queries.md.",
+        "properties": {
+          "cursor": {
+            "description": "The previous page's `next_cursor`.",
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "filter": {
+            "$ref": "#/components/schemas/CollectionFilter"
+          },
+          "limit": {
+            "default": 25,
+            "description": "Page size; a page may hold fewer rows when its scan budget is spent.",
+            "format": "uint32",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "select": {
+            "description": "Fields to return, at their full-row JSON paths.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64,
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ExplorerNftsPage": {
         "additionalProperties": false,
         "properties": {
           "items": {
@@ -10126,13 +10418,41 @@
             "maxItems": 100,
             "type": "array"
           },
-          "pagination": {
-            "$ref": "#/components/schemas/ExplorerCursorMeta"
+          "next_cursor": {
+            "maxLength": 4096,
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
-          "pagination",
-          "items"
+          "items",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "ExplorerRwasPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "next_cursor": {
+            "maxLength": 4096,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
         ],
         "type": "object"
       },
@@ -10165,7 +10485,7 @@
         ],
         "type": "object"
       },
-      "ExplorerTransactionsHistoryPage": {
+      "ExplorerTransactionsPage": {
         "additionalProperties": false,
         "properties": {
           "items": {
@@ -10175,13 +10495,17 @@
             "maxItems": 100,
             "type": "array"
           },
-          "pagination": {
-            "$ref": "#/components/schemas/ExplorerHistoryCursorMeta"
+          "next_cursor": {
+            "maxLength": 4096,
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
-          "pagination",
-          "items"
+          "items",
+          "next_cursor"
         ],
         "type": "object"
       },
@@ -24960,6 +25284,69 @@
         ],
         "type": "object"
       },
+      "MultisigExecutionEvidenceV1": {
+        "additionalProperties": false,
+        "description": "Data-only immutable multisig originals from one complete certified native World cut. Decoding grants no finality authority: the reader independently verifies the certified prefix, complete snapshot and both original records. Canonical response reader ceiling is 16777216 bytes.",
+        "properties": {
+          "approval_outcome": {
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 65536,
+            "minItems": 1,
+            "type": "array"
+          },
+          "context_id": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "entrypoint_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9A-F]{64}$",
+            "type": "string"
+          },
+          "height": {
+            "format": "uint64",
+            "minimum": 2,
+            "type": "integer"
+          },
+          "instructions_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "multisig_account_id": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "terminal_execution": {
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 65536,
+            "minItems": 1,
+            "type": "array"
+          },
+          "world_snapshot": {
+            "$ref": "#/components/schemas/WorldStateSnapshotV1"
+          }
+        },
+        "required": [
+          "height",
+          "context_id",
+          "multisig_account_id",
+          "entrypoint_hash",
+          "instructions_hash",
+          "world_snapshot",
+          "approval_outcome",
+          "terminal_execution"
+        ],
+        "type": "object",
+        "x-iroha-norito-frame": "iroha.torii.v1.multisig.execution-evidence.response"
+      },
       "MultisigInvalidateOutstandingPayload": {
         "additionalProperties": false,
         "description": "Exact MultisigInstructionBox custom payload that atomically terminalizes every other outstanding proposal. It must execute as the target multisig account.",
@@ -28126,6 +28513,9 @@
       "MusubiProviderCompletionAuthorityV1": {
         "additionalProperties": false,
         "properties": {
+          "completion_signer": {
+            "$ref": "#/components/schemas/MusubiAccountIdV1"
+          },
           "provider_owner": {
             "$ref": "#/components/schemas/MusubiAccountIdV1"
           },
@@ -28135,6 +28525,7 @@
         },
         "required": [
           "provider_owner",
+          "completion_signer",
           "signer_policy"
         ],
         "type": "object"
@@ -36744,14 +37135,10 @@
             "type": "integer"
           },
           "lifecycle_seal": {
-            "items": {
-              "maximum": 255,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "maxItems": 32,
-            "minItems": 32,
-            "type": "array"
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9A-Fa-f]{64}$",
+            "type": "string"
           },
           "source_asset": {
             "type": "string"
@@ -49588,6 +49975,11 @@
       "SorafsProviderIngestCompletionAuthorityV1": {
         "additionalProperties": false,
         "properties": {
+          "completion_signer": {
+            "description": "Canonical domainless I105 account explicitly selected by the current provider-owner authority to sign completion transactions.",
+            "minLength": 1,
+            "type": "string"
+          },
           "provider_owner": {
             "description": "Canonical domainless I105 provider-owner account identifier.",
             "minLength": 1,
@@ -49599,6 +49991,7 @@
         },
         "required": [
           "provider_owner",
+          "completion_signer",
           "signer_policy"
         ],
         "type": "object"
@@ -49836,7 +50229,7 @@
             "type": "integer"
           },
           "completed_by": {
-            "description": "Canonical domainless I105 account identifier; exactly equal to completion_authority.provider_owner.",
+            "description": "Canonical domainless I105 account identifier; exactly equal to completion_authority.completion_signer.",
             "minLength": 1,
             "type": "string"
           },
@@ -51248,6 +51641,35 @@
         ],
         "type": "object"
       },
+      "SubscriptionPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SubscriptionRow"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` to read the next page; `null` on the last page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total": {
+            "description": "Exact match count; present only with `include_total`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
       "SubscriptionPlanDraftRequestV1": {
         "additionalProperties": false,
         "properties": {
@@ -51296,6 +51718,117 @@
           "transaction_payload_b64",
           "signing_message_b64"
         ],
+        "type": "object"
+      },
+      "SubscriptionPlanPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SubscriptionPlanRow"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` to read the next page; `null` on the last page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total": {
+            "description": "Exact match count; present only with `include_total`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "SubscriptionPlanRow": {
+        "additionalProperties": false,
+        "description": "Fields may be omitted by select projections.",
+        "properties": {
+          "billing": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "id": {
+            "type": "string"
+          },
+          "pricing": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "provider": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SubscriptionRow": {
+        "additionalProperties": false,
+        "description": "Fields may be omitted by select projections.",
+        "properties": {
+          "billing_trigger_id": {
+            "type": "string"
+          },
+          "cancel_at_ms": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cancel_at_period_end": {
+            "type": "boolean"
+          },
+          "current_period_end_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "current_period_start_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "failure_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "invoice": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "next_charge_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "owned_by": {
+            "type": "string"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "subscriber": {
+            "type": "string"
+          },
+          "usage_accumulated": {
+            "$ref": "#/components/schemas/JsonValue"
+          }
+        },
         "type": "object"
       },
       "SubscriptionStateV1": {
@@ -53679,6 +54212,70 @@
           "payload",
           "signature"
         ],
+        "type": "object"
+      },
+      "UaidManifestPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/UaidManifestRow"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` to read the next page; `null` on the last page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total": {
+            "description": "Exact match count; present only with `include_total`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "UaidManifestRow": {
+        "additionalProperties": false,
+        "description": "Fields may be omitted by select projections.",
+        "properties": {
+          "accounts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "dataspace_alias": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dataspace_id": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "manifest_hash": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "UploadedModelRegisterPayload": {
@@ -58262,6 +58859,131 @@
         "x-iroha-tool-effect": "write"
       }
     },
+    "/v1/accounts/recovery/cancel": {
+      "post": {
+        "description": "Prepare or submit cancellation of the exact pending native request generation. The active controller may cancel directly; eligible guardians approve cancellation under the native recovery policy. The request must remain bound to the active controller lineage.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountRecoveryCancelRequest"
+              }
+            },
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountRecoveryMutationResponse"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid recovery payload.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Stable account alias, policy, or request not found.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Recovery state, controller lineage, quorum, timelock, or terminal evidence conflict.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Cancel an exact pending regulated account-recovery request.",
+        "tags": [
+          "Account Recovery"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "contracts.account_recovery_cancel_post"
+        },
+        "x-iroha-tool-effect": "write"
+      }
+    },
     "/v1/accounts/recovery/finalize": {
       "post": {
         "description": "Prepare or submit guardian-triggered finalization after native 2-of-3 quorum and the full 72-hour ledger timelock. Finalization atomically terminalizes every outstanding native multisig proposal before rekeying the stable alias.",
@@ -59145,7 +59867,7 @@
     },
     "/v1/accounts/{account_id}/history": {
       "get": {
-        "description": "List indexed account activity for the selected account, including incoming and outgoing value movement plus raw affected transactions. Supports pagination and optional asset filtering.",
+        "description": "Account movements in descending chain position order, with bounded authenticated history reads. Accepts shared filter, select, limit and cursor. Continue until next_cursor is null, including after short or empty pages. sort, include_total, aggregate, offset and count_mode are rejected. See specs/torii/collection_queries.md.",
         "parameters": [
           {
             "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
@@ -59157,38 +59879,39 @@
             }
           },
           {
-            "description": "Optional page size limit.",
+            "description": "Text filter, e.g. `owned_by = \"sorau…\" and quantity >= 10.5`.",
             "in": "query",
-            "name": "limit",
+            "name": "filter",
             "required": false,
             "schema": {
-              "format": "uint64",
-              "type": "integer"
+              "maxLength": 32768,
+              "type": "string"
             }
           },
           {
-            "description": "Optional starting offset (default 0).",
+            "description": "Comma-separated fields to return, e.g. `id,quantity`.",
             "in": "query",
-            "name": "offset",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Count mode: `bounded` omits exact totals; `exact` includes an exact `total`.",
-            "in": "query",
-            "name": "count_mode",
+            "name": "select",
             "required": false,
             "schema": {
               "type": "string"
             }
           },
           {
-            "description": "Filter activity by canonical Base58 asset id, asset definition id, or active asset alias.",
+            "description": "Page size.",
             "in": "query",
-            "name": "asset_id",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's `next_cursor`.",
+            "in": "query",
+            "name": "cursor",
             "required": false,
             "schema": {
               "type": "string"
@@ -59200,7 +59923,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/AccountHistoryPage"
                 }
               }
             },
@@ -59229,7 +59952,7 @@
             "IrohaCanonicalWitness": []
           }
         ],
-        "summary": "List indexed account history.",
+        "summary": "List account movements.",
         "tags": [
           "Accounts"
         ],
@@ -59240,6 +59963,77 @@
           "stableRouteId": "application.accounts_by_account_id_history_get"
         },
         "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/accounts/{account_id}/history/query": {
+      "post": {
+        "description": "Account movements in descending chain position order, with bounded authenticated history reads. Accepts shared filter, select, limit and cursor. Continue until next_cursor is null, including after short or empty pages. sort, include_total, aggregate, offset and count_mode are rejected. See specs/torii/collection_queries.md.",
+        "parameters": [
+          {
+            "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HistoryQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountHistoryPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Query account movements.",
+        "tags": [
+          "Accounts"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.accounts_by_account_id_history_query_post"
+        },
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/accounts/{account_id}/identifiers/claim-receipt": {
@@ -59314,7 +60108,7 @@
     },
     "/v1/accounts/{account_id}/permissions": {
       "get": {
-        "description": "List effective permissions granted to an account, including permissions inherited from assigned roles. Signed/internal reads fan out across all configured dataspaces so dataspace-scoped grants remain visible regardless of ingress; unsigned reads stay limited to caller-visible routes.",
+        "description": "Effective permissions, including direct and role grants. Accepts filter, sort, select, limit, cursor and include_total. Returns {items,next_cursor,total?}; pass next_cursor as cursor until null.",
         "parameters": [
           {
             "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
@@ -59324,6 +60118,63 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "Text filter, e.g. `owned_by = \"sorau…\" and quantity >= 10.5`.",
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "maxLength": 32768,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated sort keys; a leading `-` sorts descending, e.g. `-quantity,id`.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated fields to return, e.g. `id,quantity`.",
+            "in": "query",
+            "name": "select",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's `next_cursor`.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Add the exact match count as `total`; costs a full scan.",
+            "in": "query",
+            "name": "include_total",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -59331,7 +60182,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/AccountPermissionPage"
                 }
               }
             },
@@ -59369,6 +60220,77 @@
           "authentication": "optional_canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "application.accounts_by_account_id_permissions_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/accounts/{account_id}/permissions/query": {
+      "post": {
+        "description": "Effective permissions, including direct and role grants. Accepts the common CollectionQuery JSON body, including aggregate.",
+        "parameters": [
+          {
+            "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollectionQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountPermissionPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Query AccountPermission.",
+        "tags": [
+          "Accounts"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.accounts_by_account_id_permissions_query_post"
         },
         "x-iroha-tool-effect": "read"
       }
@@ -63406,100 +64328,45 @@
     },
     "/v1/contracts/activity": {
       "get": {
-        "description": "Return committed contract-call activity derived from transaction metadata, with pagination and contract-specific filtering.",
+        "description": "Committed contract calls in descending chain position order, with bounded authenticated history reads. Accepts shared filter, select, limit and cursor. Continue until next_cursor is null, including after short or empty pages. sort, include_total, aggregate, offset and count_mode are rejected. See specs/torii/collection_queries.md.",
         "parameters": [
           {
-            "description": "Optional page size limit.",
+            "description": "Text filter, e.g. `owned_by = \"sorau…\" and quantity >= 10.5`.",
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "maxLength": 32768,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated fields to return, e.g. `id,quantity`.",
+            "in": "query",
+            "name": "select",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size.",
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
-              "format": "uint64",
+              "format": "uint32",
+              "minimum": 1,
               "type": "integer"
             }
           },
           {
-            "description": "Optional starting offset (default 0).",
+            "description": "The previous page's `next_cursor`.",
             "in": "query",
-            "name": "offset",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Count mode: `bounded` omits exact totals; `exact` includes an exact `total`.",
-            "in": "query",
-            "name": "count_mode",
+            "name": "cursor",
             "required": false,
             "schema": {
               "type": "string"
-            }
-          },
-          {
-            "description": "Filter by canonical I105 authority.",
-            "in": "query",
-            "name": "authority",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter by contract address.",
-            "in": "query",
-            "name": "contract_address",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter by deployed contract alias.",
-            "in": "query",
-            "name": "contract_alias",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter by contract entrypoint name.",
-            "in": "query",
-            "name": "contract_entrypoint",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter items whose timestamp is greater than or equal to this value.",
-            "in": "query",
-            "name": "since_timestamp_ms",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Filter items whose timestamp is less than or equal to this value.",
-            "in": "query",
-            "name": "until_timestamp_ms",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Filter by execution outcome.",
-            "in": "query",
-            "name": "result_ok",
-            "required": false,
-            "schema": {
-              "type": "boolean"
             }
           }
         ],
@@ -63508,7 +64375,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/ContractActivityPage"
                 }
               }
             },
@@ -63537,7 +64404,7 @@
             "IrohaCanonicalWitness": []
           }
         ],
-        "summary": "List contract activity entries.",
+        "summary": "List committed contract calls.",
         "tags": [
           "Contracts"
         ],
@@ -63548,6 +64415,67 @@
           "stableRouteId": "application.contracts_activity_get"
         },
         "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/contracts/activity/query": {
+      "post": {
+        "description": "Committed contract calls in descending chain position order, with bounded authenticated history reads. Accepts shared filter, select, limit and cursor. Continue until next_cursor is null, including after short or empty pages. sort, include_total, aggregate, offset and count_mode are rejected. See specs/torii/collection_queries.md.",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HistoryQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContractActivityPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Query committed contract calls.",
+        "tags": [
+          "Contracts"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.contracts_activity_query_post"
+        },
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/contracts/aliases": {
@@ -65115,136 +66043,45 @@
     },
     "/v1/contracts/events": {
       "get": {
-        "description": "Return the indexed generic contract-event envelope derived from committed contract-call metadata, with pagination and contract-specific filtering.",
+        "description": "Committed contract events in descending chain position order, with bounded authenticated history reads. Accepts shared filter, select, limit and cursor. Continue until next_cursor is null, including after short or empty pages. sort, include_total, aggregate, offset and count_mode are rejected. See specs/torii/collection_queries.md.",
         "parameters": [
           {
-            "description": "Optional page size limit.",
+            "description": "Text filter, e.g. `owned_by = \"sorau…\" and quantity >= 10.5`.",
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "maxLength": 32768,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated fields to return, e.g. `id,quantity`.",
+            "in": "query",
+            "name": "select",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size.",
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
-              "format": "uint64",
+              "format": "uint32",
+              "minimum": 1,
               "type": "integer"
             }
           },
           {
-            "description": "Optional starting offset (default 0).",
+            "description": "The previous page's `next_cursor`.",
             "in": "query",
-            "name": "offset",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Count mode: `bounded` omits exact totals; `exact` includes an exact `total`.",
-            "in": "query",
-            "name": "count_mode",
+            "name": "cursor",
             "required": false,
             "schema": {
               "type": "string"
-            }
-          },
-          {
-            "description": "Filter by canonical I105 authority.",
-            "in": "query",
-            "name": "authority",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter by contract address.",
-            "in": "query",
-            "name": "contract_address",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter by deployed contract alias.",
-            "in": "query",
-            "name": "contract_alias",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter by derived module identifier.",
-            "in": "query",
-            "name": "module",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter by generic contract event kind.",
-            "in": "query",
-            "name": "event_kind",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter by participant account/account-alias-like references.",
-            "in": "query",
-            "name": "participant",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter by referenced asset identifier.",
-            "in": "query",
-            "name": "asset_id",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter by event provenance (`emitted` or `derived`).",
-            "in": "query",
-            "name": "provenance",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter items whose timestamp is greater than or equal to this value.",
-            "in": "query",
-            "name": "since_timestamp_ms",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Filter items whose timestamp is less than or equal to this value.",
-            "in": "query",
-            "name": "until_timestamp_ms",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Filter by execution outcome.",
-            "in": "query",
-            "name": "result_ok",
-            "required": false,
-            "schema": {
-              "type": "boolean"
             }
           }
         ],
@@ -65253,7 +66090,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/ContractEventPage"
                 }
               }
             },
@@ -65282,7 +66119,7 @@
             "IrohaCanonicalWitness": []
           }
         ],
-        "summary": "List generic contract events.",
+        "summary": "List committed contract events.",
         "tags": [
           "Contracts"
         ],
@@ -65293,6 +66130,67 @@
           "stableRouteId": "application.contracts_events_get"
         },
         "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/contracts/events/query": {
+      "post": {
+        "description": "Committed contract events in descending chain position order, with bounded authenticated history reads. Accepts shared filter, select, limit and cursor. Continue until next_cursor is null, including after short or empty pages. sort, include_total, aggregate, offset and count_mode are rejected. See specs/torii/collection_queries.md.",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HistoryQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContractEventPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Query committed contract events.",
+        "tags": [
+          "Contracts"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.contracts_events_query_post"
+        },
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/contracts/events/sse": {
@@ -69079,27 +69977,33 @@
     },
     "/v1/explorer/accounts": {
       "get": {
-        "description": "Seek through the canonical account index. Cursors are collection-, version-, and filter-bound; one request inspects at most 512 candidate keys.",
+        "description": "Bounded Explorer feed using shared ListQuery and Page. DTO rows and visibility-aware counters are preserved. Continue with next_cursor until null, including after empty pages. Cursors bind the collection, complete filter and current visibility; history also pins the committed snapshot. Sorting, totals and aggregates are rejected. See specs/torii/collection_queries.md.",
         "parameters": [
           {
-            "description": "Opaque canonical base64url cursor returned by the preceding request with the exact same collection and filters.",
             "in": "query",
-            "name": "cursor",
+            "name": "filter",
             "required": false,
             "schema": {
-              "maxLength": 1424,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
+              "description": "Shared text filter expression.",
               "type": "string"
             }
           },
           {
-            "description": "Maximum matching records to return (default 25, hard maximum 100). At most 512 indexed candidate keys are inspected per request; sparse filters may return fewer records with a continuation cursor.",
+            "in": "query",
+            "name": "select",
+            "required": false,
+            "schema": {
+              "description": "Comma-separated row field paths.",
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "default": 25,
+              "description": "Page size; a page may hold fewer rows when its scan budget is spent.",
               "format": "uint32",
               "maximum": 100,
               "minimum": 1,
@@ -69107,20 +70011,12 @@
             }
           },
           {
-            "description": "Filter accounts by bound alias domain.",
             "in": "query",
-            "name": "domain",
+            "name": "cursor",
             "required": false,
             "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter accounts by a held asset definition selector.",
-            "in": "query",
-            "name": "with_asset",
-            "required": false,
-            "schema": {
+              "description": "The previous page's `next_cursor`.",
+              "maxLength": 4096,
               "type": "string"
             }
           }
@@ -69130,7 +70026,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ExplorerAccountsCursorPage"
+                  "$ref": "#/components/schemas/ExplorerAccountsPage"
                 }
               }
             },
@@ -69168,6 +70064,66 @@
           "authentication": "optional_canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "application.explorer_accounts_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/explorer/accounts/query": {
+      "post": {
+        "description": "Bounded Explorer feed using shared ListQuery and Page. DTO rows and visibility-aware counters are preserved. Continue with next_cursor until null, including after empty pages. Cursors bind the collection, complete filter and current visibility; history also pins the committed snapshot. Sorting, totals and aggregates are rejected. See specs/torii/collection_queries.md.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExplorerListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplorerAccountsPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Query Explorer accounts.",
+        "tags": [
+          "Explorer"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.explorer_accounts_query_post"
         },
         "x-iroha-tool-effect": "read"
       }
@@ -69297,27 +70253,33 @@
     },
     "/v1/explorer/asset-definitions": {
       "get": {
-        "description": "Seek through maintained asset-definition indexes and enrich only the bounded result page.",
+        "description": "Bounded Explorer feed using shared ListQuery and Page. DTO rows and visibility-aware counters are preserved. Continue with next_cursor until null, including after empty pages. Cursors bind the collection, complete filter and current visibility; history also pins the committed snapshot. Sorting, totals and aggregates are rejected. See specs/torii/collection_queries.md.",
         "parameters": [
           {
-            "description": "Opaque canonical base64url cursor returned by the preceding request with the exact same collection and filters.",
             "in": "query",
-            "name": "cursor",
+            "name": "filter",
             "required": false,
             "schema": {
-              "maxLength": 1424,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
+              "description": "Shared text filter expression.",
               "type": "string"
             }
           },
           {
-            "description": "Maximum matching records to return (default 25, hard maximum 100). At most 512 indexed candidate keys are inspected per request; sparse filters may return fewer records with a continuation cursor.",
+            "in": "query",
+            "name": "select",
+            "required": false,
+            "schema": {
+              "description": "Comma-separated row field paths.",
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "default": 25,
+              "description": "Page size; a page may hold fewer rows when its scan budget is spent.",
               "format": "uint32",
               "maximum": 100,
               "minimum": 1,
@@ -69325,20 +70287,12 @@
             }
           },
           {
-            "description": "Filter asset definitions by immutable owning domain.",
             "in": "query",
-            "name": "owning_domain",
+            "name": "cursor",
             "required": false,
             "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter asset definitions by canonical owner account or on-chain account alias.",
-            "in": "query",
-            "name": "owned_by",
-            "required": false,
-            "schema": {
+              "description": "The previous page's `next_cursor`.",
+              "maxLength": 4096,
               "type": "string"
             }
           }
@@ -69348,7 +70302,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ExplorerAssetDefinitionsCursorPage"
+                  "$ref": "#/components/schemas/ExplorerAssetDefinitionsPage"
                 }
               }
             },
@@ -69386,6 +70340,66 @@
           "authentication": "optional_canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "application.explorer_asset_definitions_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/explorer/asset-definitions/query": {
+      "post": {
+        "description": "Bounded Explorer feed using shared ListQuery and Page. DTO rows and visibility-aware counters are preserved. Continue with next_cursor until null, including after empty pages. Cursors bind the collection, complete filter and current visibility; history also pins the committed snapshot. Sorting, totals and aggregates are rejected. See specs/torii/collection_queries.md.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExplorerListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplorerAssetDefinitionsPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Query Explorer asset-definitions.",
+        "tags": [
+          "Explorer"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.explorer_asset_definitions_query_post"
         },
         "x-iroha-tool-effect": "read"
       }
@@ -69575,27 +70589,33 @@
     },
     "/v1/explorer/assets": {
       "get": {
-        "description": "Seek through maintained asset indexes with optional owned_by/definition/asset_id filters. The cursor is bound to the exact normalized filter set.",
+        "description": "Bounded Explorer feed using shared ListQuery and Page. DTO rows and visibility-aware counters are preserved. Continue with next_cursor until null, including after empty pages. Cursors bind the collection, complete filter and current visibility; history also pins the committed snapshot. Sorting, totals and aggregates are rejected. See specs/torii/collection_queries.md.",
         "parameters": [
           {
-            "description": "Opaque canonical base64url cursor returned by the preceding request with the exact same collection and filters.",
             "in": "query",
-            "name": "cursor",
+            "name": "filter",
             "required": false,
             "schema": {
-              "maxLength": 1424,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
+              "description": "Shared text filter expression.",
               "type": "string"
             }
           },
           {
-            "description": "Maximum matching records to return (default 25, hard maximum 100). At most 512 indexed candidate keys are inspected per request; sparse filters may return fewer records with a continuation cursor.",
+            "in": "query",
+            "name": "select",
+            "required": false,
+            "schema": {
+              "description": "Comma-separated row field paths.",
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "default": 25,
+              "description": "Page size; a page may hold fewer rows when its scan budget is spent.",
               "format": "uint32",
               "maximum": 100,
               "minimum": 1,
@@ -69603,29 +70623,12 @@
             }
           },
           {
-            "description": "Filter assets by account owner (accepts canonical I105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
             "in": "query",
-            "name": "owned_by",
+            "name": "cursor",
             "required": false,
             "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter assets by asset definition selector (canonical Base58 asset definition id or on-chain alias `name#domain.dataspace` / `name#dataspace`).",
-            "in": "query",
-            "name": "definition",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter assets by canonical Base58 asset id.",
-            "in": "query",
-            "name": "asset_id",
-            "required": false,
-            "schema": {
+              "description": "The previous page's `next_cursor`.",
+              "maxLength": 4096,
               "type": "string"
             }
           }
@@ -69635,7 +70638,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ExplorerAssetsCursorPage"
+                  "$ref": "#/components/schemas/ExplorerAssetsPage"
                 }
               }
             },
@@ -69673,6 +70676,66 @@
           "authentication": "optional_canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "application.explorer_assets_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/explorer/assets/query": {
+      "post": {
+        "description": "Bounded Explorer feed using shared ListQuery and Page. DTO rows and visibility-aware counters are preserved. Continue with next_cursor until null, including after empty pages. Cursors bind the collection, complete filter and current visibility; history also pins the committed snapshot. Sorting, totals and aggregates are rejected. See specs/torii/collection_queries.md.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExplorerListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplorerAssetsPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Query Explorer assets.",
+        "tags": [
+          "Explorer"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.explorer_assets_query_post"
         },
         "x-iroha-tool-effect": "read"
       }
@@ -69740,31 +70803,47 @@
     },
     "/v1/explorer/blocks": {
       "get": {
-        "description": "List visible block summaries newest-first through a committed snapshot. Anonymous requests see active public dataspaces; a complete canonical account signature or witness adds the caller's authorized routes. Any partial or invalid authentication attempt returns 401. The opaque cursor is bound to this route, the committed snapshot, and the caller's visible-route-set digest.",
+        "description": "Bounded Explorer feed using shared ListQuery and Page. DTO rows and visibility-aware counters are preserved. Continue with next_cursor until null, including after empty pages. Cursors bind the collection, complete filter and current visibility; history also pins the committed snapshot. Sorting, totals and aggregates are rejected. See specs/torii/collection_queries.md.",
         "parameters": [
           {
-            "description": "Opaque canonical base64url cursor returned by the preceding request for the same visible-route set.",
             "in": "query",
-            "name": "cursor",
+            "name": "filter",
             "required": false,
             "schema": {
-              "maxLength": 1424,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
+              "description": "Shared text filter expression.",
               "type": "string"
             }
           },
           {
-            "description": "Maximum visible summaries to return (default 25, hard maximum 100). The history scan remains subject to Torii's hard candidate ceiling.",
+            "in": "query",
+            "name": "select",
+            "required": false,
+            "schema": {
+              "description": "Comma-separated row field paths.",
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "default": 25,
+              "description": "Page size; a page may hold fewer rows when its scan budget is spent.",
               "format": "uint32",
               "maximum": 100,
               "minimum": 1,
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "The previous page's `next_cursor`.",
+              "maxLength": 4096,
+              "type": "string"
             }
           }
         ],
@@ -69773,7 +70852,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ExplorerBlocksHistoryPage"
+                  "$ref": "#/components/schemas/ExplorerBlocksPage"
                 }
               }
             },
@@ -69811,6 +70890,66 @@
           "authentication": "optional_canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "application.explorer_blocks_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/explorer/blocks/query": {
+      "post": {
+        "description": "Bounded Explorer feed using shared ListQuery and Page. DTO rows and visibility-aware counters are preserved. Continue with next_cursor until null, including after empty pages. Cursors bind the collection, complete filter and current visibility; history also pins the committed snapshot. Sorting, totals and aggregates are rejected. See specs/torii/collection_queries.md.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExplorerListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplorerBlocksPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Query Explorer blocks.",
+        "tags": [
+          "Explorer"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.explorer_blocks_query_post"
         },
         "x-iroha-tool-effect": "read"
       }
@@ -69928,27 +71067,33 @@
     },
     "/v1/explorer/domains": {
       "get": {
-        "description": "Seek through the canonical domain or owner index without materializing the full selection.",
+        "description": "Bounded Explorer feed using shared ListQuery and Page. DTO rows and visibility-aware counters are preserved. Continue with next_cursor until null, including after empty pages. Cursors bind the collection, complete filter and current visibility; history also pins the committed snapshot. Sorting, totals and aggregates are rejected. See specs/torii/collection_queries.md.",
         "parameters": [
           {
-            "description": "Opaque canonical base64url cursor returned by the preceding request with the exact same collection and filters.",
             "in": "query",
-            "name": "cursor",
+            "name": "filter",
             "required": false,
             "schema": {
-              "maxLength": 1424,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
+              "description": "Shared text filter expression.",
               "type": "string"
             }
           },
           {
-            "description": "Maximum matching records to return (default 25, hard maximum 100). At most 512 indexed candidate keys are inspected per request; sparse filters may return fewer records with a continuation cursor.",
+            "in": "query",
+            "name": "select",
+            "required": false,
+            "schema": {
+              "description": "Comma-separated row field paths.",
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "default": 25,
+              "description": "Page size; a page may hold fewer rows when its scan budget is spent.",
               "format": "uint32",
               "maximum": 100,
               "minimum": 1,
@@ -69956,11 +71101,12 @@
             }
           },
           {
-            "description": "Filter domains by canonical owner account or on-chain account alias.",
             "in": "query",
-            "name": "owned_by",
+            "name": "cursor",
             "required": false,
             "schema": {
+              "description": "The previous page's `next_cursor`.",
+              "maxLength": 4096,
               "type": "string"
             }
           }
@@ -69970,7 +71116,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ExplorerDomainsCursorPage"
+                  "$ref": "#/components/schemas/ExplorerDomainsPage"
                 }
               }
             },
@@ -70008,6 +71154,66 @@
           "authentication": "optional_canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "application.explorer_domains_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/explorer/domains/query": {
+      "post": {
+        "description": "Bounded Explorer feed using shared ListQuery and Page. DTO rows and visibility-aware counters are preserved. Continue with next_cursor until null, including after empty pages. Cursors bind the collection, complete filter and current visibility; history also pins the committed snapshot. Sorting, totals and aggregates are rejected. See specs/torii/collection_queries.md.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExplorerListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplorerDomainsPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Query Explorer domains.",
+        "tags": [
+          "Explorer"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.explorer_domains_query_post"
         },
         "x-iroha-tool-effect": "read"
       }
@@ -70075,27 +71281,33 @@
     },
     "/v1/explorer/instructions": {
       "get": {
-        "description": "List visible instructions newest-first through a committed snapshot with optional account/authority/transaction/block/kind/asset_id filters. Anonymous requests see active public dataspaces; a complete canonical account signature or witness adds the caller's authorized routes. Any partial or invalid authentication attempt returns 401. The opaque cursor is bound to this route, snapshot, normalized filters, and visible-route-set digest.",
+        "description": "Bounded Explorer feed using shared ListQuery and Page. DTO rows and visibility-aware counters are preserved. Continue with next_cursor until null, including after empty pages. Cursors bind the collection, complete filter and current visibility; history also pins the committed snapshot. Sorting, totals and aggregates are rejected. See specs/torii/collection_queries.md.",
         "parameters": [
           {
-            "description": "Opaque canonical base64url cursor returned by the preceding request with the exact same filters and visible-route set.",
             "in": "query",
-            "name": "cursor",
+            "name": "filter",
             "required": false,
             "schema": {
-              "maxLength": 1424,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
+              "description": "Shared text filter expression.",
               "type": "string"
             }
           },
           {
-            "description": "Maximum visible instructions to return (default 25, hard maximum 100). The history scan remains subject to Torii's hard candidate ceiling.",
+            "in": "query",
+            "name": "select",
+            "required": false,
+            "schema": {
+              "description": "Comma-separated row field paths.",
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "default": 25,
+              "description": "Page size; a page may hold fewer rows when its scan budget is spent.",
               "format": "uint32",
               "maximum": 100,
               "minimum": 1,
@@ -70103,66 +71315,12 @@
             }
           },
           {
-            "description": "Filter instructions by authority account (accepts canonical I105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
             "in": "query",
-            "name": "authority",
+            "name": "cursor",
             "required": false,
             "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter instructions by referenced account (transfer participants, asset-owner scoped mint/burn/asset-metadata updates, multisig accounts, and public-lane reward assets; accepts canonical I105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
-            "in": "query",
-            "name": "account",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter instructions by transaction hash.",
-            "in": "query",
-            "name": "transaction_hash",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter instructions by transaction status (`committed` or `rejected`).",
-            "in": "query",
-            "name": "transaction_status",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter instructions by block height.",
-            "in": "query",
-            "name": "block",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Filter instructions by instruction kind (e.g., `transfer`, `mint`, `burn`).",
-            "in": "query",
-            "name": "kind",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter instructions by canonical Base58 asset id.",
-            "in": "query",
-            "name": "asset_id",
-            "required": false,
-            "schema": {
+              "description": "The previous page's `next_cursor`.",
+              "maxLength": 4096,
               "type": "string"
             }
           }
@@ -70172,7 +71330,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ExplorerInstructionsHistoryPage"
+                  "$ref": "#/components/schemas/ExplorerInstructionsPage"
                 }
               }
             },
@@ -70210,6 +71368,219 @@
           "authentication": "optional_canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "application.explorer_instructions_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/explorer/instructions/latest": {
+      "get": {
+        "description": "Bounded Explorer feed using shared ListQuery and Page. DTO rows and visibility-aware counters are preserved. Continue with next_cursor until null, including after empty pages. Cursors bind the collection, complete filter and current visibility; history also pins the committed snapshot. Sorting, totals and aggregates are rejected. See specs/torii/collection_queries.md.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "description": "Shared text filter expression.",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "select",
+            "required": false,
+            "schema": {
+              "description": "Comma-separated row field paths.",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "description": "Page size; a page may hold fewer rows when its scan budget is spent.",
+              "format": "uint32",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "The previous page's `next_cursor`.",
+              "maxLength": 4096,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplorerInstructionsPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "List instructions (explorer).",
+        "tags": [
+          "Explorer"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.explorer_instructions_latest_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/explorer/instructions/latest/query": {
+      "post": {
+        "description": "Bounded Explorer feed using shared ListQuery and Page. DTO rows and visibility-aware counters are preserved. Continue with next_cursor until null, including after empty pages. Cursors bind the collection, complete filter and current visibility; history also pins the committed snapshot. Sorting, totals and aggregates are rejected. See specs/torii/collection_queries.md.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExplorerListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplorerInstructionsPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Query Explorer instructions latest.",
+        "tags": [
+          "Explorer"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.explorer_instructions_latest_query_post"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/explorer/instructions/query": {
+      "post": {
+        "description": "Bounded Explorer feed using shared ListQuery and Page. DTO rows and visibility-aware counters are preserved. Continue with next_cursor until null, including after empty pages. Cursors bind the collection, complete filter and current visibility; history also pins the committed snapshot. Sorting, totals and aggregates are rejected. See specs/torii/collection_queries.md.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExplorerListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplorerInstructionsPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Query Explorer instructions.",
+        "tags": [
+          "Explorer"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.explorer_instructions_query_post"
         },
         "x-iroha-tool-effect": "read"
       }
@@ -70386,27 +71757,33 @@
     },
     "/v1/explorer/nfts": {
       "get": {
-        "description": "Seek through maintained NFT owner/domain indexes without full-selection sorting.",
+        "description": "Bounded Explorer feed using shared ListQuery and Page. DTO rows and visibility-aware counters are preserved. Continue with next_cursor until null, including after empty pages. Cursors bind the collection, complete filter and current visibility; history also pins the committed snapshot. Sorting, totals and aggregates are rejected. See specs/torii/collection_queries.md.",
         "parameters": [
           {
-            "description": "Opaque canonical base64url cursor returned by the preceding request with the exact same collection and filters.",
             "in": "query",
-            "name": "cursor",
+            "name": "filter",
             "required": false,
             "schema": {
-              "maxLength": 1424,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
+              "description": "Shared text filter expression.",
               "type": "string"
             }
           },
           {
-            "description": "Maximum matching records to return (default 25, hard maximum 100). At most 512 indexed candidate keys are inspected per request; sparse filters may return fewer records with a continuation cursor.",
+            "in": "query",
+            "name": "select",
+            "required": false,
+            "schema": {
+              "description": "Comma-separated row field paths.",
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "default": 25,
+              "description": "Page size; a page may hold fewer rows when its scan budget is spent.",
               "format": "uint32",
               "maximum": 100,
               "minimum": 1,
@@ -70414,20 +71791,12 @@
             }
           },
           {
-            "description": "Filter NFTs by canonical owner account or on-chain account alias.",
             "in": "query",
-            "name": "owned_by",
+            "name": "cursor",
             "required": false,
             "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter NFTs by domain.",
-            "in": "query",
-            "name": "domain",
-            "required": false,
-            "schema": {
+              "description": "The previous page's `next_cursor`.",
+              "maxLength": 4096,
               "type": "string"
             }
           }
@@ -70437,7 +71806,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ExplorerNftsCursorPage"
+                  "$ref": "#/components/schemas/ExplorerNftsPage"
                 }
               }
             },
@@ -70475,6 +71844,66 @@
           "authentication": "optional_canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "application.explorer_nfts_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/explorer/nfts/query": {
+      "post": {
+        "description": "Bounded Explorer feed using shared ListQuery and Page. DTO rows and visibility-aware counters are preserved. Continue with next_cursor until null, including after empty pages. Cursors bind the collection, complete filter and current visibility; history also pins the committed snapshot. Sorting, totals and aggregates are rejected. See specs/torii/collection_queries.md.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExplorerListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplorerNftsPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Query Explorer nfts.",
+        "tags": [
+          "Explorer"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.explorer_nfts_query_post"
         },
         "x-iroha-tool-effect": "read"
       }
@@ -70542,27 +71971,33 @@
     },
     "/v1/explorer/rwas": {
       "get": {
-        "description": "Seek through maintained RWA owner/domain indexes without full-selection sorting.",
+        "description": "Bounded Explorer feed using shared ListQuery and Page. DTO rows and visibility-aware counters are preserved. Continue with next_cursor until null, including after empty pages. Cursors bind the collection, complete filter and current visibility; history also pins the committed snapshot. Sorting, totals and aggregates are rejected. See specs/torii/collection_queries.md.",
         "parameters": [
           {
-            "description": "Opaque canonical base64url cursor returned by the preceding request with the exact same collection and filters.",
             "in": "query",
-            "name": "cursor",
+            "name": "filter",
             "required": false,
             "schema": {
-              "maxLength": 1424,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
+              "description": "Shared text filter expression.",
               "type": "string"
             }
           },
           {
-            "description": "Maximum matching records to return (default 25, hard maximum 100). At most 512 indexed candidate keys are inspected per request; sparse filters may return fewer records with a continuation cursor.",
+            "in": "query",
+            "name": "select",
+            "required": false,
+            "schema": {
+              "description": "Comma-separated row field paths.",
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "default": 25,
+              "description": "Page size; a page may hold fewer rows when its scan budget is spent.",
               "format": "uint32",
               "maximum": 100,
               "minimum": 1,
@@ -70570,20 +72005,12 @@
             }
           },
           {
-            "description": "Filter RWA lots by canonical owner account or on-chain account alias.",
             "in": "query",
-            "name": "owned_by",
+            "name": "cursor",
             "required": false,
             "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter RWA lots by domain.",
-            "in": "query",
-            "name": "domain",
-            "required": false,
-            "schema": {
+              "description": "The previous page's `next_cursor`.",
+              "maxLength": 4096,
               "type": "string"
             }
           }
@@ -70593,7 +72020,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ExplorerRwasCursorPage"
+                  "$ref": "#/components/schemas/ExplorerRwasPage"
                 }
               }
             },
@@ -70631,6 +72058,66 @@
           "authentication": "optional_canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "application.explorer_rwas_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/explorer/rwas/query": {
+      "post": {
+        "description": "Bounded Explorer feed using shared ListQuery and Page. DTO rows and visibility-aware counters are preserved. Continue with next_cursor until null, including after empty pages. Cursors bind the collection, complete filter and current visibility; history also pins the committed snapshot. Sorting, totals and aggregates are rejected. See specs/torii/collection_queries.md.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExplorerListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplorerRwasPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Query Explorer rwas.",
+        "tags": [
+          "Explorer"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.explorer_rwas_query_post"
         },
         "x-iroha-tool-effect": "read"
       }
@@ -70698,27 +72185,33 @@
     },
     "/v1/explorer/transactions": {
       "get": {
-        "description": "List visible transactions newest-first through a committed snapshot with optional authority/block/status/asset_id filters. Anonymous requests see active public dataspaces; a complete canonical account signature or witness adds the caller's authorized routes. Any partial or invalid authentication attempt returns 401. The opaque cursor is bound to this route, snapshot, normalized filters, and visible-route-set digest.",
+        "description": "Bounded Explorer feed using shared ListQuery and Page. DTO rows and visibility-aware counters are preserved. Continue with next_cursor until null, including after empty pages. Cursors bind the collection, complete filter and current visibility; history also pins the committed snapshot. Sorting, totals and aggregates are rejected. See specs/torii/collection_queries.md.",
         "parameters": [
           {
-            "description": "Opaque canonical base64url cursor returned by the preceding request with the exact same filters and visible-route set.",
             "in": "query",
-            "name": "cursor",
+            "name": "filter",
             "required": false,
             "schema": {
-              "maxLength": 1424,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_-]+$",
+              "description": "Shared text filter expression.",
               "type": "string"
             }
           },
           {
-            "description": "Maximum visible transactions to return (default 25, hard maximum 100). The history scan remains subject to Torii's hard candidate ceiling.",
+            "in": "query",
+            "name": "select",
+            "required": false,
+            "schema": {
+              "description": "Comma-separated row field paths.",
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "default": 25,
+              "description": "Page size; a page may hold fewer rows when its scan budget is spent.",
               "format": "uint32",
               "maximum": 100,
               "minimum": 1,
@@ -70726,39 +72219,12 @@
             }
           },
           {
-            "description": "Filter transactions by authority account (accepts canonical I105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
             "in": "query",
-            "name": "authority",
+            "name": "cursor",
             "required": false,
             "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter transactions by block height.",
-            "in": "query",
-            "name": "block",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Filter transactions by status (`committed` or `rejected`).",
-            "in": "query",
-            "name": "status",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter transactions by canonical Base58 asset id.",
-            "in": "query",
-            "name": "asset_id",
-            "required": false,
-            "schema": {
+              "description": "The previous page's `next_cursor`.",
+              "maxLength": 4096,
               "type": "string"
             }
           }
@@ -70768,7 +72234,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ExplorerTransactionsHistoryPage"
+                  "$ref": "#/components/schemas/ExplorerTransactionsPage"
                 }
               }
             },
@@ -70806,6 +72272,219 @@
           "authentication": "optional_canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "application.explorer_transactions_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/explorer/transactions/latest": {
+      "get": {
+        "description": "Bounded Explorer feed using shared ListQuery and Page. DTO rows and visibility-aware counters are preserved. Continue with next_cursor until null, including after empty pages. Cursors bind the collection, complete filter and current visibility; history also pins the committed snapshot. Sorting, totals and aggregates are rejected. See specs/torii/collection_queries.md.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "description": "Shared text filter expression.",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "select",
+            "required": false,
+            "schema": {
+              "description": "Comma-separated row field paths.",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "description": "Page size; a page may hold fewer rows when its scan budget is spent.",
+              "format": "uint32",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "The previous page's `next_cursor`.",
+              "maxLength": 4096,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplorerTransactionsPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "List transactions (explorer).",
+        "tags": [
+          "Explorer"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.explorer_transactions_latest_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/explorer/transactions/latest/query": {
+      "post": {
+        "description": "Bounded Explorer feed using shared ListQuery and Page. DTO rows and visibility-aware counters are preserved. Continue with next_cursor until null, including after empty pages. Cursors bind the collection, complete filter and current visibility; history also pins the committed snapshot. Sorting, totals and aggregates are rejected. See specs/torii/collection_queries.md.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExplorerListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplorerTransactionsPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Query Explorer transactions latest.",
+        "tags": [
+          "Explorer"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.explorer_transactions_latest_query_post"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/explorer/transactions/query": {
+      "post": {
+        "description": "Bounded Explorer feed using shared ListQuery and Page. DTO rows and visibility-aware counters are preserved. Continue with next_cursor until null, including after empty pages. Cursors bind the collection, complete filter and current visibility; history also pins the committed snapshot. Sorting, totals and aggregates are rejected. See specs/torii/collection_queries.md.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExplorerListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplorerTransactionsPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Query Explorer transactions.",
+        "tags": [
+          "Explorer"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.explorer_transactions_query_post"
         },
         "x-iroha-tool-effect": "read"
       }
@@ -82341,6 +84020,103 @@
           "stableRouteId": "contracts.multisig_cancel_post"
         },
         "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/multisig/execution-evidence/{multisig_account_id}/{entrypoint_hash}/{instructions_hash}": {
+      "get": {
+        "description": "Returns the complete native World snapshot and both immutable original records selected by exact account, entrypoint and instructions identities. Standard Torii listener access controls apply. The reader independently authenticates the certified prefix and snapshot; successful decoding grants no finality authority. Bounded admission, memory and egress controls fail closed. Responses are never stored.",
+        "parameters": [
+          {
+            "description": "Exact canonical encoded AccountId.",
+            "in": "path",
+            "name": "multisig_account_id",
+            "required": true,
+            "schema": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact lowercase native hash selector.",
+            "in": "path",
+            "name": "entrypoint_hash",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact lowercase native hash selector.",
+            "in": "path",
+            "name": "instructions_hash",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultisigExecutionEvidenceV1"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Both immutable originals at one certified native cut.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed or noncanonical native selector."
+          },
+          "406": {
+            "description": "Unsupported response representation."
+          },
+          "429": {
+            "description": "Read admission or rate limit reached."
+          },
+          "503": {
+            "description": "multisig_execution_evidence_unavailable: both immutable records are not available in the current certified native cut."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Read original multisig execution records at a certified native cut.",
+        "tags": [
+          "Multisig"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "multisig.execution_evidence"
+        },
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/multisig/proposals/query": {
@@ -112661,7 +114437,7 @@
     },
     "/v1/sorafs/provider/source": {
       "post": {
-        "description": "Read bounded canonical source metadata or one digest-verified chunk for the authenticated target provider owner under an exact live native replication assignment. Current and retained-floor same-State durable finality, both provider admissions, the approved retained manifest, exact order and assignment revision, and CanCompleteSorafsReplicationOrder permission are checked before and after payload I/O. Only healthy admitted payload is served. A missing chunk_index requests the Metadata variant once; a present index requests only the Chunk variant with its exact ordinal and bytes, without repeating the complete metadata. Each response is bounded to 4 MiB plus 4 KiB of framing. The response is source material, not completion evidence or a capability to sign or submit completion.",
+        "description": "Read bounded canonical source metadata or one digest-verified chunk for the authenticated governed completion signer of the target provider under an exact live native replication assignment. Current and retained-floor same-State durable finality, both provider admissions, the approved retained manifest, exact order and assignment revision, current full completion authority with its independent registered provider owner, and provider-scoped CanCompleteSorafsReplicationOrder permission are checked before and after payload I/O. Only healthy admitted payload is served. A missing chunk_index requests the Metadata variant once; a present index requests only the Chunk variant with its exact ordinal and bytes, without repeating the complete metadata. Each response is bounded to 4 MiB plus 4 KiB of framing. The response is source material, not completion evidence or a capability to sign or submit completion.",
         "requestBody": {
           "content": {
             "application/x-norito": {
@@ -113509,7 +115285,7 @@
     },
     "/v1/sorafs/replication": {
       "get": {
-        "description": "Return a fresh committed registry projection with exact canonical order bytes, the decoded V1 order, assignment revision, provider-owner signer-policy identity/revision/digest chain, and the finalized block anchor carried by every completion. Filters are canonical and case-sensitive; unknown, duplicate, empty, aliased, or out-of-range selectors are rejected.",
+        "description": "Return a fresh committed registry projection with exact canonical order bytes, the decoded V1 order, assignment revision, provider owner, governed completion signer, signer-policy identity/revision/digest chain, and the finalized block anchor carried by every completion. Filters are canonical and case-sensitive; unknown, duplicate, empty, aliased, or out-of-range selectors are rejected.",
         "parameters": [
           {
             "description": "Optional page size (default 50).",
@@ -118109,7 +119885,7 @@
     },
     "/v1/space-directory/uaids/{uaid}/manifests": {
       "get": {
-        "description": "Fetch manifests registered for a user account identifier.",
+        "description": "Manifest inventory for one UAID. Accepts filter, sort, select, limit, cursor and include_total. Returns {items,next_cursor,total?}; pass next_cursor as cursor until null.",
         "parameters": [
           {
             "description": "User account identifier.",
@@ -118119,6 +119895,63 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "Text filter, e.g. `owned_by = \"sorau…\" and quantity >= 10.5`.",
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "maxLength": 32768,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated sort keys; a leading `-` sorts descending, e.g. `-quantity,id`.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated fields to return, e.g. `id,quantity`.",
+            "in": "query",
+            "name": "select",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's `next_cursor`.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Add the exact match count as `total`; costs a full scan.",
+            "in": "query",
+            "name": "include_total",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -118126,7 +119959,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/UaidManifestPage"
                 }
               }
             },
@@ -118168,55 +120001,136 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/subscriptions": {
-      "get": {
-        "description": "List subscriptions with optional filters.",
+    "/v1/space-directory/uaids/{uaid}/manifests/query": {
+      "post": {
+        "description": "Manifest inventory for one UAID. Accepts the common CollectionQuery JSON body, including aggregate.",
         "parameters": [
           {
-            "description": "Filter subscriptions by subscriber account id (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`).",
+            "description": "User account identifier.",
+            "in": "path",
+            "name": "uaid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollectionQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UaidManifestPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Query UaidManifest.",
+        "tags": [
+          "SpaceDirectory"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.space_directory_uaids_by_uaid_manifests_query_post"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/subscriptions": {
+      "get": {
+        "description": "Subscriptions with flat state fields and optional invoice and plan. Accepts filter, sort, select, limit, cursor and include_total. Returns {items,next_cursor,total?}; pass next_cursor as cursor until null.",
+        "parameters": [
+          {
+            "description": "Text filter, e.g. `owned_by = \"sorau…\" and quantity >= 10.5`.",
             "in": "query",
-            "name": "owned_by",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "maxLength": 32768,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated sort keys; a leading `-` sorts descending, e.g. `-quantity,id`.",
+            "in": "query",
+            "name": "sort",
             "required": false,
             "schema": {
               "type": "string"
             }
           },
           {
-            "description": "Filter subscriptions by provider account id (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`).",
+            "description": "Comma-separated fields to return, e.g. `id,quantity`.",
             "in": "query",
-            "name": "provider",
+            "name": "select",
             "required": false,
             "schema": {
               "type": "string"
             }
           },
           {
-            "description": "Filter by status (`active`, `paused`, `past_due`, `canceled`, `suspended`).",
-            "in": "query",
-            "name": "status",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Optional page size limit.",
+            "description": "Page size.",
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
-              "format": "uint64",
+              "format": "uint32",
+              "minimum": 1,
               "type": "integer"
             }
           },
           {
-            "description": "Optional starting offset (default 0).",
+            "description": "The previous page's `next_cursor`.",
             "in": "query",
-            "name": "offset",
+            "name": "cursor",
             "required": false,
             "schema": {
-              "format": "uint64",
-              "type": "integer"
+              "type": "string"
+            }
+          },
+          {
+            "description": "Add the exact match count as `total`; costs a full scan.",
+            "in": "query",
+            "name": "include_total",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -118225,11 +120139,21 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/SubscriptionPage"
                 }
               }
             },
-            "description": "Successful response"
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -118397,35 +120321,63 @@
     },
     "/v1/subscriptions/plans": {
       "get": {
-        "description": "List subscription plans by provider.",
+        "description": "Subscription plans. Accepts filter, sort, select, limit, cursor and include_total. Returns {items,next_cursor,total?}; pass next_cursor as cursor until null.",
         "parameters": [
           {
-            "description": "Filter plans by provider account id (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`).",
+            "description": "Text filter, e.g. `owned_by = \"sorau…\" and quantity >= 10.5`.",
             "in": "query",
-            "name": "provider",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "maxLength": 32768,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated sort keys; a leading `-` sorts descending, e.g. `-quantity,id`.",
+            "in": "query",
+            "name": "sort",
             "required": false,
             "schema": {
               "type": "string"
             }
           },
           {
-            "description": "Optional page size limit.",
+            "description": "Comma-separated fields to return, e.g. `id,quantity`.",
+            "in": "query",
+            "name": "select",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size.",
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
-              "format": "uint64",
+              "format": "uint32",
+              "minimum": 1,
               "type": "integer"
             }
           },
           {
-            "description": "Optional starting offset (default 0).",
+            "description": "The previous page's `next_cursor`.",
             "in": "query",
-            "name": "offset",
+            "name": "cursor",
             "required": false,
             "schema": {
-              "format": "uint64",
-              "type": "integer"
+              "type": "string"
+            }
+          },
+          {
+            "description": "Add the exact match count as `total`; costs a full scan.",
+            "in": "query",
+            "name": "include_total",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -118434,11 +120386,21 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/SubscriptionPlanPage"
                 }
               }
             },
-            "description": "Successful response"
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -118602,6 +120564,114 @@
           "stableRouteId": "application.subscriptions_plans_post"
         },
         "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/subscriptions/plans/query": {
+      "post": {
+        "description": "Subscription plans. Accepts the common CollectionQuery JSON body, including aggregate.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollectionQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionPlanPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Query SubscriptionPlan.",
+        "tags": [
+          "Subscriptions"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "application.subscriptions_plans_query_post"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/subscriptions/query": {
+      "post": {
+        "description": "Subscriptions with flat state fields and optional invoice and plan. Accepts the common CollectionQuery JSON body, including aggregate.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollectionQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Query Subscription.",
+        "tags": [
+          "Subscriptions"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "application.subscriptions_query_post"
+        },
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/subscriptions/{subscription_id}": {
@@ -120318,55 +122388,6 @@
           "stableRouteId": "time.status"
         },
         "x-iroha-tool-effect": "operator"
-      }
-    },
-    "/v1/transactions/history": {
-      "get": {
-        "description": "Return the app-facing transaction history view for the active query filters.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "IrohaCanonicalAccount": [],
-            "IrohaCanonicalNonce": [],
-            "IrohaCanonicalSignature": [],
-            "IrohaCanonicalTimestampMs": []
-          },
-          {
-            "IrohaCanonicalWitness": []
-          }
-        ],
-        "summary": "List transaction history entries.",
-        "tags": [
-          "Transactions"
-        ],
-        "x-iroha-route-auth": {
-          "admission": "authenticated_account",
-          "authentication": "canonical_account_signature",
-          "schemaVersion": 1,
-          "stableRouteId": "application.transactions_history_get"
-        },
-        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/transactions/query": {

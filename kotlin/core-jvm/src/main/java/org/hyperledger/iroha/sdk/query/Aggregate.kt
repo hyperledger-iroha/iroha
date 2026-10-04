@@ -130,6 +130,12 @@ class AggregateSpec private constructor(
             (havingText?.hashCode() ?: 0)
 
     companion object {
+        /** Maximum number of `group_by` fields in one aggregate. */
+        const val MAX_GROUP_BY: Int = 8
+
+        /** Maximum number of metrics in one aggregate. */
+        const val MAX_METRICS: Int = 16
+
         @JvmStatic
         fun builder(): Builder = Builder()
 
@@ -202,7 +208,10 @@ class AggregateSpec private constructor(
         }
     }
 
-    /** Builder for [AggregateSpec]; at least one metric is required. */
+    /**
+     * Builder for [AggregateSpec]: at least one and at most [MAX_METRICS] metrics, and at most
+     * [MAX_GROUP_BY] grouping fields.
+     */
     class Builder internal constructor() {
         private val groupBy = ArrayList<FieldPath>()
         private val metrics = ArrayList<AggregateMetric>()
@@ -230,6 +239,12 @@ class AggregateSpec private constructor(
 
         fun build(): AggregateSpec {
             if (metrics.isEmpty()) throw ListQueryException("aggregate", "`metrics` must list at least one metric")
+            if (groupBy.size > MAX_GROUP_BY) {
+                throw ListQueryException("aggregate", "`group_by` lists at most $MAX_GROUP_BY fields")
+            }
+            if (metrics.size > MAX_METRICS) {
+                throw ListQueryException("aggregate", "`metrics` lists at most $MAX_METRICS metrics")
+            }
             having?.let {
                 try {
                     it.validate()

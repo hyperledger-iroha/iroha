@@ -1600,13 +1600,10 @@ mod tests {
     }
     #[test]
     fn contract_and_application_route_policies_are_projection_safe() {
-        assert_eq!(
-            application_api::TRANSACTIONS_HISTORY_GET.authentication(),
-            AuthenticationPolicy::CanonicalAccountSignature
-        );
-        assert_eq!(
-            application_api::TRANSACTIONS_HISTORY_GET.admission(),
-            AdmissionPolicy::AuthenticatedAccount
+        assert!(
+            contract_and_application_routes().iter()
+                .all(|route| route.path() != "/v1/transactions/history"),
+            "the retired offset history route must not be exposed",
         );
         for route in [
             contracts_and_verification_keys::CONTRACTS_ARTIFACTS_BY_DATASPACE_ID_BY_CODE_HASH_BYTES_GET,
