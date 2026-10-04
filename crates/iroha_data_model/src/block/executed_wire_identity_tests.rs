@@ -75,7 +75,7 @@ fn executed_identity_matches_resultless_and_nonempty_executed_wire() {
 #[test]
 fn executed_identity_excludes_original_complete_certificate_only() {
     let fixture = crate::sumeragi_finality::test_fixtures::NativeFinalityFixture::new();
-    let certified = decode_versioned_signed_block(&fixture.latest().block_wire).unwrap();
+    let certified = decode_framed_signed_block(&fixture.latest().block_wire).unwrap();
     assert!(certified.has_results());
     assert!(certified.network_entrypoint_count() > 0);
     assert!(!certified.execution_outputs().is_empty());

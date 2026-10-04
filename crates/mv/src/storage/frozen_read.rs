@@ -7,11 +7,6 @@
 use super::*;
 
 impl<K: Key, V: Value, A, M: StorageMode<K, V>> Detached<K, V, A, M> {
-    /// Borrow the exact original undo entries for the existing snapshot codec.
-    pub(crate) fn original_undo_entries(&self) -> impl Iterator<Item = (&K, &Option<V>)> {
-        self.revert.iter()
-    }
-
     /// Borrow the value before the original block's first mutation of `key`.
     ///
     /// A retained absent preimage stays absent; an untouched key comes from the

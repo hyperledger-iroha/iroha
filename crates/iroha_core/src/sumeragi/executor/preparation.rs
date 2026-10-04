@@ -99,12 +99,22 @@ pub(super) fn validation_failure(error: &BlockValidationError) -> Option<Publica
             StateViewError::Busy(wait) => PublicationDeferral::StateViewBusy(wait.clone()),
             StateViewError::Runtime(crate::state::LaneLifecycleError::NposPolicy(
                 crate::execution_attempt::ExecutionAttemptError::Deferred(reason),
+            )) if reason.reason() == ExecutionDeferral::LocalInvariantViolation => {
+                return Some(PublicationError::RecoveryRequired(reason.to_string()));
+            }
+            StateViewError::Runtime(crate::state::LaneLifecycleError::NposPolicy(
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason),
             )) => PublicationDeferral::Execution(reason.clone()),
             StateViewError::Changed | StateViewError::Poisoned | StateViewError::Runtime(_) => {
                 return Some(PublicationError::RecoveryRequired(original.to_string()));
             }
         },
         BlockValidationError::ExecutionDeferred(original) => {
+            if !cfg!(all(test, sumeragi_core_mutation = "HC86"))
+                && original.reason() == ExecutionDeferral::LocalInvariantViolation
+            {
+                return Some(PublicationError::RecoveryRequired(original.to_string()));
+            }
             PublicationDeferral::Execution(original.clone())
         }
         BlockValidationError::StateStorageAdmission(original) => match original {

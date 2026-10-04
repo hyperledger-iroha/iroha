@@ -99,6 +99,7 @@ mod current_policy_proof {
     use crate::{
         captured_schema_tests::Case,
         sorafs::reserve::{
+            account_proof::ReserveAccountProofV1,
             history::{ReserveEventJournalHeadV1, ReserveStateV1},
             proof::ReservePolicyProofV1,
         },
@@ -145,6 +146,7 @@ mod current_policy_proof {
         ReserveEventJournalHeadV1 => "iroha_data_model::sorafs::reserve::history::ReserveEventJournalHeadV1",
         ReserveStateV1 => "iroha_data_model::sorafs::reserve::history::ReserveStateV1",
         ReservePolicyProofV1 => "iroha_data_model::sorafs::reserve::proof::ReservePolicyProofV1",
+        ReserveAccountProofV1 => "iroha_data_model::sorafs::reserve::account_proof::ReserveAccountProofV1",
     }
 
     crate::captured_schema_tests::native_capture::owner_printer!(CURRENT_CASES);

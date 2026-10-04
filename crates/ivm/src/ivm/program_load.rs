@@ -11,11 +11,8 @@ pub(super) fn prepare<'a>(
     program: &'a [u8],
     budget: Option<&AllocationBudget>,
 ) -> Result<PreparedLoadImage<'a>, VMError> {
-    let parsed = ProgramMetadata::parse(program)?;
-    if parsed.metadata.abi_version != 1 {
-        return Err(VMError::InvalidMetadata);
-    }
-    if parsed.contract_interface.is_some() {
+    let header = ProgramMetadata::parse_header(program)?;
+    if header.declares_contract_interface() {
         let contract = match budget {
             Some(budget) => crate::prepare_contract_with_memory_budget(program, budget),
             None => crate::prepare_contract(Arc::<[u8]>::from(program)),
@@ -23,6 +20,7 @@ pub(super) fn prepare<'a>(
         .map_err(crate::ContractArtifactError::into_vm_error)?;
         return Ok(PreparedLoadImage::Contract(contract));
     }
+    let parsed = header.parse_sections()?;
     let strict_return_integrity = false;
     let header_len = parsed.header_len;
     let literal_prefix = parsed.prefix_len();

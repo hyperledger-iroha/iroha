@@ -706,7 +706,7 @@ fn compliance_unavailable_response() -> Response {
 #[cfg(not(feature = "app_api"))]
 fn enforce_compliance_subject(
     state: &SharedAppState,
-    kind: super::gateway::GatewayComplianceSubjectKindV1,
+    kind: sorafs_manifest::gateway_compliance::GatewayComplianceSubjectKindV1,
     subject: &str,
     observed_at_unix: u64,
 ) -> Result<(), Response> {
@@ -812,7 +812,7 @@ async fn enforce_local_pre_read(
         .duration_since(UNIX_EPOCH)
         .map_err(|_| compliance_unavailable_response())?
         .as_secs();
-    use super::gateway::GatewayComplianceSubjectKindV1;
+    use sorafs_manifest::gateway_compliance::GatewayComplianceSubjectKindV1;
     enforce_compliance_subject(
         state,
         GatewayComplianceSubjectKindV1::ManifestDigest,

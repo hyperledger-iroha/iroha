@@ -1,12 +1,12 @@
 //! Exact catalog linking declared canonical tables to actual State readers.
 //!
 //! The catalog contains 217 table outputs in 216 capture groups. Complete table
-//! coverage still refuses unresolved State schemas and cannot authorize finality.
+//! coverage admits declared schema metadata and cannot authorize finality.
 //! Even complete coverage will need one State publication cut, derived-index
 //! checks, durable Kura node custody, predecessor binding and recovery before
 //! any captured nodes may become an execution anchor.
-//! TODO: implement every declared table reader and consume the retained nodes
-//! through the State/Kura publication capsule after those checks are complete.
+//! TODO: capture prospective tables and cells from original frozen journals, then
+//! consume their retained nodes through the State/Kura publication capsule.
 //! Musubi availability/resolver/directory readers share one validated borrowed
 //! source. State transaction membership retains one writer-owned pair and frontier;
 //! its specialized node store still needs durable publication integration. Neither gate may be
@@ -19,17 +19,21 @@ use super::{
 };
 use super::{
     capture_account_rekey_records_once, capture_asset_definitions_once, capture_assets_once,
-    capture_contract_alias_bindings_once, capture_escrows_once, capture_nfts_once,
-    capture_repo_agreements_once, capture_rwas_once,
+    capture_contract_alias_bindings_once, capture_contract_subject_bindings_once,
+    capture_escrows_once, capture_governance_proposals_once, capture_nfts_once,
+    capture_proofs_once, capture_repo_agreements_once, capture_rwas_once,
+    capture_verifying_keys_once,
 };
 use crate::state::deserialize::musubi_source_work::{
     self, SourceValidationError, SourceWorkLimits, observation::MusubiSemanticTable,
 };
-use crate::state::{State, is_stable_state_view_generation};
+use crate::state::{State, StateBlock, is_stable_state_view_generation};
 use mv::storage::StorageReadOnly;
 
 #[path = "table_capture/catalog.rs"]
 mod catalog;
+#[path = "table_capture/frozen.rs"]
+pub(in crate::state) mod frozen;
 use super::transaction_membership::{
     CapturedMembershipCompanion, MembershipCaptureError, MembershipWorkLimits,
     capture_membership_group_once,
@@ -47,10 +51,25 @@ include!("table_capture/capture_macros.rs");
 #[path = "table_capture/checked_group_tests.rs"]
 mod checked_group_tests;
 #[cfg(test)]
+#[path = "table_capture/confidential_policy_tests.rs"]
+mod confidential_policy_tests;
+#[cfg(test)]
+#[path = "table_capture/contract_subject_tests.rs"]
+mod contract_subject_tests;
+#[cfg(test)]
 #[path = "table_capture/native_test_support.rs"]
 mod native_test_support;
 #[path = "table_capture/native_world.rs"]
 mod native_world;
+#[cfg(test)]
+#[path = "table_capture/proof_status_tests.rs"]
+mod proof_status_tests;
+#[cfg(test)]
+#[path = "table_capture/validation_fee_proposal_tests.rs"]
+mod validation_fee_proposal_tests;
+#[cfg(test)]
+#[path = "table_capture/verifying_key_tests.rs"]
+mod verifying_key_tests;
 
 #[path = "table_capture/musubi_native.rs"]
 mod musubi_native;
@@ -299,11 +318,6 @@ capture_trigger_semantic_once!(
 );
 
 capture_world_table_once!(
-    capture_verifying_keys_once,
-    verifying_keys,
-    "world.verifying_keys"
-);
-capture_world_table_once!(
     capture_consensus_keys_once,
     consensus_keys,
     "world.consensus_keys"
@@ -423,7 +437,6 @@ capture_world_table_once!(
     privacy_root_heads,
     "world.privacy_root_heads"
 );
-capture_world_table_once!(capture_proofs_once, proofs, "world.proofs");
 capture_world_table_once!(capture_proof_tags_once, proof_tags, "world.proof_tags");
 capture_world_table_once!(
     capture_consensus_evidence_once,
@@ -454,11 +467,6 @@ capture_world_table_once!(
     capture_contract_instances_once,
     contract_instances,
     "world.contract_instances"
-);
-capture_world_table_once!(
-    capture_contract_subject_bindings_once,
-    contract_subject_bindings,
-    "world.contract_subject_bindings"
 );
 capture_world_table_once!(
     capture_smart_contract_state_once,
@@ -649,58 +657,25 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
         capture: capture_accounts_table_once,
     },
     ALIAS_MATERIALIZER,
-    TableMaterializer::Single {
-        id: "world.ram_lfe_program_policies",
-        capture: capture_ram_lfe_program_policies_once,
-    },
-    TableMaterializer::Single {
-        id: "world.identifier_policies",
-        capture: capture_identifier_policies_once,
-    },
-    TableMaterializer::Single {
-        id: "world.fee_sponsor_programs",
-        capture: capture_fee_sponsor_programs_once,
-    },
-    TableMaterializer::Single {
-        id: "world.fee_sponsor_program_revisions",
-        capture: capture_fee_sponsor_program_revisions_once,
-    },
-    TableMaterializer::Single {
-        id: "world.fee_sponsor_enrollments",
-        capture: capture_fee_sponsor_enrollments_once,
-    },
-    TableMaterializer::Single {
-        id: "world.fee_sponsor_vaults",
-        capture: capture_fee_sponsor_vaults_once,
-    },
-    TableMaterializer::Single {
-        id: "world.fee_sponsor_budget_counters",
-        capture: capture_fee_sponsor_budget_counters_once,
-    },
-    TableMaterializer::Single {
-        id: "world.identifier_claims",
-        capture: capture_identifier_claims_once,
-    },
+    capture_ram_lfe_program_policies_once::MATERIALIZER,
+    capture_identifier_policies_once::MATERIALIZER,
+    capture_fee_sponsor_programs_once::MATERIALIZER,
+    capture_fee_sponsor_program_revisions_once::MATERIALIZER,
+    capture_fee_sponsor_enrollments_once::MATERIALIZER,
+    capture_fee_sponsor_vaults_once::MATERIALIZER,
+    capture_fee_sponsor_budget_counters_once::MATERIALIZER,
+    capture_identifier_claims_once::MATERIALIZER,
     TableMaterializer::Single {
         id: "world.account_rekey_records",
         capture: capture_account_rekey_records_once,
     },
-    TableMaterializer::Single {
-        id: "world.account_recovery_policies",
-        capture: capture_account_recovery_policies_once,
-    },
-    TableMaterializer::Single {
-        id: "world.account_recovery_requests",
-        capture: capture_account_recovery_requests_once,
-    },
+    capture_account_recovery_policies_once::MATERIALIZER,
+    capture_account_recovery_requests_once::MATERIALIZER,
     TableMaterializer::Single {
         id: "world.asset_definitions",
         capture: capture_asset_definitions_once,
     },
-    TableMaterializer::Single {
-        id: "world.asset_definition_alias_bindings",
-        capture: capture_asset_definition_alias_bindings_once,
-    },
+    capture_asset_definition_alias_bindings_once::MATERIALIZER,
     TableMaterializer::Single {
         id: "world.contract_alias_bindings",
         capture: capture_contract_alias_bindings_once,
@@ -709,10 +684,7 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
         id: "world.assets",
         capture: capture_assets_once,
     },
-    TableMaterializer::Single {
-        id: "world.asset_metadata",
-        capture: capture_asset_metadata_once,
-    },
+    capture_asset_metadata_once::MATERIALIZER,
     TableMaterializer::Single {
         id: "world.nfts",
         capture: capture_nfts_once,
@@ -721,130 +693,40 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
         id: "world.rwas",
         capture: capture_rwas_once,
     },
-    TableMaterializer::Single {
-        id: "world.roles",
-        capture: capture_roles_once,
-    },
-    TableMaterializer::Single {
-        id: "world.account_permissions",
-        capture: capture_account_permissions_once,
-    },
-    TableMaterializer::Single {
-        id: "world.account_roles",
-        capture: capture_account_roles_once,
-    },
-    TableMaterializer::Single {
-        id: "world.oracle_feeds",
-        capture: capture_oracle_feeds_once,
-    },
-    TableMaterializer::Single {
-        id: "world.oracle_observations",
-        capture: capture_oracle_observations_once,
-    },
-    TableMaterializer::Single {
-        id: "world.oracle_history",
-        capture: capture_oracle_history_once,
-    },
-    TableMaterializer::Single {
-        id: "world.oracle_provider_stats",
-        capture: capture_oracle_provider_stats_once,
-    },
-    TableMaterializer::Single {
-        id: "world.oracle_disputes",
-        capture: capture_oracle_disputes_once,
-    },
-    TableMaterializer::Single {
-        id: "world.oracle_changes",
-        capture: capture_oracle_changes_once,
-    },
-    TableMaterializer::Single {
-        id: "world.defi_oracle_attestations",
-        capture: capture_defi_oracle_attestations_once,
-    },
-    TableMaterializer::Single {
-        id: "world.twitter_bindings",
-        capture: capture_twitter_bindings_once,
-    },
-    TableMaterializer::Single {
-        id: "world.twitter_bindings_by_uaid",
-        capture: capture_twitter_bindings_by_uaid_once,
-    },
-    TableMaterializer::Single {
-        id: "world.viral_daily_counters",
-        capture: capture_viral_daily_counters_once,
-    },
-    TableMaterializer::Single {
-        id: "world.viral_binding_claims",
-        capture: capture_viral_binding_claims_once,
-    },
-    TableMaterializer::Single {
-        id: "world.viral_escrows",
-        capture: capture_viral_escrows_once,
-    },
-    TableMaterializer::Single {
-        id: "world.viral_bonus_paid",
-        capture: capture_viral_bonus_paid_once,
-    },
+    capture_roles_once::MATERIALIZER,
+    capture_account_permissions_once::MATERIALIZER,
+    capture_account_roles_once::MATERIALIZER,
+    capture_oracle_feeds_once::MATERIALIZER,
+    capture_oracle_observations_once::MATERIALIZER,
+    capture_oracle_history_once::MATERIALIZER,
+    capture_oracle_provider_stats_once::MATERIALIZER,
+    capture_oracle_disputes_once::MATERIALIZER,
+    capture_oracle_changes_once::MATERIALIZER,
+    capture_defi_oracle_attestations_once::MATERIALIZER,
+    capture_twitter_bindings_once::MATERIALIZER,
+    capture_twitter_bindings_by_uaid_once::MATERIALIZER,
+    capture_viral_daily_counters_once::MATERIALIZER,
+    capture_viral_binding_claims_once::MATERIALIZER,
+    capture_viral_escrows_once::MATERIALIZER,
+    capture_viral_bonus_paid_once::MATERIALIZER,
     TableMaterializer::Single {
         id: "world.asset_escrows",
         capture: capture_escrows_once,
     },
-    TableMaterializer::Single {
-        id: "world.execution_proof_profiles",
-        capture: capture_execution_proof_profiles_once,
-    },
-    TableMaterializer::Single {
-        id: "world.execution_proof_verifications",
-        capture: capture_execution_proof_verifications_once,
-    },
-    TableMaterializer::Single {
-        id: "world.game_sessions",
-        capture: capture_game_sessions_once,
-    },
-    TableMaterializer::Single {
-        id: "world.nft_sale_offers",
-        capture: capture_nft_sale_offers_once,
-    },
-    TableMaterializer::Single {
-        id: "world.nft_custody_records",
-        capture: capture_nft_custody_records_once,
-    },
-    TableMaterializer::Single {
-        id: "world.vpn_leases",
-        capture: capture_vpn_leases_once,
-    },
-    TableMaterializer::Single {
-        id: "world.space_directory_manifests",
-        capture: capture_space_directory_manifests_once,
-    },
-    TableMaterializer::Single {
-        id: "world.axt_handle_counters",
-        capture: capture_axt_handle_counters_once,
-    },
-    TableMaterializer::Single {
-        id: "world.axt_asset_incarnations",
-        capture: capture_axt_asset_incarnations_once,
-    },
-    TableMaterializer::Single {
-        id: "world.axt_replay_ledger",
-        capture: capture_axt_replay_ledger_once,
-    },
-    TableMaterializer::Single {
-        id: "world.axt_spend_nonce_ledger",
-        capture: capture_axt_spend_nonce_ledger_once,
-    },
-    TableMaterializer::Single {
-        id: "world.axt_source_transfer_replay_ledger",
-        capture: capture_axt_source_transfer_replay_ledger_once,
-    },
-    TableMaterializer::Single {
-        id: "world.axt_handle_budget_ledger",
-        capture: capture_axt_handle_budget_ledger_once,
-    },
-    TableMaterializer::Single {
-        id: "world.tx_sequences",
-        capture: capture_tx_sequences_once,
-    },
+    capture_execution_proof_profiles_once::MATERIALIZER,
+    capture_execution_proof_verifications_once::MATERIALIZER,
+    capture_game_sessions_once::MATERIALIZER,
+    capture_nft_sale_offers_once::MATERIALIZER,
+    capture_nft_custody_records_once::MATERIALIZER,
+    capture_vpn_leases_once::MATERIALIZER,
+    capture_space_directory_manifests_once::MATERIALIZER,
+    capture_axt_handle_counters_once::MATERIALIZER,
+    capture_axt_asset_incarnations_once::MATERIALIZER,
+    capture_axt_replay_ledger_once::MATERIALIZER,
+    capture_axt_spend_nonce_ledger_once::MATERIALIZER,
+    capture_axt_source_transfer_replay_ledger_once::MATERIALIZER,
+    capture_axt_handle_budget_ledger_once::MATERIALIZER,
+    capture_tx_sequences_once::MATERIALIZER,
     TableMaterializer::Single {
         id: "triggers.data",
         capture: capture_trigger_data_once,
@@ -869,625 +751,175 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
         id: "world.verifying_keys",
         capture: capture_verifying_keys_once,
     },
-    TableMaterializer::Single {
-        id: "world.consensus_keys",
-        capture: capture_consensus_keys_once,
-    },
-    TableMaterializer::Single {
-        id: "world.consensus_keys_by_pk",
-        capture: capture_consensus_keys_by_pk_once,
-    },
-    TableMaterializer::Single {
-        id: "world.domain_committees",
-        capture: capture_domain_committees_once,
-    },
-    TableMaterializer::Single {
-        id: "world.domain_endorsement_policies",
-        capture: capture_domain_endorsement_policies_once,
-    },
-    TableMaterializer::Single {
-        id: "world.domain_endorsements",
-        capture: capture_domain_endorsements_once,
-    },
-    TableMaterializer::Single {
-        id: "world.domain_endorsements_by_domain",
-        capture: capture_domain_endorsements_by_domain_once,
-    },
-    TableMaterializer::Single {
-        id: "world.pedersen_params",
-        capture: capture_pedersen_params_once,
-    },
-    TableMaterializer::Single {
-        id: "world.poseidon_params",
-        capture: capture_poseidon_params_once,
-    },
-    TableMaterializer::Single {
-        id: "world.runtime_upgrades",
-        capture: capture_runtime_upgrades_once,
-    },
-    TableMaterializer::Single {
-        id: "world.privacy_activations",
-        capture: capture_privacy_activations_once,
-    },
-    TableMaterializer::Single {
-        id: "world.private_settlement_governance",
-        capture: capture_private_settlement_governance_once,
-    },
-    TableMaterializer::Single {
-        id: "world.private_settlement_pools",
-        capture: capture_private_settlement_pools_once,
-    },
-    TableMaterializer::Single {
-        id: "world.private_settlement_roots",
-        capture: capture_private_settlement_roots_once,
-    },
-    TableMaterializer::Single {
-        id: "world.private_settlement_nullifiers",
-        capture: capture_private_settlement_nullifiers_once,
-    },
-    TableMaterializer::Single {
-        id: "world.private_settlement_outputs",
-        capture: capture_private_settlement_outputs_once,
-    },
-    TableMaterializer::Single {
-        id: "world.private_settlement_staged_locks",
-        capture: capture_private_settlement_staged_locks_once,
-    },
-    TableMaterializer::Single {
-        id: "world.private_settlement_receipts",
-        capture: capture_private_settlement_receipts_once,
-    },
-    TableMaterializer::Single {
-        id: "world.private_settlement_aborts",
-        capture: capture_private_settlement_aborts_once,
-    },
-    TableMaterializer::Single {
-        id: "world.privacy_pgc_accounts",
-        capture: capture_privacy_pgc_accounts_once,
-    },
-    TableMaterializer::Single {
-        id: "world.privacy_pgc_pool_invariants",
-        capture: capture_privacy_pgc_pool_invariants_once,
-    },
-    TableMaterializer::Single {
-        id: "world.privacy_nullifiers",
-        capture: capture_privacy_nullifiers_once,
-    },
-    TableMaterializer::Single {
-        id: "world.privacy_commitments",
-        capture: capture_privacy_commitments_once,
-    },
-    TableMaterializer::Single {
-        id: "world.privacy_roots",
-        capture: capture_privacy_roots_once,
-    },
-    TableMaterializer::Single {
-        id: "world.privacy_root_heads",
-        capture: capture_privacy_root_heads_once,
-    },
+    capture_consensus_keys_once::MATERIALIZER,
+    capture_consensus_keys_by_pk_once::MATERIALIZER,
+    capture_domain_committees_once::MATERIALIZER,
+    capture_domain_endorsement_policies_once::MATERIALIZER,
+    capture_domain_endorsements_once::MATERIALIZER,
+    capture_domain_endorsements_by_domain_once::MATERIALIZER,
+    capture_pedersen_params_once::MATERIALIZER,
+    capture_poseidon_params_once::MATERIALIZER,
+    capture_runtime_upgrades_once::MATERIALIZER,
+    capture_privacy_activations_once::MATERIALIZER,
+    capture_private_settlement_governance_once::MATERIALIZER,
+    capture_private_settlement_pools_once::MATERIALIZER,
+    capture_private_settlement_roots_once::MATERIALIZER,
+    capture_private_settlement_nullifiers_once::MATERIALIZER,
+    capture_private_settlement_outputs_once::MATERIALIZER,
+    capture_private_settlement_staged_locks_once::MATERIALIZER,
+    capture_private_settlement_receipts_once::MATERIALIZER,
+    capture_private_settlement_aborts_once::MATERIALIZER,
+    capture_privacy_pgc_accounts_once::MATERIALIZER,
+    capture_privacy_pgc_pool_invariants_once::MATERIALIZER,
+    capture_privacy_nullifiers_once::MATERIALIZER,
+    capture_privacy_commitments_once::MATERIALIZER,
+    capture_privacy_roots_once::MATERIALIZER,
+    capture_privacy_root_heads_once::MATERIALIZER,
     TableMaterializer::Single {
         id: "world.proofs",
         capture: capture_proofs_once,
     },
-    TableMaterializer::Single {
-        id: "world.proof_tags",
-        capture: capture_proof_tags_once,
-    },
-    TableMaterializer::Single {
-        id: "world.consensus_evidence",
-        capture: capture_consensus_evidence_once,
-    },
-    TableMaterializer::Single {
-        id: "world.contract_manifests",
-        capture: capture_contract_manifests_once,
-    },
-    TableMaterializer::Single {
-        id: "world.contract_code",
-        capture: capture_contract_code_once,
-    },
-    TableMaterializer::Single {
-        id: "world.contract_code_uploads",
-        capture: capture_contract_code_uploads_once,
-    },
-    TableMaterializer::Single {
-        id: "world.contract_code_upload_chunks",
-        capture: capture_contract_code_upload_chunks_once,
-    },
-    TableMaterializer::Single {
-        id: "world.contract_instances",
-        capture: capture_contract_instances_once,
-    },
+    capture_proof_tags_once::MATERIALIZER,
+    capture_consensus_evidence_once::MATERIALIZER,
+    capture_contract_manifests_once::MATERIALIZER,
+    capture_contract_code_once::MATERIALIZER,
+    capture_contract_code_uploads_once::MATERIALIZER,
+    capture_contract_code_upload_chunks_once::MATERIALIZER,
+    capture_contract_instances_once::MATERIALIZER,
     TableMaterializer::Single {
         id: "world.contract_subject_bindings",
         capture: capture_contract_subject_bindings_once,
     },
-    TableMaterializer::Single {
-        id: "world.smart_contract_state",
-        capture: capture_smart_contract_state_once,
-    },
-    TableMaterializer::Single {
-        id: "world.musubi_namespace_bindings",
-        capture: capture_musubi_namespace_bindings_once,
-    },
-    TableMaterializer::Single {
-        id: "world.musubi_domain_ownership_generations",
-        capture: capture_musubi_domain_ownership_generations_once,
-    },
-    TableMaterializer::Single {
-        id: "world.musubi_packages",
-        capture: capture_musubi_packages_once,
-    },
-    TableMaterializer::Single {
-        id: "world.musubi_package_metadata",
-        capture: capture_musubi_package_metadata_once,
-    },
-    TableMaterializer::Single {
-        id: "world.musubi_package_members",
-        capture: capture_musubi_package_members_once,
-    },
-    TableMaterializer::Single {
-        id: "world.musubi_package_invitations",
-        capture: capture_musubi_package_invitations_once,
-    },
-    TableMaterializer::Single {
-        id: "world.musubi_releases",
-        capture: capture_musubi_releases_once,
-    },
-    TableMaterializer::Single {
-        id: "world.musubi_archives",
-        capture: capture_musubi_archives_once,
-    },
-    TableMaterializer::Single {
-        id: "world.musubi_pin_outbox_high_waters",
-        capture: capture_musubi_pin_outbox_high_waters_once,
-    },
-    TableMaterializer::Single {
-        id: "world.musubi_provider_bundle_attestations",
-        capture: capture_musubi_provider_bundle_attestations_once,
-    },
-    TableMaterializer::Single {
-        id: "world.musubi_archive_locations",
-        capture: capture_musubi_archive_locations_once,
-    },
+    capture_smart_contract_state_once::MATERIALIZER,
+    capture_musubi_namespace_bindings_once::MATERIALIZER,
+    capture_musubi_domain_ownership_generations_once::MATERIALIZER,
+    capture_musubi_packages_once::MATERIALIZER,
+    capture_musubi_package_metadata_once::MATERIALIZER,
+    capture_musubi_package_members_once::MATERIALIZER,
+    capture_musubi_package_invitations_once::MATERIALIZER,
+    capture_musubi_releases_once::MATERIALIZER,
+    capture_musubi_archives_once::MATERIALIZER,
+    capture_musubi_pin_outbox_high_waters_once::MATERIALIZER,
+    capture_musubi_provider_bundle_attestations_once::MATERIALIZER,
+    capture_musubi_archive_locations_once::MATERIALIZER,
     TableMaterializer::MusubiSemantic(&MusubiSemanticTable::Availability),
     TableMaterializer::MusubiSemantic(&MusubiSemanticTable::Resolver),
-    TableMaterializer::Single {
-        id: "world.musubi_resolver_index_checkpoints",
-        capture: capture_musubi_resolver_index_checkpoints_once,
-    },
+    capture_musubi_resolver_index_checkpoints_once::MATERIALIZER,
     TableMaterializer::MusubiSemantic(&MusubiSemanticTable::Directory),
-    TableMaterializer::Single {
-        id: "world.musubi_aliases",
-        capture: capture_musubi_aliases_once,
-    },
-    TableMaterializer::Single {
-        id: "world.musubi_alias_history",
-        capture: capture_musubi_alias_history_once,
-    },
-    TableMaterializer::Single {
-        id: "world.musubi_governance_decisions",
-        capture: capture_musubi_governance_decisions_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_service_revisions",
-        capture: native_world::capture_soracloud_service_revisions_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_service_deployments",
-        capture: native_world::capture_soracloud_service_deployments_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_app_infra_states",
-        capture: native_world::capture_soracloud_app_infra_states_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_service_runtime",
-        capture: native_world::capture_soracloud_service_runtime_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_inrou_replica_runtime",
-        capture: native_world::capture_soracloud_inrou_replica_runtime_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_service_audit_events",
-        capture: native_world::capture_soracloud_service_audit_events_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_app_infra_audit_events",
-        capture: native_world::capture_soracloud_app_infra_audit_events_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_service_state_entries",
-        capture: native_world::capture_soracloud_service_state_entries_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_decryption_request_records",
-        capture: native_world::capture_soracloud_decryption_request_records_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_agent_apartments",
-        capture: native_world::capture_soracloud_agent_apartments_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_agent_apartment_audit_events",
-        capture: native_world::capture_soracloud_agent_apartment_audit_events_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_training_jobs",
-        capture: native_world::capture_soracloud_training_jobs_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_training_job_audit_events",
-        capture: native_world::capture_soracloud_training_job_audit_events_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_model_registries",
-        capture: native_world::capture_soracloud_model_registries_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_model_weight_versions",
-        capture: native_world::capture_soracloud_model_weight_versions_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_model_weight_audit_events",
-        capture: native_world::capture_soracloud_model_weight_audit_events_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_model_artifacts",
-        capture: native_world::capture_soracloud_model_artifacts_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_model_artifact_audit_events",
-        capture: native_world::capture_soracloud_model_artifact_audit_events_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_uploaded_model_bundles",
-        capture: native_world::capture_soracloud_uploaded_model_bundles_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_inrou_host_capabilities",
-        capture: native_world::capture_soracloud_inrou_host_capabilities_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_hf_sources",
-        capture: native_world::capture_soracloud_hf_sources_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_hf_shared_lease_pools",
-        capture: native_world::capture_soracloud_hf_shared_lease_pools_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_hf_shared_lease_members",
-        capture: native_world::capture_soracloud_hf_shared_lease_members_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_hf_shared_lease_audit_events",
-        capture: native_world::capture_soracloud_hf_shared_lease_audit_events_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_inrou_service_placements",
-        capture: native_world::capture_soracloud_inrou_service_placements_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_mailbox_messages",
-        capture: native_world::capture_soracloud_mailbox_messages_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soracloud_runtime_receipts",
-        capture: native_world::capture_soracloud_runtime_receipts_once,
-    },
-    TableMaterializer::Single {
-        id: "world.capacity_declarations",
-        capture: native_world::capture_capacity_declarations_once,
-    },
-    TableMaterializer::Single {
-        id: "world.capacity_fee_ledger",
-        capture: native_world::capture_capacity_fee_ledger_once,
-    },
-    TableMaterializer::Single {
-        id: "world.capacity_disputes",
-        capture: native_world::capture_capacity_disputes_once,
-    },
-    TableMaterializer::Single {
-        id: "world.provider_credit_ledger",
-        capture: native_world::capture_provider_credit_ledger_once,
-    },
-    TableMaterializer::Single {
-        id: "world.provider_owners",
-        capture: native_world::capture_provider_owners_once,
-    },
-    TableMaterializer::Single {
-        id: "world.provider_ingest_completion_authorities",
-        capture: native_world::capture_provider_ingest_completion_authorities_once,
-    },
-    TableMaterializer::Single {
-        id: "world.da_pin_intents_by_ticket",
-        capture: native_world::capture_da_pin_intents_by_ticket_once,
-    },
-    TableMaterializer::Single {
-        id: "world.da_pin_intents_by_alias",
-        capture: native_world::capture_da_pin_intents_by_alias_once,
-    },
-    TableMaterializer::Single {
-        id: "world.pin_manifests",
-        capture: native_world::capture_pin_manifests_once,
-    },
-    TableMaterializer::Single {
-        id: "world.manifest_aliases",
-        capture: native_world::capture_manifest_aliases_once,
-    },
-    TableMaterializer::Single {
-        id: "world.replication_orders",
-        capture: native_world::capture_replication_orders_once,
-    },
-    TableMaterializer::Single {
-        id: "world.content_bundles",
-        capture: native_world::capture_content_bundles_once,
-    },
-    TableMaterializer::Single {
-        id: "world.content_chunks",
-        capture: native_world::capture_content_chunks_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soradns_directory_records",
-        capture: native_world::capture_soradns_directory_records_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soradns_directory_pending",
-        capture: native_world::capture_soradns_directory_pending_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soradns_directory_history",
-        capture: native_world::capture_soradns_directory_history_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soradns_directory_prev_of",
-        capture: native_world::capture_soradns_directory_prev_of_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soradns_directory_revocations",
-        capture: native_world::capture_soradns_directory_revocations_once,
-    },
-    TableMaterializer::Single {
-        id: "world.soradns_release_signers",
-        capture: native_world::capture_soradns_release_signers_once,
-    },
+    capture_musubi_aliases_once::MATERIALIZER,
+    capture_musubi_alias_history_once::MATERIALIZER,
+    capture_musubi_governance_decisions_once::MATERIALIZER,
+    native_world::capture_soracloud_service_revisions_once::MATERIALIZER,
+    native_world::capture_soracloud_service_deployments_once::MATERIALIZER,
+    native_world::capture_soracloud_app_infra_states_once::MATERIALIZER,
+    native_world::capture_soracloud_service_runtime_once::MATERIALIZER,
+    native_world::capture_soracloud_inrou_replica_runtime_once::MATERIALIZER,
+    native_world::capture_soracloud_service_audit_events_once::MATERIALIZER,
+    native_world::capture_soracloud_app_infra_audit_events_once::MATERIALIZER,
+    native_world::capture_soracloud_service_state_entries_once::MATERIALIZER,
+    native_world::capture_soracloud_decryption_request_records_once::MATERIALIZER,
+    native_world::capture_soracloud_agent_apartments_once::MATERIALIZER,
+    native_world::capture_soracloud_agent_apartment_audit_events_once::MATERIALIZER,
+    native_world::capture_soracloud_training_jobs_once::MATERIALIZER,
+    native_world::capture_soracloud_training_job_audit_events_once::MATERIALIZER,
+    native_world::capture_soracloud_model_registries_once::MATERIALIZER,
+    native_world::capture_soracloud_model_weight_versions_once::MATERIALIZER,
+    native_world::capture_soracloud_model_weight_audit_events_once::MATERIALIZER,
+    native_world::capture_soracloud_model_artifacts_once::MATERIALIZER,
+    native_world::capture_soracloud_model_artifact_audit_events_once::MATERIALIZER,
+    native_world::capture_soracloud_uploaded_model_bundles_once::MATERIALIZER,
+    native_world::capture_soracloud_inrou_host_capabilities_once::MATERIALIZER,
+    native_world::capture_soracloud_hf_sources_once::MATERIALIZER,
+    native_world::capture_soracloud_hf_shared_lease_pools_once::MATERIALIZER,
+    native_world::capture_soracloud_hf_shared_lease_members_once::MATERIALIZER,
+    native_world::capture_soracloud_hf_shared_lease_audit_events_once::MATERIALIZER,
+    native_world::capture_soracloud_inrou_service_placements_once::MATERIALIZER,
+    native_world::capture_soracloud_mailbox_messages_once::MATERIALIZER,
+    native_world::capture_soracloud_runtime_receipts_once::MATERIALIZER,
+    native_world::capture_capacity_declarations_once::MATERIALIZER,
+    native_world::capture_capacity_fee_ledger_once::MATERIALIZER,
+    native_world::capture_capacity_disputes_once::MATERIALIZER,
+    native_world::capture_provider_credit_ledger_once::MATERIALIZER,
+    native_world::capture_provider_owners_once::MATERIALIZER,
+    native_world::capture_provider_ingest_completion_authorities_once::MATERIALIZER,
+    native_world::capture_da_pin_intents_by_ticket_once::MATERIALIZER,
+    native_world::capture_da_pin_intents_by_alias_once::MATERIALIZER,
+    native_world::capture_pin_manifests_once::MATERIALIZER,
+    native_world::capture_manifest_aliases_once::MATERIALIZER,
+    native_world::capture_replication_orders_once::MATERIALIZER,
+    native_world::capture_content_bundles_once::MATERIALIZER,
+    native_world::capture_content_chunks_once::MATERIALIZER,
+    native_world::capture_soradns_directory_records_once::MATERIALIZER,
+    native_world::capture_soradns_directory_pending_once::MATERIALIZER,
+    native_world::capture_soradns_directory_history_once::MATERIALIZER,
+    native_world::capture_soradns_directory_prev_of_once::MATERIALIZER,
+    native_world::capture_soradns_directory_revocations_once::MATERIALIZER,
+    native_world::capture_soradns_release_signers_once::MATERIALIZER,
     TableMaterializer::Single {
         id: "world.repo_agreements",
         capture: capture_repo_agreements_once,
     },
-    TableMaterializer::Single {
-        id: "world.settlement_receipts",
-        capture: native_world::capture_settlement_receipts_once,
-    },
-    TableMaterializer::Single {
-        id: "world.kagemusha_reserve_pools",
-        capture: native_world::capture_kagemusha_reserve_pools_once,
-    },
-    TableMaterializer::Single {
-        id: "world.kagemusha_reserve_operations",
-        capture: native_world::capture_kagemusha_reserve_operations_once,
-    },
-    TableMaterializer::Single {
-        id: "world.kagemusha_mint_credit_operations",
-        capture: native_world::capture_kagemusha_mint_credit_operations_once,
-    },
-    TableMaterializer::Single {
-        id: "world.kagemusha_issuance_operations",
-        capture: native_world::capture_kagemusha_issuance_operations_once,
-    },
-    TableMaterializer::Single {
-        id: "world.kagemusha_redemption_id_operations",
-        capture: native_world::capture_kagemusha_redemption_id_operations_once,
-    },
-    TableMaterializer::Single {
-        id: "world.kagemusha_terminal_nullifier_operations",
-        capture: native_world::capture_kagemusha_terminal_nullifier_operations_once,
-    },
-    TableMaterializer::Single {
-        id: "world.public_lane_validators",
-        capture: native_world::capture_public_lane_validators_once,
-    },
-    TableMaterializer::Single {
-        id: "world.public_lane_stake_shares",
-        capture: native_world::capture_public_lane_stake_shares_once,
-    },
-    TableMaterializer::Single {
-        id: "world.public_lane_rewards",
-        capture: native_world::capture_public_lane_rewards_once,
-    },
-    TableMaterializer::Single {
-        id: "world.public_lane_reward_claims",
-        capture: native_world::capture_public_lane_reward_claims_once,
-    },
-    TableMaterializer::Single {
-        id: "world.public_lane_reward_accruals",
-        capture: capture_public_lane_reward_accruals_once,
-    },
-    TableMaterializer::Single {
-        id: "world.public_lane_stake_custody",
-        capture: capture_public_lane_stake_custody_once,
-    },
-    TableMaterializer::Single {
-        id: "world.zk_assets",
-        capture: native_world::capture_zk_assets_once,
-    },
-    TableMaterializer::Single {
-        id: "world.elections",
-        capture: native_world::capture_elections_once,
-    },
-    TableMaterializer::Single {
-        id: "world.citizens",
-        capture: native_world::capture_citizens_once,
-    },
-    TableMaterializer::Single {
-        id: "world.ministry_agenda_proposals",
-        capture: native_world::capture_ministry_agenda_proposals_once,
-    },
+    native_world::capture_settlement_receipts_once::MATERIALIZER,
+    native_world::capture_kagemusha_reserve_pools_once::MATERIALIZER,
+    native_world::capture_kagemusha_reserve_operations_once::MATERIALIZER,
+    native_world::capture_kagemusha_mint_credit_operations_once::MATERIALIZER,
+    native_world::capture_kagemusha_issuance_operations_once::MATERIALIZER,
+    native_world::capture_kagemusha_redemption_id_operations_once::MATERIALIZER,
+    native_world::capture_kagemusha_terminal_nullifier_operations_once::MATERIALIZER,
+    native_world::capture_public_lane_validators_once::MATERIALIZER,
+    native_world::capture_public_lane_stake_shares_once::MATERIALIZER,
+    native_world::capture_public_lane_rewards_once::MATERIALIZER,
+    native_world::capture_public_lane_reward_claims_once::MATERIALIZER,
+    capture_public_lane_reward_accruals_once::MATERIALIZER,
+    capture_public_lane_stake_custody_once::MATERIALIZER,
+    native_world::capture_zk_assets_once::MATERIALIZER,
+    native_world::capture_elections_once::MATERIALIZER,
+    native_world::capture_citizens_once::MATERIALIZER,
+    native_world::capture_ministry_agenda_proposals_once::MATERIALIZER,
     TableMaterializer::Single {
         id: "world.governance_proposals",
-        capture: native_world::capture_governance_proposals_once,
+        capture: capture_governance_proposals_once,
     },
-    TableMaterializer::Single {
-        id: "world.governance_referenda",
-        capture: native_world::capture_governance_referenda_once,
-    },
-    TableMaterializer::Single {
-        id: "world.governance_locks",
-        capture: native_world::capture_governance_locks_once,
-    },
-    TableMaterializer::Single {
-        id: "world.governance_slashes",
-        capture: native_world::capture_governance_slashes_once,
-    },
-    TableMaterializer::Single {
-        id: "world.parliament_attempts",
-        capture: native_world::capture_parliament_attempts_once,
-    },
-    TableMaterializer::Single {
-        id: "world.tle_key_sessions",
-        capture: native_world::capture_tle_key_sessions_once,
-    },
-    TableMaterializer::Single {
-        id: "world.tle_key_session_rosters",
-        capture: native_world::capture_tle_key_session_rosters_once,
-    },
-    TableMaterializer::Single {
-        id: "world.tle_key_session_lifecycles",
-        capture: native_world::capture_tle_key_session_lifecycles_once,
-    },
-    TableMaterializer::Single {
-        id: "world.tle_active_key_session",
-        capture: native_world::capture_tle_active_key_session_once,
-    },
-    TableMaterializer::Single {
-        id: "world.timed_ovn_evidence",
-        capture: native_world::capture_timed_ovn_evidence_once,
-    },
-    TableMaterializer::Single {
-        id: "world.validator_candidate_keys",
-        capture: capture_validator_candidate_keys_once,
-    },
-    TableMaterializer::Single {
-        id: "world.validator_committee_transitions",
-        capture: capture_validator_committee_transitions_once,
-    },
-    TableMaterializer::Single {
-        id: "world.global_beacon_dkg",
-        capture: native_world::capture_global_beacon_dkg_once,
-    },
-    TableMaterializer::Single {
-        id: "world.global_beacon_key_sessions",
-        capture: native_world::capture_global_beacon_key_sessions_once,
-    },
-    TableMaterializer::Single {
-        id: "world.global_beacon_active_session",
-        capture: native_world::capture_global_beacon_active_session_once,
-    },
-    TableMaterializer::Single {
-        id: "world.global_beacon_latest_pulse",
-        capture: native_world::capture_global_beacon_latest_pulse_once,
-    },
-    TableMaterializer::Single {
-        id: "world.global_beacon_pulses",
-        capture: native_world::capture_global_beacon_pulses_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_bridge_keys",
-        capture: capture_sccp_bridge_keys_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_bridge_key_owners",
-        capture: capture_sccp_bridge_key_owners_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_rosters",
-        capture: capture_sccp_rosters_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_block_leaves",
-        capture: capture_sccp_block_leaves_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_block_commitments",
-        capture: capture_sccp_block_commitments_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_history_leaves",
-        capture: capture_sccp_history_leaves_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_attestation_subjects",
-        capture: capture_sccp_attestation_subjects_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_attestation_status",
-        capture: capture_sccp_attestation_status_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_attestation_signatures",
-        capture: capture_sccp_attestation_signatures_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_attestation_faults",
-        capture: capture_sccp_attestation_faults_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_member_last_signed",
-        capture: capture_sccp_member_last_signed_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_handoff_stalled",
-        capture: capture_sccp_handoff_stalled_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_outbound_messages",
-        capture: capture_sccp_outbound_messages_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_outbound_by_nonce",
-        capture: capture_sccp_outbound_by_nonce_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_control_messages",
-        capture: capture_sccp_control_messages_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_routes",
-        capture: capture_sccp_routes_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_destination_words",
-        capture: capture_sccp_destination_words_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_governance_revisions",
-        capture: capture_sccp_governance_revisions_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_inbound_messages",
-        capture: capture_sccp_inbound_messages_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_pending_counts",
-        capture: capture_sccp_pending_counts_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_light_clients",
-        capture: capture_sccp_light_clients_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_light_client_sets",
-        capture: capture_sccp_light_client_sets_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_light_client_checkpoints",
-        capture: capture_sccp_light_client_checkpoints_once,
-    },
-    TableMaterializer::Single {
-        id: "world.sccp_light_client_stride_index",
-        capture: capture_sccp_light_client_stride_index_once,
-    },
+    native_world::capture_governance_referenda_once::MATERIALIZER,
+    native_world::capture_governance_locks_once::MATERIALIZER,
+    native_world::capture_governance_slashes_once::MATERIALIZER,
+    native_world::capture_parliament_attempts_once::MATERIALIZER,
+    native_world::capture_tle_key_sessions_once::MATERIALIZER,
+    native_world::capture_tle_key_session_rosters_once::MATERIALIZER,
+    native_world::capture_tle_key_session_lifecycles_once::MATERIALIZER,
+    native_world::capture_tle_active_key_session_once::MATERIALIZER,
+    native_world::capture_timed_ovn_evidence_once::MATERIALIZER,
+    capture_validator_candidate_keys_once::MATERIALIZER,
+    capture_validator_committee_transitions_once::MATERIALIZER,
+    native_world::capture_global_beacon_dkg_once::MATERIALIZER,
+    native_world::capture_global_beacon_key_sessions_once::MATERIALIZER,
+    native_world::capture_global_beacon_active_session_once::MATERIALIZER,
+    native_world::capture_global_beacon_latest_pulse_once::MATERIALIZER,
+    native_world::capture_global_beacon_pulses_once::MATERIALIZER,
+    capture_sccp_bridge_keys_once::MATERIALIZER,
+    capture_sccp_bridge_key_owners_once::MATERIALIZER,
+    capture_sccp_rosters_once::MATERIALIZER,
+    capture_sccp_block_leaves_once::MATERIALIZER,
+    capture_sccp_block_commitments_once::MATERIALIZER,
+    capture_sccp_history_leaves_once::MATERIALIZER,
+    capture_sccp_attestation_subjects_once::MATERIALIZER,
+    capture_sccp_attestation_status_once::MATERIALIZER,
+    capture_sccp_attestation_signatures_once::MATERIALIZER,
+    capture_sccp_attestation_faults_once::MATERIALIZER,
+    capture_sccp_member_last_signed_once::MATERIALIZER,
+    capture_sccp_handoff_stalled_once::MATERIALIZER,
+    capture_sccp_outbound_messages_once::MATERIALIZER,
+    capture_sccp_outbound_by_nonce_once::MATERIALIZER,
+    capture_sccp_control_messages_once::MATERIALIZER,
+    capture_sccp_routes_once::MATERIALIZER,
+    capture_sccp_destination_words_once::MATERIALIZER,
+    capture_sccp_governance_revisions_once::MATERIALIZER,
+    capture_sccp_inbound_messages_once::MATERIALIZER,
+    capture_sccp_pending_counts_once::MATERIALIZER,
+    capture_sccp_light_clients_once::MATERIALIZER,
+    capture_sccp_light_client_sets_once::MATERIALIZER,
+    capture_sccp_light_client_checkpoints_once::MATERIALIZER,
+    capture_sccp_light_client_stride_index_once::MATERIALIZER,
     TableMaterializer::TransactionMembership,
 ];
 
@@ -1500,15 +932,15 @@ use aggregate::{
     CapturedCanonicalTables, TableCaptureError, TableCaptureLimits, capture_tables_once,
 };
 
-/// Production-facing fail-closed entrypoint for the actual State inventory.
+/// Bounded table acquisition after actual inventory metadata admission.
 ///
-/// It currently returns the first `RequiredSchema` after exhaustive table admission.
-/// It cannot return a finalized root, disclose rows or authorize IVM/AXT use.
+/// Returned nodes cover tables only, not canonical cells or authenticated history.
+/// They cannot return a finalized root, disclose rows or authorize IVM/AXT use.
 #[cfg_attr(
     not(test),
     expect(
         dead_code,
-        reason = "TODO: finish every State table reader before State/Kura publication consumes this owner"
+        reason = "TODO: bind original frozen tables, cells and history before State/Kura publication consumes this owner"
     )
 )]
 fn capture_actual_state_tables_once(
@@ -1634,11 +1066,31 @@ mod tests {
         assert_eq!(
             capture_actual_state_tables_once(&state(), policy(limits()))
                 .err()
-                .expect("incomplete actual catalog"),
-            TableCaptureError::Inventory(CompleteInventoryError::RequiredSchema(
-                "state.kagemusha_v1_runtime_verifier"
-            ))
+                .expect("three slots cannot retain the complete table catalog"),
+            TableCaptureError::MaterializerLimit
         );
+    }
+
+    #[test]
+    fn actual_table_catalog_admits_metadata_then_enforces_original_node_capacity() {
+        let count = require_exact_table_materializers(STATE_FIELDS, TABLE_MATERIALIZERS).unwrap();
+        assert_eq!(count, 217);
+        assert_eq!(require_complete_inventory(STATE_FIELDS), Ok(()));
+        let state = state();
+        let budget = state.ivm_execution_budget();
+        let original_limit = budget.limit_bytes();
+        let before = budget.reserved_bytes();
+        let mut cap = limits();
+        cap.max_tables = count;
+        budget.set_limit_bytes(0);
+        assert!(matches!(
+            capture_actual_state_tables_once(&state, policy(cap)),
+            Err(TableCaptureError::Admission(iroha_allocation::AllocationRefusal::ExceedsLimit { requested_bytes, limit_bytes: 0 }))
+                if requested_bytes == std::alloc::Layout::array::<CanonicalTablePairedSnapshot>(count).unwrap().size()
+        ));
+        assert_eq!(budget.reserved_bytes(), before);
+        budget.set_limit_bytes(original_limit);
+        // Inventory admission and local memory refusal confer no State-root handle.
     }
 
     #[test]
@@ -1917,7 +1369,9 @@ mod tests {
             3
         );
         for owner in TABLE_MATERIALIZERS {
-            let TableMaterializer::Single { id, capture } = owner else {
+            let (TableMaterializer::Single { id, capture }
+            | TableMaterializer::Native { id, capture, .. }) = owner
+            else {
                 continue;
             };
             let node = capture(&state, limits())
@@ -1938,7 +1392,9 @@ mod tests {
         let mut publication = state.state_view_publication();
         let guard = publication.begin();
         for owner in TABLE_MATERIALIZERS {
-            let TableMaterializer::Single { capture, .. } = owner else {
+            let (TableMaterializer::Single { capture, .. }
+            | TableMaterializer::Native { capture, .. }) = owner
+            else {
                 continue;
             };
             assert!(

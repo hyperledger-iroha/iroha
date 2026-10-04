@@ -517,6 +517,7 @@ fn prepare_fresh(
     )?;
     let config = parse_private_peer_config(&bootstrap, Some(&root.join("peer0.toml")))?;
     let expected = write_genesis(GenesisWriteContext {
+        creation_time_ms: None,
         manifest: &genesis,
         public_key: &genesis_public,
         private_key: genesis_private,
@@ -610,7 +611,11 @@ fn parse_private_peer_config(rendered: &str, path: Option<&Path>) -> Result<actu
     let mut config = parse_localnet_peer_config(rendered, path)?;
     // Match the native worker's required `--sora` launch profile before deriving any signed
     // execution-policy commitment. Explicit private geometry is preserved by this owner.
-    config.apply_sora_profile();
+    let table = crate::secret_toml::Table::new(crate::secret_toml::parse_table(
+        rendered,
+        "private-root validator",
+    )?);
+    iroha_config::sora_profile::SoraProfileSelection::from_table(&table).apply(&mut config);
     Ok(config)
 }
 

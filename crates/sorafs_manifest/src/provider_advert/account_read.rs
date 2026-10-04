@@ -16,7 +16,8 @@ pub const ACCOUNT_READ_CAPABILITY_MAX_BYTES_V1: usize = 2_048;
 ///
 /// HTTPS is mandatory. The exact DNS hostname and port select one origin; path prefixes,
 /// wildcard hosts, IP literals, credentials and caller-chosen origins are not supported.
-/// Clients must pin exclusively public DNS answers through their existing transport owner.
+/// Transport owners independently authorize and pin the exact addresses; the capability does not
+/// authorize access to private or local networks.
 #[derive(
     Clone,
     Debug,
@@ -34,7 +35,7 @@ pub const ACCOUNT_READ_CAPABILITY_MAX_BYTES_V1: usize = 2_048;
 pub struct RegisteredAccountReadV1 {
     /// Canonical lowercase ASCII DNS name, without a trailing dot.
     pub https_host: String,
-    /// Exact HTTPS port; the first-release archive transport requires 443.
+    /// Exact nonzero HTTPS port, preserved by every origin and transport consumer.
     pub https_port: u16,
     /// Maximum lifetime of an issued account token in seconds.
     pub ttl_secs: u64,
@@ -74,7 +75,7 @@ impl RegisteredAccountReadV1 {
                 .rsplit('.')
                 .next()
                 .is_some_and(|label| label.bytes().any(|b| b.is_ascii_lowercase()))
-            || self.https_port != 443
+            || self.https_port == 0
             || !(1..=STREAM_TOKEN_MAX_TTL_SECS_V1).contains(&self.ttl_secs)
             || !(1..=STREAM_TOKEN_MAX_STREAMS_V1).contains(&self.max_streams)
             || !(1..=STREAM_TOKEN_MAX_RATE_LIMIT_BYTES_V1).contains(&self.rate_limit_bytes)
@@ -90,7 +91,11 @@ impl RegisteredAccountReadV1 {
     /// Rejects invalid origin or limit fields.
     pub fn https_origin(&self) -> Result<String, AccountReadCapabilityError> {
         self.validate()?;
-        Ok(format!("https://{}", self.https_host))
+        Ok(if self.https_port == 443 {
+            format!("https://{}", self.https_host)
+        } else {
+            format!("https://{}:{}", self.https_host, self.https_port)
+        })
     }
 
     /// Encode the policy in the sole admitted capability layout.
@@ -174,6 +179,32 @@ mod tests {
         );
     }
     #[test]
+    fn explicit_nondefault_https_ports_roundtrip_without_remapping() {
+        for port in [1, 80, 8443, u16::MAX] {
+            let mut p = policy();
+            p.https_port = port;
+            assert_eq!(
+                p.https_origin().unwrap(),
+                format!("https://storage.example.com:{port}")
+            );
+            let cap = p.to_capability().unwrap();
+            assert_eq!(
+                RegisteredAccountReadV1::from_capabilities(&[cap]).unwrap(),
+                Some(p.clone())
+            );
+            let binary = norito::encode_canonical(&p).unwrap();
+            assert_eq!(
+                norito::decode_canonical::<RegisteredAccountReadV1>(&binary).unwrap(),
+                p
+            );
+            let json = norito::json::to_json(&p).unwrap();
+            assert_eq!(
+                norito::json::from_str::<RegisteredAccountReadV1>(&json).unwrap(),
+                p
+            );
+        }
+    }
+    #[test]
     fn ambiguous_hosts_and_unbounded_policies_are_rejected() {
         for host in [
             "",
@@ -193,7 +224,7 @@ mod tests {
             p.https_host = host.into();
             assert!(p.validate().is_err(), "{host}");
         }
-        for port in [0, 80, 8443, u16::MAX] {
+        for port in [0] {
             let mut p = policy();
             p.https_port = port;
             assert!(p.validate().is_err());

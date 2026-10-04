@@ -108,7 +108,10 @@ fn successful_check_cannot_hide_later_same_block_custody_revocation() {
         [true, true]
     );
     assert_eq!(
-        pending.verify_finalized(|| Ok(interval(NOW, NOW))).err(),
+        pending
+            .verify_finalized(|| Ok(interval(NOW, NOW)))
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Authority)
     );
 }
@@ -131,7 +134,8 @@ fn rejection_result_is_not_a_successful_check_even_with_real_finality() {
     assert_eq!(
         pending
             .verify_finalized(|| panic!("rejected result must precede clock"))
-            .err(),
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Execution)
     );
 }
@@ -147,7 +151,8 @@ fn durable_check_without_actual_state_membership_is_not_observation() {
     assert_eq!(
         pending
             .verify_finalized(|| panic!("unapplied member must precede clock"))
-            .err(),
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::NotApplied)
     );
 }
@@ -163,7 +168,8 @@ fn applied_check_without_durable_finality_is_rejected() {
     assert_eq!(
         pending
             .verify_finalized(|| panic!("missing finality must precede clock"))
-            .err(),
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Finality)
     );
 }
@@ -193,7 +199,8 @@ fn independent_floor_hash_and_committee_context_cannot_come_from_candidate() {
         assert_eq!(
             pending
                 .verify_finalized(|| panic!("foreign floor must precede clock"))
-                .err(),
+                .err()
+                .and_then(|failure| failure.rejection()),
             Some(Error::Finality)
         );
     }
@@ -207,12 +214,18 @@ fn each_round_has_fresh_entropy_and_signed_envelopes_cannot_be_replaced() {
     assert_ne!(first.instruction(), second.instruction());
     let signed_other = f.sign(prepared_instruction(&second), 2, NOW);
     assert_eq!(
-        first.bind_signed_transaction(signed_other).err(),
+        first
+            .bind_signed_transaction(signed_other)
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Transaction)
     );
     let signed_wrong_account = f.sign(prepared_instruction(&second), 1, NOW);
     assert_eq!(
-        second.bind_signed_transaction(signed_wrong_account).err(),
+        second
+            .bind_signed_transaction(signed_wrong_account)
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Transaction)
     );
 }
@@ -232,7 +245,10 @@ fn signature_verification_is_independent_of_signed_intent_identity() {
         "intent identity excludes authorization"
     );
     assert_eq!(
-        prepared.bind_signed_transaction(signed).err(),
+        prepared
+            .bind_signed_transaction(signed)
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Transaction)
     );
 }
@@ -244,7 +260,10 @@ fn signing_and_terminal_verification_never_reset_the_one_use_interval() {
     let signed = f.sign(prepared_instruction(&prepared), 2, NOW);
     prepared.round.expire_for_test();
     assert_eq!(
-        prepared.bind_signed_transaction(signed).err(),
+        prepared
+            .bind_signed_transaction(signed)
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Expired)
     );
     let mut pending = f.pending();
@@ -254,7 +273,8 @@ fn signing_and_terminal_verification_never_reset_the_one_use_interval() {
     assert_eq!(
         pending
             .verify_finalized(|| panic!("expiry must precede clock"))
-            .err(),
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Expired)
     );
 }
@@ -273,7 +293,13 @@ fn unavailable_or_invalid_eligibility_clock_fails_closed_after_proof() {
         let mut f = Fixture::new();
         let pending = f.pending();
         f.commit(NOW, vec![pending.signed_transaction().clone()], true, true);
-        assert_eq!(pending.verify_finalized(|| now).err(), Some(Error::Clock));
+        assert_eq!(
+            pending
+                .verify_finalized(|| now)
+                .err()
+                .and_then(|failure| failure.rejection()),
+            Some(Error::Clock)
+        );
     }
 }
 
@@ -290,7 +316,8 @@ fn historical_future_dated_qc_cannot_stand_in_for_a_new_round() {
     assert_eq!(
         fresh
             .verify_finalized(|| panic!("new challenge has no applied entry"))
-            .err(),
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::NotApplied)
     );
 }
@@ -356,7 +383,10 @@ fn exact_reviewed_target_and_payload_commitment_cannot_be_replaced_in_signed_che
         }
         let signed = f.sign(changed.into(), 2, NOW);
         assert_eq!(
-            prepared.bind_signed_transaction(signed).err(),
+            prepared
+                .bind_signed_transaction(signed)
+                .err()
+                .and_then(|failure| failure.rejection()),
             Some(Error::Transaction)
         );
     }
@@ -407,7 +437,8 @@ fn successful_check_rechecks_both_accounts_permissions_at_same_or_descendant_cut
             assert_eq!(
                 pending
                     .verify_finalized(|| Ok(interval(NOW + 1, NOW + 1)))
-                    .err(),
+                    .err()
+                    .and_then(|failure| failure.rejection()),
                 Some(Error::Authority)
             );
         }
@@ -444,7 +475,10 @@ fn account_interval_requires_both_endpoints_after_native_enrollment_execution() 
             verified.round.expire_for_test();
             assert_eq!(verified.ensure_live(), Err(Error::Expired));
         } else {
-            assert_eq!(result.err(), Some(Error::Authority));
+            assert_eq!(
+                result.err().and_then(|failure| failure.rejection()),
+                Some(Error::Authority)
+            );
         }
     }
 }
@@ -473,7 +507,10 @@ fn prepared_account_liveness_keeps_original_challenge_and_gates_expired_runtime_
     assert_eq!(callbacks.get(), 1);
     assert_eq!(prepared.instruction(), &instruction);
     assert_eq!(
-        prepared.bind_signed_transaction(signed).err(),
+        prepared
+            .bind_signed_transaction(signed)
+            .err()
+            .and_then(|failure| failure.rejection()),
         Some(Error::Expired)
     );
 }
@@ -593,4 +630,29 @@ fn account_verified_check_retains_exact_external_and_check_block_after_descendan
     assert_eq!(verified.canonical_external(), exact);
     assert_eq!(verified.check_block_hash(), check_hash);
     verified.ensure_live().unwrap();
+}
+
+#[test]
+fn binding_local_refusal_retries_only_original_signed_custody() {
+    let fixture = Fixture::new();
+    let prepared = fixture.prepared();
+    let signed = fixture.sign(prepared.instruction().clone().into(), 2, NOW);
+    let expected_wire = signed.encode_wire_v1().unwrap();
+    let deadline = prepared.deadline();
+    let zero = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
+    let failure =
+        match norito::with_decode_limits_scope(zero, || prepared.bind_signed_transaction(signed)) {
+            Err(failure) => failure,
+            Ok(_) => panic!("original caller allocation ceiling must survive"),
+        };
+    assert!(failure.error().is_retryable());
+    assert!(failure.rejection().is_none());
+    assert_eq!(failure.deadline(), deadline);
+    let pending = failure.retry().unwrap();
+    assert_eq!(pending.deadline(), deadline);
+    assert_eq!(
+        pending.signed_transaction().encode_wire_v1().unwrap(),
+        expected_wire
+    );
+    assert!(Arc::ptr_eq(&pending.prepared.state, &fixture.state));
 }

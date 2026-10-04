@@ -73,13 +73,14 @@ fn checked_faucet_block_leader_fixture() -> KeyPair {
 }
 fn signed_faucet_beacon_fixture(
     network_id: iroha_data_model::NetworkId,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> (
-    iroha_core::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+    iroha_core::beacon::RetainedFinalizedGlobalThresholdBeaconSessionV1,
     iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
 ) {
     // Each original signed genesis has its own network identity; a process-wide
     // singleton would substitute the first test's authenticated beacon binding.
-    iroha_core::beacon::signed_persisted_pulse_fixture_for_world(network_id, 5)
+    iroha_core::beacon::signed_persisted_pulse_fixture_for_world(network_id, 5, budget)
 }
 #[test]
 fn faucet_account_fixture_uses_checked_ed25519_key_generation() {
@@ -337,7 +338,8 @@ fn build_faucet_test_context_with_authority(
             0,
         );
         let mut block = state.block(header);
-        let (key_record, pulse) = signed_faucet_beacon_fixture(network_id);
+        let (key_record, pulse) =
+            signed_faucet_beacon_fixture(network_id, &state.ivm_execution_budget());
         block
             .world
             .install_global_beacon_fixture_for_testing(

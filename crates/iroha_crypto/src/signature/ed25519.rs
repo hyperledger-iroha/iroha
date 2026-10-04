@@ -23,6 +23,9 @@ use std::{
 };
 mod public_key;
 pub(crate) use public_key::KeyRejection;
+#[cfg(test)]
+#[path = "ed25519/candidate_tests.rs"]
+mod candidate_tests;
 
 const VERIFY_OK_CACHE_LIMIT: usize = 8192;
 // Two exact entries fit in each bucket, so this admits the same bounded
@@ -798,12 +801,14 @@ mod test {
     #[cfg(feature = "rand")]
     impl TryCryptoRng for FixedTryRng {}
     #[test]
+    #[cfg(feature = "rand")]
     fn create_new_keys() {
         let (p, s) = Ed25519Sha512::keypair(KeyGenOption::Random);
         println!("{s:?}");
         println!("{p:?}");
     }
     #[test]
+    #[cfg(feature = "rand")]
     fn try_keypair_random_signs_and_verifies() {
         let (pk, sk) =
             Ed25519Sha512::try_keypair(KeyGenOption::Random).expect("checked random keypair");
@@ -855,7 +860,9 @@ mod test {
     }
     #[test]
     fn ed25519_verify_ok_cache_separates_message_and_signature() {
-        let (pk, sk) = Ed25519Sha512::keypair(KeyGenOption::Random);
+        let (pk, sk) = Ed25519Sha512::keypair(KeyGenOption::UseSeed(
+            b"iroha:test:ed25519:ed25519_verify_ok_cache_separates_message_and_signature".to_vec(),
+        ));
         let msg1 = b"ed25519 verify-ok-cache msg1";
         let msg2 = b"ed25519 verify-ok-cache msg2";
         let sig1 = Ed25519Sha512::sign(msg1, &sk);
@@ -1026,7 +1033,9 @@ mod test {
     #[test]
     fn parse_public_key_uses_thread_local_cache_for_valid_keys() {
         reset_public_key_parse_cache_for_tests();
-        let (pk, _) = Ed25519Sha512::keypair(KeyGenOption::Random);
+        let (pk, _) = Ed25519Sha512::keypair(KeyGenOption::UseSeed(
+            b"iroha:test:ed25519:parse_public_key_uses_thread_local_cache_for_valid_keys".to_vec(),
+        ));
         let bytes = pk.to_bytes();
         let first = Ed25519Sha512::parse_public_key(&bytes).expect("first parse succeeds");
         assert!(public_key_parse_cache_consulted_for_tests());

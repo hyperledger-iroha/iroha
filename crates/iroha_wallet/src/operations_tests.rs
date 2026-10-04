@@ -28,16 +28,24 @@ nonce = false
 }
 
 #[derive(Debug, Default)]
-struct Transport {
-    quote_count: AtomicUsize,
-    dispatch_count: AtomicUsize,
+pub(super) struct Transport {
+    pub(super) requests: AtomicUsize,
+    pub(super) quote_count: AtomicUsize,
+    pub(super) dispatch_count: AtomicUsize,
+    pub(super) cancel_on_path: Mutex<Option<(String, Arc<AtomicBool>)>>,
     journal: Mutex<Option<std::path::PathBuf>>,
     wrong_payer: AtomicBool,
-    incompatible_submission: AtomicBool,
+    pub(super) incompatible_submission: AtomicBool,
     alias_plan: Mutex<Option<AliasTransactionPlanV1>>,
 }
 impl HttpTransport for Transport {
     fn send_blocking(&self, request: TransportRequest) -> Result<Response<Vec<u8>>> {
+        self.requests.fetch_add(1, Ordering::SeqCst);
+        if let Some((path, signal)) = self.cancel_on_path.lock().unwrap().as_ref() {
+            if request.url.path() == path.as_str() {
+                signal.store(true, Ordering::Release);
+            }
+        }
         let (status, body) = match request.url.path() {
             "/v1/node/capabilities" => (
                 200,
@@ -139,7 +147,7 @@ impl HttpTransport for Transport {
         Box::pin(async move { self.send_blocking(request) })
     }
 }
-fn service() -> (AccountService, Arc<Transport>) {
+pub(super) fn service() -> (AccountService, Arc<Transport>) {
     let config = fixture_config();
     let transport = Arc::new(Transport::default());
     let client = Client::with_http_transport(config.clone(), transport.clone()).unwrap();
@@ -148,11 +156,12 @@ fn service() -> (AccountService, Arc<Transport>) {
             config,
             client,
             deadline: None,
+            cancellation: None,
         },
         transport,
     )
 }
-fn request() -> TransferRequest {
+pub(super) fn request() -> TransferRequest {
     TransferRequest {
         destination: iroha_test_samples::BOB_ID.clone(),
         amount: Quantity::from(3_u32),
@@ -182,9 +191,21 @@ fn prepare_quotes_exact_transfer_and_persists_before_any_dispatch() {
     for secret in ["private_key", "onboarding_token", "basic_auth"] {
         assert!(!public.contains(secret));
     }
+    let repeated = service.prepare_transfer(&request(), &path).unwrap();
+    assert_eq!(
+        repeated.data["transaction_hash"],
+        result.data["transaction_hash"]
+    );
+    assert_eq!(
+        std::fs::read_to_string(path.join("operation.json")).unwrap(),
+        public
+    );
+    assert_eq!(transport.quote_count.load(Ordering::SeqCst), 1);
+    let mut changed = request();
+    changed.amount = Quantity::from(4_u32);
     assert!(
-        service.prepare_transfer(&request(), &path).is_err(),
-        "preparation cannot overwrite an earlier signed operation"
+        service.prepare_transfer(&changed, &path).is_err(),
+        "changed preparation cannot overwrite an earlier signed operation"
     );
 }
 
@@ -256,7 +277,7 @@ fn ambiguous_submission_is_never_repeated_and_resume_is_read_only() {
 }
 
 #[test]
-fn hostile_quote_and_invalid_transfer_fail_before_journal_or_dispatch() {
+fn hostile_quote_and_invalid_transfer_never_sign_or_dispatch() {
     let (service, transport) = service();
     let temporary = tempfile::tempdir().unwrap();
     let path = temporary.path().join("transfer");
@@ -270,10 +291,15 @@ fn hostile_quote_and_invalid_transfer_fail_before_journal_or_dispatch() {
         .unwrap_err()
         .to_string();
     assert!(insufficient.contains("required 78"), "{insufficient}");
-    assert!(!path.exists());
+    assert!(path.join("preparation.json").is_file());
+    assert!(!path.join("payload.json").exists());
+    assert!(!path.join("operation.json").exists());
+    let hostile = temporary.path().join("hostile");
     transport.wrong_payer.store(true, Ordering::SeqCst);
-    assert!(service.prepare_transfer(&request(), &path).is_err());
-    assert!(!path.exists());
+    assert!(service.prepare_transfer(&request(), &hostile).is_err());
+    assert!(hostile.join("preparation.json").is_file());
+    assert!(!hostile.join("payload.json").exists());
+    assert!(!hostile.join("operation.json").exists());
     assert_eq!(transport.dispatch_count.load(Ordering::SeqCst), 0);
 }
 
@@ -547,7 +573,9 @@ fn alias_creation_preserves_the_exact_plan_and_checks_its_rent_before_signing() 
         } else {
             let error = result.unwrap_err().to_string();
             assert!(error.contains("required 78"), "{error}");
-            assert!(!path.exists());
+            assert!(path.join("preparation.json").is_file());
+            assert!(!path.join("payload.json").exists());
+            assert!(!path.join("operation.json").exists());
         }
         assert_eq!(transport.dispatch_count.load(Ordering::SeqCst), 0);
     }
@@ -562,7 +590,9 @@ fn incompatible_submission_surface_preserves_an_unattempted_operation() {
         .incompatible_submission
         .store(true, Ordering::SeqCst);
     assert!(service.prepare_transfer(&request(), &path).is_err());
-    assert!(!path.exists());
+    assert!(path.join("preparation.json").is_file());
+    assert!(!path.join("payload.json").exists());
+    assert!(!path.join("operation.json").exists());
     transport
         .incompatible_submission
         .store(false, Ordering::SeqCst);

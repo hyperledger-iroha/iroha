@@ -139,8 +139,11 @@ fn validate_genesis_request(
     {
         return Err(Error::InvalidInput);
     }
-    GlobalThresholdBeaconDkgStateV1::new(session, &AdaptiveGlobalThresholdBeaconDkgCryptoV1)
-        .map_err(|_| Error::Crypto)?;
+    GlobalThresholdBeaconDkgStateV1::validate_session(
+        &session,
+        &AdaptiveGlobalThresholdBeaconDkgCryptoV1,
+    )
+    .map_err(|_| Error::Crypto)?;
     Ok(())
 }
 
@@ -151,6 +154,7 @@ fn verify_signed_genesis_attempt(
     chain_discriminant: u16,
     request: &GenesisRequest,
     genesis: &GenesisProof,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<(Vec<PeerId>, NativeJournalCursor, u64)> {
     iroha_genesis::init_instruction_registry();
     let session = request.dkg_session;
@@ -160,7 +164,7 @@ fn verify_signed_genesis_attempt(
         &genesis.public_key,
         network.into_genesis_hash(),
     )
-    .map_err(|_| Error::Crypto)?;
+    .map_err(Error::GenesisBundle)?;
     if genesis.manifest.consensus_mode()
         != iroha_data_model::parameter::system::SumeragiConsensusMode::Npos
         || genesis.manifest.chain_discriminant() != chain_discriminant
@@ -169,8 +173,7 @@ fn verify_signed_genesis_attempt(
         return Err(Error::InvalidInput);
     }
     let (signed_genesis, epoch) =
-        authenticate_signed_genesis(&genesis.signed_wire, network, limits)
-            .map_err(|_| Error::Crypto)?;
+        authenticate_signed_genesis(&genesis.signed_wire, network, limits)?;
     if signed_genesis.hash() != validated.block().hash() {
         return Err(Error::Crypto);
     }
@@ -191,8 +194,8 @@ fn verify_signed_genesis_attempt(
         network,
         iroha_data_model::block::consensus::SumeragiRootScope::Global,
         limits,
-    )
-    .map_err(|_| Error::Crypto)?;
+        budget,
+    )?;
     Ok((roster, verifier, cutoff))
 }
 
@@ -217,6 +220,7 @@ pub(super) fn provision_genesis_seat_command(
     finality_fd: i32,
     attempt_root: &Path,
     timeout_ms: u64,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<()> {
     let limits = finality_limits.checked()?;
     let _profile =
@@ -256,6 +260,7 @@ pub(super) fn provision_genesis_seat_command(
         chain_discriminant,
         &request,
         &genesis,
+        budget,
     )?;
     if signer_index == 0 || usize::from(signer_index) > roster.len() {
         return Err(Error::InvalidInput);
@@ -272,21 +277,25 @@ pub(super) fn provision_genesis_seat_command(
     }
     let session = request.dkg_session;
     let handle = &request.provider_handles[usize::from(signer_index - 1)];
-    let output = rotation_seat::claim_attempt_directory(attempt_root, &session, signer_index)?;
-    rotation_seat::run_seat_dkg(
+    // SAFETY: distinct inherited FIFO sources were validated above and are
+    // moved once, never duplicated or reacquired on a retained attempt retry.
+    use std::os::fd::FromRawFd as _;
+    let attempt = seat_attempt::SeatDkgAttempt::new(
         session,
-        roster,
+        &roster,
         signer_index,
         signer,
-        public_input,
-        finality_input,
+        unsafe { File::from_raw_fd(public_fd) },
+        unsafe { File::from_raw_fd(finality_fd) },
         verifier,
         cutoff,
         handle,
         request.provider_revision,
-        output,
+        attempt_root,
         deadline,
-    )
+        budget,
+    )?;
+    attempt.resume().map_err(Error::PendingAttempt)
 }
 
 fn validate_genesis_phase_chain(
@@ -297,6 +306,7 @@ fn validate_genesis_phase_chain(
     request: &GenesisRequest,
     genesis: &GenesisProof,
     phases: &[NativeFinalityJournal],
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<Vec<PeerId>> {
     let (roster, mut verifier, cutoff) = verify_signed_genesis_attempt(
         chain_id,
@@ -305,6 +315,7 @@ fn validate_genesis_phase_chain(
         chain_discriminant,
         request,
         genesis,
+        budget,
     )?;
     if phases.len() != 3 {
         return Err(Error::Height);
@@ -350,6 +361,7 @@ fn validate_genesis_bundle(
     limits: NativeFinalityLimits,
     network: NetworkId,
     chain_discriminant: u16,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<Vec<PeerId>> {
     let roster = validate_genesis_phase_chain(
         chain_id,
@@ -359,9 +371,10 @@ fn validate_genesis_bundle(
         &bundle.request,
         &bundle.genesis,
         &bundle.phase_proofs,
+        budget,
     )?;
     let session = bundle.request.dkg_session;
-    bundle.record.validate().map_err(|_| Error::Crypto)?;
+    bundle.record.validate(budget).map_err(Error::from)?;
     if bundle.schema != BUNDLE_SCHEMA
         || bundle.record.session.adaptive_dkg.session != session
         || bundle.record.session.adaptive_dkg.finalized_at_height != session.acceptances_end_height
@@ -389,7 +402,7 @@ fn validate_genesis_bundle(
             || provider.policy_digest
                 != global_beacon_partial_signer_public_inventory_digest_v1(
                     network,
-                    &[(bundle.record.session.clone(), seat)],
+                    &[(&bundle.record.session, seat)],
                 )
                 .map_err(|_| Error::Crypto)?
         {
@@ -415,6 +428,7 @@ pub(super) fn assemble_genesis_dkg_command(
     provider_paths: &[PathBuf],
     certificate_height: u64,
     output: &Path,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<()> {
     let limits = finality_limits.checked()?;
     let _profile =
@@ -425,7 +439,7 @@ pub(super) fn assemble_genesis_dkg_command(
         .iter()
         .map(|path| {
             let bytes = read_public_bytes_bounded(path, limits.journal_bytes)?;
-            NativeFinalityJournal::decode(&bytes, limits).map_err(|_| Error::Crypto)
+            NativeFinalityJournal::decode(&bytes, limits).map_err(Error::from)
         })
         .collect::<Result<Vec<_>>>()?;
     let roster = validate_genesis_phase_chain(
@@ -436,13 +450,14 @@ pub(super) fn assemble_genesis_dkg_command(
         &request,
         &genesis,
         &phase_proofs,
+        budget,
     )?;
     let bytes = read_public_bytes(public_session_path)?;
     let public: GlobalThresholdBeaconKeySessionV1 =
         norito::decode_canonical_with_limits(&bytes, norito::canonical_decode_limits(bytes.len()))
             .map_err(|_| Error::Crypto)?;
-    let record =
-        FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(public).map_err(|_| Error::Crypto)?;
+    let record = FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(public, budget)
+        .map_err(Error::from)?;
     let mut providers = provider_paths
         .iter()
         .map(|path| read_json::<Provider>(path))
@@ -459,7 +474,14 @@ pub(super) fn assemble_genesis_dkg_command(
         finalization_draft: draft,
         providers,
     };
-    validate_genesis_bundle(&bundle, chain_id, limits, network, chain_discriminant)?;
+    validate_genesis_bundle(
+        &bundle,
+        chain_id,
+        limits,
+        network,
+        chain_discriminant,
+        budget,
+    )?;
     write_new(output, &json_bytes(&bundle)?, false)
 }
 
@@ -474,6 +496,7 @@ pub(super) fn sign_genesis_install_command(
     key_fd: Option<i32>,
     config_fd: Option<i32>,
     output: &Path,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<()> {
     let limits = finality_limits.checked()?;
     let _profile =
@@ -485,7 +508,14 @@ pub(super) fn sign_genesis_install_command(
         _ => return Err(Error::InvalidInput),
     };
     let bundle: GenesisPublicBundle = read_json(bundle_path)?;
-    let roster = validate_genesis_bundle(&bundle, chain_id, limits, network, chain_discriminant)?;
+    let roster = validate_genesis_bundle(
+        &bundle,
+        chain_id,
+        limits,
+        network,
+        chain_discriminant,
+        budget,
+    )?;
     let file = crate::taira_runtime_signer::take_inherited_private_file(fd)
         .map_err(|_| Error::InvalidCustody)?;
     let key = if config {
@@ -506,13 +536,21 @@ pub(super) fn assemble_genesis_install_command(
     bundle_path: &Path,
     signature_paths: &[PathBuf],
     output: &Path,
+    budget: &iroha_allocation::AllocationBudget,
 ) -> Result<()> {
     let limits = finality_limits.checked()?;
     let _profile =
         iroha_data_model::account::address::ChainDiscriminantGuard::enter(chain_discriminant);
     iroha_genesis::init_instruction_registry();
     let bundle: GenesisPublicBundle = read_json(bundle_path)?;
-    let roster = validate_genesis_bundle(&bundle, chain_id, limits, network, chain_discriminant)?;
+    let roster = validate_genesis_bundle(
+        &bundle,
+        chain_id,
+        limits,
+        network,
+        chain_discriminant,
+        budget,
+    )?;
     let signatures = signature_paths
         .iter()
         .map(|path| read_json(path))
@@ -538,7 +576,7 @@ mod tests {
         let mut keys = (0..seats)
             .map(|index| {
                 KeyPair::from_seed(
-                    vec![u8::try_from(index).expect("test committee fits u8"); 32],
+                    vec![u8::try_from(index + 1).expect("test committee fits u8"); 32],
                     Algorithm::BlsNormal,
                 )
             })
@@ -582,40 +620,40 @@ mod tests {
                 .expect("all exact authenticated genesis seats");
             let mut wrong = request.clone();
             wrong.dkg_session.committee_size -= 1;
-            assert_eq!(
+            assert!(matches!(
                 validate_genesis_request(network, &wrong, &roster),
                 Err(Error::InvalidInput)
-            );
+            ));
             wrong = request.clone();
             wrong.dkg_session.threshold += 1;
-            assert_eq!(
+            assert!(matches!(
                 validate_genesis_request(network, &wrong, &roster),
                 Err(Error::InvalidInput)
-            );
+            ));
             wrong = request.clone();
             wrong.target_roster.pop();
-            assert_eq!(
+            assert!(matches!(
                 validate_genesis_request(network, &wrong, &roster),
                 Err(Error::InvalidInput)
-            );
+            ));
             wrong = request.clone();
             wrong.authorization_roster.swap(0, 1);
-            assert_eq!(
+            assert!(matches!(
                 validate_genesis_request(network, &wrong, &roster),
                 Err(Error::InvalidInput)
-            );
+            ));
             wrong = request.clone();
             wrong.provider_handles.pop();
-            assert_eq!(
+            assert!(matches!(
                 validate_genesis_request(network, &wrong, &roster),
                 Err(Error::InvalidInput)
-            );
+            ));
             wrong = request.clone();
             wrong.provider_handles[1] = wrong.provider_handles[0].clone();
-            assert_eq!(
+            assert!(matches!(
                 validate_genesis_request(network, &wrong, &roster),
                 Err(Error::InvalidInput)
-            );
+            ));
         }
     }
 
@@ -630,24 +668,24 @@ mod tests {
                 assert_eq!(usize::from(threshold), (seats - 1) / 3 + 1);
                 assert_eq!(usize::from(quorum), seats - (seats - 1) / 3);
             } else {
-                assert_eq!(
+                assert!(matches!(
                     genesis_roster_geometry(&roster[..seats]),
                     Err(Error::InvalidInput)
-                );
+                ));
             }
         }
         let mut duplicate = roster[..7].to_vec();
         duplicate[1] = duplicate[0].clone();
-        assert_eq!(
+        assert!(matches!(
             genesis_roster_geometry(&duplicate),
             Err(Error::InvalidInput)
-        );
+        ));
         let mut reordered = roster[..7].to_vec();
         reordered.swap(0, 1);
-        assert_eq!(
+        assert!(matches!(
             genesis_roster_geometry(&reordered),
             Err(Error::InvalidInput)
-        );
+        ));
     }
 
     #[test]
@@ -663,19 +701,28 @@ mod tests {
                 request.provider_revision,
             )
             .expect("exact genesis ceremony plan");
-            let dealt =
-                deal_global_beacon_at_logical_clock_v1(&plan, &keys.iter().collect::<Vec<_>>())
-                    .expect("real signed all-edge genesis DKG");
-            let draft = draft_genesis_certificate(&roster, &dealt.record, 5)
+            let dealt = deal_global_beacon_at_logical_clock_v1(
+                &plan,
+                &keys.iter().collect::<Vec<_>>(),
+                &test_credential_budget(),
+            )
+            .expect("real signed all-edge genesis DKG");
+            // Exercise the actual public DTO boundary after the ceremony has
+            // retained its single authenticated graph; no second runtime owner.
+            let encoded =
+                norito::encode_canonical(&dealt.record).expect("canonical retained record");
+            let record: FinalizedGlobalThresholdBeaconKeySessionRecordV1 =
+                norito::decode_canonical(&encoded).expect("public wire record");
+            let draft = draft_genesis_certificate(&roster, &record, 5)
                 .expect("complete genesis install draft");
             assert_eq!(usize::from(draft.committee_size), seats);
             assert_eq!(draft.expected_active_session_id, None);
             let quorum = seats - (seats - 1) / 3;
             assert_eq!(usize::from(draft.quorum), quorum);
-            assert_eq!(
-                draft_genesis_certificate(&roster, &dealt.record, 4),
+            assert!(matches!(
+                draft_genesis_certificate(&roster, &record, 4),
                 Err(Error::Height)
-            );
+            ));
             let signatures = keys
                 .iter()
                 .enumerate()
@@ -686,14 +733,14 @@ mod tests {
                 .collect::<Vec<_>>();
             assemble_rotation_draft(&draft, &roster, signatures[..quorum].to_vec())
                 .expect("exact n-f genesis authorization");
-            assert_eq!(
+            assert!(matches!(
                 assemble_rotation_draft(&draft, &roster, signatures[..quorum - 1].to_vec()),
                 Err(Error::Crypto)
-            );
-            assert_eq!(
+            ));
+            assert!(matches!(
                 assemble_rotation_draft(&draft, &roster, signatures[..quorum + 1].to_vec()),
                 Err(Error::Crypto)
-            );
+            ));
         }
     }
 }

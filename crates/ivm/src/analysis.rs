@@ -704,7 +704,7 @@ mod tests {
         }
     }
     fn build_program(words: &[u32]) -> Vec<u8> {
-        let mut bytes = ProgramMetadata::default_for(1, 0, 1).encode();
+        let mut bytes = ProgramMetadata::default_for(1, 1, 1).encode();
         for word in words {
             bytes.extend_from_slice(&word.to_le_bytes());
         }

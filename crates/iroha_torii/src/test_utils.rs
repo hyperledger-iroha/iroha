@@ -561,6 +561,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             chain_discriminant: WithOrigin::inline(defaults::common::chain_discriminant()),
         },
         runtime_provider_broker: A::RuntimeProviderBroker {
+                credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES,
             endpoint_path: A::RuntimeProviderBrokerEndpointPath::try_new(
                 defaults::runtime_provider_broker::endpoint_path(),
             )

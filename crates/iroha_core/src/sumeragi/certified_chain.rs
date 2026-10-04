@@ -1307,8 +1307,8 @@ fn read_durable_pinned_block(
             .native_frame_read(height, expected)
             .map_err(|error| match error {
                 crate::kura::Error::NoritoFrame(error) => read_decode_error(height, error),
-                crate::kura::Error::VersionedCodec(error) => {
-                    crate::execution_attempt::versioned_decode_attempt_error(error, |_| {
+                crate::kura::Error::BlockDecode(error) => {
+                    crate::execution_attempt::canonical_decode_attempt_error(error, |_| {
                         unavailable()
                     })
                 }
@@ -1322,8 +1322,8 @@ fn read_durable_pinned_block(
             .read(wire_len)
             .map_err(|error| match error {
                 crate::kura::Error::NoritoFrame(error) => read_decode_error(height, error),
-                crate::kura::Error::VersionedCodec(error) => {
-                    crate::execution_attempt::versioned_decode_attempt_error(error, |_| {
+                crate::kura::Error::BlockDecode(error) => {
+                    crate::execution_attempt::canonical_decode_attempt_error(error, |_| {
                         unavailable()
                     })
                 }
@@ -1334,7 +1334,7 @@ fn read_durable_pinned_block(
             .map_err(|error| ExecutionAttemptError::Deferred(error.into()))?;
         let block =
             iroha_data_model::block::decode_framed_signed_block(&bytes).map_err(|error| {
-                crate::execution_attempt::versioned_decode_attempt_error(error, |_| unavailable())
+                crate::execution_attempt::canonical_decode_attempt_error(error, |_| unavailable())
             })?;
         if block.hash() != expected || block.header().height().get() != height {
             return Err(unavailable().into());

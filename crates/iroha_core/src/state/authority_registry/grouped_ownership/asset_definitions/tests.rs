@@ -238,7 +238,7 @@ fn source_reference_failures_precede_index_checks_and_leave_sources_unchanged() 
 
 #[test]
 fn work_is_charged_before_rows_domain_lookups_and_absent_undo_inspections() {
-    for (context, exact) in [(false, 10), (true, 18)] {
+    for (context, exact) in [(false, 12), (true, 20)] {
         let world = fixture(context);
         assert_eq!(check(&world, exact), Ok(()));
         assert_eq!(
@@ -254,16 +254,16 @@ fn work_is_charged_before_rows_domain_lookups_and_absent_undo_inspections() {
             block.commit();
         }
         assert_eq!(
-            check(&world, exact + 2),
+            check(&world, exact + 3),
             Err(GroupedOwnershipError::WorkLimit)
         );
-        assert_eq!(check(&world, exact + 3), Ok(()));
+        assert_eq!(check(&world, exact + 4), Ok(()));
     }
 }
 
 #[test]
 fn every_original_source_and_index_reader_detects_native_publication() {
-    for index in 0..5 {
+    for index in 0..7 {
         let world = fixture(true);
         let checked = CheckedAssetDefinitions::capture(&world, 1024).unwrap();
         match index {
@@ -272,6 +272,8 @@ fn every_original_source_and_index_reader_detects_native_publication() {
             2 => world.asset_definition_domains.block().commit(),
             3 => world.domain_asset_definitions.block().commit(),
             4 => world.asset_definitions_by_owner.block().commit(),
+            5 => world.confidential_policy_transition_index.block().commit(),
+            6 => world.confidential_policy_transition_counts.block().commit(),
             _ => unreachable!(),
         };
         assert!(!checked.matches_current().unwrap());

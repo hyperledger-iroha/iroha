@@ -319,7 +319,7 @@ mod tests {
     #[test]
     fn original_checkpoint_binary_refusal_is_local_and_retries_exact_original_source() {
         use crate::execution_attempt::ExecutionDeferred;
-        use iroha_data_model::block::decode_versioned_signed_block;
+        use iroha_data_model::block::decode_framed_signed_block;
         use ivm::error::ExecutionDeferral;
         let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::default(), 10_000))
             .expect("original signed State genesis");
@@ -338,13 +338,16 @@ mod tests {
             norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, allocation, 64)
         };
         let producer =
-            norito::with_decode_limits_scope(limits(0), || decode_versioned_signed_block(&wire))
+            norito::with_decode_limits_scope(limits(0), || decode_framed_signed_block(&wire))
                 .unwrap_err();
+        assert_eq!(
+            producer.kind(),
+            norito::core::DecodeAttemptErrorKind::EnclosingLimit
+        );
         assert!(
-            matches!(producer, iroha_version::error::Error::NoritoResourceLimit(
+            matches!(producer.into_error().decode_resource_error(), Some(
             norito::core::DecodeResourceError::TotalAllocationExceeded { attempted, limit: 0 }
-        ) if attempted > 0),
-            "{producer:?}"
+        ) if attempted > 0)
         );
         let read = || {
             SumeragiFinalityVerifier::from_trusted_checkpoint(
@@ -481,19 +484,15 @@ impl From<iroha_data_model::sumeragi_finality::FinalityReadError> for ProofError
         use iroha_data_model::sumeragi_finality::FinalityReadError;
         match error {
             FinalityReadError::Invalid(error) => Self::Portable(error),
-            FinalityReadError::DecodeResource(resource) => {
-                let completed = |_: norito::Error| {
-                    Self::Portable(FinalityError(
-                        iroha_version::error::Error::NoritoResourceLimit(resource).to_string(),
-                    ))
+            FinalityReadError::DecodeResource(original) => {
+                let completed = |error: norito::core::DecodeAttemptError| {
+                    Self::Portable(FinalityError(error.to_string()))
                 };
                 if cfg!(all(test, sumeragi_core_mutation = "HC52")) {
-                    return completed(resource.into());
+                    return completed(original);
                 }
-                match crate::execution_attempt::norito_decode_attempt_error(
-                    resource.into(),
-                    completed,
-                ) {
+                match crate::execution_attempt::canonical_decode_attempt_error(original, completed)
+                {
                     crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
                     crate::execution_attempt::ExecutionAttemptError::Deferred(local) => {
                         Self::Deferred(local)

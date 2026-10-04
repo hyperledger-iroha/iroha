@@ -1,170 +1,35 @@
 //! Original generated authority and signed-genesis identity; no response-selected trust roots.
 
 use super::*;
-use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
-use iroha_data_model::{
-    NetworkId,
-    account::address::ChainDiscriminantGuard,
-    sumeragi_finality::{FinalityValidator, genesis_epoch},
-};
+use iroha_crypto::KeyPair;
+use iroha_data_model::account::address::ChainDiscriminantGuard;
 use sorafs_manifest::signer::protocol::{SignerPurposeBindingV1, SignerRoleV1};
-use std::collections::BTreeSet;
-use zeroize::Zeroizing;
-
-pub(super) fn open(prepared: &PreparedLocalnet) -> Result<ManagedStreamTokenCustody> {
-    let manifest = prepared.stream_token_authorities()?.ok_or_else(|| {
-        invalid("managed custody requires its original StreamTokenAuthorities profile")
-    })?;
-    let config = prepared.context.load_client_config()?;
-    let _profile = ChainDiscriminantGuard::enter(config.account_chain_discriminant);
-    let path = prepared
-        .context
-        .client_config
-        .parent()
-        .ok_or_else(|| invalid("managed custody has no generation"))?;
-    let generation = PrivateDirectory::open_exact(path)?;
-    let bytes = generation.read(
-        "genesis.signed.nrt",
-        iroha_genesis::SIGNED_GENESIS_MAX_BYTES_V1,
-    )?;
-    let genesis = iroha_data_model::block::decode_framed_signed_block(&bytes)
-        .map_err(|_| invalid("invalid original signed custody genesis"))?;
-    let epoch = genesis_epoch(&genesis)
-        .map_err(|_| invalid("cannot authenticate original custody genesis"))?;
-    if epoch.network_id != config.network_id
-        || NetworkId::from_genesis_hash(genesis.hash()) != manifest.network_id
-        || prepared.context.dataspace_id != 0
-        || manifest.manager != config.account
-    {
-        return Err(invalid("original custody network or manager differs"));
-    }
-    let validators = epoch
-        .committee
-        .iter()
-        .map(|member| FinalityValidator {
-            public_key: member.validator.public_key().clone(),
-            proof_of_possession: member.proof_of_possession.clone(),
-        })
-        .collect();
-    let expected: BTreeSet<_> = epoch
-        .committee
-        .iter()
-        .map(|member| member.validator.clone())
-        .collect();
-    let mut peers = Vec::new();
-    for peer in &prepared.peers {
-        let bytes = iroha_fs::read_private(&peer.config_path, 1024 * 1024)?;
-        let rendered = std::str::from_utf8(&bytes)
-            .map_err(|_| invalid("invalid retained custody peer configuration"))?;
-        let table = crate::secret_toml::parse_table(rendered, "managed custody peer")
-            .map_err(|_| invalid("invalid retained custody peer configuration"))?;
-        let reader = iroha_config::node_config::open_node_config(
-            iroha_config::node_config::NodeFile::Verified {
-                path: peer.config_path.clone(),
-                table,
-            },
-            iroha_config::node_config::NodeConfigOptions::default(),
-        )
-        .map_err(|_| invalid("cannot resolve retained custody peer"))?;
-        let (user, _) = reader
-            .read()
-            .map_err(|_| invalid("cannot read retained custody peer"))?;
-        let actual = user
-            .parse()
-            .map_err(|_| invalid("invalid retained custody peer"))?;
-        let id = PeerId::new(actual.common.key_pair.public_key().clone());
-        if actual.genesis.expected_hash != genesis.hash() || !expected.contains(&id) {
-            return Err(invalid(
-                "custody peer differs from original genesis committee",
-            ));
-        }
-        let mut selected = config.clone();
-        selected.torii_api_url = peer
-            .torii_url
-            .parse()
-            .map_err(|_| invalid("invalid custody peer endpoint"))?;
-        let client = Client::builder(selected)
-            .build()
-            .map_err(|_| invalid("cannot construct custody peer client"))?;
-        peers.push((id, client));
-    }
-    if peers.len() != expected.len()
-        || peers
-            .iter()
-            .map(|(peer, _)| peer.clone())
-            .collect::<BTreeSet<_>>()
-            != expected
-    {
-        return Err(invalid(
-            "custody endpoints do not cover the exact original committee",
-        ));
-    }
-    let directory = generation
-        .ensure_child("runtime")?
-        .ensure_child("stream-token-custody")?;
-    let lock = directory.open_lock("operation.lock")?;
-    lock.try_lock()
-        .map_err(|_| invalid("another managed custody operation holds this generation"))?;
-    directory.revalidate()?;
-    Ok(ManagedStreamTokenCustody {
-        prepared: prepared.clone(),
-        directory,
-        _lock: lock,
-        manifest,
-        config: config.clone(),
-        genesis: GenesisAnchor {
-            network_id: config.network_id,
-            chain_id: config.chain.to_string(),
-            genesis,
-            validators,
-        },
-        peers,
-    })
-}
 
 impl ManagedStreamTokenCustody {
-    pub(super) fn role(&self, role: StreamTokenAuthorityRole) -> Result<&AccountId> {
-        self.manifest
-            .authorities
-            .iter()
-            .find(|authority| authority.role == role)
-            .map(|authority| &authority.account)
-            .ok_or_else(|| invalid("original custody role is absent"))
-    }
-    pub(super) fn validate_profile(&self) -> Result<()> {
-        self.directory.revalidate()?;
-        if iroha_fs::FileIdentity::of(&self.directory.open_read("operation.lock")?)?
-            != iroha_fs::FileIdentity::of(&self._lock)?
-        {
-            return Err(invalid("managed custody operation lock was replaced"));
-        }
-        if self.prepared.stream_token_authorities()?.as_ref() != Some(&self.manifest) {
-            return Err(invalid("original custody authority profile changed"));
-        }
-        Ok(())
-    }
     pub(super) fn validate_policy(&self, policy: &SignerCustodyPolicyV1) -> Result<()> {
-        journal::encode(policy, 16 * 1024)?;
+        encode(policy, 16 * 1024)?;
         policy
             .validate()
             .map_err(|_| invalid("invalid managed custody policy"))?;
-        if policy.binding.chain_id != self.config.chain.to_string()
-            || policy.binding.network_id != *self.config.network_id.as_bytes()
+        if policy.binding.chain_id != self.authority.config.chain.to_string()
+            || policy.binding.network_id != *self.authority.config.network_id.as_bytes()
             || policy.binding.role != SignerRoleV1::StreamToken
             || policy.binding.purpose
                 != (SignerPurposeBindingV1::StreamToken {
-                    provider_id: *self.manifest.provider_id.as_bytes(),
+                    provider_id: *self.authority.provider_id()?.as_bytes(),
                 })
             || self
-                .role(StreamTokenAuthorityRole::TokenSigner)?
+                .authority
+                .provider_role(StreamTokenAuthorityRole::TokenSigner)?
                 .try_signatory()
                 != Some(&policy.binding.public_key)
             || self
-                .role(StreamTokenAuthorityRole::CustodyAttester)?
+                .authority
+                .provider_role(StreamTokenAuthorityRole::CustodyAttester)?
                 .try_signatory()
                 != Some(&policy.attester_public_key)
-            || policy.binding.public_key == *self.config.key_pair.public_key()
-            || policy.attester_public_key == *self.config.key_pair.public_key()
+            || policy.binding.public_key == *self.authority.config.key_pair.public_key()
+            || policy.attester_public_key == *self.authority.config.key_pair.public_key()
             || policy.binding.key_revision != 1
             || policy.binding.policy_revision != 1
             || policy.attester_authority.key_revision != 1
@@ -176,15 +41,27 @@ impl ManagedStreamTokenCustody {
         }
         Ok(())
     }
-    pub(super) fn validate_original(&self, original: &Original) -> Result<()> {
+    pub(super) fn validate_original(
+        &self,
+        original: &Original,
+        purpose: CustodyPurpose,
+    ) -> Result<()> {
+        purpose.directory_name()?;
+        if matches!(original.action, Action::Configure(_)) != (purpose == CustodyPurpose::Configure)
+        {
+            return Err(invalid("retained custody purpose differs"));
+        }
         original.validate()?;
-        let verifier = self.decode_checkpoint(&original.checkpoint)?;
+        let verifier = self.authority.decode_checkpoint(&original.checkpoint)?;
         verifier
             .verified_tip()
             .map_err(|_| invalid("invalid original custody checkpoint"))?
-            .verify_global_scope(self.config.network_id, &self.config.chain.to_string())
+            .verify_global_scope(
+                self.authority.config.network_id,
+                &self.authority.config.chain.to_string(),
+            )
             .map_err(|_| invalid("original custody checkpoint is not the selected Global root"))?;
-        if original.selection.provider_id != self.manifest.provider_id {
+        if original.selection.provider_id != self.authority.provider_id()? {
             return Err(invalid("original custody provider differs"));
         }
         match &original.action {
@@ -216,7 +93,6 @@ impl ManagedStreamTokenCustody {
                     .map_err(|_| invalid("invalid original governed custody control"))?;
                 self.validate_policy(&control.policy)?;
                 if control.policy.binding != original.selection.binding
-                    || current.revision != 1
                     || original.selection.expected_revision != current.revision
                     || current
                         .canonical_digest()
@@ -237,6 +113,26 @@ impl ManagedStreamTokenCustody {
                     norito::DecodeLimits::new(4096, 16 * 1024, 16 * 1024, 1024 * 1024, 32),
                 )
                 .map_err(|_| invalid("invalid retained enrollment statement"))?;
+                match purpose {
+                    CustodyPurpose::InitialEnroll => {
+                        if current.revision != 1
+                            || control.active_head.is_some()
+                            || current.active_enrollment.is_some()
+                            || control.next_sequence != 1
+                            || statement.statement.sequence != 1
+                        {
+                            return Err(invalid(
+                                "initial enrollment has a substituted predecessor",
+                            ));
+                        }
+                    }
+                    CustodyPurpose::Renewal(sequence) => {
+                        self.validate_renewal_original(original, &control, sequence)?;
+                    }
+                    CustodyPurpose::Configure => {
+                        return Err(invalid("retained custody purpose differs"));
+                    }
+                }
                 if statement.statement.evidence_digest
                     != self.evidence_digest(
                         &control.policy,
@@ -257,16 +153,19 @@ impl ManagedStreamTokenCustody {
         binding: &SignerCustodyBindingV1,
         state: &VerifiedStreamTokenCustodyStateV1,
     ) -> Result<StreamTokenCustodySelection> {
-        if state.network_id() != self.config.network_id
-            || state.provider_id() != self.manifest.provider_id
-            || state.owner() != self.role(StreamTokenAuthorityRole::IssuerOperator)?
+        if state.network_id() != self.authority.config.network_id
+            || state.provider_id() != self.authority.provider_id()?
+            || state.owner()
+                != self
+                    .authority
+                    .provider_role(StreamTokenAuthorityRole::IssuerOperator)?
         {
             return Err(invalid(
                 "verified custody state differs from independently selected owner",
             ));
         }
         Ok(StreamTokenCustodySelection {
-            provider_id: self.manifest.provider_id,
+            provider_id: self.authority.provider_id()?,
             binding: binding.clone(),
             expected_revision: state
                 .current()
@@ -278,38 +177,14 @@ impl ManagedStreamTokenCustody {
         })
     }
     pub(super) fn attester(&self) -> Result<KeyPair> {
-        let path = self
-            .prepared
-            .context
-            .client_config
-            .parent()
-            .ok_or_else(|| invalid("missing custody generation"))?
-            .join("runtime")
-            .join("stream-token-authorities");
-        let authority = PrivateDirectory::open_exact(&path)?;
-        let bytes = authority.read(
-            StreamTokenAuthorityRole::CustodyAttester.credential_filename(),
-            256,
-        )?;
-        let text = bytes
-            .strip_suffix(b"\n")
-            .and_then(|bytes| std::str::from_utf8(bytes).ok())
-            .ok_or_else(|| invalid("invalid original attester credential"))?;
-        let text = Zeroizing::new(text.to_owned());
-        let exposed: ExposedPrivateKey = text
-            .parse()
-            .map_err(|_| invalid("invalid original attester credential"))?;
-        let key = KeyPair::from_private_key(exposed.0)
-            .map_err(|_| invalid("invalid original attester key"))?;
-        if key.public_key().algorithm() != Algorithm::Ed25519
-            || self
-                .role(StreamTokenAuthorityRole::CustodyAttester)?
-                .try_signatory()
-                != Some(key.public_key())
-        {
-            return Err(invalid("original independent attester key changed"));
-        }
-        Ok(key)
+        self.authority
+            .validate_profile()
+            .map_err(|_| invalid("invalid original custody-attester profile"))?;
+        crate::localnet::service_authorities::custody_attester_key(
+            &self.authority.prepared,
+            &self.authority.manifest,
+            self.authority.provider_id()?,
+        )
     }
     pub(super) fn evidence_digest(
         &self,
@@ -317,14 +192,15 @@ impl ManagedStreamTokenCustody {
         selection: &StreamTokenCustodySelection,
         checkpoint: &[u8],
     ) -> Result<[u8; 32]> {
-        let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
-        let profile = norito::json::to_vec(&self.manifest)
+        let _profile =
+            ChainDiscriminantGuard::enter(self.authority.config.account_chain_discriminant);
+        let profile = norito::json::to_vec(&self.authority.manifest)
             .map_err(|_| invalid("cannot encode original authority profile"))?;
-        let policy = journal::encode(policy, 16 * 1024)?;
-        let selection = journal::encode(selection, 64 * 1024)?;
+        let policy = encode(policy, 16 * 1024)?;
+        let selection = encode(selection, 64 * 1024)?;
         Ok(*Hash::new_from_chunks(&[
             b"iroha:managed-stream-token-custody-evidence:v1\0",
-            self.genesis.genesis.hash().as_ref(),
+            self.authority.genesis.genesis.hash().as_ref(),
             &profile,
             &policy,
             &selection,

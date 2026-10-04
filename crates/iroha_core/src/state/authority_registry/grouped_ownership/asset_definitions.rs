@@ -1,8 +1,9 @@
-//! Exact asset-definition ownership and optional domain projections.
+//! Exact asset-definition ownership, domain and confidential-policy projections.
 //!
-//! Keep the canonical definition/domain readers and all three derived readers
+//! Keep the canonical definition/domain readers and all five derived readers
 //! alive through encoding. Balances and their five indexes are a separate check.
 
+use super::confidential_policies::RetainedConfidentialPolicies;
 use super::*;
 use iroha_data_model::{
     asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId},
@@ -17,6 +18,7 @@ pub(in super::super) struct CheckedAssetDefinitions<'world> {
     contexts: CommittedStorageView<'world, AssetDefinitionId, DomainId>,
     by_domain: CommittedStorageView<'world, DomainId, BTreeSet<AssetDefinitionId>>,
     by_owner: CommittedStorageView<'world, AccountId, BTreeSet<AssetDefinitionId>>,
+    confidential_policies: RetainedConfidentialPolicies<'world>,
 }
 
 impl<'world> CheckedAssetDefinitions<'world> {
@@ -38,6 +40,7 @@ impl<'world> CheckedAssetDefinitions<'world> {
             by_owner: world
                 .asset_definitions_by_owner
                 .try_committed_view_nonblocking()?,
+            confidential_policies: RetainedConfidentialPolicies::retain(world)?,
         };
         let result = checked.validate(&mut Work(max_work));
         // Native publication changes take precedence over apparent corruption.
@@ -108,7 +111,8 @@ impl<'world> CheckedAssetDefinitions<'world> {
             "world.domain_asset_definitions",
             |_, definition| definition.owning_domain().as_ref(),
             work,
-        )
+        )?;
+        self.confidential_policies.validate(&self.rows, work)
     }
 
     /// Borrow the exact canonical rows whose derived lookups were checked.
@@ -120,19 +124,21 @@ impl<'world> CheckedAssetDefinitions<'world> {
 
     /// Check every original reader until canonical encoding has completed.
     pub(in super::super) fn matches_current(&self) -> Result<bool, GroupedOwnershipError> {
-        Ok(self
+        let rows = self
             .rows
-            .try_matches_current(&self.world.asset_definitions)?
-            && self.domains.try_matches_current(&self.world.domains)?
-            && self
-                .contexts
-                .try_matches_current(&self.world.asset_definition_domains)?
-            && self
-                .by_domain
-                .try_matches_current(&self.world.domain_asset_definitions)?
-            && self
-                .by_owner
-                .try_matches_current(&self.world.asset_definitions_by_owner)?)
+            .try_matches_current(&self.world.asset_definitions)?;
+        let domains = self.domains.try_matches_current(&self.world.domains)?;
+        let contexts = self
+            .contexts
+            .try_matches_current(&self.world.asset_definition_domains)?;
+        let by_domain = self
+            .by_domain
+            .try_matches_current(&self.world.domain_asset_definitions)?;
+        let by_owner = self
+            .by_owner
+            .try_matches_current(&self.world.asset_definitions_by_owner)?;
+        let confidential_policies = self.confidential_policies.matches_current()?;
+        Ok(rows && domains && contexts && by_domain && by_owner && confidential_policies)
     }
 }
 

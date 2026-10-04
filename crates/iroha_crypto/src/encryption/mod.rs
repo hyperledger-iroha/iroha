@@ -155,6 +155,61 @@ where
         out[..nonce_len].copy_from_slice(nonce_bytes);
         Ok(out.as_slice())
     }
+    /// Seal an initialized envelope in place without allocating backing storage.
+    ///
+    /// The caller places plaintext between the nonce and tag slots according to
+    /// the algorithm's tag position. On success the same storage contains the
+    /// canonical easy envelope. On failure it must be discarded; callers with
+    /// secret plaintext must retain zeroizing custody of the entire buffer.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotEnoughData`] for missing nonce/tag slots,
+    /// [`Error::NonceGeneration`] or [`Error::InertNonce`] for nonce failure, or
+    /// [`Error::Encryption`] if the cipher rejects the payload.
+    pub fn encrypt_easy_in_place<A: AsRef<[u8]>>(
+        &self,
+        aad: A,
+        data: &mut [u8],
+    ) -> Result<(), Error>
+    where
+        E: AeadInOut,
+    {
+        self.encrypt_easy_in_place_from_rng(aad.as_ref(), data, &mut OsRng)
+    }
+
+    fn encrypt_easy_in_place_from_rng<R: TryRngCore<Error = OsError>>(
+        &self,
+        aad: &[u8],
+        data: &mut [u8],
+        rng: &mut R,
+    ) -> Result<(), Error>
+    where
+        E: AeadInOut,
+    {
+        let nonce_len = mem::size_of::<aead::Nonce<E>>();
+        let tag_len = mem::size_of::<aead::Tag<E>>();
+        if data.len() < nonce_len + tag_len {
+            return Err(Error::NotEnoughData);
+        }
+        let nonce = random_nonce_from_rng::<E, _>(rng)?;
+        let (nonce_bytes, envelope) = data.split_at_mut(nonce_len);
+        let message_len = envelope.len() - tag_len;
+        let (message, tag_bytes) = match E::TAG_POSITION {
+            TagPosition::Prefix => {
+                let (tag, message) = envelope.split_at_mut(tag_len);
+                (message, tag)
+            }
+            TagPosition::Postfix => envelope.split_at_mut(message_len),
+        };
+        let tag = self
+            .encryptor
+            .encrypt_inout_detached(&nonce, aad, message.into())
+            .map_err(Error::Encryption)?;
+        nonce_bytes.copy_from_slice(nonce.as_slice());
+        tag_bytes.copy_from_slice(tag.as_slice());
+        Ok(())
+    }
+
     /// Encrypt `plaintext` and integrity protect `aad` using the provided `nonce`.
     ///
     /// # Errors
@@ -463,3 +518,6 @@ mod tests {
         assert_eq!(plaintext.as_slice(), message);
     }
 }
+
+#[cfg(test)]
+mod initialized_tests;

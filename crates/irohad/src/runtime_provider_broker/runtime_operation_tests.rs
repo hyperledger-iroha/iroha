@@ -2028,3 +2028,70 @@ fn evidence_viewer_grant_nonce_is_required_by_canonical_broker_requests() {
         Err(BrokerError::Rejected)
     );
 }
+
+#[test]
+fn provider_ingest_signer_wire_binds_both_accounts_and_refuses_missing_authority() {
+    let signer = AccountId::new(
+        provider_ingest_completion_test_keypair()
+            .public_key()
+            .clone(),
+    );
+    let owner_key =
+        iroha_crypto::KeyPair::try_from_seed(vec![0x7B; 32], iroha_crypto::Algorithm::Ed25519)
+            .unwrap();
+    let owner = AccountId::new(owner_key.public_key().clone());
+    let mut context = provider_ingest_completion_test_context(signer.clone());
+    context.expected_authority.provider_owner = owner.clone();
+    let wire = provider_ingest_signer_context_to_wire(&context).unwrap();
+    assert_eq!(
+        provider_ingest_signer_context_from_wire(&wire).unwrap(),
+        context
+    );
+    let mut instruction = provider_ingest_completion_test_instruction(signer.clone());
+    instruction.expected_authority = context.expected_authority.clone();
+    let payload = provider_ingest_completion_test_payload_with_executable(
+        server_test_network_id(),
+        signer,
+        Executable::Instructions(
+            vec![iroha_data_model::isi::InstructionBox::from(
+                instruction.clone(),
+            )]
+            .into(),
+        ),
+    );
+    assert_eq!(
+        ensure_provider_ingest_completion_payload(&payload, &context, &server_test_network_id()),
+        Ok(())
+    );
+    let owner_signed = provider_ingest_completion_test_payload_with_executable(
+        server_test_network_id(),
+        owner.clone(),
+        Executable::Instructions(
+            vec![iroha_data_model::isi::InstructionBox::from(instruction)].into(),
+        ),
+    );
+    assert_eq!(
+        ensure_provider_ingest_completion_payload(
+            &owner_signed,
+            &context,
+            &server_test_network_id()
+        ),
+        Err(BrokerError::BindingMismatch)
+    );
+    let mut changed = context.clone();
+    changed.expected_authority.completion_signer = owner;
+    let changed = provider_ingest_signer_context_from_wire(
+        &provider_ingest_signer_context_to_wire(&changed).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        ensure_provider_ingest_completion_payload(&payload, &changed, &server_test_network_id()),
+        Err(BrokerError::BindingMismatch)
+    );
+    let mut missing = wire.clone();
+    missing.expected_authority.clear();
+    assert!(provider_ingest_signer_context_from_wire(&missing).is_err());
+    let mut trailing = wire;
+    trailing.expected_authority.push(0);
+    assert!(provider_ingest_signer_context_from_wire(&trailing).is_err());
+}

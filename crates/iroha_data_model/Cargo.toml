@@ -179,6 +179,10 @@ name = "musubi_text_validation_allocations"
 path = "tests/musubi_text_validation_allocations.rs"
 
 [[test]]
+name = "contract_subject_derivation"
+path = "tests/contract_subject_derivation.rs"
+
+[[test]]
 name = "json_object_key_contract"
 path = "tests/json_object_key_contract.rs"
 

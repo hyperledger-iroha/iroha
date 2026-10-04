@@ -287,13 +287,16 @@ impl SumeragiFinalityVerifier {
         )?;
         let genesis = norito::core::with_decode_limits_scope(
             norito::canonical_decode_limits(checkpoint.genesis_wire.len()),
-            || decode_versioned_signed_block(&checkpoint.genesis_wire),
+            || decode_framed_signed_block(&checkpoint.genesis_wire),
         )
-        .map_err(|error| match error {
-            iroha_version::error::Error::NoritoResourceLimit(resource) => {
-                super::FinalityReadError::DecodeResource(resource)
+        .map_err(|error| match error.kind() {
+            norito::core::DecodeAttemptErrorKind::Allocator
+            | norito::core::DecodeAttemptErrorKind::EnclosingLimit => {
+                super::FinalityReadError::DecodeResource(error)
             }
-            invalid => super::FinalityReadError::Invalid(malformed(invalid)),
+            norito::core::DecodeAttemptErrorKind::Invalid => {
+                super::FinalityReadError::Invalid(malformed(error))
+            }
         })?;
         need(
             genesis.header().is_genesis()

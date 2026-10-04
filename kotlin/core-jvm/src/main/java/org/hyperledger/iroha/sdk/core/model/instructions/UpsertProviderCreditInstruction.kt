@@ -1,14 +1,21 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
 import java.math.BigInteger
+import org.hyperledger.iroha.sdk.core.util.HashLiteral
 
 private const val ACTION = "UpsertProviderCredit"
 private const val METADATA_PREFIX = "record.metadata."
 
 /**
- * Typed representation of the `UpsertProviderCredit` instruction (SoraFS provider ledger).
+ * Argument template for the guarded `UpsertProviderCredit` native instruction.
+ *
+ * [expectedCurrent] is required: null requests absence; a non-null value is the exact
+ * canonical hash of the selected full native credit row. It is an input claim, not a
+ * proof of that row. The argument map always contains `expected_current` (`null` or
+ * a canonical marked hash literal). Transaction encoding still needs a native wire frame.
  */
 class UpsertProviderCreditInstruction private constructor(
+    @JvmField val expectedCurrent: String?,
     @JvmField val providerIdHex: String,
     @JvmField val availableCreditNano: BigInteger,
     @JvmField val bondedNano: BigInteger,
@@ -21,14 +28,18 @@ class UpsertProviderCreditInstruction private constructor(
     @JvmField val underDeliveryStrikes: Int?,
     @JvmField val lastPenaltyEpoch: Long?,
     metadata: Map<String, String>,
-    override val arguments: Map<String, String>,
+    arguments: Map<String, String>,
 ) : InstructionTemplate {
 
     private val _metadata: Map<String, String> = metadata.toMap()
 
-    val metadata: Map<String, String> get() = _metadata
+    private val _arguments: Map<String, String> = arguments.toMap()
+
+    val metadata: Map<String, String> get() = _metadata.toMap()
+    override val arguments: Map<String, String> get() = _arguments.toMap()
 
     constructor(
+        expectedCurrent: String?,
         providerIdHex: String,
         availableCreditNano: BigInteger,
         bondedNano: BigInteger,
@@ -42,6 +53,7 @@ class UpsertProviderCreditInstruction private constructor(
         lastPenaltyEpoch: Long? = null,
         metadata: Map<String, String> = emptyMap(),
     ) : this(
+        expectedCurrent = validatedExpectedCurrent(expectedCurrent),
         providerIdHex = validatedProviderIdHex(providerIdHex),
         availableCreditNano = requireNonNegative(availableCreditNano, "availableCreditNano"),
         bondedNano = requireNonNegative(bondedNano, "bondedNano"),
@@ -57,6 +69,7 @@ class UpsertProviderCreditInstruction private constructor(
         lastPenaltyEpoch = lastPenaltyEpoch?.also { ensureNonNegative(it, "lastPenaltyEpoch") },
         metadata = metadata,
         arguments = buildArguments(
+            validatedExpectedCurrent(expectedCurrent),
             providerIdHex, availableCreditNano, bondedNano, requiredBondNano,
             expectedSettlementNano, onboardingEpoch, lastSettlementEpoch,
             lowBalanceSinceEpoch, slashedNano, underDeliveryStrikes, lastPenaltyEpoch, metadata,
@@ -68,7 +81,8 @@ class UpsertProviderCreditInstruction private constructor(
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is UpsertProviderCreditInstruction) return false
-        return onboardingEpoch == other.onboardingEpoch
+        return expectedCurrent == other.expectedCurrent
+            && onboardingEpoch == other.onboardingEpoch
             && lastSettlementEpoch == other.lastSettlementEpoch
             && providerIdHex == other.providerIdHex
             && availableCreditNano == other.availableCreditNano
@@ -83,7 +97,8 @@ class UpsertProviderCreditInstruction private constructor(
     }
 
     override fun hashCode(): Int {
-        var result = providerIdHex.hashCode()
+        var result = expectedCurrent?.hashCode() ?: 0
+        result = 31 * result + providerIdHex.hashCode()
         result = 31 * result + availableCreditNano.hashCode()
         result = 31 * result + bondedNano.hashCode()
         result = 31 * result + requiredBondNano.hashCode()
@@ -101,6 +116,9 @@ class UpsertProviderCreditInstruction private constructor(
     companion object {
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): UpsertProviderCreditInstruction {
+            require(arguments["action"] == ACTION) { "Instruction action must be '$ACTION'" }
+            val guard = require(arguments, "expected_current")
+            val expectedCurrent = if (guard == "null") null else validatedExpectedCurrent(guard)
             val providerIdHex = require(arguments, "record.provider_id_hex")
             val availableCreditNano = BigInteger(require(arguments, "record.available_credit_nano"))
             val bondedNano = BigInteger(require(arguments, "record.bonded_nano"))
@@ -126,6 +144,7 @@ class UpsertProviderCreditInstruction private constructor(
             }
 
             return UpsertProviderCreditInstruction(
+                expectedCurrent = expectedCurrent,
                 providerIdHex = providerIdHex,
                 availableCreditNano = availableCreditNano,
                 bondedNano = bondedNano,
@@ -148,6 +167,7 @@ class UpsertProviderCreditInstruction private constructor(
         }
 
         private fun buildArguments(
+            expectedCurrent: String?,
             providerIdHex: String,
             availableCreditNano: BigInteger,
             bondedNano: BigInteger,
@@ -163,6 +183,7 @@ class UpsertProviderCreditInstruction private constructor(
         ): Map<String, String> {
             val args = linkedMapOf<String, String>()
             args["action"] = ACTION
+            args["expected_current"] = expectedCurrent ?: "null"
             args["record.provider_id_hex"] = providerIdHex
             args["record.available_credit_nano"] = availableCreditNano.toString()
             args["record.bonded_nano"] = bondedNano.toString()
@@ -200,4 +221,16 @@ private fun validatedProviderIdHex(value: String): String {
     val normalized = value.trim()
     require(normalized.isNotEmpty()) { "providerIdHex must not be blank" }
     return normalized
+}
+
+private fun validatedExpectedCurrent(value: String?): String? {
+    if (value == null) return null
+    // Reuse the sole hash-literal owner. Exact comparison refuses normalization
+    // of raw hex, whitespace, case, checksum, or an unmarked hash.
+    require(value.length == 74) { "expectedCurrent must be an exact canonical marked hash literal" }
+    val bytes = HashLiteral.decode(value)
+    require((bytes.last().toInt() and 1) == 1 && HashLiteral.canonicalize(bytes) == value) {
+        "expectedCurrent must be an exact canonical marked hash literal"
+    }
+    return value
 }

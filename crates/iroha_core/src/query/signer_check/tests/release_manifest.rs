@@ -79,7 +79,8 @@ fn bind(
     instruction: &MutateSorafsReleaseManifestAuthority,
     floor: NativeCheckFloorV1,
 ) -> Result<BoundNativeCheckV1, Error> {
-    bind_signed_check_v1(
+    bind_fixture(
+        &state,
         round,
         NativeCustodyCheckRefV1::ReleaseManifest(instruction),
         &state.view().chain_id().to_string(),
@@ -102,10 +103,11 @@ fn role13_check_binding_rejects_purpose_floor_signed_body_and_non_check_substitu
         authenticate_applied_check_v1(
             &state,
             NativeCustodyCheckPurposeV1::FinalPromotion,
-            bound,
+            &mut Some(bound),
             &round,
         )
-        .err(),
+        .err()
+        .map(crate::execution_attempt::expect_completed_rejection),
         Some(Error::Invalid),
     );
 
@@ -123,7 +125,8 @@ fn role13_check_binding_rejects_purpose_floor_signed_body_and_non_check_substitu
     let mut substituted = instruction.clone();
     substituted.expected_control_digest = [0x99; 32];
     assert_eq!(
-        bind_signed_check_v1(
+        bind_fixture(
+            &state,
             &mut round,
             NativeCustodyCheckRefV1::ReleaseManifest(&instruction),
             &state.view().chain_id().to_string(),
@@ -238,10 +241,11 @@ fn finalized_role13_check_with_exact_grants_still_cannot_authenticate() {
         authenticate_applied_check_v1(
             &state,
             NativeCustodyCheckPurposeV1::ReleaseManifest,
-            bound,
+            &mut Some(bound),
             &round,
         )
-        .err(),
+        .err()
+        .map(crate::execution_attempt::expect_completed_rejection),
         Some(Error::Execution),
         "a finalized failed output cannot authorize release-manifest signing",
     );

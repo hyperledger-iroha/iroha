@@ -8,7 +8,7 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     NetworkId,
     block::{
-        SignedBlock, decode_versioned_signed_block,
+        SignedBlock, decode_framed_signed_block,
         proofs::{
             AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1, BlockProofs,
             TrustedBlockProofAnchor,
@@ -360,28 +360,16 @@ fn decode_executed_block_wire(bytes: &[u8]) -> Result<SignedBlock, VerificationE
         LABEL,
     )?;
     let limits = authenticated_decode_limits(bytes.len());
-    let block = norito::core::with_decode_limits(limits, || {
-        decode_versioned_signed_block(bytes)
-            .map_err(|error| norito::core::Error::Message(error.to_string()))
-    })
-    .map_err(|error| {
-        VerificationError::new(
-            VerificationErrorCode::NonCanonicalBlockWire,
-            format!("{LABEL} did not decode as SignedBlockWire: {error}"),
-        )
-    })?;
-    let canonical = block.encode_wire().map_err(|error| {
-        VerificationError::new(
-            VerificationErrorCode::NonCanonicalBlockWire,
-            format!("{LABEL} could not be canonically re-encoded: {error}"),
-        )
-    })?;
-    if canonical != bytes {
-        return Err(VerificationError::new(
-            VerificationErrorCode::NonCanonicalBlockWire,
-            format!("{LABEL} is not its exact canonical SignedBlockWire re-encoding"),
-        ));
-    }
+    let block =
+        norito::core::with_decode_limits_scope(limits, || decode_framed_signed_block(bytes))
+            // TODO: give the host terminal ABI a distinct local-unavailable outcome. The
+            // canonical decoder retains the original cause up to this fixed JS boundary.
+            .map_err(|error| {
+                VerificationError::new(
+                    VerificationErrorCode::NonCanonicalBlockWire,
+                    format!("{LABEL} did not decode as SignedBlockWire: {error}"),
+                )
+            })?;
     Ok(block)
 }
 fn authenticated_decode_limits(encoded_len: usize) -> norito::DecodeLimits {
@@ -508,7 +496,7 @@ mod tests {
         proof: &mut SumeragiFinalityProof,
         mutate: impl FnOnce(&mut iroha_sumeragi::message::Qc),
     ) {
-        let mut block = decode_versioned_signed_block(&proof.block_wire).unwrap();
+        let mut block = decode_framed_signed_block(&proof.block_wire).unwrap();
         let certificate = block.commit_certificate().unwrap();
         let mut qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
         mutate(&mut qc);

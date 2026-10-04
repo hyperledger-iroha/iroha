@@ -1,9 +1,9 @@
 //! Move-only, original-pool custody for detached diagnostic trace snapshots.
 //!
-//! These records are diagnostics, not an execution proof. Live source log growth
-//! and caller-created copies remain separate custody boundaries.
+//! These records are diagnostics, not an execution proof. Runtime delta sources
+//! retain their original funded owner; detached captures prepay their own backing.
 
-use super::{Constraint, DeltaEntry, MemEvent, RegEvent, RegisterState, StepEntry};
+use super::{Constraint, DeltaTraceLog, MemEvent, RegEvent, RegisterState, StepEntry};
 use crate::{
     VMError,
     error::ExecutionDeferral,
@@ -18,7 +18,7 @@ pub enum DiagnosticRegisterSource<'a> {
     /// Already expanded cycle states.
     States(&'a [RegisterState]),
     /// Compact cycle changes, expanded directly into funded backing.
-    Deltas(&'a [DeltaEntry]),
+    Deltas(&'a DeltaTraceLog),
 }
 
 /// Borrowed source records whose complete backing demand is planned before copying.
@@ -165,7 +165,7 @@ impl DiagnosticTraceSource<'_> {
     pub fn allocation_plan(&self) -> Result<ExecutionMemoryPlan, VMError> {
         if let DiagnosticRegisterSource::Deltas(rows) = &self.registers
             && rows
-                .iter()
+                .entries()
                 .any(|row| row.changes.iter().any(|(index, _, _)| *index >= 256))
         {
             return Err(VMError::DecodeError);
@@ -237,8 +237,8 @@ impl DiagnosticTraceSource<'_> {
                     gpr: [0; 256],
                     tags: [false; 256],
                 };
-                for row in *rows {
-                    for &(index, value, tag) in &row.changes {
+                for row in rows.entries() {
+                    for &(index, value, tag) in row.changes {
                         scratch.gpr[index] = value;
                         scratch.tags[index] = tag;
                     }

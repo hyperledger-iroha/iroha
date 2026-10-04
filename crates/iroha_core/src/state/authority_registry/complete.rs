@@ -1,8 +1,8 @@
 //! Fail-closed admission of the complete State authority inventory.
 //!
 //! The registry describes every physical owner, but a description with a
-//! `Required` schema is not a complete commitment schema. The eventual State
-//! root publisher must call this check before it can expose a finalized root.
+//! `Required` schema is not a complete commitment schema. Admission checks only
+//! schema metadata; it never grants captured-row, publication or finality authority.
 //! Derived dependencies must terminate in canonical values or authenticated
 //! history; an owner container or a node-local cache cannot supply authority.
 //! TODO: fund and consume this check in the State/Kura publication capsule.
@@ -29,12 +29,20 @@ pub(crate) use native_capture::{
     capture_account_alias_table_once, capture_accounts_table_once, capture_domains_table_once,
 };
 
+#[path = "complete/frozen_verifying_keys.rs"]
+pub(in crate::state) mod frozen_verifying_keys;
+
+#[path = "complete/frozen_proofs.rs"]
+pub(in crate::state) mod frozen_proofs;
+
 #[path = "complete/grouped_capture.rs"]
 mod grouped_capture;
 pub(crate) use grouped_capture::{
     capture_account_rekey_records_once, capture_asset_definitions_once, capture_assets_once,
-    capture_contract_alias_bindings_once, capture_escrows_once, capture_nfts_once,
-    capture_repo_agreements_once, capture_rwas_once,
+    capture_contract_alias_bindings_once, capture_contract_subject_bindings_once,
+    capture_escrows_once, capture_governance_proposals_once, capture_nfts_once,
+    capture_proofs_once, capture_repo_agreements_once, capture_rwas_once,
+    capture_verifying_keys_once,
 };
 
 /// A field that cannot yet participate in a complete State commitment.
@@ -282,13 +290,13 @@ pub(crate) fn require_complete_inventory(
     result
 }
 
-/// Require the actual exhaustively typed State inventory to be complete.
+/// Admit the actual typed inventory's schema metadata, without capturing State authority.
 pub(crate) fn require_complete_state_inventory() -> Result<(), CompleteInventoryError> {
     require_complete_inventory(STATE_FIELDS)
 }
 
 mod composition;
-mod table_capture;
+pub(in crate::state) mod table_capture;
 
 #[cfg(test)]
 #[path = "complete/native_history_tests.rs"]
@@ -470,13 +478,18 @@ mod tests {
     }
 
     #[test]
-    fn actual_state_cannot_claim_complete_authority_while_any_projection_is_required() {
-        assert_eq!(
-            require_complete_state_inventory(),
-            Err(CompleteInventoryError::RequiredSchema(
-                "state.kagemusha_v1_runtime_verifier"
-            ))
-        );
+    fn actual_inventory_admits_governed_authority_without_local_runtime_artifacts() {
+        assert_eq!(require_complete_state_inventory(), Ok(()));
+        assert!(matches!(
+            find_identity(STATE_FIELDS, "world.kagemusha_verifier_registry")
+                .unwrap()
+                .role,
+            Role::Canonical(Canonical::Cell(Schema::Norito { .. }))
+        ));
+        let local = find_identity(STATE_FIELDS, "state.kagemusha_v1_runtime_verifier").unwrap();
+        assert!(matches!(local.role, Role::Local(_)));
+        assert_eq!(local.disclosure, Disclosure::NotApplicable);
+        // This checks only static identities and schemas. No State owner was captured.
     }
 
     #[test]

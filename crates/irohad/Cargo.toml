@@ -23,6 +23,8 @@ path = "src/lib.rs"
 workspace = true
 
 [features]
+# Test-only deterministic daemon integration mutations; never enabled in shipping builds.
+mutation-testing = []
 # Portable daemon defaults retain automatic SIMD and target-appropriate Metal.
 # The canonical Linux release builder adds `ivm-cuda`, requiring the signed PTX
 # bundle while keeping nvcc and the driver out of build/startup dependencies.
@@ -176,6 +178,7 @@ rand = { workspace = true }
 blake3 = { workspace = true }
 
 [dev-dependencies]
+iroha_musubi_service = { workspace = true, features = ["test-fixtures"] }
 iroha_executor_data_model = { workspace = true }
 iroha_torii = { workspace = true, default-features = false, features = ["test-fixtures"] }
 iroha_core = { workspace = true, default-features = false, features = ["runtime", "iroha-core-tests"] }

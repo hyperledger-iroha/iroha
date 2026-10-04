@@ -14,6 +14,216 @@ fn store() -> (tempfile::TempDir, PrivateDirectory) {
 }
 
 #[test]
+fn atomic_staging_names_accept_only_the_native_writer_grammar() {
+    assert!(is_atomic_staging_name(OsStr::new(&temporary_name())));
+    for name in [
+        ".iroha-fs-1-0.tmp",
+        ".iroha-fs-4294967295-18446744073709551615.tmp",
+    ] {
+        assert!(is_atomic_staging_name(OsStr::new(name)), "{name}");
+    }
+    for name in [
+        ".iroha-fs-0-0.tmp",
+        ".iroha-fs-01-0.tmp",
+        ".iroha-fs-1-00.tmp",
+        ".iroha-fs-+1-0.tmp",
+        ".iroha-fs-1-+0.tmp",
+        ".iroha-fs-1--1.tmp",
+        ".iroha-fs-4294967296-0.tmp",
+        ".iroha-fs-1-18446744073709551616.tmp",
+        ".iroha-fs-1-0.tmp.extra",
+        "clock-floor-v1.next",
+        "record",
+    ] {
+        assert!(!is_atomic_staging_name(OsStr::new(name)), "{name}");
+    }
+}
+
+#[test]
+fn interrupted_atomic_staging_cleanup_preserves_original_state_and_lock() {
+    let (_temporary, store) = store();
+    let lock = store.create_lock("lock").unwrap();
+    lock.try_lock().unwrap();
+    store
+        .write_atomic("state", b"committed", PublishMode::CreateNew)
+        .unwrap();
+    let state = FileSnapshot::private_journal(&store.open_read("state").unwrap()).unwrap();
+    // Reproduce crashes before a body write and after a partial body write. Neither file has
+    // reached its destination name; recovery never treats either as committed state.
+    let zero = store.create_lock(".iroha-fs-1-0.tmp").unwrap();
+    zero.sync_all().unwrap();
+    drop(zero);
+    let mut partial = store.create_lock(".iroha-fs-1-1.tmp").unwrap();
+    partial.write_all(b"partial").unwrap();
+    partial.sync_all().unwrap();
+    drop(partial);
+    assert_eq!(
+        store
+            .reconcile_atomic_staging(&["lock", "state"], 2, 7)
+            .unwrap(),
+        2
+    );
+    assert_eq!(store.read("state", 9).unwrap().as_slice(), b"committed");
+    assert_eq!(
+        FileSnapshot::private_journal(&store.open_read("state").unwrap()).unwrap(),
+        state
+    );
+    assert!(
+        store
+            .open_existing_lock("lock")
+            .unwrap()
+            .try_lock()
+            .is_err()
+    );
+    assert_eq!(
+        store
+            .reconcile_atomic_staging(&["lock", "state"], 0, 0)
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn atomic_staging_cleanup_never_recovers_a_missing_committed_file() {
+    let (_temporary, store) = store();
+    let lock = store.create_lock("lock").unwrap();
+    lock.try_lock().unwrap();
+    store
+        .write_atomic(".iroha-fs-1-0.tmp", b"uncommitted", PublishMode::CreateNew)
+        .unwrap();
+    let before = store.entries(2).unwrap();
+    assert_eq!(
+        store
+            .reconcile_atomic_staging(&["lock", "state"], 1, 32)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+    assert_eq!(store.entries(2).unwrap(), before);
+    assert_eq!(
+        store.read(".iroha-fs-1-0.tmp", 32).unwrap().as_slice(),
+        b"uncommitted"
+    );
+}
+
+#[test]
+fn atomic_staging_cleanup_validates_every_name_and_extent_before_mutation() {
+    let (_temporary, store) = store();
+    let lock = store.create_lock("lock").unwrap();
+    lock.try_lock().unwrap();
+    store
+        .write_atomic("state", b"original", PublishMode::CreateNew)
+        .unwrap();
+    store
+        .write_atomic(".iroha-fs-1-0.tmp", b"small", PublishMode::CreateNew)
+        .unwrap();
+    store
+        .write_atomic(".iroha-fs-1-1.tmp", b"larger", PublishMode::CreateNew)
+        .unwrap();
+    let before = store.entries(4).unwrap();
+    for (count, bytes) in [(1, 6), (2, 5), (17, 6)] {
+        assert!(
+            store
+                .reconcile_atomic_staging(&["lock", "state"], count, bytes)
+                .is_err()
+        );
+        assert_eq!(store.entries(4).unwrap(), before);
+    }
+    for required in [
+        vec![],
+        vec!["state", "state"],
+        vec!["../escape"],
+        vec![".iroha-fs-1-0.tmp"],
+    ] {
+        assert!(store.reconcile_atomic_staging(&required, 2, 6).is_err());
+        assert_eq!(store.entries(4).unwrap(), before);
+    }
+    store
+        .write_atomic("z-unknown", b"unowned", PublishMode::CreateNew)
+        .unwrap();
+    let before = store.entries(5).unwrap();
+    assert!(
+        store
+            .reconcile_atomic_staging(&["lock", "state"], 3, 6)
+            .is_err()
+    );
+    assert_eq!(store.entries(5).unwrap(), before);
+    assert_eq!(
+        store.read(".iroha-fs-1-0.tmp", 6).unwrap().as_slice(),
+        b"small"
+    );
+    assert_eq!(store.read("state", 8).unwrap().as_slice(), b"original");
+}
+
+#[test]
+fn atomic_staging_cleanup_refuses_a_directory_before_removing_any_file() {
+    let (_temporary, store) = store();
+    let lock = store.create_lock("lock").unwrap();
+    lock.try_lock().unwrap();
+    store
+        .write_atomic(".iroha-fs-1-0.tmp", b"retained", PublishMode::CreateNew)
+        .unwrap();
+    let child = store.create_child(".iroha-fs-1-1.tmp").unwrap();
+    assert!(store.reconcile_atomic_staging(&["lock"], 2, 8).is_err());
+    assert_eq!(store.entries(3).unwrap().len(), 3);
+    assert_eq!(
+        store.read(".iroha-fs-1-0.tmp", 8).unwrap().as_slice(),
+        b"retained"
+    );
+    child.revalidate().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn atomic_staging_cleanup_refuses_links_modes_and_replaced_ancestors() {
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+    for attack in ["symlink", "hardlink", "mode", "ancestor"] {
+        let (temporary, store) = store();
+        let lock = store.create_lock("lock").unwrap();
+        lock.try_lock().unwrap();
+        store
+            .write_atomic("state", b"committed", PublishMode::CreateNew)
+            .unwrap();
+        store
+            .write_atomic(".iroha-fs-1-0.tmp", b"retained", PublishMode::CreateNew)
+            .unwrap();
+        let unsafe_path = store.path().join(".iroha-fs-1-1.tmp");
+        let mut actual = store.path().to_owned();
+        match attack {
+            "symlink" => symlink("state", &unsafe_path).unwrap(),
+            "hardlink" => fs::hard_link(store.path().join("state"), &unsafe_path).unwrap(),
+            "mode" => {
+                store
+                    .write_atomic(".iroha-fs-1-1.tmp", b"unsafe", PublishMode::CreateNew)
+                    .unwrap();
+                fs::set_permissions(unsafe_path, fs::Permissions::from_mode(0o644)).unwrap();
+            }
+            "ancestor" => {
+                actual = temporary.path().join("displaced");
+                fs::rename(store.path(), &actual).unwrap();
+                fs::create_dir(store.path()).unwrap();
+                fs::set_permissions(store.path(), fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            store
+                .reconcile_atomic_staging(&["lock", "state"], 2, 16)
+                .is_err(),
+            "{attack}"
+        );
+        assert_eq!(fs::read(actual.join("state")).unwrap(), b"committed");
+        assert_eq!(
+            fs::read(actual.join(".iroha-fs-1-0.tmp")).unwrap(),
+            b"retained"
+        );
+        if attack == "ancestor" {
+            assert_eq!(fs::read_dir(store.path()).unwrap().count(), 0);
+        }
+    }
+}
+
+#[test]
 fn complete_private_directory_publication_never_exposes_partial_destination() {
     let (temporary, _) = store();
     let parent = OwnerDirectory::open(temporary.path()).unwrap();

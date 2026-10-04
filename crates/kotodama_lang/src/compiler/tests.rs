@@ -1,9 +1,15 @@
 //! Compiler bytecode, source-policy, and access-hint regressions.
 
+#[path = "tests/dead_operands.rs"]
+mod dead_operands;
 #[path = "tests/literal_helpers.rs"]
 mod literal_helpers;
+#[path = "tests/numeric_operands.rs"]
+mod numeric_operands;
 #[path = "tests/rematerialized.rs"]
 mod rematerialized;
+#[path = "tests/state_operands.rs"]
+mod state_operands;
 
 use super::{
     ACCOUNT_WILDCARD_KEY, AUTHORITY_ACCOUNT_KEY, AccessHintDiagnostics, AccessSets,
@@ -2962,10 +2968,23 @@ fn debug_info_emits_full_width_pointer_codec_and_complete_access() {
         ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
     )
     .to_le_bytes();
-    assert!(
-        code.windows(publish_needle.len())
-            .any(|window| window == publish_needle),
-        "full-width numeric logging must publish the pointer TLV"
+    let pointer_codec = encoding::wide::encode_sys(
+        instruction::wide::system::SCALL,
+        ivm_abi::syscalls::SYSCALL_POINTER_TO_NORITO as u8,
+    )
+    .to_le_bytes();
+    let logging_codec_calls: Vec<_> = code
+        .chunks_exact(4)
+        .filter(|word| *word == needle || *word == pointer_codec || *word == publish_needle)
+        .map(|word| <[u8; 4]>::try_from(word).expect("one complete instruction"))
+        .collect();
+    // The synchronous pointer codec validates the original owned public TLV.
+    // String logging needs no conversion; numeric logging must encode the full
+    // typed value before DEBUG_LOG, without an intermediate publication copy.
+    assert_eq!(
+        logging_codec_calls,
+        [needle, pointer_codec, needle],
+        "string log, full-width pointer codec, and numeric log must stay ordered"
     );
     let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
     let inspect = entrypoints

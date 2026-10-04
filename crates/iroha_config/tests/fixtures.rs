@@ -2341,11 +2341,19 @@ fn nexus_evidence_preparation_pool_covers_all_offenders_and_local_observations()
     assert_eq!(prune_plan, 3_968);
     assert_eq!(
         pending_plan,
-        4 * 31 * 31 * std::mem::size_of::<defaults::nexus::storage::ConsensusPenaltyPendingEntry>()
+        4 * 31
+            * iroha_data_model::sumeragi_lanes::MAX_LANE_CUSTODY_SIGNERS
+            * std::mem::size_of::<defaults::nexus::storage::ConsensusPenaltyPendingEntry>()
+    );
+    assert_eq!(
+        defaults::nexus::storage::CONSENSUS_EVIDENCE_PENDING_PEER_KEY_BYTES,
+        49
     );
     assert_eq!(
         pending_peer_keys,
-        4 * 31 * 31 * (1 + iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES)
+        4 * 31
+            * iroha_data_model::sumeragi_lanes::MAX_LANE_CUSTODY_SIGNERS
+            * defaults::nexus::storage::CONSENSUS_EVIDENCE_PENDING_PEER_KEY_BYTES
     );
     assert_eq!(one_plan, prune_plan + pending_plan + pending_peer_keys);
     assert_eq!(
@@ -2462,4 +2470,76 @@ fn sumeragi_seed_custody_and_local_overrides_are_validated_together() {
 
     let error = parse("observer", 199).expect_err("observer cannot hold a validator seed");
     assert!(format!("{error:?}").contains("observer must not configure a mint-finality seed"));
+}
+
+#[test]
+fn credential_registry_memory_budget_is_configured_and_nonzero() {
+    let parse = |extra: &str| {
+        ConfigReader::new()
+            .without_env()
+            .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+            .unwrap()
+            .with_toml_source(TomlSource::inline(extra.parse().unwrap()))
+            .read_and_complete::<UserConfig>()
+            .map(|user| user.parse())
+    };
+    let default = parse("").unwrap().unwrap();
+    assert_eq!(
+        default.runtime_provider_broker.credential_max_memory_bytes,
+        defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES
+    );
+    let explicit = parse("[runtime_provider_broker]\ncredential_max_memory_bytes = 123456\n")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        explicit
+            .runtime_provider_broker
+            .credential_max_memory_bytes
+            .get(),
+        123456
+    );
+    assert!(parse("[runtime_provider_broker]\ncredential_max_memory_bytes = 0\n").is_err());
+}
+
+#[test]
+fn standalone_credential_registry_policy_matches_root_and_is_strict() {
+    use iroha_config::parameters::actual::RuntimeProviderBroker;
+
+    let parse = |table: &str| {
+        RuntimeProviderBroker::from_toml_source(TomlSource::inline(table.parse().unwrap()))
+    };
+    let default = parse("").expect("default broker policy without a node config");
+    assert_eq!(
+        default.credential_max_memory_bytes,
+        defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES
+    );
+    let table = "credential_max_memory_bytes = 123456\nendpoint_path = '/tmp/runtime-provider-broker-v1.sock'\n";
+    let standalone = parse(table).expect("standalone broker policy");
+    let root = ConfigReader::new()
+        .without_env()
+        .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+        .unwrap()
+        .with_toml_source(TomlSource::inline(
+            format!("[runtime_provider_broker]\n{table}")
+                .parse()
+                .unwrap(),
+        ))
+        .read_and_complete::<UserConfig>()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(standalone, root.runtime_provider_broker);
+    for invalid in [
+        "credential_max_memory_bytes = 0",
+        "credential_max_memory_byte = 123456",
+        "endpoint_path = 'relative/runtime-provider-broker-v1.sock'",
+        "endpoint_path = '/tmp/wrong.sock'",
+        "extends = '/missing/broker-policy.toml'",
+        "private_key_file = '/missing/private-key'",
+    ] {
+        assert!(
+            parse(invalid).is_err(),
+            "accepted invalid broker table: {invalid}"
+        );
+    }
 }

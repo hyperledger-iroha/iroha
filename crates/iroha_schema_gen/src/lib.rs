@@ -70,7 +70,13 @@ macro_rules! schema_types {
             iroha_data_model::sorafs::provider_admission::discovery::ProviderDiscoveryProofV1,
             iroha_data_model::sorafs::stream_token_custody::proof::StreamTokenCustodyProofV1,
             iroha_data_model::sorafs::reserve::proof::ReservePolicyProofV1,
+            iroha_data_model::sorafs::reserve::account_proof::ReserveAccountProofV1,
+            iroha_data_model::sorafs::reserve::ReserveProviderAccountV1,
             iroha_data_model::sorafs::reserve::history::ReserveStateV1,
+            // Reserve-account responses retain these originals as opaque byte frames.
+            iroha_data_model::sorafs::pricing::ProviderCreditRecord,
+            iroha_data_model::sorafs::capacity::CapacityDeclarationRecord,
+            iroha_data_model::sorafs::pricing::PricingScheduleRecord,
             iroha_data_model::sorafs::provider_admission::discovery::account_read::RegisteredAccountReadV1,
             iroha_data_model::sorafs::stream_token_custody::history::StreamTokenCustodyControlIndexV1,
             iroha_data_model::sns::lease::SnsLeaseProofV1,

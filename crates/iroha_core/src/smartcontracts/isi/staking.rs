@@ -721,7 +721,7 @@ fn materialize_index_quantity(
     let charge = reservation
         .try_split(layout)
         .map_err(|_| EvidencePreparationError::Invariant)?;
-    #[cfg(all(test, feature = "mutation-testing", sumeragi_core_mutation = "HC55"))]
+    #[cfg(all(test, feature = "mutation-testing", sumeragi_core_mutation = "HC87"))]
     let charge = {
         // Mutation: release the admitted original while the physical quantity lives.
         drop(charge);

@@ -423,49 +423,55 @@ public struct SorafsProviderIngestCompletionSignerPolicyV1: Equatable, Sendable 
     }
 }
 
-/// Exact provider owner and signer policy expected at completion commit.
+/// Exact provider owner, completion signer and signer policy expected at completion commit.
 public struct SorafsProviderIngestCompletionAuthorityV1: Equatable, Sendable {
     public let providerOwner: String
+    public let completionSigner: String
     public let signerPolicy: SorafsProviderIngestCompletionSignerPolicyV1
 
     public init(
         providerOwner: String,
+        completionSigner: String,
         signerPolicy: SorafsProviderIngestCompletionSignerPolicyV1
     ) throws {
-        guard providerOwner == providerOwner.trimmingCharacters(in: .whitespacesAndNewlines),
-              providerOwner.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
-              !providerOwner.contains("@"),
-              !providerOwner.contains("#"),
-              !providerOwner.contains("$")
-        else {
-            throw SorafsReplicationInstructionBuilderError.invalidInstruction(
-                reason: "provider_owner must be an exact canonical I105 account id"
-            )
-        }
-        do {
-            let prefix = try AccountAddress
-                .inspectI105NetworkPrefix(providerOwner).chainDiscriminant
-            let address = try AccountAddress.parseCanonicalI105(
-                providerOwner,
-                expectedPrefix: prefix
-            )
-            guard try address.toI105(networkPrefix: prefix) == providerOwner else {
+        for (account, field) in [(providerOwner, "provider_owner"), (completionSigner, "completion_signer")] {
+            guard account == account.trimmingCharacters(in: .whitespacesAndNewlines),
+                  account.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
+                  !account.contains("@"),
+                  !account.contains("#"),
+                  !account.contains("$")
+            else {
                 throw SorafsReplicationInstructionBuilderError.invalidInstruction(
-                    reason: "provider_owner must be an exact canonical I105 account id"
+                    reason: "\(field) must be an exact canonical I105 account id"
                 )
             }
-        } catch {
-            throw SorafsReplicationInstructionBuilderError.invalidInstruction(
-                reason: "provider_owner must be an exact canonical I105 account id"
-            )
+            do {
+                let prefix = try AccountAddress
+                    .inspectI105NetworkPrefix(account).chainDiscriminant
+                let address = try AccountAddress.parseCanonicalI105(
+                    account,
+                    expectedPrefix: prefix
+                )
+                guard try address.toI105(networkPrefix: prefix) == account else {
+                    throw SorafsReplicationInstructionBuilderError.invalidInstruction(
+                        reason: "\(field) must be an exact canonical I105 account id"
+                    )
+                }
+            } catch {
+                throw SorafsReplicationInstructionBuilderError.invalidInstruction(
+                    reason: "\(field) must be an exact canonical I105 account id"
+                )
+            }
         }
         self.providerOwner = providerOwner
+        self.completionSigner = completionSigner
         self.signerPolicy = signerPolicy
     }
 
     fileprivate var jsonObject: [String: Any] {
         [
             "provider_owner": providerOwner,
+            "completion_signer": completionSigner,
             "signer_policy": signerPolicy.jsonObject,
         ]
     }
@@ -705,7 +711,7 @@ public enum SorafsReplicationInstructionBuilders {
             )
             let authority = try exactBody(
                 body["expected_authority"],
-                fields: ["provider_owner", "signer_policy"],
+                fields: ["provider_owner", "completion_signer", "signer_policy"],
                 variant: "ProviderIngestCompletionAuthorityV1"
             )
             let signerPolicy = try exactBody(
@@ -731,6 +737,10 @@ public enum SorafsReplicationInstructionBuilders {
                     providerOwner: try string(
                         authority["provider_owner"],
                         field: "provider_owner"
+                    ),
+                    completionSigner: try string(
+                        authority["completion_signer"],
+                        field: "completion_signer"
                     ),
                     signerPolicy: try SorafsProviderIngestCompletionSignerPolicyV1(
                         policyId: try string(

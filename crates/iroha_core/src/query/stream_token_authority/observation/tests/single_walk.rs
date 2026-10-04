@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::{
+    execution_attempt::ExecutionAttemptError,
     query::signer_check::{NativeCheckErrorV1, PreparedCheckExecutionV1, SignerCertifiedWalkV1},
     sumeragi::certified_chain::relation_counts,
 };
@@ -35,7 +36,7 @@ fn assert_one_walk(pending: PendingStreamTokenCheckV1, height: u64) {
     );
 }
 
-fn reserved(fixture: &mut Fixture, certified: bool) -> StreamTokenCheckExpectedV1 {
+fn reserved(fixture: &mut Fixture) -> StreamTokenCheckExpectedV1 {
     let initial = fixture.expected();
     let request = StreamTokenAuthorityRequestV1 {
         network_id: fixture.policy.binding.network_id,
@@ -50,11 +51,7 @@ fn reserved(fixture: &mut Fixture, certified: bool) -> StreamTokenCheckExpectedV
         2,
         2_000,
     );
-    let outputs = if certified {
-        fixture::commit(&mut fixture.chain, 2_000, vec![signed])
-    } else {
-        fixture::commit_uncertified(&mut fixture.chain, 2_000, vec![signed])
-    };
+    let outputs = fixture::commit(&mut fixture.chain, 2_000, vec![signed]);
     assert_eq!(outputs, [true]);
     let row = read_slot(
         fixture.state.view().world(),
@@ -76,7 +73,7 @@ fn current_reserved_and_completed_checks_each_use_one_native_continuation() {
     assert_one_walk(pending, 4);
 
     let mut fixture = Fixture::new();
-    let expected = reserved(&mut fixture, true);
+    let expected = reserved(&mut fixture);
     assert_eq!(expected.floor.height, 4); // Reserve and floor coalesce.
     let pending = fixture.pending(expected);
     fixture.apply(&pending, true);
@@ -114,7 +111,10 @@ fn each_required_or_intermediate_frame_remains_mandatory() {
             .corrupt_canonical_body_for_testing(core::num::NonZeroUsize::new(height).unwrap())
             .unwrap();
         assert_eq!(
-            pending.verify_finalized(now).err(),
+            pending
+                .verify_finalized(now)
+                .err()
+                .and_then(|failure| failure.rejection()),
             Some(Error::Finality),
             "missing height {height}"
         );
@@ -124,10 +124,22 @@ fn each_required_or_intermediate_frame_remains_mandatory() {
 #[test]
 fn a_successful_reserve_with_below_quorum_certificate_is_not_history() {
     let mut fixture = Fixture::new();
-    let expected = reserved(&mut fixture, false);
+    let expected = reserved(&mut fixture);
+    let reserve_height = fixture.chain.height();
     let pending = fixture.pending(expected);
     fixture.apply(&pending, true);
-    assert_eq!(pending.verify_finalized(now).err(), Some(Error::Finality));
+    // The valid descendant already exists; now corrupt only its source's local QC.
+    fixture.chain.corrupt_local_quorum_for_test(
+        reserve_height,
+        crate::sumeragi::test_chain::Signers::BelowQuorum,
+    );
+    assert_eq!(
+        pending
+            .verify_finalized(now)
+            .err()
+            .and_then(|failure| failure.rejection()),
+        Some(Error::Finality)
+    );
 }
 
 #[test]
@@ -149,7 +161,13 @@ fn changed_floor_and_original_operation_claim_do_not_authorize() {
                 row.terminal_execution.as_mut().unwrap().height = row.reserved_execution.height;
             }
         }
-        assert_eq!(pending.verify_finalized(now).err(), Some(Error::Execution));
+        assert_eq!(
+            pending
+                .verify_finalized(now)
+                .err()
+                .and_then(|failure| failure.rejection()),
+            Some(Error::Execution)
+        );
     }
 }
 
@@ -163,7 +181,13 @@ fn zero_floor_and_omitted_applied_check_reject_before_release() {
         Some(Error::Invalid)
     );
     let pending = fixture.pending(fixture.expected());
-    assert_eq!(pending.verify_finalized(now).err(), Some(Error::NotApplied));
+    assert_eq!(
+        pending
+            .verify_finalized(now)
+            .err()
+            .and_then(|failure| failure.rejection()),
+        Some(Error::NotApplied)
+    );
 }
 
 #[test]
@@ -179,7 +203,13 @@ fn misplaced_check_membership_and_an_uncertified_later_tip_reject() {
                 pending.signed_transaction().hash_as_entrypoint(),
                 core::num::NonZeroUsize::new(height).unwrap(),
             );
-        assert_eq!(pending.verify_finalized(now).err(), Some(Error::NotApplied));
+        assert_eq!(
+            pending
+                .verify_finalized(now)
+                .err()
+                .and_then(|failure| failure.rejection()),
+            Some(Error::NotApplied)
+        );
     }
 
     let mut fixture = Fixture::new();
@@ -187,7 +217,13 @@ fn misplaced_check_membership_and_an_uncertified_later_tip_reject() {
     let pending = fixture.pending(expected);
     fixture.apply(&pending, true);
     fixture::commit_uncertified(&mut fixture.chain, NOW + 1, Vec::new());
-    assert_eq!(pending.verify_finalized(now).err(), Some(Error::Finality));
+    assert_eq!(
+        pending
+            .verify_finalized(now)
+            .err()
+            .and_then(|failure| failure.rejection()),
+        Some(Error::Finality)
+    );
 }
 
 #[test]
@@ -248,10 +284,11 @@ fn borrowed_check_relation_rejects_omission_duplicate_and_foreign_fork() {
         let pending = fixture.pending(fixture.expected());
         fixture.apply(&pending, true);
         let view = fixture.state.view();
+        let mut bound = Some(pending.bound);
         let mut proof = PreparedCheckExecutionV1::new(
             &view,
             NativeCustodyCheckPurposeV1::StreamToken,
-            pending.bound,
+            &mut bound,
             &pending.prepared.round,
         )
         .unwrap();
@@ -259,10 +296,25 @@ fn borrowed_check_relation_rejects_omission_duplicate_and_foreign_fork() {
         let floor = chain.walk(3, 3).next().unwrap().unwrap();
         proof.consume(&floor).unwrap();
         match mode {
-            0 => assert_eq!(proof.finish().err(), Some(NativeCheckErrorV1::Execution)),
+            0 => assert_eq!(
+                proof.finish().err(),
+                Some(ExecutionAttemptError::Rejected(
+                    NativeCheckErrorV1::Execution
+                ))
+            ),
             1 => {
-                assert_eq!(proof.consume(&floor), Err(NativeCheckErrorV1::Finality));
-                assert_eq!(proof.finish().err(), Some(NativeCheckErrorV1::Execution));
+                assert_eq!(
+                    proof.consume(&floor),
+                    Err(ExecutionAttemptError::Rejected(
+                        NativeCheckErrorV1::Finality
+                    ))
+                );
+                assert_eq!(
+                    proof.finish().err(),
+                    Some(ExecutionAttemptError::Rejected(
+                        NativeCheckErrorV1::Execution
+                    ))
+                );
             }
             _ => {
                 let mut other = Fixture::new();
@@ -274,8 +326,18 @@ fn borrowed_check_relation_rejects_omission_duplicate_and_foreign_fork() {
                     .next()
                     .unwrap()
                     .unwrap();
-                assert_eq!(proof.consume(&foreign), Err(NativeCheckErrorV1::Finality));
-                assert_eq!(proof.finish().err(), Some(NativeCheckErrorV1::Execution));
+                assert_eq!(
+                    proof.consume(&foreign),
+                    Err(ExecutionAttemptError::Rejected(
+                        NativeCheckErrorV1::Finality
+                    ))
+                );
+                assert_eq!(
+                    proof.finish().err(),
+                    Some(ExecutionAttemptError::Rejected(
+                        NativeCheckErrorV1::Execution
+                    ))
+                );
             }
         }
     }
@@ -319,10 +381,11 @@ fn identical_body_and_context_with_another_valid_qc_cannot_change_check_source()
     let other = alternate_qc_source(&fixture, 4);
     let view = fixture.state.view();
     let other_view = other.view();
+    let mut bound = Some(pending.bound);
     let mut proof = PreparedCheckExecutionV1::new(
         &view,
         NativeCustodyCheckPurposeV1::StreamToken,
-        pending.bound,
+        &mut bound,
         &pending.prepared.round,
     )
     .unwrap();
@@ -347,8 +410,18 @@ fn identical_body_and_context_with_another_valid_qc_cannot_change_check_source()
         right.block().commit_certificate()
     );
     proof.consume(&floor).unwrap();
-    assert_eq!(proof.consume(&foreign), Err(NativeCheckErrorV1::Finality));
-    assert_eq!(proof.finish().err(), Some(NativeCheckErrorV1::Execution));
+    assert_eq!(
+        proof.consume(&foreign),
+        Err(ExecutionAttemptError::Rejected(
+            NativeCheckErrorV1::Finality
+        ))
+    );
+    assert_eq!(
+        proof.finish().err(),
+        Some(ExecutionAttemptError::Rejected(
+            NativeCheckErrorV1::Execution
+        ))
+    );
 }
 
 #[test]

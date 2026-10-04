@@ -19,6 +19,8 @@ use norito::codec::{Decode, Encode};
 use sorafs_manifest::deal::{BASIS_POINTS_PER_UNIT, DealAmountError, XorQuantity};
 use thiserror::Error;
 
+/// Exact provider partition and active policy at one certified World cut.
+pub mod account_proof;
 /// Canonical native reserve singleton layout and structural validation.
 pub mod history;
 /// Independently authenticated policy presence or absence at one certified World cut.

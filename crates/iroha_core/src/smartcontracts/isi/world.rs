@@ -12039,11 +12039,21 @@ pub mod isi {
                             });
                         committee_attempt_instruction_error(state_transaction, error)
                     })?;
-                    record.validate().map_err(|_| {
-                        threshold_key_lifecycle_error_v1(
-                            "global-beacon public key session is invalid",
+                    let record =
+                        crate::beacon::RetainedFinalizedGlobalThresholdBeaconSessionV1::admit(
+                            &record,
+                            &state_transaction.execution_budget(),
                         )
-                    })?;
+                        .map_err(|error| {
+                            committee_attempt_instruction_error(
+                                state_transaction,
+                                error.into_execution_attempt().map_rejection(|_| {
+                                    threshold_key_lifecycle_error_v1(
+                                        "global-beacon public key session is invalid",
+                                    )
+                                }),
+                            )
+                        })?;
                     if record.activated_at_height.is_some()
                         || record.retired_at_height.is_some()
                         || record.session.session_id != certificate.session_id
@@ -19759,6 +19769,7 @@ pub mod isi {
             let (key_record, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
                 state_transaction.network_id,
                 release_height,
+                &state_transaction.execution_budget(),
             );
             state_transaction
                 .world
@@ -19812,6 +19823,7 @@ pub mod isi {
             let (key_record, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
                 state_transaction.network_id,
                 release_height,
+                &state_transaction.execution_budget(),
             );
             state_transaction
                 .world
@@ -20765,6 +20777,7 @@ pub mod isi {
                 let (key_record, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
                     state_transaction.network_id,
                     PULSE_HEIGHT,
+                    &state_transaction.execution_budget(),
                 );
                 state_transaction
                     .world
@@ -23371,9 +23384,10 @@ pub mod isi {
                         acceptances_end_height: 4,
                     },
                     &successor_validator_keys,
+                    &state_transaction.execution_budget(),
                 );
             let key_b = crate::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(
-                successor_session.record().clone()
+                successor_session.record().clone(), &state_transaction.execution_budget()
             ).expect("the successor retains a genuinely finalized DKG transcript");
             let install_b = certified_threshold_key_lifecycle_instruction_v1(
                 &state_transaction,

@@ -1281,6 +1281,7 @@ fn finish_reward_maintenance(
 mod tests {
     use super::*;
     include!("validation_fee_rewards/signed_claim_tests.rs");
+    include!("validation_fee_rewards/credit_refusal_tests.rs");
     use iroha_crypto::{Algorithm, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
         asset::AssetDefinitionId,

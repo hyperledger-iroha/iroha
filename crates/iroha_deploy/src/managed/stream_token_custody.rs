@@ -1,34 +1,30 @@
-//! Initial managed signer custody: original intent, once-only wallet dispatch and native evidence.
+//! Managed signer custody: immutable initial and renewal intents with native evidence.
 //!
-//! Configure and Enroll are the only writable purposes. Exact transaction finality and fresh
+//! Configure and Enroll (including bounded generated renewal) are the only writable purposes.
+//! Exact transaction finality and fresh
 //! custody state are separate observations; neither enables services or establishes admission,
 //! capacity, current signing eligibility, or hardware custody guarantees.
 
-use super::{Error, PreparedLocalnet, Result};
-use crate::{
-    localnet::service_authorities::{StreamTokenAuthorityManifest, StreamTokenAuthorityRole},
-    verify::{
-        finality::{
-            AttestationQuorum, FinalityError, FinalitySource, FinalityVerifier, GenesisAnchor,
-        },
-        http::HttpFinalitySource,
+use super::{
+    PreparedLocalnet, Result,
+    native_operation::{
+        MAX_CHECKPOINT_BYTES, ManagedTransactionFinality, Terms, checkpoint_bytes, encode, invalid,
+        now_ms, read_optional, read_selected_peers, require_deadline, require_empty,
     },
+    service_authority::{ProviderPurpose, ServiceAuthority},
 };
-use iroha::{client::Client, config::Config};
-use iroha_crypto::{Hash, HashOf, Signature};
+use crate::{
+    localnet::service_authorities::StreamTokenAuthorityRole, verify::finality::FinalityVerifier,
+};
+use iroha_crypto::{Hash, Signature};
 use iroha_data_model::{
-    account::AccountId,
-    block::BlockHeader,
     sorafs::stream_token_custody::proof::VerifiedStreamTokenCustodyStateV1,
-    sumeragi_finality::SumeragiFinalityCheckpoint,
-    transaction::{SignedTransaction, TransactionEntrypoint},
+    sumeragi_finality::VerifiedSumeragiBlock, transaction::SignedTransaction,
 };
 use iroha_fs::{PrivateDirectory, PublishMode};
-use iroha_model_base::peer::PeerId;
 use iroha_wallet::operations::{
-    AccountService, BoundedTransactionOptions, OperationReport, OperationStatus,
-    StreamTokenCustodyConfigureRequest, StreamTokenCustodyEnrollRequest,
-    StreamTokenCustodySelection,
+    AccountService, BoundedTransactionOptions, OperationStatus, StreamTokenCustodyConfigureRequest,
+    StreamTokenCustodyEnrollRequest, StreamTokenCustodySelection,
 };
 use sorafs_manifest::signer::{
     custody::{
@@ -37,31 +33,28 @@ use sorafs_manifest::signer::{
     },
     custody_control::SignerCustodyPolicyV1,
 };
-use std::{
-    fs::File,
-    num::NonZeroU64,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
+use std::time::Instant;
+#[cfg(test)]
+use std::{num::NonZeroU64, time::Duration};
 
 #[path = "stream_token_custody/identity.rs"]
 mod identity;
 #[path = "stream_token_custody/journal.rs"]
 mod journal;
-use journal::{Action, Original, Terms};
-
-const MAX_CHECKPOINT_BYTES: usize = 32 * 1024 * 1024;
-const MAX_REPLAY_SUCCESSORS: u64 = 16;
-
-/// Independent successful inclusion of the exact original signed wallet transaction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ManagedCustodyFinality {
-    /// Original signed transaction identity, whose exact wire was independently compared.
-    pub transaction_hash: HashOf<SignedTransaction>,
-    /// Original certified execution carrier height.
-    pub height: u64,
-    /// Original authenticated Iroha carrier header hash.
-    pub block_hash: HashOf<BlockHeader>,
-}
+use super::{
+    ManagedBootstrapFailure,
+    native_operation::{
+        Fees,
+        attempts::{self, Observation, Purpose, Selected},
+    },
+    service_bootstrap::authorization::BootstrapChildAuthorization,
+};
+use journal::{Action, Original};
+#[path = "stream_token_custody/enrollment.rs"]
+mod enrollment;
+#[path = "stream_token_custody/renewal.rs"]
+pub(super) mod renewal;
+pub use enrollment::RetainedCustodyEnrollment;
 
 /// Separate node observation, exact original inclusion and freshly proved current custody.
 #[derive(Debug)]
@@ -69,7 +62,7 @@ pub struct ManagedCustodyProgress {
     /// Exact wallet/node observation; `Applied` alone is not independent finality.
     pub transaction_status: OperationStatus,
     /// Independently authenticated original transaction carrier, when replay has reached it.
-    pub finalized: Option<ManagedCustodyFinality>,
+    pub finalized: Option<ManagedTransactionFinality>,
     /// Fresh native state at the separately observed quorum tip, not a signing eligibility claim.
     /// `None` means unavailable, including a changed binding; only a verified state's absent
     /// current record is authenticated absence. Historical inclusion remains independently valid.
@@ -90,19 +83,63 @@ pub struct ManagedCustodyEnrollmentInterval {
     pub deadline_unix_ms: u64,
 }
 
-/// Held native private custody for one generated Global network's initial Configure and Enroll.
+/// Held native private custody for one generated Global network's Configure and Enroll.
 ///
 /// The generated manager, role signer and attester remain distinct. Opening authenticates the
 /// original signed genesis and retained authority profile. Fixed journals support initial
-/// provisioning only; expired or conflicting originals are never reset or silently renewed.
+/// provisioning. Renewals have separate bounded sequence journals; no original is reset.
 pub struct ManagedStreamTokenCustody {
-    prepared: PreparedLocalnet,
-    directory: PrivateDirectory,
-    _lock: File,
-    manifest: StreamTokenAuthorityManifest,
-    config: Config,
-    genesis: GenesisAnchor,
-    peers: Vec<(PeerId, Client)>,
+    authority: ServiceAuthority,
+}
+
+#[derive(Clone, Copy)]
+enum Mode<'a> {
+    ObserveLocal,
+    SubmitOriginal,
+    SubmitAuthorized(&'a BootstrapChildAuthorization<'a>),
+    ObserveOnly,
+}
+impl Mode<'_> {
+    fn bind_account(self, account: AccountService) -> Result<AccountService> {
+        match self {
+            Self::SubmitAuthorized(authorization) => authorization.bind_account(account),
+            _ => Ok(account),
+        }
+    }
+
+    fn submits(self) -> bool {
+        matches!(self, Self::SubmitOriginal | Self::SubmitAuthorized(_))
+    }
+    fn check_dispatch(self, purpose: Purpose, deadline: Instant) -> Result<()> {
+        if let Self::SubmitAuthorized(authorization) = self {
+            authorization.check(purpose, deadline)?;
+        }
+        Ok(())
+    }
+}
+
+/// Closed directory/purpose selection; a renewal never substitutes the initial journal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CustodyPurpose {
+    Configure,
+    InitialEnroll,
+    Renewal(u64),
+}
+impl CustodyPurpose {
+    #[cfg(test)]
+    fn initial(action: &Action) -> Self {
+        match action {
+            Action::Configure(_) => Self::Configure,
+            Action::Enroll { .. } => Self::InitialEnroll,
+        }
+    }
+    fn directory_name(self) -> Result<String> {
+        match self {
+            Self::Configure => Ok("configure".into()),
+            Self::InitialEnroll => Ok("enroll".into()),
+            Self::Renewal(sequence) => renewal::directory_name(sequence),
+        }
+    }
 }
 
 impl ManagedStreamTokenCustody {
@@ -110,134 +147,328 @@ impl ManagedStreamTokenCustody {
     /// # Errors
     /// Rejects a Standard/private root, substituted genesis/roles/configuration, unsafe custody
     /// or another active coordinator. No network operation or transaction occurs here.
-    pub fn open(prepared: &PreparedLocalnet) -> Result<Self> {
-        identity::open(prepared)
+    pub fn open(
+        prepared: &PreparedLocalnet,
+        provider: iroha_data_model::sorafs::capacity::ProviderId,
+    ) -> Result<Self> {
+        Ok(Self {
+            authority: ServiceAuthority::open_provider(
+                prepared,
+                provider,
+                ProviderPurpose::Custody,
+            )?,
+        })
     }
 
-    /// Retain the original first configuration, prepare its wallet journal, and advance once.
+    pub(super) fn open_existing(
+        prepared: &PreparedLocalnet,
+        provider: iroha_data_model::sorafs::capacity::ProviderId,
+    ) -> Result<Option<Self>> {
+        ServiceAuthority::open_provider_existing(prepared, provider, ProviderPurpose::Custody)
+            .map(|authority| authority.map(|authority| Self { authority }))
+    }
+    fn wallet(&self) -> Result<AccountService> {
+        AccountService::new(self.authority.config.clone())
+            .map_err(|_| invalid("cannot open custody wallet"))
+    }
+
+    /// Retain the exact first configuration and finite dispatch authorization, then advance once.
     /// # Errors
-    /// Rejects changed original policy/fees/deadline, nonempty current custody, wrong generated
-    /// keys or provider, failed native proof, original expiry, or unsafe private publication.
+    /// Rejects changed policy, terms, generated roles, native prerequisite or private custody.
     pub fn configure(
         &mut self,
         policy: &SignerCustodyPolicyV1,
-        deadline_unix_ms: u64,
+        utc: u64,
         options: &BoundedTransactionOptions,
     ) -> Result<ManagedCustodyProgress> {
-        self.validate_profile()?;
+        self.authority.validate_profile()?;
         self.validate_policy(policy)?;
-        let directory = self.directory.ensure_child("configure")?;
-        match journal::read_original(&directory)? {
-            Some(original) => original.matches_configuration(policy, deadline_unix_ms, options)?,
-            None => {
-                journal::require_empty(&directory)?;
-                let terms = Terms::new(deadline_unix_ms, options)?;
-                let (verifier, current) = self.observe(&policy.binding, options.deadline)?;
-                if current.current().is_some() {
-                    return Err(invalid("initial custody configuration already exists"));
-                }
-                let original = Original {
-                    selection: self.selection(&policy.binding, &current)?,
-                    action: Action::Configure(policy.clone()),
-                    terms,
-                    checkpoint: checkpoint_bytes(&verifier)?,
-                };
-                journal::publish_original(&directory, &original)?;
-            }
-        }
+        let directory = self.authority.directory.ensure_child("configure")?;
+        let original = self.select_configuration(&directory, policy, options.deadline)?;
+        journal::explicit(&directory, &original, utc, options, &self.wallet()?)?;
         self.advance_configure(options.deadline)
     }
+    fn select_configuration(
+        &mut self,
+        directory: &PrivateDirectory,
+        policy: &SignerCustodyPolicyV1,
+        deadline: Instant,
+    ) -> Result<Original> {
+        if let Some(original) = journal::read_intent(directory)? {
+            original.matches_configuration(policy)?;
+            self.validate_original(&original, CustodyPurpose::Configure)?;
+            return Ok(original);
+        }
+        require_empty(directory)?;
+        let (verifier, current) = self.observe(&policy.binding, deadline)?;
+        if current.current().is_some() {
+            return Err(invalid("initial custody configuration already exists"));
+        }
+        let original = Original {
+            selection: self.selection(&policy.binding, &current)?,
+            action: Action::Configure(policy.clone()),
+            checkpoint: checkpoint_bytes(&verifier)?,
+        };
+        self.validate_original(&original, CustodyPurpose::Configure)?;
+        journal::publish_intent(directory, &original)?;
+        Ok(original)
+    }
 
-    /// Retain an independently attested initial enrollment after proving Configure inclusion.
-    ///
-    /// Evidence commits the authenticated original genesis/profile, selected policy and exact
-    /// fresh native record/checkpoint. It does not assert physical or hardware key isolation.
+    /// Retain an independently attested first body after exact native Configure inclusion.
     /// # Errors
-    /// Rejects unfinalized Configure, changed current policy/CAS, revoked roles, changed original
-    /// interval/fees, invalid attester custody, expiry or failed independent native evidence.
+    /// Rejects changed original interval, fees, native predecessor, role custody or body expiry.
     pub fn enroll(
         &mut self,
         interval: ManagedCustodyEnrollmentInterval,
         options: &BoundedTransactionOptions,
     ) -> Result<ManagedCustodyProgress> {
-        self.validate_profile()?;
-        let configured = self.directory.open_child("configure")?;
-        let configuration = journal::required_original(&configured)?;
-        let Action::Configure(policy) = &configuration.action else {
-            return Err(invalid("configuration journal has another purpose"));
-        };
-        self.validate_policy(policy)?;
-        let transaction = self.verify_wallet(&configured, &configuration, options.deadline)?;
-        let finalized = self
-            .retained_finality(&configured, &transaction)?
-            .ok_or_else(|| invalid("configuration requires independent original inclusion"))?;
-        let directory = self.directory.ensure_child("enroll")?;
-        match journal::read_original(&directory)? {
-            Some(original) => original.matches_enrollment(interval, options)?,
-            None => {
-                journal::require_empty(&directory)?;
-                let terms = Terms::new(interval.deadline_unix_ms, options)?;
-                let (verifier, current) = self.observe(&policy.binding, options.deadline)?;
-                let selected = current
-                    .current()
-                    .ok_or_else(|| invalid("custody policy absent"))?;
-                if selected.control().policy != *policy
-                    || selected.control().signer_revoked
-                    || selected.control().attester_revoked
-                    || selected.control().active_head.is_some()
-                    || selected.record().revision != 1
-                    || selected.record().execution_height != finalized.height
-                    || selected.record().authority != self.config.account
-                {
-                    return Err(invalid(
-                        "initial configured custody changed before enrollment",
-                    ));
-                }
-                let observed = now_ms()?;
-                validate_interval(interval, observed)?;
-                let checkpoint = checkpoint_bytes(&verifier)?;
-                let selection = self.selection(&policy.binding, &current)?;
-                let evidence_digest = self.evidence_digest(policy, &selection, &checkpoint)?;
-                let statement = SignerCustodyStatementV1 {
-                    magic: SIGNER_CUSTODY_MAGIC_V1,
-                    version: SIGNER_CUSTODY_VERSION_V1,
-                    binding: policy.binding.clone(),
-                    authority: policy.attester_authority.clone(),
-                    anchor: selected.anchor(),
-                    sequence: selected.control().next_sequence,
-                    predecessor_digest: selected.control().predecessor_digest,
-                    issued_at_unix_ms: interval.issued_at_unix_ms,
-                    expires_at_unix_ms: interval.expires_at_unix_ms,
-                    evidence_digest,
-                    revoked: false,
-                };
-                let key = self.attester()?;
-                let payload = statement
-                    .signing_payload()
-                    .map_err(|_| invalid("invalid enrollment statement"))?;
-                let signature = Signature::new(key.private_key(), &payload);
-                let enrollment = SignerCustodyRecordV1 {
-                    statement,
-                    attestation: signature
-                        .payload()
-                        .try_into()
-                        .map_err(|_| invalid("invalid attester signature"))?,
-                };
-                let original = Original {
-                    selection,
-                    action: Action::Enroll {
-                        anchor: selected.anchor(),
-                        observed_at_unix_ms: observed,
-                        interval,
-                        enrollment: journal::encode(&enrollment, 16 * 1024)?,
-                    },
-                    terms,
-                    checkpoint,
-                };
-                journal::publish_original(&directory, &original)?;
+        self.authority.validate_profile()?;
+        let (policy, finalized) = self.retained_configuration(options.deadline)?;
+        let directory = self.authority.directory.ensure_child("enroll")?;
+        let original = if let Some(original) = journal::read_intent(&directory)? {
+            self.validate_original(&original, CustodyPurpose::InitialEnroll)?;
+            original.matches_enrollment_policy(&policy)?;
+            if !matches!(&original.action, Action::Enroll { validity, .. } if *validity == journal::EnrollmentValidity::from_interval(interval))
+            {
+                return Err(invalid("initial custody enrollment cannot be renewed"));
             }
-        }
+            original
+        } else {
+            Terms::new(interval.deadline_unix_ms, options)?;
+            self.select_initial_enrollment(
+                &directory,
+                &policy,
+                &finalized,
+                interval,
+                options.deadline,
+            )?
+        };
+        journal::explicit(
+            &directory,
+            &original,
+            interval.deadline_unix_ms,
+            options,
+            &self.wallet()?,
+        )?;
         self.advance_enroll(options.deadline)
+    }
+    fn select_initial_enrollment(
+        &mut self,
+        directory: &PrivateDirectory,
+        policy: &SignerCustodyPolicyV1,
+        finalized: &ManagedTransactionFinality,
+        interval: ManagedCustodyEnrollmentInterval,
+        deadline: Instant,
+    ) -> Result<Original> {
+        require_empty(directory)?;
+        let (verifier, current) = self.observe(&policy.binding, deadline)?;
+        let selected = current
+            .current()
+            .ok_or_else(|| invalid("custody policy absent"))?;
+        if selected.control().policy != *policy
+            || selected.control().signer_revoked
+            || selected.control().attester_revoked
+            || selected.control().active_head.is_some()
+            || selected.record().revision != 1
+            || selected.record().execution_height != finalized.height
+            || selected.record().authority != self.authority.config.account
+        {
+            return Err(invalid(
+                "initial configured custody changed before enrollment",
+            ));
+        }
+        let observed = now_ms()?;
+        validate_interval(interval, observed)?;
+        let original = self.enrollment_original(policy, &current, &verifier, interval, observed)?;
+        self.authority.validate_profile()?;
+        require_deadline(deadline)?;
+        journal::publish_intent(directory, &original)?;
+        Ok(original)
+    }
+    pub(super) fn advance_configure_selected(
+        &mut self,
+        policy: &SignerCustodyPolicyV1,
+        authorization: &BootstrapChildAuthorization<'_>,
+        deadline: Instant,
+    ) -> Result<ManagedCustodyProgress> {
+        let purpose = Purpose::CustodyConfigure(self.authority.provider_id()?);
+        let deadline = authorization.validate(&self.authority, purpose, deadline)?;
+        if policy
+            != &authorization
+                .policies()
+                .provider(self.authority.provider_id()?)?
+                .custody
+        {
+            return Err(invalid(
+                "custody configuration differs from authorized policy",
+            ));
+        }
+        self.validate_policy(policy)?;
+        let directory = self.authority.directory.ensure_child("configure")?;
+        let original = self.select_configuration(&directory, policy, deadline)?;
+        self.select_generated_attempt(&directory, &original, authorization, deadline)?;
+        self.advance(
+            CustodyPurpose::Configure,
+            deadline,
+            Mode::SubmitAuthorized(authorization),
+            false,
+        )
+    }
+    pub(super) fn advance_enroll_selected(
+        &mut self,
+        policy: &SignerCustodyPolicyV1,
+        authorization: &BootstrapChildAuthorization<'_>,
+        deadline: Instant,
+    ) -> Result<ManagedCustodyProgress> {
+        let purpose = Purpose::CustodyEnroll(self.authority.provider_id()?);
+        let deadline = authorization.validate(&self.authority, purpose, deadline)?;
+        let provider_policies = authorization
+            .policies()
+            .provider(self.authority.provider_id()?)?;
+        if policy != &provider_policies.custody {
+            return Err(invalid("custody enrollment differs from authorized policy"));
+        }
+        self.validate_policy(policy)?;
+        let (configured, finalized) = self.retained_configuration(deadline)?;
+        if configured != *policy {
+            return Err(invalid("original Configure policy differs from enrollment"));
+        }
+        let directory = self.authority.directory.ensure_child("enroll")?;
+        let original = if let Some(original) = journal::read_intent(&directory)? {
+            self.validate_original(&original, CustodyPurpose::InitialEnroll)?;
+            original.matches_enrollment_policy(policy)?;
+            original
+        } else {
+            let terms = authorization.terms(deadline, Some(policy.active_until_unix_ms))?;
+            let interval = provider_policies
+                .initial_enrollment(now_ms()?, terms.requested_deadline_unix_ms)?;
+            authorization.validate(&self.authority, purpose, deadline)?;
+            self.select_initial_enrollment(&directory, policy, &finalized, interval, deadline)?
+        };
+        authorization.validate(&self.authority, purpose, deadline)?;
+        self.select_generated_attempt(&directory, &original, authorization, deadline)?;
+        self.advance(
+            CustodyPurpose::InitialEnroll,
+            deadline,
+            Mode::SubmitAuthorized(authorization),
+            false,
+        )
+    }
+    fn select_generated_attempt(
+        &mut self,
+        directory: &PrivateDirectory,
+        original: &Original,
+        authorization: &BootstrapChildAuthorization<'_>,
+        deadline: Instant,
+    ) -> Result<()> {
+        let purpose = original.dispatch_purpose()?;
+        let account = self.wallet()?;
+        let body_expiry = match &original.action {
+            Action::Configure(_) => None,
+            Action::Enroll { validity, .. } => Some(validity.expires_at_unix_ms),
+        };
+        let account = authorization.bind_account(account)?;
+        attempts::generated(
+            directory,
+            purpose,
+            original.digest()?,
+            authorization,
+            deadline,
+            body_expiry,
+            |attempt| {
+                original
+                    .request(attempt.terms(), attempt.observation()?, deadline)?
+                    .inspect(&account, &attempt.wallet_path())
+            },
+            |attempt| {
+                original
+                    .request(attempt.terms(), attempt.observation()?, deadline)?
+                    .retire(&account, &attempt.wallet_path())
+            },
+            |attempt, observation, deadline| {
+                original
+                    .request(attempt.terms(), observation, deadline)?
+                    .retain(&account, &attempt.wallet_path())
+            },
+            |_, deadline| self.fresh_original_predecessor(original, deadline),
+            |attempt| match &original.action {
+                Action::Configure(_) => Ok(true),
+                Action::Enroll { validity, .. } => {
+                    let now = now_ms()?;
+                    if now >= validity.expires_at_unix_ms {
+                        return Err(ManagedBootstrapFailure::EnrollmentExpired.into());
+                    }
+                    let observed = attempt
+                        .observation()?
+                        .enrollment_observed_at_unix_ms
+                        .ok_or_else(|| invalid("enrollment observation absent"))?;
+                    Ok(observed <= now
+                        && now - observed <= original.control()?.policy.max_anchor_age_ms)
+                }
+            },
+        )?;
+        authorization.validate(&self.authority, purpose, deadline)?;
+        Ok(())
+    }
+    /// A fresh paid observation is admitted only after the original certified anchor and the
+    /// current native record independently agree. This never selects another attester body.
+    fn fresh_original_predecessor(
+        &mut self,
+        original: &Original,
+        deadline: Instant,
+    ) -> Result<Observation> {
+        self.authority.validate_profile()?;
+        let checkpoint = self.authority.decode_checkpoint(&original.checkpoint)?;
+        let historical = self.read_current(&original.selection.binding, &checkpoint, deadline)?;
+        if !matches_predecessor(
+            &original.selection,
+            historical.current().map(|record| record.record()),
+        ) {
+            return Err(ManagedBootstrapFailure::EnrollmentPredecessorChanged.into());
+        }
+        let (_, current) = self.observe(&original.selection.binding, deadline)?;
+        if !matches_predecessor(
+            &original.selection,
+            current.current().map(|record| record.record()),
+        ) {
+            return Err(ManagedBootstrapFailure::EnrollmentPredecessorChanged.into());
+        }
+        let observed = now_ms()?;
+        let observation = match &original.action {
+            Action::Configure(_) => Observation::ordinary(),
+            Action::Enroll {
+                validity,
+                anchor,
+                enrollment,
+                ..
+            } => {
+                if observed >= validity.expires_at_unix_ms {
+                    return Err(ManagedBootstrapFailure::EnrollmentExpired.into());
+                }
+                let control = original.control()?;
+                sorafs_manifest::signer::custody::verify_signer_custody_enrollment_v1(
+                    enrollment,
+                    &original.selection.binding,
+                    &control.policy.custody_trust(),
+                    &sorafs_manifest::signer::custody::SignerCustodyEnrollmentContextV1 {
+                        now_unix_ms: observed,
+                        anchor_observed_at_unix_ms: observed,
+                        current_anchor: *anchor,
+                        next_sequence: control.next_sequence,
+                        predecessor_digest: control.predecessor_digest,
+                        signer_revoked: control.signer_revoked,
+                        attester_revoked: control.attester_revoked,
+                    },
+                )
+                .map_err(|_| invalid("original attester body no longer admits this dispatch"))?;
+                Observation {
+                    enrollment_observed_at_unix_ms: Some(observed),
+                }
+            }
+        };
+        self.authority.validate_profile()?;
+        require_deadline(deadline)?;
+        Ok(observation)
     }
 
     /// Recover and advance only the original Configure, with a fresh finite I/O deadline.
@@ -245,7 +476,12 @@ impl ManagedStreamTokenCustody {
     /// Rejects changed custody/context, wallet evidence or native finality. This cannot renew UTC
     /// authorization; the wallet's retained pre-dispatch marker permits at most one send.
     pub fn advance_configure(&mut self, deadline: Instant) -> Result<ManagedCustodyProgress> {
-        self.advance("configure", true, deadline)
+        self.advance(
+            CustodyPurpose::Configure,
+            deadline,
+            Mode::SubmitOriginal,
+            true,
+        )
     }
 
     /// Recover and advance only the original Enroll without replacing its signed interval.
@@ -253,52 +489,209 @@ impl ManagedStreamTokenCustody {
     /// Rejects changed custody/context, wallet evidence or native finality. Current proof is
     /// separate from original inclusion and can show custody changed after that transaction.
     pub fn advance_enroll(&mut self, deadline: Instant) -> Result<ManagedCustodyProgress> {
-        self.advance("enroll", false, deadline)
+        self.advance(
+            CustodyPurpose::InitialEnroll,
+            deadline,
+            Mode::SubmitOriginal,
+            true,
+        )
+    }
+
+    pub(super) fn recover_configure_selected_if_present(
+        &mut self,
+        policy: &SignerCustodyPolicyV1,
+        fees: &Fees,
+        deadline: Instant,
+    ) -> Result<Option<ManagedCustodyProgress>> {
+        self.recover_selected(
+            policy,
+            fees,
+            deadline,
+            CustodyPurpose::Configure,
+            Mode::ObserveOnly,
+        )
+    }
+    pub(super) fn recover_configure_local_selected_if_present(
+        &mut self,
+        policy: &SignerCustodyPolicyV1,
+        fees: &Fees,
+        deadline: Instant,
+    ) -> Result<Option<ManagedCustodyProgress>> {
+        self.recover_selected(
+            policy,
+            fees,
+            deadline,
+            CustodyPurpose::Configure,
+            Mode::ObserveLocal,
+        )
+    }
+    pub(super) fn recover_enroll_selected_if_present(
+        &mut self,
+        policy: &SignerCustodyPolicyV1,
+        fees: &Fees,
+        deadline: Instant,
+    ) -> Result<Option<ManagedCustodyProgress>> {
+        self.recover_selected(
+            policy,
+            fees,
+            deadline,
+            CustodyPurpose::InitialEnroll,
+            Mode::ObserveOnly,
+        )
+    }
+    pub(super) fn recover_enroll_local_selected_if_present(
+        &mut self,
+        policy: &SignerCustodyPolicyV1,
+        fees: &Fees,
+        deadline: Instant,
+    ) -> Result<Option<ManagedCustodyProgress>> {
+        self.recover_selected(
+            policy,
+            fees,
+            deadline,
+            CustodyPurpose::InitialEnroll,
+            Mode::ObserveLocal,
+        )
+    }
+    fn recover_selected(
+        &mut self,
+        policy: &SignerCustodyPolicyV1,
+        fees: &Fees,
+        deadline: Instant,
+        purpose: CustodyPurpose,
+        mode: Mode<'_>,
+    ) -> Result<Option<ManagedCustodyProgress>> {
+        require_deadline(deadline)?;
+        self.authority.validate_profile()?;
+        self.validate_policy(policy)?;
+        let directory = match self
+            .authority
+            .directory
+            .open_child(purpose.directory_name()?)
+        {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let Some(original) = journal::read_intent(&directory)? else {
+            return Ok(None);
+        };
+        self.validate_original(&original, purpose)?;
+        match purpose {
+            CustodyPurpose::Configure => original.matches_configuration(policy)?,
+            CustodyPurpose::InitialEnroll => original.matches_enrollment_policy(policy)?,
+            CustodyPurpose::Renewal(_) => {
+                return Err(invalid(
+                    "bootstrap cannot recover a renewal as initial enrollment",
+                ));
+            }
+        }
+        let history =
+            attempts::History::read(&directory, original.dispatch_purpose()?, original.digest()?)?;
+        history.require_fees(fees)?;
+        self.advance(purpose, deadline, mode, false).map(Some)
     }
 
     fn advance(
         &mut self,
-        name: &str,
-        configure: bool,
+        purpose: CustodyPurpose,
         deadline: Instant,
+        mode: Mode<'_>,
+        observe_current: bool,
     ) -> Result<ManagedCustodyProgress> {
         require_deadline(deadline)?;
-        self.validate_profile()?;
-        let directory = self.directory.open_child(name)?;
-        let original = journal::required_original(&directory)?;
-        if matches!(original.action, Action::Configure(_)) != configure {
-            return Err(invalid("retained custody purpose differs"));
+        self.authority.validate_profile()?;
+        let operation = self
+            .authority
+            .directory
+            .open_child(&purpose.directory_name()?)?;
+        let original = journal::required_original(&operation)?;
+        let directory = original.directory();
+        self.validate_original(&original, purpose)?;
+        if matches!(purpose, CustodyPurpose::Renewal(_)) {
+            self.validate_renewal_context(&original, deadline)?;
         }
-        self.validate_original(&original)?;
-        let needs_prepare = match directory.open_child("transaction") {
-            Ok(_) => false,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
-            Err(error) => return Err(error.into()),
+        let journal_path = directory.path().join("transaction");
+        let account = AccountService::new(self.authority.config.clone())
+            .map_err(|_| invalid("cannot open custody wallet"))?;
+        let account = mode.bind_account(account)?;
+        let verify_custody = || {
+            original.verify_wallets(|intent, attempt| {
+                intent
+                    .request(attempt.terms(), attempt.observation()?, deadline)?
+                    .inspect(&account, &attempt.wallet_path())
+            })
         };
-        let retained_transaction = if needs_prepare {
-            None
-        } else {
-            Some(self.verify_wallet(&directory, &original, deadline)?)
+        verify_custody()?;
+        let preparation = original
+            .request(deadline)?
+            .inspect(&account, &journal_path)?;
+        let unprepared_expired = preparation.unprepared_status() == Some(OperationStatus::Expired);
+        let retained_transaction = match preparation.phase() {
+            iroha_wallet::operations::NativePreparationPhase::Missing
+            | iroha_wallet::operations::NativePreparationPhase::RequestOnly
+            | iroha_wallet::operations::NativePreparationPhase::PayloadRetained => None,
+            iroha_wallet::operations::NativePreparationPhase::Signed => {
+                Some(preparation.into_signed_transaction().map_err(|_| {
+                    invalid("retained custody preparation has no signed transaction")
+                })?)
+            }
+            iroha_wallet::operations::NativePreparationPhase::Retired => {
+                return Err(invalid("original custody wallet request was retired"));
+            }
         };
+        let needs_prepare = retained_transaction.is_none();
         if let Some(transaction) = &retained_transaction
-            && let Some(finalized) = self.retained_finality(&directory, transaction)?
+            && let Some(finalized) = self.authority.retained_finality(&directory, transaction)?
         {
             // Immutable original inclusion survives a current peer/quorum outage. Freshness
             // remains a separate best-effort observation and cannot renew that historical fact.
-            let current = self
-                .observe(&original.selection.binding, deadline)
-                .ok()
+            let current = observe_current
+                .then(|| self.observe(&original.selection.binding, deadline).ok())
+                .flatten()
                 .map(|(_, current)| current);
+            verify_custody()?;
             return Ok(ManagedCustodyProgress {
                 transaction_status: OperationStatus::Applied,
                 finalized: Some(finalized),
                 current,
             });
         }
-        if needs_prepare && now_ms()? >= original.terms.signing_deadline_unix_ms {
-            let current = self
-                .observe(&original.selection.binding, deadline)
-                .ok()
+        if matches!(mode, Mode::ObserveLocal) {
+            return Ok(ManagedCustodyProgress {
+                transaction_status: if needs_prepare {
+                    if now_ms()? >= original.terms.signing_deadline_unix_ms || unprepared_expired {
+                        OperationStatus::Expired
+                    } else {
+                        OperationStatus::Absent
+                    }
+                } else {
+                    OperationStatus::Pending
+                },
+                finalized: None,
+                current: None,
+            });
+        }
+        if needs_prepare && matches!(mode, Mode::ObserveOnly) {
+            // Parent recovery cannot create a wallet, quote fees, sign, or refresh current state.
+            return Ok(ManagedCustodyProgress {
+                transaction_status: if now_ms()? >= original.terms.signing_deadline_unix_ms
+                    || unprepared_expired
+                {
+                    OperationStatus::Expired
+                } else {
+                    OperationStatus::Absent
+                },
+                finalized: None,
+                current: None,
+            });
+        }
+        if needs_prepare
+            && (now_ms()? >= original.terms.signing_deadline_unix_ms || unprepared_expired)
+        {
+            let current = observe_current
+                .then(|| self.observe(&original.selection.binding, deadline).ok())
+                .flatten()
                 .map(|(_, current)| current);
             return Ok(ManagedCustodyProgress {
                 transaction_status: OperationStatus::Expired,
@@ -306,7 +699,7 @@ impl ManagedStreamTokenCustody {
                 current,
             });
         }
-        let observed = self.observe_finality(deadline)?;
+        let observed = self.authority.observe_finality(deadline)?;
         let current = self
             .read_current(&original.selection.binding, &observed, deadline)
             .ok();
@@ -316,11 +709,8 @@ impl ManagedStreamTokenCustody {
                 state.current().map(|current| current.record()),
             )
         });
-        let journal_path = directory.path().join("transaction");
-        let account = AccountService::new(self.config.clone())
-            .map_err(|_| invalid("cannot open custody wallet"))?;
         if needs_prepare {
-            if now_ms()? >= original.terms.signing_deadline_unix_ms {
+            if now_ms()? >= original.terms.signing_deadline_unix_ms || unprepared_expired {
                 return Ok(ManagedCustodyProgress {
                     transaction_status: OperationStatus::Expired,
                     finalized: None,
@@ -332,8 +722,10 @@ impl ManagedStreamTokenCustody {
                     "fresh custody predecessor differs; original request cannot be re-signed",
                 ));
             }
+            verify_custody()?;
+            mode.check_dispatch(original.dispatch_purpose()?, deadline)?;
             let signing_deadline = original.terms.signing_deadline(deadline)?;
-            match original.request(signing_deadline) {
+            match original.request(signing_deadline)? {
                 journal::Request::Configure(request) => {
                     account.prepare_stream_token_custody_configure(&request, &journal_path)
                 }
@@ -345,11 +737,12 @@ impl ManagedStreamTokenCustody {
                 invalid("custody preparation failed; retain original request and journal")
             })?;
         }
+        verify_custody()?;
         let transaction = match retained_transaction {
             Some(transaction) => transaction,
             None => self.verify_wallet(&directory, &original, deadline)?,
         };
-        let mut report = match original.request(deadline) {
+        let mut report = match original.request(deadline)? {
             journal::Request::Configure(request) => {
                 account.resume_stream_token_custody_configure(&journal_path, &request)
             }
@@ -359,10 +752,12 @@ impl ManagedStreamTokenCustody {
         }
         .map_err(|_| invalid("custody transaction unresolved; recover its original journal"))?;
         if report.status == OperationStatus::Absent {
-            if now_ms()? >= original.terms.signing_deadline_unix_ms {
+            if now_ms()? >= original.terms.signing_deadline_unix_ms || unprepared_expired {
                 report.status = OperationStatus::Expired;
-            } else if unchanged {
-                report = match original.request(deadline) {
+            } else if mode.submits() && unchanged {
+                verify_custody()?;
+                mode.check_dispatch(original.dispatch_purpose()?, deadline)?;
+                report = match original.request(deadline)? {
                     journal::Request::Configure(request) => {
                         account.submit_stream_token_custody_configure(&journal_path, &request)
                     }
@@ -375,26 +770,35 @@ impl ManagedStreamTokenCustody {
                 })?;
             }
         }
-        let finalized = if let Some(retained) = self.retained_finality(&directory, &transaction)? {
-            Some(retained)
-        } else if report.status == OperationStatus::Applied {
-            self.advance_carrier(
-                &directory,
-                &original,
-                &transaction,
-                &report,
-                observed.checkpoint().height(),
-                deadline,
-            )?
+        if matches!(mode, Mode::SubmitAuthorized(_)) && report.status == OperationStatus::Expired {
+            return Err(super::ManagedBootstrapFailure::SignedUnresolved.into());
+        }
+        verify_custody()?;
+        let finalized =
+            if let Some(retained) = self.authority.retained_finality(&directory, &transaction)? {
+                Some(retained)
+            } else if report.status == OperationStatus::Applied {
+                self.authority.advance_carrier(
+                    &directory,
+                    &original.checkpoint,
+                    &transaction,
+                    &report,
+                    observed.checkpoint().height(),
+                    deadline,
+                )?
+            } else {
+                None
+            };
+        // Refresh separately after any dispatch/replay; an old original inclusion never becomes
+        // a claim that today's policy, revocation or enrollment head still agrees.
+        let current = if observe_current {
+            let observed = self.authority.observe_finality(deadline)?;
+            self.read_current(&original.selection.binding, &observed, deadline)
+                .ok()
         } else {
             None
         };
-        // Refresh separately after any dispatch/replay; an old original inclusion never becomes
-        // a claim that today's policy, revocation or enrollment head still agrees.
-        let observed = self.observe_finality(deadline)?;
-        let current = self
-            .read_current(&original.selection.binding, &observed, deadline)
-            .ok();
+        verify_custody()?;
         Ok(ManagedCustodyProgress {
             transaction_status: report.status,
             finalized,
@@ -407,32 +811,9 @@ impl ManagedStreamTokenCustody {
         binding: &SignerCustodyBindingV1,
         deadline: Instant,
     ) -> Result<(FinalityVerifier, VerifiedStreamTokenCustodyStateV1)> {
-        let verifier = self.observe_finality(deadline)?;
+        let verifier = self.authority.observe_finality(deadline)?;
         let current = self.read_current(binding, &verifier, deadline)?;
         Ok((verifier, current))
-    }
-
-    fn observe_finality(&mut self, deadline: Instant) -> Result<FinalityVerifier> {
-        require_deadline(deadline)?;
-        let retained = journal::read_optional(
-            &self.directory,
-            "current-checkpoint.nrt",
-            MAX_CHECKPOINT_BYTES,
-        )?;
-        let mut verifier = if let Some(bytes) = retained {
-            self.decode_checkpoint(&bytes)?
-        } else {
-            let source = self.source(1, deadline)?;
-            let proof = source
-                .finality_proof(NonZeroU64::new(1).expect("positive genesis"))
-                .map_err(|_| invalid("cannot read original genesis result"))?;
-            FinalityVerifier::from_genesis(&self.genesis, &proof)
-                .map_err(|_| invalid("original genesis finality differs"))?
-        };
-        let source = self.source(verifier.checkpoint().height(), deadline)?;
-        let observation = verifier.observe(&source, &rand::random());
-        retain_observation(&self.directory, &mut verifier, observation)?;
-        Ok(verifier)
     }
 
     fn read_current(
@@ -444,55 +825,56 @@ impl ManagedStreamTokenCustody {
         let block = verifier
             .verified_tip()
             .map_err(|_| invalid("invalid certified custody tip"))?;
-        let owner = self.role(StreamTokenAuthorityRole::IssuerOperator)?;
+        self.read_current_at(binding, &block, deadline)
+    }
+
+    fn read_current_at(
+        &self,
+        binding: &SignerCustodyBindingV1,
+        block: &VerifiedSumeragiBlock,
+        deadline: Instant,
+    ) -> Result<VerifiedStreamTokenCustodyStateV1> {
+        require_deadline(deadline)?;
+        block
+            .verify_global_scope(
+                self.authority.config.network_id,
+                self.authority.config.chain.as_str(),
+            )
+            .map_err(|_| invalid("current custody cut differs from original Global scope"))?;
+        let owner = self
+            .authority
+            .provider_role(StreamTokenAuthorityRole::IssuerOperator)?;
         let schema = iroha_core::state::State::native_world_schema_hash_v1()
             .map_err(|_| invalid("native custody schema is unavailable"))?;
-        read_selected_peers(&self.peers, deadline, |client, deadline| {
+        read_selected_peers(&self.authority.peers, deadline, |client, deadline| {
             client
                 .with_request_deadline(deadline)
                 .get_stream_token_custody_state(
-                    self.manifest.provider_id,
+                    self.authority.provider_id()?,
                     owner,
                     binding,
                     schema,
-                    &block,
+                    block,
                 )
                 .map_err(|_| invalid("native custody candidate is unavailable or invalid"))
         })
     }
 
-    fn source(&self, height: u64, deadline: Instant) -> Result<HttpFinalitySource> {
-        HttpFinalitySource::new(
-            self.config.network_id,
-            NonZeroU64::new(height).ok_or_else(|| invalid("zero custody checkpoint"))?,
-            self.peers
-                .iter()
-                .map(|(_, client)| client.clone())
-                .collect(),
-            self.peers.clone(),
-            deadline,
-        )
-        .map_err(|_| invalid("invalid custody finality source"))
-    }
-
-    fn decode_checkpoint(&self, bytes: &[u8]) -> Result<FinalityVerifier> {
-        decode_checkpoint(
-            bytes,
-            self.config.network_id,
-            &self.config.chain.to_string(),
-        )
-    }
-
     fn verify_wallet(
         &self,
         directory: &PrivateDirectory,
-        original: &Original,
+        original: &Selected<Original>,
         deadline: Instant,
     ) -> Result<SignedTransaction> {
-        let account = AccountService::new(self.config.clone())
+        let account = AccountService::new(self.authority.config.clone())
             .map_err(|_| invalid("cannot open custody wallet"))?;
+        original.verify_wallets(|intent, attempt| {
+            intent
+                .request(attempt.terms(), attempt.observation()?, deadline)?
+                .inspect(&account, &attempt.wallet_path())
+        })?;
         let path = directory.path().join("transaction");
-        match original.request(deadline) {
+        match original.request(deadline)? {
             journal::Request::Configure(request) => {
                 account.verify_stream_token_custody_configure_journal(&path, &request)
             }
@@ -502,117 +884,6 @@ impl ManagedStreamTokenCustody {
         }
         .map_err(|_| invalid("custody wallet differs from original request"))
     }
-
-    fn retained_finality(
-        &self,
-        directory: &PrivateDirectory,
-        transaction: &SignedTransaction,
-    ) -> Result<Option<ManagedCustodyFinality>> {
-        retained_carrier(
-            directory,
-            self.config.network_id,
-            &self.config.chain.to_string(),
-            transaction,
-        )
-    }
-
-    fn advance_carrier(
-        &self,
-        directory: &PrivateDirectory,
-        original: &Original,
-        transaction: &SignedTransaction,
-        report: &OperationReport,
-        observed_height: u64,
-        deadline: Instant,
-    ) -> Result<Option<ManagedCustodyFinality>> {
-        let height = report
-            .data
-            .get("evidence")
-            .and_then(|e| e.get("block_height"))
-            .and_then(norito::json::Value::as_u64)
-            .ok_or_else(|| invalid("Applied custody observation has no carrier hint"))?;
-        let original_verifier = self.decode_checkpoint(&original.checkpoint)?;
-        if height <= original_verifier.checkpoint().height() {
-            return Err(invalid("custody carrier predates its original request"));
-        }
-        if height > observed_height {
-            return Ok(None);
-        }
-        // Applied is only a replaceable lookup hint. A false earlier hint cannot irreversibly
-        // pin a carrier or prevent replaying the original transaction at its actual height.
-        let progress = journal::read_optional(directory, "replay.nrt", MAX_CHECKPOINT_BYTES)?
-            .map(|bytes| self.decode_checkpoint(&bytes))
-            .transpose()?;
-        let mut verifier = replay_start(original_verifier, progress, height)?;
-        let source = self.source(verifier.checkpoint().height(), deadline)?;
-        let target = height.min(
-            verifier
-                .checkpoint()
-                .height()
-                .saturating_add(MAX_REPLAY_SUCCESSORS),
-        );
-        verifier
-            .catch_up(
-                &source,
-                NonZeroU64::new(target).ok_or_else(|| invalid("zero custody carrier"))?,
-            )
-            .map_err(|_| invalid("original custody carrier replay unavailable"))?;
-        let bytes = checkpoint_bytes(&verifier)?;
-        directory.write_atomic("replay.nrt", &bytes, PublishMode::Replace)?;
-        if verifier.checkpoint().height() != height {
-            return Ok(None);
-        }
-        let finalized = verify_carrier(&verifier, transaction)?;
-        directory.write_atomic("carrier.nrt", &bytes, PublishMode::CreateNew)?;
-        Ok(Some(finalized))
-    }
-}
-
-// Every candidate is checked by the supplied SDK operation against the same independently
-// authenticated block. This helper owns only bounded endpoint iteration, never proof authority.
-fn read_selected_peers<T>(
-    peers: &[(PeerId, Client)],
-    deadline: Instant,
-    mut read: impl FnMut(&Client, Instant) -> Result<T>,
-) -> Result<T> {
-    for (_, client) in peers {
-        require_deadline(deadline)?;
-        if let Ok(value) = read(
-            client,
-            deadline.min(Instant::now() + Duration::from_secs(5)),
-        ) {
-            require_deadline(deadline)?;
-            return Ok(value);
-        }
-    }
-    Err(invalid(
-        "fresh native custody presence or absence proof unavailable",
-    ))
-}
-
-fn decode_checkpoint(
-    bytes: &[u8],
-    network: iroha_data_model::NetworkId,
-    chain: &str,
-) -> Result<FinalityVerifier> {
-    if bytes.len() > MAX_CHECKPOINT_BYTES {
-        return Err(invalid("custody checkpoint exceeds bound"));
-    }
-    let checkpoint = SumeragiFinalityCheckpoint::decode_canonical(bytes)
-        .map_err(|_| invalid("invalid retained custody checkpoint"))?;
-    FinalityVerifier::from_checkpoint(checkpoint, network, chain)
-        .map_err(|_| invalid("retained custody checkpoint changed network or chain"))
-}
-
-pub(crate) fn retained_carrier(
-    directory: &PrivateDirectory,
-    network: iroha_data_model::NetworkId,
-    chain: &str,
-    transaction: &SignedTransaction,
-) -> Result<Option<ManagedCustodyFinality>> {
-    journal::read_optional(directory, "carrier.nrt", MAX_CHECKPOINT_BYTES)?
-        .map(|bytes| verify_carrier(&decode_checkpoint(&bytes, network, chain)?, transaction))
-        .transpose()
 }
 
 fn matches_predecessor(
@@ -637,142 +908,6 @@ fn matches_predecessor(
     }
 }
 
-pub(crate) fn retain_observation(
-    directory: &PrivateDirectory,
-    verifier: &mut FinalityVerifier,
-    observation: std::result::Result<AttestationQuorum, FinalityError>,
-) -> Result<()> {
-    match &observation {
-        Ok(_) => {}
-        Err(FinalityError::CatchingUp { .. }) => {
-            if !verifier.promote_verified_progress() {
-                return Err(invalid("custody catch-up omitted its verified prefix"));
-            }
-        }
-        Err(_) => return Err(invalid("fresh native custody quorum unavailable")),
-    }
-    directory.write_atomic(
-        "current-checkpoint.nrt",
-        &checkpoint_bytes(verifier)?,
-        PublishMode::Replace,
-    )?;
-    observation
-        .map(|_| ())
-        .map_err(|_| invalid("custody finality is catching up; a fresh quorum is still required"))
-}
-
-pub(crate) fn replay_start(
-    original: FinalityVerifier,
-    progress: Option<FinalityVerifier>,
-    hint: u64,
-) -> Result<FinalityVerifier> {
-    if hint <= original.checkpoint().height() {
-        return Err(invalid("custody carrier predates original authorization"));
-    }
-    if let Some(progress) = progress {
-        if progress.checkpoint().network_id() != original.checkpoint().network_id()
-            || progress.checkpoint().chain_id() != original.checkpoint().chain_id()
-            || progress.checkpoint().height() < original.checkpoint().height()
-        {
-            return Err(invalid("custody replay left its original certified prefix"));
-        }
-        if progress.checkpoint().height() <= hint {
-            return Ok(progress);
-        }
-    }
-    Ok(original)
-}
-
-pub(crate) fn verify_carrier(
-    verifier: &FinalityVerifier,
-    transaction: &SignedTransaction,
-) -> Result<ManagedCustodyFinality> {
-    let verified = verifier
-        .verified_tip()
-        .map_err(|_| invalid("invalid original custody carrier"))?;
-    verified
-        .verify_global_scope(
-            verifier.checkpoint().network_id(),
-            verifier.checkpoint().chain_id(),
-        )
-        .map_err(|_| invalid("custody carrier is not the selected Global root"))?;
-    transaction
-        .verify_signature()
-        .map_err(|_| invalid("invalid original custody signature"))?;
-    if transaction.network_id() != Some(&verifier.checkpoint().network_id()) {
-        return Err(invalid("custody transaction network differs from carrier"));
-    }
-    let wire = transaction
-        .encode_wire_v1()
-        .map_err(|_| invalid("invalid original custody wire"))?;
-    let mut found = false;
-    for (index, entrypoint) in verified.block().network_entrypoints().enumerate() {
-        let TransactionEntrypoint::External(candidate) = entrypoint else {
-            continue;
-        };
-        if candidate.hash() != transaction.hash() {
-            continue;
-        }
-        let input_index =
-            u32::try_from(index).map_err(|_| invalid("custody carrier index exceeds bound"))?;
-        if found
-            || candidate
-                .encode_wire_v1()
-                .map_err(|_| invalid("invalid carrier transaction wire"))?
-                != wire
-            || !verified
-                .block()
-                .network_output_at(input_index)
-                .is_some_and(|(_, output)| output.result.as_ref().is_ok())
-        {
-            return Err(invalid(
-                "custody carrier lacks exact successful original execution",
-            ));
-        }
-        found = true;
-    }
-    if !found {
-        return Err(invalid(
-            "original custody transaction absent from certified carrier",
-        ));
-    }
-    Ok(ManagedCustodyFinality {
-        transaction_hash: transaction.hash(),
-        height: verified.height(),
-        block_hash: verified.header().hash(),
-    })
-}
-
-fn checkpoint_bytes(verifier: &FinalityVerifier) -> Result<Vec<u8>> {
-    let bytes = verifier
-        .checkpoint()
-        .encode_canonical()
-        .map_err(|_| invalid("cannot encode custody checkpoint"))?;
-    if bytes.len() > MAX_CHECKPOINT_BYTES {
-        return Err(invalid("custody checkpoint exceeds bound"));
-    }
-    Ok(bytes)
-}
-fn invalid(message: &'static str) -> Error {
-    Error::Invalid(message.into())
-}
-fn require_deadline(deadline: Instant) -> Result<()> {
-    if deadline <= Instant::now() {
-        return Err(invalid(
-            "custody I/O deadline elapsed; retain original journals",
-        ));
-    }
-    Ok(())
-}
-fn now_ms() -> Result<u64> {
-    u64::try_from(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| invalid("invalid UTC clock"))?
-            .as_millis(),
-    )
-    .map_err(|_| invalid("UTC clock exceeds custody bounds"))
-}
 fn validate_interval(interval: ManagedCustodyEnrollmentInterval, now: u64) -> Result<()> {
     if interval.issued_at_unix_ms == 0
         || interval.issued_at_unix_ms > now
@@ -795,3 +930,19 @@ mod tests;
 #[cfg(test)]
 #[path = "stream_token_custody/transport_tests.rs"]
 mod transport_tests;
+
+#[cfg(test)]
+#[path = "stream_token_custody/native_tests.rs"]
+mod native_tests;
+
+#[cfg(test)]
+#[path = "stream_token_custody/bootstrap_test_support.rs"]
+mod bootstrap_test_support;
+
+#[cfg(test)]
+#[path = "stream_token_custody/renewal_tests.rs"]
+mod renewal_tests;
+
+#[cfg(test)]
+#[path = "stream_token_custody/epoch_test_support.rs"]
+mod epoch_test_support;

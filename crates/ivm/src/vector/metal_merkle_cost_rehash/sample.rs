@@ -74,9 +74,11 @@ pub(in crate::vector) fn calibrate(
     context: Sha256Context,
     started: Instant,
 ) -> Result<Profile, Failure> {
-    with_inputs(geometry, started, |input, cpu, metal| {
-        let mut cpu_ns = [[0; TRIALS]; 2];
-        let mut metal_ns = [[0; TRIALS]; 2];
+    // Preserve the original partial arrays when admission or sampling refuses.
+    // No receipt is published until all sample timers and cleanup have finished.
+    let mut cpu_ns = [[0; TRIALS]; 2];
+    let mut metal_ns = [[0; TRIALS]; 2];
+    let result = with_inputs(geometry, started, |input, cpu, metal| {
         for pattern in 0..2 {
             for (index, byte) in input.iter_mut().enumerate() {
                 *byte = if pattern == 0 {
@@ -131,7 +133,10 @@ pub(in crate::vector) fn calibrate(
         }
         // Both fixed trees remain live beyond every update timer.
         Profile::from_trials(geometry, baseline, cpu_ns, metal_ns)
-    })
+    });
+    #[cfg(all(test, feature = "metal-hardware-tests"))]
+    super::super::metal_receipts::timing::record(cpu_ns, metal_ns);
+    result
 }
 
 #[cfg(test)]

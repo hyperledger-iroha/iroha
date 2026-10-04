@@ -3,7 +3,7 @@ use super::*;
 use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use crate::sumeragi::{body_read::BodyReadPoll, crypto::BlsCrypto};
 use iroha_data_model::{
-    block::decode_versioned_signed_block,
+    block::decode_framed_signed_block,
     sumeragi_finality::{ScheduledSlot, test_fixtures::NativeFinalityFixture},
 };
 use iroha_sumeragi::{availability::AvailabilityFrame, crypto::NoAttestation, types::HeightConfig};
@@ -58,7 +58,7 @@ fn fixture() -> Fixture {
             .initialize(fixture.genesis().clone()),
     )
     .unwrap();
-    let mut executed = decode_versioned_signed_block(&fixture.latest().block_wire).unwrap();
+    let mut executed = decode_framed_signed_block(&fixture.latest().block_wire).unwrap();
     let c = executed
         .commit_certificate()
         .unwrap()
@@ -567,7 +567,7 @@ fn real_valid_future_certificate_cannot_skip_a_height_and_reopening_keeps_origin
     chain.certify(block);
     let third = iroha_data_model::block::SharedSignedBlock::reserve(&f.store.execution_budget)
         .unwrap()
-        .initialize(decode_versioned_signed_block(&chain.latest().block_wire).unwrap());
+        .initialize(decode_framed_signed_block(&chain.latest().block_wire).unwrap());
     let mut read = CommittedRead::new(
         third,
         3,
@@ -627,7 +627,7 @@ fn untrusted_certificate_and_mismatching_staged_payload_are_never_written() {
     header.creation_time_ms += 17;
     let different = other.block_with_submitted_work(header);
     other.certify(different);
-    let mut mismatching = decode_versioned_signed_block(&other.latest().block_wire).unwrap();
+    let mut mismatching = decode_framed_signed_block(&other.latest().block_wire).unwrap();
     assert_eq!(mismatching.header().height().get(), 2);
     assert!(!publication::matches_payload(&mismatching, f.body.payload().as_slice()).unwrap());
     // Keep the original valid certificate but provide another executed frame: it must fail

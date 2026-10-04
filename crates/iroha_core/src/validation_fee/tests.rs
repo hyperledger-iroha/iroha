@@ -1,4 +1,6 @@
 //! Conversion provenance and protected runtime fixture tests.
+#[path = "registry_refusal_tests.rs"]
+mod registry_refusal_tests;
 #[path = "runtime_dlmm_tests.rs"]
 mod runtime_dlmm_tests;
 #[path = "runtime_wrapper_tests.rs"]

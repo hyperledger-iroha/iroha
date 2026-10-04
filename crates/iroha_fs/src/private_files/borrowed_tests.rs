@@ -1,11 +1,12 @@
-//! Borrowed authority, bounded I/O and immutable publication regressions on Unix.
+//! Native borrowed authority, bounded I/O and immutable publication regressions.
 
 use super::*;
+#[cfg(unix)]
+use std::os::unix::fs::{PermissionsExt as _, symlink};
 use std::{
     ffi::OsString,
     fs::{self, OpenOptions},
     io::{Seek as _, SeekFrom, Write as _},
-    os::unix::fs::{PermissionsExt as _, symlink},
 };
 
 fn store() -> (tempfile::TempDir, PrivateDirectory) {
@@ -42,6 +43,7 @@ fn borrowed_create_seal_reopen_preserve_original_object_and_bounds() {
     assert_eq!(reopened.snapshot().unwrap(), snapshot);
     reopened.read_exact(&mut bytes).unwrap();
     assert_eq!(&bytes, b"exact receipt");
+    #[cfg(unix)]
     assert_eq!(
         fs::metadata(directory.path().join(&name))
             .unwrap()
@@ -50,6 +52,33 @@ fn borrowed_create_seal_reopen_preserve_original_object_and_bounds() {
             & 0o7777,
         0o400
     );
+}
+
+#[test]
+fn borrowed_and_owned_receipts_share_exact_custody_and_publication_rules() {
+    let (_temporary, directory) = store();
+    let borrowed_name = OsStr::new("borrowed");
+    let mut borrowed = directory
+        .create_borrowed_private(borrowed_name, 16)
+        .unwrap();
+    borrowed.write_all(b"borrowed bytes").unwrap();
+    let borrowed = borrowed.seal_read_only().unwrap();
+    let owned = directory
+        .open_retained_read_only(borrowed_name, 16)
+        .unwrap();
+    assert_eq!(owned.identity().unwrap(), borrowed.identity().unwrap());
+    assert_eq!(owned.snapshot().unwrap(), borrowed.snapshot().unwrap());
+    assert!(owned.publish_new_name("relocated").is_err());
+
+    let mut owned = directory.create_retained_private("owned", 16).unwrap();
+    owned.write_all(b"owned bytes").unwrap();
+    let owned = owned.seal_read_only().unwrap();
+    let borrowed = directory
+        .open_borrowed_read_only(OsStr::new("owned"), 16)
+        .unwrap();
+    assert_eq!(borrowed.identity().unwrap(), owned.identity().unwrap());
+    assert_eq!(borrowed.snapshot().unwrap(), owned.snapshot().unwrap());
+    assert!(borrowed.publish_new_name(OsStr::new("relocated")).is_err());
 }
 
 #[test]
@@ -141,7 +170,16 @@ fn borrowed_interrupted_claims_stay_private_and_are_not_repaired_on_reopen() {
     assert!(directory.open_borrowed_read_only(name, 64).is_err());
     let metadata = fs::metadata(directory.path().join(name)).unwrap();
     assert_eq!(metadata.len(), 0);
+    #[cfg(unix)]
     assert_eq!(metadata.permissions().mode() & 0o7777, 0o600);
+    directory
+        .visit_private_files(1, |observed_name, metadata| {
+            assert_eq!(observed_name, name);
+            assert!(metadata.is_empty());
+            assert!(!metadata.is_read_only());
+            Ok(())
+        })
+        .unwrap();
     let mut partial = directory
         .create_borrowed_private(OsStr::new("partial"), 64)
         .unwrap();
@@ -179,6 +217,7 @@ fn borrowed_open_and_publication_reject_invalid_names() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn borrowed_handles_reject_truncation_growth_and_strict_mode_changes() {
     let (_temporary, directory) = store();
@@ -228,6 +267,7 @@ fn borrowed_handles_reject_truncation_growth_and_strict_mode_changes() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn borrowed_custody_rejects_file_substitution_and_links() {
     let (_temporary, directory) = store();
@@ -285,6 +325,7 @@ fn borrowed_custody_rejects_file_substitution_and_links() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn borrowed_authority_rechecks_original_directory_after_namespace_substitution() {
     let (temporary, directory) = store();
@@ -305,4 +346,56 @@ fn borrowed_authority_rechecks_original_directory_after_namespace_substitution()
             .create_borrowed_private(OsStr::new("new"), 64)
             .is_err()
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_borrowed_creation_denies_parallel_writes_deletion_and_ancestor_replacement() {
+    let (temporary, directory) = store();
+    let name = OsStr::new("receipt");
+    let path = directory.path().join(name);
+    let mut writer = directory.create_borrowed_private(name, 16).unwrap();
+    writer.write_all(b"original").unwrap();
+    assert!(OpenOptions::new().write(true).open(&path).is_err());
+    assert!(fs::remove_file(&path).is_err());
+    assert!(fs::rename(&path, directory.path().join("substitute")).is_err());
+    assert!(fs::rename(directory.path(), temporary.path().join("displaced")).is_err());
+
+    let sealed = writer.seal_read_only().unwrap();
+    let before = sealed.snapshot().unwrap();
+    assert!(OpenOptions::new().write(true).open(&path).is_err());
+    assert!(fs::remove_file(&path).is_err());
+    assert!(fs::rename(&path, directory.path().join("substitute")).is_err());
+    assert!(fs::rename(directory.path(), temporary.path().join("displaced")).is_err());
+    let mut reopened = directory.open_borrowed_read_only(name, 16).unwrap();
+    assert_eq!(reopened.snapshot().unwrap(), before);
+    let mut bytes = [0; 8];
+    reopened.read_exact(&mut bytes).unwrap();
+    assert_eq!(&bytes, b"original");
+    assert_eq!(sealed.snapshot().unwrap(), before);
+    assert_eq!(reopened.snapshot().unwrap(), before);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_borrowed_readonly_attribute_does_not_repair_an_incomplete_claim() {
+    let (_temporary, directory) = store();
+    let name = OsStr::new("incomplete");
+    let path = directory.path().join(name);
+    drop(directory.create_borrowed_private(name, 16).unwrap());
+    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&path, permissions).unwrap();
+    assert!(directory.open_borrowed_read_only(name, 16).is_err());
+    directory
+        .visit_private_files(1, |observed_name, metadata| {
+            assert_eq!(observed_name, name);
+            assert!(!metadata.is_read_only());
+            Ok(())
+        })
+        .unwrap();
+    assert!(fs::metadata(&path).unwrap().permissions().readonly());
+    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    permissions.set_readonly(false);
+    fs::set_permissions(&path, permissions).unwrap();
 }

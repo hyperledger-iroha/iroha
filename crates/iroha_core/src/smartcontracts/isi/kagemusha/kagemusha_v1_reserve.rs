@@ -2305,7 +2305,7 @@ mod tests {
         block::{
             BlockHeader, CommitCertificate,
             consensus::{ExecKv, ExecWitness},
-            decode_versioned_signed_block,
+            decode_framed_signed_block,
         },
         isi::{
             KAGEMUSHA_CHAIN_VERSION_V1, KagemushaOperationFinalityV1,
@@ -2936,7 +2936,7 @@ mod tests {
         )
         .expect("actual paired Poseidon membership");
         let top_up_root = kagemusha_mint_finality_root_v1(top_up_membership_witness.root);
-        let mut block = decode_versioned_signed_block(&fixture.latest().block_wire).unwrap();
+        let mut block = decode_framed_signed_block(&fixture.latest().block_wire).unwrap();
         let certificate = block.commit_certificate().unwrap();
         let header = certificate.consensus_header().to_vec();
         let availability = certificate.availability().to_vec();

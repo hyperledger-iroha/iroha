@@ -1,4 +1,4 @@
-//! Actual semantic readers, original local refusals, and unchanged complete-State gate.
+//! Actual semantic readers, original local refusals, and table-only inventory admission.
 
 use super::*;
 use crate::{
@@ -210,7 +210,7 @@ fn semantic_memory_refusal_preserves_original_pool_release_owner() {
 }
 
 #[test]
-fn semantic_catalog_keeps_exact_order_and_complete_state_required_schema_gate() {
+fn semantic_catalog_keeps_exact_order_and_actual_catalog_capacity_gate() {
     assert_eq!(require_exact_table_materializers(FIELDS, READERS), Ok(3));
     assert!(matches!(
         require_exact_table_materializers(FIELDS, &[READERS[1], READERS[0], READERS[2]]),
@@ -221,9 +221,7 @@ fn semantic_catalog_keeps_exact_order_and_complete_state_required_schema_gate() 
     let state = state();
     assert!(matches!(
         capture_actual_state_tables_once(&state, policy()),
-        Err(TableCaptureError::Inventory(
-            CompleteInventoryError::RequiredSchema("state.kagemusha_v1_runtime_verifier")
-        ))
+        Err(TableCaptureError::MaterializerLimit)
     ));
     let mut publication = state.state_view_publication();
     let guard = publication.begin();

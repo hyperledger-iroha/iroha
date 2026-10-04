@@ -9459,13 +9459,13 @@ pub mod tests {
     }
     const IVM_METADATA_HEADER_LEN: usize = ivm::HEADER_SIZE;
     const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
-    /// Build a minimal valid IVM program: header (1.0, vector=4, `max_cycles=0`, abi=1) + HALT.
+    /// Build a minimal valid IVM program: header (1.1, vector=4, `max_cycles=0`, abi=1) + HALT.
     fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         let mut code = Vec::new();
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let mut program = ivm::ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: 0,
             vector_length: 4,
             max_cycles: 1_000,
@@ -9536,7 +9536,7 @@ pub mod tests {
         }
         let mut program = ivm::ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: 0,
             vector_length: 4,
             max_cycles,
@@ -9604,7 +9604,7 @@ pub mod tests {
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let mut program = ivm::ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: 0,
             vector_length: 4,
             max_cycles: 1_000,
@@ -9621,7 +9621,7 @@ pub mod tests {
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let mut program = ivm::ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: 0,
             vector_length: 4,
             max_cycles: 1_000,

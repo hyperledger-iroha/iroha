@@ -4,8 +4,12 @@
 //! not by itself identify the State/Kura source that supplied its local certificate.
 //! Only this walk constructs a source-bound block. Borrowing the original view prevents
 //! its identity from being reused while any block is retained; identity is never serialized.
+//!
+//! Local native refusals keep their original retry owner; only completed rejections map
+//! into a purpose's semantic finality error.
 
 use super::{Error, StateView};
+use crate::execution_attempt::ExecutionAttemptError;
 use crate::sumeragi::certified_chain::{CertifiedBlock, CertifiedChain};
 use iroha_data_model::{
     query::error::QueryExecutionFail, sumeragi::finality::NativeFinalityLimits,
@@ -36,14 +40,20 @@ struct SourceAllowance {
     failed: bool,
 }
 impl SourceAllowance {
-    fn admit(&mut self, frames: u64, bytes: u64) -> Result<(), QueryExecutionFail> {
+    fn admit(
+        &mut self,
+        frames: u64,
+        bytes: u64,
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<QueryExecutionFail>> {
         let remaining = self
             .frames
             .checked_sub(frames)
             .zip(self.bytes.checked_sub(bytes));
         if self.failed || bytes > LIMITS.block_bytes as u64 || remaining.is_none() {
             self.failed = true;
-            return Err(QueryExecutionFail::GasBudgetExceeded);
+            return Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+            ));
         }
         (self.frames, self.bytes) = remaining.unwrap();
         Ok(())
@@ -60,7 +70,9 @@ pub(crate) struct SignerCertifiedWalkV1<'view, 'state> {
     allowance: RefCell<SourceAllowance>,
 }
 impl<'view, 'state> SignerCertifiedWalkV1<'view, 'state> {
-    pub(crate) fn new(view: &'view StateView<'state>) -> Result<Self, Error> {
+    pub(crate) fn new(
+        view: &'view StateView<'state>,
+    ) -> Result<Self, ExecutionAttemptError<Error>> {
         let mut allowance = SourceAllowance {
             frames: LIMITS.block_count as u64,
             bytes: LIMITS.journal_bytes as u64,
@@ -69,7 +81,7 @@ impl<'view, 'state> SignerCertifiedWalkV1<'view, 'state> {
         let chain = CertifiedChain::new_with_source_admission(view, |frames, bytes| {
             allowance.admit(frames, bytes)
         })
-        .map_err(|_| Error::Finality)?;
+        .map_err(|error| error.map_rejection(|_| Error::Finality))?;
         Ok(Self {
             view,
             chain,
@@ -82,7 +94,9 @@ impl<'view, 'state> SignerCertifiedWalkV1<'view, 'state> {
         &self,
         start: u64,
         end: u64,
-    ) -> impl Iterator<Item = Result<SignerCertifiedBlockV1<'view, 'state>, Error>> + '_ {
+    ) -> impl Iterator<
+        Item = Result<SignerCertifiedBlockV1<'view, 'state>, ExecutionAttemptError<Error>>,
+    > + '_ {
         let interval = super::check_history_span_v1(start, end).and_then(|()| {
             usize::try_from(start)
                 .ok()
@@ -104,18 +118,20 @@ impl<'view, 'state> SignerCertifiedWalkV1<'view, 'state> {
             if invalid {
                 invalid = false;
                 failed = true;
-                return Some(Err(Error::Finality));
+                return Some(Err(ExecutionAttemptError::Rejected(Error::Finality)));
             }
-            let result = walk
-                .as_mut()?
-                .next()?
-                .map_err(|_| Error::Finality)
-                .map(|block| SignerCertifiedBlockV1 {
+            // Move the receipt directly into its source-bound owner. Chained result maps
+            // retain additional full decoded receipt temporaries on debug native stacks.
+            match walk.as_mut()?.next()? {
+                Ok(block) => Some(Ok(SignerCertifiedBlockV1 {
                     view: self.view,
                     block,
-                });
-            failed = result.is_err();
-            Some(result)
+                })),
+                Err(error) => {
+                    failed = true;
+                    Some(Err(error.map_rejection(|_| Error::Finality)))
+                }
+            }
         })
     }
 }

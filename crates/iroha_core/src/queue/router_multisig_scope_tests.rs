@@ -1040,7 +1040,7 @@ fn multisig_approve_routes_by_persisted_proposal_when_scope_is_missing() {
     );
 }
 #[test]
-fn multisig_approve_ignores_corrupt_proposal_state_and_uses_account_scope() {
+fn multisig_approve_rejects_corrupt_proposal_state_despite_account_scope() {
     multisig_routing_fixture!(submitter_id submitter_keypair multisig_id dataspace_id lane_id catalog lane_catalog policy router proposed);
     let instructions_hash = HashOf::new(&proposed);
     let tx = sample_transaction(
@@ -1056,31 +1056,49 @@ fn multisig_approve_ignores_corrupt_proposal_state_and_uses_account_scope() {
     let mut state =
         state_with_account_scope_entries(&[(multisig_id.clone(), scope_entry)], catalog);
     install_router_lane_catalog(&mut state, lane_catalog);
-    state.world.smart_contract_state_mut_for_testing().insert(
-        multisig_proposal_state_key(&multisig_id, &instructions_hash),
-        b"not a multisig proposal state".to_vec(),
-    );
-    let expected_route = RoutingDecision::new(lane_id, dataspace_id);
-    let expected_plan = RoutingPlan::single(expected_route);
+    let proposal_key = multisig_proposal_state_key(&multisig_id, &instructions_hash);
+    let corrupt_bytes = b"not a multisig proposal state".to_vec();
+    state
+        .world
+        .smart_contract_state_mut_for_testing()
+        .insert(proposal_key.clone(), corrupt_bytes.clone());
     assert_eq!(
         router
             .try_route_without_state(&tx)
             .expect("multisig approval should defer to state-aware routing"),
         None
     );
-    assert_eq!(
-        router
-            .try_route_with_view(&tx, &state.view())
-            .expect("corrupt proposal state should fall back to multisig account scope"),
-        expected_route
-    );
-    assert_eq!(
+    // An account's routing scope cannot authenticate the approved proposal body.
+    // Every state-aware entry must preserve the corrupt proposal rejection.
+    let assert_invalid = |error| match error {
+        RoutingResolveError::InvalidMultisigProposal {
+            account,
+            instructions_hash: rejected_hash,
+            reason,
+        } => {
+            assert_eq!(account, multisig_id);
+            assert_eq!(rejected_hash, instructions_hash);
+            assert!(!reason.is_empty());
+        }
+        error => panic!("corrupt proposal must retain its typed rejection: {error:?}"),
+    };
+    assert_invalid(router.try_route_with_view(&tx, &state.view()).unwrap_err());
+    assert_invalid(
         router
             .try_route_plan_with_view(&tx, &state.view())
-            .expect("corrupt proposal state plan should fall back to multisig account scope"),
-        expected_plan
+            .unwrap_err(),
     );
-    assert_eq!(
+    assert_invalid(
+        evaluate_policy_with_catalog_and_world(
+            &policy,
+            router.lane_catalog.as_ref(),
+            &state.view().nexus().dataspace_catalog,
+            &tx,
+            state.view().world(),
+        )
+        .unwrap_err(),
+    );
+    assert_invalid(
         evaluate_policy_plan_with_catalog_and_world(
             &policy,
             router.lane_catalog.as_ref(),
@@ -1088,9 +1106,15 @@ fn multisig_approve_ignores_corrupt_proposal_state_and_uses_account_scope() {
             &tx,
             state.view().world(),
         )
-        .expect("validation routing should ignore corrupt proposal state")
-        .coordinator_route(),
-        expected_route
+        .unwrap_err(),
+    );
+    assert_eq!(
+        state
+            .view()
+            .world()
+            .smart_contract_state()
+            .get(&proposal_key),
+        Some(&corrupt_bytes),
     );
 }
 #[test]

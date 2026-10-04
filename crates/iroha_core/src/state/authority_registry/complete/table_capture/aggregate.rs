@@ -118,10 +118,10 @@ impl CapturedCanonicalTables {
 
 /// Attempt one aggregate capture from fixed State readers and declared tables.
 ///
-/// The current production catalog intentionally fails closed before any nodes
-/// are returned. `None` means a State publication overlapped the capture and
-/// the caller must retry. Direct MV writes can bypass this generation counter,
-/// so even a future `Some` result is not a coherent finalized-State certificate.
+/// Schema metadata admission permits this bounded table-only observation. `None`
+/// means a State publication overlapped capture and the caller must retry. Direct
+/// MV writes can bypass this generation counter, so `Some` is not a coherent
+/// finalized-State certificate. Frozen cells and authenticated history are absent.
 pub(super) fn capture_tables_once(
     state: &State,
     fields: &'static [Field],
@@ -163,7 +163,8 @@ pub(super) fn capture_tables_once(
         .transpose()?;
     for materializer in materializers {
         match *materializer {
-            TableMaterializer::Single { id, capture } => {
+            TableMaterializer::Single { id, capture }
+            | TableMaterializer::Native { id, capture, .. } => {
                 let Some(node) = capture(state, limits.tables)? else {
                     return Ok(None);
                 };

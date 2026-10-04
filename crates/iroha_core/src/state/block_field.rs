@@ -213,6 +213,8 @@ where
 
 #[path = "block_field/frozen.rs"]
 mod frozen;
+#[path = "block_field/original_images.rs"]
+mod original_images;
 #[path = "block_field/read.rs"]
 mod read;
 

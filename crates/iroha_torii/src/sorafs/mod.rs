@@ -33,6 +33,7 @@ pub mod pop_api;
 pub mod por;
 #[cfg(feature = "app_api")]
 pub mod potr_signing;
+pub(crate) mod provider_attestation;
 pub(crate) mod provider_source;
 pub(crate) mod public_gateway;
 #[cfg(feature = "app_api")]

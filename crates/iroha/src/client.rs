@@ -27,6 +27,7 @@ mod data_availability_http_tests;
 #[cfg(test)]
 mod data_availability_query_tests;
 mod dispatch;
+mod gateway_compliance;
 mod moderation;
 mod multisig_validation;
 pub mod musubi;
@@ -36,6 +37,8 @@ pub mod nexus;
 #[cfg(test)]
 mod operator_auth_tests;
 mod private_settlement;
+mod provider_advert;
+mod provider_attestation;
 mod repair;
 mod reputation_journal;
 mod reserve;
@@ -12410,6 +12413,7 @@ mod evidence_http_tests {
     include!("client/consensus_keys_tests.rs");
     include!("client/activation_attestation_tests.rs");
     include!("client/reserve_policy_tests.rs");
+    include!("client/reserve_account_tests.rs");
     include!("client/sns_lease_tests.rs");
     fn transaction_hash(seed: u8) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH]))
@@ -14713,6 +14717,7 @@ include!("client/operator_request_auth.rs");
 include!("client/activation_evidence.rs");
 include!("client/sumeragi_finality.rs");
 include!("client/reserve_policy.rs");
+include!("client/reserve_account.rs");
 include!("client/sns_lease.rs");
 /// Representation of `Iroha` client.
 impl Client {
@@ -16186,6 +16191,7 @@ impl Client {
             ) => {
                 return Err(tx_confirmation_final_report(eyre::Report::new(error)));
             }
+            Err(QueryError::Sdk(error)) => return Err(error.into()),
             Err(QueryError::Other(error)) => return Err(error),
         };
         match rejection_reason_from_transaction_details(&details, hash, entrypoint_hash) {
@@ -23907,24 +23913,42 @@ mod tests {
         client.torii_url = "https://user:secret@example.test/"
             .parse()
             .expect("URL fixture");
-        assert_eq!(
-            client.clone().build().expect_err("embedded credentials"),
-            SdkError::Context(AuthorityContextError::EmbeddedEndpointCredentials)
-        );
+        {
+            let actual_error = client.clone().build().expect_err("embedded credentials");
+            let SdkError::Context(actual_source) = &actual_error else {
+                panic!("unexpected SDK error: {actual_error:?}");
+            };
+            assert_eq!(
+                actual_source,
+                &(AuthorityContextError::EmbeddedEndpointCredentials)
+            );
+        };
 
         client.torii_url = "https://example.test/api".parse().expect("URL fixture");
-        assert_eq!(
-            client.clone().build().expect_err("directory-form base URL"),
-            SdkError::Context(AuthorityContextError::EndpointPathMissingTrailingSlash)
-        );
+        {
+            let actual_error = client.clone().build().expect_err("directory-form base URL");
+            let SdkError::Context(actual_source) = &actual_error else {
+                panic!("unexpected SDK error: {actual_error:?}");
+            };
+            assert_eq!(
+                actual_source,
+                &(AuthorityContextError::EndpointPathMissingTrailingSlash)
+            );
+        };
 
         client.torii_url = base_url();
         client.network_id = test_network_id();
         client.account = AccountId::new(checked_random_keypair().public_key().clone());
-        assert_eq!(
-            client.clone().build().expect_err("unbound account key"),
-            SdkError::Context(AuthorityContextError::AccountSigningKeyMismatch)
-        );
+        {
+            let actual_error = client.clone().build().expect_err("unbound account key");
+            let SdkError::Context(actual_source) = &actual_error else {
+                panic!("unexpected SDK error: {actual_error:?}");
+            };
+            assert_eq!(
+                actual_source,
+                &(AuthorityContextError::AccountSigningKeyMismatch)
+            );
+        };
 
         let nonmember = checked_random_keypair();
         let policy = MultisigPolicy::new(
@@ -23936,13 +23960,19 @@ mod tests {
         )
         .expect("valid multisig policy");
         client.account = AccountId::new_multisig(policy);
-        assert_eq!(
-            client
+        {
+            let actual_error = client
                 .clone()
                 .build()
-                .expect_err("nonmember account key must not bind"),
-            SdkError::Context(AuthorityContextError::AccountSigningKeyNotMultisigMember)
-        );
+                .expect_err("nonmember account key must not bind");
+            let SdkError::Context(actual_source) = &actual_error else {
+                panic!("unexpected SDK error: {actual_error:?}");
+            };
+            assert_eq!(
+                actual_source,
+                &(AuthorityContextError::AccountSigningKeyNotMultisigMember)
+            );
+        };
     }
 
     #[test]
@@ -28565,7 +28595,7 @@ mod tests {
         let artifact = include_bytes!("../tests/fixtures/contract_code_readback/code_readback.to");
         assert_eq!(
             hex::encode(iroha_data_model::smart_contract::contract_code_hash(artifact).as_ref()),
-            "ce3b2db09db97871a76cf1e2318ccfb51931ec71a9917af74270128ca510c913",
+            "984f729f8c465b6d7fb6b62bf9ff13c882f7fbb18b76cad922c3c35a63ded6df",
             "checked-in fixture must retain its native artifact identity"
         );
         artifact

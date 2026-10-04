@@ -416,16 +416,20 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::account_recovery::CancelAccountRecovery>,
     dispatch_instruction::<iroha_data_model::isi::account_recovery::FinalizeAccountRecovery>,
     dispatch_instruction::<iroha_data_model::isi::contract_alias::SetContractAlias>,
-    dispatch_instruction::<iroha_data_model::isi::musubi::RegisterMusubiNamespaceBindingV1>,
+    // The native namespace owner/generation and exact static/SNS dataspace mapping authorize
+    // registration and current-owner replay; no executor-level blanket grant is introduced.
+    dispatch_instruction::<iroha_data_model::isi::musubi::RegisterMusubiNamespaceBindingV1> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::musubi::RegisterMusubiArchiveV1>,
     dispatch_instruction::<iroha_data_model::isi::musubi::AdvanceMusubiPinOutboxV1>,
     dispatch_instruction::<iroha_data_model::isi::musubi::CheckMusubiPinOutboxV1>,
+    // The native archive manager, original completed provider evidence and current revision
+    // checks own these publication operations; Initial only routes to those exact owners.
     dispatch_instruction::<
         iroha_data_model::isi::musubi::RegisterMusubiProviderBundleAttestationV1,
-    >,
-    dispatch_instruction::<iroha_data_model::isi::musubi::AddMusubiArchiveLocationV1>,
+    > => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::musubi::AddMusubiArchiveLocationV1> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::musubi::RetireMusubiArchiveLocationV1>,
-    dispatch_instruction::<iroha_data_model::isi::musubi::PublishMusubiReleaseV1>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::PublishMusubiReleaseV1> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::musubi::SetMusubiReleaseYankV1>,
     dispatch_instruction::<iroha_data_model::isi::musubi::SetMusubiPackageMetadataV1>,
     dispatch_instruction::<iroha_data_model::isi::musubi::InviteMusubiPackageMaintainerV1>,

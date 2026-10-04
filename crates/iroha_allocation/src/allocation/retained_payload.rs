@@ -123,6 +123,23 @@ impl<T> RetainedPayload<T> {
                 .all(|charge| charge.belongs_to(budget))
     }
 
+    /// Observe every exact original payload charge plus the ledger's physical backing.
+    ///
+    /// Spare initialized-payload or ledger capacity remains funded. This sums the
+    /// retained layouts themselves, never inferred payload lengths, and neither
+    /// reserves nor reprices them. `None` is a fail-closed arithmetic overflow.
+    pub fn allocation_bytes(&self) -> Option<usize> {
+        let ledger = std::alloc::Layout::array::<AllocationCharge>(self.charges.capacity())
+            .ok()?
+            .size();
+        self.charges
+            .as_slice()
+            .iter()
+            .try_fold(ledger, |bytes, charge| {
+                bytes.checked_add(charge.layout().size())
+            })
+    }
+
     /// Borrow the exact original canonical value without transferring its allocation custody.
     pub fn get(&self) -> &T {
         &self.payload

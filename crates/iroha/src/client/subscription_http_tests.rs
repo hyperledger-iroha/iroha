@@ -789,18 +789,28 @@ async fn payload_drafts_reject_unrequested_fixed_transaction_fields() {
                     .prepare_plan(&plan_id(), &plan(client.account.clone()))
                     .await
             };
-            assert_eq!(
-                result.unwrap_err(),
-                Error::ResponseBinding {
-                    operation: if usage {
-                        "subscriptions.prepare_usage"
-                    } else {
-                        "subscriptions.prepare_plan"
-                    },
-                    field,
-                },
-                "must reject {mutation} on the requested operation"
-            );
+            {
+                let actual_error = result.unwrap_err();
+                let Error::ResponseBinding {
+                    operation: actual_operation,
+                    field: actual_field,
+                } = &actual_error
+                else {
+                    panic!("unexpected SDK error: {actual_error:?}");
+                };
+                assert_eq!(
+                    (actual_operation, actual_field,),
+                    (
+                        &(if usage {
+                            "subscriptions.prepare_usage"
+                        } else {
+                            "subscriptions.prepare_plan"
+                        }),
+                        &(field),
+                    ),
+                    "must reject {mutation} on the requested operation"
+                );
+            };
             assert_eq!(calls.load(Ordering::SeqCst), 1);
         }
     }

@@ -351,7 +351,7 @@ fn current_readback_target_matches(
             .is_ok()
         && attestation.registered_at_height >= archive.registered_at_height
         && binding.network_id == archive.staging_receipt.payload.binding.network_id
-        && binding.completed_by == *owner
+        && binding.completed_by == binding.completion_authority.completion_signer
         && binding.completion_authority.provider_owner == *owner
         && binding.archive_id == archive.archive_id
         && binding.bundle_digest == archive.commitment.bundle_digest
@@ -1207,14 +1207,16 @@ pub(crate) mod tests {
             revision: 1,
             state: MusubiArchiveLocationStateV1::Healthy,
         };
-        let provider_key = keypair(0x32);
-        let owner = AccountId::new(provider_key.public_key().clone());
+        let provider_key = keypair(0x34);
+        let owner = AccountId::new(keypair(0x32).public_key().clone());
+        let signer = AccountId::new(provider_key.public_key().clone());
         let binding = MusubiProviderBundleVerificationBindingV1 {
             network_id: archive.staging_receipt.payload.binding.network_id,
             provider_id: location.providers[0],
-            completed_by: owner.clone(),
+            completed_by: signer.clone(),
             completion_authority: ProviderIngestCompletionAuthorityV1::new(
                 owner,
+                signer,
                 ProviderIngestCompletionSignerPolicyV1 {
                     policy_id: [0x71; 32],
                     revision: 1,
@@ -1278,7 +1280,13 @@ pub(crate) mod tests {
     fn current_readback_target_requires_exact_location_and_registered_provider() {
         let mut archive = registration_material().archive;
         let (location, record) = readback_target(&archive);
-        let owner = &record.attestation.payload.binding.completed_by;
+        let owner = &record
+            .attestation
+            .payload
+            .binding
+            .completion_authority
+            .provider_owner;
+        assert_ne!(*owner, record.attestation.payload.binding.completed_by);
         archive.location_ids.push(location.location_id);
         assert!(current_readback_target_matches(
             &archive,
@@ -1287,6 +1295,16 @@ pub(crate) mod tests {
             Some(owner),
             Some(&record),
         ));
+        assert!(
+            !current_readback_target_matches(
+                &archive,
+                &location,
+                Some(&location),
+                Some(&record.attestation.payload.binding.completed_by),
+                Some(&record),
+            ),
+            "completion signer cannot replace the registered provider owner"
+        );
         let mut changed = location.clone();
         changed.pin_manifest = ManifestDigest::new([0x65; 32]);
         assert!(!current_readback_target_matches(
@@ -1406,7 +1424,13 @@ pub(crate) mod tests {
             Some(&substituted_attestation),
             Some((
                 provider,
-                record.attestation.payload.binding.completed_by.clone(),
+                record
+                    .attestation
+                    .payload
+                    .binding
+                    .completion_authority
+                    .provider_owner
+                    .clone(),
             )),
         );
         assert_eq!(
@@ -1425,7 +1449,9 @@ pub(crate) mod tests {
         assert_eq!(archive.location_revision, 2);
         assert_eq!(archive.location_ids, fixture.archive.location_ids);
     }
-    #[cfg(unix)]
+    mod storage_authorization_tests {
+        include!("finality/storage_authorization_tests.rs");
+    }
     #[test]
     fn storage_preflight_never_dispatches_unfinalized_registration() {
         use super::super::storage_coordination::FinalizedRegistrationCheckedStorageBackendV1;
@@ -1447,7 +1473,7 @@ pub(crate) mod tests {
 
             fn coordinate_storage(
                 &mut self,
-                _request: &MusubiStorageCoordinationRequestV1,
+                _request: &iroha_musubi_service::VerifiedStorageCoordinationRequestV1<'_>,
             ) -> Result<MusubiStorageCoordinationResponseV1, MusubiPublicationServiceBackendErrorV1>
             {
                 self.0.fetch_add(1, Ordering::SeqCst);
@@ -1480,16 +1506,25 @@ pub(crate) mod tests {
 
         let fixture = reader_fixture();
         let calls = Arc::new(AtomicUsize::new(0));
-        let mut checked = FinalizedRegistrationCheckedStorageBackendV1::new(
+        let checked = FinalizedRegistrationCheckedStorageBackendV1::new(
             fixture.reader.clone(),
             Box::new(MutationProbe(Arc::clone(&calls))),
         );
+        let dispatch = |source: &ReaderFixture, request: &MusubiStorageCoordinationRequestV1| {
+            storage_authorization_tests::dispatch(
+                Box::new(FinalizedRegistrationCheckedStorageBackendV1::new(
+                    source.reader.clone(),
+                    Box::new(MutationProbe(Arc::clone(&calls))),
+                )),
+                request,
+            )
+        };
         let exact = request(&fixture);
         exact.validate().expect("canonical coordination request");
         assert_eq!(checked.verify_current_registration(&exact), Ok(()));
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         assert_eq!(
-            checked.coordinate_storage(&exact),
+            dispatch(&fixture, &exact),
             Err(MusubiPublicationServiceBackendErrorV1::Retryable),
         );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -1497,19 +1532,31 @@ pub(crate) mod tests {
         let mut wrong_transaction = exact.clone();
         wrong_transaction.finalized_registration.transaction_hash = [0x91; 32];
         assert_eq!(
-            checked.coordinate_storage(&wrong_transaction),
+            checked.verify_current_registration(&wrong_transaction),
+            Err(MusubiPublicationServiceBackendErrorV1::Permanent),
+        );
+        assert_eq!(
+            dispatch(&fixture, &wrong_transaction),
             Err(MusubiPublicationServiceBackendErrorV1::Permanent),
         );
         let mut wrong_policy = exact.clone();
         wrong_policy.expected_policy_revision += 1;
         assert_eq!(
-            checked.coordinate_storage(&wrong_policy),
+            checked.verify_current_registration(&wrong_policy),
+            Err(MusubiPublicationServiceBackendErrorV1::Permanent),
+        );
+        assert_eq!(
+            dispatch(&fixture, &wrong_policy),
             Err(MusubiPublicationServiceBackendErrorV1::Permanent),
         );
         let mut foreign_network = exact.clone();
         foreign_network.network_id = network_id(0x67);
         assert_eq!(
-            checked.coordinate_storage(&foreign_network),
+            checked.verify_current_registration(&foreign_network),
+            Err(MusubiPublicationServiceBackendErrorV1::Permanent),
+        );
+        assert_eq!(
+            dispatch(&fixture, &foreign_network),
             Err(MusubiPublicationServiceBackendErrorV1::Permanent),
         );
         let mut locally_ahead = exact.clone();
@@ -1518,18 +1565,26 @@ pub(crate) mod tests {
             .snapshot
             .finalized_height += 1;
         assert_eq!(
-            checked.coordinate_storage(&locally_ahead),
+            checked.verify_current_registration(&locally_ahead),
+            Err(MusubiPublicationServiceBackendErrorV1::Retryable),
+        );
+        assert_eq!(
+            dispatch(&fixture, &locally_ahead),
             Err(MusubiPublicationServiceBackendErrorV1::Retryable),
         );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
         let uncertified = reader_fixture_with_finality(false);
-        let mut checked_uncertified = FinalizedRegistrationCheckedStorageBackendV1::new(
+        let checked_uncertified = FinalizedRegistrationCheckedStorageBackendV1::new(
             uncertified.reader.clone(),
             Box::new(MutationProbe(Arc::clone(&calls))),
         );
         assert_eq!(
-            checked_uncertified.coordinate_storage(&request(&uncertified)),
+            checked_uncertified.verify_current_registration(&request(&uncertified)),
+            Err(MusubiPublicationServiceBackendErrorV1::Permanent),
+        );
+        assert_eq!(
+            dispatch(&uncertified, &request(&uncertified)),
             Err(MusubiPublicationServiceBackendErrorV1::Permanent),
         );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -1804,15 +1859,16 @@ pub(crate) mod tests {
             invalid()
         );
     }
-    #[cfg(unix)]
     #[test]
     fn finalized_seed_capability_reads_exact_car_once_per_bounded_lease() {
         use super::super::{
-            seed_staging::{MusubiSeedStagingBackendV1, MusubiSeedStagingErrorV1, tests::fixture},
+            MusubiPublicationFinalizedSeedReadErrorV1,
             shared_seed_staging::SharedSeedStagingBackendV1,
         };
-        use iroha_musubi_service::MusubiSeedIngressBackendV1;
-        use std::{fs, os::unix::fs::PermissionsExt as _};
+        use iroha_musubi_service::{
+            MusubiSeedIngressBackendV1, MusubiSeedStagingBackendV1, MusubiSeedStagingErrorV1,
+            seed_test_support::fixture,
+        };
 
         let (seed_binding, commitment, plan, car) = fixture();
         let fixture = reader_fixture_with_finality_using(
@@ -1820,14 +1876,12 @@ pub(crate) mod tests {
             Some((commitment, seed_binding.semantic_release_manifest_digest)),
         );
         let binding = &fixture.archive.staging_receipt.payload.binding;
-        let root = tempfile::tempdir().expect("private seed fixture root");
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
-            .expect("owner-only seed directory");
-        let seed_root = root
-            .path()
-            .canonicalize()
-            .expect("canonical seed fixture root");
-        let seed = MusubiSeedStagingBackendV1::open(
+        let workspace = tempfile::tempdir().expect("seed fixture workspace");
+        let directory =
+            iroha_fs::PrivateDirectory::open_or_create(workspace.path().join("private"))
+                .expect("native private seed fixture root");
+        let seed_root = directory.path().to_owned();
+        let seed = MusubiSeedStagingBackendV1::initialize(
             &seed_root,
             binding.seed_provider,
             2,
@@ -1861,8 +1915,23 @@ pub(crate) mod tests {
             capability
                 .read_finalized_seed(&wrong_transaction)
                 .unwrap_err(),
-            MusubiSeedStagingErrorV1::Invalid,
+            MusubiPublicationFinalizedSeedReadErrorV1::Finality(
+                MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Invalid
+            ),
         );
+        let budget = fixture.state.ivm_execution_budget();
+        let held = budget
+            .try_reserve_bytes(budget.limit_bytes().saturating_sub(budget.reserved_bytes()))
+            .unwrap();
+        let error = capability.read_finalized_seed(&fixture.query).unwrap_err();
+        let MusubiPublicationFinalizedSeedReadErrorV1::Finality(
+            MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Deferred(ref original),
+        ) = error
+        else {
+            panic!("original native seed-read refusal was lost: {error:?}")
+        };
+        assert!(original.allocation_refusal().is_some());
+        drop(held);
         let lease = capability
             .read_finalized_seed(&fixture.query)
             .expect("exact finalized registration opens exact staged bytes");
@@ -1870,7 +1939,7 @@ pub(crate) mod tests {
         assert_eq!(lease.car(), car.as_slice());
         assert_eq!(
             capability.read_finalized_seed(&fixture.query).unwrap_err(),
-            MusubiSeedStagingErrorV1::Capacity,
+            MusubiPublicationFinalizedSeedReadErrorV1::Custody(MusubiSeedStagingErrorV1::Capacity),
         );
         drop(lease);
         let replay = capability
@@ -1890,7 +1959,9 @@ pub(crate) mod tests {
         );
         assert_eq!(
             capability.read_finalized_seed(&fixture.query).unwrap_err(),
-            MusubiSeedStagingErrorV1::Invalid,
+            MusubiPublicationFinalizedSeedReadErrorV1::Finality(
+                MusubiPublicationFinalizedArchiveRegistrationReadErrorV1::Invalid
+            ),
             "a completed seed lease must not authorize a substituted current registration",
         );
         drop(ingress);

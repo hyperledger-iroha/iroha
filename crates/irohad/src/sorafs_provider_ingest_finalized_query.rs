@@ -1580,15 +1580,18 @@ fn map_archive_page(
         {
             return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
         }
-        let completion_authority = match (row.expected_owner.as_ref(), row.expected_signer_policy) {
-            (Some(owner), Some(policy)) if policy.is_valid() => Some(
-                ProviderIngestCompletionAuthorityV1::new(owner.clone(), policy),
-            ),
-            (_, None) => None,
-            _ => {
-                return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
-            }
-        };
+        let completion_authority =
+            match (row.expected_owner.as_ref(), row.expected_authority.as_ref()) {
+                (Some(owner), Some(authority))
+                    if authority.is_valid() && &authority.provider_owner == owner =>
+                {
+                    Some(authority.clone())
+                }
+                (_, None) => None,
+                _ => {
+                    return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
+                }
+            };
         let musubi_archive = row
             .musubi_archive
             .clone()
@@ -1687,13 +1690,16 @@ fn map_archive_capture_source_page(
         {
             return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
         }
-        let completion_authority = match (row.expected_owner.as_ref(), row.expected_signer_policy) {
-            (Some(owner), Some(policy)) if policy.is_valid() => Some(
-                ProviderIngestCompletionAuthorityV1::new(owner.clone(), policy),
-            ),
-            (_, None) => None,
-            _ => return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected),
-        };
+        let completion_authority =
+            match (row.expected_owner.as_ref(), row.expected_authority.as_ref()) {
+                (Some(owner), Some(authority))
+                    if authority.is_valid() && &authority.provider_owner == owner =>
+                {
+                    Some(authority.clone())
+                }
+                (_, None) => None,
+                _ => return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected),
+            };
         rows.push(
             ProviderIngestCompletedMusubiCaptureSourceRowV1::from_projected_fields(
                 PinManifestFinalizedRecordV1 {
@@ -1890,6 +1896,7 @@ mod tests {
             completion_epoch: 7,
             assignment_revision: 1,
             completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                (completed_by).clone(),
                 completed_by,
                 ProviderIngestCompletionSignerPolicyV1 {
                     policy_id: [0x91; 32],
@@ -1958,7 +1965,7 @@ mod tests {
             rows: vec![ProviderIngestFinalizedArchiveAssignmentV1 {
                 provider_id,
                 expected_owner: None,
-                expected_signer_policy: None,
+                expected_authority: None,
                 expected_assignment_revision: 1,
                 finalized_anchor: ProviderIngestFinalizedAnchorV1 {
                     height: key.height,
@@ -2303,7 +2310,7 @@ mod tests {
                 providers: vec![ProviderIngestFinalizedProviderProjectionV1 {
                     provider_id,
                     expected_owner: None,
-                    expected_signer_policy: None,
+                    expected_authority: None,
                     orders: vec![
                         replay_safe_archived_order(0x61, provider_id),
                         replay_safe_archived_order(0x62, provider_id),
@@ -2479,7 +2486,7 @@ mod tests {
                 providers: vec![ProviderIngestFinalizedProviderProjectionV1 {
                     provider_id,
                     expected_owner: None,
-                    expected_signer_policy: None,
+                    expected_authority: None,
                     orders: vec![
                         // A continuation must name an actual immutable predecessor.
                         replay_safe_archived_order(0x01, provider_id),
@@ -2591,7 +2598,7 @@ mod tests {
             providers: vec![ProviderIngestFinalizedProviderProjectionV1 {
                 provider_id,
                 expected_owner: None,
-                expected_signer_policy: None,
+                expected_authority: None,
                 // Every previously pending order remains in immutable committed history.
                 orders: vec![
                     replay_safe_archived_order(0x01, provider_id),

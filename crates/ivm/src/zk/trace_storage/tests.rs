@@ -56,12 +56,24 @@ fn pc_copy_scope_refusal_and_unwind_preserve_the_original() {
     for pc in 1..=4 {
         log.record_reserved(pc);
     }
-    assert_eq!(log.prepare(0, None), Err(VMError::HostUnavailable));
+    assert_eq!(
+        log.prepare(0, None),
+        Err(VMError::ExecutionDeferred(
+            crate::error::ExecutionDeferral::TraceOwnerUnavailable
+        ))
+    );
     foreign.with_deferred_refund_notifications(|scope| {
-        assert_eq!(log.reset(Some(scope)), Err(VMError::HostUnavailable));
+        assert_eq!(
+            log.reset(Some(scope)),
+            Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::TraceOwnerUnavailable
+            ))
+        );
         assert!(matches!(
             log.try_clone_allocation(Some(scope)),
-            Err(VMError::HostUnavailable)
+            Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::TraceOwnerUnavailable
+            ))
         ));
     });
     let before = original.reserved_bytes();

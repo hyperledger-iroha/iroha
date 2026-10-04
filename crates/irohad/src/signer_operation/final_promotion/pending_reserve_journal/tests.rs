@@ -146,3 +146,40 @@ fn canonical_signed_frame_rejects_forged_authorization_proof() {
     let _: TransactionEntrypoint = norito::decode_canonical(&forged).unwrap();
     assert!(decode_signed_frame(&forged).is_err());
 }
+
+#[test]
+fn canonical_frame_capacity_is_local_and_invalid_signature_remains_unavailable() {
+    let key = KeyPair::try_from_seed(vec![0x37; 32], Algorithm::Ed25519).unwrap();
+    let network = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::prehashed([0x43; 32]),
+    ));
+    let mut builder = TransactionBuilder::new(
+        network,
+        AccountId::new(key.public_key().clone()),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "pending frame".to_owned())]);
+    builder.set_ttl(std::time::Duration::from_secs(60));
+    let signed = builder.try_sign(key.private_key()).unwrap();
+    let entry = TransactionEntrypoint::External(signed.clone());
+    let expected = norito::encode_canonical(&entry).unwrap();
+    assert_eq!(encode_signed_frame(&entry).unwrap(), expected);
+    let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
+    assert_eq!(
+        norito::core::with_decode_limits_scope(limits, || encode_signed_frame(&entry)),
+        Err(Error::LocalCapacity)
+    );
+    assert_eq!(entry, TransactionEntrypoint::External(signed.clone()));
+    assert_eq!(encode_signed_frame(&entry).unwrap(), expected);
+    let forged = TransactionBuilder::from_payload(signed.payload().clone())
+        .unwrap()
+        .build_with_signature(Signature::from_bytes(&[1; 64]));
+    assert_eq!(
+        encode_signed_frame(&TransactionEntrypoint::External(forged)),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(
+        decode_signed_frame(b"not a canonical signed frame").err(),
+        Some(Error::Unavailable)
+    );
+}

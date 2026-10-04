@@ -48,6 +48,16 @@ cargo build -p irohad_lib --release --no-default-features --lib
 
 This flag can be combined with the `--features` flag in order to precisely specify the feature set that you wish.
 
+### Standalone beacon preparation
+
+Every `iroha3d_taira beacon-bootstrap` command requires
+`--credential-max-memory-bytes <positive-bytes>` before the subcommand. Configure
+that explicit operation cap in the supervisor's launch arguments; the command
+uses one pool for authenticated session custody and verification scratch and
+preserves local capacity failures. It does not cap every raw DKG or encoding
+buffer. The existing [beacon bootstrap contract](BEACON_BOOTSTRAP.md) records the
+exact command and custody boundaries.
+
 ### Deployment runtime-provider launcher
 
 `irohad_lib` provides the `irohad` library target; the `irohad` package owns the thin executable launchers. A deployment-owned binary can use the same

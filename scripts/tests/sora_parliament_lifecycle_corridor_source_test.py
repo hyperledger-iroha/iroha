@@ -17,6 +17,7 @@ NO_RESULT_PATHS = ROOT / "integration_tests/tests/sora_parliament_no_result_path
 FAILURE_PATHS = ROOT / "integration_tests/tests/sora_parliament_failure_paths.rs"
 ENACTMENT = ROOT / "integration_tests/tests/sora_parliament_enactment.rs"
 SUPPORT = ROOT / "integration_tests/tests/sora_parliament_lifecycle_support.rs"
+NATIVE_FINALITY = ROOT / "integration_tests/tests/sora_parliament_finality.rs"
 PRIVATE_BALLOT_RETRY = ROOT / "integration_tests/tests/sora_parliament_private_ballot_retry.rs"
 USER_CONFIG = ROOT / "crates/iroha_config/src/parameters/user.rs"
 ACTUAL_CONFIG = ROOT / "crates/iroha_config/src/parameters/actual.rs"
@@ -322,6 +323,7 @@ def read_corridor_source() -> str:
             ENACTMENT.read_text(encoding="utf-8"),
             SUPPORT.read_text(encoding="utf-8"),
             PRIVATE_BALLOT_RETRY.read_text(encoding="utf-8"),
+            NATIVE_FINALITY.read_text(encoding="utf-8"),
         )
     )
 
@@ -380,18 +382,18 @@ SUCCESSOR_SEED_EQUALITY = (
     "assert_eq!(context.leader_seed, successor_seed);"
 )
 RETAINED_AUTHORITY_MARKERS = (
-    "assert_eq!(genesis_hash, trusted_network.into_genesis_hash());",
-    "BridgeFinalityVerifier::with_context(",
-    "verifier.verify(&genesis)?;",
-    "for height in 2..=second_boundary_height + 1 {",
-    "client.get_next_bridge_finality_proof(",
-    "&mut verifier,",
-    "assert_eq!(context.kagemusha_mint_finality_authority, authority);",
+    "finality::visit_certified_prefix(\n"
+    "        &network,\n"
+    "        &client,\n"
+    "        second_boundary_height + 1,\n"
+    "        move |proof, verified| {",
+    "original_authority = Some(context.authority.clone());",
+    "assert_eq!(&context.authority, original_authority.as_ref().unwrap());",
     "assert_eq!(context.da_layout, recommended_data_availability_layout());",
-    "assert_eq!(context.quorum.min_signers, 3);",
-    "assert_eq!(proof.finality_artifact.commit_qc.signers.len(), 3);",
+    "assert_eq!(context.committee.len(), VALIDATOR_COUNT);",
+    "assert_eq!(context.authorization.epoch, expected_epoch);",
     "assert_eq!(context.leader_seed, expected_seed);",
-    "assert_eq!(context.epoch_end_height, expected_end);",
+    "assert_eq!(context.authorization.last_height, expected_end);",
     "KagemushaMintFinalityEpochDecisionV1::RetainAndCancel",
     "KagemushaMintFinalityEpochDecisionV1::Retain",
     "assert_eq!(authorization.transition_id, [0; 32]);",
@@ -400,6 +402,31 @@ RETAINED_AUTHORITY_MARKERS = (
     "transcript_hash: expected_transcript,",
     "assert_eq!(successor_pulse.session_id, beacon_record.session.session_id);",
     "assert_eq!(successor_pulse.session_id, pulse.session_id);",
+)
+NATIVE_FINALITY_MARKERS = (
+    "letprovisioned=network.native_genesis_provisioning_bundle()?;",
+    "letgenesis=iroha_genesis::validate_prepared_genesis_bundle("
+    "&provisioned.signed_wire,&manifest,&provisioned.public_key,provisioned.block_hash,)?;",
+    "ifiroha_data_model::NetworkId::from_genesis_hash(genesis.expected_hash())"
+    "!=network.network_id()||genesis.consensus_metadata().sumeragi_context.da_layout"
+    "!=recommended_data_availability_layout(){returnErr(eyre!("
+    '"ParliamentsignedgenesisnetworkormandatoryRS16layoutdiffers"));}',
+    "ifvalidators.len()!=VALIDATOR_COUNT{returnErr(eyre!("
+    '"Parliamentrequiresexactlyfoursigned-genesisvalidators"));}',
+    "letmutverifier=SumeragiFinalityVerifier::new("
+    "genesis.block(),&network.chain_id().to_string(),validators,)?;",
+    "fornextin1..=height{",
+    "letproof=client.get_sumeragi_finality_proof(NonZeroU64::new(next).unwrap())?;",
+    "letverified=verifier.verify(&proof)?;",
+    "ifproof.committee.len()!=VALIDATOR_COUNT||members!=expected_members{returnErr(eyre!("
+    '"certifiedParliamentcommitteediffersfromtheindependentfour-validatorroster"));}',
+    "ifnext>1{",
+    "letqc:iroha_sumeragi::message::Qc=norito::decode_canonical(certificate.commit_qc())?;",
+    "ifqc.signers.count_ones()!=3{returnErr(eyre!("
+    '"Parliamentsuccessorrequiresexactlythreeequalvalidatorvotes"));}',
+    "ifInstant::now()>=deadline{returnErr(eyre!("
+    '"Parliamentcontiguousfinalityverificationexceededitsdeadline"));}',
+    "visit(&proof,&verified)?;",
 )
 POSITIVE_BEACON_MODES = """constPOSITIVE_BEACON_SIGNER_MODES:[ParliamentBeaconSignerMode;VALIDATOR_COUNT]=[ParliamentBeaconSignerMode::Valid,ParliamentBeaconSignerMode::Valid,ParliamentBeaconSignerMode::Absent,ParliamentBeaconSignerMode::Invalid,];"""
 FAIL_CLOSED_BEACON_MODES = """constFAIL_CLOSED_BEACON_SIGNER_MODES:[ParliamentBeaconSignerMode;VALIDATOR_COUNT]=[ParliamentBeaconSignerMode::Valid,ParliamentBeaconSignerMode::Absent,ParliamentBeaconSignerMode::Absent,ParliamentBeaconSignerMode::Invalid,];"""
@@ -1002,18 +1029,19 @@ def validate_mandatory_npos_boundary(source: str) -> None:
         "global_threshold_beacon_npos_successor_seed_v1(",
         BOUNDARY_PROGRESSION,
         SUCCESSOR_PROGRESSION,
-        "assert_eq!(context.epoch, successor_epoch);",
+        "assert_eq!(context.authorization.epoch, successor_epoch);",
         SUCCESSOR_SEED_EQUALITY,
         "let successor_pulse_height = boundary_height",
         "&validated_beacon_session",
         "let second_successor_epoch = 2;",
-        "assert_eq!(context.epoch, second_successor_epoch);",
+        "assert_eq!(context.authorization.epoch, second_successor_epoch);",
         "assert_eq!(context.leader_seed, second_successor_seed);",
         "!status.is_halted()",
         *RETAINED_AUTHORITY_MARKERS,
     )
     for marker in required:
         require(marker in test, f"mandatory NPoS beacon test lost `{marker}`")
+    validate_native_finality_prefix(source)
     require(
         test.count("verify_finalized_global_threshold_beacon_pulse_v1(") == 2,
         "mandatory NPoS beacon test must independently verify both retained-session pulses",
@@ -1036,6 +1064,24 @@ def validate_mandatory_npos_boundary(source: str) -> None:
     )
 
 
+def validate_native_finality_prefix(source: str) -> None:
+    """Follow the connected native prefix helper to signed genesis and exact quorum."""
+
+    require(
+        '#[path = "sora_parliament_finality.rs"]\npub(super) mod finality;' in source,
+        "Parliament corridor lost its native finality helper registration",
+    )
+    helpers = list(re.finditer(
+        r"(?ms)^pub\(super\) async fn visit_certified_prefix\(.*?^\}\n", source,
+    ))
+    require(len(helpers) == 1, "Parliament native prefix helper must have one owner")
+    body = compact(re.sub(r"/\*.*?\*/|//[^\n]*", "", helpers[0].group(0), flags=re.S))
+    for marker in NATIVE_FINALITY_MARKERS:
+        require(marker in body, f"Parliament native finality lost `{marker}`")
+    positions = [body.find(marker) for marker in NATIVE_FINALITY_MARKERS]
+    require(positions == sorted(positions), "native prefix must authenticate before observation")
+
+
 def validate_beacon_rotation_fixture(source: str) -> None:
     """Require two complete feature-only DKG fixtures and exact-session dispatch."""
 
@@ -1045,11 +1091,11 @@ def validate_beacon_rotation_fixture(source: str) -> None:
     )
     for marker in (
         "deterministic_parliament_beacon_successor_key_record_v1",
-        "deterministic_fixture_v1(network_id, ordered_roster, true)",
+        "deterministic_fixture_v1(network_id, ordered_roster, true, budget)",
         "let initial_fixture =",
-        "deterministic_fixture_v1(self.network_id, &self.ordered_roster, false)",
+        "deterministic_fixture_v1(self.network_id, &self.ordered_roster, false, &self.budget)",
         "let successor_fixture =",
-        "deterministic_fixture_v1(self.network_id, &self.ordered_roster, true)",
+        "deterministic_fixture_v1(self.network_id, &self.ordered_roster, true, &self.budget)",
         "if successor_fixture.session.record() != session.record()",
         "exact_seat_signer_supports_one_domain_separated_successor_session",
         "assert_ne!(initial.session.session_id, successor.session.session_id);",
@@ -1672,8 +1718,8 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
         source = BEACON_TEST_SIGNER.read_text(encoding="utf-8")
         for marker in (
             "TEST_SUCCESSOR_SESSION_ID_DOMAIN_V1",
-            "deterministic_fixture_v1(network_id, ordered_roster, true)",
-            "deterministic_fixture_v1(self.network_id, &self.ordered_roster, true)",
+            "deterministic_fixture_v1(network_id, ordered_roster, true, budget)",
+            "deterministic_fixture_v1(self.network_id, &self.ordered_roster, true, &self.budget)",
             "exact_seat_signer_supports_one_domain_separated_successor_session",
         ):
             with self.subTest(marker=marker), self.assertRaises(ContractError):
@@ -1736,7 +1782,7 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
                 corridor, "transcript_hash: expected_transcript,"
             ),
             "genesis identity check omitted": mutate_mandatory_npos_test(
-                corridor, "assert_eq!(genesis_hash, trusted_network.into_genesis_hash());"
+                corridor, "finality::visit_certified_prefix("
             ),
             "successor pulse not bound to retained session": mutate_mandatory_npos_test(
                 corridor,
@@ -1767,6 +1813,40 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
                 validate_mandatory_npos_boundary(
                     mutate_mandatory_npos_test(corridor, marker)
                 )
+
+    def test_native_finality_rejects_missing_or_disconnected_authentication(self) -> None:
+        """Genesis, source, committee, votes and deadline checks must precede the callback."""
+        corridor = read_corridor_source()
+        validate_mandatory_npos_boundary(corridor)
+        for marker in NATIVE_FINALITY_MARKERS:
+            with self.subTest(marker=marker), self.assertRaises(ContractError):
+                changed = mutate_marker(corridor, marker, owner="visit_certified_prefix")
+                validate_mandatory_npos_boundary(changed + "\n/* " + marker + " */\n")
+        with self.subTest(marker="disconnected module"), self.assertRaises(ContractError):
+            validate_mandatory_npos_boundary(corridor.replace(
+                '#[path = "sora_parliament_finality.rs"]\npub(super) mod finality;', "", 1,
+            ))
+
+    def test_native_finality_rejects_genesis_only_prefix_and_missing_rejections(self) -> None:
+        """A present predicate without its refusal cannot establish authentication."""
+        corridor = read_corridor_source()
+        validate_mandatory_npos_boundary(corridor)
+        for argument in ("&network", "&client", "second_boundary_height + 1"):
+            marker = RETAINED_AUTHORITY_MARKERS[0]
+            replacement = marker.replace(argument, "1" if argument.endswith(" + 1") else "&other")
+            with self.subTest(argument=argument), self.assertRaises(ContractError):
+                validate_mandatory_npos_boundary(
+                    mutate_mandatory_npos_test(corridor, marker, replacement)
+                )
+        for marker in NATIVE_FINALITY_MARKERS:
+            if "{returnErr(" not in marker:
+                continue
+            condition, rejection = marker.split("{", 1)
+            for replacement in (condition + "{}", condition + "{let_=" + rejection[6:]):
+                with self.subTest(marker=marker, replacement=replacement), self.assertRaises(ContractError):
+                    validate_mandatory_npos_boundary(
+                        mutate_marker(corridor, marker, replacement, owner="visit_certified_prefix")
+                    )
 
     def test_beacon_mode_profiles_reject_adversarial_mutations(self) -> None:
         corridor = read_corridor_source()

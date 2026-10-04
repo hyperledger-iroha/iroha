@@ -349,7 +349,7 @@ impl ProviderVrfPublicKeyV1 {
 pub struct EndpointAdmissionV1 {
     /// Advertised endpoint.
     pub endpoint: AdvertEndpoint,
-    /// Remote-attestation bundle tied to the endpoint.
+    /// Admitted transport certificate material tied to the endpoint.
     pub attestation: EndpointAttestationV1,
 }
 impl EndpointAdmissionV1 {
@@ -358,7 +358,7 @@ impl EndpointAdmissionV1 {
             return Err(EndpointAdmissionError::EmptyHostPattern);
         }
         let expected_kind = match self.endpoint.kind {
-            EndpointKind::Torii | EndpointKind::NoritoRpc => EndpointAttestationKind::Mtls,
+            EndpointKind::Torii | EndpointKind::NoritoRpc => EndpointAttestationKind::Tls,
             EndpointKind::Quic => EndpointAttestationKind::Quic,
         };
         if self.attestation.kind != expected_kind {
@@ -372,18 +372,25 @@ impl EndpointAdmissionV1 {
         Ok(())
     }
 }
-/// Supported endpoint attestation modes.
+/// Supported endpoint certificate-material kinds.
+///
+/// Signed admission authenticates the selected material. It does not establish a live
+/// TLS handshake, current endpoint reachability or client certificate authentication.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_manifest::provider_admission::EndpointAttestationKind")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
 pub enum EndpointAttestationKind {
-    /// X.509 certificate bundle validated via mTLS.
-    Mtls = 1,
+    /// X.509 server certificate material for TLS; client authentication is separate.
+    Tls = 1,
     /// QUIC + TLS 1.3 certificate report.
     Quic = 2,
 }
-/// Remote-attestation report for a provider endpoint.
+/// Certificate material and optional attestation evidence for a provider endpoint.
+///
+/// Structural validation checks this record's shape and validity interval. TLS clients
+/// must still validate their selected root, server name and certificate lifetime at use.
+/// This record grants no client authentication or current reachability guarantee.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_manifest::provider_admission::EndpointAttestationV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
@@ -1773,7 +1780,7 @@ mod tests {
         };
         let attestation = EndpointAttestationV1 {
             version: ENDPOINT_ATTESTATION_VERSION_V1,
-            kind: EndpointAttestationKind::Mtls,
+            kind: EndpointAttestationKind::Tls,
             attested_at: 1,
             expires_at: 1 + 86_400,
             leaf_certificate: vec![0x01, 0x02, 0x03],
@@ -1789,6 +1796,58 @@ mod tests {
             endpoint,
         )
     }
+    #[test]
+    fn tls_endpoint_material_has_one_canonical_kind_and_frame() {
+        assert_eq!(EndpointAttestationKind::Tls as u8, 1);
+        assert_eq!(EndpointAttestationKind::Quic as u8, 2);
+        for kind in [EndpointAttestationKind::Tls, EndpointAttestationKind::Quic] {
+            let frame = norito::encode_canonical(&kind).unwrap();
+            let decoded = norito::decode_from_bytes::<EndpointAttestationKind>(&frame).unwrap();
+            assert_eq!(decoded, kind);
+            assert_eq!(norito::encode_canonical(&decoded).unwrap(), frame);
+        }
+        // This is structural codec evidence, not a certificate or handshake fixture.
+        let (mut endpoint, _) = sample_endpoint();
+        endpoint.attestation.report.clear();
+        endpoint.validate().unwrap();
+        let frame = norito::encode_canonical(&endpoint).unwrap();
+        let decoded = norito::decode_from_bytes::<EndpointAdmissionV1>(&frame).unwrap();
+        assert_eq!(decoded, endpoint);
+        assert_eq!(decoded.attestation.kind, EndpointAttestationKind::Tls);
+        assert_eq!(norito::encode_canonical(&decoded).unwrap(), frame);
+    }
+
+    #[test]
+    fn endpoint_certificate_kind_must_match_selected_transport() {
+        for transport in [
+            EndpointKind::Torii,
+            EndpointKind::NoritoRpc,
+            EndpointKind::Quic,
+        ] {
+            let (mut endpoint, _) = sample_endpoint();
+            endpoint.endpoint.kind = transport;
+            let expected = match transport {
+                EndpointKind::Torii | EndpointKind::NoritoRpc => EndpointAttestationKind::Tls,
+                EndpointKind::Quic => EndpointAttestationKind::Quic,
+            };
+            endpoint.attestation.kind = expected;
+            endpoint.validate().unwrap();
+            let other = match expected {
+                EndpointAttestationKind::Tls => EndpointAttestationKind::Quic,
+                EndpointAttestationKind::Quic => EndpointAttestationKind::Tls,
+            };
+            endpoint.attestation.kind = other;
+            assert_eq!(
+                endpoint.validate(),
+                Err(EndpointAdmissionError::KindMismatch {
+                    endpoint: transport,
+                    attestation: other,
+                    expected,
+                })
+            );
+        }
+    }
+
     fn sample_capability() -> CapabilityTlv {
         CapabilityTlv {
             cap_type: CapabilityType::ToriiGateway,

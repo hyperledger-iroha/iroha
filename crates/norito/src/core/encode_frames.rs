@@ -84,7 +84,7 @@ pub(super) fn write_typed_payload_frame<T, P, W>(
 ) -> Result<(), Error>
 where
     T: NoritoSerialize,
-    P: NoritoSerialize,
+    P: super::SerializePayload + ?Sized,
     W: Write + ?Sized,
 {
     write_typed_payload_frame_with_prefix::<T, P, _, _>(value, writer, base_flags, |_, _| Ok(()))
@@ -98,7 +98,7 @@ fn write_typed_payload_frame_with_prefix<T, P, W, F>(
 ) -> Result<(), Error>
 where
     T: NoritoSerialize,
-    P: NoritoSerialize,
+    P: super::SerializePayload + ?Sized,
     W: Write + ?Sized,
     F: FnOnce(&mut W, usize) -> Result<(), Error>,
 {

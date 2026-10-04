@@ -99,7 +99,9 @@ fn execution_history_admits_each_actual_source_before_read() {
             .executed_block(NonZeroUsize::MIN, |_, _| {
                 attempts += 1;
                 if attempts == 2 {
-                    Err(iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded)
+                    Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                        ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                    ))
                 } else {
                     Ok(())
                 }

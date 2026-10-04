@@ -353,6 +353,7 @@ fn seed_ingress_binding(broker: AccountId) -> MusubiSeedIngressReceiptBindingV1 
 }
 fn provider_completion_authority(owner: AccountId) -> ProviderIngestCompletionAuthorityV1 {
     ProviderIngestCompletionAuthorityV1::new(
+        account(0x40),
         owner,
         ProviderIngestCompletionSignerPolicyV1 {
             policy_id: [0x21; 32],
@@ -2181,5 +2182,66 @@ fn parent_local_dependency_aliases_are_unique_across_wire_surfaces() {
     assert!(
         row.validate().is_err(),
         "resolver rows must not retain an ambiguous dependency alias"
+    );
+}
+
+#[test]
+fn provider_bundle_binding_uses_completion_signer_independently_of_owner() {
+    let binding = provider_bundle_binding(account(0x41));
+    assert_ne!(
+        binding.completed_by,
+        binding.completion_authority.provider_owner
+    );
+    assert_eq!(
+        binding.completed_by,
+        binding.completion_authority.completion_signer
+    );
+    binding.validate().unwrap();
+    let mut substituted = binding.clone();
+    substituted.completed_by = substituted.completion_authority.provider_owner.clone();
+    assert!(substituted.validate().is_err());
+    let mut substituted = binding;
+    substituted.completion_authority.completion_signer = account(0x42);
+    assert!(substituted.validate().is_err());
+}
+
+#[test]
+fn provider_bundle_attestation_signatures_use_independent_completion_controller() {
+    let signer = KeyPair::try_from_seed(vec![0x41; 32], Algorithm::Ed25519).unwrap();
+    let owner = KeyPair::try_from_seed(vec![0x40; 32], Algorithm::Ed25519).unwrap();
+    let binding = provider_bundle_binding(AccountId::new(signer.public_key().clone()));
+    assert_eq!(
+        binding.completion_authority.provider_owner,
+        AccountId::new(owner.public_key().clone())
+    );
+    assert_ne!(
+        binding.completion_authority.provider_owner,
+        binding.completion_authority.completion_signer
+    );
+    let payload = MusubiProviderBundleVerificationPayloadV1 {
+        version: MUSUBI_REGISTRY_VERSION_V1,
+        binding: binding.clone(),
+    };
+    let digest = payload.signing_hash();
+    let mut attestation = MusubiProviderBundleVerificationAttestationV1 {
+        payload,
+        approvals: vec![MusubiProviderBundleVerificationApprovalV1 {
+            public_key: signer.public_key().clone(),
+            signature: SignatureOf::try_from_hash(signer.private_key(), digest).unwrap(),
+        }],
+    };
+    attestation
+        .verify(&binding)
+        .expect("the dedicated completion key signs the exact retained bundle");
+    attestation.approvals = vec![MusubiProviderBundleVerificationApprovalV1 {
+        public_key: owner.public_key().clone(),
+        signature: SignatureOf::try_from_hash(owner.private_key(), digest).unwrap(),
+    }];
+    let error = attestation
+        .verify(&binding)
+        .expect_err("provider ownership cannot impersonate completion signing");
+    assert_eq!(
+        error.reason(),
+        "Musubi provider bundle approval is not a completion-signer key"
     );
 }

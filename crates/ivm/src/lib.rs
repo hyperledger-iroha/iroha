@@ -23,7 +23,7 @@
 //! generated `instruction` module provides detailed
 //! commentary on every opcode constant and is summarised in
 //! [`docs/opcodes.md`](../docs/opcodes.md).
-#[cfg(any(feature = "cuda", all(target_os = "macos", feature = "metal"), test))]
+#[cfg(any(feature = "cuda", test))]
 mod acceleration_cost;
 mod aes;
 pub mod analysis;

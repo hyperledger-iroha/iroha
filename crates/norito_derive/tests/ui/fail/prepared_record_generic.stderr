@@ -1,0 +1,5 @@
+error: decode_fields requires a closed named record without generic parameters
+ --> tests/ui/fail/prepared_record_generic.rs:4:15
+  |
+4 | struct Generic<T> {
+  |               ^^^

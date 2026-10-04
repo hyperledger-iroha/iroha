@@ -49,17 +49,7 @@ import org.hyperledger.iroha.android.client.MusubiModelsV1.PackageSelector;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.Page;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PageRequest;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PrereleaseIdentifier;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleAttestationDigest;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleAttestationKey;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleAttestationRecord;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleAttestationSetDigest;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleVerificationApproval;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleVerificationAttestation;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleVerificationBinding;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleVerificationPayload;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderCompletionAuthority;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderCompletionSignerPolicy;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderFinalizedAnchor;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.RegistrySnapshot;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ReleaseId;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ReleaseManifest;
@@ -220,12 +210,6 @@ final class MusubiJsonV1 {
             && (!storageFinalizedHeight.equals(snapshot.finalizedHeight())
                 || Arrays.equals(storageFinalizedHash, snapshot.finalizedBlockHash())),
         "Musubi exact release snapshot is inconsistent or not finalized");
-  }
-
-  static ProviderBundleAttestationRecord parseProviderBundleAttestation(
-      final byte[] payload) {
-    return parseProviderBundleAttestationRecord(
-        parse(payload, "Musubi provider-bundle-attestation response"), "response");
   }
 
   static ResolverIndexPage parseResolverPage(final byte[] payload) {
@@ -412,8 +396,6 @@ final class MusubiJsonV1 {
         final Map<String, Object> root = exactObject(value, "request", keys("release"));
         return new ExactReleaseQuery(parseRelease(root.get("release"), "request.release"));
       }
-      case MusubiToriiClientV1.PROVIDER_BUNDLE_ATTESTATION_PATH:
-        return parseProviderBundleAttestationKey(value, "request");
       case MusubiToriiClientV1.RESOLVER_INDEX_PATH: {
         final Map<String, Object> root =
             exactObject(value, "request", keys("package", "requirement", "page"));
@@ -478,8 +460,6 @@ final class MusubiJsonV1 {
     switch (path) {
       case MusubiToriiClientV1.EXACT_PACKAGE_PATH: return parseExactPackage(payload);
       case MusubiToriiClientV1.EXACT_RELEASE_PATH: return parseExactRelease(payload);
-      case MusubiToriiClientV1.PROVIDER_BUNDLE_ATTESTATION_PATH:
-        return parseProviderBundleAttestation(payload);
       case MusubiToriiClientV1.RESOLVER_INDEX_PATH: return parseResolverPage(payload);
       case MusubiToriiClientV1.VERSIONS_PATH: return parseVersionPage(payload);
       case MusubiToriiClientV1.MAINTAINERS_PATH: return parseMaintainerPage(payload);
@@ -1145,122 +1125,6 @@ final class MusubiJsonV1 {
               string(approval.get("signature"), approvalField + ".signature")));
     }
     return new SeedIngressReceipt(typedPayload, approvals);
-  }
-
-  private static ProviderBundleAttestationKey parseProviderBundleAttestationKey(
-      final Object value, final String field) {
-    final Map<String, Object> root =
-        exactObject(
-            value,
-            field,
-            keys("archive_id", "replication_order", "provider_id"));
-    return new ProviderBundleAttestationKey(
-        digest(root.get("archive_id"), field + ".archive_id"),
-        digest(root.get("replication_order"), field + ".replication_order"),
-        newtypeText(root.get("provider_id"), field + ".provider_id"));
-  }
-
-  private static ProviderBundleAttestationRecord parseProviderBundleAttestationRecord(
-      final Object value, final String field) {
-    final Map<String, Object> root =
-        exactObject(
-            value,
-            field,
-            keys(
-                "key", "attestation_digest", "attestation", "registered_by",
-                "registered_at_height"));
-    return new ProviderBundleAttestationRecord(
-        parseProviderBundleAttestationKey(root.get("key"), field + ".key"),
-        ProviderBundleAttestationDigest.fromBytes(
-            digest(root.get("attestation_digest"), field + ".attestation_digest").bytes()),
-        parseProviderBundleAttestation(root.get("attestation"), field + ".attestation"),
-        string(root.get("registered_by"), field + ".registered_by"),
-        nonZeroU64(root.get("registered_at_height"), field + ".registered_at_height"));
-  }
-
-  private static ProviderBundleVerificationAttestation parseProviderBundleAttestation(
-      final Object value, final String field) {
-    final Map<String, Object> root = exactObject(value, field, keys("payload", "approvals"));
-    final Map<String, Object> payload =
-        exactObject(root.get("payload"), field + ".payload", keys("version", "binding"));
-    require(
-        u8(payload.get("version"), field + ".payload.version") == 1,
-        field + ".payload.version is unsupported in Musubi V1");
-    final String bindingField = field + ".payload.binding";
-    final Map<String, Object> binding =
-        exactObject(
-            payload.get("binding"),
-            bindingField,
-            keys(
-                "network_id", "provider_id", "completed_by",
-                "completion_authority", "replication_order", "assignment_revision",
-                "completion_epoch", "finalized_anchor", "archive_id", "bundle_digest",
-                "descriptor_digest", "semantic_release_manifest_digest",
-                "verification_lock_digest", "source_tree_digest"));
-    final String authorityField = bindingField + ".completion_authority";
-    final Map<String, Object> authority =
-        exactObject(
-            binding.get("completion_authority"),
-            authorityField,
-            keys("provider_owner", "signer_policy"));
-    final String signerField = authorityField + ".signer_policy";
-    final Map<String, Object> signer =
-        exactObject(
-            authority.get("signer_policy"),
-            signerField,
-            keys("policy_id", "revision", "predecessor_digest", "policy_digest"));
-    final String anchorField = bindingField + ".finalized_anchor";
-    final Map<String, Object> anchor =
-        exactObject(
-            binding.get("finalized_anchor"),
-            anchorField,
-            keys("height", "block_hash"));
-    final ProviderBundleVerificationBinding typedBinding =
-        new ProviderBundleVerificationBinding(
-            NetworkId.parse(string(binding.get("network_id"), bindingField + ".network_id")),
-            newtypeText(binding.get("provider_id"), bindingField + ".provider_id"),
-            string(binding.get("completed_by"), bindingField + ".completed_by"),
-            new ProviderCompletionAuthority(
-                string(authority.get("provider_owner"), authorityField + ".provider_owner"),
-                new ProviderCompletionSignerPolicy(
-                    fixedBytes(signer.get("policy_id"), signerField + ".policy_id"),
-                    nonZeroU64(signer.get("revision"), signerField + ".revision"),
-                    signer.get("predecessor_digest") == null
-                        ? null
-                        : fixedBytes(
-                            signer.get("predecessor_digest"),
-                            signerField + ".predecessor_digest"),
-                    fixedBytes(signer.get("policy_digest"), signerField + ".policy_digest"))),
-            digest(binding.get("replication_order"), bindingField + ".replication_order"),
-            nonZeroU64(binding.get("assignment_revision"), bindingField + ".assignment_revision"),
-            nonZeroU64(binding.get("completion_epoch"), bindingField + ".completion_epoch"),
-            new ProviderFinalizedAnchor(
-                nonZeroU64(anchor.get("height"), anchorField + ".height"),
-                fixedBytes(anchor.get("block_hash"), anchorField + ".block_hash")),
-            digest(binding.get("archive_id"), bindingField + ".archive_id"),
-            digest(binding.get("bundle_digest"), bindingField + ".bundle_digest"),
-            digest(binding.get("descriptor_digest"), bindingField + ".descriptor_digest"),
-            digest(
-                binding.get("semantic_release_manifest_digest"),
-                bindingField + ".semantic_release_manifest_digest"),
-            digest(
-                binding.get("verification_lock_digest"),
-                bindingField + ".verification_lock_digest"),
-            digest(binding.get("source_tree_digest"), bindingField + ".source_tree_digest"));
-    final List<Object> rawApprovals = list(root.get("approvals"), field + ".approvals");
-    final List<ProviderBundleVerificationApproval> approvals = new ArrayList<>();
-    for (int index = 0; index < rawApprovals.size(); index++) {
-      final String approvalField = field + ".approvals[" + index + "]";
-      final Map<String, Object> approval =
-          exactObject(
-              rawApprovals.get(index), approvalField, keys("public_key", "signature"));
-      approvals.add(
-          new ProviderBundleVerificationApproval(
-              string(approval.get("public_key"), approvalField + ".public_key"),
-              string(approval.get("signature"), approvalField + ".signature")));
-    }
-    return new ProviderBundleVerificationAttestation(
-        new ProviderBundleVerificationPayload(typedBinding), approvals);
   }
 
   private static AliasRecord parseAliasRecord(final Object value, final String field) {

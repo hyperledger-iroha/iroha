@@ -288,7 +288,9 @@ pub enum SignerPurposeBindingV1 {
         /// Admitted provider whose completed bundles may be approved.
         provider_id: [u8; 32],
         /// Complete canonical provider-owner account identity, including its controller.
-        owner_account_id: Vec<u8>,
+        provider_owner_account_id: Vec<u8>,
+        /// Complete canonical completion-signing account, including its controller.
+        completion_signer_account_id: Vec<u8>,
         /// Stable governed signing-policy identity.
         policy_id: [u8; 32],
         /// Monotonic governed policy revision.
@@ -323,7 +325,8 @@ impl SignerPurposeBindingV1 {
                 Self::MusubiProviderAttestation {
                     network_id,
                     provider_id,
-                    owner_account_id,
+                    provider_owner_account_id,
+                    completion_signer_account_id,
                     policy_id,
                     policy_revision,
                     predecessor_digest,
@@ -337,8 +340,10 @@ impl SignerPurposeBindingV1 {
                 };
                 network_id[31] & 1 == 1
                     && *provider_id != [0; 32]
-                    && !owner_account_id.is_empty()
-                    && owner_account_id.len() <= 8 * 1024
+                    && !provider_owner_account_id.is_empty()
+                    && provider_owner_account_id.len() <= 8 * 1024
+                    && !completion_signer_account_id.is_empty()
+                    && completion_signer_account_id.len() <= 8 * 1024
                     && *policy_id != [0; 32]
                     && *policy_digest != [0; 32]
                     && predecessor_valid
@@ -905,7 +910,8 @@ mod musubi_purpose_tests {
         let binding = SignerPurposeBindingV1::MusubiProviderAttestation {
             network_id: [1; 32],
             provider_id: [2; 32],
-            owner_account_id: vec![3; 32],
+            provider_owner_account_id: vec![3; 32],
+            completion_signer_account_id: vec![7; 32],
             policy_id: [4; 32],
             policy_revision: 2,
             predecessor_digest: Some([5; 32]),
@@ -918,12 +924,13 @@ mod musubi_purpose_tests {
             norito::decode_canonical::<SignerPurposeBindingV1>(&bytes).unwrap(),
             binding
         );
-        for index in 0..7 {
+        for index in 0..10 {
             let mut altered = binding.clone();
             let SignerPurposeBindingV1::MusubiProviderAttestation {
                 network_id,
                 provider_id,
-                owner_account_id,
+                provider_owner_account_id,
+                completion_signer_account_id,
                 policy_id,
                 policy_revision,
                 predecessor_digest,
@@ -935,11 +942,14 @@ mod musubi_purpose_tests {
             match index {
                 0 => *network_id = [0; 32],
                 1 => *provider_id = [0; 32],
-                2 => owner_account_id.clear(),
+                2 => provider_owner_account_id.clear(),
                 3 => *policy_id = [0; 32],
                 4 => *policy_revision = 1,
                 5 => *predecessor_digest = None,
-                _ => *policy_digest = [0; 32],
+                6 => *policy_digest = [0; 32],
+                7 => completion_signer_account_id.clear(),
+                8 => *completion_signer_account_id = vec![7; 8 * 1024 + 1],
+                _ => *provider_owner_account_id = vec![3; 8 * 1024 + 1],
             }
             assert!(!altered.validates_role(role));
         }

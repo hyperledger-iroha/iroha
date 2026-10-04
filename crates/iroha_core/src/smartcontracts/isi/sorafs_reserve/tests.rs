@@ -949,7 +949,7 @@ fn committed_record_queries_enforce_limits_budgets_and_corruption_checks() {
                 updated_at_unix: NOW + 1,
             };
             transaction.world.smart_contract_state.insert(
-                provider_key(provider_id),
+                reserve_provider_key(provider_id),
                 encode_state(&account, "maximum reserve provider page")
                     .expect("encode provider account"),
             );
@@ -1008,7 +1008,7 @@ fn committed_record_queries_enforce_limits_budgets_and_corruption_checks() {
         };
         account.terms.provider_id = ProviderId::new([0x22; 32]);
         transaction.world.smart_contract_state.insert(
-            provider_key(ProviderId::new([0x21; 32])),
+            reserve_provider_key(ProviderId::new([0x21; 32])),
             encode_state(&account, "mismatched reserve provider")
                 .expect("encode mismatched provider"),
         );
@@ -1028,7 +1028,7 @@ fn committed_record_queries_enforce_limits_budgets_and_corruption_checks() {
         let mut block = oversized_record.block(header.clone());
         let mut transaction = block.transaction();
         transaction.world.smart_contract_state.insert(
-            provider_key(ProviderId::new([0x31; 32])),
+            reserve_provider_key(ProviderId::new([0x31; 32])),
             vec![0xFF; RESERVE_QUERY_MAX_RECORD_BYTES_V1 + 1],
         );
         transaction.apply();
@@ -1322,7 +1322,7 @@ fn provider_event_projection_uses_exact_authoritative_after_state() {
     transaction
         .world
         .smart_contract_state
-        .remove(provider_key(PROVIDER_ID));
+        .remove(reserve_provider_key(PROVIDER_ID));
     assert!(matches!(
         emit_reserve_event(
             &mut transaction,
@@ -1541,6 +1541,37 @@ fn committed_event_queries_fail_closed_on_corruption_and_resource_exhaustion() {
         Err(QueryExecutionFail::Conversion(message)) if message.contains("probe key")
     ));
 }
+#[test]
+fn initial_policy_activation_preserves_adjacent_user_state() {
+    let governance = account(&keypair(0x91));
+    let provider = account(&keypair(0x92));
+    let custody = account(&keypair(0x93));
+    let treasury = account(&keypair(0x94));
+    let mut state = state_fixture(&governance, &provider, &custody, &treasury);
+    let ordinary: StatePath = "sorafs_reservex_state_v1".parse().unwrap();
+    state
+        .world
+        .smart_contract_state
+        .insert(ordinary.clone(), vec![7]);
+    let selected = policy(1, None, custody, treasury, &governance);
+    transact(&mut state, 1, NOW, |transaction| {
+        SetSorafsReservePolicy::new(selected.clone()).execute(&governance, transaction)
+    })
+    .expect("native authorized policy activation retains its own write authority");
+    let view = state.view();
+    assert_eq!(
+        view.world().smart_contract_state().get(&ordinary),
+        Some(&vec![7])
+    );
+    assert_eq!(read_policy(view.world()).unwrap().unwrap().policy, selected);
+    assert!(
+        view.world()
+            .smart_contract_state()
+            .get(&event_key(1))
+            .is_some()
+    );
+}
+
 #[test]
 fn initial_policy_activation_rejects_a_nonempty_reserve_namespace_atomically() {
     let governance = account(&keypair(0x91));

@@ -261,7 +261,7 @@ impl Client {
             Self::decode_canonical_norito_response(
                 &response,
                 SUMERAGI_FINALITY_RESPONSE_MAX_BYTES,
-                "Failed to get current genesis readiness",
+                "sumeragi.genesis_readiness.read",
             )?;
         attestation.verify()?;
         let body = &attestation.body;
@@ -332,7 +332,7 @@ impl Client {
             Self::decode_canonical_norito_response(
                 &response,
                 SUMERAGI_FINALITY_RESPONSE_MAX_BYTES,
-                "Failed to get current finality attestation",
+                "sumeragi.finality_attestation.read",
             )?;
         attestation.verify()?;
         if attestation.body.challenge != challenge
@@ -371,7 +371,7 @@ impl Client {
             Self::decode_canonical_norito_response(
                 &response,
                 SUMERAGI_FINALITY_RESPONSE_MAX_BYTES,
-                "Failed to get current finality proof",
+                "sumeragi.finality_proof.read",
             )?;
         if proof.height() != height.get() {
             return Err(eyre!(
@@ -615,7 +615,7 @@ impl Client {
             Self::decode_canonical_norito_response(
                 &response,
                 MAX,
-                "FI current World original unavailable",
+                "kagemusha.authority_state.read",
             )?;
         original.attestation.verify()?;
         let body = &original.attestation.body;

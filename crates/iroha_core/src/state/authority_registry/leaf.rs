@@ -216,6 +216,10 @@ fn fold_schema(accumulator: Hash, field: &Field, key: Schema, value: Schema) -> 
     ])
 }
 
+#[cfg(test)]
+#[path = "leaf/overflow_pause.rs"]
+pub(in crate::state) mod overflow_pause;
+
 struct BoundedWriter<'a> {
     inner: &'a mut dyn Write,
     remaining: usize,
@@ -226,6 +230,8 @@ impl Write for BoundedWriter<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         if *self.exceeded || bytes.len() > self.remaining {
             *self.exceeded = true;
+            #[cfg(test)]
+            overflow_pause::observe_overflow();
             return Err(io::ErrorKind::InvalidData.into());
         }
         let written = self.inner.write(bytes)?;

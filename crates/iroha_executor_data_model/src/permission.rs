@@ -1074,9 +1074,13 @@ pub mod sorafs {
         pub struct CanIssueSorafsReplicationOrder;
     }
     permission! {
-        /// Permission to complete `SoraFS` replication orders.
+        /// Permission to complete native replication assignments for one exact provider.
         #[derive(Copy)]
-        pub struct CanCompleteSorafsReplicationOrder;
+        #[norito(deny_unknown_fields)]
+        pub struct CanCompleteSorafsReplicationOrder {
+            /// Nonzero governed provider identity whose assignments may be completed.
+            pub provider_id: ProviderId,
+        }
     }
     permission! {
         /// Permission to set `SoraFS` pricing schedules.

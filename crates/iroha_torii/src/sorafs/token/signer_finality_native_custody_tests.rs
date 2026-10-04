@@ -185,7 +185,7 @@ impl NativeCustodyFixture {
         &self,
         current_anchor: SignerCustodyAnchorV1,
     ) -> SignerStreamTokenStateObservationBodyV1 {
-        let expected = SignerStreamTokenObservationExpectedV1::current(
+        let mut expected = SignerStreamTokenObservationExpectedV1::current(
             self.pins.binding(),
             SignerStreamTokenObservationPhaseV1::BeforeAdmission,
             [0x93; 32],
@@ -233,7 +233,7 @@ impl NativeCustodyFixture {
             self.pins.binding(),
             self.pins.custody_trust(),
             self.pins.observer_trust(),
-            expected,
+            &mut expected,
             NOW_MS,
         )
         .expect("full independent custody and observation verification");

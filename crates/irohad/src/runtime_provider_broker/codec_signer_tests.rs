@@ -344,7 +344,7 @@ fn operation_request_prelude_enforces_role_limit_and_global_inbound_budget() {
         "declared inbound bytes must fit the single shared operation budget"
     );
     assert_eq!(
-        decode_pool.used_bytes.load(Ordering::Acquire),
+        decode_pool.allocation.reserved_bytes(),
         0,
         "raw ingress rejection happens before composed process admission"
     );
@@ -364,7 +364,7 @@ fn stalled_operation_body_does_not_reserve_composed_decode_pool() {
                 return std::io::Read::read(&mut self.prefix, output);
             }
             assert_eq!(
-                self.decode_pool.used_bytes.load(Ordering::Acquire),
+                self.decode_pool.allocation.reserved_bytes(),
                 0,
                 "the composed pool is acquired only after the full raw frame"
             );
@@ -402,7 +402,7 @@ fn stalled_operation_body_does_not_reserve_composed_decode_pool() {
         Err(BrokerError::Unavailable)
     ));
     assert!(observed_body_read.load(Ordering::Acquire));
-    assert_eq!(decode_pool.used_bytes.load(Ordering::Acquire), 0);
+    assert_eq!(decode_pool.allocation.reserved_bytes(), 0);
     assert_eq!(
         raw_budget.available_permits(),
         16,

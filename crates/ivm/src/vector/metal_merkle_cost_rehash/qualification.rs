@@ -63,8 +63,14 @@ fn required_metal_rehash_covers_actual_memory_bounds_and_original_fixed_outputs(
                 let geometry = Geometry::new(bytes, chunk, leaves).unwrap();
                 let production = counts(&health, false);
                 let synthetic = counts(&health, true);
-                let profile = calibrate(geometry, baseline, context, Instant::now())
-                    .expect("bounded actual retained-update calibration on required runner");
+                let profile = super::super::metal_receipts::timing::report(
+                    "Rehash",
+                    health.identity(),
+                    geometry,
+                    baseline,
+                    || calibrate(geometry, baseline, context, Instant::now()),
+                )
+                .expect("bounded actual retained-update calibration on required runner");
                 assert_eq!(profile.geometry, geometry);
                 assert_eq!(profile.baseline, baseline);
                 assert_eq!(counts(&health, false), production);

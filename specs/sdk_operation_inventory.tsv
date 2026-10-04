@@ -332,6 +332,7 @@ contracts.sorafs_por_ingestion_by_manifest_digest_hex_get	GET	/v1/sorafs/por/ing
 contracts.sorafs_por_report_by_iso_week_get	GET	/v1/sorafs/por/report/{iso_week}	public	torii_default	public	read	http	feature(app_api)	true	true	false	false
 contracts.sorafs_por_status_get	GET	/v1/sorafs/por/status	public	torii_default	public	read	http	feature(app_api)	true	true	false	false
 contracts.sorafs_por_vrf_post	POST	/v1/sorafs/por/vrf	public	canonical_account_signature	authenticated_account	mutation	http	feature(app_api)	true	false	false	true
+contracts.sorafs_reserve_account_proof_get	GET	/v1/sorafs/reserve/providers/{provider_id}/proof/{height}	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
 contracts.sorafs_reserve_appeals_by_appeal_id_hex_decision_post	POST	/v1/sorafs/reserve/appeals/{appeal_id_hex}/decision	public	canonical_signed_body	authenticated_account	mutation	http	feature(app_api)	true	false	false	false
 contracts.sorafs_reserve_appeals_by_appeal_id_hex_get	GET	/v1/sorafs/reserve/appeals/{appeal_id_hex}	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
 contracts.sorafs_reserve_appeals_get	GET	/v1/sorafs/reserve/appeals	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
@@ -345,6 +346,7 @@ contracts.sorafs_reserve_movements_by_movement_id_hex_decision_post	POST	/v1/sor
 contracts.sorafs_reserve_movements_by_movement_id_hex_get	GET	/v1/sorafs/reserve/movements/{movement_id_hex}	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
 contracts.sorafs_reserve_movements_get	GET	/v1/sorafs/reserve/movements	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
 contracts.sorafs_reserve_policy_get	GET	/v1/sorafs/reserve/policy	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
+contracts.sorafs_reserve_policy_proof_get	GET	/v1/sorafs/reserve/policy/{height}	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
 contracts.sorafs_reserve_providers_by_provider_id_hex_get	GET	/v1/sorafs/reserve/providers/{provider_id_hex}	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
 contracts.sorafs_reserve_providers_get	GET	/v1/sorafs/reserve/providers	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	false	false	true
 contracts.sorafs_reserve_top_up_post	POST	/v1/sorafs/reserve/top-up	public	canonical_signed_body	authenticated_account	mutation	http	feature(app_api)	true	false	false	false
@@ -423,6 +425,9 @@ iso20022.sese024.submit	POST	/v1/iso20022/sese024	public	operator_signature	oper
 iso20022.sese025.submit	POST	/v1/iso20022/sese025	public	operator_signature	operator	mutation	http	always	true	true	true	true
 kagemusha.authority_state	GET	/v1/kagemusha/authority-state/{asset_definition_id}	public	torii_default	public	read	http	always	true	true	true	false
 kagemusha.operation	GET	/v1/kagemusha/operations/{operation_id}	public	torii_default	public	read	http	always	true	true	true	false
+kagemusha.ordinary_mint_credit	POST	/v1/kagemusha/ordinary/top-up/credit	public	canonical_account_signature	authenticated_account	read	http	always	true	true	false	true
+kagemusha.ordinary_mint_finalized	POST	/v1/kagemusha/ordinary/top-up/finality	public	canonical_account_signature	authenticated_account	read	http	always	true	true	false	true
+kagemusha.ordinary_mint_issuer_purpose	POST	/v1/kagemusha/ordinary/mint-issuer-purpose	public	canonical_account_signature	authenticated_account	read	http	always	true	true	false	true
 kagemusha.ordinary_wallet_current	POST	/v1/kagemusha/ordinary/current-wallet	public	canonical_account_signature	authenticated_account	read	http	always	true	true	false	true
 kagemusha.readiness	GET	/v1/kagemusha/readiness	public	torii_default	public	read	http	always	true	true	true	false
 kagemusha.redeem	POST	/v1/kagemusha/redeem	public	canonical_signed_body	authenticated_account	mutation	http	always	true	true	true	false
@@ -436,6 +441,7 @@ ledger.state_proof	GET	/v1/ledger/state-proof/{height}	public	torii_default	publ
 ledger.state_root	GET	/v1/ledger/state/{height}	public	torii_default	public	read	http	always	true	true	false	false
 ministry.agenda_proposal.draft	POST	/v1/ministry/agenda/proposals/draft	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 ministry.agenda_proposal.read	GET	/v1/ministry/agenda/proposals/{proposal_id}	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
+multisig.execution_evidence	GET	/v1/multisig/execution-evidence/{multisig_account_id}/{entrypoint_hash}/{instructions_hash}	public	torii_default	public	read	http	always	true	true	true	false
 musubi.v1.instruction.alias_register	POST	/v1/musubi/instructions/alias-register	public	canonical_account_signature	authenticated_account	compute	http	feature(app_api)	true	true	true	true
 musubi.v1.instruction.alias_retarget	POST	/v1/musubi/instructions/alias-retarget	public	canonical_account_signature	authenticated_account	compute	http	feature(app_api)	true	true	true	true
 musubi.v1.instruction.archive_location_add	POST	/v1/musubi/instructions/archive-location-add	public	canonical_account_signature	authenticated_account	compute	http	feature(app_api)	true	true	true	true
@@ -637,6 +643,7 @@ sorafs.storage_peer.list	GET	/v1/sorafs/storage/peers	public	torii_default	publi
 sorafs.storage_plan.read	GET	/v1/sorafs/storage/plan/{manifest_id}	public	torii_default	public	read	http	feature(app_api)	true	true	false	false
 sorafs.storage_state.read	GET	/v1/sorafs/storage/state	operator	operator_signature	operator	read	http	feature(app_api)	false	false	false	true
 sorafs.storage_token.issue	POST	/v1/sorafs/storage/token	public	operator_signature	operator	mutation	http	feature(app_api)	true	true	false	true
+sorafs.stream_token_custody.read	GET	/v1/sorafs/providers/{provider_id}/custody/{height}	public	torii_default	public	read	http	feature(app_api)	true	false	false	true
 sorafs.transparency_cycle.list	GET	/v1/sorafs/transparency/cycles	public	torii_default	public	read	http	feature(app_api)	true	true	false	false
 sorafs.transparency_cycle.read	GET	/v1/sorafs/transparency/cycles/{cycle_id_hex}	public	torii_default	public	read	http	feature(app_api)	true	true	false	false
 sorafs.transparency_cycle_entry.read	GET	/v1/sorafs/transparency/cycles/{cycle_id_hex}/entries/{entry_id_hex}	public	torii_default	public	read	http	feature(app_api)	true	true	false	false
@@ -661,11 +668,15 @@ sumeragi.status.stream_sse	GET	/v1/sumeragi/status/sse	operator	operator_signatu
 time.now	GET	/v1/time/now	public	torii_default	public	read	http	always	true	true	false	false
 time.status	GET	/v1/time/status	operator	operator_signature	operator	read	http	always	true	true	false	true
 trigger.completion.list	GET	/v1/triggers/completed	operator	operator_signature	operator	compute	http	always	true	true	false	true
-validation_fee.hijiri.quote	POST	/v1/validation-fee/hijiri/quote	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 validation_fee.policy.current_proof	POST	/v1/validation-fee/policy/current/proof	public	canonical_account_signature	authenticated_account	compute	http	feature(app_api)	true	true	false	true
 validation_fee.proposal.draft	POST	/v1/validation-fee/proposals/draft	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 validation_fee.proposal.list	GET	/v1/validation-fee/proposals	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 validation_fee.proposal.read	GET	/v1/validation-fee/proposals/{proposal_id}	public	canonical_account_signature	authenticated_account	compute	http	feature(app_api)	true	true	false	true
+validation_fee.retail.quote	POST	/v1/validation-fee/quote	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
+validation_fee.retail.receipts	GET	/v1/validation-fee/accounts/{account_id}/receipts	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
+validation_fee.retail.statement	POST	/v1/validation-fee/accounts/{account_id}/statement	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
+validation_fee.retail.statement_head	GET	/v1/validation-fee/accounts/{account_id}/statement/head	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
+validation_fee.retail.status	GET	/v1/validation-fee/accounts/{account_id}/status	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 vpn.profile	GET	/v1/vpn/profile	public	torii_default	public	read	http	always	true	true	false	false
 vpn.quote.create	POST	/v1/vpn/quotes	public	canonical_account_signature	authenticated_account	compute	http	always	true	true	false	true
 vpn.receipt.list	GET	/v1/vpn/receipts	public	canonical_account_signature	authenticated_account	read	http	always	true	true	false	true

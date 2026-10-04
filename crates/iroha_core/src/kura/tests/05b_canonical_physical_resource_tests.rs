@@ -56,7 +56,7 @@ fn canonical_physical_seed_da_suffix(
             .read_da_block_bytes((index + 1) as u64, entry.length)
             .unwrap();
         assert_eq!(
-            decode_versioned_signed_block(&bytes).unwrap().hash(),
+            decode_framed_signed_block(&bytes).unwrap().hash(),
             block.hash()
         );
     }

@@ -13,6 +13,9 @@ Rust bare payload writers use the object-safe `SerializePayload` contract.
 implement or derive `SerializePayload` without acquiring a root-frame identity;
 generic frame writers require `NoritoSerialize` explicitly. This separation
 does not change the V1 header, payload layout, checksum or signed bytes.
+`core::PayloadRef` forwards an existing field's binary and JSON serialization,
+length hints, and errors without inserting a wrapper field. It has no decoder
+or frame identity; its containing record retains the canonical schema.
 
 `DeserializePayload<'a>` owns `deserialize` and `try_deserialize` within the
 active bounded payload context. Both typed frame directions are blanket
@@ -378,6 +381,35 @@ and schema limits remain deterministic artifact rejections. The JSON parser and 
 canonical writer preserve the same opaque refusal across binary `Json` fields, including
 trigger metadata; copying diagnostic fields or formatting JSON errors cannot replace its
 scope identity. JSON body, nesting, and arithmetic-overflow bounds remain protocol failures.
+
+
+Closed named records can opt into `#[norito(decode_fields)]`. Their ordinary
+`DeserializePayload` and caller-prepared destination then use one generated
+positional field walk. Fixed byte-array fields retain their raw-field framing;
+other fields use the canonical child decoder relationship. Generic, skipped,
+flattened and whole-value validation-hook records are rejected by this initial
+opt-in rather than silently changing their contracts. No schema or V1 bytes change.
+
+`PreparedDecodeWorkspace` preadmits its two reusable physical counter controls
+from an explicit original `iroha_allocation` reservation. Active scopes borrow
+synchronous stack nodes; every reused attempt has a new checked identity, so a
+retained old refusal cannot acquire the new attempt's provenance. The workspace
+owns no input, graph or alignment copy. `decode_canonical_into` resets destination
+validity, runs the shared header/field kernels, then compares the complete filled
+payload against the original frame through the existing streaming canonical
+writer. It preserves original codec/resource causes separately from local
+prepared-destination failures; neither is retried through an owning decoder.
+
+Prepared sequence destinations supply initialized `SequenceSpan` scratch and
+initialized output storage. The existing scalar sequence walker validates the
+complete span plan before any element callback, preserving late-framing error
+precedence. Raw `Vec<u8>` and element-framed `ConstVec<u8>` retain distinct layouts.
+Logical sequence/storage limits still apply; they do not fund physical backing.
+Callers must admit every buffer and crypto leaf before the operation, validate
+intrinsic type/length bounds separately from local bank geometry, retain input
+and destination custody on refusal, and transfer initialized children only after
+the complete canonical frame succeeds. This API alone does not fund a caller's
+whole decoded graph or secret-consuming workflow.
 
 Rust error adapters retain these refusals through
 `core::Error::decode_resource_error` and the copyable `core::DecodeResourceError`.

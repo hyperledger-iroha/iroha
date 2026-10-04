@@ -519,7 +519,7 @@ impl ManagedStore {
         }
         let spec = binding.spec.clone();
         let local = self.up_private_root_bound(
-            &runtime.localnet_request(
+            &runtime.private_root_request(
                 &request.name,
                 remaining(deadline)?.min(Duration::from_secs(30)),
             ),

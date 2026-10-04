@@ -73,7 +73,7 @@ use norito::{
 
 use crate::{
     NetworkId,
-    block::{BlockHeader, SignedBlock, decode_versioned_signed_block},
+    block::{BlockHeader, SignedBlock, decode_framed_signed_block},
     query::CommittedTransaction,
     sumeragi::SumeragiStatus,
     transaction::TransactionEntrypoint,
@@ -99,7 +99,7 @@ pub struct FinalityError(pub String);
 /// Completed proof checks retain their existing verdict. Decoder errors remain typed so
 /// callers can distinguish surviving local limits from intrinsic format ceilings before
 /// projecting an external response.
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum FinalityReadError {
     /// A completed trust-binding or cryptographic check failed.
     #[error(transparent)]
@@ -110,7 +110,7 @@ pub enum FinalityReadError {
     /// Exact original checkpoint decoder fields, before any caller locality classification.
     /// Intrinsic format ceilings are not automatically a retryable caller refusal.
     #[error("checkpoint decoder resource: {0}")]
-    DecodeResource(norito::core::DecodeResourceError),
+    DecodeResource(#[source] norito::core::DecodeAttemptError),
 }
 
 fn need(condition: bool, reason: &str) -> Result<(), FinalityError> {
@@ -388,7 +388,7 @@ impl SumeragiFinalityProof {
         )?;
         let block = norito::core::with_decode_limits_scope(
             norito::canonical_decode_limits(self.block_wire.len()),
-            || decode_versioned_signed_block(&self.block_wire),
+            || decode_framed_signed_block(&self.block_wire),
         )
         .map_err(malformed)?;
         need(

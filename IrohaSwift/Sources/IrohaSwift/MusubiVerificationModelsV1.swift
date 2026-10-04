@@ -188,25 +188,30 @@ public struct MusubiProviderIngestCompletionSignerPolicyV1: Codable, Hashable, S
     }
 }
 
-/// Chain-authoritative provider owner and governed completion signer policy.
+/// Chain-authoritative provider owner, completion signer and governed signer policy.
 public struct MusubiProviderIngestCompletionAuthorityV1: Codable, Hashable, Sendable {
     public let providerOwner: String
+    public let completionSigner: String
     public let signerPolicy: MusubiProviderIngestCompletionSignerPolicyV1
 
     public init(
         providerOwner: String,
+        completionSigner: String,
         signerPolicy: MusubiProviderIngestCompletionSignerPolicyV1
     ) throws {
         _ = try CanonicalNorito.encodeCompactAccountId(providerOwner)
+        _ = try CanonicalNorito.encodeCompactAccountId(completionSigner)
         self.providerOwner = providerOwner
+        self.completionSigner = completionSigner
         self.signerPolicy = signerPolicy
     }
 
     public init(from decoder: Decoder) throws {
-        try musubiRequireExactKeys(decoder, ["provider_owner", "signer_policy"])
+        try musubiRequireExactKeys(decoder, ["provider_owner", "completion_signer", "signer_policy"])
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(
             providerOwner: container.decode(String.self, forKey: .providerOwner),
+            completionSigner: container.decode(String.self, forKey: .completionSigner),
             signerPolicy: container.decode(
                 MusubiProviderIngestCompletionSignerPolicyV1.self,
                 forKey: .signerPolicy
@@ -216,6 +221,7 @@ public struct MusubiProviderIngestCompletionAuthorityV1: Codable, Hashable, Send
 
     private enum CodingKeys: String, CodingKey {
         case providerOwner = "provider_owner"
+        case completionSigner = "completion_signer"
         case signerPolicy = "signer_policy"
     }
 }
@@ -283,10 +289,10 @@ public struct MusubiProviderBundleVerificationBindingV1: Codable, Hashable, Send
         sourceTreeDigest: MusubiDigest32V1
     ) throws {
         let completedByPayload = try CanonicalNorito.encodeCompactAccountId(completedBy)
-        let providerOwnerPayload = try CanonicalNorito.encodeCompactAccountId(
-            completionAuthority.providerOwner
+        let completionSignerPayload = try CanonicalNorito.encodeCompactAccountId(
+            completionAuthority.completionSigner
         )
-        guard completedByPayload == providerOwnerPayload,
+        guard completedByPayload == completionSignerPayload,
               assignmentRevision > 0, completionEpoch > 0,
               [
                   providerID, replicationOrder, archiveID, bundleDigest,

@@ -60,10 +60,25 @@ impl InstalledRuntime {
         })
     }
 
-    /// Construct a startup request with the same installed worker and daemon.
+    /// Construct a fresh global startup request with the installed worker and daemon.
+    ///
+    /// Service-authority prerequisites are generated in the original genesis; services stay disabled.
     #[must_use]
     pub fn localnet_request(&self, name: &str, timeout: std::time::Duration) -> LocalnetRequest {
         let mut request = LocalnetRequest::new(self.kagami.clone(), self.daemon.clone());
+        request.name = name.into();
+        request.startup_timeout = timeout;
+        request
+    }
+
+    /// Construct a private-root startup request with no global service-authority profile.
+    #[must_use]
+    pub fn private_root_request(
+        &self,
+        name: &str,
+        timeout: std::time::Duration,
+    ) -> LocalnetRequest {
+        let mut request = LocalnetRequest::private_root(self.kagami.clone(), self.daemon.clone());
         request.name = name.into();
         request.startup_timeout = timeout;
         request
@@ -237,6 +252,19 @@ mod tests {
         assert_eq!(request.name, "named");
         assert_eq!(request.startup_timeout, std::time::Duration::from_secs(7));
         assert_eq!(request.launcher.parent(), request.daemon.parent());
+        assert_eq!(
+            request.service_profile,
+            crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities
+        );
+        let private = runtime.private_root_request("private", std::time::Duration::from_secs(9));
+        assert_eq!(private.name, "private");
+        assert_eq!(private.startup_timeout, std::time::Duration::from_secs(9));
+        assert_eq!(private.launcher, request.launcher);
+        assert_eq!(private.daemon, request.daemon);
+        assert_eq!(
+            private.service_profile,
+            crate::localnet::LocalnetServiceProfile::Standard
+        );
         let store = ManagedStore::open(&temporary.path().join("state")).unwrap();
         assert!(
             store

@@ -1,4 +1,7 @@
 //! Original global frontier, real signed native ancestry, and retained source refusal tests.
+#[path = "tests/replacement.rs"]
+mod replacement;
+
 use super::*;
 use crate::{
     state::{StateReadOnly, WorldReadOnly},
@@ -1210,13 +1213,13 @@ fn native_lane_original_genesis_escrow_is_debited_only_by_delayed_authenticated_
     // Run that complete State/Kernel stack under its existing production bound,
     // as the native publication fixtures do, rather than libtest's small default.
     crate::sumeragi::threads::sumeragi_thread_builder("funded-lane-slashing-test")
-        .spawn(funded_original_lane_slashing_scenario)
+        .spawn(|| funded_original_lane_slashing_scenario(false))
         .expect("spawn funded native lane fixture")
         .join()
         .expect("funded native lane fixture");
 }
 
-fn funded_original_lane_slashing_scenario() {
+fn funded_original_lane_slashing_scenario(complete_replacement: bool) {
     use crate::{
         smartcontracts::isi::staking::preparation::prepare_public_lane_plan,
         sumeragi::{evidence, lanes::runner::evidence_observer},
@@ -1246,14 +1249,20 @@ fn funded_original_lane_slashing_scenario() {
         total_supply: Quantity,
     }
 
-    let (mut chain, _guard) = anchored_chain_with_config(
-        7,
+    let policy = if complete_replacement {
+        replacement::policy()
+    } else {
         SumeragiNposParameters {
             slashing_delay_blocks: 2,
             ..SumeragiNposParameters::default()
-        },
-        fund_original_validator_in_signed_genesis,
-    );
+        }
+    };
+    let configure = if complete_replacement {
+        replacement::fund_signed_genesis
+    } else {
+        fund_original_validator_in_signed_genesis
+    };
+    let (mut chain, _guard) = anchored_chain_with_config(7, policy.clone(), configure);
     assert!(
         chain
             .genesis()
@@ -1677,14 +1686,7 @@ fn funded_original_lane_slashing_scenario() {
 
     // A new executor/State starts from the same original signed genesis and native
     // frontier, then independently replays the exact admitted and penalized suffix.
-    let (mut replay, _replay_guard) = anchored_chain_with_config(
-        7,
-        SumeragiNposParameters {
-            slashing_delay_blocks: 2,
-            ..SumeragiNposParameters::default()
-        },
-        fund_original_validator_in_signed_genesis,
-    );
+    let (mut replay, _replay_guard) = anchored_chain_with_config(7, policy, configure);
     assert_eq!(replay.genesis().hash(), chain.genesis().hash());
     assert_eq!(replay.state().view().height() as u64, original_height);
     replay.replay_from(&chain).unwrap();
@@ -1699,6 +1701,17 @@ fn funded_original_lane_slashing_scenario() {
         drop(view);
         assert_eq!(snapshot(replay.state()), expected_custody);
         replay.replay_from(&chain).unwrap();
+    }
+    if complete_replacement {
+        replacement::finish_after_real_detector_penalty(
+            &mut chain,
+            &mut replay,
+            &validator_key,
+            request_id,
+            release_at_ms,
+            &key,
+            &expected_record,
+        );
     }
 }
 

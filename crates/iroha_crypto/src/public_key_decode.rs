@@ -44,17 +44,23 @@ pub fn validate(algorithm: Algorithm, payload: &[u8]) -> Result<(), Error> {
     valid.then_some(()).ok_or_else(invalid_key)
 }
 
+/// Preserve the canonical compact owner's nominal decode-work admission even
+/// when a caller already owns its initialized physical backing.
+pub(crate) fn reserve_compact_decode_backing(payload_bytes: usize) -> Result<usize, Error> {
+    let allocation_bytes = payload_bytes
+        .checked_add(1)
+        .ok_or(Error::AllocationFailed { bytes: u64::MAX })?;
+    norito::core::reserve_decode_allocation(allocation_bytes)?;
+    Ok(allocation_bytes)
+}
+
 impl PublicKeyCompact {
     #[allow(unsafe_code)]
     pub(super) fn try_new_for_decode(
         algorithm: Algorithm,
         payload: &[u8],
     ) -> Result<Self, norito::core::Error> {
-        let allocation_bytes = payload
-            .len()
-            .checked_add(1)
-            .ok_or(norito::core::Error::AllocationFailed { bytes: u64::MAX })?;
-        norito::core::reserve_decode_allocation(allocation_bytes)?;
+        let allocation_bytes = reserve_compact_decode_backing(payload.len())?;
         let layout = std::alloc::Layout::array::<u8>(allocation_bytes)
             .map_err(|_| norito::core::Error::AllocationFailed { bytes: u64::MAX })?;
         // SAFETY: `layout` is non-zero and valid for `allocation_bytes` bytes.
@@ -85,10 +91,7 @@ impl PublicKeyCompact {
         payload_hex: &str,
     ) -> Result<Self, norito::core::Error> {
         let payload_bytes = payload_hex.len() / 2;
-        let allocation_bytes = payload_bytes
-            .checked_add(1)
-            .ok_or(norito::core::Error::AllocationFailed { bytes: u64::MAX })?;
-        norito::core::reserve_decode_allocation(allocation_bytes)?;
+        let allocation_bytes = reserve_compact_decode_backing(payload_bytes)?;
         let layout = std::alloc::Layout::array::<u8>(allocation_bytes)
             .map_err(|_| norito::core::Error::AllocationFailed { bytes: u64::MAX })?;
         // SAFETY: the exact destination was admitted before this allocation;
@@ -124,11 +127,21 @@ impl PublicKeyCompact {
     }
 }
 
-fn decode_compact(bytes: &[u8], exact: bool) -> Result<(PublicKeyCompact, usize), Error> {
+/// The sole compact-byte parser and validator, with a caller-selected owner.
+/// Fixed scratch never becomes a retained allocation. Ordinary decoding and the
+/// prepared destination choose their owner only after the same validation.
+pub(crate) fn with_decoded_compact<R, E>(
+    bytes: &[u8],
+    exact: bool,
+    retain: impl FnOnce(Algorithm, &[u8]) -> Result<R, E>,
+) -> Result<(R, usize), E>
+where
+    E: From<Error>,
+{
     let mut scratch = [0; super::MAX_PUBLIC_KEY_PAYLOAD_BYTES + 1];
     let (length, used) = norito::core::decode_byte_element_sequence_into(bytes, &mut scratch)?;
     if exact && used != bytes.len() {
-        return Err(Error::LengthMismatch);
+        return Err(Error::LengthMismatch.into());
     }
     let (&tag, payload) = scratch[..length]
         .split_first()
@@ -136,7 +149,11 @@ fn decode_compact(bytes: &[u8], exact: bool) -> Result<(PublicKeyCompact, usize)
     let algorithm = Algorithm::try_from(tag)
         .map_err(|()| Error::invalid_tag("PublicKeyCompact::algorithm", tag))?;
     validate(algorithm, payload)?;
-    PublicKeyCompact::try_new_for_decode(algorithm, payload).map(|key| (key, used))
+    retain(algorithm, payload).map(|key| (key, used))
+}
+
+fn decode_compact(bytes: &[u8], exact: bool) -> Result<(PublicKeyCompact, usize), Error> {
+    with_decoded_compact(bytes, exact, PublicKeyCompact::try_new_for_decode)
 }
 
 impl<'de> DeserializePayload<'de> for PublicKeyCompact {

@@ -2579,6 +2579,11 @@ fn classify_lane_step(
     error: &lanes::step::LaneStepError,
 ) -> Result<Option<Hash32>, PublicationError> {
     match error {
+        lanes::step::LaneStepError::Deferred(original)
+            if original.reason() == ivm::error::ExecutionDeferral::LocalInvariantViolation =>
+        {
+            Err(PublicationError::RecoveryRequired(original.to_string()))
+        }
         lanes::step::LaneStepError::Deferred(original) => {
             Err(PublicationError::Deferred(original.clone().into()))
         }

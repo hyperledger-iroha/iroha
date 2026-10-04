@@ -828,8 +828,8 @@ public struct RegisterMusubiProviderBundleAttestationV1: MusubiInstructionV1 {
         }
         try musubiValidateControllerApprovalsV1(
             attestation.approvals,
-            account: attestation.payload.binding.completionAuthority.providerOwner,
-            field: "provider owner"
+            account: attestation.payload.binding.completionAuthority.completionSigner,
+            field: "completion signer"
         )
         self.attestation = attestation
         self.expectedLocationRevision = expectedLocationRevision
@@ -1334,6 +1334,7 @@ private enum MusubiInstructionNoritoV1 {
     ) throws -> Data {
         var writer = CompactNoritoWriter()
         writer.writeField(try CanonicalNorito.encodeCompactAccountId(value.providerOwner))
+        writer.writeField(try CanonicalNorito.encodeCompactAccountId(value.completionSigner))
         writer.writeField(completionSignerPolicy(value.signerPolicy))
         return writer.data
     }

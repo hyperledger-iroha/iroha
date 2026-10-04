@@ -122,7 +122,7 @@ impl SignerStreamTokenObservationRequestV1 {
     ///
     /// # Errors
     /// Rejects malformed fields, wrong phase/subject or the complete request ceiling.
-    pub fn encode_canonical(&self) -> Result<Vec<u8>, SignerStreamTokenEvidenceErrorV1> {
+    pub fn encode_canonical(&self) -> Result<Vec<u8>, SignerStreamTokenEvidenceAdmissionErrorV1> {
         self.validate()?;
         encode_document(self, SIGNER_STREAM_TOKEN_OBSERVATION_REQUEST_MAX_BYTES_V1)
     }
@@ -130,7 +130,9 @@ impl SignerStreamTokenObservationRequestV1 {
     ///
     /// # Errors
     /// Rejects noncanonical frames, resource limits and invalid phase/subject/challenge/floors.
-    pub fn decode_canonical(bytes: &[u8]) -> Result<Self, SignerStreamTokenEvidenceErrorV1> {
+    pub fn decode_canonical(
+        bytes: &[u8],
+    ) -> Result<Self, SignerStreamTokenEvidenceAdmissionErrorV1> {
         let value: Self =
             decode_document(bytes, SIGNER_STREAM_TOKEN_OBSERVATION_REQUEST_MAX_BYTES_V1)?;
         value.validate()?;
@@ -140,7 +142,7 @@ impl SignerStreamTokenObservationRequestV1 {
     ///
     /// # Errors
     /// Rejects invalid fields or bounded canonical encoding failure.
-    pub fn digest(&self) -> Result<[u8; 32], SignerStreamTokenEvidenceErrorV1> {
+    pub fn digest(&self) -> Result<[u8; 32], SignerStreamTokenEvidenceAdmissionErrorV1> {
         let bytes = self.encode_canonical()?;
         Ok(digest_parts(REQUEST_DOMAIN, &[&bytes]))
     }
@@ -287,13 +289,16 @@ impl SignerStreamTokenStateObservationBodyV1 {
     ///
     /// # Errors
     /// Rejects invalid variable leaves/times/subjects before output-frame counting and encoding.
-    pub fn signing_payload(&self) -> Result<Vec<u8>, SignerStreamTokenEvidenceErrorV1> {
+    pub fn signing_payload(&self) -> Result<Vec<u8>, SignerStreamTokenEvidenceAdmissionErrorV1> {
         self.validate()?;
         let frame = encode_document(
             self,
             SIGNER_STREAM_TOKEN_EVIDENCE_MAX_BYTES_V1 - STATE_DOMAIN.len(),
         )?;
-        let mut payload = Vec::with_capacity(STATE_DOMAIN.len() + frame.len());
+        let mut payload = Vec::new();
+        payload
+            .try_reserve_exact(STATE_DOMAIN.len() + frame.len())
+            .map_err(SignerStreamTokenEvidenceAdmissionErrorV1::Allocation)?;
         payload.extend_from_slice(STATE_DOMAIN);
         payload.extend_from_slice(&frame);
         Ok(payload)
@@ -327,7 +332,7 @@ impl SignerStreamTokenStateObservationV1 {
     ///
     /// # Errors
     /// Rejects invalid body leaves/phase/times and oversized canonical output.
-    pub fn encode_canonical(&self) -> Result<Vec<u8>, SignerStreamTokenEvidenceErrorV1> {
+    pub fn encode_canonical(&self) -> Result<Vec<u8>, SignerStreamTokenEvidenceAdmissionErrorV1> {
         self.body.validate()?;
         encode_document(self, SIGNER_STREAM_TOKEN_EVIDENCE_MAX_BYTES_V1)
     }
@@ -335,7 +340,9 @@ impl SignerStreamTokenStateObservationV1 {
     ///
     /// # Errors
     /// Rejects malformed/noncanonical/compressed/oversized frames and invalid body fields.
-    pub fn decode_canonical(bytes: &[u8]) -> Result<Self, SignerStreamTokenEvidenceErrorV1> {
+    pub fn decode_canonical(
+        bytes: &[u8],
+    ) -> Result<Self, SignerStreamTokenEvidenceAdmissionErrorV1> {
         let value: Self = decode_document(bytes, SIGNER_STREAM_TOKEN_EVIDENCE_MAX_BYTES_V1)?;
         value.body.validate()?;
         Ok(value)

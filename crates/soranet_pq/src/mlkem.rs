@@ -8,7 +8,7 @@ use pqcrypto_traits::Error as PqError;
 use rand_core::{RngCore, TryCryptoRng};
 use sha3::{Digest, Sha3_256};
 use thiserror::Error;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 const MLKEM512_PUBLIC_KEY_BYTES: usize = 800;
 const MLKEM512_SECRET_KEY_BYTES: usize = 1632;
 const MLKEM512_CIPHERTEXT_BYTES: usize = 768;
@@ -86,7 +86,7 @@ impl MlKemSuite {
     }
     /// Return the shared-secret length in bytes for this parameter set.
     #[must_use]
-    pub fn shared_secret_len(self) -> usize {
+    pub const fn shared_secret_len(self) -> usize {
         match self {
             MlKemSuite::MlKem512 => MLKEM512_SHARED_SECRET_BYTES,
             MlKemSuite::MlKem768 => MLKEM768_SHARED_SECRET_BYTES,
@@ -579,6 +579,7 @@ pub struct MlKemCiphertext {
 }
 impl MlKemCiphertext {
     /// Construct from raw ciphertext bytes.
+    #[cfg(test)]
     fn try_new(suite: MlKemSuite, bytes: Vec<u8>) -> Result<Self, MlKemError> {
         suite.validate_ciphertext(&bytes)?;
         Ok(Self { bytes })
@@ -602,6 +603,7 @@ impl fmt::Debug for MlKemSharedSecret {
     }
 }
 impl MlKemSharedSecret {
+    #[cfg(test)]
     fn try_new(suite: MlKemSuite, bytes: Zeroizing<Vec<u8>>) -> Result<Self, MlKemError> {
         validate_len(
             suite.shared_secret_kind(),
@@ -741,6 +743,88 @@ pub fn generate_mlkem_keypair(
     rng.fill_bytes(coins.as_mut());
     generate_mlkem_keypair_from_coins(suite, &coins)
 }
+/// Generate into initialized, exact-suite caller storage without allocating output backing.
+///
+/// Secret output is erased on every error or unwind. On success the caller owns
+/// its erasure duty and should retain the buffer in `Zeroizing` storage. Public
+/// output is not usable until this operation succeeds.
+///
+/// # Errors
+/// Returns the existing geometry, generated-material or backend error. Output
+/// geometry is checked before consuming randomness or invoking the backend.
+pub fn generate_mlkem_keypair_into(
+    suite: MlKemSuite,
+    rng: &mut HedgedChaCha20Rng,
+    public_key: &mut [u8],
+    secret_key: &mut [u8],
+) -> Result<(), MlKemError> {
+    let mut secret = SecretOutput::new(secret_key);
+    validate_len(
+        suite.public_key_kind(),
+        public_key.len(),
+        suite.public_key_len(),
+    )?;
+    validate_len(
+        suite.secret_key_kind(),
+        secret.bytes.len(),
+        suite.secret_key_len(),
+    )?;
+    let mut coins = Zeroizing::new([0u8; 64]);
+    rng.fill_bytes(coins.as_mut());
+    generate_mlkem_keypair_from_coins_into(suite, &coins, public_key, secret.bytes)?;
+    secret.complete();
+    Ok(())
+}
+
+// Only successful callers may retain generated secret material. This guard has
+// no allocation and also erases output when validation or the backend unwinds.
+struct SecretOutput<'a> {
+    bytes: &'a mut [u8],
+    complete: bool,
+}
+impl<'a> SecretOutput<'a> {
+    fn new(bytes: &'a mut [u8]) -> Self {
+        Self {
+            bytes,
+            complete: false,
+        }
+    }
+    fn complete(&mut self) {
+        self.complete = true;
+    }
+}
+impl Drop for SecretOutput<'_> {
+    fn drop(&mut self) {
+        if !self.complete {
+            self.bytes.zeroize();
+        }
+    }
+}
+
+fn generate_mlkem_keypair_from_coins_into(
+    suite: MlKemSuite,
+    coins: &[u8; 64],
+    public_key: &mut [u8],
+    secret_key: &mut [u8],
+) -> Result<(), MlKemError> {
+    let mut secret = SecretOutput::new(secret_key);
+    suite.validate_key_material_not_all_zero("ML-KEM keypair coins", coins)?;
+    validate_len(
+        suite.public_key_kind(),
+        public_key.len(),
+        suite.public_key_len(),
+    )?;
+    validate_len(
+        suite.secret_key_kind(),
+        secret.bytes.len(),
+        suite.secret_key_len(),
+    )?;
+    mlkem_ffi::keypair_derand(suite, public_key, secret.bytes, coins)?;
+    suite.validate_key_pair(public_key, secret.bytes)?;
+    secret.complete();
+    Ok(())
+}
+
 /// Generate an ML-KEM keypair using a seed plus live OS entropy when available.
 ///
 /// # Errors
@@ -784,14 +868,14 @@ fn generate_mlkem_keypair_from_coins(
     suite.validate_key_material_not_all_zero("ML-KEM keypair coins", coins)?;
     let mut public_key = vec![0u8; suite.public_key_len()];
     let mut secret_key = Zeroizing::new(vec![0u8; suite.secret_key_len()]);
-    mlkem_ffi::keypair_derand(suite, &mut public_key, secret_key.as_mut(), coins)?;
+    generate_mlkem_keypair_from_coins_into(suite, coins, &mut public_key, secret_key.as_mut())?;
     let keypair = MlKemKeyPair {
         public_key,
         secret_key,
     };
-    validate_generated_mlkem_keypair(suite, &keypair)?;
     Ok(keypair)
 }
+#[cfg(test)]
 fn validate_generated_mlkem_keypair(
     suite: MlKemSuite,
     keypair: &MlKemKeyPair,
@@ -813,6 +897,67 @@ pub fn encapsulate_mlkem(
     rng.fill_bytes(coins.as_mut());
     encapsulate_mlkem_from_coins(suite, public_key, &coins)
 }
+/// Encapsulate into initialized, exact-suite shared-secret and ciphertext buffers.
+///
+/// The public-key checks precede output geometry and RNG use. Secret output is
+/// erased on error or unwind; successful callers must retain zeroizing custody.
+/// Ciphertext is usable only on success.
+///
+/// # Errors
+/// Returns the existing input/output geometry, canonical-material or backend error.
+pub fn encapsulate_mlkem_into(
+    suite: MlKemSuite,
+    public_key: &[u8],
+    rng: &mut HedgedChaCha20Rng,
+    shared_secret: &mut [u8],
+    ciphertext: &mut [u8],
+) -> Result<(), MlKemError> {
+    let mut shared = SecretOutput::new(shared_secret);
+    suite.validate_public_key(public_key)?;
+    validate_len(
+        suite.shared_secret_kind(),
+        shared.bytes.len(),
+        suite.shared_secret_len(),
+    )?;
+    validate_len(
+        suite.ciphertext_kind(),
+        ciphertext.len(),
+        suite.ciphertext_len(),
+    )?;
+    let mut coins = Zeroizing::new([0u8; 32]);
+    rng.fill_bytes(coins.as_mut());
+    encapsulate_mlkem_from_coins_into(suite, public_key, &coins, shared.bytes, ciphertext)?;
+    shared.complete();
+    Ok(())
+}
+
+fn encapsulate_mlkem_from_coins_into(
+    suite: MlKemSuite,
+    public_key: &[u8],
+    coins: &[u8; 32],
+    shared_secret: &mut [u8],
+    ciphertext: &mut [u8],
+) -> Result<(), MlKemError> {
+    let mut shared = SecretOutput::new(shared_secret);
+    suite.validate_public_key(public_key)?;
+    suite.validate_key_material_not_all_zero("ML-KEM encapsulation coins", coins)?;
+    validate_len(
+        suite.shared_secret_kind(),
+        shared.bytes.len(),
+        suite.shared_secret_len(),
+    )?;
+    validate_len(
+        suite.ciphertext_kind(),
+        ciphertext.len(),
+        suite.ciphertext_len(),
+    )?;
+    mlkem_ffi::encapsulate_derand(suite, ciphertext, shared.bytes, public_key, coins)?;
+    suite.validate_key_material_not_all_zero(suite.shared_secret_kind(), shared.bytes)?;
+    suite.validate_ciphertext(ciphertext)?;
+    shared.complete();
+    Ok(())
+}
+
 /// Encapsulate using seed material plus live OS entropy when available.
 ///
 /// # Errors
@@ -866,10 +1011,10 @@ fn encapsulate_mlkem_from_coins(
     suite.validate_key_material_not_all_zero("ML-KEM encapsulation coins", coins)?;
     let mut shared = Zeroizing::new(vec![0u8; suite.shared_secret_len()]);
     let mut ciphertext = vec![0u8; suite.ciphertext_len()];
-    mlkem_ffi::encapsulate_derand(suite, &mut ciphertext, shared.as_mut(), public_key, coins)?;
+    encapsulate_mlkem_from_coins_into(suite, public_key, coins, shared.as_mut(), &mut ciphertext)?;
     Ok((
-        MlKemSharedSecret::try_new(suite, shared)?,
-        MlKemCiphertext::try_new(suite, ciphertext)?,
+        MlKemSharedSecret { bytes: shared },
+        MlKemCiphertext { bytes: ciphertext },
     ))
 }
 /// Decapsulate a ciphertext with the provided secret key.
@@ -885,9 +1030,37 @@ pub fn decapsulate_mlkem(
     suite.validate_secret_key(secret_key)?;
     suite.validate_ciphertext(ciphertext)?;
     let mut shared = Zeroizing::new(vec![0u8; suite.shared_secret_len()]);
-    mlkem_ffi::decapsulate(suite, shared.as_mut(), ciphertext, secret_key)?;
-    MlKemSharedSecret::try_new(suite, shared)
+    decapsulate_mlkem_into(suite, secret_key, ciphertext, shared.as_mut())?;
+    Ok(MlKemSharedSecret { bytes: shared })
 }
+/// Decapsulate into initialized, exact-suite shared-secret storage.
+///
+/// Secret-key validation precedes ciphertext validation, followed by output
+/// geometry. Output is erased on any error or unwind; successful callers must
+/// retain it in zeroizing custody.
+///
+/// # Errors
+/// Returns the existing input/output geometry, canonical-material or backend error.
+pub fn decapsulate_mlkem_into(
+    suite: MlKemSuite,
+    secret_key: &[u8],
+    ciphertext: &[u8],
+    shared_secret: &mut [u8],
+) -> Result<(), MlKemError> {
+    let mut shared = SecretOutput::new(shared_secret);
+    suite.validate_secret_key(secret_key)?;
+    suite.validate_ciphertext(ciphertext)?;
+    validate_len(
+        suite.shared_secret_kind(),
+        shared.bytes.len(),
+        suite.shared_secret_len(),
+    )?;
+    mlkem_ffi::decapsulate(suite, shared.bytes, ciphertext, secret_key)?;
+    suite.validate_key_material_not_all_zero(suite.shared_secret_kind(), shared.bytes)?;
+    shared.complete();
+    Ok(())
+}
+
 /// Return parameter lengths for the given ML-KEM suite.
 #[must_use]
 pub fn mlkem_parameters(suite: MlKemSuite) -> MlKemParameters {
@@ -2216,3 +2389,6 @@ mod tests {
         assert_eq!(MlKemSuite::MlKem1024.to_string(), "mlkem1024");
     }
 }
+
+#[cfg(test)]
+mod initialized_output_tests;

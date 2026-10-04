@@ -5,14 +5,31 @@
 //! advertises readiness only after all four peers serve genesis and a signed smoke commits.
 //! Secrets stay in the private store; public receipts contain only connection metadata.
 
+mod bootstrap_failure;
 mod build_registry;
 mod bundle;
 mod deployment_report;
+pub(crate) mod gateway_compliance;
+mod generated_service_runtime;
 mod generation;
+pub(crate) mod native_operation;
+mod provider_advert;
+mod provider_capacity;
+mod provider_credit;
+mod provider_economics;
+mod provider_funding;
 mod remote;
 mod remote_failure;
 mod remote_status;
+mod reserve_account;
+mod reserve_policy;
+mod reserve_top_up;
+mod reserve_top_up_approval;
 mod runtime;
+mod service_authority;
+mod service_bootstrap;
+mod service_policies;
+mod service_setup;
 mod store;
 pub(crate) mod stream_token_custody;
 mod transport;
@@ -22,22 +39,45 @@ use std::{path::PathBuf, time::Duration};
 
 use norito::json::{JsonDeserialize, JsonSerialize};
 
-pub use build_registry::ManagedBuildRegistry;
+pub use bootstrap_failure::ManagedBootstrapFailure;
 pub use bundle::{MOCHI_APPLICATION_ID, NativeBundleLayout, macos_info_plist};
 pub use deployment_report::{
     ManagedDeploymentExecution, ManagedDeploymentReport, ManagedDeploymentTarget,
     ManagedParentObservation, ManagedParentReport,
+};
+pub use native_operation::ManagedTransactionFinality;
+pub use provider_advert::{ManagedProviderAdvertisement, ManagedProviderAdvertisementReport};
+pub use provider_capacity::{ManagedProviderCapacity, ManagedProviderCapacityProgress};
+pub use provider_credit::{
+    ManagedInitialProviderCredit, ManagedInitialProviderCreditIntent,
+    ManagedInitialProviderCreditProgress,
 };
 pub use remote_failure::ManagedAttachmentFailure;
 pub use remote_status::{
     DataspaceRequest, ManagedAttachmentPhase, ManagedAttachmentStatus, ManagedConfirmedAnchor,
     ManagedDataspaceStatus,
 };
+pub use reserve_account::{ManagedReserveAccountProgress, ManagedReserveAccountRegistration};
+pub use reserve_policy::{
+    ManagedInitialReservePolicy, ManagedReservePolicyActivation, ManagedReservePolicyProgress,
+};
+pub use reserve_top_up::{
+    ManagedHistoricalReserveTopUp, ManagedReserveTopUpIntent, ManagedReserveTopUpProgress,
+    ManagedReserveTopUpRequest,
+};
+pub use reserve_top_up_approval::{
+    ManagedHistoricalReserveTopUpApproval, ManagedReserveTopUpApproval,
+    ManagedReserveTopUpApprovalIntent, ManagedReserveTopUpApprovalProgress,
+};
 pub use runtime::run_worker;
+pub use service_setup::{
+    ManagedInitialGatewaySetup, ManagedInitialProviderIngestAuthority,
+    ManagedInitialReputationPolicy, ManagedInitialServiceSetupProgress,
+};
 pub use store::{LocalnetPorts, ManagedStore};
 pub use stream_token_custody::{
-    ManagedCustodyEnrollmentInterval, ManagedCustodyFinality, ManagedCustodyProgress,
-    ManagedStreamTokenCustody,
+    ManagedCustodyEnrollmentInterval, ManagedCustodyProgress, ManagedStreamTokenCustody,
+    RetainedCustodyEnrollment,
 };
 pub use workspace::{InstalledRuntime, default_state_root, workspace_state_root};
 
@@ -47,6 +87,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// A managed operation that could not safely complete.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// A closed retained-bootstrap condition that cannot renew an original signed intent.
+    #[error(transparent)]
+    Bootstrap(#[from] ManagedBootstrapFailure),
     /// This workspace has never selected a managed environment.
     #[error("no developer environment is selected in this workspace")]
     NoSelection,
@@ -141,15 +184,28 @@ pub struct LocalnetRequest {
 }
 
 impl LocalnetRequest {
-    /// Construct the default named localnet with a thirty-second readiness budget.
+    /// Construct a global localnet with original service-authority prerequisites and a thirty-second budget.
+    ///
+    /// The generated authorities do not enable services or establish provider admission.
     #[must_use]
     pub fn new(launcher: PathBuf, daemon: PathBuf) -> Self {
         Self {
-            service_profile: crate::localnet::LocalnetServiceProfile::Standard,
+            service_profile: crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities,
             name: "local".into(),
             launcher,
             daemon,
             startup_timeout: Duration::from_secs(30),
+        }
+    }
+
+    /// Construct a private-root request without global service-authority prerequisites.
+    ///
+    /// The exact parent and private scope are supplied separately to `up_private_root`.
+    #[must_use]
+    pub fn private_root(launcher: PathBuf, daemon: PathBuf) -> Self {
+        Self {
+            service_profile: crate::localnet::LocalnetServiceProfile::Standard,
+            ..Self::new(launcher, daemon)
         }
     }
 }

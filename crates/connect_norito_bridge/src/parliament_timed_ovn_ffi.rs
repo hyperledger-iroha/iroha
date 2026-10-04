@@ -913,7 +913,7 @@ mod tests {
         block::{
             CommitCertificate,
             consensus::{ExecKv, ExecWitness},
-            decode_versioned_signed_block,
+            decode_framed_signed_block,
         },
         parliament_casting::{
             PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1,
@@ -1689,7 +1689,7 @@ mod tests {
 
         let mut fake_chain = fixture.clone();
         let bad_tip = fake_chain.response.finality_chain.last_mut().unwrap();
-        let mut bad_block = decode_versioned_signed_block(&bad_tip.block_wire).unwrap();
+        let mut bad_block = decode_framed_signed_block(&bad_tip.block_wire).unwrap();
         let certificate = bad_block.commit_certificate().unwrap();
         let mut qc = certificate.commit_qc().to_vec();
         let last = qc.last_mut().unwrap();

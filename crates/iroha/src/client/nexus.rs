@@ -123,20 +123,11 @@ fn decode_response(response: Response<Vec<u8>>) -> Result<PublicLanePreparationV
             body: response.into_body(),
         });
     }
-    if !dispatch::media_type(PREPARE, &response)?.eq_ignore_ascii_case(APPLICATION_NORITO) {
-        return Err(Error::Decode {
-            operation: PREPARE,
-            details: "expected application/x-norito staking preparation response".to_owned(),
-        });
-    }
-    norito::decode_canonical_with_limits(
-        response.body(),
-        norito::canonical_decode_limits(response.body().len()),
+    Client::decode_canonical_norito_response(
+        &response,
+        PUBLIC_LANE_PREPARATION_RESPONSE_MAX_BYTES,
+        PREPARE,
     )
-    .map_err(|error| Error::Decode {
-        operation: PREPARE,
-        details: error.to_string(),
-    })
 }
 
 fn validate_response(
@@ -766,17 +757,27 @@ mod tests {
                 Duration::ZERO,
             );
             let (request, _) = fixture(*client.network_id());
-            assert_eq!(
-                client
+            {
+                let actual_error = client
                     .nexus()
                     .prepare_public_lane_plan(&request)
                     .await
-                    .unwrap_err(),
-                Error::ResponseTooLarge {
-                    maximum: PUBLIC_LANE_PREPARATION_RESPONSE_MAX_BYTES,
-                    actual: Some(PUBLIC_LANE_PREPARATION_RESPONSE_MAX_BYTES + 1)
-                }
-            );
+                    .unwrap_err();
+                let Error::ResponseTooLarge {
+                    maximum: actual_maximum,
+                    actual: actual_actual,
+                } = &actual_error
+                else {
+                    panic!("unexpected SDK error: {actual_error:?}");
+                };
+                assert_eq!(
+                    (actual_maximum, actual_actual,),
+                    (
+                        &(PUBLIC_LANE_PREPARATION_RESPONSE_MAX_BYTES),
+                        &(Some(PUBLIC_LANE_PREPARATION_RESPONSE_MAX_BYTES + 1)),
+                    )
+                );
+            };
             assert_eq!(requests.lock().unwrap().len(), 1);
         }
     }
@@ -797,7 +798,7 @@ mod tests {
                     .headers_mut()
                     .append(http::header::CONTENT_TYPE, media.parse().unwrap());
             }
-            responses.push(response);
+            responses.push((response, false));
         }
         for body in [
             vec![],
@@ -806,24 +807,90 @@ mod tests {
         ] {
             let mut response = successful_response();
             *response.body_mut() = body;
-            responses.push(response);
+            let canonical_failure = !response.body().is_empty();
+            responses.push((response, canonical_failure));
         }
-        for response in responses {
+        for (response, canonical_failure) in responses {
             let (client, requests, _) = attach(
                 move |_| Ok(response.clone()),
                 Duration::ZERO,
                 Duration::ZERO,
             );
             let (request, _) = fixture(*client.network_id());
-            assert!(matches!(
-                client.nexus().prepare_public_lane_plan(&request).await,
-                Err(Error::Decode {
+            let failure = client
+                .nexus()
+                .prepare_public_lane_plan(&request)
+                .await
+                .unwrap_err();
+            if canonical_failure {
+                let Error::CanonicalDecode {
                     operation: PREPARE,
-                    ..
-                })
-            ));
+                    source,
+                } = &failure
+                else {
+                    panic!("original canonical decoder failure: {failure:?}");
+                };
+                assert_eq!(source.kind(), norito::core::DecodeAttemptErrorKind::Invalid);
+                assert!(std::error::Error::source(&failure).is_some());
+            } else {
+                assert!(matches!(
+                    failure,
+                    Error::Decode {
+                        operation: PREPARE,
+                        ..
+                    }
+                ));
+            }
             assert_eq!(requests.lock().unwrap().len(), 1);
         }
+    }
+
+    #[test]
+    fn staking_preparation_retains_original_decode_refusal_across_dispatch_context() {
+        use norito::core::{DecodeAttemptErrorKind, with_decode_limits_scope};
+
+        let response = successful_response();
+        let original_body = response.body().clone();
+        let failure = with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+            || decode_response(response.clone()),
+        )
+        .unwrap_err();
+        let Error::CanonicalDecode { source, .. } = &failure else {
+            panic!("original resource refusal: {failure:?}");
+        };
+        assert_eq!(source.kind(), DecodeAttemptErrorKind::EnclosingLimit);
+        let original_scope = std::error::Error::source(source)
+            .unwrap()
+            .downcast_ref::<norito::Error>()
+            .unwrap();
+        let norito::Error::ScopedDecodeResource(original_scope) = original_scope else {
+            panic!("exact enclosing scope must survive decoding");
+        };
+        let original_scope = original_scope.clone();
+        let failure = dispatch::transport_error(
+            "unrelated.dispatch",
+            eyre::Report::new(failure).wrap_err("staking preparation context"),
+        );
+        let Error::CanonicalDecode {
+            operation: PREPARE,
+            source,
+        } = &failure
+        else {
+            panic!("original staking operation and decoder owner: {failure:?}");
+        };
+        assert_eq!(source.kind(), DecodeAttemptErrorKind::EnclosingLimit);
+        let retained = std::error::Error::source(source)
+            .unwrap()
+            .downcast_ref::<norito::Error>()
+            .unwrap();
+        let norito::Error::ScopedDecodeResource(retained) = retained else {
+            panic!("dispatch must retain the original enclosing scope");
+        };
+        assert_eq!(retained, &original_scope);
+        let (_, expected) = fixture(super::super::test_network_id());
+        assert_eq!(decode_response(response.clone()).unwrap(), expected);
+        assert_eq!(response.body(), &original_body);
     }
 
     #[tokio::test]
@@ -841,19 +908,36 @@ mod tests {
                 Duration::ZERO,
             );
             let (request, _) = fixture(*client.network_id());
-            assert_eq!(
-                client
+            {
+                let actual_error = client
                     .nexus()
                     .prepare_public_lane_plan(&request)
                     .await
-                    .unwrap_err(),
-                Error::Http {
-                    operation: PREPARE,
-                    status,
-                    retry_after: Some(Duration::from_secs(3)),
-                    body: b"staking-unavailable".to_vec(),
-                }
-            );
+                    .unwrap_err();
+                let Error::Http {
+                    operation: actual_operation,
+                    status: actual_status,
+                    retry_after: actual_retry_after,
+                    body: actual_body,
+                } = &actual_error
+                else {
+                    panic!("unexpected SDK error: {actual_error:?}");
+                };
+                assert_eq!(
+                    (
+                        actual_operation,
+                        actual_status,
+                        actual_retry_after,
+                        actual_body,
+                    ),
+                    (
+                        &(PREPARE),
+                        &(status),
+                        &(Some(Duration::from_secs(3))),
+                        &(b"staking-unavailable".to_vec()),
+                    )
+                );
+            };
             assert_eq!(requests.lock().unwrap().len(), 1);
         }
         let (client, requests, _) = attach(
@@ -892,14 +976,20 @@ mod tests {
                 client
             };
             let (request, _) = fixture(*client.network_id());
-            assert_eq!(
-                client
+            {
+                let actual_error = client
                     .nexus()
                     .prepare_public_lane_plan(&request)
                     .await
-                    .unwrap_err(),
-                Error::Timeout { operation: PREPARE }
-            );
+                    .unwrap_err();
+                let Error::Timeout {
+                    operation: actual_operation,
+                } = &actual_error
+                else {
+                    panic!("unexpected SDK error: {actual_error:?}");
+                };
+                assert_eq!((actual_operation,), (&(PREPARE),));
+            };
             assert_eq!(requests.lock().unwrap().len(), 1);
             assert_eq!(completed.load(Ordering::SeqCst), 0);
         }
@@ -910,14 +1000,20 @@ mod tests {
         );
         let (request, _) = fixture(*client.network_id());
         let client = client.with_request_deadline(Instant::now());
-        assert_eq!(
-            client
+        {
+            let actual_error = client
                 .nexus()
                 .prepare_public_lane_plan(&request)
                 .await
-                .unwrap_err(),
-            Error::Timeout { operation: PREPARE }
-        );
+                .unwrap_err();
+            let Error::Timeout {
+                operation: actual_operation,
+            } = &actual_error
+            else {
+                panic!("unexpected SDK error: {actual_error:?}");
+            };
+            assert_eq!((actual_operation,), (&(PREPARE),));
+        };
         assert!(requests.lock().unwrap().is_empty());
     }
 
@@ -941,17 +1037,24 @@ mod tests {
         ));
         builder.torii_url = "https://other.mock/root/".parse().unwrap();
         let other = builder.build().unwrap();
-        assert_eq!(
-            other
+        {
+            let actual_error = other
                 .nexus()
                 .prepare_public_lane_plan(&request)
                 .await
-                .unwrap_err(),
-            Error::ResponseBinding {
-                operation: PREPARE,
-                field: "network_id",
-            }
-        );
+                .unwrap_err();
+            let Error::ResponseBinding {
+                operation: actual_operation,
+                field: actual_field,
+            } = &actual_error
+            else {
+                panic!("unexpected SDK error: {actual_error:?}");
+            };
+            assert_eq!(
+                (actual_operation, actual_field,),
+                (&(PREPARE), &("network_id"),)
+            );
+        };
         assert_eq!(
             requests.lock().unwrap()[1].url.as_str(),
             "https://other.mock/root/v1/nexus/staking/prepare"

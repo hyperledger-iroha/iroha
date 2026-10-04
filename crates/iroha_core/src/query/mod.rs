@@ -24,6 +24,7 @@ pub mod projection_rowset;
 pub mod projection_shard;
 /// Finalized governed provider-admission authority.
 pub mod provider_admission;
+pub mod provider_attestation_inventory;
 pub mod provider_ingest_finalized;
 pub mod provider_ingest_source;
 /// Raw role-13 custody history and same-State block finality; signing still requires executed Check.

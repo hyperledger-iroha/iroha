@@ -61,6 +61,7 @@ struct RuntimeProviderCatalogWireV1 {
     version: u16,
     chain_id: String,
     network_id: NetworkId,
+    credential_max_memory_bytes: u64,
     bindings: Vec<RuntimeProviderBindingWireV1>,
 }
 #[derive(norito::NoritoSchema)]
@@ -291,7 +292,7 @@ impl IrohaRuntimeProviderBindingsV1 {
     /// broker handoff artifact.
     ///
     /// Only the display-chain identity, exact genesis-derived network identity,
-    /// and public binding fields already held by this type are serialized.
+    /// the explicit local credential-memory bound, and public binding fields are serialized.
     /// Credentials, private keys, tokens, vendor
     /// connection settings, and the full daemon configuration are not inputs
     /// to this API.
@@ -355,6 +356,8 @@ impl RuntimeProviderCatalogWireV1 {
             version: RUNTIME_PROVIDER_CATALOG_VERSION_V1,
             chain_id: bindings.chain_id().to_owned(),
             network_id: *bindings.network_id(),
+            credential_max_memory_bytes: u64::try_from(bindings.credential_max_memory_bytes())
+                .map_err(|_| IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?,
             bindings: projected,
         };
         // Reconstruct once before export. This prevents an internally
@@ -389,8 +392,17 @@ impl RuntimeProviderCatalogWireV1 {
         let reconstructed = IrohaRuntimeProviderBindingsV1 {
             chain_id: self.chain_id,
             network_id: self.network_id,
+            credential_max_memory_bytes: usize::try_from(self.credential_max_memory_bytes)
+                .map_err(|_| IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?,
             bindings,
         };
+        if reconstructed.credential_max_memory_bytes == 0
+            && reconstructed.iter().any(|binding| {
+                binding.slot() == IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner
+            })
+        {
+            return Err(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding);
+        }
         validate_catalog_relationships(&reconstructed)?;
         Ok(reconstructed)
     }
@@ -441,7 +453,10 @@ where
         if count > RUNTIME_PROVIDER_CATALOG_MAX_ENTRIES_V1 {
             return Err(IrohaRuntimeProviderCatalogErrorV1::InvalidOrder);
         }
-        let index = usize::from(slot.wire_id() - 1);
+        // Wire IDs are sparse. Count only positions in the canonical inventory.
+        let index = IrohaRuntimeProviderSlotV1::ALL
+            .binary_search(&slot)
+            .map_err(|_| IrohaRuntimeProviderCatalogErrorV1::InvalidOrder)?;
         multiplicities[index] = multiplicities[index]
             .checked_add(1)
             .ok_or(IrohaRuntimeProviderCatalogErrorV1::InvalidOrder)?;
@@ -1568,6 +1583,7 @@ mod tests {
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "sorafs-catalog-test".to_owned(),
             network_id: runtime_provider_test_network_id(),
+            credential_max_memory_bytes: iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
             bindings,
         }
     }
@@ -2150,6 +2166,24 @@ mod tests {
         assert_invalid_wire(&governance_bound);
     }
     #[test]
+    fn catalog_binding_sequence_enforces_every_sparse_slot_multiplicity() {
+        for slot in IrohaRuntimeProviderSlotV1::ALL {
+            let maximum = slot.max_configured_multiplicity();
+            assert_eq!(
+                validate_binding_sequence(std::iter::repeat_n(slot, maximum)),
+                Ok(()),
+                "valid multiplicity for wire ID {}",
+                slot.wire_id(),
+            );
+            assert_eq!(
+                validate_binding_sequence(std::iter::repeat_n(slot, maximum + 1)),
+                Err(IrohaRuntimeProviderCatalogErrorV1::InvalidOrder),
+                "excess multiplicity for wire ID {}",
+                slot.wire_id(),
+            );
+        }
+    }
+    #[test]
     fn catalog_bounds_match_config_validation() {
         let mut appeal = wire_from_bindings(vec![
             appeal_signer(
@@ -2372,6 +2406,7 @@ mod tests {
             version: RUNTIME_PROVIDER_CATALOG_VERSION_V1,
             chain_id: "sorafs-catalog-test".to_owned(),
             network_id: runtime_provider_test_network_id(),
+            credential_max_memory_bytes: 64 * 1024 * 1024,
             bindings: Vec::new(),
         };
         let bytes = norito::encode_canonical(&empty).expect("encode empty fixture");
@@ -2416,6 +2451,7 @@ mod tests {
             version: RUNTIME_PROVIDER_CATALOG_VERSION_V1,
             chain_id: "sorafs-catalog-test".to_owned(),
             network_id: runtime_provider_test_network_id(),
+            credential_max_memory_bytes: 64 * 1024 * 1024,
             bindings: vec![second, first],
         };
         let bytes = norito::encode_canonical(&reversed).expect("encode reversed fixture");
@@ -2471,5 +2507,74 @@ mod tests {
                 "{origin:?} must fail closed"
             );
         }
+    }
+    #[test]
+    fn credential_memory_bound_roundtrips_and_partitions_without_resetting() {
+        let mut catalog = IrohaRuntimeProviderBindingsV1::qualified_for_test(
+            "credential-pool",
+            IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner,
+            "software://beacon/registry",
+            1,
+            [0x37; 32],
+        );
+        catalog.credential_max_memory_bytes = 123_456;
+        let restored = IrohaRuntimeProviderBindingsV1::load_canonical_v1(
+            &catalog.export_canonical_v1().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(restored, catalog);
+        assert_eq!(restored.credential_max_memory_bytes(), 123_456);
+        let (signers, base) = restored.partition_external_software_signers_v1();
+        assert_eq!(signers.credential_max_memory_bytes(), 123_456);
+        assert_eq!(base.credential_max_memory_bytes(), 123_456);
+        assert_eq!(
+            restored
+                .select_slots(&[IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner])
+                .credential_max_memory_bytes(),
+            123_456
+        );
+        let original = restored.new_credential_registry_budget_v1();
+        assert_eq!(original.limit_bytes(), 123_456);
+        let retained = original.try_reserve_bytes(123_456).unwrap();
+        assert!(matches!(
+            original.try_reserve_bytes(1),
+            Err(iroha_allocation::AllocationRefusal::Capacity { .. })
+        ));
+        drop(retained);
+        assert_eq!(original.reserved_bytes(), 0);
+        catalog.credential_max_memory_bytes = 0;
+        assert_eq!(
+            catalog.export_canonical_v1(),
+            Err(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)
+        );
+    }
+
+    #[test]
+    fn catalog_without_explicit_credential_bound_is_rejected() {
+        #[derive(Encode, norito::NoritoSchema)]
+        #[norito_schema(
+            name = "irohad::runtime_provider_registry::catalog::RuntimeProviderCatalogWireV1"
+        )]
+        struct MissingBound {
+            magic: [u8; 8],
+            version: u16,
+            chain_id: String,
+            network_id: NetworkId,
+            bindings: Vec<RuntimeProviderBindingWireV1>,
+        }
+        let current = canonical_wire();
+        let missing = MissingBound {
+            magic: current.magic,
+            version: current.version,
+            chain_id: current.chain_id,
+            network_id: current.network_id,
+            bindings: current.bindings,
+        };
+        assert_eq!(
+            IrohaRuntimeProviderBindingsV1::load_canonical_v1(
+                &norito::encode_canonical(&missing).unwrap()
+            ),
+            Err(IrohaRuntimeProviderCatalogErrorV1::NonCanonicalEncoding)
+        );
     }
 }

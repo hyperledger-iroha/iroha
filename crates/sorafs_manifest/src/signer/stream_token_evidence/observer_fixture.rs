@@ -9,7 +9,7 @@ pub(super) struct Evidence {
     pub(super) trust: SignerStateObserverTrustV1,
     pub(super) phase: Phase,
     pub(super) request: SignerStreamTokenObservationRequestV1,
-    pub(super) attempt: Option<SignerStreamTokenObservationExpectedV1>,
+    pub(super) attempt: SignerStreamTokenObservationExpectedV1,
     pub(super) state: SignerStreamTokenStateObservationV1,
     pub(super) now: u64,
 }
@@ -144,7 +144,7 @@ impl Evidence {
             trust,
             phase,
             request,
-            attempt: Some(attempt),
+            attempt,
             state,
             now,
         };
@@ -166,7 +166,7 @@ impl Evidence {
 
     pub(super) fn fresh_attempt(&mut self, challenge: [u8; 32], not_before: u64) {
         assert!(
-            self.attempt.is_none(),
+            self.attempt.is_retired(),
             "retire the previous pending attempt"
         );
         let attempt = if is_current(self.phase) {
@@ -191,7 +191,7 @@ impl Evidence {
         }
         .expect("fresh independently retained attempt");
         self.request = attempt.request().clone();
-        self.attempt = Some(attempt);
+        self.attempt = attempt;
         self.state.body.request_digest = request_digest(&self.request);
         self.resign();
     }
@@ -211,11 +211,11 @@ impl Evidence {
         completed_operation
     }
 
-    pub(super) fn verify_bytes(&mut self, bytes: &[u8]) -> Result<VerifiedEvidence, EvidenceError> {
-        let attempt = self
-            .attempt
-            .take()
-            .expect("one retained verification attempt");
+    pub(super) fn verify_bytes(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<VerifiedEvidence, SignerStreamTokenEvidenceAdmissionErrorV1> {
+        let attempt = &mut self.attempt;
         match self.phase {
             Phase::Startup
             | Phase::BeforeAdmission
@@ -290,7 +290,10 @@ pub(super) fn assert_positive(evidence: &mut Evidence) {
         evidence.receipt.current.active_head.record_digest
     );
     assert_eq!(observed_at, evidence.state.body.observed_at_unix_ms);
-    assert!(evidence.attempt.is_none(), "success consumes the attempt");
+    assert!(
+        evidence.attempt.is_retired(),
+        "success retires the attempt in place"
+    );
 }
 
 pub(super) fn checked_fixture(phase: Phase) -> Evidence {
@@ -300,8 +303,15 @@ pub(super) fn checked_fixture(phase: Phase) -> Evidence {
 
 pub(super) fn assert_error(evidence: &mut Evidence, expected: EvidenceError) {
     let bytes = evidence.observation_bytes();
-    assert_eq!(evidence.verify_bytes(&bytes).err(), Some(expected));
-    assert!(evidence.attempt.is_none(), "failure consumes the attempt");
+    let failure = evidence
+        .verify_bytes(&bytes)
+        .err()
+        .expect("completed rejection");
+    assert_eq!(rejection(failure), expected);
+    assert!(
+        evidence.attempt.is_retired(),
+        "terminal failure retires the attempt"
+    );
 }
 
 pub(super) fn fields(bytes: &[u8], count: usize) -> Vec<std::ops::Range<usize>> {
@@ -338,4 +348,13 @@ pub(super) fn omit_field<T: norito::NoritoSerialize>(
     }
     norito::core::frame_bare_with_header_flags::<T>(&shortened, flags)
         .expect("omission retains the current schema")
+}
+
+/// Assert semantic controls never silently project an operational refusal.
+pub(super) fn rejection(error: SignerStreamTokenEvidenceAdmissionErrorV1) -> EvidenceError {
+    assert!(
+        !error.is_retryable(),
+        "semantic control encountered local refusal: {error:?}"
+    );
+    error.rejection().expect("completed rejection")
 }

@@ -54,6 +54,165 @@ fn state_set_budget_exhaustion_traps_without_staging_a_write() {
 
 // Existing namespace and generic/debug state boundary tests, included in host::tests.
 #[test]
+fn reserve_namespace_syscalls_preserve_reads_but_refuse_raw_mutations() {
+    let authority = fixture_account("alice");
+    for text in [
+        "sorafs_reserve_state_v1",
+        "sorafs_reserve_provider_v1_00",
+        "sorafs_reserve_movement_v1_00",
+        "sorafs_reserve_appeal_v1_00",
+        "sorafs_reserve_event_v1_0001",
+        "sorafs_reserve_unknown_record",
+    ] {
+        let path: StatePath = text.parse().unwrap();
+        let original = norito::to_bytes(&7_u64).unwrap();
+        // Local-debug execution reaches the lower-level namespace admission. Ordinary generic
+        // execution separately forbids all durable syscalls; this test grants no on-chain scope.
+        let mut host = local_contract_host(authority.clone());
+        host.set_durable_state_snapshot(BTreeMap::from([(path.clone(), original.clone())]));
+        let mut vm = IVM::new(10_000);
+        let path_ptr = store_state_path_tlv(&mut vm, &path);
+        let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &original);
+        for syscall in [ivm_sys::SYSCALL_STATE_SET, ivm_sys::SYSCALL_STATE_DEL] {
+            vm.set_register(10, path_ptr);
+            vm.set_register(11, value_ptr);
+            assert_eq!(
+                host.syscall(syscall, &mut vm),
+                Err(ivm::VMError::PermissionDenied),
+                "{text} syscall {syscall}"
+            );
+            assert!(host.durable_state_overlay.is_empty());
+        }
+        vm.set_register(10, path_ptr);
+        host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm)
+            .expect("existing reserve read policy is unchanged");
+        let value = vm.memory.validate_tlv(vm.register(10)).unwrap();
+        assert_eq!(value.payload, original.as_slice());
+    }
+}
+
+#[test]
+fn reserve_namespace_syscalls_allow_adjacent_user_keys() {
+    for text in [
+        "sorafs_reserve",
+        "sorafs_reserve/user",
+        "sorafs_reservex_state_v1",
+    ] {
+        let path: StatePath = text.parse().unwrap();
+        let mut host = local_contract_host(fixture_account("alice"));
+        let mut vm = IVM::new(10_000);
+        let path_ptr = store_state_path_tlv(&mut vm, &path);
+        let original = norito::to_bytes(&7_u64).unwrap();
+        let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &original);
+        vm.set_register(10, path_ptr);
+        vm.set_register(11, value_ptr);
+        host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm)
+            .expect("adjacent ordinary key remains writable");
+        assert_eq!(host.durable_state_overlay.get(&path), Some(&Some(original)));
+        vm.set_register(10, path_ptr);
+        host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm)
+            .expect("adjacent ordinary key remains deletable");
+        assert_eq!(host.durable_state_overlay.get(&path), Some(&None));
+    }
+}
+
+#[test]
+fn reserve_namespace_retained_host_artifacts_refuse_before_any_effect() {
+    let authority = fixture_account("alice");
+    let state = contract_test_state(&authority);
+    let mut block = state.block(BlockHeader::new(
+        (u64::try_from(state.view().height()).unwrap() + 1)
+            .try_into()
+            .unwrap(),
+        state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    ));
+    for text in ["sorafs_reserve_state_v1", "sorafs_reserve_event_v1_0001"] {
+        for replacement in [Some(vec![8]), None] {
+            let path: StatePath = text.parse().unwrap();
+            let ordinary: StatePath = "ordinary_before_reserve".parse().unwrap();
+            let metadata: Name = "reserve_artifact_must_not_apply".parse().unwrap();
+            let original = vec![7];
+            let mut tx = block.transaction();
+            tx.world
+                .smart_contract_state
+                .insert(path.clone(), original.clone());
+            bind_artifact_test_signed_root(&mut tx, &authority);
+            // Deliberately model a retained artifact that bypassed syscall admission. This is
+            // data supplied to the production application owner, not native reserve authority.
+            let writes = BTreeMap::from([
+                (ordinary.clone(), Some(vec![1])),
+                (path.clone(), replacement),
+            ]);
+            let artifacts = HostExecutionArtifacts {
+                queued: vec![QueuedInstruction {
+                    instruction: SetKeyValue::account(
+                        authority.clone(),
+                        metadata.clone(),
+                        Json::new(true),
+                    )
+                    .into(),
+                    authority: authority.clone(),
+                    contract_runtime_context: None,
+                    entrypoint_authorization: None,
+                }],
+                entrypoint_authorization: None,
+                confidential_gas_delta: 7,
+                completed_axt: Vec::new(),
+                durable_state_authorizations: writes
+                    .keys()
+                    .cloned()
+                    .map(|key| (key, None))
+                    .collect(),
+                durable_state_overlay: writes,
+            };
+            let error = artifacts
+                .apply_to_transaction(&mut tx, &authority)
+                .unwrap_err();
+            assert!(
+                matches!(error, ValidationFail::NotPermitted(reason) if reason.contains("native reserve state"))
+            );
+            assert_eq!(tx.world.smart_contract_state.get(&path), Some(&original));
+            assert!(tx.world.smart_contract_state.get(&ordinary).is_none());
+            assert!(
+                tx.world
+                    .account(&authority)
+                    .unwrap()
+                    .metadata()
+                    .get(&metadata)
+                    .is_none()
+            );
+            assert_eq!(tx.confidential_gas_used_in_tx, 0);
+            tx.finish_execution_effect_budget().unwrap();
+        }
+    }
+    for replacement in [Some(vec![8]), None] {
+        let path: StatePath = "sorafs_reservex_state_v1".parse().unwrap();
+        let mut tx = block.transaction();
+        tx.world.smart_contract_state.insert(path.clone(), vec![7]);
+        bind_artifact_test_signed_root(&mut tx, &authority);
+        let artifacts = HostExecutionArtifacts {
+            queued: Vec::new(),
+            entrypoint_authorization: None,
+            confidential_gas_delta: 0,
+            completed_axt: Vec::new(),
+            durable_state_authorizations: BTreeMap::from([(path.clone(), None)]),
+            durable_state_overlay: BTreeMap::from([(path.clone(), replacement.clone())]),
+        };
+        artifacts
+            .apply_to_transaction(&mut tx, &authority)
+            .expect("adjacent ordinary artifacts still apply");
+        assert_eq!(
+            tx.world.smart_contract_state.get(&path),
+            replacement.as_ref()
+        );
+        tx.finish_execution_effect_budget().unwrap();
+    }
+}
+
+#[test]
 fn contract_state_namespace_access_covers_consensus_owned_prefixes() {
     for key in [
         "retail_day_policy_v1",

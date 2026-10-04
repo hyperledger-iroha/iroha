@@ -340,6 +340,21 @@ impl Fixture {
                 false,
             );
         }
+        if load && wide::rd(w) != 0 {
+            // The memory effect owns the loaded value; this dispatcher-only
+            // fixture still carries the sole atomic destination's exact shape.
+            p[SCALAR_DESTINATION] = event(
+                Space::Register,
+                0,
+                wide::rd(w) as u32,
+                if wide::rd(w) == wide::rs1(w) { base } else { 0 },
+                0,
+                true,
+                clocks[SCALAR_DESTINATION],
+                false,
+                false,
+            );
+        }
         if store {
             p[STORE_VALUE] = event(
                 Space::Register,
@@ -497,6 +512,36 @@ fn original_private_dispatch_owns_call_return_and_store_packets() {
         }
     }
     assert!(Fixture::padding().accepts(&program));
+}
+
+#[test]
+fn canonical_load_fixture_owns_one_atomic_destination_and_keeps_r0_memory_reads() {
+    for destination in [0, 2, 3] {
+        let program = Program::new(contract(
+            &[enc::encode_load(wide::memory::LOAD64, destination, 2, 0)],
+            1_000,
+            ivm::ivm_mode::ZK,
+        ))
+        .unwrap();
+        let fixture = Fixture::new(&program, 0, false, 0);
+        assert!(fixture.accepts(&program));
+        assert_eq!(fixture.packets.fields[MEMORY_BASE][ENABLED], F::ONE);
+        let output = &fixture.packets.fields[SCALAR_DESTINATION];
+        assert_eq!(output[ENABLED], F(u64::from(destination != 0)));
+        if destination == 0 {
+            assert!(output.iter().all(|field| *field == F::ZERO));
+        } else {
+            assert_eq!(output[INDEX], F(destination as u64));
+            assert_eq!(output[WRITE], F::ONE);
+            assert_eq!(output[AFTER_TAG], F::ZERO);
+            if destination == 2 {
+                assert_eq!(
+                    &output[BEFORE..BEFORE + 4],
+                    &fixture.packets.fields[MEMORY_BASE][BEFORE..BEFORE + 4]
+                );
+            }
+        }
+    }
 }
 
 #[test]

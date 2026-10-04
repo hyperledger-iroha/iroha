@@ -67,7 +67,7 @@ required. Full Mint/Guard/receiver, genuine proof/export and full-State authorit
 remain incomplete; the unresolved runtime-verifier schema is not replaced by a
 diagnostic schema. Governed standby retirement and original-context publication
 repairs and paired native retirement fixtures are applied. A separate current
-fixture captures all 105 typed codec owners and 1,555 nominal identities; the
+fixture captures all 106 typed codec owners and 1,559 nominal identities; the
 1,551 still-active historical rows retain their exact hashes. The new ordinary
 checks, reduced-feature checks and native publication replay remain pending.
 
@@ -295,7 +295,9 @@ original atomic destination value/tag transition; its 37-packet schedule places
 that destination after the physical memory read, with no duplicate register or
 tag event. An `r0` destination suppresses only the register write, preserving
 memory checks and the three-gas debit. Closed opcode selection rejects other
-running operations. Current merged native controls require fresh validation.
+running operations. Native LOAD64 controls retain the admitted artifact and bind
+the original value/tag, memory, frame and architectural transitions. Native
+STORE64 controls bind original operand order, stored bytes and completion tariffs.
 Complete instruction/region semantics and finalized State binding remain open;
 these components do not enable IVM proof admission.
 

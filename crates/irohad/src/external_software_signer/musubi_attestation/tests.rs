@@ -39,11 +39,19 @@ fn network() -> NetworkId {
         Hash::prehashed([6; 32]),
     ))
 }
+fn provider_owner() -> AccountId {
+    AccountId::new(
+        KeyPair::from_seed(vec![0x91; 32], Algorithm::Ed25519)
+            .public_key()
+            .clone(),
+    )
+}
 fn purpose(owner: &AccountId) -> SignerPurposeBindingV1 {
     SignerPurposeBindingV1::MusubiProviderAttestation {
         network_id: *network().as_bytes(),
         provider_id: [7; 32],
-        owner_account_id: norito::encode_canonical(owner).unwrap(),
+        provider_owner_account_id: norito::encode_canonical(&provider_owner()).unwrap(),
+        completion_signer_account_id: norito::encode_canonical(owner).unwrap(),
         policy_id: policy().policy_id,
         policy_revision: policy().revision,
         predecessor_digest: policy().predecessor_digest,
@@ -57,7 +65,11 @@ fn payload(owner: AccountId) -> MusubiProviderBundleVerificationPayloadV1 {
             network_id: network(),
             provider_id: ProviderId::new([7; 32]),
             completed_by: owner.clone(),
-            completion_authority: ProviderIngestCompletionAuthorityV1::new(owner, policy()),
+            completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                provider_owner(),
+                owner,
+                policy(),
+            ),
             replication_order: ReplicationOrderId::new([8; 32]),
             assignment_revision: 1,
             completion_epoch: 1,
@@ -145,6 +157,35 @@ fn encoded(payload: &MusubiProviderBundleVerificationPayloadV1) -> Vec<u8> {
     )
     .unwrap()
 }
+
+#[tokio::test]
+async fn dedicated_completion_approval_retains_independent_provider_owner() {
+    let (_parent, service, payload) = service_fixture();
+    let binding = &payload.binding;
+    assert_ne!(
+        binding.completion_authority.provider_owner,
+        binding.completed_by
+    );
+    assert_eq!(
+        binding.completion_authority.completion_signer,
+        binding.completed_by
+    );
+    let approval = adapter(vec![client(&service)])
+        .approve_payload(payload.clone(), [61; 32])
+        .await
+        .unwrap();
+    approval.verify(binding).unwrap();
+    assert_eq!(approval.payload, payload);
+    let mut wrong = payload.clone();
+    wrong.binding.completion_authority.provider_owner = wrong.binding.completed_by.clone();
+    assert!(
+        adapter(vec![client(&service)])
+            .approve_payload(wrong, [62; 32])
+            .await
+            .is_err()
+    );
+}
+
 #[tokio::test]
 async fn approval_worker_panic_is_unavailable() {
     let result: Result<(), _> = approve_payload_recoverably(|| {
@@ -197,7 +238,7 @@ fn musubi_software_rejects_cross_identity_and_policy_before_signing() {
     let (_parent, service, payload) = service_fixture();
     let client = client(&service);
     let initial = service.provenance().unwrap().audit_sequence;
-    for index in 0..7 {
+    for index in 0..8 {
         let mut altered = payload.clone();
         match index {
             0 => {
@@ -213,7 +254,7 @@ fn musubi_software_rejects_cross_identity_and_policy_before_signing() {
                         .clone(),
                 );
                 altered.binding.completed_by = owner.clone();
-                altered.binding.completion_authority.provider_owner = owner;
+                altered.binding.completion_authority.completion_signer = owner;
             }
             3 => altered.binding.completion_authority.signer_policy.policy_id = [42; 32],
             4 => altered.binding.completion_authority.signer_policy.revision = 3,
@@ -224,12 +265,16 @@ fn musubi_software_rejects_cross_identity_and_policy_before_signing() {
                     .signer_policy
                     .predecessor_digest = Some([42; 32])
             }
-            _ => {
+            6 => {
                 altered
                     .binding
                     .completion_authority
                     .signer_policy
                     .policy_digest = [42; 32]
+            }
+            _ => {
+                altered.binding.completion_authority.provider_owner =
+                    altered.binding.completed_by.clone()
             }
         }
         assert!(client.sign([index + 1; 32], &encoded(&altered)).is_err());

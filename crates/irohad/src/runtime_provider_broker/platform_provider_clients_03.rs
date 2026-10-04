@@ -58,8 +58,9 @@ impl ProviderIngestBrokerSignerResolver {
             || !self
                 .expected_signer_binding
                 .qualification
-                .matches_authority(&context.provider_owner)
-            || self.expected_signer_binding.qualification.signer_policy != context.signer_policy
+                .matches_authority(&context.expected_authority.completion_signer)
+            || self.expected_signer_binding.qualification.signer_policy
+                != context.expected_authority.signer_policy
         {
             return Err(sorafs_node::ProviderIngestCompletionSignerResolverErrorV1::Rejected);
         }
@@ -283,7 +284,7 @@ impl sorafs_node::ProviderIngestCompletionSignerV1 for ProviderIngestBrokerCompl
         &self.expected_binding.runtime_handle
     }
     fn authority(&self) -> &iroha_data_model::account::AccountId {
-        &self.resolution_context.provider_owner
+        &self.resolution_context.expected_authority.completion_signer
     }
     fn qualification(
         &self,
@@ -2714,8 +2715,8 @@ impl GlobalBeaconBrokerPartialSigner {
             .map_err(|_| BrokerError::Rejected)?;
             live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)?;
             let request_payload = encode_canonical(
-                &GlobalBeaconCapabilityAttestRequestWireV1 {
-                    session: session.record().clone(),
+                &GlobalBeaconCapabilityAttestRequestRefV1 {
+                    session: norito::core::PayloadRef(session.record()),
                     signer_index: expected_signer_index,
                 },
                 MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
@@ -2792,9 +2793,9 @@ impl iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1 for GlobalBeaconBr
         global_threshold_beacon_seat_readiness_challenge_v1(session, authority, context)?;
         retry_consensus_signer_once_after_unavailable(self.session.as_ref(), || {
             live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)?;
-            let request = GlobalBeaconSeatReadinessRequestWireV1 {
-                session: session.record().clone(),
-                authority: authority.clone(),
+            let request = GlobalBeaconSeatReadinessRequestRefV1 {
+                session: norito::core::PayloadRef(session.record()),
+                authority: norito::core::PayloadRef(authority),
                 context: *context,
             };
             let request_payload = encode_canonical(&request, MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1)?;
@@ -2837,8 +2838,8 @@ impl iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1 for GlobalBeaconBr
                 iroha_core::beacon::global_threshold_beacon_pulse_signing_slot_v1(session, payload)
                     .map_err(|_| BrokerError::Rejected)?;
             live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)?;
-            let request = GlobalBeaconPartialSignRequestWireV1 {
-                session: session.record().clone(),
+            let request = GlobalBeaconPartialSignRequestRefV1 {
+                session: norito::core::PayloadRef(session.record()),
                 height: slot.height,
                 finalized_chain_anchor: slot.finalized_chain_anchor,
                 context: slot.context,
@@ -2854,8 +2855,13 @@ impl iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1 for GlobalBeaconBr
             let signed = self
                 .session
                 .decode_result::<GlobalBeaconPartialSignResultWireV1>(&result)?;
-            let mut verifier =
-                global_beacon_aggregator_from_sign_request(&request, &session.record().network_id)?;
+            let mut verifier = iroha_core::beacon::GlobalThresholdBeaconPulseAggregatorV1::new(
+                session.clone(),
+                slot.height,
+                slot.finalized_chain_anchor,
+                slot.context,
+            )
+            .map_err(|_| BrokerError::Rejected)?;
             verifier.accept_partial(signed.partial).map_err(|_| {
                 self.session.poison();
                 BrokerError::Rejected

@@ -6484,6 +6484,7 @@ fn parse_actual_config_for_genesis_result(
     let reader = ConfigReader::new()
         .with_env(MockEnv::default())
         .with_toml_source(TomlSource::inline(merged));
+    let sora_profile = iroha_config::sora_profile::SoraProfileSelection::from_reader(&reader);
     let user = reader
         .read_and_complete::<iroha_config::parameters::user::Root>()
         .map_err(|err| eyre!("failed to read merged config for genesis config: {err:?}"))?;
@@ -6491,7 +6492,7 @@ fn parse_actual_config_for_genesis_result(
         .parse()
         .map_err(|err| eyre!("failed to parse merged config for genesis config: {err:?}"))?;
     if config_requires_sora_profile(config_layers) {
-        config.apply_sora_profile();
+        sora_profile.apply(&mut config);
     }
     config.apply_storage_budget();
     Ok(config)
@@ -10721,10 +10722,7 @@ mod tests {
     use iroha_core::sumeragi::consensus::compute_consensus_parameters_fingerprint;
     use iroha_crypto::Algorithm;
     use iroha_data_model::{
-        block::{
-            decode_framed_signed_block, decode_versioned_signed_block,
-            deframe_versioned_signed_block_bytes,
-        },
+        block::{decode_framed_signed_block, deframe_versioned_signed_block_bytes},
         isi::{Instruction, SetParameter},
         parameter::{Parameter, system::consensus_metadata},
         transaction::{Executable, ExecutableBatchItem},
@@ -15937,8 +15935,7 @@ mod tests {
             deframe_versioned_signed_block_bytes(&framed).expect("deframe framed genesis");
         assert_eq!(deframed.bytes.as_ref(), framed.as_slice());
         assert_eq!(deframed.bare_versioned.as_ref(), versioned.as_slice());
-        let decoded =
-            decode_versioned_signed_block(framed.as_slice()).expect("decode framed genesis");
+        let decoded = decode_framed_signed_block(framed.as_slice()).expect("decode framed genesis");
         assert_eq!(
             decoded.version(),
             1,

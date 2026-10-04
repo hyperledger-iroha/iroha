@@ -315,7 +315,8 @@ where
     V: JsonSerialize + Value,
 {
     fn json_serialize(&self, out: &mut String) {
-        write_original_storage(self.original_undo_entries(), self.iter(), out);
+        let images = self.original_images();
+        write_original_storage(images.undo_entries(), images.current_entries(), out);
     }
 }
 

@@ -2007,7 +2007,7 @@ mod tests {
             endpoint: endpoint.clone(),
             attestation: EndpointAttestationV1 {
                 version: sorafs_manifest::ENDPOINT_ATTESTATION_VERSION_V1,
-                kind: EndpointAttestationKind::Mtls,
+                kind: EndpointAttestationKind::Tls,
                 attested_at: 1_600_000_000,
                 expires_at: 1_800_000_000,
                 leaf_certificate: vec![1],

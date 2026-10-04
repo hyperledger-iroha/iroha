@@ -9,7 +9,8 @@ import XCTest
 final class ValidatorStakingNoritoV1FixtureTests: XCTestCase {
     private let expectedKinds: Set<String> = [
         "authority_generation", "epoch_authorization", "dkg_session", "dkg_transcript",
-        "committee_transition", "monetary_plan", "reward_claim_plan", "fee_reward_claim_plan", "rebind_peer",
+        "committee_transition", "monetary_plan", "monetary_bond_plan", "monetary_unbond_plan",
+        "monetary_slash_plan", "reward_claim_plan", "fee_reward_claim_plan", "rebind_peer",
     ]
 
     func testCanonicalRustFixtures() throws {
@@ -119,6 +120,121 @@ final class ValidatorStakingNoritoV1FixtureTests: XCTestCase {
         XCTAssertEqual(rebind.noritoPayload, rows["rebind_peer"])
     }
 
+    func testMonetaryOperationFixturesBindExactTypedFieldsAndNetworkXor() throws {
+        let rows = try fixtureRows()
+        let registration = try ValidatorStakingNoritoV1.MonetaryPlan(noritoPayload: rows["monetary_plan"]!)
+        let transition = try ValidatorStakingNoritoV1.CommitteeTransition(noritoPayload: rows["committee_transition"]!)
+        let bond = try ValidatorStakingNoritoV1.MonetaryPlan(noritoPayload: rows["monetary_bond_plan"]!)
+        let unbond = try ValidatorStakingNoritoV1.MonetaryPlan(noritoPayload: rows["monetary_unbond_plan"]!)
+        let slash = try ValidatorStakingNoritoV1.MonetaryPlan(noritoPayload: rows["monetary_slash_plan"]!)
+        guard case let .bond(bondBinding) = bond.precondition,
+              case let .unbond(unbondBinding) = unbond.precondition,
+              case let .slash(slashBinding) = slash.precondition else {
+            XCTFail("operation-specific fixtures must decode to their exact typed variants")
+            return
+        }
+        XCTAssertEqual(bondBinding.peerID.algorithm, .blsNormal)
+        XCTAssertEqual(bondBinding.peerID.noritoPayload, transition.preparation.committee[0].validator)
+        XCTAssertEqual(bondBinding.peerID.publicKey, transition.preparation.committee[0].blsPublicKey)
+        XCTAssertEqual(unbondBinding.requestHash, Data(repeating: 0x75, count: 32))
+        XCTAssertEqual(slashBinding.slashableExposure.mantissaLittleEndian, Data([0xdc, 0x05]))
+        XCTAssertEqual(slashBinding.slashableExposure.scale, 0)
+        for (name, plan) in [("monetary_bond_plan", bond), ("monetary_unbond_plan", unbond), ("monetary_slash_plan", slash)] {
+            XCTAssertEqual(plan.networkScope, transition.preparation.networkID)
+            XCTAssertEqual(plan.validUntilHeight, 210)
+            XCTAssertEqual(plan.amount.mantissaLittleEndian, registration.amount.mantissaLittleEndian)
+            XCTAssertEqual(plan.amount.scale, 0)
+            XCTAssertEqual(plan.precondition.activationHeight, 201)
+            for asset in [plan.sourceAsset, plan.destinationAsset] {
+                XCTAssertEqual(asset.definition, transition.preparation.eligibility.xorAssetDefinitionID)
+                XCTAssertNil(asset.scopeDataspace)
+            }
+            let deposits = plan.precondition.kind == .bond
+            XCTAssertEqual(plan.sourceAsset.noritoPayload, deposits ? registration.sourceAsset.noritoPayload : registration.destinationAsset.noritoPayload)
+            XCTAssertEqual(plan.destinationAsset.noritoPayload, deposits ? registration.destinationAsset.noritoPayload : registration.sourceAsset.noritoPayload)
+            XCTAssertEqual(plan.noritoPayload, rows[name])
+        }
+    }
+
+    func testMonetaryBindingsRejectMalformedPeerHashAndExposure() throws {
+        let rows = try fixtureRows()
+        func assertRejected(_ kind: String, _ tag: UInt64, _ body: [Data], file: StaticString = #filePath, line: UInt = #line) throws {
+            let original = try fields(rows[kind]!)
+            let variant = uint(tag, bytes: 4) + record([record(body)])
+            XCTAssertThrowsError(try ValidatorStakingNoritoV1.MonetaryPrecondition(noritoPayload: variant), file: file, line: line)
+            XCTAssertThrowsError(try ValidatorStakingNoritoV1.MonetaryPlan(
+                noritoPayload: replacing(original, index: 5, value: variant)), file: file, line: line)
+        }
+        let peer = try fields(fields(fields(rows["monetary_bond_plan"]!)[5].dropFirst(4))[0])[1]
+        let key = try vectorFields(fields(peer)[0])
+        let badPeers = [
+            Data(), record([]), record([Data()]), record([vector([])]),
+            record([vector([Data([0xff])] + Array(key.dropFirst()))]),
+            record([vector(Array(key.dropLast()))]),
+            record([vector(key + [Data([1])])]),
+            record([vector([Data([2])] + Array(repeating: Data([0]), count: 48))]),
+            record([vector([Data([2, 0])] + Array(key.dropFirst()))]),
+            record([vector(key), Data([0])]),
+        ]
+        for malformed in badPeers { try assertRejected("monetary_bond_plan", 1, [uint(201), malformed]) }
+        for width in [0, 1, 31, 33] {
+            try assertRejected("monetary_unbond_plan", 2, [uint(201), Data(repeating: 0x75, count: width)])
+        }
+        var unmarked = Data(repeating: 0x75, count: 32)
+        unmarked[31] = 0x74
+        try assertRejected("monetary_unbond_plan", 2, [uint(201), unmarked])
+        for malformed in [quantity([0xff], scale: 0), quantity([10], scale: 1), quantity([1], scale: 29), Data()] {
+            try assertRejected("monetary_slash_plan", 3, [uint(201), malformed])
+        }
+        for (kind, tag, binding) in [("monetary_bond_plan", UInt64(1), peer),
+                                   ("monetary_unbond_plan", 2, Data(repeating: 0x75, count: 32)),
+                                   ("monetary_slash_plan", 3, quantity([0xdc, 5], scale: 0))] {
+            try assertRejected(kind, tag, [uint(201)])
+            try assertRejected(kind, tag, [uint(201), binding, Data([0])])
+            for width in [0, 7, 9] { try assertRejected(kind, tag, [Data(repeating: 0, count: width), binding]) }
+            try assertRejected(kind, 4, [uint(201), binding])
+            try assertRejected(kind, UInt64(UInt32.max), [uint(201), binding])
+        }
+        let body = record([uint(201), Data(repeating: 0x75, count: 32)])
+        let nonminimal = uint(2, bytes: 4) + Data([UInt8(body.count) | 0x80, 0]) + body
+        XCTAssertThrowsError(try ValidatorStakingNoritoV1.MonetaryPrecondition(noritoPayload: nonminimal))
+    }
+
+    func testMonetaryBindingsPreserveUnsignedHeightAndOwnedValues() throws {
+        let rows = try fixtureRows()
+        for (kind, tag) in [("monetary_bond_plan", UInt64(1)), ("monetary_unbond_plan", 2), ("monetary_slash_plan", 3)] {
+            var plan = try fields(rows[kind]!)
+            var binding = try fields(fields(plan[5].dropFirst(4))[0])
+            for height in [UInt64(0), UInt64.max] {
+                binding[0] = uint(height)
+                plan[5] = uint(tag, bytes: 4) + record([record(binding)])
+                var bytes = record(plan)
+                let original = bytes
+                let decoded = try ValidatorStakingNoritoV1.MonetaryPlan(noritoPayload: bytes)
+                bytes.resetBytes(in: 0..<bytes.count)
+                XCTAssertEqual(decoded.precondition.activationHeight, height)
+                XCTAssertEqual(decoded.noritoPayload, original)
+                switch decoded.precondition {
+                case .bond(let value):
+                    var key = value.peerID.publicKey
+                    key.resetBytes(in: 0..<key.count)
+                    XCTAssertNotEqual(value.peerID.publicKey, key)
+                case .unbond(let value):
+                    var hash = value.requestHash
+                    hash.resetBytes(in: 0..<hash.count)
+                    XCTAssertEqual(value.requestHash, Data(repeating: 0x75, count: 32))
+                case .slash(let value): XCTAssertEqual(value.slashableExposure.mantissaLittleEndian, Data([0xdc, 5]))
+                case .registration: XCTFail("wrong monetary variant")
+                }
+            }
+        }
+        // PeerId is a generic Rust key identity, not a BLS-only wire alias.
+        let replacementPeer = try fields(rows["rebind_peer"]!)[2]
+        let peer = try ValidatorStakingNoritoV1.PeerID(noritoPayload: replacementPeer)
+        XCTAssertEqual(peer.algorithm, .ed25519)
+        XCTAssertEqual(peer.noritoPayload, replacementPeer)
+    }
+
     func testTruncatedRecordsFailClosed() throws {
         let rows = try fixtureRows()
         let decoders: [String: (Data) throws -> Void] = [
@@ -128,6 +244,9 @@ final class ValidatorStakingNoritoV1FixtureTests: XCTestCase {
             "dkg_transcript": { _ = try ValidatorStakingNoritoV1.DkgTranscript(noritoPayload: $0) },
             "committee_transition": { _ = try ValidatorStakingNoritoV1.CommitteeTransition(noritoPayload: $0) },
             "monetary_plan": { _ = try ValidatorStakingNoritoV1.MonetaryPlan(noritoPayload: $0) },
+            "monetary_bond_plan": { _ = try ValidatorStakingNoritoV1.MonetaryPlan(noritoPayload: $0) },
+            "monetary_unbond_plan": { _ = try ValidatorStakingNoritoV1.MonetaryPlan(noritoPayload: $0) },
+            "monetary_slash_plan": { _ = try ValidatorStakingNoritoV1.MonetaryPlan(noritoPayload: $0) },
             "reward_claim_plan": { _ = try ValidatorStakingNoritoV1.RewardClaimPlan(noritoPayload: $0) },
             "fee_reward_claim_plan": { _ = try ValidatorStakingNoritoV1.RewardClaimPlan(noritoPayload: $0) },
             "rebind_peer": { _ = try ValidatorStakingNoritoV1.RebindPeer(noritoPayload: $0) },

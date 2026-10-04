@@ -1384,6 +1384,7 @@ mod tests {
             crate::sorafs::pricing::PricingScheduleRecord::launch_default(),
         ));
         assert_default_registry_decodes(sorafs::UpsertProviderCredit::new(
+            None,
             crate::sorafs::pricing::ProviderCreditRecord::new(
                 crate::sorafs::capacity::ProviderId::new([0xC1; 32]),
                 xor_quantity_nanos(1),

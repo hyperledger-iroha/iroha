@@ -41,6 +41,11 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
+mod generated_local;
+pub use generated_local::{
+    AuthenticatedGeneratedLocalProviderTransportV1, GeneratedLocalProviderTransportErrorV1,
+    GeneratedLocalProviderTransportV1,
+};
 mod source;
 pub use source::{GatewaySourceErrorV1, GatewaySourceLimitsV1, GatewayVerifiedPayloadV1};
 const HEADER_SORA_NONCE: &str = "x-sorafs-nonce";
@@ -348,6 +353,28 @@ impl GatewayFetchContext {
             Some(tls_roots_der),
         )
     }
+    /// Construct the one exact generated-local provider transport after a native proof join.
+    ///
+    /// Uses only its original CA, original hostname and loopback socket. Platform roots,
+    /// DNS lookup, proxies, redirects and unrelated privacy endpoints are unavailable.
+    /// # Errors
+    /// Refuses a different provider/origin, invalid TLS material, timeout or stream token.
+    pub fn new_with_generated_local_transport(
+        config: GatewayFetchConfig,
+        provider: GatewayProviderInput,
+        connect_timeout: Duration,
+        request_timeout: Duration,
+        selected: &AuthenticatedGeneratedLocalProviderTransportV1,
+    ) -> Result<Self, GatewayBuildError> {
+        selected.validate_input(&provider)?;
+        let client = selected.async_http_client(connect_timeout, request_timeout)?;
+        Self::build_with_selected_engine(
+            config,
+            [provider],
+            Arc::new(ReqwestEngine::new(client)),
+            Some(selected),
+        )
+    }
     fn build_with_tls_roots(
         config: GatewayFetchConfig,
         providers: impl IntoIterator<Item = GatewayProviderInput>,
@@ -438,6 +465,14 @@ impl GatewayFetchContext {
         providers: impl IntoIterator<Item = GatewayProviderInput>,
         engine: Arc<dyn HttpEngine>,
     ) -> Result<Self, GatewayBuildError> {
+        Self::build_with_selected_engine(config, providers, engine, None)
+    }
+    fn build_with_selected_engine(
+        config: GatewayFetchConfig,
+        providers: impl IntoIterator<Item = GatewayProviderInput>,
+        engine: Arc<dyn HttpEngine>,
+        selected: Option<&AuthenticatedGeneratedLocalProviderTransportV1>,
+    ) -> Result<Self, GatewayBuildError> {
         let config = NormalisedConfig::from_config(config)?;
         let mut provider_map = HashMap::new();
         let mut provider_ids = HashSet::new();
@@ -453,6 +488,7 @@ impl GatewayFetchContext {
                 input,
                 &mut provider_map,
                 &mut provider_ids,
+                selected,
             )?;
             fetch_providers.push(descriptor.provider.clone());
         }
@@ -1123,6 +1159,7 @@ impl ProviderDescriptor {
         input: GatewayProviderInput,
         providers: &mut HashMap<String, Arc<ProviderRuntime>>,
         provider_ids: &mut HashSet<[u8; 32]>,
+        selected: Option<&AuthenticatedGeneratedLocalProviderTransportV1>,
     ) -> Result<Self, GatewayBuildError> {
         if input.name.is_empty()
             || input.name.len() > MAX_PROVIDER_NAME_BYTES
@@ -1151,12 +1188,15 @@ impl ProviderDescriptor {
             return Err(GatewayBuildError::DuplicateProviderId { provider_id_hex });
         }
         let gateway_public_key = decode_gateway_public_key(&input.gateway_public_key_hex)?;
-        let base_url = parse_base_url(&input.base_url).map_err(|source| {
-            GatewayBuildError::InvalidBaseUrl {
-                provider_id: provider_id_hex.clone(),
-                source,
-            }
-        })?;
+        let base_url = match selected {
+            Some(local) => local.validate_input(&input)?,
+            None => parse_base_url(&input.base_url).map_err(|source| {
+                GatewayBuildError::InvalidBaseUrl {
+                    provider_id: provider_id_hex.clone(),
+                    source,
+                }
+            })?,
+        };
         let privacy_events_url = match input.privacy_events_url.as_ref() {
             Some(raw) => Some(parse_privacy_url(raw).map_err(|source| {
                 GatewayBuildError::InvalidPrivacyUrl {
@@ -1385,8 +1425,8 @@ fn parse_gateway_url(value: &str) -> Result<Url, GatewayUrlError> {
     if url.scheme() != "https" {
         return Err(GatewayUrlError::InsecureScheme);
     }
-    if url.port_or_known_default() != Some(443) {
-        return Err(GatewayUrlError::NonStandardPort);
+    if url.port_or_known_default().is_none_or(|port| port == 0) {
+        return Err(GatewayUrlError::ZeroPort);
     }
     if !url.username().is_empty() || url.password().is_some() {
         return Err(GatewayUrlError::Credentials);
@@ -1400,6 +1440,9 @@ fn parse_gateway_url(value: &str) -> Result<Url, GatewayUrlError> {
             return Err(GatewayUrlError::NonPublicAddress);
         }
         url::Host::Ipv6(address) if !is_public_ip(IpAddr::V6(address)) => {
+            return Err(GatewayUrlError::NonPublicAddress);
+        }
+        url::Host::Domain(name) if name == "localhost" || name.ends_with(".localhost") => {
             return Err(GatewayUrlError::NonPublicAddress);
         }
         _ => {}
@@ -1481,8 +1524,8 @@ pub enum GatewayUrlError {
     NonCanonical,
     #[error("URL must use HTTPS")]
     InsecureScheme,
-    #[error("URL must use the standard HTTPS port 443")]
-    NonStandardPort,
+    #[error("URL must use a nonzero HTTPS port")]
+    ZeroPort,
     #[error("URL credentials are forbidden")]
     Credentials,
     #[error("URL query strings and fragments are forbidden")]
@@ -1533,6 +1576,9 @@ pub enum GatewayBuildError {
     /// Explicit source trust roots were empty, excessive or invalid DER.
     #[error("gateway pinned TLS roots are invalid")]
     InvalidPinnedTlsRoots,
+    /// Provider inputs differ from the exact original joined local transport.
+    #[error("gateway inputs do not match the selected generated-local transport")]
+    InvalidGeneratedLocalTransport,
     #[error("failed to obtain secure random bytes for gateway nonces: {message}")]
     RandomBytes { message: String },
     #[error("gateway DNS resolution returned no exclusively public addresses")]
@@ -2614,7 +2660,9 @@ mod tests {
         for invalid in [
             "http://gateway.example/",
             "https://user@gateway.example/",
-            "https://gateway.example:444/",
+            "https://gateway.example:0/",
+            "https://localhost:444/",
+            "https://provider.localhost:444/",
             "https://gateway.example:443/",
             "HTTPS://gateway.example/",
             "https://Gateway.Example/",
@@ -2642,6 +2690,11 @@ mod tests {
         }
         assert!(parse_base_url("https://gateway.example/").is_ok());
         assert!(parse_base_url("https://8.8.8.8/").is_ok());
+        for origin in ["https://gateway.example:444/", "https://8.8.8.8:8443/"] {
+            let parsed = parse_base_url(origin).unwrap();
+            assert_eq!(parsed.as_str(), origin);
+            assert_ne!(parsed.port_or_known_default(), Some(443));
+        }
         assert!(parse_privacy_url("https://gateway.example/privacy/events").is_ok());
         assert!(parse_privacy_url("https://gateway.example/").is_err());
     }

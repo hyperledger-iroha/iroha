@@ -4634,6 +4634,7 @@ dependencies = [
  "futures-util",
  "hex",
  "iroha",
+ "iroha_allocation",
  "iroha_config",
  "iroha_config_base",
  "iroha_core",
@@ -4873,6 +4874,7 @@ dependencies = [
  "log",
  "nonzero_ext",
  "norito",
+ "sorafs_manifest",
  "soranet_pq",
  "strum",
  "thiserror 2.0.18",
@@ -4928,6 +4930,7 @@ dependencies = [
 name = "iroha_core"
 version = "2.0.0-rc.2.0"
 dependencies = [
+ "arrayvec",
  "base64 0.22.1",
  "blake2",
  "blake3",
@@ -5257,17 +5260,24 @@ dependencies = [
  "iroha_genesis",
  "iroha_model_base",
  "iroha_primitives",
+ "iroha_storage_client",
  "iroha_sumeragi",
  "iroha_test_samples",
+ "iroha_torii_shared",
+ "iroha_version",
  "iroha_wallet",
  "kotodama_lang",
  "libc",
  "norito",
  "rand 0.9.4",
+ "rcgen",
  "rustix 1.1.4",
+ "rustls",
  "sorafs_manifest",
+ "sorafs_node",
  "tempfile",
  "thiserror 2.0.18",
+ "time",
  "tokio",
  "toml 0.9.12+spec-1.1.0",
  "url",
@@ -5489,48 +5499,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "iroha_kagemusha_attested"
-version = "2.0.0-rc.2.0"
-dependencies = [
- "base64 0.22.1",
- "hex",
- "norito",
- "p256",
- "sha2",
-]
-
-[[package]]
-name = "iroha_kagemusha_issuer"
-version = "2.0.0-rc.2.0"
-dependencies = [
- "axum",
- "base64 0.22.1",
- "bytes",
- "eyre",
- "hex",
- "http",
- "http-body-util",
- "iroha",
- "iroha_crypto",
- "iroha_data_model",
- "iroha_kagemusha_attested",
- "norito",
- "p256",
- "rand 0.9.4",
- "reqwest",
- "sha2",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "url",
- "zeroize",
-]
-
-[[package]]
 name = "iroha_logger"
 version = "2.0.0-rc.2.0"
 dependencies = [
@@ -5601,13 +5569,13 @@ dependencies = [
  "iroha",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_fs",
  "iroha_model_base",
- "iroha_primitives",
  "iroha_service_model",
  "iroha_telemetry",
  "norito",
  "reqwest",
- "rustix 1.1.4",
+ "rustix",
  "sorafs_car",
  "sorafs_manifest",
  "tempfile",
@@ -5938,6 +5906,7 @@ dependencies = [
  "fslock",
  "futures",
  "iroha",
+ "iroha_allocation",
  "iroha_config",
  "iroha_core",
  "iroha_core_zk",
@@ -6010,6 +5979,7 @@ dependencies = [
  "iroha_crypto",
  "iroha_data_model",
  "iroha_executor_data_model",
+ "iroha_fs",
  "iroha_futures",
  "iroha_logger",
  "iroha_model_base",
@@ -6057,6 +6027,7 @@ dependencies = [
  "thiserror 2.0.18",
  "time",
  "tokio",
+ "tokio-rustls",
  "tokio-tungstenite",
  "tower",
  "tower-http",
@@ -6107,6 +6078,7 @@ dependencies = [
  "iroha",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_executor_data_model",
  "iroha_fs",
  "iroha_model_base",
  "iroha_primitives",
@@ -7402,6 +7374,7 @@ dependencies = [
  "criterion",
  "gpuzstd_metal",
  "hkdf",
+ "iroha_allocation",
  "iroha_audio",
  "iroha_schema",
  "norito_derive",
@@ -10468,14 +10441,17 @@ dependencies = [
  "iroha_service_model",
  "norito",
  "rand 0.9.4",
+ "rcgen",
  "reqwest",
  "rustix 1.1.4",
+ "rustls",
  "sorafs_chunker",
  "sorafs_manifest",
  "sorafs_orchestrator",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-rustls",
  "toml 0.9.12+spec-1.1.0",
  "url",
  "zstd",
@@ -10515,6 +10491,7 @@ dependencies = [
  "soranet_pq",
  "tempfile",
  "thiserror 2.0.18",
+ "url",
 ]
 
 [[package]]
@@ -10530,6 +10507,7 @@ dependencies = [
  "iroha_config",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_fs",
  "iroha_logger",
  "iroha_model_base",
  "iroha_telemetry",
@@ -11627,7 +11605,6 @@ dependencies = [
  "futures-util",
  "http",
  "http-body",
- "http-body-util",
  "pin-project-lite",
  "tokio",
  "tower",

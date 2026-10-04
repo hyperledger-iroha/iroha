@@ -1261,6 +1261,9 @@ impl Execute for iroha_data_model::isi::sorafs::SetProviderIngestCompletionAutho
             .into());
         }
         state_transaction.world.account(&self.next.provider_owner)?;
+        state_transaction
+            .world
+            .account(&self.next.completion_signer)?;
         let current = state_transaction
             .world
             .provider_ingest_completion_authorities
@@ -2563,12 +2566,21 @@ pub fn seed_eligible_auto_replication_providers_for_test(
             .world
             .provider_owners
             .insert(provider_id, owner.clone());
+        state_transaction.world.add_account_permission(
+            owner,
+            Permission::from(
+                iroha_executor_data_model::permission::sorafs::CanCompleteSorafsReplicationOrder {
+                    provider_id,
+                },
+            ),
+        );
         state_transaction
             .world
             .provider_ingest_completion_authorities
             .insert(
                 provider_id,
                 ProviderIngestCompletionAuthorityV1::new(
+                    owner.clone(),
                     owner.clone(),
                     ProviderIngestCompletionSignerPolicyV1 {
                         policy_id: provider_bytes,
@@ -2687,6 +2699,7 @@ pub(crate) fn completed_auto_replication_order_for_test(
     };
     let mut order = build_auto_replication_order(pin, issued_by, issued_epoch, &[provider_id])?;
     let completion_authority = ProviderIngestCompletionAuthorityV1::new(
+        issued_by.clone(),
         issued_by.clone(),
         ProviderIngestCompletionSignerPolicyV1 {
             policy_id: [0xD6; 32],
@@ -4356,7 +4369,7 @@ pub(crate) fn validate_stored_replication_order(
                 .is_some_and(|previous| completion.completion_epoch < previous)
             || completion.assignment_revision != record.assignment_revision
             || !completion.completion_authority.is_valid()
-            || completion.completion_authority.provider_owner != completion.completed_by
+            || completion.completion_authority.completion_signer != completion.completed_by
             || !completion.finalized_anchor.is_valid()
         {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -4533,11 +4546,15 @@ impl Execute for iroha_data_model::isi::sorafs::CompleteReplicationOrder {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        require_permission(
-            state_transaction,
+        if !crate::query::provider_ingest_source::has_provider_completion_permission_v1(
+            &state_transaction.world,
             authority,
-            "CanCompleteSorafsReplicationOrder",
-        )?;
+            self.provider_id,
+        ) {
+            return Err(invalid_parameter(
+                "provider-scoped CanCompleteSorafsReplicationOrder permission required",
+            ));
+        }
         if self.expected_assignment_revision == 0
             || !self.expected_authority.is_valid()
             || !provider_ingest_anchor_matches_committed_prefix(
@@ -4611,10 +4628,11 @@ impl Execute for iroha_data_model::isi::sorafs::CompleteReplicationOrder {
                     .into(),
                 )
             })?;
-        if provider_owner != authority || provider_owner != &self.expected_authority.provider_owner
+        if provider_owner != &self.expected_authority.provider_owner
+            || authority != &self.expected_authority.completion_signer
         {
             return Err(invalid_parameter(format!(
-                "replication order {order_label} completion for provider {} must be authorized by its registered owner",
+                "replication order {order_label} completion for provider {} must be authorized by its exact governed completion signer",
                 hex::encode(self.provider_id.as_bytes())
             )));
         }
@@ -4874,6 +4892,34 @@ impl Execute for iroha_data_model::isi::sorafs::UpsertProviderCredit {
         if record.provider_id == ProviderId::default() {
             return Err(invalid_parameter(
                 "provider credit record must reference a non-zero provider identifier",
+            ));
+        }
+        // Compare the entire canonical native row before reserve scans or mutation.
+        // Hash the borrowed record under the inherited attempt allowance. A local
+        // serializer refusal remains sticky deferral, never a stale-CAS rejection.
+        let current = state_transaction
+            .world
+            .provider_credit_ledger
+            .get(&record.provider_id);
+        let matches = match (self.expected_current, current) {
+            (None, None) => true,
+            (Some(expected), Some(current)) => {
+                let hash = iroha_crypto::HashOf::try_new(current).map_err(|error| {
+                    state_transaction.world.attempt_error_to_instruction_error(
+                        crate::execution_attempt::norito_decode_attempt_error(error, |_| {
+                            invalid_parameter(
+                                "provider credit current record cannot be canonically hashed",
+                            )
+                        }),
+                    )
+                })?;
+                hash == expected
+            }
+            _ => false,
+        };
+        if !matches {
+            return Err(invalid_parameter(
+                "provider credit expected current record does not match",
             ));
         }
         let owner = state_transaction
@@ -8553,6 +8599,11 @@ mod sorafs_tests {
         register_governed_capacity_declaration(&mut stx, &alice(), declaration)
             .expect("register capacity declaration");
         UpsertProviderCredit {
+            expected_current: stx
+                .world
+                .provider_credit_ledger
+                .get(&provider)
+                .map(iroha_crypto::HashOf::new),
             record: provider_credit_nanos(provider, 1_000_000_000, 1_000_000_000),
         }
         .execute(&alice(), &mut stx)
@@ -8748,6 +8799,11 @@ mod sorafs_tests {
         register_governed_capacity_declaration(&mut stx, &alice(), declaration)
             .expect("register declaration");
         UpsertProviderCredit {
+            expected_current: stx
+                .world
+                .provider_credit_ledger
+                .get(&provider)
+                .map(iroha_crypto::HashOf::new),
             record: provider_credit_nanos(provider, 1_000_000_000, 1_000_000_000),
         }
         .execute(&alice(), &mut stx)
@@ -12198,9 +12254,12 @@ mod sorafs_tests {
             1,
             Metadata::default(),
         );
-        let err = UpsertProviderCredit { record: credit }
-            .execute(&alice(), &mut stx)
-            .expect_err("permissionless credit update must fail");
+        let err = UpsertProviderCredit {
+            expected_current: None,
+            record: credit,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("permissionless credit update must fail");
         assert!(matches!(
             err,
             InstructionExecutionError::InvalidParameter(
@@ -13089,6 +13148,14 @@ mod sorafs_tests {
         }
         .execute(&alice(), &mut stx)
         .expect("issue replication order");
+        stx.world.add_account_permission(
+            &bob(),
+            Permission::from(
+                iroha_executor_data_model::permission::sorafs::CanCompleteSorafsReplicationOrder {
+                    provider_id: providers[0],
+                },
+            ),
+        );
         let complete = completion_instruction(order_id, providers[0], 10, &alice());
         let error = complete
             .execute(&bob(), &mut stx)
@@ -13097,7 +13164,7 @@ mod sorafs_tests {
             error,
             InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(message)
-            ) if message.contains("must be authorized by its registered owner")
+            ) if message.contains("must be authorized by its exact governed completion signer")
         ));
         assert_eq!(
             stx.world
@@ -13160,6 +13227,14 @@ mod sorafs_tests {
         )
         .execute(&bob(), &mut stx)
         .expect("install the replacement owner's completion authority");
+        stx.world.add_account_permission(
+            &bob(),
+            Permission::from(
+                iroha_executor_data_model::permission::sorafs::CanCompleteSorafsReplicationOrder {
+                    provider_id: providers[0],
+                },
+            ),
+        );
         let complete = completion_instruction(order_id, providers[0], 12, &alice());
         let error = complete
             .execute(&bob(), &mut stx)
@@ -13523,6 +13598,11 @@ mod sorafs_tests {
         register_governed_capacity_declaration(&mut stx, &alice(), declaration)
             .expect("register capacity declaration");
         UpsertProviderCredit {
+            expected_current: stx
+                .world
+                .provider_credit_ledger
+                .get(&provider)
+                .map(iroha_crypto::HashOf::new),
             record: provider_credit_nanos(provider, 1_000_000_000, 1_000_000_000),
         }
         .execute(&alice(), &mut stx)
@@ -13578,6 +13658,11 @@ mod sorafs_tests {
         register_governed_capacity_declaration(&mut stx, &alice(), declaration)
             .expect("register capacity declaration");
         UpsertProviderCredit {
+            expected_current: stx
+                .world
+                .provider_credit_ledger
+                .get(&provider)
+                .map(iroha_crypto::HashOf::new),
             record: provider_credit_nanos(provider, 1_000_000_000, 1_000_000_000),
         }
         .execute(&alice(), &mut stx)
@@ -13638,6 +13723,11 @@ mod sorafs_tests {
         register_governed_capacity_declaration(&mut stx, &bob(), declaration)
             .expect("register capacity declaration");
         UpsertProviderCredit {
+            expected_current: stx
+                .world
+                .provider_credit_ledger
+                .get(&provider)
+                .map(iroha_crypto::HashOf::new),
             record: provider_credit_nanos(provider, 1_000_000_000, 1_000_000_000),
         }
         .execute(&alice(), &mut stx)
@@ -14920,9 +15010,12 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x51; Hash::LENGTH]));
         let record = provider_credit_nanos(ProviderId::new([0x55; 32]), 1_000, 0);
-        let err = UpsertProviderCredit { record }
-            .execute(&alice(), &mut stx)
-            .expect_err("provider must exist before credit entry");
+        let err = UpsertProviderCredit {
+            expected_current: None,
+            record,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("provider must exist before credit entry");
         let message = match err {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                 message,
@@ -14957,9 +15050,12 @@ mod sorafs_tests {
             0,
             Metadata::default(),
         );
-        let error = UpsertProviderCredit { record }
-            .execute(&alice(), &mut stx)
-            .expect_err("an administrator-authored number cannot create bonded stake");
+        let error = UpsertProviderCredit {
+            expected_current: None,
+            record,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("an administrator-authored number cannot create bonded stake");
         assert!(matches!(
             error,
             InstructionExecutionError::InvalidParameter(
@@ -14985,9 +15081,16 @@ mod sorafs_tests {
             0,
             Metadata::default(),
         );
-        let error = UpsertProviderCredit { record: forged }
-            .execute(&alice(), &mut stx)
-            .expect_err("credit projection cannot exceed native reserve custody");
+        let error = UpsertProviderCredit {
+            expected_current: stx
+                .world
+                .provider_credit_ledger
+                .get(&provider)
+                .map(iroha_crypto::HashOf::new),
+            record: forged,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("credit projection cannot exceed native reserve custody");
         assert!(matches!(
             error,
             InstructionExecutionError::InvalidParameter(
@@ -15032,9 +15135,16 @@ mod sorafs_tests {
             0,
             Metadata::default(),
         );
-        let error = UpsertProviderCredit { record: reset }
-            .execute(&alice(), &mut stx)
-            .expect_err("credit upsert must not erase a native-custody slash lien");
+        let error = UpsertProviderCredit {
+            expected_current: stx
+                .world
+                .provider_credit_ledger
+                .get(&provider)
+                .map(iroha_crypto::HashOf::new),
+            record: reset,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("credit upsert must not erase a native-custody slash lien");
         assert!(matches!(
             error,
             InstructionExecutionError::InvalidParameter(
@@ -15377,6 +15487,7 @@ mod sorafs_tests {
             ) if message.contains("replacement") && message.contains("revision 1")
         ));
         let replacement = ProviderIngestCompletionAuthorityV1::new(
+            alice().clone(),
             alice(),
             ProviderIngestCompletionSignerPolicyV1 {
                 policy_id: [0xB1; 32],
@@ -16335,7 +16446,9 @@ mod sorafs_tests {
     }
     include!("sorafs/repair_query_tail_tests.rs");
     include!("sorafs/canonical_accounting_tests.rs");
+    include!("sorafs/provider_credit_cas_tests.rs");
     include!("sorafs/replication_lifecycle_tests.rs");
+    include!("sorafs/completion_authority_tests.rs");
     include!("sorafs/repair_schema_identity_tests.rs");
 }
 

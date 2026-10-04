@@ -155,7 +155,7 @@ fn read_block(store: &mut BlockStore, index: usize) -> eyre::Result<SignedBlock>
     let len: usize = length.try_into().unwrap();
     let mut buff = vec![0_u8; len];
     store.read_block_data(start, &mut buff)?;
-    let block = decode_versioned_signed_block(&buff).map_err(eyre::Report::new)?;
+    let block = decode_framed_signed_block(&buff).map_err(eyre::Report::new)?;
     Ok(block)
 }
 

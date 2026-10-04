@@ -165,6 +165,12 @@ internal object MusubiJsonV1 {
         }
     }
 
+    fun parseProviderBundleAttestationKey(payload: ByteArray): MusubiProviderBundleAttestationKeyV1 =
+        parseProviderBundleAttestationKey(
+            parse(payload, "Musubi provider-bundle-attestation request"),
+            "request",
+        )
+
     fun parseProviderBundleAttestation(
         payload: ByteArray,
     ): MusubiProviderBundleAttestationRecordV1 =
@@ -1247,7 +1253,7 @@ internal object MusubiJsonV1 {
         val authority = exactObject(
             binding["completion_authority"],
             "$field.payload.binding.completion_authority",
-            setOf("provider_owner", "signer_policy"),
+            setOf("provider_owner", "completion_signer", "signer_policy"),
         )
         val signerPolicy = exactObject(
             authority["signer_policy"],
@@ -1269,6 +1275,10 @@ internal object MusubiJsonV1 {
                 string(
                     authority["provider_owner"],
                     "$field.payload.binding.completion_authority.provider_owner",
+                ),
+                string(
+                    authority["completion_signer"],
+                    "$field.payload.binding.completion_authority.completion_signer",
                 ),
                 MusubiProviderIngestCompletionSignerPolicyV1(
                     fixedBytes(

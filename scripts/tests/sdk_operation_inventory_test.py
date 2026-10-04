@@ -98,7 +98,8 @@ def test_compiler_errors_fail_closed(tmp_path: Path, monkeypatch: pytest.MonkeyP
 def test_invalid_catalog_cannot_produce_an_inventory(tmp_path: Path) -> None:
     exporter = Path("scripts/sdk_operation_inventory.rs")
     catalog = Path("crates/iroha_torii_shared/src/route_catalog.rs")
-    for relative in (exporter, catalog):
+    multisig_path = Path("crates/iroha_torii_shared/src/multisig_execution_evidence/path.rs")
+    for relative in (exporter, catalog, multisig_path):
         target = tmp_path / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(inventory.ROOT / relative, target)

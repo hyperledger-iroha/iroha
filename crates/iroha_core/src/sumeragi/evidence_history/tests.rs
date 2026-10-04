@@ -180,11 +180,11 @@ fn local_history_refusal_and_corrupt_original_tip_never_become_attribution() {
     assert!(matches!(
         verify_from_state(&chain.state().view(), &evidence, |count, _| {
             reads += count;
-            Err(QueryExecutionFail::GasBudgetExceeded)
+            Err(crate::execution_attempt::ExecutionAttemptError::Deferred(ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into()))
         }),
         Err(NativeEvidenceError::History(
             crate::execution_attempt::ExecutionAttemptError::Deferred(local)
-        )) if local.reason() == ivm::error::ExecutionDeferral::ActiveMemoryCapacity
+        )) if local.reason() == ivm::error::ExecutionDeferral::CanonicalHistoryCapacity
     ));
     assert_eq!(reads, 1);
     chain

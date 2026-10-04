@@ -95,7 +95,10 @@ pub mod common {
 }
 /// Public endpoint used by the stock runtime-provider broker.
 pub mod runtime_provider_broker {
-    use super::PathBuf;
+    use super::{NonZeroUsize, PathBuf};
+
+    /// Finite aggregate public-transcript memory for one credential registry (64 MiB).
+    pub const CREDENTIAL_MAX_MEMORY_BYTES: NonZeroUsize = nonzero_ext::nonzero!(67_108_864usize);
 
     /// Default Unix socket path for the local runtime-provider broker.
     #[cfg(target_os = "macos")]
@@ -1592,8 +1595,8 @@ pub mod sorafs {
             /// an activation request.
             pub mod provider_attestation_journal {
                 use iroha_config_base::util::Bytes;
-                /// Request capture-child activation; stock `irohad` currently rejects
-                /// this request until a concrete child is qualified.
+                /// Request native completed-bundle capture activation with exact credential
+                /// bindings and explicitly initialized retained journal custody.
                 pub const ENABLED: bool = false;
                 /// Maximum retained active and terminal entries, independently of
                 /// the checkpoint byte cap.
@@ -2306,6 +2309,11 @@ pub mod sorafs {
         pub mod compliance {
             use iroha_config_base::util::Bytes;
             use std::time::Duration;
+            /// Stable runtime handle required from the V1 authenticated feed transport.
+            pub const GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1: &str =
+                "sorafs.gateway.compliance.feed-https.v1";
+            /// Exact V1 runtime adapter revision.
+            pub const GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1: u64 = 1;
             /// Keep the signed compliance controller disabled until governance
             /// identities, feeds, storage, and a runtime transport are provisioned.
             pub const ENABLED: bool = false;
@@ -2322,7 +2330,9 @@ pub mod sorafs {
             /// Total feed operation timeout.
             pub const TOTAL_TIMEOUT: Duration = Duration::from_secs(20);
             /// Maximum accepted timestamp skew.
-            pub const MAX_CLOCK_SKEW: Duration = Duration::from_secs(5 * 60);
+            pub const MAX_CLOCK_SKEW: Duration = Duration::from_secs(
+                sorafs_manifest::gateway_compliance::DEFAULT_GATEWAY_COMPLIANCE_MAX_CLOCK_SKEW_SECS,
+            );
             /// Maximum age of one source feed at catalog construction.
             pub const MAX_FEED_AGE: Duration = Duration::from_secs(60 * 60);
             /// Maximum signed catalog validity interval.
@@ -3008,6 +3018,17 @@ pub mod torii {
             pub const MAX_HEADERS: NonZeroUsize = nonzero!(100usize);
             /// Maximum HTTP/1 parser buffer, including the request head.
             pub const MAX_HEADER_BYTES: Bytes = Bytes(64 * 1024);
+        }
+        /// Optional HTTPS listener identity and handshake bounds.
+        pub mod https {
+            /// Absolute TLS handshake deadline; HTTPS itself is disabled by default.
+            pub const HANDSHAKE_TIMEOUT_MS: u64 = 10_000;
+            /// Maximum configured TLS handshake deadline.
+            pub const MAX_HANDSHAKE_TIMEOUT_MS: u64 = 120_000;
+            /// Maximum DER certificates in the configured leaf-first chain.
+            pub const MAX_CERTIFICATES: usize = 4;
+            /// Maximum bytes in each DER certificate or private key file.
+            pub const MAX_DER_BYTES: usize = 16 * 1024;
         }
         /// Norito-RPC transport defaults surfaced via `torii.transport.norito_rpc`.
         pub mod norito_rpc {

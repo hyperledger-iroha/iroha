@@ -195,6 +195,11 @@ pub use artifacts::{
 };
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 pub(crate) use generation::generate_kagemusha_mint_hash_artifacts_for_guarded_test_v1;
+#[cfg(test)]
+pub(crate) use generation::{
+    create_state_carrier_ep_proof_for_golden_test_v1,
+    create_state_carrier_eq_proof_for_golden_test_v1,
+};
 
 /// Run the one real mint-authority proof qualification under the external process memory guard.
 ///

@@ -1056,7 +1056,7 @@ mod tests {
     fn a_self_consistent_candidate_cannot_create_a_native_anchor_without_valid_qc() {
         let native = crate::sumeragi_finality::tests::Fixture::new();
         let mut proof = native.second.clone();
-        let mut block = crate::block::decode_versioned_signed_block(&proof.block_wire).unwrap();
+        let mut block = crate::block::decode_framed_signed_block(&proof.block_wire).unwrap();
         let certificate = block.commit_certificate().unwrap();
         let mut qc: iroha_sumeragi::message::Qc =
             norito::decode_canonical(certificate.commit_qc()).unwrap();

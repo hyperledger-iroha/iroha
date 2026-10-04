@@ -2,7 +2,9 @@
 
 use super::super::grouped_ownership::{
     CheckedAccountRekeys, CheckedAssetDefinitions, CheckedAssets, CheckedContractAliases,
-    CheckedEscrows, CheckedNfts, CheckedRepoAgreements, CheckedRwas, GroupedOwnershipError,
+    CheckedContractSubjects, CheckedEscrows, CheckedNfts, CheckedProofRecords,
+    CheckedRepoAgreements, CheckedRwas, CheckedValidationFeeProposals, CheckedVerifyingKeys,
+    GroupedOwnershipError,
 };
 use super::*;
 use mv::{PublicationPreparationError, storage::StorageReadOnly};
@@ -49,20 +51,42 @@ macro_rules! grouped_capture {
                 limits,
                 &budget,
                 checked.rows().iter(),
-            )?;
-            if !checked.matches_current()? {
-                return Ok(None);
-            }
+            );
+            // A refusal still belongs to the retained source cut. Observe its native owners,
+            // release the readers, and let State publication win before reporting either error.
+            let current = checked.matches_current();
             drop(checked);
             if !is_stable_state_view_generation(generation, state.state_view_generation()) {
                 return Ok(None);
             }
-            Ok(Some(snapshot))
+            if !current? {
+                return Ok(None);
+            }
+            Ok(Some(snapshot?))
         }
     };
 }
 
 grouped_capture!(capture_nfts_once, CheckedNfts, "world.nfts");
+grouped_capture!(
+    capture_contract_subject_bindings_once,
+    CheckedContractSubjects,
+    "world.contract_subject_bindings",
+    16_384
+);
+
+grouped_capture!(
+    capture_proofs_once,
+    CheckedProofRecords,
+    "world.proofs",
+    512
+);
+grouped_capture!(
+    capture_governance_proposals_once,
+    CheckedValidationFeeProposals,
+    "world.governance_proposals",
+    8
+);
 grouped_capture!(
     capture_account_rekey_records_once,
     CheckedAccountRekeys,
@@ -86,4 +110,11 @@ grouped_capture!(
     capture_repo_agreements_once,
     CheckedRepoAgreements,
     "world.repo_agreements"
+);
+
+grouped_capture!(
+    capture_verifying_keys_once,
+    CheckedVerifyingKeys,
+    "world.verifying_keys",
+    1024
 );

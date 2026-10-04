@@ -332,7 +332,7 @@ fn build_proposal(
                 },
                 attestation: EndpointAttestationV1 {
                     version: ENDPOINT_ATTESTATION_VERSION_V1,
-                    kind: EndpointAttestationKind::Mtls,
+                    kind: EndpointAttestationKind::Tls,
                     attested_at: params.attested_at,
                     expires_at: params.expires_at,
                     leaf_certificate: LEAF_CERT.to_vec(),

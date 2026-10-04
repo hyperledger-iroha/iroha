@@ -1464,7 +1464,7 @@ class MusubiInstructionsV1FixtureTest {
             "source_tree_digest",
         )
         val authority = binding.objectValue("completion_authority")
-        authority.requireKeys("provider_owner", "signer_policy")
+        authority.requireKeys("provider_owner", "completion_signer", "signer_policy")
         val signer = authority.objectValue("signer_policy")
         signer.requireKeys("policy_id", "revision", "predecessor_digest", "policy_digest")
         val anchor = binding.objectValue("finalized_anchor")
@@ -1475,6 +1475,7 @@ class MusubiInstructionsV1FixtureTest {
             binding.string("completed_by"),
             MusubiProviderIngestCompletionAuthorityV1(
                 authority.string("provider_owner"),
+                authority.string("completion_signer"),
                 MusubiProviderIngestCompletionSignerPolicyV1(
                     fixedBytes32(signer["policy_id"]),
                     signer.bigInteger("revision"),

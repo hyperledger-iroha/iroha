@@ -6,18 +6,22 @@
 //! buffering. Construction also seals the canonical trust inventory into the runtime identity that
 //! the controller verifies at startup and around feed use.
 use super::compliance::{
-    GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1, GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
     GatewayComplianceContentEncoding, GatewayComplianceError, GatewayComplianceFeedTransport,
     GatewayComplianceFeedTransportIdentityV1, GatewayComplianceFeedTransportProbeError,
     GatewayComplianceFetchRequest, GatewayComplianceFetchResponse,
-    MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1, gateway_compliance_feed_transport_policy_digest,
 };
 use http::{
     HeaderMap, HeaderName,
     header::{CONTENT_ENCODING, CONTENT_LENGTH, LOCATION},
 };
+use iroha_config::parameters::defaults::sorafs::gateway::compliance::{
+    GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1, GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
+};
 use reqwest::{redirect::Policy, tls::TlsInfo};
 use sha2::{Digest as _, Sha256};
+use sorafs_manifest::gateway_compliance::{
+    MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1, gateway_compliance_feed_transport_policy_digest,
+};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
@@ -239,7 +243,8 @@ impl fmt::Debug for ProductionGatewayComplianceFeedTransport {
 }
 impl ProductionGatewayComplianceFeedTransport {
     /// Create the standard no-secret production transport from resolved trust
-    /// pins keyed by canonical DNS hostname.
+    /// pins keyed by canonical DNS hostname. An empty inventory is a qualified deny-all
+    /// external transport; catalog authorization and activation remain in the controller.
     ///
     /// # Errors
     ///
@@ -270,6 +275,13 @@ impl ProductionGatewayComplianceFeedTransport {
             identity,
         })
     }
+    fn require_configured_host(&self, hostname: &str) -> Result<(), GatewayComplianceError> {
+        if self.accepted_spki_sha256_by_hostname.contains_key(hostname) {
+            Ok(())
+        } else {
+            Err(GatewayComplianceError::TrustPinMismatch)
+        }
+    }
     fn verify_spki(
         &self,
         hostname: &str,
@@ -298,6 +310,7 @@ impl GatewayComplianceFeedTransport for ProductionGatewayComplianceFeedTransport
         hostname: &str,
         timeout: Duration,
     ) -> Result<Vec<IpAddr>, GatewayComplianceError> {
+        self.require_configured_host(hostname)?;
         self.resolver.resolve(hostname, timeout)
     }
     fn fetch(
@@ -313,6 +326,9 @@ fn fetch_pinned(
 ) -> Result<GatewayComplianceFetchResponse, GatewayComplianceError> {
     let started = Instant::now();
     let (hostname, port) = validate_fetch_request(request)?;
+    // Refuse unconfigured hosts before allocating client/address state or opening any socket.
+    // In particular, an explicitly empty inventory can never be an outbound transport.
+    transport.require_configured_host(hostname)?;
     let socket_addresses: Vec<_> = request
         .pinned_addresses
         .iter()
@@ -1048,5 +1064,68 @@ mod tests {
             vec![IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))]
         );
         assert_eq!(calls.load(Ordering::Relaxed), 2);
+    }
+    #[test]
+    fn empty_and_nonempty_transports_refuse_unknown_hosts_before_resolver_or_http() {
+        for inventory in [
+            BTreeMap::new(),
+            BTreeMap::from([("configured.example".to_owned(), BTreeSet::from([[7; 32]]))]),
+        ] {
+            let mut transport =
+                ProductionGatewayComplianceFeedTransport::try_new(inventory.clone()).unwrap();
+            let identity = transport.qualification().unwrap();
+            assert!(!identity.test_marked);
+            assert_eq!(
+                identity.policy_digest,
+                gateway_compliance_feed_transport_policy_digest(&inventory).unwrap()
+            );
+            let calls = Arc::new(AtomicUsize::new(0));
+            let counted = Arc::clone(&calls);
+            transport.resolver = ResolverPool::new_with(
+                1,
+                1,
+                Arc::new(move |_| {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    Ok(vec![IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))])
+                }),
+            )
+            .unwrap();
+            assert!(matches!(
+                transport.resolve("unconfigured.example", Duration::from_secs(1)),
+                Err(GatewayComplianceError::TrustPinMismatch)
+            ));
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+            let request = GatewayComplianceFetchRequest {
+                url: url::Url::parse("https://unconfigured.example/catalog").unwrap(),
+                pinned_addresses: vec![IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))],
+                connect_timeout: Duration::from_millis(1),
+                total_timeout: Duration::from_millis(1),
+                max_encoded_bytes: 1024,
+            };
+            validate_fetch_request(&request).unwrap();
+            // The production fetch boundary returns the inventory refusal before constructing
+            // a reqwest client or socket, rather than a connection/DNS/timeout failure.
+            assert!(matches!(
+                transport.fetch(&request),
+                Err(GatewayComplianceError::TrustPinMismatch)
+            ));
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+            if !inventory.is_empty() {
+                assert_eq!(
+                    transport
+                        .resolve("configured.example", Duration::from_secs(1))
+                        .unwrap(),
+                    request.pinned_addresses
+                );
+                assert_eq!(calls.load(Ordering::SeqCst), 1);
+                transport
+                    .verify_spki("configured.example", [7; 32])
+                    .unwrap();
+                assert!(matches!(
+                    transport.verify_spki("configured.example", [8; 32]),
+                    Err(GatewayComplianceError::TrustPinMismatch)
+                ));
+            }
+        }
     }
 }

@@ -3985,7 +3985,7 @@ fn executed_block_wire_handler_returns_the_exact_finalized_canonical_wire() {
         let actual_wire = torii_body_bytes(response, "wire body").await;
         assert_eq!(actual_wire.as_ref(), expected_wire.as_slice());
         let restored =
-            iroha_data_model::block::decode_versioned_signed_block(actual_wire.as_ref()).unwrap();
+            iroha_data_model::block::decode_framed_signed_block(actual_wire.as_ref()).unwrap();
         assert_eq!(restored.commit_certificate(), block.commit_certificate());
         assert_eq!(
             restored.executed_block_wire_hash().unwrap(),

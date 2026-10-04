@@ -818,7 +818,7 @@ fn sorafs_replication_openapi_is_a_strict_chain_authoritative_v1_projection() {
         "SorafsReplicationSlaV1", &contract_words( "ingest_deadline_secs min_availability_percent_milli min_por_success_percent_milli", ), &[];
         "SorafsReplicationMetadataEntryV1", &contract_words("key value"), &[];
         "SorafsReplicationCanonicalOrderV1", &contract_words(concat!( "version order_id_hex manifest_cid_b64 manifest_digest_hex chunking_profile ", "target_replicas assignments issued_at deadline_at sla metadata" )), &[];
-        "SorafsProviderIngestCompletionAuthorityV1", &contract_words("provider_owner signer_policy"), &[];
+        "SorafsProviderIngestCompletionAuthorityV1", &contract_words("provider_owner completion_signer signer_policy"), &[];
         "SorafsProviderIngestFinalizedAnchorV1", &contract_words("height block_hash_hex"), &[];
         "SorafsReplicationCompletionV1", &contract_words(concat!( "provider_hex completed_by completion_epoch assignment_revision ", "completion_authority finalized_anchor" )), &[];
         "SorafsReplicationOrderProjectionV1", &contract_words(concat!( "order_id_hex manifest_digest_hex issued_by issued_epoch deadline_epoch status ", "canonical_order_b64 assignment_revision order provider_completions providers" )), &[];

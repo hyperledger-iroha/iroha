@@ -736,7 +736,7 @@ fn checkpoint_input_requires_complete_canonical_authenticated_material_and_priva
 #[test]
 fn state_promotion_accepts_another_exact_quorum_for_the_same_certified_decision() {
     use iroha_data_model::{
-        block::{CommitCertificate, decode_versioned_signed_block},
+        block::{CommitCertificate, decode_framed_signed_block},
         sumeragi_finality::SumeragiFinalityVerifier,
     };
     use iroha_sumeragi::{
@@ -746,7 +746,7 @@ fn state_promotion_accepts_another_exact_quorum_for_the_same_certified_decision(
 
     let checkpoint = checkpoint(3, 5);
     let mut proof = checkpoint.tip().clone();
-    let mut block = decode_versioned_signed_block(&proof.block_wire).expect("certified block");
+    let mut block = decode_framed_signed_block(&proof.block_wire).expect("certified block");
     let certificate = block.commit_certificate().expect("certificate");
     let mut qc: Qc = norito::decode_canonical(certificate.commit_qc()).expect("native QC");
     let mut keys: Vec<_> = (1..=4)

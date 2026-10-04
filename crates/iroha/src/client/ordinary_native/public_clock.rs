@@ -95,7 +95,7 @@ impl ClockRead<'_> {
                     Client::decode_canonical_norito_response(
                         &response,
                         SUMERAGI_FINALITY_RESPONSE_MAX_BYTES,
-                        "public clock canonical original rejected",
+                        "ordinary_native.public_clock.finality_attestation.read",
                     )?;
                 original.verify()?;
                 ensure!(
@@ -130,7 +130,7 @@ impl ClockRead<'_> {
                     Client::decode_canonical_norito_response(
                         &response,
                         SUMERAGI_FINALITY_RESPONSE_MAX_BYTES,
-                        "public clock proof original rejected",
+                        "ordinary_native.public_clock.finality_proof.read",
                     )?;
                 ensure!(
                     proof.height() == height.get(),

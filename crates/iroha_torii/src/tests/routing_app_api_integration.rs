@@ -2564,6 +2564,7 @@ mod app_api_integration_tests {
                             completion_epoch: 9,
                             assignment_revision: 1,
                             completion_authority: iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionAuthorityV1::new(
+                                issuer.clone(),
                                 issuer,
                                 iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
                                     policy_id: [0xA1; 32],
@@ -2704,7 +2705,7 @@ mod app_api_integration_tests {
                 endpoint: body.endpoints.first().cloned().expect("advert endpoint"),
                 attestation: sorafs_manifest::EndpointAttestationV1 {
                     version: sorafs_manifest::ENDPOINT_ATTESTATION_VERSION_V1,
-                    kind: sorafs_manifest::EndpointAttestationKind::Mtls,
+                    kind: sorafs_manifest::EndpointAttestationKind::Tls,
                     attested_at: issued_at.saturating_sub(60),
                     expires_at: expires_at + 60,
                     leaf_certificate: vec![0xAA],

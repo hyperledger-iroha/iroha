@@ -256,6 +256,9 @@ fn reputation_checkpoint_request() -> IrohaRuntimeProviderBindingsV1 {
     IrohaRuntimeProviderBindingsV1 {
         chain_id: "reputation-checkpoint-registry-test".to_owned(),
         network_id: test_network_id(0xA5),
+        credential_max_memory_bytes:
+            iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES
+                .get(),
         bindings: vec![
             IrohaRuntimeProviderBindingV1::try_new(
                 IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint,
@@ -291,6 +294,9 @@ fn reputation_checkpoint_resolution_is_exactly_scoped_and_qualified() {
     let unrequested = IrohaRuntimeProviderBindingsV1 {
         chain_id: "reputation-checkpoint-registry-test".to_owned(),
         network_id: test_network_id(0xA5),
+        credential_max_memory_bytes:
+            iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES
+                .get(),
         bindings: Vec::new(),
     };
     assert!(matches!(
@@ -1268,6 +1274,9 @@ fn unrequested_native_signers_are_rejected_individually() {
     let empty_bindings = IrohaRuntimeProviderBindingsV1 {
         chain_id: "production-chain".to_owned(),
         network_id: test_network_id(0xA5),
+        credential_max_memory_bytes:
+            iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES
+                .get(),
         bindings: Vec::new(),
     };
     for dependencies in unrequested_dependencies {
@@ -1419,9 +1428,9 @@ fn builtin_compliance_transport_is_assembled_locally_and_excluded_from_broker_ca
     ));
     let compliance = config.torii.sorafs_gateway.compliance.as_mut().unwrap();
     compliance.feed_transport_provider.provider_handle =
-        iroha_torii::sorafs::gateway::GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1.into();
+        iroha_config::parameters::defaults::sorafs::gateway::compliance::GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1.into();
     compliance.feed_transport_provider.revision =
-        iroha_torii::sorafs::gateway::GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1;
+        iroha_config::parameters::defaults::sorafs::gateway::compliance::GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1;
     let pins = compliance
         .feeds
         .iter()
@@ -1434,7 +1443,7 @@ fn builtin_compliance_transport_is_assembled_locally_and_excluded_from_broker_ca
         })
         .collect();
     compliance.feed_transport_provider.policy_digest =
-        iroha_torii::sorafs::gateway::gateway_compliance_feed_transport_policy_digest(&pins)
+        sorafs_manifest::gateway_compliance::gateway_compliance_feed_transport_policy_digest(&pins)
             .unwrap();
     let native = IrohaRuntimeProviderBindingsV1::try_from_config(&config).unwrap();
     assert!(!native.iter().any(

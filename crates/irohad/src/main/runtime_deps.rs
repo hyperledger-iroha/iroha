@@ -315,16 +315,15 @@ fn validate_threshold_signer_startup_readiness_v1(
         {
             return Err("active global-beacon key session is not bound to the startup roster");
         }
-        let session = iroha_core::beacon::validate_global_threshold_beacon_session_v1(
-            record.session.clone(),
-            &iroha_core::beacon::GlobalThresholdBeaconSessionBindingV1 {
+        let session = &record.session;
+        session
+            .check_binding(&iroha_core::beacon::GlobalThresholdBeaconSessionBindingV1 {
                 network_id: *state.network_id_ref(),
                 session_id: active_session_id,
                 roster_hash: topology_roster_hash,
-                transcript_hash: record.session.transcript_hash,
-            },
-        )
-        .map_err(|_| "active global-beacon key session is invalid")?;
+                transcript_hash: session.transcript_hash,
+            })
+            .map_err(|_| "active global-beacon key session is invalid")?;
         let local_signer_index = topology
             .iter()
             .position(|peer| peer == local_peer)
@@ -338,7 +337,7 @@ fn validate_threshold_signer_startup_readiness_v1(
             runtime_deps
                 .sumeragi_global_beacon_partial_signer
                 .as_deref(),
-            &session,
+            session,
         )?;
     }
 

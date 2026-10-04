@@ -143,7 +143,12 @@ fn previous_two_build_reference(
 #[test]
 fn merge_floor_avoids_duplicate_original_parent_build_with_exact_wire_parity() {
     let chain = original_parent_chain();
-    let parent = chain.state().view().latest_block().unwrap();
+    let parent = chain
+        .state()
+        .view()
+        .latest_block()
+        .expect("original committed parent read completes")
+        .expect("fixture retains its actual committed parent");
     let assembly = Assembly {
         parent: &parent,
         view: 7,
@@ -216,7 +221,12 @@ fn merge_floor_avoids_duplicate_original_parent_build_with_exact_wire_parity() {
 #[test]
 fn empty_work_and_cadence_overflow_refuse_before_any_parent_build() {
     let chain = original_parent_chain();
-    let parent = chain.state().view().latest_block().unwrap();
+    let parent = chain
+        .state()
+        .view()
+        .latest_block()
+        .expect("original committed parent read completes")
+        .expect("fixture retains its actual committed parent");
     let assembly = Assembly {
         parent: &parent,
         view: 0,

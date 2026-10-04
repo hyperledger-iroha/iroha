@@ -108886,6 +108886,161 @@
         "x-iroha-tool-effect": "operator"
       }
     },
+    "/v1/sorafs/provider/attestation": {
+      "post": {
+        "description": "Read one original signed provider bundle attestation from the already-owned live native inventory. Fresh canonical account authentication identifies the requesting archive manager. Same-State Global native finality, exact archive/order/provider binding, current full completion authority, independent provider owner, scoped completion permission and current admission are checked before and after inventory I/O. The original signature and full completion body remain unchanged. This response is retained evidence only: it does not prove registry membership or current publication eligibility. A 204 response means only this endpoint has no retained item; it is not authenticated native absence. One bounded request has no provider substitution or transaction dispatch.",
+        "requestBody": {
+          "content": {
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "maxLength": 4096,
+                "type": "string",
+                "x-iroha-norito-schema": "iroha_data_model::musubi::MusubiProviderBundleAttestationKeyV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/x-norito": {
+                "schema": {
+                  "format": "binary",
+                  "maxLength": 1048576,
+                  "type": "string",
+                  "x-iroha-norito-schema": "iroha_data_model::musubi::MusubiProviderBundleVerificationAttestationV1"
+                }
+              }
+            },
+            "description": "Exact original signed attestation matching the request key and current native completion.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "This live endpoint has no retained item; this does not prove native absence.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed canonical request or invalid exact inventory key.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Fresh exact-network canonical account signature required.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Local provider, archive manager or current native completion/admission selection rejected.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request or original signed response exceeds the fixed bounds.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Query admission capacity exhausted.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Original native inventory, durable history, resources or deadline unavailable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "sorafs.provider.attestation"
+        },
+        "x-iroha-tool-effect": "expensive"
+      }
+    },
     "/v1/sorafs/provider/source": {
       "post": {
         "description": "Read bounded canonical source metadata or one digest-verified chunk for the authenticated target provider owner under an exact live native replication assignment. Current and retained-floor same-State durable finality, both provider admissions, the approved retained manifest, exact order and assignment revision, and CanCompleteSorafsReplicationOrder permission are checked before and after payload I/O. Only healthy admitted payload is served. A missing chunk_index requests the Metadata variant once; a present index requests only the Chunk variant with its exact ordinal and bytes, without repeating the complete metadata. Each response is bounded to 4 MiB plus 4 KiB of framing. The response is source material, not completion evidence or a capability to sign or submit completion.",

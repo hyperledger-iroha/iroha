@@ -26,7 +26,12 @@ import org.hyperledger.iroha.android.client.MusubiInstructionsV1.RecoverMusubiPa
 import org.hyperledger.iroha.android.client.MusubiInstructionsV1.RegisterMusubiArchiveV1;
 import org.hyperledger.iroha.android.client.MusubiInstructionsV1.RegisterMusubiAliasV1;
 import org.hyperledger.iroha.android.client.MusubiInstructionsV1.RegisterMusubiNamespaceBindingV1;
-import org.hyperledger.iroha.android.client.MusubiInstructionsV1.RegisterMusubiProviderBundleAttestationV1;
+import org.hyperledger.iroha.sdk.musubi.MusubiInstructionsV1.RegisterMusubiProviderBundleAttestationV1;
+import org.hyperledger.iroha.sdk.musubi.MusubiDigest32V1;
+import org.hyperledger.iroha.sdk.musubi.MusubiInstructionsV1.CheckMusubiPinOutboxV1;
+import org.hyperledger.iroha.sdk.musubi.MusubiPinOutboxCheckExpectationV1;
+import org.hyperledger.iroha.sdk.musubi.MusubiPinOutboxCheckFloorV1;
+import org.hyperledger.iroha.sdk.musubi.MusubiPinOutboxHighWaterV1;
 import org.hyperledger.iroha.android.client.MusubiInstructionsV1.RemoveMusubiPackageMaintainerV1;
 import org.hyperledger.iroha.android.client.MusubiInstructionsV1.RetargetMusubiAliasV1;
 import org.hyperledger.iroha.android.client.MusubiInstructionsV1.RetireMusubiArchiveLocationV1;
@@ -58,13 +63,13 @@ import org.hyperledger.iroha.android.client.MusubiModelsV1.PackageRole;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PackageScope;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PrereleaseIdentifier;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleAttestationSetDigest;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleVerificationApproval;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleVerificationAttestation;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleVerificationBinding;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleVerificationPayload;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderCompletionAuthority;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderCompletionSignerPolicy;
-import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderFinalizedAnchor;
+import org.hyperledger.iroha.sdk.musubi.MusubiProviderBundleVerificationApprovalV1;
+import org.hyperledger.iroha.sdk.musubi.MusubiProviderBundleVerificationAttestationV1;
+import org.hyperledger.iroha.sdk.musubi.MusubiProviderBundleVerificationBindingV1;
+import org.hyperledger.iroha.sdk.musubi.MusubiProviderBundleVerificationPayloadV1;
+import org.hyperledger.iroha.sdk.musubi.MusubiProviderIngestCompletionAuthorityV1;
+import org.hyperledger.iroha.sdk.musubi.MusubiProviderIngestCompletionSignerPolicyV1;
+import org.hyperledger.iroha.sdk.musubi.MusubiProviderIngestFinalizedAnchorV1;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.Publication;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.Reason;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.RegistryAdmissionMode;
@@ -174,13 +179,12 @@ public final class MusubiInstructionsV1FixtureTests {
                 register.commitment(), register.stagingReceipt(), BigInteger.ZERO));
 
     final RegisterMusubiProviderBundleAttestationV1 registerProviderAttestation =
-        (RegisterMusubiProviderBundleAttestationV1)
-            instruction(fixtureCase("register-provider-bundle-attestation"));
+        providerInstruction(fixtureCase("register-provider-bundle-attestation"));
     assertThrows(
         IllegalArgumentException.class,
         () ->
             new RegisterMusubiProviderBundleAttestationV1(
-                registerProviderAttestation.attestation(), BigInteger.ZERO));
+                registerProviderAttestation.attestation, BigInteger.ZERO));
 
     final AddMusubiArchiveLocationV1 add =
         (AddMusubiArchiveLocationV1)
@@ -382,7 +386,7 @@ public final class MusubiInstructionsV1FixtureTests {
         () -> digest(Collections.<Object>singletonList(invalidDigestOctets)));
 
     final List<Object> cases = array(fixture.get("cases"));
-    assertEquals(20, cases.size());
+    assertEquals(22, cases.size());
     final List<String> caseIds = new ArrayList<>();
     for (final Object rawCase : cases) {
       caseIds.add(string(object(rawCase).get("id")));
@@ -404,6 +408,8 @@ public final class MusubiInstructionsV1FixtureTests {
             "takedown-max-major-prerelease",
             "register-archive-max-bounds-signed-receipt",
             "advance-signed-pin-outbox-inventory",
+            "check-authority-wide-pin-outbox-absent",
+            "check-complete-pin-outbox-present",
             "register-provider-bundle-attestation",
             "add-location-three-signed-providers",
             "publish-delegated-domain-release",
@@ -735,17 +741,18 @@ public final class MusubiInstructionsV1FixtureTests {
 
     final Map<String, Object> semantic =
         object(fixtureCase("register-provider-bundle-attestation").get("semantic"));
-    final ProviderBundleVerificationBinding template =
+    final MusubiProviderBundleVerificationBindingV1 template =
         providerAttestation(semantic.get("attestation"))
-            .payload()
-            .binding();
-    final ProviderCompletionAuthority equivalentAuthority =
-        new ProviderCompletionAuthority(
-            reverse, template.completionAuthority().signerPolicy());
-    final ProviderBundleVerificationBinding binding =
+            .payload
+            .binding;
+    final MusubiProviderIngestCompletionAuthorityV1 equivalentAuthority =
+        new MusubiProviderIngestCompletionAuthorityV1(
+            template.completionAuthority.providerOwner, reverse, template.completionAuthority.signerPolicy);
+    final MusubiProviderBundleVerificationBindingV1 binding =
         providerBindingWithAccounts(template, forward, equivalentAuthority);
-    assertEquals(forward, binding.completedBy());
-    assertEquals(reverse, binding.completionAuthority().providerOwner());
+    assertEquals(forward, binding.completedBy);
+    assertEquals(reverse, binding.completionAuthority.completionSigner);
+    assertEquals(template.completionAuthority.providerOwner, binding.completionAuthority.providerOwner);
 
     final String unrelated =
         AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x63), "ed25519")
@@ -756,8 +763,8 @@ public final class MusubiInstructionsV1FixtureTests {
             providerBindingWithAccounts(
                 template,
                 forward,
-                new ProviderCompletionAuthority(
-                    unrelated, template.completionAuthority().signerPolicy())));
+                new MusubiProviderIngestCompletionAuthorityV1(
+                    template.completionAuthority.providerOwner, unrelated, template.completionAuthority.signerPolicy)));
   }
 
   @Test
@@ -823,6 +830,46 @@ public final class MusubiInstructionsV1FixtureTests {
       byte[] concreteFrame, InstructionBox toInstructionBox) {}
 
   private static FixtureEncoding fixtureEncoding(final Map<String, Object> fixtureCase) {
+    final String fixtureId = string(fixtureCase.get("id"));
+    if ("check-authority-wide-pin-outbox-absent".equals(fixtureId)
+        || "check-complete-pin-outbox-present".equals(fixtureId)) {
+      final Map<String, Object> semantic = object(fixtureCase.get("semantic"));
+      assertSemanticKeys(semantic, "network_id", "pin_authority", "session_id",
+          "inventory_digest", "challenge", "floor", "expected");
+      final Map<String, Object> floor = object(semantic.get("floor"));
+      assertSemanticKeys(floor, "height", "block_hash", "context_id");
+      final Map<String, Object> expectation = object(semantic.get("expected"));
+      assertSemanticKeys(expectation, "kind", "value");
+      final MusubiPinOutboxCheckExpectationV1 expected;
+      if ("Absent".equals(string(expectation.get("kind")))) {
+        assertEquals(null, expectation.get("value"));
+        expected = MusubiPinOutboxCheckExpectationV1.Absent.INSTANCE;
+      } else if ("Present".equals(string(expectation.get("kind")))) {
+        final Map<String, Object> row = object(expectation.get("value"));
+        assertSemanticKeys(row, "version", "network_id", "pin_authority", "session_id",
+            "revision", "inventory_digest", "recorded_at_height", "transaction_hash");
+        expected = new MusubiPinOutboxCheckExpectationV1.Present(new MusubiPinOutboxHighWaterV1(
+            unsigned(row.get("version")).intValueExact(),
+            org.hyperledger.iroha.sdk.core.model.NetworkId.parse(string(row.get("network_id"))),
+            string(row.get("pin_authority")), fixed32(row.get("session_id")),
+            unsigned(row.get("revision")), fixed32(row.get("inventory_digest")),
+            unsigned(row.get("recorded_at_height")), fixed32(row.get("transaction_hash"))));
+      } else {
+        throw new AssertionError("unknown closed pin-outbox expectation");
+      }
+      final List<Object> context = array(floor.get("context_id"));
+      assertEquals(1, context.size());
+      final CheckMusubiPinOutboxV1 owner = new CheckMusubiPinOutboxV1(
+          org.hyperledger.iroha.sdk.core.model.NetworkId.parse(string(semantic.get("network_id"))),
+          string(semantic.get("pin_authority")), fixed32(semantic.get("session_id")),
+          fixed32(semantic.get("inventory_digest")), fixed32(semantic.get("challenge")),
+          new MusubiPinOutboxCheckFloorV1(unsigned(floor.get("height")),
+              fixed32(floor.get("block_hash")),
+              org.hyperledger.iroha.sdk.core.util.HashLiteral.decode(string(context.get(0)))), expected);
+      return new FixtureEncoding(CheckMusubiPinOutboxV1.WIRE_ID, CheckMusubiPinOutboxV1.SCHEMA_NAME,
+          owner.barePayload(), owner.concreteFrame(),
+          InstructionBox.fromWirePayload(CheckMusubiPinOutboxV1.WIRE_ID, owner.concreteFrame()));
+    }
     if ("advance-signed-pin-outbox-inventory".equals(string(fixtureCase.get("id")))) {
       final Map<String, Object> semantic = object(fixtureCase.get("semantic"));
       assertSemanticKeys(
@@ -844,9 +891,27 @@ public final class MusubiInstructionsV1FixtureTests {
           owner.barePayload(), owner.concreteFrame(),
           InstructionBox.fromWirePayload(wireId, owner.concreteFrame()));
     }
+    if ("register-provider-bundle-attestation".equals(string(fixtureCase.get("id")))) {
+      final RegisterMusubiProviderBundleAttestationV1 owner = providerInstruction(fixtureCase);
+      return new FixtureEncoding(
+          RegisterMusubiProviderBundleAttestationV1.WIRE_ID,
+          RegisterMusubiProviderBundleAttestationV1.SCHEMA_NAME,
+          owner.barePayload(), owner.concreteFrame(),
+          InstructionBox.fromWirePayload(
+              RegisterMusubiProviderBundleAttestationV1.WIRE_ID, owner.concreteFrame()));
+    }
     final TypedInstructionV1 owner = instruction(fixtureCase);
     return new FixtureEncoding(owner.wireId(), owner.concreteSchemaName(), owner.barePayload(),
         owner.concreteFrame(), owner.toInstructionBox());
+  }
+
+  private static RegisterMusubiProviderBundleAttestationV1 providerInstruction(
+      final Map<String, Object> fixtureCase) {
+    final Map<String, Object> semantic = object(fixtureCase.get("semantic"));
+    assertSemanticKeys(semantic, "attestation", "expected_location_revision");
+    return new RegisterMusubiProviderBundleAttestationV1(
+        providerAttestation(semantic.get("attestation")),
+        unsigned(semantic.get("expected_location_revision")));
   }
 
   private static TypedInstructionV1 instruction(final Map<String, Object> fixtureCase) {
@@ -981,12 +1046,6 @@ public final class MusubiInstructionsV1FixtureTests {
           archiveCommitment(semantic.get("commitment")),
           seedIngressReceipt(semantic.get("staging_receipt")),
           unsigned(semantic.get("expected_policy_revision")));
-    }
-    if ("register-provider-bundle-attestation".equals(id)) {
-      assertSemanticKeys(semantic, "attestation", "expected_location_revision");
-      return new RegisterMusubiProviderBundleAttestationV1(
-          providerAttestation(semantic.get("attestation")),
-          unsigned(semantic.get("expected_location_revision")));
     }
     if ("add-location-three-signed-providers".equals(id)) {
       assertSemanticKeys(
@@ -1143,7 +1202,7 @@ public final class MusubiInstructionsV1FixtureTests {
         approvals);
   }
 
-  private static ProviderBundleVerificationAttestation providerAttestation(final Object value) {
+  private static MusubiProviderBundleVerificationAttestationV1 providerAttestation(final Object value) {
     final Map<String, Object> attestation = object(value);
     assertSemanticKeys(attestation, "payload", "approvals");
     final Map<String, Object> payload = object(attestation.get("payload"));
@@ -1167,65 +1226,67 @@ public final class MusubiInstructionsV1FixtureTests {
         "verification_lock_digest",
         "source_tree_digest");
     final Map<String, Object> authority = object(binding.get("completion_authority"));
-    assertSemanticKeys(authority, "provider_owner", "signer_policy");
+    assertSemanticKeys(authority, "provider_owner", "completion_signer", "signer_policy");
     final Map<String, Object> signerPolicy = object(authority.get("signer_policy"));
     assertSemanticKeys(
         signerPolicy, "policy_id", "revision", "predecessor_digest", "policy_digest");
     final Object predecessor = signerPolicy.get("predecessor_digest");
-    final ProviderCompletionSignerPolicy policy = new ProviderCompletionSignerPolicy(
+    final MusubiProviderIngestCompletionSignerPolicyV1 policy = new MusubiProviderIngestCompletionSignerPolicyV1(
         fixed32(signerPolicy.get("policy_id")),
         unsigned(signerPolicy.get("revision")),
         predecessor == null ? null : fixed32(predecessor),
         fixed32(signerPolicy.get("policy_digest")));
     final Map<String, Object> anchor = object(binding.get("finalized_anchor"));
     assertSemanticKeys(anchor, "height", "block_hash");
-    final ProviderBundleVerificationBinding bindingValue =
-        new ProviderBundleVerificationBinding(
-            NetworkId.parse(string(binding.get("network_id"))),
+    final MusubiProviderBundleVerificationBindingV1 bindingValue =
+        new MusubiProviderBundleVerificationBindingV1(
+            org.hyperledger.iroha.sdk.core.model.NetworkId.parse(string(binding.get("network_id"))),
             newtypeText(binding.get("provider_id")),
             string(binding.get("completed_by")),
-            new ProviderCompletionAuthority(string(authority.get("provider_owner")), policy),
-            digest(binding.get("replication_order")),
+            new MusubiProviderIngestCompletionAuthorityV1(
+                string(authority.get("provider_owner")),
+                string(authority.get("completion_signer")), policy),
+            new MusubiDigest32V1(digest(binding.get("replication_order")).bytes()),
             unsigned(binding.get("assignment_revision")),
             unsigned(binding.get("completion_epoch")),
-            new ProviderFinalizedAnchor(
+            new MusubiProviderIngestFinalizedAnchorV1(
                 unsigned(anchor.get("height")), fixed32(anchor.get("block_hash"))),
-            digest(binding.get("archive_id")),
-            digest(binding.get("bundle_digest")),
-            digest(binding.get("descriptor_digest")),
-            digest(binding.get("semantic_release_manifest_digest")),
-            digest(binding.get("verification_lock_digest")),
-            digest(binding.get("source_tree_digest")));
-    final List<ProviderBundleVerificationApproval> approvals = new ArrayList<>();
+            new MusubiDigest32V1(digest(binding.get("archive_id")).bytes()),
+            new MusubiDigest32V1(digest(binding.get("bundle_digest")).bytes()),
+            new MusubiDigest32V1(digest(binding.get("descriptor_digest")).bytes()),
+            new MusubiDigest32V1(digest(binding.get("semantic_release_manifest_digest")).bytes()),
+            new MusubiDigest32V1(digest(binding.get("verification_lock_digest")).bytes()),
+            new MusubiDigest32V1(digest(binding.get("source_tree_digest")).bytes()));
+    final List<MusubiProviderBundleVerificationApprovalV1> approvals = new ArrayList<>();
     for (final Object approvalValue : array(attestation.get("approvals"))) {
       final Map<String, Object> approval = object(approvalValue);
       assertSemanticKeys(approval, "public_key", "signature");
-      approvals.add(new ProviderBundleVerificationApproval(
+      approvals.add(new MusubiProviderBundleVerificationApprovalV1(
           string(approval.get("public_key")), string(approval.get("signature"))));
     }
-    return new ProviderBundleVerificationAttestation(
-        new ProviderBundleVerificationPayload(bindingValue), approvals);
+    return new MusubiProviderBundleVerificationAttestationV1(
+        new MusubiProviderBundleVerificationPayloadV1(bindingValue), approvals);
   }
 
-  private static ProviderBundleVerificationBinding providerBindingWithAccounts(
-      final ProviderBundleVerificationBinding template,
+  private static MusubiProviderBundleVerificationBindingV1 providerBindingWithAccounts(
+      final MusubiProviderBundleVerificationBindingV1 template,
       final String completedBy,
-      final ProviderCompletionAuthority completionAuthority) {
-    return new ProviderBundleVerificationBinding(
-        template.networkId(),
-        template.providerId(),
+      final MusubiProviderIngestCompletionAuthorityV1 completionAuthority) {
+    return new MusubiProviderBundleVerificationBindingV1(
+        template.networkId,
+        template.providerId,
         completedBy,
         completionAuthority,
-        template.replicationOrder(),
-        template.assignmentRevision(),
-        template.completionEpoch(),
-        template.finalizedAnchor(),
-        template.archiveId(),
-        template.bundleDigest(),
-        template.descriptorDigest(),
-        template.semanticReleaseManifestDigest(),
-        template.verificationLockDigest(),
-        template.sourceTreeDigest());
+        template.replicationOrder,
+        template.assignmentRevision,
+        template.completionEpoch,
+        template.finalizedAnchor,
+        template.archiveId,
+        template.bundleDigest,
+        template.descriptorDigest,
+        template.semanticReleaseManifestDigest,
+        template.verificationLockDigest,
+        template.sourceTreeDigest);
   }
 
   private static PackageId packageId(final Object value) {

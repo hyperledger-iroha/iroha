@@ -23,8 +23,7 @@ mod ordinary_mint_submission;
 pub(crate) mod runtime_publication_tests;
 
 pub(crate) use authority::{
-    KagemushaVerifierAuthorityV1, runtime_matches_governed_registry, runtime_verifier_authority,
-    validate_runtime_cache_for_publication,
+    runtime_matches_governed_registry, validate_runtime_cache_for_publication,
 };
 
 use std::{collections::BTreeMap, path::Path, sync::Arc};
@@ -302,12 +301,6 @@ pub trait KagemushaV1RuntimeVerifier: std::any::Any + Send + Sync {
         request: KagemushaRedemptionRequestV1,
     ) -> Result<crate::zk::kagemusha_v1_recursion::VerifiedKagemushaRedemptionProofV1, String>;
 
-    /// Prove the zero-value bootstrap for an authenticated release and its pinned authorization.
-    ///
-    /// This runs only when Kura has no durable checkpoint. The proof is generated after release
-    /// authentication, then terminally reverified before persistence; it is deliberately absent
-    /// from the profile digest so the release identity cannot depend on a proof that embeds that
-    /// same release identity.
     /// Prove the exact ordinary committed source under separately retained governed authority.
     /// The source is created only by real archived native execution, never offered data.
     fn prove_finalized_ordinary_top_up(
@@ -330,6 +323,12 @@ pub trait KagemushaV1RuntimeVerifier: std::any::Any + Send + Sync {
         Err("genuine ordinary finalized Mint readback verifier unavailable".into())
     }
 
+    /// Prove the zero-value bootstrap for an authenticated release and its pinned authorization.
+    ///
+    /// This runs only when Kura has no durable checkpoint. The proof is generated after release
+    /// authentication, then terminally reverified before persistence; it is deliberately absent
+    /// from the profile digest so the release identity cannot depend on a proof that embeds that
+    /// same release identity.
     fn prove_mint_authority_bootstrap(
         &self,
         release_id: [u8; 32],

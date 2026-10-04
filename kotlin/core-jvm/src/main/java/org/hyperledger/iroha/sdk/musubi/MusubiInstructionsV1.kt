@@ -1321,6 +1321,7 @@ private fun encodeProviderCompletionAuthority(
     authority: MusubiProviderIngestCompletionAuthorityV1,
 ) {
     encodeField(encoder) { field -> field.writeBytes(authority.providerOwnerPayload) }
+    encodeField(encoder) { field -> field.writeBytes(authority.completionSignerPayload) }
     encodeField(encoder) { field -> encodeProviderSignerPolicy(field, authority.signerPolicy) }
 }
 

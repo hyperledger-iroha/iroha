@@ -3,10 +3,10 @@
 use super::*;
 use crate::beacon_bootstrap::{Directory, FinalityLimitsArgs, read_public_bytes_bounded};
 use clap::Parser;
-use iroha_core::sumeragi::native_journal::NativeJournalCursor;
+use iroha_core::sumeragi::native_journal::{NativeJournalCursor, NativeJournalError};
 use iroha_core::validator_committee_evidence::{
-    COMMITTEE_PROVISIONING_EVIDENCE_MAX_BYTES_V1, ValidatorCommitteeProvisioningEvidenceV1,
-    verify_validator_committee_provisioning_evidence_v1,
+    COMMITTEE_PROVISIONING_EVIDENCE_MAX_BYTES_V1, ValidatorCommitteeProvisioningEvidenceError,
+    ValidatorCommitteeProvisioningEvidenceV1, verify_validator_committee_provisioning_evidence_v1,
 };
 use iroha_crypto::Hash;
 use iroha_model_base::chain::ChainId;
@@ -42,6 +42,9 @@ struct Args {
     /// Explicit bounds for source bytes and cumulative decoded allocation.
     #[command(flatten)]
     finality_limits: FinalityLimitsArgs,
+    /// Required aggregate local custody budget; must match a retained catalog exactly.
+    #[arg(long)]
+    credential_max_memory_bytes: std::num::NonZeroUsize,
     #[arg(long)]
     target_epoch: u64,
     /// Exact frozen attempt identifier, as 64 hexadecimal digits.
@@ -88,13 +91,84 @@ pub(crate) fn dispatch_if_requested() -> bool {
     let args =
         Args::parse_from(std::iter::once(OsString::from("beacon-prepare-custody")).chain(args));
     if let Err(error) = run(args) {
-        eprintln!("beacon custody preparation rejected: {error}");
+        eprintln!("beacon custody preparation failed: {error}");
         std::process::exit(1);
     }
     true
 }
 
-fn run(args: Args) -> Result<(), &'static str> {
+/// Preserve local admission failures until the terminal command diagnostic.
+#[derive(Debug)]
+enum PreparationError {
+    Invalid(&'static str),
+    Journal(NativeJournalError),
+    Evidence(ValidatorCommitteeProvisioningEvidenceError),
+    Credential(RuntimeConsensusThresholdSignerCredentialErrorV1),
+}
+impl From<NativeJournalError> for PreparationError {
+    fn from(error: NativeJournalError) -> Self {
+        Self::Journal(error)
+    }
+}
+impl From<&'static str> for PreparationError {
+    fn from(reason: &'static str) -> Self {
+        Self::Invalid(reason)
+    }
+}
+impl From<ValidatorCommitteeProvisioningEvidenceError> for PreparationError {
+    fn from(error: ValidatorCommitteeProvisioningEvidenceError) -> Self {
+        Self::Evidence(error)
+    }
+}
+impl From<RuntimeConsensusThresholdSignerCredentialErrorV1> for PreparationError {
+    fn from(error: RuntimeConsensusThresholdSignerCredentialErrorV1) -> Self {
+        Self::Credential(error)
+    }
+}
+impl From<GlobalThresholdBeaconSessionError> for PreparationError {
+    fn from(error: GlobalThresholdBeaconSessionError) -> Self {
+        Self::Credential(error.into())
+    }
+}
+impl fmt::Display for PreparationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Invalid(reason) => formatter.write_str(reason),
+            Self::Journal(error) => fmt::Display::fmt(error, formatter),
+            Self::Credential(error) => fmt::Display::fmt(error, formatter),
+            Self::Evidence(error) => fmt::Display::fmt(error, formatter),
+        }
+    }
+}
+impl std::error::Error for PreparationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Invalid(_) => None,
+            Self::Journal(error) => Some(error),
+            Self::Credential(error) => Some(error),
+            Self::Evidence(error) => Some(error),
+        }
+    }
+}
+
+fn decode_provisioning_evidence(
+    bytes: &[u8],
+    limits: iroha_data_model::sumeragi::finality::NativeFinalityLimits,
+) -> Result<ValidatorCommitteeProvisioningEvidenceV1, PreparationError> {
+    let admission = limits
+        .decode_limits()
+        .map_err(|_| "invalid finality admission limits")?;
+    // TODO: source bytes and the outer evidence DTO need retained caller-pool ledgers;
+    // canonical counter admission and typed source errors alone do not fund that graph.
+    norito::core::with_decode_limits_scope(admission, || {
+        norito::decode_canonical_for_admission(bytes, norito::canonical_decode_limits(bytes.len()))
+            .map_err(iroha_data_model::sumeragi::finality::NativeFinalityDecodeError::from)
+            .map_err(NativeJournalError::Decode)
+            .map_err(PreparationError::Journal)
+    })
+}
+
+fn run(args: Args) -> Result<(), PreparationError> {
     let limits = args
         .finality_limits
         .checked()
@@ -103,13 +177,15 @@ fn run(args: Args) -> Result<(), &'static str> {
         .chain_id
         .parse()
         .map_err(|_| "invalid chain identifier")?;
+    let credential_max_memory_bytes = args.credential_max_memory_bytes.get();
+    let credential_budget = AllocationBudget::new(credential_max_memory_bytes);
     let cursor = NativeJournalCursor::new(
         chain_id.clone(),
         args.network_id,
         iroha_data_model::block::consensus::SumeragiRootScope::Global,
         limits,
-    )
-    .map_err(|_| "invalid native chain configuration")?;
+        &credential_budget,
+    )?;
     let transition_id: [u8; 32] = hex::decode(&args.transition_id)
         .map_err(|_| "invalid transition identifier")?
         .try_into()
@@ -121,13 +197,7 @@ fn run(args: Args) -> Result<(), &'static str> {
             .min(COMMITTEE_PROVISIONING_EVIDENCE_MAX_BYTES_V1),
     )
     .map_err(|_| "untrusted evidence file")?;
-    let evidence: ValidatorCommitteeProvisioningEvidenceV1 = norito::decode_canonical_with_limits(
-        &evidence_bytes,
-        limits
-            .decode_limits()
-            .map_err(|_| "invalid finality admission limits")?,
-    )
-    .map_err(|_| "noncanonical evidence")?;
+    let evidence = decode_provisioning_evidence(&evidence_bytes, limits)?;
     let verified = verify_validator_committee_provisioning_evidence_v1(
         &evidence,
         &chain_id,
@@ -136,8 +206,8 @@ fn run(args: Args) -> Result<(), &'static str> {
         transition_id,
         limits,
         cursor.attestations(),
-    )
-    .map_err(|_| "evidence is not authorized by the independently pinned incumbent chain")?;
+        &credential_budget,
+    )?;
     // No private descriptor is opened until every public authorization and target binding passes.
     let catalog = args
         .current_catalog
@@ -155,7 +225,13 @@ fn run(args: Args) -> Result<(), &'static str> {
     if catalog.as_ref().is_some_and(|value| {
         value.network_id() != &args.network_id || value.chain_id() != args.chain_id
     }) {
-        return Err("retained catalog network or chain differs");
+        return Err("retained catalog network or chain differs".into());
+    }
+    if catalog
+        .as_ref()
+        .is_some_and(|catalog| catalog.credential_max_memory_bytes() != credential_max_memory_bytes)
+    {
+        return Err("retained catalog credential memory bound differs".into());
     }
     let binding = catalog.as_ref().and_then(|catalog| {
         catalog
@@ -170,10 +246,10 @@ fn run(args: Args) -> Result<(), &'static str> {
         .map(|index| u16::try_from(index + 1).map_err(|_| "invalid incumbent index"))
         .transpose()?;
     if incumbent_index.is_some() && binding.is_none() {
-        return Err("incumbent validator must retain its exact current credential");
+        return Err("incumbent validator must retain its exact current credential".into());
     }
     if args.current_catalog.is_some() && binding.is_none() {
-        return Err("retained catalog lacks a qualified beacon slot");
+        return Err("retained catalog lacks a qualified beacon slot".into());
     }
     let target_index = verified
         .transition()
@@ -197,15 +273,24 @@ fn run(args: Args) -> Result<(), &'static str> {
             read_retained_frame(file)
         })
         .transpose()?;
-    if let Some((bytes, binding)) = retained.as_deref().zip(binding) {
-        validate_retained_incumbent(
-            bytes,
-            binding,
-            args.network_id,
-            incumbent_index,
-            verified.incumbent_beacon(),
-        )?;
+    let retained_shares = retained
+        .as_deref()
+        .zip(binding)
+        .map(|(bytes, binding)| {
+            decode_global_beacon_credential_shares_v1(
+                bytes,
+                &args.network_id,
+                binding,
+                &credential_budget,
+            )
+            .map(|shares| (shares, binding))
+        })
+        .transpose()?;
+    if let Some((shares, _)) = retained_shares.as_ref() {
+        validate_retained_incumbent(shares, incumbent_index, verified.incumbent_beacon())?;
     }
+    // Verification retained this exact graph in the same operation pool.
+    let pending_session = verified.session().clone();
     let share_file = crate::taira_runtime_signer::take_inherited_private_file(198)
         .map_err(|_| "pending share FD 198 unavailable")?;
     let components =
@@ -217,22 +302,17 @@ fn run(args: Args) -> Result<(), &'static str> {
             Ok(components)
         })
         .map_err(|_| "invalid disposable pending share descriptor")?;
-    let prepared = prepare_global_beacon_transition_credential_v1(
-        retained
-            .as_deref()
-            .zip(binding)
-            .map(|(bytes, binding)| (bytes.as_slice(), binding)),
+    let prepared = prepared::prepare_global_beacon_transition_from_retained_v1(
+        retained_shares
+            .as_ref()
+            .map(|(shares, binding)| (shares.as_slice(), *binding)),
         &args.handle,
         args.revision,
         verified.transition(),
         &args.local_validator,
-        RuntimeGlobalBeaconShareProvisioningV1::new(
-            verified.session().clone(),
-            target_index,
-            components,
-        ),
-    )
-    .map_err(|_| "pending credential import or retained inventory validation failed")?;
+        &RuntimeGlobalBeaconShareProvisioningV1::new(pending_session, target_index, components),
+        &credential_budget,
+    )?;
     let catalog = IrohaRuntimeProviderBindingsV1::with_prepared_beacon_inventory_v1(
         catalog.as_ref(),
         &args.chain_id,
@@ -240,6 +320,7 @@ fn run(args: Args) -> Result<(), &'static str> {
         &args.handle,
         prepared.revision,
         prepared.policy_digest,
+        credential_max_memory_bytes,
     )
     .map_err(|_| "invalid advanced catalog qualification")?
     .export_canonical_v1()
@@ -274,14 +355,10 @@ fn run(args: Args) -> Result<(), &'static str> {
 }
 
 pub(super) fn validate_retained_incumbent(
-    bytes: &[u8],
-    binding: &IrohaRuntimeProviderBindingV1,
-    network: NetworkId,
+    retained: &[RuntimeGlobalBeaconShareProvisioningV1],
     incumbent_index: Option<u16>,
     active: iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1,
 ) -> Result<(), &'static str> {
-    let retained = decode_global_beacon_credential_shares_v1(bytes, &network, binding)
-        .map_err(|_| "invalid retained credential")?;
     if let Some(index) = incumbent_index {
         if !retained.iter().any(|entry| {
             entry.signer_index() == index

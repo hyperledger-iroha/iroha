@@ -125,7 +125,7 @@ Operations:
   `status` and `manifest_digest` filters. Each order emits
   `assignment_revision`. Every `provider_completions[]` entry emits
   `assignment_revision`,
-  `completion_authority.provider_owner`,
+  `completion_authority.provider_owner`, `completion_authority.completion_signer`,
   `completion_authority.signer_policy.{policy_id_hex,revision,predecessor_digest_hex,policy_digest_hex}`,
   and `finalized_anchor.{height,block_hash_hex}`. These are retained ledger
   facts, not live substitutions from the provider registry.
@@ -152,11 +152,13 @@ Operations:
   the registered content root and `manifest_digest` must equal the BLAKE3 digest
   of the canonical manifest envelope. They bound payload/assignment/metadata sizes, require sorted distinct providers and
   positive SLA targets, reject alternate Norito layouts, and only complete
-  within their ledger deadline. `CanCompleteSorafsReplicationOrder` is necessary
-  but not sufficient: the transaction authority must also equal the provider's
-  current registered owner and the completion's exact expected owner, and the
-  current signer-policy tuple, assignment revision, and committed-chain anchor
-  must still match. One account need not own every provider in a multi-provider
+  within their ledger deadline. Exact provider-scoped `CanCompleteSorafsReplicationOrder`
+  is necessary but not sufficient: the transaction authority must equal the current
+  governed `completion_signer`. The binding's `provider_owner` must independently
+  match the current provider registry owner. The complete expected authority,
+  signer-policy lineage, assignment revision, and committed-chain anchor must match.
+  Only the current provider owner can Set or Revoke the completion binding through
+  full-record CAS; setting a binding requires its signer account to exist. One account need not own every provider in a multi-provider
   order. Exact retained completion replays are idempotent even after a later
   authority rotation; stale prepared completions and conflicting replays fail,
   and retiring a manifest cancels each pending order at or before its inclusive

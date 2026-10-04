@@ -7,7 +7,7 @@
 //! unresolved owners; this module must not make the stock daemon path operational.
 
 use super::{MusubiPinOutboxCheckErrorV1, PendingMusubiPinOutboxCheckV1};
-use crate::{execution_attempt::ExecutionDeferred, state::StateReadOnly as _};
+use crate::execution_attempt::ExecutionDeferred;
 use iroha_allocation::{ChargedBuffer, ChargedBufferError};
 use iroha_data_model::isi::musubi::MUSUBI_PIN_OUTBOX_EXTERNAL_MAX_BYTES_V1;
 use std::{fmt, io, time::Instant};
@@ -142,7 +142,9 @@ impl PendingMusubiPinOutboxCheckV1 {
                     maximum: MUSUBI_PIN_OUTBOX_EXTERNAL_MAX_BYTES_V1,
                 });
             }
-            let original_budget = self.prepared.state.query_view().execution_budget();
+            // This is the immutable original pool owner. Constructing a query view here would
+            // acquire unrelated MV readers and allocate runtime projections before admission.
+            let original_budget = self.prepared.state.ivm_execution_budget();
             let mut destination =
                 OriginalWireDestination(ChargedBuffer::new(length, &original_budget)?);
             plan.write_to(&mut destination)

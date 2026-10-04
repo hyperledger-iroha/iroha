@@ -6,11 +6,12 @@ pub(super) fn encode_bounded<T: norito::core::NoritoSerialize>(
     value: &T,
     maximum: usize,
 ) -> Result<Vec<u8>> {
-    eyre::ensure!(
-        norito::canonical_frame_len(value)? <= maximum,
-        "operation frame exceeds its byte bound"
-    );
-    Ok(norito::encode_canonical(value)?)
+    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let length = norito::canonical_frame_len(value)?;
+    eyre::ensure!(length <= maximum, "operation frame exceeds its byte bound");
+    norito::core::reserve_decode_allocation(length)?;
+    norito::core::to_bytes_bounded(value, length)
+        .map_err(|error| eyre::eyre!("bounded operation encoding: {error:?}"))
 }
 
 pub(super) fn decode_bounded<T>(bytes: &[u8], maximum: usize) -> Result<T>
@@ -35,7 +36,7 @@ pub(super) fn validate_options(options: &BoundedTransactionOptions) -> Result<()
     );
     eyre::ensure!(
         matches!(options.fee_payment, FeePaymentIntent::Authority(_)),
-        "operation requires explicit manager-paid fees"
+        "operation requires explicit authority-paid fees"
     );
     options.fee_payment.validate()?;
     eyre::ensure!(

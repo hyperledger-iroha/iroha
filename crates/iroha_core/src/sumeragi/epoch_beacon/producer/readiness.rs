@@ -195,24 +195,21 @@ impl NativeBeaconProducer {
                 && (current.authorization.beacon == BeaconEpochBindingV1::Bootstrap
                     || current.authorization.beacon == BeaconEpochBindingV1::Installed(binding));
             if authenticated {
-                let peers = current
-                    .committee
-                    .iter()
-                    .map(|seat| seat.validator.clone())
-                    .collect::<Vec<_>>();
-                let roster_hash =
-                    authenticated_global_threshold_beacon_roster_hash_v1(&record.session, &peers)
-                        .map_err(|error| NativeBeaconError::Source(error.to_string()))?;
-                let session = validate_global_threshold_beacon_session_v1(
-                    record.session.clone(),
-                    &GlobalThresholdBeaconSessionBindingV1 {
+                let peers = current.committee.iter().map(|seat| &seat.validator);
+                let roster_hash = authenticated_global_threshold_beacon_roster_hash_iter_v1(
+                    &record.session,
+                    peers,
+                )
+                .map_err(|error| NativeBeaconError::Source(error.to_string()))?;
+                let session = &record.session;
+                session
+                    .check_binding(&GlobalThresholdBeaconSessionBindingV1 {
                         network_id: current.network_id,
                         session_id: id,
                         roster_hash,
                         transcript_hash: record.session.transcript_hash,
-                    },
-                )
-                .map_err(|error| NativeBeaconError::Source(error.to_string()))?;
+                    })
+                    .map_err(|error| NativeBeaconError::Source(error.to_string()))?;
                 horizon.session_covers_next_pulse =
                     next.is_some_and(|height| record.is_active_at(height));
                 horizon.local_provider_ready = record.is_active_at(context.height)

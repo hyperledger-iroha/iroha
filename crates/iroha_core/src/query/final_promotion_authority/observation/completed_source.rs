@@ -11,6 +11,7 @@ use iroha_data_model::{
 
 use super::{Error, FinalPromotionCheckFloorV1};
 use crate::{
+    query::signer_check::SignerCertifiedWalkV1,
     query::{
         final_promotion_authority::{
             final_promotion_authority_request_digest_v1,
@@ -19,7 +20,6 @@ use crate::{
         signer_check::{NativeCheckFloorV1, NativeCheckRoundV1, native_signed_entry_frame_v1},
     },
     state::{StateReadOnly, StateView, TransactionsReadOnly},
-    sumeragi::certified_chain::CertifiedChain,
 };
 
 /// A completed Check may replay at most this many finalized blocks from its original floor.
@@ -35,7 +35,7 @@ pub(super) fn authenticate_completed_source(
     reserve: &SignedTransaction,
     complete: &SignedTransaction,
     round: &NativeCheckRoundV1,
-) -> Result<(), Error> {
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
     let terminal = read_operation_slot(
         &view.world,
         &expected.deployment_id,
@@ -77,7 +77,7 @@ pub(super) fn authenticate_completed_source(
             .is_none_or(|span| span > MAX_COMPLETED_HISTORY_BLOCKS_V1)
         || expected.execution.recorded_at_unix_ms >= expected.reservation.expires_at_unix_ms
     {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     }
 
     let reserve_hash = reserve.hash_as_entrypoint();
@@ -99,11 +99,11 @@ pub(super) fn authenticate_completed_source(
             .map(|index| index.get())
             != usize::try_from(expected.execution.height).ok()
     {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     }
 
     let Executable::Instructions(reserve_instructions) = reserve.instructions() else {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     };
     let reserve_instruction = reserve_instructions
         .first()
@@ -115,7 +115,7 @@ pub(super) fn authenticate_completed_source(
         .ok_or(Error::Execution)?;
     let FinalPromotionAuthorityActionV1::Reserve(reserve_request) = &reserve_instruction.action
     else {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     };
     if reserve_instruction.deployment_id != original.deployment_id
         || reserve_instruction.expected_control_digest != original.custody.control_state_digest
@@ -125,11 +125,11 @@ pub(super) fn authenticate_completed_source(
             .map_err(|_| Error::Execution)?
             != original.request_digest
     {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     }
 
     let Executable::Instructions(complete_instructions) = complete.instructions() else {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     };
     let complete_instruction = complete_instructions
         .first()
@@ -141,10 +141,10 @@ pub(super) fn authenticate_completed_source(
         .ok_or(Error::Execution)?;
     let FinalPromotionAuthorityActionV1::Complete(complete_request) = &complete_instruction.action
     else {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     };
     let FinalPromotionOperationOutcomeV1::Completed(completed) = expected.outcome else {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     };
     if complete_instruction.deployment_id != expected.deployment_id
         || complete_instruction.expected_control_digest != expected.custody.control_state_digest
@@ -157,34 +157,52 @@ pub(super) fn authenticate_completed_source(
             .map_err(|_| Error::Execution)?
             != expected.request_digest
     {
-        return Err(Error::Execution);
+        return Err(Error::Execution.into());
     }
 
+    // TODO: admit historical source clones and nested codec scratch from the original State pool.
     let reserve_frame =
         native_signed_entry_frame_v1(&TransactionEntrypoint::External(reserve.clone()))
-            .map_err(|_| Error::Execution)?;
+            .map_err(|error| error.map_rejection(|_| Error::Execution))?;
     let complete_frame =
         native_signed_entry_frame_v1(&TransactionEntrypoint::External(complete.clone()))
-            .map_err(|_| Error::Execution)?;
+            .map_err(|error| error.map_rejection(|_| Error::Execution))?;
 
     // The challenged Check already authenticated floor-to-applied continuity. Replaying the
     // original floor through Complete retains both targets' certified blocks and exact entries.
-    let chain = CertifiedChain::new(view).map_err(|_| Error::Finality)?;
+    let chain =
+        SignerCertifiedWalkV1::new(view).map_err(|error| error.map_rejection(Error::from))?;
     let mut cumulative_bytes = 0_usize;
-    for block in chain.walk(floor.height, expected.execution.height) {
-        round.ensure_live()?;
-        let block = block.map_err(|_| Error::Finality)?;
+    // Keep the one original iterator in place. Moving only this reference into
+    // the loop avoids duplicate parent/successor storage while decoding another
+    // certificate; the original source allowance and view remain unchanged.
+    let mut walk = chain.walk(floor.height, expected.execution.height);
+    for block in &mut walk {
+        round.ensure_live().map_err(Error::from)?;
+        // Convert only an actual error, without another full receipt-bearing
+        // Result temporary live alongside the next original decoder frame.
+        let receipt = match block {
+            Ok(receipt) => receipt,
+            Err(error) => return Err(error.map_rejection(Error::from)),
+        };
+        let block = receipt.in_view(view).map_err(Error::from)?;
         cumulative_bytes = cumulative_bytes
             .checked_add(block.certificate_len())
-            .ok_or(Error::Finality)?;
+            .ok_or_else(|| {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(
+                    ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+                )
+            })?;
         if cumulative_bytes > MAX_COMPLETED_HISTORY_FINALITY_BYTES_V1 {
-            return Err(Error::Finality);
+            return Err(crate::execution_attempt::ExecutionAttemptError::Deferred(
+                ivm::error::ExecutionDeferral::CanonicalHistoryCapacity.into(),
+            ));
         }
         let cursor = block.height();
         if cursor == floor.height
             && (*block.block_hash().as_ref() != floor.block_hash || block.id() != floor.context_id)
         {
-            return Err(Error::Finality);
+            return Err(Error::Finality.into());
         }
         for (execution, origin, entry_hash, source_frame) in [
             (
@@ -203,7 +221,7 @@ pub(super) fn authenticate_completed_source(
             if execution.height != cursor {
                 continue;
             }
-            round.ensure_live()?;
+            round.ensure_live().map_err(Error::from)?;
             let anchor = block
                 .entry_anchor(entry_hash)
                 .map_err(|_| Error::Execution)?;
@@ -212,7 +230,7 @@ pub(super) fn authenticate_completed_source(
                 .network_execution_proof(entry_hash)
                 .ok_or(Error::Execution)?;
             if !proof.verify(&anchor) || anchor.entry_index() != origin.entry_index {
-                return Err(Error::Execution);
+                return Err(Error::Execution.into());
             }
             let actual = body
                 .network_entrypoint_at(
@@ -225,14 +243,15 @@ pub(super) fn authenticate_completed_source(
             if !output.result.is_ok()
                 || block.block_time_ms() != execution.recorded_at_unix_ms
                 || native_signed_entry_frame_v1(actual)
-                    .map_err(|_| Error::Execution)?
+                    .map_err(|error| error.map_rejection(|_| Error::Execution))?
                     .as_slice()
                     != source_frame
             {
-                return Err(Error::Execution);
+                return Err(Error::Execution.into());
             }
         }
     }
-    round.ensure_live()?;
+    drop(walk);
+    round.ensure_live().map_err(Error::from)?;
     Ok(())
 }

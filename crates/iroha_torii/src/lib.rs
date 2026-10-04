@@ -96,6 +96,8 @@ mod push;
 #[doc(hidden)]
 pub mod query_load_profiles;
 #[cfg(feature = "app_api")]
+mod reserve_account_proof;
+#[cfg(feature = "app_api")]
 mod reserve_policy_proof;
 /// SCCP v1 public read API.
 mod sccp;
@@ -757,15 +759,20 @@ impl ValidatedToriiHttpTransport {
     }
 }
 
-async fn serve_torii_http_connection(
-    stream: TcpStream,
+mod public_tls;
+
+async fn serve_torii_http_connection<S>(
+    stream: S,
     remote: std::net::SocketAddr,
     permit: SocketPermit,
     router: Router,
     config: ToriiHttpTransport,
     shutdown_signal: ShutdownSignal,
     max_header_bytes: usize,
-) -> Result<(), hyper::Error> {
+) -> Result<(), hyper::Error>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     let io = HyperTokioIo(WriteTimeoutIo::with_lease(
         stream,
         config.write_timeout,
@@ -796,63 +803,121 @@ async fn serve_torii_http_connection(
         }
     }
 }
-fn observe_torii_connection_completion(
-    completion: Result<
-        std::thread::Result<(std::net::SocketAddr, Result<(), hyper::Error>)>,
-        JoinError,
-    >,
-) -> std::io::Result<()> {
-    match completion {
-        Ok(Ok((remote, Ok(())))) => {
-            iroha_logger::trace!(%remote, "Torii HTTP connection closed");
-            Ok(())
-        }
-        Ok(Ok((remote, Err(error)))) => {
-            // Malformed, timed-out, and reset connections are isolated to the
-            // attacker-controlled socket and must not terminate the listener.
-            iroha_logger::debug!(%remote, ?error, "Torii HTTP connection terminated");
-            Ok(())
-        }
-        Ok(Err(_)) => {
-            iroha_logger::warn!("Torii HTTP connection panicked and was isolated");
-            Ok(())
-        }
-        Err(error) => Err(std::io::Error::other(format!(
-            "Torii HTTP connection task failed: {error}"
-        ))),
-    }
-}
-async fn serve_torii_http_inner(
-    listener: TcpListener,
+/// One accepted socket owner for both transports. Admission is already held while
+/// HTTPS negotiates; successful TLS adds no authority to the shared router.
+async fn serve_torii_public_connection(
+    stream: TcpStream,
+    remote: std::net::SocketAddr,
+    permit: SocketPermit,
+    https: Option<(public_tls::HttpsIdentity, tokio::time::Instant)>,
     router: Router,
     transport: ValidatedToriiHttpTransport,
     shutdown_signal: ShutdownSignal,
 ) -> std::io::Result<()> {
     let config = transport.config;
     let max_header_bytes = transport.max_header_bytes;
+    if let Some((identity, deadline)) = https {
+        let stream = tokio::select! {
+            biased;
+            () = shutdown_signal.receive() => return Ok(()),
+            result = tokio::time::timeout_at(deadline, identity.acceptor.accept(stream)) => {
+                result.map_err(|_| std::io::Error::new(
+                    std::io::ErrorKind::TimedOut, "Torii TLS handshake deadline elapsed",
+                ))??
+            }
+        };
+        serve_torii_http_connection(
+            stream,
+            remote,
+            permit,
+            router,
+            config,
+            shutdown_signal,
+            max_header_bytes,
+        )
+        .await
+        .map_err(std::io::Error::other)
+    } else {
+        serve_torii_http_connection(
+            stream,
+            remote,
+            permit,
+            router,
+            config,
+            shutdown_signal,
+            max_header_bytes,
+        )
+        .await
+        .map_err(std::io::Error::other)
+    }
+}
+
+fn observe_torii_connection_completion(
+    completion: Result<std::thread::Result<(std::net::SocketAddr, std::io::Result<()>)>, JoinError>,
+) -> std::io::Result<()> {
+    match completion {
+        Ok(Ok((remote, Ok(())))) => {
+            iroha_logger::trace!(%remote, "Torii public connection closed");
+            Ok(())
+        }
+        Ok(Ok((remote, Err(error)))) => {
+            // TLS, malformed HTTP, timeout and reset failures belong only to this socket.
+            iroha_logger::debug!(%remote, ?error, "Torii public connection terminated");
+            Ok(())
+        }
+        Ok(Err(_)) => {
+            iroha_logger::warn!("Torii public connection panicked and was isolated");
+            Ok(())
+        }
+        Err(error) => Err(std::io::Error::other(format!(
+            "Torii public connection task failed: {error}"
+        ))),
+    }
+}
+async fn serve_torii_public_inner(
+    listener: TcpListener,
+    https: Option<public_tls::BoundHttpsListener>,
+    router: Router,
+    transport: ValidatedToriiHttpTransport,
+    shutdown_signal: ShutdownSignal,
+) -> std::io::Result<()> {
+    let config = transport.config;
+    // There is exactly one pool and one task set, including incomplete TLS handshakes.
     let admission = SocketAdmission::new(config.max_connections, config.max_connections_per_ip);
     let mut connections = JoinSet::new();
     enum ServerEvent {
         Shutdown,
-        Accepted(std::io::Result<(TcpStream, std::net::SocketAddr)>),
+        Accepted(
+            std::io::Result<(TcpStream, std::net::SocketAddr)>,
+            Option<public_tls::HttpsIdentity>,
+        ),
         ConnectionFinished(
             Option<
-                Result<
-                    std::thread::Result<(std::net::SocketAddr, Result<(), hyper::Error>)>,
-                    JoinError,
-                >,
+                Result<std::thread::Result<(std::net::SocketAddr, std::io::Result<()>)>, JoinError>,
             >,
         ),
     }
     loop {
         let has_connections = !connections.is_empty();
+        let accept = async {
+            // Unbiased selection avoids favoring plaintext over TLS under sustained ingress.
+            tokio::select! {
+                accepted = listener.accept() => ServerEvent::Accepted(accepted, None),
+                accepted = async {
+                    match &https {
+                        Some(https) => ServerEvent::Accepted(https.listener.accept().await, Some(https.identity.clone())),
+                        None => std::future::pending().await,
+                    }
+                } => accepted,
+            }
+        };
         let event = tokio::select! {
             biased;
             () = shutdown_signal.receive() => ServerEvent::Shutdown,
             completion = connections.join_next(), if has_connections => {
                 ServerEvent::ConnectionFinished(completion)
             }
-            accepted = listener.accept() => ServerEvent::Accepted(accepted),
+            accepted = accept => accepted,
         };
         match event {
             ServerEvent::Shutdown => break,
@@ -860,29 +925,33 @@ async fn serve_torii_http_inner(
                 observe_torii_connection_completion(completion)?;
             }
             ServerEvent::ConnectionFinished(None) => {}
-            ServerEvent::Accepted(Ok((stream, remote))) => {
+            ServerEvent::Accepted(Ok((stream, remote)), identity) => {
                 let Some(permit) = admission.try_acquire(remote.ip()) else {
                     iroha_logger::debug!(%remote, "Torii rejected TCP connection at listener capacity");
                     drop(stream);
                     continue;
                 };
+                let identity = identity.map(|identity| {
+                    let deadline = tokio::time::Instant::now() + identity.handshake_timeout;
+                    (identity, deadline)
+                });
                 let router = router.clone();
                 let connection_shutdown = shutdown_signal.clone();
                 connections.spawn(crate::panic_recovery::catch_async_recoverable(async move {
-                    let result = serve_torii_http_connection(
+                    let result = serve_torii_public_connection(
                         stream,
                         remote,
                         permit,
+                        identity,
                         router,
-                        config,
+                        transport,
                         connection_shutdown,
-                        max_header_bytes,
                     )
                     .await;
                     (remote, result)
                 }));
             }
-            ServerEvent::Accepted(Err(error)) => {
+            ServerEvent::Accepted(Err(error), _) => {
                 iroha_logger::warn!(?error, "Torii TCP accept failed; retrying");
                 tokio::select! {
                     () = shutdown_signal.receive() => break,
@@ -892,6 +961,7 @@ async fn serve_torii_http_inner(
         }
     }
     drop(listener);
+    drop(https);
     let drain = async {
         while let Some(completion) = connections.join_next().await {
             observe_torii_connection_completion(completion)?;
@@ -911,13 +981,15 @@ async fn serve_torii_http_inner(
     Ok(())
 }
 
-async fn serve_torii_http(
+async fn serve_torii_public(
     listener: TcpListener,
+    https: Option<public_tls::BoundHttpsListener>,
     router: Router,
     transport: ValidatedToriiHttpTransport,
     shutdown_signal: ShutdownSignal,
 ) -> std::io::Result<()> {
-    let result = serve_torii_http_inner(listener, router, transport, shutdown_signal.clone()).await;
+    let result =
+        serve_torii_public_inner(listener, https, router, transport, shutdown_signal.clone()).await;
     if result.is_err() {
         shutdown_signal.send();
     }
@@ -2473,6 +2545,8 @@ struct AppState {
     #[cfg(feature = "app_api")]
     sorafs_routing_authority_cache: Arc<sorafs::delegated_routing::RoutingAuthorityCache>,
     sorafs_node: sorafs_node::NodeHandle,
+    sorafs_provider_attestation_inventory:
+        Option<Arc<dyn sorafs_node::MusubiProviderAttestationInventoryReaderV1>>,
     #[cfg(feature = "app_api")]
     sorafs_proof_outcome_signer: Option<Arc<dyn SoraFsProofOutcomeTransactionSigner>>,
     #[cfg(feature = "app_api")]
@@ -36069,6 +36143,7 @@ pub struct Torii {
     preauth_gate: Arc<limits::PreAuthGate>,
     fee_policy: FeePolicy,
     http_transport: ToriiHttpTransport,
+    https_transport: Option<iroha_config::parameters::actual::ToriiHttpsTransport>,
     norito_rpc: iroha_config::parameters::actual::NoritoRpcTransport,
     mcp: iroha_config::parameters::actual::ToriiMcp,
     cors: iroha_config::parameters::actual::ToriiCors,
@@ -36114,6 +36189,7 @@ pub struct Torii {
     #[cfg(feature = "app_api")]
     sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>,
     sorafs_node: sorafs_node::NodeHandle,
+    sorafs_provider_attestation_inventory: Option<Arc<dyn sorafs_node::MusubiProviderAttestationInventoryReaderV1>>,
     #[cfg(feature = "app_api")]
     sorafs_proof_outcome_signer: Option<Arc<dyn SoraFsProofOutcomeTransactionSigner>>,
     #[cfg(feature = "app_api")]
@@ -36213,6 +36289,7 @@ pub struct ToriiRuntimeDeps {
     >,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
     sorafs_node: Option<sorafs_node::NodeHandle>,
+    sorafs_provider_attestation_inventory: Option<Arc<dyn sorafs_node::MusubiProviderAttestationInventoryReaderV1>>,
     #[cfg(feature = "app_api")]
     sorafs_stream_token_signer_client: Option<Arc<dyn sorafs::StreamTokenSignerClientV1>>,
     #[cfg(feature = "app_api")]
@@ -36342,6 +36419,7 @@ impl ToriiRuntimeDeps {
             bootle_lantern_issuance_provider_registry: None,
             soracloud_runtime: None,
             sorafs_node: None,
+            sorafs_provider_attestation_inventory: None,
             #[cfg(feature = "app_api")]
             sorafs_stream_token_signer_client: None,
             #[cfg(feature = "app_api")]
@@ -36500,6 +36578,16 @@ impl ToriiRuntimeDeps {
     #[must_use]
     pub fn with_sorafs_node(mut self, sorafs_node: sorafs_node::NodeHandle) -> Self {
         self.sorafs_node = Some(sorafs_node);
+        self
+    }
+    /// Retain the same local signed-inventory owner used by the supervised native capture driver.
+    /// This read-only dependency neither opens storage nor proves registry inclusion.
+    #[must_use]
+    pub fn with_sorafs_provider_attestation_inventory(
+        mut self,
+        inventory: Arc<dyn sorafs_node::MusubiProviderAttestationInventoryReaderV1>,
+    ) -> Self {
+        self.sorafs_provider_attestation_inventory = Some(inventory);
         self
     }
     /// Attach the runtime-only signer used for authoritative SoraFS proof outcomes.
@@ -38606,6 +38694,7 @@ impl Torii {
             SORAFS_ORDERBOOK_EVENTS_WS_GET => limited_canonical_account_get(sorafs::api::handle_get_sorafs_orderbook_events_ws, app_state, 0, 0);
             SORAFS_RESERVE_POLICY_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_policy);
             SORAFS_RESERVE_POLICY_PROOF_GET => canonical_signature_get(reserve_policy_proof::handler);
+            SORAFS_RESERVE_ACCOUNT_PROOF_GET => canonical_signature_get(reserve_account_proof::handler);
             SORAFS_RESERVE_PROVIDERS_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_providers);
             SORAFS_RESERVE_PROVIDERS_BY_PROVIDER_ID_HEX_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_provider);
             SORAFS_RESERVE_TOP_UP_POST => layered_canonical_signed_post(sorafs::reserve_api::handle_post_sorafs_reserve_top_up, contracts_body_limit);
@@ -38624,10 +38713,10 @@ impl Torii {
             SORAFS_RESERVE_EVENTS_WS_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_events_ws);
             SORAFS_GATEWAY_COMPLIANCE_FEEDS_BY_FEED_ID_GET => canonical_signature_get(sorafs::gateway_compliance_api::handle_get_sorafs_gateway_compliance_feed);
             SORAFS_GATEWAY_COMPLIANCE_STATUS_GET => canonical_signature_get(sorafs::gateway_compliance_api::handle_get_sorafs_gateway_compliance_status);
-            SORAFS_GATEWAY_COMPLIANCE_STAGE_POST => limited_canonical_signature_post(sorafs::gateway_compliance_api::handle_post_sorafs_gateway_compliance_stage, sorafs::gateway::MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1);
-            SORAFS_GATEWAY_COMPLIANCE_ACKNOWLEDGE_POST => limited_canonical_signature_post(sorafs::gateway_compliance_api::handle_post_sorafs_gateway_compliance_acknowledge, sorafs::gateway::MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1);
+            SORAFS_GATEWAY_COMPLIANCE_STAGE_POST => limited_canonical_signature_post(sorafs::gateway_compliance_api::handle_post_sorafs_gateway_compliance_stage, sorafs_manifest::gateway_compliance::MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1);
+            SORAFS_GATEWAY_COMPLIANCE_ACKNOWLEDGE_POST => limited_canonical_signature_post(sorafs::gateway_compliance_api::handle_post_sorafs_gateway_compliance_acknowledge, sorafs_manifest::gateway_compliance::MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1);
             SORAFS_GATEWAY_COMPLIANCE_PROMOTE_POST => limited_canonical_signature_post(sorafs::gateway_compliance_api::handle_post_sorafs_gateway_compliance_promote, 0);
-            SORAFS_GATEWAY_COMPLIANCE_ROLLBACK_POST => limited_canonical_signature_post(sorafs::gateway_compliance_api::handle_post_sorafs_gateway_compliance_rollback, sorafs::gateway::MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1);
+            SORAFS_GATEWAY_COMPLIANCE_ROLLBACK_POST => limited_canonical_signature_post(sorafs::gateway_compliance_api::handle_post_sorafs_gateway_compliance_rollback, sorafs_manifest::gateway_compliance::MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1);
             SORAFS_APPEALS_PRICING_CONFIG_GET => public_get(sorafs::api::handle_get_sorafs_appeal_pricing_config);
             SORAFS_APPEALS_PRICING_STATUS_GET => public_get(sorafs::api::handle_get_sorafs_appeal_pricing_status);
             SORAFS_APPEALS_PRICING_QUOTE_POST => public_post(sorafs::api::handle_post_sorafs_appeal_pricing_quote);
@@ -39431,6 +39520,7 @@ impl Torii {
             PIN_REGISTER => limited_canonical_signed_post(handler_post_sorafs_register_manifest, sorafs_body_limit);
             REPAIR_SOURCE => limited_canonical_account_post(sorafs::repair_source::read_chunk, sorafs_operator_state, iroha_data_model::sorafs::repair_source::REPAIR_SOURCE_REQUEST_MAX_BYTES_V1, iroha_data_model::sorafs::repair_source::REPAIR_SOURCE_REQUEST_MAX_BYTES_V1);
             PROVIDER_SOURCE => limited_canonical_account_post(sorafs::provider_source::read_source, sorafs_operator_state, 4096, 4096);
+            PROVIDER_ATTESTATION => limited_canonical_account_post(sorafs::provider_attestation::read_attestation, sorafs_operator_state, 4096, 4096);
             PUBLISH_SOURCE => limited_canonical_account_post(sorafs::publisher::stage_source, sorafs_operator_state, sorafs_car::publisher::PUBLISHER_SOURCE_REQUEST_MAX_BYTES_V1, sorafs_car::publisher::PUBLISHER_SOURCE_REQUEST_MAX_BYTES_V1);
             PUBLISH_PREPARE => limited_canonical_account_post(sorafs::publisher::prepare_publication, sorafs_operator_state, 4096, 4096);
             PUBLISH_PROOF => limited_canonical_account_post(sorafs::publisher::publication_proof, sorafs_operator_state, 4096, 4096);
@@ -39913,6 +40003,8 @@ impl Torii {
             runtime_deps.sorafs_stream_token_admission_capture.clone();
         #[cfg(feature = "app_api")]
         let shared_sorafs_proof_outcome_signer = runtime_deps.sorafs_proof_outcome_signer.clone();
+        let shared_sorafs_provider_attestation_inventory =
+            runtime_deps.sorafs_provider_attestation_inventory.clone();
         #[cfg(feature = "app_api")]
         let shared_sorafs_repair_transaction_signer =
             runtime_deps.sorafs_repair_transaction_signer.clone();
@@ -41323,6 +41415,7 @@ impl Torii {
             preauth_gate,
             fee_policy,
             http_transport: config.transport.http,
+            https_transport: config.transport.https.clone(),
             norito_rpc: config.transport.norito_rpc.clone(),
             mcp: config.mcp,
             cors: config.cors,
@@ -41370,6 +41463,7 @@ impl Torii {
             #[cfg(feature = "app_api")]
             sorafs_cache,
             sorafs_node,
+            sorafs_provider_attestation_inventory: shared_sorafs_provider_attestation_inventory,
             #[cfg(feature = "app_api")]
             sorafs_proof_outcome_signer: shared_sorafs_proof_outcome_signer,
             #[cfg(feature = "app_api")]
@@ -41565,6 +41659,11 @@ impl Torii {
     fn validate_startup_configuration(&self) -> core::result::Result<(), ToriiBuildError> {
         ValidatedToriiHttpTransport::new(self.http_transport)
             .map_err(|error| ToriiBuildError::invalid_configuration("transport.http", error))?;
+        if let Some(https) = &self.https_transport {
+            public_tls::validate(https).map_err(|error| {
+                ToriiBuildError::invalid_configuration("transport.https", error)
+            })?;
+        }
         let _ = self.build_cors_layer()?;
         if self.cors.enabled {
             let _ = Self::parse_cors_origins(&self.cors.allowed_origins)?;
@@ -42352,6 +42451,9 @@ impl Torii {
                 sorafs::delegated_routing::RoutingAuthorityCache::default(),
             ),
             sorafs_node: self.sorafs_node.clone(),
+            sorafs_provider_attestation_inventory: self
+                .sorafs_provider_attestation_inventory
+                .clone(),
             #[cfg(feature = "app_api")]
             sorafs_proof_outcome_signer: self.sorafs_proof_outcome_signer.clone(),
             #[cfg(feature = "app_api")]
@@ -42799,6 +42901,14 @@ impl Torii {
         let http_transport = ValidatedToriiHttpTransport::new(self.http_transport)
             .change_context(Error::StartServer)
             .attach("invalid Torii HTTP transport configuration")?;
+        // Identity admission precedes every bind and background service startup.
+        let https = self
+            .https_transport
+            .as_ref()
+            .map(public_tls::PreparedHttps::load)
+            .transpose()
+            .change_context(Error::StartServer)
+            .attach("failed to load Torii HTTPS identity")?;
         #[cfg(feature = "app_api")]
         let zk_prover_enabled = !emergency_fast && crate::zk_prover::cfg_enabled();
         #[cfg(feature = "app_api")]
@@ -42828,6 +42938,16 @@ impl Torii {
             .change_context(Error::StartServer)
             .attach("failed to bind to the specified address")
             .attach_with(|| self.address.clone().into_attachment())?;
+        let https = match https {
+            Some(prepared) => Some(
+                prepared
+                    .bind()
+                    .await
+                    .change_context(Error::StartServer)
+                    .attach("failed to bind Torii HTTPS listener")?,
+            ),
+            None => None,
+        };
         let (api_router, app_state) = self
             .create_api_router_with_state(shutdown_signal.clone())
             .change_context(Error::StartServer)
@@ -43261,8 +43381,9 @@ impl Torii {
         #[cfg(not(feature = "app_api"))]
         drop(app_state);
         iroha_logger::info!(addr = %torii_address, "Torii bound and listening");
-        let server = serve_torii_http(
+        let server = serve_torii_public(
             listener,
+            https,
             api_router,
             http_transport,
             shutdown_signal.clone(),
@@ -43795,6 +43916,8 @@ fn gateway_compliance_controller_config(
 ) -> Result<sorafs::gateway::GatewayComplianceControllerConfig, ToriiBuildError> {
     use sorafs::gateway::{
         GatewayComplianceFeedHostPolicy, GatewayComplianceFeedPolicy, GatewayComplianceFetchLimits,
+    };
+    use sorafs_manifest::gateway_compliance::{
         GatewayComplianceTrustPolicyV1, GatewayComplianceTrustedSignerV1,
     };
     let convert_signer =

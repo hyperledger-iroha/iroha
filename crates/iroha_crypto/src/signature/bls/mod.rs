@@ -51,6 +51,8 @@ pub(crate) mod canonical;
 mod consolidation_tests;
 mod ethereum;
 mod implementation;
+pub(crate) mod signing;
+pub use signing::BlsSigningError;
 pub(crate) mod uncached;
 pub use ethereum::{
     ETHEREUM_BLS_POP_DST, ethereum_bls_pop_fast_aggregate_verify,

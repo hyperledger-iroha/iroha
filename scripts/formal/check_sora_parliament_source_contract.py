@@ -1108,8 +1108,81 @@ SCHEDULE_EXECUTION_PATH = "crates/iroha_core/src/sumeragi/schedule/execution.rs"
 NATIVE_HEADER_SOURCE_PATH = "crates/iroha_core/src/block/native_header_source.rs"
 
 
+BEACON_ROSTER_PATH = "crates/iroha_core/src/beacon.rs"
+BEACON_ROSTER_CODEC_PATH = "crates/iroha_core/src/beacon/validation.rs"
+BEACON_SEALED_SESSION_PATH = "crates/iroha_core/src/beacon/session_owner/validated.rs"
+BEACON_DKG_OWNER_PATH = "crates/iroha_core/src/beacon/session_owner/dkg.rs"
+
+
+def require_beacon_finalization_roster(committee: str) -> None:
+    """Finalization authenticates the original current and frozen target rosters."""
+    committee_path = "crates/iroha_core/src/state/validator_committee.rs"
+    finalization = section(committee, "pub(crate) fn validate_beacon_finalization(",
+                           "impl StateBlock<'_> {", committee_path)
+    require_all(committee_path, finalization, (
+        "current_authority(state)?", "validate_against_authority(authority)",
+        "authority.generation != 0 || authorization.beacon != BeaconEpochBindingV1::Bootstrap",
+        "authenticated_global_threshold_beacon_roster_hash_v1(&record.session, authorizing_roster)",
+        "validator_committee_transitions()", "validate_against_preparing_authorization(authorization)?",
+        "active != Some(incumbent.session_id)", "current.session.transcript_hash != incumbent.transcript_hash",
+        "transition.outcome.is_some()", "height >= authorization.last_height",
+        "record.session.session_id != preparation.beacon_session_id()?",
+        "record.session.adaptive_dkg.session.start_height <= preparation.selection_height",
+        "record.session.adaptive_dkg.finalized_at_height >= preparation.first_height - 1",
+        "let target_roster = preparation.committee.iter().map(|seat| &seat.validator);",
+        "authenticated_global_threshold_beacon_roster_hash_iter_v1(&record.session, target_roster)",
+        "Ok(false)",
+    ))
+
+
+def require_borrowed_beacon_roster_and_sealed_binding() -> None:
+    """Borrowed identities retain canonical order, exact count and current seal binding."""
+    source = read(BEACON_ROSTER_PATH)
+    authenticated = compact_rust(rust_item(
+        source, "pub(crate) fn authenticated_global_threshold_beacon_roster_hash_iter_v1<",
+        BEACON_ROSTER_PATH))
+    require_all(BEACON_ROSTER_PATH, authenticated, (
+        "I:ExactSizeIterator<Item=&'aPeerId>+Clone,",
+        "letcount=roster.len();",
+        "letroster_hash=global_threshold_beacon_roster_hash_iter_v1(roster);",
+        "ifsession.roster_hash!=roster_hash||usize::from(session.committee_size)!=count{"
+        "returnErr(GlobalThresholdBeaconError::RosterMismatch);}",
+        "Ok(roster_hash)",
+    ))
+    digest = compact_rust(rust_item(
+        source, "pub fn global_threshold_beacon_roster_hash_iter_v1<", BEACON_ROSTER_PATH))
+    require_all(BEACON_ROSTER_PATH, digest, (
+        "I:ExactSizeIterator<Item=&'aPeerId>+Clone,",
+        "*iroha_crypto::HashOf::new(&validation::RosterIter(roster)).as_ref()",
+    ))
+    codec = compact_rust(rust_item(
+        read(BEACON_ROSTER_CODEC_PATH),
+        "impl<'a, I> norito::core::SerializePayload for RosterIter<I>",
+        BEACON_ROSTER_CODEC_PATH))
+    require_all(BEACON_ROSTER_CODEC_PATH, codec, (
+        "I:ExactSizeIterator<Item=&'aPeerId>+Clone,",
+        "norito::core::write_element_sequence::<PeerId,_>(writer,self.0.clone())",
+    ))
+    sealed = read(BEACON_SEALED_SESSION_PATH)
+    recheck = compact_rust(rust_item(sealed, "    pub fn check_binding(", BEACON_SEALED_SESSION_PATH))
+    require_all(BEACON_SEALED_SESSION_PATH, recheck, (
+        "validate_binding(self.record(),expected)",
+    ))
+    binding = compact_rust(rust_item(sealed, "fn validate_binding(", BEACON_SEALED_SESSION_PATH))
+    require_all(BEACON_SEALED_SESSION_PATH, binding, (
+        "ifsource.version!=iroha_data_model::consensus::GLOBAL_THRESHOLD_BEACON_VERSION_V1{"
+        "returnErr(GlobalThresholdBeaconError::UnsupportedVersion{actual:source.version,});}",
+        "ifsource.network_id!=expected.network_id{returnErr(GlobalThresholdBeaconError::NetworkMismatch);}",
+        "ifsource.session_id!=expected.session_id{returnErr(GlobalThresholdBeaconError::SessionMismatch);}",
+        "ifsource.roster_hash!=expected.roster_hash{returnErr(GlobalThresholdBeaconError::RosterMismatch);}",
+        "ifsource.transcript_hash!=expected.transcript_hash{returnErr(GlobalThresholdBeaconError::TranscriptMismatch);}",
+        "beacon::validate_adaptive_dkg_geometry(source)?;",
+    ))
+
+
 def require_parliament_beacon_requirement(beacon: str, producer: str) -> None:
     """Authenticated root ownership and exact committed demand gate both consumers."""
+    require_borrowed_beacon_roster_and_sealed_binding()
     path = EPOCH_BEACON_PATH
     ownership = compact_rust(rust_item(beacon, "fn owns_global_control(", path))
     expected_ownership = compact_rust("""
@@ -1238,9 +1311,29 @@ def require_parliament_beacon_requirement(beacon: str, producer: str) -> None:
             };
         """),
         "validate_pending_slot(world,current,height)?;",
-        "letpeers=current.committee.iter().map(|seat|seat.validator.clone()).collect::<Vec<_>>();",
-        "authenticated_global_threshold_beacon_roster_hash_v1(&record.session,&peers)",
-        "verify_finalized_global_threshold_beacon_pulse_v1(",
+        "letpeers=current.committee.iter().map(|seat|&seat.validator);",
+        "authenticated_global_threshold_beacon_roster_hash_iter_v1(&record.session,peers)",
+        compact_rust("""
+            let binding = GlobalThresholdBeaconSessionBindingV1 {
+                network_id: current.network_id,
+                session_id: pulse.session_id,
+                roster_hash,
+                transcript_hash: record.session.transcript_hash,
+            };
+            let session = &record.session;
+            session
+                .check_binding(&binding)
+                .map_err(|error| error.to_string())?;
+            let link = verify_finalized_global_threshold_beacon_pulse_v1(
+                &session,
+                &pulse,
+                anchor,
+                expected_context
+                    .as_ref()
+                    .ok_or("native pulse has no parent context")?,
+            )
+            .map_err(|error| error.to_string())?;
+        """),
     )
     positions = [admission.find(token) for token in admission_order]
     if (any(admission.count(token) != 1 for token in admission_order)
@@ -1669,23 +1762,76 @@ def require_encrypted_beacon_dkg_source(model: str, core: str) -> None:
         "|| self.encrypted_shares.len() != all_edges",
         "|| self.share_acceptances.len() != all_edges",
         "self.aborted = true;",
-        "return Err(GlobalThresholdBeaconError::IncompleteDkgEdges);",
+        "return Err(GlobalThresholdBeaconError::IncompleteDkgEdges.into());",
         "&encrypted_shares,\n            &share_acceptances,",
-        "GlobalThresholdBeaconDkgTranscriptV1 {",
     ))
-    verification = rust_item(core, "fn validate_adaptive_dkg_shape<E>(", core_path)
-    require_all(core_path, verification, (
-        "admit: &mut impl FnMut(usize) -> Result<(), E>",
-        "Result<(), GlobalThresholdBeaconVerificationError<E>>",
-        "validation::DkgSnapshotRef::from(transcript).validate_with_admission(admit)?;",
+    # Follow the sole retained constructor rather than requiring an uncharged
+    # inline DTO. Publication must keep the original snapshot, budget and cause.
+    retained_order = (
+        "letsnapshot=self.public_snapshot()?;",
+        "letfinalized=session_owner::retain_finalized_dkg("
+        "snapshot.record(),&qualified_dealers,event_hash,height,&derived,&self.budget,)?;",
+        "self.finalized=Some(finalized);",
+        "self.last_updated_height=height;",
+    )
+    compact_finalization = compact_rust(finalization)
+    positions = [compact_finalization.rfind(token) for token in retained_order]
+    if any(position < 0 for position in positions) or positions != sorted(positions):
+        raise RuntimeError(f"{core_path}: finalization must publish the original retained DKG owner")
+    retained = compact_rust(rust_item(
+        read(BEACON_DKG_OWNER_PATH), "pub(in crate::beacon) fn retain_finalized_dkg(",
+        BEACON_DKG_OWNER_PATH,
+    ))
+    require_all(BEACON_DKG_OWNER_PATH, retained, (
+        "letmutreservation=budget.try_reserve_bytes(demand.total_bytes()?)?;",
+        "letmutconstruction=Construction::with_demand(demand,budget,&mutreservation)?;",
+        "letpublic_shares=construction.copied(&derived.public_shares)?;",
+        "letqualified_dealers=construction.copied(qualified_dealers)?;",
+        "letrecipient_keys=construction.recipients(source.recipient_keys.iter())?;",
+        "letdealer_commitments=construction.dealers(source.dealer_commitments.iter())?;",
+        "letencrypted_shares=construction.edges(source.encrypted_shares.iter())?;",
+        "letshare_acceptances=construction.acceptances(source.share_acceptances.iter())?;",
+        "letadaptive_dkg=GlobalThresholdBeaconDkgTranscriptV1{session:source.session,"
+        "generator_h:source.generator_h,generator_v:source.generator_v,dealer_commitments,"
+        "recipient_keys,encrypted_shares,share_acceptances,qualified_dealers,event_hash,"
+        "finalized_at_height:height,};",
+        "letowner=construction.finish(GlobalThresholdBeaconKeySessionV1{",
+        "dkg_contribution_hash:event_hash,transcript_hash:derived.transcript_hash,})?;",
+        "ifconstruction.reservation.remaining_bytes()!=0{"
+        "returnErr(GlobalThresholdBeaconSessionError::PlanChanged);}",
+        "Ok(owner)",
+    ))
+    geometry = rust_item(core, "fn validate_adaptive_dkg_geometry(", core_path)
+    require_all(core_path, geometry, (
+        "validate_dkg_session(&transcript.session)?;",
+        "let seats = usize::from(session.committee_size);",
+        "let all_edges = seats\n        .checked_mul(seats)",
         "transcript.recipient_keys.len() != seats",
         "|| transcript.dealer_commitments.len() != seats",
         "|| transcript.encrypted_shares.len() != all_edges",
         "|| transcript.share_acceptances.len() != all_edges",
-        "return Err(GlobalThresholdBeaconError::IncompleteDkgEdges.into());",
+        ".eq(1..=session.committee_size)",
+        "return Err(GlobalThresholdBeaconError::IncompleteDkgEdges);",
+        "validation::DkgSnapshotRef::from(transcript).validate_bounds()?;",
+    ))
+    verification = rust_item(core, "fn validate_adaptive_dkg_shape<V: validation::DkgSignatureVerifier>(", core_path)
+    require_all(core_path, verification, (
+        "verifier: &mut V",
+        "Result<(), GlobalThresholdBeaconVerificationError<V::Resource>>",
+        "validate_adaptive_dkg_geometry(record)?;",
+        "validation::DkgSnapshotRef::from(transcript).validate_with_verifier(verifier)?;",
         "&transcript.encrypted_shares,\n        &transcript.share_acceptances,",
         "!= transcript.event_hash",
     ))
+    ordered = (
+        "validate_adaptive_dkg_geometry(record)?;",
+        "validation::DkgSnapshotRef::from(transcript).validate_with_verifier(verifier)?;",
+        "global_threshold_beacon_dkg_event_hash_v1(",
+    )
+    positions = [verification.find(token) for token in ordered]
+    if (any(verification.count(token) != 1 for token in ordered)
+            or positions != sorted(positions)):
+        raise RuntimeError(f"{core_path}: geometry and original verifier must precede event admission")
 
 
 def require_signed_deferred_authority_and_native_fees(
@@ -5224,21 +5370,7 @@ def main() -> int:
 
     committee_path = "crates/iroha_core/src/state/validator_committee.rs"
     committee = read(committee_path)
-    finalization = section(committee, "pub(crate) fn validate_beacon_finalization(",
-                           "impl StateBlock<'_> {", committee_path)
-    require_all(committee_path, finalization, (
-        "current_authority(state)?", "validate_against_authority(authority)",
-        "authority.generation != 0 || authorization.beacon != BeaconEpochBindingV1::Bootstrap",
-        "authenticated_global_threshold_beacon_roster_hash_v1(&record.session, authorizing_roster)",
-        "validator_committee_transitions()", "validate_against_preparing_authorization(authorization)?",
-        "active != Some(incumbent.session_id)", "current.session.transcript_hash != incumbent.transcript_hash",
-        "transition.outcome.is_some()", "height >= authorization.last_height",
-        "record.session.session_id != preparation.beacon_session_id()?",
-        "record.session.adaptive_dkg.session.start_height <= preparation.selection_height",
-        "record.session.adaptive_dkg.finalized_at_height >= preparation.first_height - 1",
-        "authenticated_global_threshold_beacon_roster_hash_v1(&record.session, &target_roster)",
-        "Ok(false)",
-    ))
+    require_beacon_finalization_roster(committee)
     boundary = section(committee, "pub(crate) fn finalize_validator_committee_boundary(",
                        "fn owns_validator(", committee_path)
     require_all(committee_path, boundary, (

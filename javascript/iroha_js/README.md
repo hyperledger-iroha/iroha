@@ -4903,6 +4903,7 @@ const complete = buildCompleteReplicationOrderInstruction({
   completionEpoch: 27,
   expectedAuthority: {
     providerOwner,
+    completionSigner,
     signerPolicy: {
       policyId,
       revision: 2,
@@ -4928,8 +4929,9 @@ one exact non-zero ArchiveId. The retired four-field wire shape is rejected.
 
 Completion uses the exact six-field hard cut: `order_id`, `provider_id`,
 `completion_epoch`, `expected_authority`, `expected_assignment_revision`, and
-`finalized_anchor`. The authority retains the provider owner and four-part
-signer-policy chain. Missing, retired three-field, alias, and unknown shapes are
+`finalized_anchor`. The authority retains the provider owner, mandatory completion signer, and
+four-part signer-policy chain. The completion transaction is signed by the selected
+completion signer; the provider owner controls that binding. Missing, retired three-field, alias, and unknown shapes are
 rejected.
 
 ## Configuration
@@ -5062,3 +5064,34 @@ See `test/fixtures/game-v1-codec.json` for generic wire and gameplay digest vect
 and `test/fixtures/race-v1-codec.json` for compiled application value vectors.
 Qualification and authenticated block finality are separate from codec round trips
 or endpoint-reported transaction status.
+
+Canonical staking values are available through `encodeValidatorStakingValueV1`
+and `decodeValidatorStakingValueV1` on the root and `norito` exports. The typed
+monetary preconditions, bounded reward records (including required explicit
+`fee_claim`), signing generations and epoch authorizations use the Rust shared
+fixtures. Amounts remain exact decimal strings and unsigned heights accept
+`bigint`; native identity validation is mandatory. These are bare value codecs,
+not preparation observations or evidence of authority. The executing network
+still verifies its pinned XOR, custody, signer and finality obligations.
+
+### Staking preparation observations
+
+The client exposes the canonical `/v1/nexus/staking/prepare` read as
+`preparePublicLanePlan(request, xorAssetDefinitionId)` in JavaScript and
+`prepare_public_lane_plan(request, xor_asset_definition_id)` in Python. It uses
+the client's immutable local signing context only to pin the expected network;
+the read signs and submits no transaction. Supply the network's genesis-pinned
+XOR definition explicitly. All proposed balances must use that definition and
+Global scope. The response is a server observation, including its reported
+block identity; it is not an independently authenticated state proof.
+
+Requests and responses use exact bounded Norito frames. The client checks the
+echoed request, epoch cut, expiry, recipients, selected accruals, and complete
+ordered balance set before returning the plan for review. There is one dispatch
+with no retry or redirect. Execution must recompute all monetary effects and
+preconditions before any signed plan changes ledger balances.
+
+JavaScript preparation retains one cancellation deadline through dispatch,
+headers and success/error body reads, including responses arriving after the
+caller has stopped waiting. The deadline uses the configured timeout with a
+30-second maximum and does not restart when headers arrive.

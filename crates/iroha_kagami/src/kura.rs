@@ -288,8 +288,9 @@ fn print_blockchain(
             block_store
                 .read_block_data(idx.start, &mut block_buf)
                 .wrap_err(format!("failed to read block № {} data.", meta_index + 1))?;
-            let block = decode_framed_signed_block(&block_buf)
-                .map_err(|err| eyre!("Failed to decode block № {}: {err}", meta_index + 1))?;
+            let block = decode_framed_signed_block(&block_buf).wrap_err_with(|| {
+                format!("failed to decode canonical block № {}", meta_index + 1)
+            })?;
             writeln!(writer, "Block#{} :", meta_index + 1)?;
             writeln!(writer, "{block:#?}")?;
         }
@@ -325,11 +326,11 @@ mod tests {
     use iroha_core::{block::BlockBuilder, kura::PipelineDagSnapshot, tx::AcceptedTransaction};
     use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        block::{BlockHeader, SignedBlock},
+        block::{BlockHeader, SharedSignedBlock, SignedBlock},
         prelude::*,
     };
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
-    use std::{borrow::Cow, fs, sync::Arc};
+    use std::{borrow::Cow, fs};
     #[test]
     fn inspection_commands_require_their_own_store_and_range() {
         use clap::Parser as _;
@@ -379,7 +380,7 @@ mod tests {
         let error = args.run(&mut BufWriter::new(Vec::new())).unwrap_err();
         assert!(error.to_string().contains("from must be positive"));
     }
-    fn fixture_block(prev: Option<&SignedBlock>) -> Arc<SignedBlock> {
+    fn fixture_block(prev: Option<&SignedBlock>) -> SharedSignedBlock {
         let network_id =
             NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
                 b"kagami-kura-fixture-network",
@@ -403,9 +404,13 @@ mod tests {
             .expect("sign Kagami Kura fixture block")
             .unpack(|_| {})
             .into();
-        Arc::new(sb)
+        let budget =
+            iroha_core::state::AllocationBudget::new(SharedSignedBlock::allocation_layout().size());
+        SharedSignedBlock::try_new(sb, &budget)
+            .map_err(|(_, error)| error)
+            .expect("admit the fixture's canonical shared block owner")
     }
-    fn append_block(store: &mut BlockStore, prev: Option<&SignedBlock>) -> Arc<SignedBlock> {
+    fn append_block(store: &mut BlockStore, prev: Option<&SignedBlock>) -> SharedSignedBlock {
         let block = fixture_block(prev);
         store.append_block_to_chain(&block).expect("append");
         block

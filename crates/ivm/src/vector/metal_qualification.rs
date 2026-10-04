@@ -137,11 +137,21 @@ fn required_on_device(index: usize) {
         .expect("original CPU baseline for required retained update");
     let rehash_geometry = metal_merkle_cost_rehash::Geometry::new(8_192 * 32, 32, 8_192)
         .expect("bounded exact retained geometry");
-    metal_merkle_cost_rehash::calibrate(
+    metal_receipts::timing::report(
+        "Rehash",
+        metal_runtime::current_health()
+            .expect("original physical owner for retained update")
+            .identity(),
         rehash_geometry,
         rehash_baseline,
-        rehash_context,
-        Instant::now(),
+        || {
+            metal_merkle_cost_rehash::calibrate(
+                rehash_geometry,
+                rehash_baseline,
+                rehash_context,
+                Instant::now(),
+            )
+        },
     )
     .expect("required isolated complete retained update calibration");
     assert!(

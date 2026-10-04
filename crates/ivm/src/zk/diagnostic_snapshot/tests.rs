@@ -143,39 +143,36 @@ fn reserved_parent_survives_shrink_and_shared_snapshot_final_owner() {
 }
 
 #[test]
-fn delta_capture_expands_without_changing_source_and_rejects_bad_indices() {
-    let mut rows = vec![
-        DeltaEntry {
-            pc: 4,
-            changes: vec![(7, 21, true)],
-        },
-        DeltaEntry {
-            pc: 8,
-            changes: vec![(8, 22, false)],
-        },
-    ];
+fn delta_capture_expands_without_changing_source() {
     let budget = AllocationBudget::new(64 * 1024);
-    fn capture(
-        rows: &[DeltaEntry],
-        budget: &AllocationBudget,
-    ) -> Result<DiagnosticTraceSnapshot, VMError> {
-        DiagnosticTraceSource {
-            registers: DiagnosticRegisterSource::Deltas(rows),
-            constraints: &[],
-            memory_events: &[],
-            register_events: &[],
-            steps: &[],
-        }
-        .try_snapshot(budget)
+    let mut rows = super::DeltaTraceLog::new(Some(&budget));
+    budget.with_deferred_refund_notifications(|scope| {
+        rows.prepare_batch(2, 256, 1, Some(scope)).unwrap();
+    });
+    let mut gpr = [0; 256];
+    let mut tags = [false; 256];
+    gpr[7] = 21;
+    tags[7] = true;
+    rows.record_reserved(4, gpr, tags);
+    gpr[8] = 22;
+    rows.record_reserved(8, gpr, tags);
+    let retained = budget.reserved_bytes();
+    let snapshot = DiagnosticTraceSource {
+        registers: DiagnosticRegisterSource::Deltas(&rows),
+        constraints: &[],
+        memory_events: &[],
+        register_events: &[],
+        steps: &[],
     }
-    let snapshot = capture(&rows, &budget).unwrap();
+    .try_snapshot(&budget)
+    .unwrap();
     assert_eq!(snapshot.states()[1].gpr[7], 21);
     assert!(snapshot.states()[1].tags[7]);
     assert_eq!(snapshot.states()[1].gpr[8], 22);
     drop(snapshot);
-    assert_eq!(rows[0].changes[0], (7, 21, true));
-    rows[1].changes.push((256, 99, true));
-    assert!(matches!(capture(&rows, &budget), Err(VMError::DecodeError)));
+    assert_eq!(rows.entry(0).unwrap().changes[7], (7, 21, true));
+    assert_eq!(budget.reserved_bytes(), retained);
+    drop(rows);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 

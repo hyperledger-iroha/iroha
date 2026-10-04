@@ -774,6 +774,7 @@ fn seed_completion_anchor(state: &State) {
 fn completion_authority(owner: &AccountId) -> ProviderIngestCompletionAuthorityV1 {
     ProviderIngestCompletionAuthorityV1::new(
         owner.clone(),
+        owner.clone(),
         ProviderIngestCompletionSignerPolicyV1 {
             policy_id: [0xA1; 32],
             revision: 1,
@@ -977,7 +978,6 @@ fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
         for perm in [
             Permission::from(CanBindSorafsAlias),
             Permission::from(CanIssueSorafsReplicationOrder),
-            Permission::from(CanCompleteSorafsReplicationOrder),
         ] {
             world.add_account_permission(&alice, perm);
         }
@@ -1009,6 +1009,10 @@ fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
         ProviderId::new([0x72; 32]),
         ProviderId::new([0x73; 32]),
     ] {
+        tx.world.add_account_permission(
+            &alice,
+            Permission::from(CanCompleteSorafsReplicationOrder { provider_id }),
+        );
         let expected_current = tx
             .world()
             .provider_ingest_completion_authorities()
@@ -1400,6 +1404,15 @@ fn order_snapshot(order: &ReplicationOrderRecord) -> json::Map {
             map.insert(
                 "expected_owner".into(),
                 Value::String(completion.completion_authority.provider_owner.to_string()),
+            );
+            map.insert(
+                "completion_signer".into(),
+                Value::String(
+                    completion
+                        .completion_authority
+                        .completion_signer
+                        .to_string(),
+                ),
             );
             map.insert(
                 "signer_policy_id_hex".into(),

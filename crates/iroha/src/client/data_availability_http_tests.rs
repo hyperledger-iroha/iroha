@@ -141,13 +141,20 @@ async fn manifest_rejects_a_response_for_another_or_noncanonical_ticket() {
             Duration::ZERO,
             Duration::ZERO,
         );
-        assert_eq!(
-            client.da().manifest(&TICKET).await.unwrap_err(),
-            Error::ResponseBinding {
-                operation: OPERATION,
-                field: "storage_ticket",
-            }
-        );
+        {
+            let actual_error = client.da().manifest(&TICKET).await.unwrap_err();
+            let Error::ResponseBinding {
+                operation: actual_operation,
+                field: actual_field,
+            } = &actual_error
+            else {
+                panic!("unexpected SDK error: {actual_error:?}");
+            };
+            assert_eq!(
+                (actual_operation, actual_field,),
+                (&(OPERATION), &("storage_ticket"),)
+            );
+        };
         assert_eq!(requests.lock().unwrap().len(), 1);
     }
 }
@@ -159,12 +166,16 @@ async fn manifest_deadline_cancels_pending_async_transport() {
         Duration::from_secs(60),
         Duration::from_millis(10),
     );
-    assert_eq!(
-        client.da().manifest(&TICKET).await.unwrap_err(),
-        Error::Timeout {
-            operation: OPERATION
-        }
-    );
+    {
+        let actual_error = client.da().manifest(&TICKET).await.unwrap_err();
+        let Error::Timeout {
+            operation: actual_operation,
+        } = &actual_error
+        else {
+            panic!("unexpected SDK error: {actual_error:?}");
+        };
+        assert_eq!((actual_operation,), (&(OPERATION),));
+    };
     assert_eq!(requests.lock().unwrap().len(), 1);
     assert_eq!(completed.load(Ordering::SeqCst), 0);
 }
@@ -190,13 +201,23 @@ async fn manifest_bounds_injected_responses_before_decoding() {
             Duration::ZERO,
             Duration::ZERO,
         );
-        assert_eq!(
-            client.da().manifest(&TICKET).await.unwrap_err(),
-            Error::ResponseTooLarge {
-                maximum: MAX_MANIFEST_RESPONSE_BYTES,
-                actual: (!declared).then_some(MAX_MANIFEST_RESPONSE_BYTES + 1),
-            }
-        );
+        {
+            let actual_error = client.da().manifest(&TICKET).await.unwrap_err();
+            let Error::ResponseTooLarge {
+                maximum: actual_maximum,
+                actual: actual_actual,
+            } = &actual_error
+            else {
+                panic!("unexpected SDK error: {actual_error:?}");
+            };
+            assert_eq!(
+                (actual_maximum, actual_actual,),
+                (
+                    &(MAX_MANIFEST_RESPONSE_BYTES),
+                    &((!declared).then_some(MAX_MANIFEST_RESPONSE_BYTES + 1)),
+                )
+            );
+        };
         assert_eq!(requests.lock().unwrap().len(), 1);
     }
 }
@@ -266,15 +287,32 @@ async fn manifest_preserves_http_and_transport_failures_without_replay() {
         Duration::ZERO,
         Duration::ZERO,
     );
-    assert_eq!(
-        client.da().manifest(&TICKET).await.unwrap_err(),
-        Error::Http {
-            operation: OPERATION,
-            status: 503,
-            retry_after: Some(Duration::from_secs(7)),
-            body: b"unavailable".to_vec(),
-        }
-    );
+    {
+        let actual_error = client.da().manifest(&TICKET).await.unwrap_err();
+        let Error::Http {
+            operation: actual_operation,
+            status: actual_status,
+            retry_after: actual_retry_after,
+            body: actual_body,
+        } = &actual_error
+        else {
+            panic!("unexpected SDK error: {actual_error:?}");
+        };
+        assert_eq!(
+            (
+                actual_operation,
+                actual_status,
+                actual_retry_after,
+                actual_body,
+            ),
+            (
+                &(OPERATION),
+                &(503),
+                &(Some(Duration::from_secs(7))),
+                &(b"unavailable".to_vec()),
+            )
+        );
+    };
     assert_eq!(requests.lock().unwrap().len(), 1);
     let (client, requests, _) = attach(
         |_| {

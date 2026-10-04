@@ -21,8 +21,10 @@ class ReplicationOrderInstructionsTest {
         revision: Long = 2,
         predecessor: String? = predecessorDigest,
         owner: String = providerOwner,
+        signer: String = providerOwner,
     ) = ProviderIngestCompletionAuthorityV1(
         providerOwner = owner,
+        completionSigner = signer,
         signerPolicy = ProviderIngestCompletionSignerPolicyV1(
             policyId = policyId,
             revision = revision,

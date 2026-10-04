@@ -55,8 +55,10 @@ Validation
   hash. Admission requires the header's `abi_version`/`abi_hash` and the
   embedded `CNTR.abi_hash` to resolve to the same runtime descriptor, so both
   the fixed header and `CNTR` bind the artifact to the ABI.
-- Generic IVM parsing accepts `version_major = 1` with `version_minor = 0` or
-  `1`. Deployable contract artifacts require version `1.1`.
+- Every first-release execution profile requires `version_major = 1` and
+  `version_minor = 1`. Header `1.0` is rejected before section decoding. Generic
+  programs and explicit local test harnesses share this header; CNTR presence and
+  the test loader capability determine their admission profile.
 - Deployable contract artifacts must embed a `CNTR` section immediately after
   the fixed header and are rejected if that section is missing or inconsistent
   with the executable stream. Embedded `DBG1` metadata is forbidden for
@@ -93,7 +95,7 @@ The following policy summary is generated from the implementation and should not
 | Field | Policy |
 |---|---|
 | version_major | 1 |
-| version_minor | 0 or 1 (deployable CNTR contracts require 1) |
+| version_minor | 1 (sole current header for every profile) |
 | mode (known bits) | 0x03 (ZK=0x01, VECTOR=0x02) |
 | abi_version | 1 |
 | vector_length | 0 or 1..=64 (0 selects runtime default; independent of VECTOR bit) |
@@ -118,7 +120,7 @@ closed.
 <!-- BEGIN GENERATED ABI HASHES -->
 | Policy | abi_hash (hex) |
 |---|---|
-| ABI v1 | 4085d87df2875f59ab4dea03dbf729fab39e9ca2f176918eb9ef7e29dee02a89 |
+| ABI v1 | 28209c6885b3bed442f0b2e4194d92e9e5b187f24c74c7837faa7a1f285c94d9 |
 <!-- END GENERATED ABI HASHES -->
 
 - ABI v1 is the sole first-release policy. Its `LDLIT`, `LDI64`, `JAL`, `JMP`, and

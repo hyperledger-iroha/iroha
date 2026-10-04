@@ -244,32 +244,33 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
         Ok(Self::new(&secret))
     }
     fn try_sign_bytes(&self, message: &[u8]) -> Result<Vec<u8>, Error> {
+        self.try_sign_fixed(message)
+            .map(|output| output.as_slice().to_vec())
+            .map_err(super::signing::BlsSigningError::into_public_error)
+    }
+    pub(crate) fn try_sign_fixed(
+        &self,
+        message: &[u8],
+    ) -> Result<super::signing::SigningOutput, super::signing::BlsSigningError> {
         #[cfg(feature = "rand")]
         {
-            self.try_sign_bytes_with_rng(message, &mut OsRng)
+            self.try_sign_fixed_with_rng(message, &mut OsRng)
         }
         #[cfg(not(feature = "rand"))]
         {
-            let mut guard = self
-                .try_load_secret()
-                .map_err(|err| Error::Signing(err.to_string()))?;
-            let msg = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
-            Ok(guard.sign_once(&msg).to_bytes())
+            super::signing::sign_once::<C>(self.bytes.as_slice(), message)
         }
     }
     #[cfg(feature = "rand")]
-    fn try_sign_bytes_with_rng<R>(&self, message: &[u8], rng: &mut R) -> Result<Vec<u8>, Error>
+    fn try_sign_fixed_with_rng<R>(
+        &self,
+        message: &[u8],
+        rng: &mut R,
+    ) -> Result<super::signing::SigningOutput, super::signing::BlsSigningError<R::Error>>
     where
         R: TryCryptoRng,
     {
-        let mut guard = self
-            .try_load_secret()
-            .map_err(|err| Error::Signing(err.to_string()))?;
-        let msg = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
-        let seed = checked_entropy_from_rng("signing key split", BLS_RNG_SEED_LEN, rng)
-            .map_err(|err| Error::Signing(err.to_string()))?;
-        let rng = crate::rng::rng_from_seed_slice(seed.as_slice());
-        Ok(guard.sign(&msg, rng).to_bytes())
+        super::signing::sign_with_rng::<C, R>(self.bytes.as_slice(), message, rng)
     }
     #[cfg(test)]
     pub(crate) fn from_unchecked_bytes_for_test(bytes: Vec<u8>) -> Self {
@@ -896,7 +897,10 @@ mod tests {
             fills: [0, 0],
             next_fill: 0,
         };
-        match private.try_sign_bytes_with_rng(b"iroha-bls-message", &mut rng) {
+        match private
+            .try_sign_fixed_with_rng(b"iroha-bls-message", &mut rng)
+            .map_err(super::super::signing::BlsSigningError::into_public_error)
+        {
             Err(Error::Signing(message)) => {
                 assert!(message.contains("signing key split"));
                 assert!(message.contains("all zero"));

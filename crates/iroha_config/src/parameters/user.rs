@@ -831,9 +831,32 @@ mod chain_id_config_tests {
 /// Public location of the authenticated local runtime-provider broker.
 #[derive(Debug, ReadConfig)]
 pub struct RuntimeProviderBroker {
+    /// Aggregate memory retained by current and pending consensus credentials.
+    #[config(default = "defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES")]
+    credential_max_memory_bytes: NonZeroUsize,
     /// Absolute path to the canonical broker Unix socket.
     #[config(default = "defaults::runtime_provider_broker::endpoint_path()")]
     endpoint_path: WithOrigin<PathBuf>,
+}
+
+impl RuntimeProviderBroker {
+    pub(super) fn parse(
+        self,
+    ) -> core::result::Result<actual::RuntimeProviderBroker, Report<ParseError>> {
+        let (endpoint_path, endpoint_origin) = self.endpoint_path.into_tuple();
+        actual::RuntimeProviderBrokerEndpointPath::try_new(endpoint_path)
+            .map(|endpoint_path| actual::RuntimeProviderBroker {
+                endpoint_path,
+                credential_max_memory_bytes: self.credential_max_memory_bytes,
+            })
+            .map_err(|error| {
+                Report::new(ParseError::InvalidRuntimeProviderBrokerConfig)
+                    .attach(error)
+                    .attach(format!(
+                        "runtime_provider_broker.endpoint_path origin: {endpoint_origin:?}"
+                    ))
+            })
+    }
 }
 
 /// User-level configuration container for `Root`.
@@ -1271,19 +1294,10 @@ impl Root {
             emitter.emit(report);
         }
         let (network, block_sync, transaction_gossiper) = self.network.parse(&mut emitter);
-        let (endpoint_path, endpoint_origin) =
-            self.runtime_provider_broker.endpoint_path.into_tuple();
-        let runtime_provider_broker =
-            actual::RuntimeProviderBrokerEndpointPath::try_new(endpoint_path)
-                .map(|endpoint_path| actual::RuntimeProviderBroker { endpoint_path })
-                .map_err(|error| {
-                    Report::new(ParseError::InvalidRuntimeProviderBrokerConfig)
-                        .attach(error)
-                        .attach(format!(
-                            "runtime_provider_broker.endpoint_path origin: {endpoint_origin:?}"
-                        ))
-                })
-                .ok_or_emit(&mut emitter);
+        let runtime_provider_broker = self
+            .runtime_provider_broker
+            .parse()
+            .ok_or_emit(&mut emitter);
         let peer = Peer::new(network.address.value().clone(), peer_public_key);
         let trusted_peers = self.trusted_peers.map(|x| {
             let others = x.0.into_iter().filter(|p| p.id() != peer.id()).collect();
@@ -17396,6 +17410,9 @@ pub struct ToriiTransport {
     /// HTTP/1 listener, parser, and socket limits.
     #[config(nested)]
     pub http: ToriiHttpTransport,
+    /// Optional HTTPS listener; an absent address disables it.
+    #[config(nested)]
+    pub https: ToriiHttpsTransport,
     /// Norito-RPC transport rollout settings.
     #[config(nested)]
     pub norito_rpc: ToriiNoritoRpcTransport,
@@ -17442,6 +17459,7 @@ impl Default for ToriiHttpTransport {
         }
     }
 }
+include!("user/torii_https_transport.rs");
 /// Norito-RPC transport configuration parameters.
 #[derive(ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiNoritoRpcTransport {
@@ -17521,6 +17539,7 @@ impl ToriiTransport {
                 max_headers: self.http.max_headers,
                 max_header_bytes: self.http.max_header_bytes,
             },
+            https: self.https.parse(emitter),
             norito_rpc: self.norito_rpc.parse(emitter),
         }
     }
@@ -18689,7 +18708,6 @@ impl AccountOnboarding {
             "CanSubmitSorafsTelemetry",
             "CanFileSorafsCapacityDispute",
             "CanIssueSorafsReplicationOrder",
-            "CanCompleteSorafsReplicationOrder",
             "CanSetSorafsPricing",
             "CanManageSorafsModeration",
             "CanManageSorafsPopRegistry",
@@ -24310,25 +24328,22 @@ impl SorafsProviderIngestFinalizedArchiveConfig {
 }
 /// User policy for Musubi provider-attestation journaling.
 ///
-/// `enabled = true` requests activation but does not itself permit durable
-/// capture. Stock `irohad` rejects the request until a concrete capture child
-/// is qualified. The three public provider bindings are mandatory as one
-/// all-or-none set while paths, deployment nonces, endpoints, credentials,
-/// tokens, and keys remain deliberately absent.
+/// Native activation requires the concrete ordinary-open journal and dedicated completion
+/// credential. External adapter selection remains separately qualified and does not imply native
+/// custody. All three public bindings are mandatory; paths and credentials remain separate.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsProviderAttestationJournalConfig {
-    /// Request activation of finalized-intent capture; stock `irohad` currently
-    /// rejects the request until a concrete capture child is qualified.
+    /// Request the supervised finalized-intent capture after concrete custody qualification.
     #[config(
         default = "defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal::ENABLED"
     )]
     pub enabled: bool,
-    /// Stable public identity of the rollback-resistant UNIX-time seal.
-    pub clock_seal_handle: Option<String>,
-    /// Exact non-zero clock-seal adapter and public-policy revision.
-    pub clock_seal_revision: Option<u64>,
-    /// Exact lowercase non-zero digest of the clock-seal public policy.
-    pub clock_seal_policy_digest_hex: Option<String>,
+    /// Stable public clock identity; native UTC has crash durability, not an external rollback seal.
+    pub clock_handle: Option<String>,
+    /// Exact non-zero clock adapter and public-policy revision.
+    pub clock_revision: Option<u64>,
+    /// Exact lowercase non-zero digest of the clock public policy.
+    pub clock_policy_digest_hex: Option<String>,
     /// Stable public identity of the approval-only signer.
     pub approval_signer_handle: Option<String>,
     /// Exact non-zero approval-signer adapter and public-policy revision.
@@ -24390,9 +24405,9 @@ impl Default for SorafsProviderAttestationJournalConfig {
         use defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal as journal;
         Self {
             enabled: journal::ENABLED,
-            clock_seal_handle: None,
-            clock_seal_revision: None,
-            clock_seal_policy_digest_hex: None,
+            clock_handle: None,
+            clock_revision: None,
+            clock_policy_digest_hex: None,
             approval_signer_handle: None,
             approval_signer_revision: None,
             approval_signer_policy_digest_hex: None,
@@ -24506,11 +24521,11 @@ impl SorafsProviderAttestationJournalConfig {
             })
         }
         let binding_fields = [
-            ("clock_seal_handle", self.clock_seal_handle.is_some()),
-            ("clock_seal_revision", self.clock_seal_revision.is_some()),
+            ("clock_handle", self.clock_handle.is_some()),
+            ("clock_revision", self.clock_revision.is_some()),
             (
-                "clock_seal_policy_digest_hex",
-                self.clock_seal_policy_digest_hex.is_some(),
+                "clock_policy_digest_hex",
+                self.clock_policy_digest_hex.is_some(),
             ),
             (
                 "approval_signer_handle",
@@ -24654,11 +24669,11 @@ impl SorafsProviderAttestationJournalConfig {
             );
             valid = false;
         }
-        let clock_seal = parse_binding(
-            "clock_seal",
-            self.clock_seal_handle,
-            self.clock_seal_revision,
-            self.clock_seal_policy_digest_hex,
+        let clock = parse_binding(
+            "clock",
+            self.clock_handle,
+            self.clock_revision,
+            self.clock_policy_digest_hex,
             emitter,
         );
         let approval_signer = parse_binding(
@@ -24680,7 +24695,7 @@ impl SorafsProviderAttestationJournalConfig {
             return None;
         }
         Some(actual::SorafsProviderAttestationJournal {
-            clock_seal: clock_seal?,
+            clock: clock?,
             approval_signer: approval_signer?,
             inventory: inventory?,
             max_entries: self.max_entries,
@@ -24789,9 +24804,8 @@ pub struct SorafsProviderIngestRuntimeConfig {
     /// Durable payload-free completion-outbox policy.
     #[config(nested)]
     pub outbox: SorafsProviderIngestOutboxConfig,
-    /// Optional request to activate the capture-only Musubi provider-attestation
-    /// journal; stock `irohad` currently rejects it until a concrete child is
-    /// qualified.
+    /// Optional native completed-bundle attestation journal. Activation requires exact
+    /// native credential bindings and explicitly initialized retained custody.
     #[config(nested)]
     pub provider_attestation_journal: SorafsProviderAttestationJournalConfig,
 }
@@ -27354,13 +27368,16 @@ impl SorafsNativeTransactionSignerBinding {
         } = self;
         if software_credential.as_ref().is_some_and(|credential| {
             !credential.is_absolute()
-                || credential.components().any(|part| {
-                    matches!(
-                        part,
-                        std::path::Component::CurDir
-                            | std::path::Component::ParentDir
-                            | std::path::Component::Prefix(_)
-                    )
+                || credential.components().any(|part| match part {
+                    std::path::Component::CurDir | std::path::Component::ParentDir => true,
+                    // Match iroha_fs's native local-drive contract. Verbatim drive paths are
+                    // also returned by Windows canonicalize; UNC/device namespaces are not
+                    // supported private stores. Runtime custody still validates every handle.
+                    std::path::Component::Prefix(prefix) => !matches!(
+                        prefix.kind(),
+                        std::path::Prefix::Disk(_) | std::path::Prefix::VerbatimDisk(_)
+                    ),
+                    _ => false,
                 })
         }) {
             emit(
@@ -33451,12 +33468,6 @@ impl SorafsGatewayCompliance {
                 hosts,
             });
             previous_feed = Some(&feed.feed_id);
-        }
-        if feeds.is_empty() {
-            emit(
-                emitter,
-                "sorafs.gateway.compliance.feeds must not be empty when enabled",
-            );
         }
         if self.max_encoded_bytes.0 == 0
             || self.max_encoded_bytes.0 > 16 * 1024 * 1024

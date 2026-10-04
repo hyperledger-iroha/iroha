@@ -40,7 +40,7 @@ fn completed_musubi_capture_composer_has_one_concrete_inert_shape() {
 }
 #[test]
 fn completed_musubi_attestation_driver_composer_remains_inert_and_open_only() {
-    // Keep the parked composer type-checked; only this test may name it.
+    // The composer remains effect-free; native supervision owns the subsequent drive loop.
     let _ = compose_inert_completed_musubi_attestation_driver_v1;
     let source = include_str!("../sorafs_provider_ingest_runtime.rs");
     let start = source
@@ -145,21 +145,32 @@ impl Read for TestTerminalReaderV1 {
 }
 #[derive(Clone)]
 struct TestOwnerAuthorityV1 {
-    owner: Arc<Mutex<Option<AccountId>>>,
+    authority: Arc<Mutex<ProviderIngestCompletionAuthorityV1>>,
 }
 impl TestOwnerAuthorityV1 {
-    fn new(owner: AccountId) -> Self {
+    fn new(owner: AccountId, policy: ProviderIngestCompletionSignerPolicyV1) -> Self {
         Self {
-            owner: Arc::new(Mutex::new(Some(owner))),
+            authority: Arc::new(Mutex::new(ProviderIngestCompletionAuthorityV1::new(
+                owner.clone(),
+                owner,
+                policy,
+            ))),
         }
     }
     fn replace(&self, owner: AccountId) {
-        *self.owner.lock().expect("owner authority lock") = Some(owner);
+        self.authority
+            .lock()
+            .expect("authority lock")
+            .provider_owner = owner;
     }
 }
-impl ProviderIngestFinalizedOwnerAuthorityV1 for TestOwnerAuthorityV1 {
-    fn owner_matches(&self, _provider_id: ProviderId, expected_owner: &AccountId) -> bool {
-        self.owner.lock().expect("owner authority lock").as_ref() == Some(expected_owner)
+impl ProviderIngestFinalizedCompletionAuthorityV1 for TestOwnerAuthorityV1 {
+    fn authority_matches(
+        &self,
+        _provider_id: ProviderId,
+        expected: &ProviderIngestCompletionAuthorityV1,
+    ) -> bool {
+        &*self.authority.lock().expect("authority lock") == expected
     }
 }
 enum TestMusubiSignerMutationV1 {
@@ -288,7 +299,11 @@ fn test_musubi_attestation_payload(
             ),
             provider_id: ProviderId::new([0x22; 32]),
             completed_by: owner.clone(),
-            completion_authority: ProviderIngestCompletionAuthorityV1::new(owner, policy),
+            completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                (owner).clone(),
+                owner,
+                policy,
+            ),
             replication_order: ReplicationOrderId::new([0x23; 32]),
             assignment_revision: 3,
             completion_epoch: 9,
@@ -337,7 +352,7 @@ fn test_musubi_signer_fixture() -> (
     let owner_key = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519)
         .expect("derive Musubi provider owner");
     let owner = AccountId::new(owner_key.public_key().clone());
-    let owner_authority = TestOwnerAuthorityV1::new(owner);
+    let owner_authority = TestOwnerAuthorityV1::new(owner, test_signer_policy(1));
     let payload = test_musubi_attestation_payload(&owner_key);
     let signer = Arc::new(TestMusubiAttestationSignerV1::new(
         owner_key,
@@ -352,7 +367,7 @@ fn test_governed_musubi_signer(
     payload: &MusubiProviderBundleVerificationPayloadV1,
 ) -> GovernedMusubiProviderAttestationSignerV1 {
     let signer: Arc<dyn MusubiProviderAttestationSignerV1> = signer;
-    let owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1> =
+    let owner_authority: Arc<dyn ProviderIngestFinalizedCompletionAuthorityV1> =
         Arc::new(owner_authority);
     GovernedMusubiProviderAttestationSignerV1::new(
         signer,
@@ -784,6 +799,7 @@ fn test_completion_payload(
         completion_epoch,
         expected_authority:
             iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionAuthorityV1::new(
+                (provider_owner).clone(),
                 provider_owner,
                 signer_policy,
             ),
@@ -865,7 +881,7 @@ fn test_governed_signer(
     let key =
         KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Ed25519).expect("derive signer key");
     let authority = AccountId::new(key.public_key().clone());
-    let owner_authority = TestOwnerAuthorityV1::new(authority.clone());
+    let owner_authority = TestOwnerAuthorityV1::new(authority.clone(), policy);
     let provider_id = ProviderId::new([0x41; 32]);
     let payload = test_completion_payload(&key, provider_id, 8, 1);
     let signer = Arc::new(TestGovernedCompletionSignerV1 {
@@ -900,7 +916,7 @@ fn governed_signer_adapter(
     let signer: Arc<dyn ProviderIngestCompletionSignerV1> = signer;
     let resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1> =
         Arc::new(TestGovernedSignerResolverV1::new(signer));
-    let owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1> =
+    let owner_authority: Arc<dyn ProviderIngestFinalizedCompletionAuthorityV1> =
         Arc::new(owner_authority);
     GovernedSignerResolverAdapterV1 {
         resolver,
@@ -922,8 +938,11 @@ fn signer_resolution_context(
     provider_owner: AccountId,
 ) -> ProviderIngestCompletionSignerResolutionContextV1 {
     ProviderIngestCompletionSignerResolutionContextV1::new(
-        provider_owner,
-        test_signer_policy(1),
+        iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionAuthorityV1::new(
+            (provider_owner).clone(),
+            provider_owner,
+            test_signer_policy(1),
+        ),
         1,
         signer_test_cursor(),
     )
@@ -2697,7 +2716,7 @@ async fn panicked_readiness_probe_is_distinct_from_transient_timeout() {
 #[test]
 fn provider_attestation_journal_policy_maps_exactly_and_revalidates_actual_config() {
     let configured = SorafsProviderAttestationJournal {
-        clock_seal: SorafsProviderAttestationRuntimeBinding {
+        clock: SorafsProviderAttestationRuntimeBinding {
             handle: "provider://musubi/provider-attestation/clock-seal".to_owned(),
             revision: 1,
             policy_digest: [0xA1; 32],
@@ -2885,4 +2904,65 @@ fn committed_provider_observation_uses_only_the_matching_network_output() {
         ProviderIngestTransactionObservationV1::Unavailable,
         "a successful Time output cannot stand in for an absent Network input",
     );
+}
+
+/// Component adapter control: the current-row test owner is explicit, not native finality evidence.
+#[tokio::test]
+async fn governed_signer_keeps_dedicated_completion_key_separate_from_current_owner() {
+    let (signer, current, provider, _) = test_governed_signer(test_signer_policy(1), None);
+    let owner_key = KeyPair::try_from_seed(vec![0x7A; 32], Algorithm::Ed25519).unwrap();
+    let expected = ProviderIngestCompletionAuthorityV1::new(
+        AccountId::new(owner_key.public_key().clone()),
+        signer.authority().clone(),
+        test_signer_policy(1),
+    );
+    *current.authority.lock().unwrap() = expected.clone();
+    let context = ProviderIngestCompletionSignerResolutionContextV1::new(
+        expected.clone(),
+        1,
+        signer_test_cursor(),
+    );
+    let adapter = governed_signer_adapter(Arc::clone(&signer), current.clone(), provider);
+    let governed = adapter.resolve(context.clone()).await.unwrap().unwrap();
+    let mut builder = TransactionBuilder::new(
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0x15; Hash::LENGTH]),
+        )),
+        expected.completion_signer.clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([InstructionBox::from(CompleteReplicationOrder {
+        order_id: ReplicationOrderId::new([0x31; 32]),
+        provider_id: provider,
+        completion_epoch: 8,
+        expected_authority: expected.clone(),
+        expected_assignment_revision: 1,
+        finalized_anchor: ProviderIngestFinalizedAnchorV1 {
+            height: 8,
+            block_hash: [0xB2; 32],
+        },
+    })]);
+    builder.set_creation_time(Duration::from_secs(1));
+    builder.set_ttl(Duration::from_secs(30));
+    let payload = builder.into_payload().unwrap();
+    let transaction = governed.sign(payload.clone()).await.unwrap();
+    assert_eq!(transaction.authority(), &expected.completion_signer);
+    assert_ne!(transaction.authority(), &expected.provider_owner);
+    assert_eq!(signer.sign_calls.load(Ordering::SeqCst), 1);
+    // Same policy bytes do not make a changed native completion account equivalent.
+    current.authority.lock().unwrap().completion_signer = expected.provider_owner.clone();
+    assert_eq!(
+        governed.sign(payload).await,
+        Err(ProviderIngestCompletionSignerErrorV1::Unavailable)
+    );
+    assert_eq!(signer.sign_calls.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        adapter.resolve(context).await,
+        Err(ProviderIngestCompletionSignerResolverErrorV1::Unavailable)
+    ));
+}
+
+/// Configuration specimen for native custody tests; it is not native current-state evidence.
+pub(super) fn native_attestation_test_config() -> SorafsProviderIngestRuntime {
+    state_free_preflight_fixture().0
 }

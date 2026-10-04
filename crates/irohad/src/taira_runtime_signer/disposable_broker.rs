@@ -55,14 +55,19 @@ pub(super) fn load_with_signer(
             return Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution);
         }
     }
+    let credential_budget = catalog.new_credential_registry_budget_v1();
     let thresholds = catalog.select_slots(THRESHOLD_SLOTS);
     let threshold_backends =
         RuntimeConsensusThresholdSignerBackendsV1::load_from_launchd_credential_bundle_v1(
             &thresholds,
             reader,
+            &credential_budget,
         )
         .map_err(|error| match error {
-            RuntimeConsensusThresholdSignerCredentialErrorV1::Unavailable => {
+            RuntimeConsensusThresholdSignerCredentialErrorV1::Unavailable
+            | RuntimeConsensusThresholdSignerCredentialErrorV1::Session(_)
+            | RuntimeConsensusThresholdSignerCredentialErrorV1::DecodeResource(_)
+            | RuntimeConsensusThresholdSignerCredentialErrorV1::Output(_) => {
                 IrohaRuntimeProviderRegistryErrorV1::Unavailable
             }
             _ => IrohaRuntimeProviderRegistryErrorV1::BindingMismatch,
@@ -73,7 +78,10 @@ pub(super) fn load_with_signer(
                 .soracloud_runtime_signer_binding()
                 .ok_or(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
             let provider = load_signer().map_err(|error| match error {
-                TairaRuntimeSignerErrorV1::DescriptorUnavailable => {
+                TairaRuntimeSignerErrorV1::DescriptorUnavailable
+                | TairaRuntimeSignerErrorV1::CredentialUnavailable
+                | TairaRuntimeSignerErrorV1::CredentialDecode(_)
+                | TairaRuntimeSignerErrorV1::CredentialSession(_) => {
                     IrohaRuntimeProviderRegistryErrorV1::Unavailable
                 }
                 _ => IrohaRuntimeProviderRegistryErrorV1::BindingMismatch,

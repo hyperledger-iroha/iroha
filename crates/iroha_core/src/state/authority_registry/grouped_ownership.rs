@@ -11,10 +11,9 @@ use iroha_data_model::{
     rwa::{RwaId, RwaValue},
 };
 use iroha_model_base::{domain::DomainId, name::Name};
-use mv::{
-    PublicationPreparationError,
-    storage::{CommittedStorageView, StorageReadOnly},
-};
+#[cfg(test)]
+use mv::storage::StorageReadOnly;
+use mv::{PublicationPreparationError, storage::CommittedStorageView};
 use std::{collections::BTreeSet, convert::Infallible};
 
 mod escrows;
@@ -24,11 +23,21 @@ pub(super) use repo_agreements::CheckedRepoAgreements;
 mod asset_definitions;
 pub(super) use asset_definitions::CheckedAssetDefinitions;
 mod assets;
+mod confidential_policies;
 pub(super) use assets::CheckedAssets;
 mod contract_aliases;
 pub(super) use contract_aliases::CheckedContractAliases;
 mod account_rekeys;
 pub(super) use account_rekeys::CheckedAccountRekeys;
+mod validation_fee_proposals;
+pub(super) use validation_fee_proposals::CheckedValidationFeeProposals;
+mod proof_status;
+pub(super) use proof_status::CheckedProofRecords;
+pub(in crate::state) use proof_status::validate_original_proofs;
+mod contract_subjects;
+pub(super) use contract_subjects::CheckedContractSubjects;
+mod verifying_keys;
+pub(super) use verifying_keys::CheckedVerifyingKeys;
 
 /// Original native image whose exact grouping is being checked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

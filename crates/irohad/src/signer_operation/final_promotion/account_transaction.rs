@@ -69,6 +69,9 @@ pub enum FinalPromotionAccountTransactionErrorV1 {
     Receipt,
     /// The configured software or optional hardware provider did not return a valid signature.
     Provider,
+    /// Local canonical-frame resources were unavailable; no semantic payload rejection occurred.
+    /// This fixed service error carries no reusable signature or retry continuation.
+    LocalCapacity,
 }
 impl fmt::Display for FinalPromotionAccountTransactionErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -78,6 +81,9 @@ impl fmt::Display for FinalPromotionAccountTransactionErrorV1 {
             Self::Authority => "final-promotion account transaction authority rejected",
             Self::Receipt => "final-promotion account transaction receipt rejected",
             Self::Provider => "final-promotion account transaction signer unavailable",
+            Self::LocalCapacity => {
+                "final-promotion account transaction local resources unavailable"
+            }
         })
     }
 }

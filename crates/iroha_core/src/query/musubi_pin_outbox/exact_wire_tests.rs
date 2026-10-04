@@ -35,7 +35,7 @@ fn exact_wire_capture_keeps_original_state_signed_backing_challenge_and_deadline
     let backing = instruction_backing(&pending);
     let challenge = pending.prepared.instruction.challenge;
     let deadline = pending.deadline();
-    let budget = pending.prepared.state.query_view().execution_budget();
+    let budget = pending.prepared.state.ivm_execution_budget();
     let baseline = budget.reserved_bytes();
     let captured = pending.capture_exact_wire_v1().unwrap();
     assert_eq!(captured.exact_wire(), original);
@@ -63,7 +63,7 @@ fn capture_capacity_refusal_returns_original_pending_and_release_owner() {
     let deadline = pending.deadline();
     let challenge = pending.prepared.instruction.challenge;
     let backing = instruction_backing(&pending);
-    let budget = pending.prepared.state.query_view().execution_budget();
+    let budget = pending.prepared.state.ivm_execution_budget();
     let mut prepaid = budget
         .try_reserve(ReleaseRegistration::allocation_layout())
         .unwrap();
@@ -136,7 +136,7 @@ fn expired_original_round_is_retained_without_recreating_pending_or_extending_de
 #[test]
 fn admitted_destination_refuses_growth_and_reclaims_only_its_actual_backing() {
     let fixture = Fixture::new();
-    let budget = fixture.chain.state().query_view().execution_budget();
+    let budget = fixture.chain.state().ivm_execution_budget();
     let baseline = budget.reserved_bytes();
     let mut destination = OriginalWireDestination(ChargedBuffer::new(1, &budget).unwrap());
     destination.write_all(&[1]).unwrap();

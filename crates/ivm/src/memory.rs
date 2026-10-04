@@ -173,9 +173,14 @@ impl Memory {
     /// Original physical cell for the sealed native producer. This does not
     /// perform a guest read, grant access, charge gas or alter access logs.
     pub(crate) fn native_packet_cell(&self, address: u64) -> Option<[u8; 16]> {
-        if !address.is_multiple_of(16) { return None; }
+        if !address.is_multiple_of(16) {
+            return None;
+        }
         let start = usize::try_from(address).ok()?;
-        self.data.get(start..start.checked_add(16)?)?.try_into().ok()
+        self.data
+            .get(start..start.checked_add(16)?)?
+            .try_into()
+            .ok()
     }
 
     pub(crate) fn capture_diagnostic_initial_image(
@@ -948,7 +953,10 @@ impl Memory {
             return Ok(());
         };
         let end = pc.checked_add(4).ok_or(VMError::DecodeError)?;
-        if !pc.is_multiple_of(4) || end > self.code_length {
+        // The prepared-program owner already authenticates the instruction
+        // boundary relative to its admitted executable origin. A variable-size
+        // contract prefix can place that origin at any physical byte alignment.
+        if end > self.code_length {
             return Err(VMError::DecodeError);
         }
         let start = usize::try_from(pc).map_err(|_| VMError::DecodeError)?;

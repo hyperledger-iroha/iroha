@@ -2399,14 +2399,20 @@ private_key = "{}"
                 let provider_key =
                     KeyPair::try_from_seed(vec![0x88 + index; 32], Algorithm::Ed25519)
                         .expect("provider key");
+                let owner_key = KeyPair::try_from_seed(vec![0xb8 + index; 32], Algorithm::Ed25519)
+                    .expect("distinct provider owner key");
                 let provider_owner =
+                    iroha_data_model::account::AccountId::new(owner_key.public_key().clone());
+                let completion_signer =
                     iroha_data_model::account::AccountId::new(provider_key.public_key().clone());
+                assert_ne!(provider_owner, completion_signer);
                 let provider_binding = MusubiProviderBundleVerificationBindingV1 {
                     network_id: request.network_id(),
                     provider_id: ProviderId::new([0x90 + index; 32]),
-                    completed_by: provider_owner.clone(),
+                    completed_by: completion_signer.clone(),
                     completion_authority: ProviderIngestCompletionAuthorityV1::new(
                         provider_owner,
+                        completion_signer,
                         ProviderIngestCompletionSignerPolicyV1 {
                             policy_id: [0x98 + index; 32],
                             revision: 1,
@@ -2606,15 +2612,15 @@ private_key = "{}"
             .collect::<Vec<_>>();
         let threshold = u16::try_from(MUSUBI_MAX_PUBLICATION_ATTESTATION_APPROVALS_V1)
             .expect("approval maximum fits u16");
-        let provider_owner = iroha_data_model::account::AccountId::new_multisig(
+        let completion_signer = iroha_data_model::account::AccountId::new_multisig(
             MultisigPolicy::new(threshold, members).expect("maximum approval-set policy"),
         );
-        attestation.payload.binding.completed_by = provider_owner.clone();
+        attestation.payload.binding.completed_by = completion_signer.clone();
         attestation
             .payload
             .binding
             .completion_authority
-            .provider_owner = provider_owner;
+            .completion_signer = completion_signer;
         let signing_hash = attestation.payload.signing_hash();
         attestation.approvals = signers
             .iter()

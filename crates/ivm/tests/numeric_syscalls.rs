@@ -18,7 +18,7 @@ use ivm::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 fn program(syscall: u32) -> Vec<u8> {
-    let mut program = ProgramMetadata::default_for(1, 0, 1).encode();
+    let mut program = ProgramMetadata::default_for(1, 1, 1).encode();
     program.extend_from_slice(&encoding::wide::encode_syscallx(syscall).to_le_bytes());
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     program
@@ -31,7 +31,7 @@ fn vm_for(syscall: u32, gas: u64) -> IVM {
     vm
 }
 fn zk_vm_for(syscall: u32, gas: u64) -> IVM {
-    let mut metadata = ProgramMetadata::default_for(1, 0, 1);
+    let mut metadata = ProgramMetadata::default_for(1, 1, 1);
     metadata.mode = ivm_mode::ZK;
     let mut program = metadata.encode();
     program.extend_from_slice(&encoding::wide::encode_syscallx(syscall).to_le_bytes());

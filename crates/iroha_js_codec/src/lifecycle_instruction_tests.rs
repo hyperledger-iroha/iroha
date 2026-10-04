@@ -222,6 +222,19 @@ fn replication(name: &'static str) -> Value {
                         ),
                     ),
                     (
+                        "completion_signer",
+                        render_model(&iroha_data_model::account::AccountId::new(
+                            iroha_crypto::KeyPair::try_from_seed(
+                                vec![0xd3; 32],
+                                iroha_crypto::Algorithm::Ed25519,
+                            )
+                            .expect("dedicated completion key")
+                            .public_key()
+                            .clone(),
+                        ))
+                        .expect("canonical completion account"),
+                    ),
+                    (
                         "signer_policy",
                         object([
                             ("policy_id", digest(0x21)),
@@ -715,5 +728,38 @@ fn replication_native_frames_and_archives_reject_unsafe_integer_projection() {
             assert_eq!(error.kind(), CodecErrorKind::InvalidArgument, "{error}");
             assert!(error.reason().contains("maximum safe integer"), "{error}");
         }
+    }
+}
+
+#[test]
+fn replication_completion_signer_is_distinct_required_and_canonical() {
+    let original = replication("CompleteReplicationOrder");
+    let authority = original
+        .get("CompleteReplicationOrder")
+        .unwrap()
+        .get("expected_authority")
+        .unwrap();
+    assert_ne!(
+        authority.get("provider_owner"),
+        authority.get("completion_signer")
+    );
+    roundtrip(&original);
+    for replacement in [
+        Value::Null,
+        Value::String("".into()),
+        Value::String("not-an-account".into()),
+    ] {
+        let mut candidate = original.clone();
+        let authority = fields(
+            fields(
+                fields(&mut candidate)
+                    .get_mut("CompleteReplicationOrder")
+                    .unwrap(),
+            )
+            .get_mut("expected_authority")
+            .unwrap(),
+        );
+        authority.insert("completion_signer".into(), replacement);
+        rejects(&candidate);
     }
 }

@@ -1,7 +1,6 @@
 //! Bounded local readers for genesis source artifacts.
 use eyre::{Result, WrapErr as _, eyre};
 use iroha_data_model::block::SignedBlock;
-use iroha_version::Version as _;
 use norito::DecodeLimits;
 use std::{
     fs,
@@ -197,30 +196,18 @@ pub fn read_signed_genesis_bytes(path: &Path) -> io::Result<Vec<u8>> {
 /// a framed signed block, exceeds a decode resource budget, or decoding panics.
 pub fn decode_signed_genesis(bytes: &[u8]) -> Result<SignedBlock> {
     validate_signed_genesis_size(bytes.len())?;
-    let (&version, framed) = bytes
-        .split_first()
-        .ok_or_else(|| eyre!("signed genesis body is empty"))?;
-    if !SignedBlock::supported_versions().contains(&version) {
-        return Err(eyre!("unsupported signed genesis version {version}"));
-    }
     crate::init_instruction_registry();
     let decoded = std::panic::catch_unwind(|| {
-        norito::with_decode_limits(signed_genesis_decode_limits_v1(), || {
-            let view = norito::core::from_bytes_view(framed)?;
-            if view.flags() != norito::default_encode_flags() {
-                return Err(norito::Error::UnsupportedFeature(
-                    "non-canonical signed block wire layout",
-                ));
-            }
-            view.decode::<SignedBlock>()
+        norito::with_decode_limits_scope(signed_genesis_decode_limits_v1(), || {
+            iroha_data_model::block::decode_framed_signed_block(bytes)
         })
     });
     match decoded {
-        Ok(Ok(block)) => Ok(block),
-        Ok(Err(error)) => Err(eyre!("decode canonical signed genesis body: {error}")),
+        Ok(result) => result.wrap_err("decode canonical signed genesis body"),
         Err(_) => Err(eyre!("decode canonical signed genesis body panicked")),
     }
 }
+
 fn validate_signed_genesis_size(length: usize) -> Result<()> {
     if length == 0 {
         return Err(eyre!("signed genesis body is empty"));
@@ -675,16 +662,20 @@ mod tests {
     }
     #[test]
     fn signed_genesis_rejects_unsupported_version_without_retaining_raw_error_bytes() {
-        let error = decode_signed_genesis(&[u8::MAX, 0])
-            .expect_err("unsupported outer version must fail before framed decoding");
-        assert!(
-            error
-                .to_string()
-                .contains("unsupported signed genesis version")
+        let mut wire = signed_genesis_fixture().encode_wire().unwrap();
+        wire[0] = u8::MAX;
+        let error = decode_signed_genesis(&wire).unwrap_err();
+        let original = error
+            .downcast_ref::<norito::core::DecodeAttemptError>()
+            .expect("original canonical decoder source");
+        assert_eq!(
+            original.kind(),
+            norito::core::DecodeAttemptErrorKind::Invalid
         );
+        assert!(original.to_string().contains("unsupported version"));
+        assert_eq!(wire[0], u8::MAX);
     }
-    #[test]
-    fn signed_genesis_decoder_roundtrips_canonical_wire() {
+    fn signed_genesis_fixture() -> SignedBlock {
         let manifest = crate::GenesisBuilder::new_without_executor(
             "bounded-signed-genesis"
                 .parse()
@@ -706,11 +697,62 @@ mod tests {
             .build_and_sign(&crate::checked_genesis_fixture_keypair())
             .expect("sign bounded signed-genesis fixture")
             .0;
+        block
+    }
+    #[test]
+    fn signed_genesis_decoder_roundtrips_canonical_wire() {
+        let block = signed_genesis_fixture();
         let wire = block
             .encode_wire()
             .expect("encode canonical signed genesis");
         let decoded = decode_signed_genesis(&wire).expect("decode canonical signed genesis");
         assert_eq!(decoded.hash(), block.hash());
+    }
+    #[test]
+    fn signed_genesis_sole_decoder_retains_original_scope_and_retries_identical_wire() {
+        let block = signed_genesis_fixture();
+        let wire = block.encode_wire().unwrap();
+        let failure = norito::with_decode_limits_scope(
+            DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+            || decode_signed_genesis(&wire),
+        )
+        .unwrap_err();
+        let original = failure
+            .downcast_ref::<norito::core::DecodeAttemptError>()
+            .expect("captured original source survives eyre context and caller scope");
+        assert_eq!(
+            original.kind(),
+            norito::core::DecodeAttemptErrorKind::EnclosingLimit
+        );
+        assert_eq!(decode_signed_genesis(&wire).unwrap(), block);
+        for offset in [0, 1, 5, 6, 7, 23, 24, 32, norito::core::Header::SIZE] {
+            let mut changed = wire.clone();
+            changed[offset] ^= 0x80;
+            let direct = iroha_data_model::block::decode_framed_signed_block(&changed).unwrap_err();
+            let bounded = decode_signed_genesis(&changed).unwrap_err();
+            let original = bounded
+                .downcast_ref::<norito::core::DecodeAttemptError>()
+                .expect("same canonical owner");
+            assert_eq!(
+                original.kind(),
+                norito::core::DecodeAttemptErrorKind::Invalid
+            );
+            assert_eq!(original.to_string(), direct.to_string());
+        }
+        let mut trailing = wire.clone();
+        trailing.push(0);
+        assert_eq!(
+            decode_signed_genesis(&trailing)
+                .unwrap_err()
+                .downcast_ref::<norito::core::DecodeAttemptError>()
+                .unwrap()
+                .kind(),
+            norito::core::DecodeAttemptErrorKind::Invalid
+        );
+        assert_eq!(
+            decode_signed_genesis(&wire).unwrap().encode_wire().unwrap(),
+            wire
+        );
     }
     #[test]
     fn signed_genesis_reader_rejects_sparse_overflow_before_reading() {

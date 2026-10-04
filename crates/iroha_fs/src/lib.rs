@@ -17,7 +17,6 @@ use std::{
 use zeroize::Zeroizing;
 
 mod private_files;
-#[cfg(unix)]
 pub use private_files::{BorrowedPendingPrivateFile, BorrowedSealedPrivateFile};
 pub use private_files::{PendingPrivateFile, PrivateFileMetadata, SealedPrivateFile};
 
@@ -249,6 +248,37 @@ impl PrivateDirectory {
     ) -> io::Result<()> {
         let name = checked_name(name.as_ref())?;
         self.inner.write_atomic(name, bytes, mode, true)
+    }
+
+    /// Discard bounded unpublished files left by an interrupted [`Self::write_atomic`].
+    ///
+    /// The caller must hold its original exclusive operation lock. Every required file must
+    /// already exist; this operation never initializes committed state. The complete directory
+    /// inventory and writable private single-link custody are checked before any removal. Only
+    /// this crate's exact staging names are eligible; file bodies are never allocated or read.
+    /// At most sixteen required files and sixteen staged files may be inspected.
+    ///
+    /// # Errors
+    /// Refuses missing required files, unknown names, unsafe or changed custody, excessive
+    /// staging count/extent, and native I/O errors. Once deletion starts, an I/O error can leave
+    /// a partially cleaned staging set; committed files are never removed or replaced.
+    pub fn reconcile_atomic_staging(
+        &self,
+        required_names: &[&str],
+        maximum_staged: usize,
+        maximum_bytes: usize,
+    ) -> io::Result<usize> {
+        if required_names.is_empty() || required_names.len() > 16 || maximum_staged > 16 {
+            return Err(invalid("atomic staging inventory bound exceeded"));
+        }
+        for (index, name) in required_names.iter().enumerate() {
+            checked_name(OsStr::new(name))?;
+            if name.starts_with(".iroha-fs-") || required_names[..index].contains(name) {
+                return Err(invalid("invalid required atomic staging inventory"));
+            }
+        }
+        self.inner
+            .reconcile_atomic_staging(required_names, maximum_staged, maximum_bytes)
     }
 
     /// Open or create a private read/write lock file without truncation or taking its lock.
@@ -846,6 +876,56 @@ fn temporary_name() -> String {
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     )
+}
+
+fn is_atomic_staging_name(name: &OsStr) -> bool {
+    let Some(body) = name
+        .to_str()
+        .and_then(|name| name.strip_prefix(".iroha-fs-"))
+        .and_then(|name| name.strip_suffix(".tmp"))
+    else {
+        return false;
+    };
+    let Some((pid, ordinal)) = body.split_once('-') else {
+        return false;
+    };
+    pid.parse::<u32>()
+        .is_ok_and(|value| value != 0 && value.to_string() == pid)
+        && ordinal
+            .parse::<u64>()
+            .is_ok_and(|value| value.to_string() == ordinal)
+}
+
+fn validate_atomic_staging_inventory(
+    names: &[std::ffi::OsString],
+    required: &[&str],
+    maximum_staged: usize,
+) -> io::Result<()> {
+    for name in required {
+        if !names
+            .iter()
+            .any(|present| present.as_os_str() == OsStr::new(name))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "required atomic staging inventory is missing",
+            ));
+        }
+    }
+    let mut staged = 0usize;
+    for name in names {
+        if required
+            .iter()
+            .any(|required| name.as_os_str() == OsStr::new(required))
+        {
+            continue;
+        }
+        if !is_atomic_staging_name(name) || staged >= maximum_staged {
+            return Err(invalid("unexpected atomic staging inventory"));
+        }
+        staged += 1;
+    }
+    Ok(())
 }
 
 fn bounded_read(file: &mut File, length: u64, maximum: usize) -> io::Result<Zeroizing<Vec<u8>>> {

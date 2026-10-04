@@ -1816,6 +1816,7 @@ fn authenticated_staging_receipt_failures_have_exact_deadletter_reasons() {
                 body: &invalid_body,
             },
             2_001,
+            std::time::Instant::now(),
         )
         .expect_err("authenticated invalid staging receipt");
     assert_eq!(
@@ -1847,6 +1848,7 @@ fn authenticated_staging_receipt_failures_have_exact_deadletter_reasons() {
                 body: &future_body,
             },
             2,
+            std::time::Instant::now(),
         )
         .expect_err("authenticated future-skewed staging receipt");
     assert_eq!(
@@ -1880,6 +1882,7 @@ fn storage_coordination_accepts_an_expired_receipt_for_the_exact_finalized_archi
                 body: &body,
             },
             120_001,
+            std::time::Instant::now(),
         )
         .expect("finalized archive outlives its registration receipt");
     let decoded: MusubiStorageCoordinationResponseV1 =
@@ -1957,7 +1960,7 @@ fn cached_storage_response_rechecks_finalized_registration_without_replaying_eff
 
         fn coordinate_storage(
             &mut self,
-            _request: &MusubiStorageCoordinationRequestV1,
+            _request: &VerifiedStorageCoordinationRequestV1<'_>,
         ) -> Result<MusubiStorageCoordinationResponseV1, MusubiPublicationServiceBackendErrorV1>
         {
             panic!("cached replay must not repeat storage effects");

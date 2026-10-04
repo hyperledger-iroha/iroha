@@ -212,19 +212,8 @@ impl ReservePolicyProofV1 {
         )?;
         let current = match &self.current {
             Some(bytes) => {
-                world.verify_table_value(
-                    "world.smart_contract_state",
-                    reserve_state_key(),
-                    bytes,
-                )?;
-                let state = ReserveStateV1::decode_frame(bytes).map_err(map_invalid)?;
-                if state.policy.policy != *expected_policy
-                    || state.policy.policy_digest
-                        != expected_policy.digest().map_err(map_invalid)?
-                    || state.policy.activated_by != *expected_manager
-                    || state.policy.activated_at_unix > world.block_time_ms() / 1_000
-                    || state.journal_head.last_target_block_height > world.height()
-                {
+                let state = verify_selected_policy(&world, expected_policy, bytes)?;
+                if state.policy.activated_by != *expected_manager {
                     return Err(invalid(
                         "Reserve policy or activation differs from selected original and certified cut",
                     ));
@@ -244,6 +233,31 @@ impl ReservePolicyProofV1 {
             current,
         })
     }
+}
+
+/// Authenticate the exact selected active singleton against an already authenticated World cut.
+/// The manager-specific reader separately checks `activated_by` against its selected manager.
+pub(super) fn verify_selected_policy(
+    world: &crate::sumeragi_finality::VerifiedWorldStateSnapshotV1,
+    expected_policy: &ReserveAuthorityPolicyV1,
+    bytes: &Vec<u8>,
+) -> Result<ReserveStateV1, FinalityError> {
+    if bytes.is_empty() || bytes.len() > STATE_MAX_BYTES {
+        return Err(invalid("Reserve policy original exceeds its bound"));
+    }
+    expected_policy.validate().map_err(map_invalid)?;
+    world.verify_table_value("world.smart_contract_state", reserve_state_key(), bytes)?;
+    let state = ReserveStateV1::decode_frame(bytes).map_err(map_invalid)?;
+    if state.policy.policy != *expected_policy
+        || state.policy.policy_digest != expected_policy.digest().map_err(map_invalid)?
+        || state.policy.activated_at_unix > world.block_time_ms() / 1_000
+        || state.journal_head.last_target_block_height > world.height()
+    {
+        return Err(invalid(
+            "Reserve policy or activation differs from selected original and certified cut",
+        ));
+    }
+    Ok(state)
 }
 
 #[cfg(test)]

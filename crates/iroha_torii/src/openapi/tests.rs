@@ -394,6 +394,7 @@ fn expected_operation_effect(method: &str, path: &str) -> &'static str {
         && matches!(
             path,
             "/v1/sorafs/provider/source"
+                | "/v1/sorafs/provider/attestation"
                 | "/v1/sorafs/publish/prepare"
                 | "/v1/sorafs/publish/proof"
                 | "/v1/sorafs/repair/source"

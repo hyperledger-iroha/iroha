@@ -940,6 +940,7 @@ fn finality_chain_from_proofs(
         network_id,
         iroha_data_model::block::consensus::SumeragiRootScope::Global,
         limits,
+        &iroha_allocation::AllocationBudget::new(limits.allocated_bytes),
     )
     .map_err(|error| eyre!(error))?;
     let blocks = with_verified_native_journal(
@@ -948,11 +949,12 @@ fn finality_chain_from_proofs(
         &network_id,
         limits,
         cursor.attestations(),
+        cursor.allocation_budget(),
         |reader| {
             reader
                 .walk(1, end)
                 .collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(|error| error.to_string())
+                .map_err(iroha_core::sumeragi::native_journal::NativeJournalError::History)
         },
     )
     .map_err(|error| eyre!(error))?;
@@ -984,7 +986,7 @@ async fn stage_genesis_brokers(
             norito::json::from_slice(&fs::read(&output.provider_path)?)?;
         let expected_digest = global_beacon_partial_signer_public_inventory_digest_v1(
             network_id,
-            &[(dkg.public_session.clone(), output.signer_index)],
+            &[(dkg.public_session.record(), output.signer_index)],
         )?;
         ensure!(
             provider.signer_index == output.signer_index
@@ -1000,7 +1002,7 @@ async fn stage_genesis_brokers(
             network_id,
             &provider.handle,
             provider.revision,
-            provider.policy_digest,
+            provider.policy_digest, iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get(),
         )?
         .export_canonical_v1()?;
         let credential = Zeroizing::new(fs::read(&output.credential_path)?);
@@ -1151,7 +1153,11 @@ fn prove_exact_target_readiness(
         roster_hash,
         transcript_hash: session.transcript_hash,
     };
-    let validated = validate_global_threshold_beacon_session_v1(session.clone(), &binding)?;
+    let validated = validate_global_threshold_beacon_session_v1(
+        session,
+        &binding,
+        &iroha_allocation::AllocationBudget::new(64 * 1024 * 1024),
+    )?;
     let share = Zeroizing::new(fs::read(&output.pending_share_path)?);
     ensure!(
         share.len() == 96,
@@ -1162,7 +1168,7 @@ fn prove_exact_target_readiness(
         component.copy_from_slice(bytes);
     }
     let custody = RuntimeGlobalThresholdBeaconShareCustodyV1::new();
-    custody.import_components(session.clone(), &binding, output.signer_index, components)?;
+    custody.import_components(validated.clone(), output.signer_index, components)?;
     ensure!(
         process.id() == output.validator,
         "Pasta seed belongs to another process"
@@ -1347,7 +1353,7 @@ async fn execute_rotation_preparation(
         .as_ref()
         .ok_or_else(|| eyre!("incumbent-certified target DKG is not pending on chain"))?;
     ensure!(
-        session == &dkg.public_session,
+        session == dkg.public_session.record(),
         "on-chain pending beacon differs from the all-seat native transcript"
     );
     let authority =
@@ -1403,7 +1409,7 @@ async fn execute_rotation_preparation(
     ensure!(
         prepared_transition.credentials.is_some()
             && prepared_transition.readiness.is_empty()
-            && prepared_status.pending_beacon_session.as_ref() == Some(&dkg.public_session),
+            && prepared_status.pending_beacon_session.as_ref() == Some(dkg.public_session.record()),
         "prepared status lacks exact public target credentials"
     );
     let proof_end = prepared_status
@@ -1424,11 +1430,16 @@ async fn execute_rotation_preparation(
         finality_journal: custody_journal,
         beacon_finalization: certificate,
     };
+    let credential_max_memory_bytes =
+        defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES;
+    let credential_budget =
+        iroha_allocation::AllocationBudget::new(credential_max_memory_bytes.get());
     let proof_cursor = NativeJournalCursor::new(
         network.chain_id(),
         network_id,
         iroha_data_model::block::consensus::SumeragiRootScope::Global,
         finality_limits(),
+        &credential_budget,
     )
     .map_err(|error| eyre!(error))?;
     verify_validator_committee_provisioning_evidence_v1(
@@ -1439,8 +1450,9 @@ async fn execute_rotation_preparation(
         preparation.transition_id().map_err(|error| eyre!(error))?,
         finality_limits(),
         proof_cursor.attestations(),
+        &credential_budget,
     )
-    .map_err(|error| eyre!("native custody evidence was not independently authorized: {error}"))?;
+    .wrap_err("native custody evidence was not independently authorized")?;
     let mut prepared = Vec::with_capacity(target.len());
     let mut readiness_proofs = BTreeMap::new();
     for seat in &dkg.seats {
@@ -1457,8 +1469,12 @@ async fn execute_rotation_preparation(
             .ok_or_else(|| eyre!("prepared seat has no owner-private Pasta seed process"))?;
         // Bind the public proof to this exact prepared challenge before native import
         // consumes the one-shot share. Only public evidence survives the restart.
-        let admission =
-            prove_exact_target_readiness(&prepared_transition, &dkg.public_session, seat, process)?;
+        let admission = prove_exact_target_readiness(
+            &prepared_transition,
+            dkg.public_session.record(),
+            seat,
+            process,
+        )?;
         let retained = current_custody.get(&seat.validator).map(|current| {
             DisposableRetainedBeaconCredential {
                 credential_path: &current.credential_path,
@@ -1471,6 +1487,7 @@ async fn execute_rotation_preparation(
                 &seat.pending_share_path,
                 retained,
                 DisposablePendingCustodyInput {
+                    credential_max_memory_bytes,
                     network_id,
                     finality_limits: finality_limits(),
                     target_epoch,
@@ -1594,8 +1611,8 @@ async fn run_custody_or_activation_scenario(
                 admin,
                 genesis_voters,
                 first_preparation,
-                &genesis_dkg.public_session,
-                &first._dkg.public_session,
+                genesis_dkg.public_session.record(),
+                first._dkg.public_session.record(),
                 signed_genesis_hash,
                 parliament_proposal.ok_or_else(|| {
                     eyre!("complete rotation lacks its admitted Parliament proposal")
@@ -1672,7 +1689,11 @@ async fn run_custody_or_activation_scenario(
     .await
     .wrap_err("first cutoff finality worker failed")?;
     if let Some(pulse) = &governance_pulse {
-        committee_parliament::verify_boundary(&cutoff_chain, pulse, &genesis_dkg.public_session)?;
+        committee_parliament::verify_boundary(
+            &cutoff_chain,
+            pulse,
+            genesis_dkg.public_session.record(),
+        )?;
     }
     let cutoff = cutoff_chain
         .last()

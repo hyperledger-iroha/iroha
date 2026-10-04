@@ -115,7 +115,7 @@ impl ExternalSoftwareSignerMusubiProviderAttestationAdapterV1 {
             return Err(invalid());
         }
         let first = &bindings[0];
-        let (owner, policy) = subject(&first.purpose_binding).map_err(|()| invalid())?;
+        let (_, signer, policy) = subject(&first.purpose_binding).map_err(|()| invalid())?;
         let mut weight = 0u32;
         for (client, binding) in clients.iter().zip(&bindings) {
             if binding.role != SignerRoleV1::MusubiProviderAttestation
@@ -124,7 +124,7 @@ impl ExternalSoftwareSignerMusubiProviderAttestationAdapterV1 {
                 return Err(invalid());
             }
             weight = weight
-                .checked_add(member_weight(&owner, &binding.public_key).ok_or_else(invalid)?)
+                .checked_add(member_weight(&signer, &binding.public_key).ok_or_else(invalid)?)
                 .ok_or_else(invalid)?;
             let before = client.qualify().map_err(map_client_error)?;
             let after = client.qualify().map_err(map_client_error)?;
@@ -133,20 +133,20 @@ impl ExternalSoftwareSignerMusubiProviderAttestationAdapterV1 {
                 return Err(ExternalSoftwareSignerAdapterErrorV1::QualificationChanged);
             }
         }
-        let required = match owner.controller() {
+        let required = match signer.controller() {
             AccountController::Single(_) => 1,
             AccountController::Multisig(policy) => u32::from(policy.threshold()),
         };
         if weight < required {
             return Err(invalid());
         }
-        let controller_digest = musubi_provider_attestation_controller_policy_digest_v1(&owner)
+        let controller_digest = musubi_provider_attestation_controller_policy_digest_v1(&signer)
             .map_err(|_| invalid())?;
         let qualification = MusubiProviderAttestationSignerQualificationV1::new(
             revision,
             expected_policy_digest,
             policy,
-            owner,
+            signer,
             controller_digest,
         );
         qualification.validate().map_err(|_| invalid())?;

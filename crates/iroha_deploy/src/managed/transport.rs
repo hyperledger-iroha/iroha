@@ -65,10 +65,24 @@ mod native {
         directory.path().join("s")
     }
 
+    fn local_endpoint_fits(store: &std::path::Path) -> bool {
+        store.join("ipc/s").as_os_str().as_bytes().len() < 104
+    }
+
     fn ipc_directory(store: &PrivateDirectory, create: bool) -> Result<PrivateDirectory> {
         store.revalidate()?;
-        // macOS sockaddr_un permits only 104 pathname bytes. The socket's private directory is
-        // independent of the (potentially very long) workspace path, but binds its complete hash.
+        // Keep control custody beside the managed state whenever the absolute pathname fits.
+        // Leave room for the NUL terminator in macOS's 104-byte sockaddr_un path; this conservative
+        // bound also fits Linux. Selection depends only on the canonical store path, so controller
+        // and worker always agree and unsafe local custody never selects a different endpoint.
+        if local_endpoint_fits(store.path()) {
+            return Ok(if create {
+                store.ensure_child("ipc")?
+            } else {
+                store.open_child("ipc")?
+            });
+        }
+        // Long paths use one short owner-private namespace bound to the complete store hash.
         let temporary = if cfg!(target_os = "macos") {
             "/private/tmp"
         } else {
@@ -99,6 +113,31 @@ mod native {
             ));
         }
         Ok((metadata.dev(), metadata.ino()))
+    }
+
+    // The caller holds the managed operation and runtime locks; no owned worker can still use
+    // this endpoint. Reject every unexpected object rather than broadening private tree removal.
+    pub(crate) fn clear_stopped_endpoint(store: &PrivateDirectory) -> Result<()> {
+        let directory = match ipc_directory(store, false) {
+            Ok(directory) => directory,
+            Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                store.revalidate()?;
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        match fs::symlink_metadata(endpoint(&directory)) {
+            Ok(_) => {
+                validate_endpoint(&directory)?;
+                fs::remove_file(endpoint(&directory))?;
+                directory.sync()?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        directory.revalidate()?;
+        store.revalidate()?;
+        Ok(())
     }
 
     fn authenticate_peer(stream: &UnixStream) -> Result<()> {
@@ -231,6 +270,86 @@ mod native {
         use super::*;
 
         #[test]
+        fn local_endpoint_selection_counts_bytes_and_reserves_the_nul_terminator() {
+            assert!(local_endpoint_fits(std::path::Path::new(&"x".repeat(97))));
+            assert!(!local_endpoint_fits(std::path::Path::new(&"x".repeat(98))));
+            assert!(local_endpoint_fits(std::path::Path::new(&"é".repeat(48))));
+            assert!(!local_endpoint_fits(std::path::Path::new(&"é".repeat(49))));
+        }
+
+        #[test]
+        fn short_store_keeps_authenticated_socket_inside_its_private_custody() {
+            let temporary = tempfile::tempdir().unwrap();
+            let directory = PrivateDirectory::open_or_create(temporary.path().join("a")).unwrap();
+            let expected = directory.path().join("ipc/s");
+            assert!(
+                expected.as_os_str().as_bytes().len() < 104,
+                "fixture needs a short TMPDIR"
+            );
+            assert!(ipc_directory(&directory, false).is_err());
+            assert!(
+                !directory.path().join("ipc").exists(),
+                "read-only lookup must not create custody"
+            );
+            let listener = Listener::bind(&directory).unwrap();
+            assert_eq!(listener.path, expected);
+            let ipc = ipc_directory(&directory, false).unwrap();
+            assert_eq!(ipc.path(), directory.path().join("ipc"));
+            validate_endpoint(&ipc).unwrap();
+            let stream = UnixStream::connect(&listener.path).unwrap();
+            authenticate_peer(&stream).unwrap();
+            assert!(listener.accept().unwrap().is_some());
+            let other = PrivateDirectory::open_or_create(temporary.path().join("b")).unwrap();
+            let other_listener = Listener::bind(&other).unwrap();
+            assert_ne!(listener.path, other_listener.path);
+            drop(listener);
+            assert!(!expected.exists());
+            validate_endpoint(&ipc_directory(&other, false).unwrap()).unwrap();
+        }
+
+        #[test]
+        fn unsafe_local_ipc_custody_is_rejected_without_selecting_another_endpoint() {
+            let temporary = tempfile::tempdir().unwrap();
+            let directory = PrivateDirectory::open_or_create(temporary.path().join("a")).unwrap();
+            assert!(directory.path().join("ipc/s").as_os_str().as_bytes().len() < 104);
+            let target = directory.ensure_child("target").unwrap();
+            std::os::unix::fs::symlink(target.path(), directory.path().join("ipc")).unwrap();
+            assert!(Listener::bind(&directory).is_err());
+            assert!(ipc_directory(&directory, false).is_err());
+            assert!(target.entries(0).unwrap().is_empty());
+            assert!(
+                std::fs::symlink_metadata(directory.path().join("ipc"))
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+        }
+
+        #[test]
+        fn stopped_endpoint_cleanup_keeps_other_files_and_rejects_non_sockets() {
+            let temporary = tempfile::tempdir().unwrap();
+            let directory = PrivateDirectory::open_or_create(temporary.path().join("a")).unwrap();
+            assert!(directory.path().join("ipc/s").as_os_str().as_bytes().len() < 104);
+            clear_stopped_endpoint(&directory).unwrap();
+            assert!(!directory.path().join("ipc").exists());
+            let ipc = ipc_directory(&directory, true).unwrap();
+            ipc.write_atomic("keep", b"original", iroha_fs::PublishMode::CreateNew)
+                .unwrap();
+            let socket = endpoint(&ipc);
+            // Dropping a bare listener leaves its pathname, reproducing a crashed worker.
+            let listener = UnixListener::bind(&socket).unwrap();
+            fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap();
+            drop(listener);
+            clear_stopped_endpoint(&directory).unwrap();
+            assert!(!socket.exists());
+            assert_eq!(ipc.read("keep", 32).unwrap().as_slice(), b"original");
+            ipc.write_atomic("s", b"unexpected", iroha_fs::PublishMode::CreateNew)
+                .unwrap();
+            assert!(clear_stopped_endpoint(&directory).is_err());
+            assert_eq!(ipc.read("s", 32).unwrap().as_slice(), b"unexpected");
+        }
+
+        #[test]
         fn long_workspace_uses_a_short_owner_bound_socket_and_cleans_it() {
             let temporary = tempfile::tempdir().unwrap();
             let path = temporary.path().join("x".repeat(80)).join("y".repeat(80));
@@ -340,6 +459,20 @@ mod native {
 }
 
 pub(crate) use native::{Listener, detach, request_as, supported};
+
+/// Remove only a stopped worker's validated Unix socket while both managed ownership locks are held.
+/// Named pipes have no filesystem entry and disappear when their original handles close.
+pub(crate) fn clear_stopped_endpoint(directory: &PrivateDirectory) -> Result<()> {
+    #[cfg(unix)]
+    {
+        native::clear_stopped_endpoint(directory)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = directory;
+        Ok(())
+    }
+}
 
 pub(crate) fn request(
     directory: &PrivateDirectory,

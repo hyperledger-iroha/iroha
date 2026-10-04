@@ -20,7 +20,7 @@ fn domainid_allowed_under_abi_current() {
     // Build minimal v1 header and load
     let meta = ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length: 0,
         max_cycles: 1,
@@ -44,7 +44,7 @@ fn unknown_pointer_type_rejected_under_current() {
     // Build minimal v1 header and load
     let meta = ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length: 0,
         max_cycles: 1,

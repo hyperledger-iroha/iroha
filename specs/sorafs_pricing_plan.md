@@ -34,7 +34,8 @@ capacity fee ledger, provider credit records, and egress reconciliation metrics.
 - Credit settlement window: weekly (7-day cycles).
 - Automatic top-up threshold (alert when balance < 20% of expected weekly cost).
 - Discount tiers for committed spend.
-- Provider credit accounts are updated through `UpsertProviderCredit`; telemetry
+- Provider credit accounts are updated through `UpsertProviderCredit` with a required
+  explicit absence or exact-current-record hash guard; telemetry
   windows debit storage plus egress charges from the active pricing schedule.
 
 ## Governance Reporting

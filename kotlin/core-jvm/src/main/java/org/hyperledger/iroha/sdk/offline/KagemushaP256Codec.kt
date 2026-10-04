@@ -5,6 +5,15 @@ package org.hyperledger.iroha.sdk.offline
 
 import java.io.ByteArrayOutputStream
 import java.math.BigInteger
+import java.security.AlgorithmParameters
+import java.security.GeneralSecurityException
+import java.security.KeyFactory
+import java.security.Signature
+import java.security.interfaces.ECPublicKey
+import java.security.spec.ECGenParameterSpec
+import java.security.spec.ECParameterSpec
+import java.security.spec.ECPoint
+import java.security.spec.ECPublicKeySpec
 
 /**
  * Canonical NIST P-256 boundary for the sole KAGEMUSHA V1 device-authority profile.
@@ -12,6 +21,8 @@ import java.math.BigInteger
  * Public keys are exactly uncompressed SEC1 (`04 || x || y`). Wire signatures are exactly
  * fixed-width `r || s` and must already use low-S form. Platform ECDSA APIs commonly return DER;
  * [rawLowSFromStrictDer] accepts only minimal DER and normalizes its valid S scalar to low-S.
+ * Received signatures are verified with [verifyRawLowS], which rejects high S before JCA
+ * verification (JCA itself accepts both S forms) and never rewrites the received bytes.
  */
 object KagemushaP256Codec {
     const val SCALAR_BYTES: Int = 32
@@ -28,6 +39,72 @@ object KagemushaP256Codec {
     private val HALF_ORDER = ORDER.shiftRight(1)
     private val TWO = BigInteger.valueOf(2L)
     private val THREE = BigInteger.valueOf(3L)
+    private const val JCA_SIGNATURE_ALGORITHM = "SHA256withECDSA"
+
+    /** JCA `secp256r1` domain parameters, resolved once through JDK 8 APIs. */
+    private val P256_PARAMETERS: ECParameterSpec by lazy {
+        AlgorithmParameters.getInstance("EC").run {
+            init(ECGenParameterSpec("secp256r1"))
+            getParameterSpec(ECParameterSpec::class.java)
+        }
+    }
+
+    /**
+     * Convert one canonical uncompressed P-256 SEC1 public key to its JCA form.
+     *
+     * The key is first checked by [requireUncompressedPublicKey] (exact 65 bytes, `0x04` prefix,
+     * coordinates inside the field, point on the curve). Construction uses only JDK 8 APIs:
+     * `AlgorithmParameters("EC")` with `ECGenParameterSpec("secp256r1")` and `ECPublicKeySpec`.
+     *
+     * @throws IllegalArgumentException when the bytes are not a canonical P-256 point.
+     */
+    @JvmStatic
+    fun publicKeyFromSec1(sec1Bytes: ByteArray): ECPublicKey {
+        val value = requireUncompressedPublicKey(sec1Bytes)
+        val point = ECPoint(
+            BigInteger(1, value.copyOfRange(1, 1 + SCALAR_BYTES)),
+            BigInteger(1, value.copyOfRange(1 + SCALAR_BYTES, PUBLIC_KEY_BYTES)),
+        )
+        val key = KeyFactory.getInstance("EC").generatePublic(ECPublicKeySpec(point, P256_PARAMETERS))
+        return key as? ECPublicKey
+            ?: throw IllegalStateException("JCA returned a non-EC key for a KAGEMUSHA V1 P-256 point")
+    }
+
+    /**
+     * Verify one received fixed-width signature over the exact [preimage] with ECDSA-P256-SHA256.
+     *
+     * The signature must first pass the canonical raw low-S check of [requireRawLowSSignature]
+     * (`1 <= r < n`, `1 <= s <= floor(n/2)`), because JCA accepts the high-S twin of every valid
+     * signature. Only then is it converted to strict DER and checked with JCA `SHA256withECDSA`,
+     * which hashes [preimage] once. The received bytes are never normalized.
+     *
+     * Returns `false` for a non-canonical key, a non-canonical or high-S signature, and a
+     * signature that does not verify.
+     */
+    @JvmStatic
+    fun verifyRawLowS(publicKeySec1: ByteArray, preimage: ByteArray, rawSignature: ByteArray): Boolean {
+        val raw = try {
+            requireRawLowSSignature(rawSignature)
+        } catch (rejected: IllegalArgumentException) {
+            return false
+        }
+        val publicKey = try {
+            publicKeyFromSec1(publicKeySec1)
+        } catch (rejected: IllegalArgumentException) {
+            return false
+        } catch (rejected: GeneralSecurityException) {
+            return false
+        }
+        return try {
+            Signature.getInstance(JCA_SIGNATURE_ALGORITHM).run {
+                initVerify(publicKey)
+                update(preimage)
+                verify(strictDerFromRawLowS(raw))
+            }
+        } catch (rejected: GeneralSecurityException) {
+            false
+        }
+    }
 
     /** Validate and defensively copy one canonical uncompressed P-256 public key. */
     @JvmStatic

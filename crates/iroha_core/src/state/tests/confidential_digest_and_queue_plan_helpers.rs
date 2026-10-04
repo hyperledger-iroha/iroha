@@ -90,7 +90,7 @@ state_test! { sync confidential_registry_delta_cap_limits_transitions
     assert_eq!(beta_status, ConfidentialStatus::Proposed);
 }
 fn assemble_ivm_header(code: &[u8]) -> Vec<u8> {
-    let_row! { mut blob = ivm::ProgramMetadata { version_major: 1, version_minor: 0, mode: 0, vector_length: 0, max_cycles: 1_000_000, abi_version: 1, } .encode() };
+    let_row! { mut blob = ivm::ProgramMetadata { version_major: 1, version_minor: 1, mode: 0, vector_length: 0, max_cycles: 1_000_000, abi_version: 1, } .encode() };
     blob.extend_from_slice(code);
     blob
 }

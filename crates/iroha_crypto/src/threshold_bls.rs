@@ -55,7 +55,7 @@ use hkdf::Hkdf;
 use rand_core::{OsRng, TryCryptoRng};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize as _, Zeroizing};
 
 /// Version of the fixed threshold-BLS transcript profile.
 pub const THRESHOLD_BLS_PROTOCOL_VERSION_V1: u16 = 1;
@@ -65,6 +65,10 @@ const MESSAGE_PREFIX_BYTES_V1: usize = MESSAGE_DOMAIN_V1.len() + SESSION_CANONIC
 pub const THRESHOLD_BLS_MIN_COMMITTEE_SIZE_V1: u16 = 4;
 /// Maximum exact `3f + 1` committee size accepted by the v1 profile.
 pub const THRESHOLD_BLS_MAX_COMMITTEE_SIZE_V1: u16 = 31;
+/// Maximum initialized dealer coefficient count for any authenticated v1 session.
+/// Every sealed session has threshold `f + 1` for `n = 3f + 1`.
+pub const MAX_DEALER_COEFFICIENTS_V1: usize =
+    ((THRESHOLD_BLS_MAX_COMMITTEE_SIZE_V1 - 1) / 3 + 1) as usize;
 /// Maximum caller payload incorporated into one signing transcript.
 pub const THRESHOLD_BLS_MAX_MESSAGE_PAYLOAD_BYTES_V1: usize = 16 * 1024;
 /// V1 has no proactive share-refresh protocol; rotate through a fresh DKG instead.
@@ -705,11 +709,13 @@ impl<P: ThresholdBlsPurpose> DasRenDealerCommitment<P> {
         if coefficients.len() != usize::from(parameters.session().threshold()) {
             return Err(ThresholdBlsError::InvalidCoefficientCommitment);
         }
-        // The exact backing is known after the degree check. Never grow a
-        // second coefficient owner while verifying an admitted public graph.
-        let mut parsed_coefficients = Vec::with_capacity(coefficients.len());
+        // The sealed session bounds f + 1 by MAX_DEALER_COEFFICIENTS_V1.
+        // Expose only initialized canonical points; no heap buffer or fake slots.
+        let mut parsed_coefficients = ArrayVec::new();
         for bytes in coefficients {
-            parsed_coefficients.push(DasRenCoefficientCommitment::from_bytes(parameters, *bytes)?);
+            parsed_coefficients
+                .try_push(DasRenCoefficientCommitment::from_bytes(parameters, *bytes)?)
+                .map_err(|_| ThresholdBlsError::InvalidCoefficientCommitment)?;
         }
         let coefficients = parsed_coefficients;
         let proof =
@@ -737,7 +743,7 @@ impl<P: ThresholdBlsPurpose> DasRenDealerCommitment<P> {
 pub struct ValidatedDealerCommitment<P: ThresholdBlsPurpose> {
     parameters_digest: [u8; 32],
     dealer_index: u16,
-    coefficients: Vec<DasRenCoefficientCommitment<P>>,
+    coefficients: ArrayVec<DasRenCoefficientCommitment<P>, MAX_DEALER_COEFFICIENTS_V1>,
     proof: DasRenSchnorrPok<P>,
 }
 
@@ -761,6 +767,69 @@ impl<P: ThresholdBlsPurpose> ValidatedDealerCommitment<P> {
     }
 }
 
+/// Initialized, bounded, zeroizing coefficient owner for one v1 dealer polynomial.
+///
+/// Only the exact initialized prefix is exposed. Unused physical slots are zeroed
+/// at construction; rejection, explicit erasure and drop erase the entire inline
+/// backing. This type is not cloneable, serializable or printable and allocates no
+/// heap storage. Zeroization remains defense in depth, not a hardware guarantee.
+pub struct DasRenSecretCoefficientsV1 {
+    values: Zeroizing<[DasRenSecretCoefficientV1; MAX_DEALER_COEFFICIENTS_V1]>,
+    len: usize,
+}
+
+impl DasRenSecretCoefficientsV1 {
+    /// Take initialized inline backing and expose only its exact prefix.
+    ///
+    /// An empty prefix is structurally representable; dealer import still checks
+    /// participant index before requiring the authenticated polynomial degree.
+    ///
+    /// # Errors
+    /// A length exceeding the v1 capacity is rejected after taking erasure custody
+    /// of every supplied slot. Unused slots of an accepted value are also erased.
+    pub fn new(
+        values: Zeroizing<[DasRenSecretCoefficientV1; MAX_DEALER_COEFFICIENTS_V1]>,
+        len: usize,
+    ) -> Result<Self, ThresholdBlsError> {
+        let mut owned = Self { values, len };
+        if len > MAX_DEALER_COEFFICIENTS_V1 {
+            return Err(ThresholdBlsError::InvalidCoefficientCommitment);
+        }
+        for coefficient in &mut owned.values[len..] {
+            coefficient.zeroize();
+        }
+        Ok(owned)
+    }
+
+    /// Borrow only the exact initialized coefficient prefix.
+    #[must_use]
+    pub fn as_slice(&self) -> &[DasRenSecretCoefficientV1] {
+        &self.values[..self.len]
+    }
+}
+
+impl core::ops::Deref for DasRenSecretCoefficientsV1 {
+    type Target = [DasRenSecretCoefficientV1];
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+impl zeroize::Zeroize for DasRenSecretCoefficientsV1 {
+    fn zeroize(&mut self) {
+        self.values.zeroize();
+        self.len = 0;
+    }
+}
+impl zeroize::ZeroizeOnDrop for DasRenSecretCoefficientsV1 {}
+impl Drop for DasRenSecretCoefficientsV1 {
+    fn drop(&mut self) {
+        self.zeroize();
+        #[cfg(test)]
+        tests::dealer_secret_inline::observe_erased(&self.values, self.len);
+    }
+}
+
 /// Non-cloneable, zeroizing owner of one dealer's `(s, r, u)` polynomials.
 ///
 /// The type has no serialization or `Debug` implementation. Its constant
@@ -770,7 +839,7 @@ pub struct DasRenDealerSecret<P: ThresholdBlsPurpose> {
     parameters_digest: [u8; 32],
     session_id: [u8; 32],
     dealer_index: u16,
-    coefficients: Zeroizing<Vec<DasRenSecretCoefficientV1>>,
+    coefficients: DasRenSecretCoefficientsV1,
     marker: PhantomData<P>,
 }
 
@@ -803,23 +872,17 @@ impl<P: ThresholdBlsPurpose> DasRenDealerSecret<P> {
         rng: &mut R,
     ) -> Result<(Self, ValidatedDealerCommitment<P>), ThresholdBlsError> {
         validate_participant_index(parameters.session(), dealer_index)?;
-        let mut coefficients = Zeroizing::new(Vec::with_capacity(usize::from(
-            parameters.session().threshold(),
-        )));
+        let mut coefficients = DasRenSecretCoefficientsV1::new(
+            Zeroizing::new([[[0_u8; 32]; 3]; MAX_DEALER_COEFFICIENTS_V1]),
+            usize::from(parameters.session().threshold()),
+        )?;
         for coefficient_index in 0..parameters.session().threshold() {
-            coefficients.push([
-                random_nonzero_scalar_bytes(rng)?,
-                if coefficient_index == 0 {
-                    Scalar::from(0_u64).to_bytes_be()
-                } else {
-                    random_nonzero_scalar_bytes(rng)?
-                },
-                if coefficient_index == 0 {
-                    Scalar::from(0_u64).to_bytes_be()
-                } else {
-                    random_nonzero_scalar_bytes(rng)?
-                },
-            ]);
+            let slot = &mut coefficients.values[usize::from(coefficient_index)];
+            slot[0] = random_nonzero_scalar_bytes(rng)?;
+            if coefficient_index != 0 {
+                slot[1] = random_nonzero_scalar_bytes(rng)?;
+                slot[2] = random_nonzero_scalar_bytes(rng)?;
+            }
         }
         Self::from_coefficients_with_rng(parameters, dealer_index, coefficients, rng)
     }
@@ -827,8 +890,8 @@ impl<P: ThresholdBlsPurpose> DasRenDealerSecret<P> {
     /// Import canonical zeroizing coefficients and build the public commitment.
     ///
     /// The first coefficient must have `r = u = 0`; all other coefficients may
-    /// contain any canonical scalar. The builder consumes the zeroizing vector,
-    /// retaining it only in this secret owner.
+    /// contain any canonical scalar. The builder consumes the bounded zeroizing
+    /// coefficient owner and retains its initialized inline backing.
     ///
     /// # Errors
     ///
@@ -837,7 +900,7 @@ impl<P: ThresholdBlsPurpose> DasRenDealerSecret<P> {
     pub fn from_coefficients(
         parameters: &AdaptiveThresholdBlsParameters<P>,
         dealer_index: u16,
-        coefficients: Zeroizing<Vec<DasRenSecretCoefficientV1>>,
+        coefficients: DasRenSecretCoefficientsV1,
     ) -> Result<(Self, ValidatedDealerCommitment<P>), ThresholdBlsError> {
         Self::from_coefficients_with_rng(parameters, dealer_index, coefficients, &mut OsRng)
     }
@@ -851,7 +914,7 @@ impl<P: ThresholdBlsPurpose> DasRenDealerSecret<P> {
     pub fn from_coefficients_with_rng<R: TryCryptoRng + ?Sized>(
         parameters: &AdaptiveThresholdBlsParameters<P>,
         dealer_index: u16,
-        coefficients: Zeroizing<Vec<DasRenSecretCoefficientV1>>,
+        coefficients: DasRenSecretCoefficientsV1,
         rng: &mut R,
     ) -> Result<(Self, ValidatedDealerCommitment<P>), ThresholdBlsError> {
         validate_participant_index(parameters.session(), dealer_index)?;
@@ -864,7 +927,10 @@ impl<P: ThresholdBlsPurpose> DasRenDealerSecret<P> {
         }
         let h_generator = parameters.h_point()?;
         let v_generator = parameters.v_point()?;
-        let mut commitment_bytes = Vec::with_capacity(coefficients.len());
+        // The exact degree check above uses the authenticated v1 threshold,
+        // bounded by MAX_DEALER_COEFFICIENTS_V1. Only initialized slots are read.
+        let mut commitment_bytes =
+            ArrayVec::<[u8; THRESHOLD_BLS_PUBLIC_KEY_BYTES], MAX_DEALER_COEFFICIENTS_V1>::new();
         for coefficient in coefficients.iter() {
             let secret = decode_scalar(&coefficient[0])?;
             let h_blinding = decode_scalar(&coefficient[1])?;
@@ -878,17 +944,22 @@ impl<P: ThresholdBlsPurpose> DasRenDealerSecret<P> {
             if bool::from(point.is_identity()) {
                 return Err(ThresholdBlsError::InvalidCoefficientCommitment);
             }
-            commitment_bytes.push(point.to_affine().to_compressed());
+            commitment_bytes
+                .try_push(point.to_affine().to_compressed())
+                .map_err(|_| ThresholdBlsError::InvalidCoefficientCommitment)?;
         }
         let nonce_bytes = Zeroizing::new(random_nonzero_scalar_bytes(rng)?);
         let nonce = decode_scalar(&nonce_bytes)?;
         let proof_commitment = (G2Projective::generator() * nonce)
             .to_affine()
             .to_compressed();
-        let parsed_coefficients = commitment_bytes
-            .iter()
-            .map(|bytes| DasRenCoefficientCommitment::from_bytes(parameters, *bytes))
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut parsed_coefficients =
+            ArrayVec::<DasRenCoefficientCommitment<P>, MAX_DEALER_COEFFICIENTS_V1>::new();
+        for bytes in &commitment_bytes {
+            parsed_coefficients
+                .try_push(DasRenCoefficientCommitment::from_bytes(parameters, *bytes)?)
+                .map_err(|_| ThresholdBlsError::InvalidCoefficientCommitment)?;
+        }
         let provisional =
             DasRenSchnorrPok::from_bytes(proof_commitment, Scalar::from(0_u64).to_bytes_be())?;
         let challenge =
@@ -1034,7 +1105,13 @@ pub fn seal_das_ren_private_share<P: ThresholdBlsPurpose>(
     share: &DasRenPrivateShare<P>,
     recipient: &HybridPublicKey,
     aad: &[u8],
-) -> Result<(HybridKemCiphertext, Vec<u8>), ThresholdBlsError> {
+) -> Result<
+    (
+        HybridKemCiphertext,
+        [u8; DAS_REN_PRIVATE_SHARE_CIPHERTEXT_BYTES_V1],
+    ),
+    ThresholdBlsError,
+> {
     if aad.is_empty() {
         return Err(ThresholdBlsError::PrivateShareEncryption);
     }
@@ -1048,17 +1125,14 @@ pub fn seal_das_ren_private_share<P: ThresholdBlsPurpose>(
     let encryptor = SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(&key[..])
         .map_err(|_| ThresholdBlsError::PrivateShareEncryption)?;
     let components = share.components_for_authenticated_encryption();
-    let mut plaintext = Zeroizing::new([0_u8; 96]);
+    let mut envelope = Zeroizing::new([0_u8; DAS_REN_PRIVATE_SHARE_CIPHERTEXT_BYTES_V1]);
     for (offset, component) in components.iter().enumerate() {
-        plaintext[offset * 32..(offset + 1) * 32].copy_from_slice(component);
+        envelope[12 + offset * 32..12 + (offset + 1) * 32].copy_from_slice(component);
     }
-    let ciphertext = encryptor
-        .encrypt_easy(aad, &plaintext[..])
+    encryptor
+        .encrypt_easy_in_place(aad, &mut envelope[..])
         .map_err(|_| ThresholdBlsError::PrivateShareEncryption)?;
-    if ciphertext.len() != DAS_REN_PRIVATE_SHARE_CIPHERTEXT_BYTES_V1 {
-        return Err(ThresholdBlsError::PrivateShareEncryption);
-    }
-    Ok((kem, ciphertext))
+    Ok((kem, *envelope))
 }
 
 /// Open one encrypted private DKG edge and verify it against the dealer polynomial.
@@ -1096,11 +1170,11 @@ pub fn open_das_ren_private_share<P: ThresholdBlsPurpose>(
     let key = Zeroizing::new(derived.encryption_key());
     let decryptor = SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(&key[..])
         .map_err(|_| ThresholdBlsError::PrivateShareDecryption)?;
-    let plaintext = Zeroizing::new(
-        decryptor
-            .decrypt_easy(aad, ciphertext)
-            .map_err(|_| ThresholdBlsError::PrivateShareDecryption)?,
-    );
+    let mut envelope = Zeroizing::new([0_u8; DAS_REN_PRIVATE_SHARE_CIPHERTEXT_BYTES_V1]);
+    envelope.copy_from_slice(ciphertext);
+    let plaintext = decryptor
+        .decrypt_easy_in_place(aad, &mut envelope[..])
+        .map_err(|_| ThresholdBlsError::PrivateShareDecryption)?;
     if plaintext.len() != 96 {
         return Err(ThresholdBlsError::PrivateShareDecryption);
     }
@@ -2111,9 +2185,14 @@ fn is_zero(bytes: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    mod dealer_generation_scratch;
+    mod dealer_inline;
+    pub(super) mod dealer_secret_inline;
     mod interpolation;
     mod message_borrow;
     mod pairing_scratch;
+    #[cfg(feature = "pqc")]
+    mod private_edge_inline;
     mod transcript_inline;
 
     use blstrs::{G2Affine, Scalar};
@@ -2209,7 +2288,13 @@ mod tests {
         let parameters =
             AdaptiveThresholdBlsParameters::derive(&session::<BeaconPurpose>()).unwrap();
         let (dealer, _) = adaptive_dealer(&parameters, 1);
-        assert_eq!(dealer.coefficients.len(), dealer.coefficients.capacity());
+        // The inline owner reserves the protocol maximum while the transcript hashes
+        // only this session's initialized coefficients, with their exact count.
+        assert_eq!(
+            dealer.coefficients.len(),
+            usize::from(parameters.session().threshold())
+        );
+        assert_eq!(dealer.coefficients.capacity(), MAX_DEALER_COEFFICIENTS_V1);
         let mut challenge = Sha256::new();
         challenge.update(DEALER_POK_DOMAIN_V1);
         challenge.update(THRESHOLD_BLS_PROTOCOL_VERSION_V1.to_be_bytes());

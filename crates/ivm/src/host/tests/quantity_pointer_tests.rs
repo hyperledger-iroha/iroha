@@ -84,7 +84,7 @@ fn default_host_pointer_decoders_enforce_owned_provenance_and_integrity() {
 fn expect_tlv_enforces_pointer_policy() {
     crate::set_banner_enabled(false);
     let mut vm = IVM::new(u64::MAX);
-    let program = ProgramMetadata::default_for(1, 0, 1).encode();
+    let program = ProgramMetadata::default_for(1, 1, 1).encode();
     vm.load_program(&program).expect("load program");
     // The first release only supports ABI v1; installing any other
     // annotated ABI version must fail closed during pointer validation.

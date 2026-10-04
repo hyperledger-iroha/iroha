@@ -1325,7 +1325,7 @@ fn migrate_fails_on_invalid_bytecode() {
     let mut prog = Vec::new();
     // Start with a fully valid authenticated header so rejection exercises the
     // oversized code section rather than an earlier metadata failure.
-    prog.extend_from_slice(&ivm::ProgramMetadata::default_for(1, 0, 1).encode());
+    prog.extend_from_slice(&ivm::ProgramMetadata::default_for(1, 1, 1).encode());
     // Oversized code
     let heap_start =
         usize::try_from(ivm::Memory::HEAP_START).expect("HEAP_START fits within usize");
@@ -1575,10 +1575,19 @@ fn initial_executor_gates_every_authoritative_sorafs_query_variant() {
             "{error:?}"
         );
     }
-    for permission in [
-        Permission::from(executor_permission::sorafs::CanSetSorafsPricing),
-        Permission::from(executor_permission::sorafs::CanCompleteSorafsReplicationOrder),
-    ] {
+    // A provider-scoped completion token authorizes completion work, never global inventory.
+    hold_only!(
+        executor_permission::sorafs::CanCompleteSorafsReplicationOrder {
+            provider_id: iroha_data_model::sorafs::capacity::ProviderId::new([0x71; 32]),
+        }
+    );
+    for query in &orderbook_queries {
+        validate!(query)
+            .expect_err("provider-scoped completion must not expose the global orderbook");
+    }
+    for permission in [Permission::from(
+        executor_permission::sorafs::CanSetSorafsPricing,
+    )] {
         hold_only!(permission.clone());
         for query in &orderbook_queries {
             validate!(query).unwrap_or_else(|error| {
@@ -1892,17 +1901,17 @@ fn initial_executor_rejects_malformed_dpn_payloads_even_at_genesis() {
                 .expect("malformed DPN signed genesis rejects");
             assert!(
                 matches!(&error.error,
-                crate::sumeragi::test_chain::TestChainError::OriginalGenesisExecution(error)
-                if matches!(error.as_ref(),
-                    crate::block::BlockValidationError::InvalidGenesis(
-                        crate::block::InvalidGenesisError::RejectedOutput(output)
-                    ) if matches!(output.reason.as_ref(),
-                        iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                            ValidationFail::NotPermitted(reason)
-                        ) if reason.contains(name) && reason.contains("Invalid permission payload")
+                    crate::sumeragi::test_chain::TestChainError::OriginalGenesisExecution(error)
+                    if matches!(error.as_ref(),
+                        crate::block::BlockValidationError::InvalidGenesis(
+                            crate::block::InvalidGenesisError::RejectedOutput(output)
+                        ) if matches!(output.reason.as_ref(),
+                            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                                ValidationFail::NotPermitted(reason)
+                            ) if reason.contains(name) && reason.contains("Invalid permission payload")
+                        )
                     )
-                )
-            ),
+                ),
                 "{name} {payload}: {error:?}"
             );
             let view = error.state.view();
@@ -2237,4 +2246,35 @@ fn native_account_grant_reader_preserves_refusal_and_exact_token_shape() {
         Ok(false),
         "revoking the original role revokes its exact grant"
     );
+}
+
+#[test]
+fn completion_permission_payload_requires_exact_nonzero_provider_scope() {
+    use iroha_data_model::sorafs::capacity::ProviderId;
+    use iroha_executor_data_model::permission::sorafs::CanCompleteSorafsReplicationOrder;
+    let token = CanCompleteSorafsReplicationOrder {
+        provider_id: ProviderId::new([1; 32]),
+    };
+    let exact: Permission = token.into();
+    validate_initial_permission_payload_constraints(&exact).unwrap();
+    let bytes = norito::to_bytes(&token).unwrap();
+    assert_eq!(
+        norito::decode_from_bytes::<CanCompleteSorafsReplicationOrder>(&bytes).unwrap(),
+        token
+    );
+    let mut extra = norito::json::to_value(&token).unwrap();
+    extra
+        .as_object_mut()
+        .unwrap()
+        .insert("unrelated".into(), norito::json::Value::Bool(true));
+    for malformed in [
+        Permission::new(exact.name().to_owned(), Json::new(())),
+        Permission::new(exact.name().to_owned(), Json::new(norito::json::json!({}))),
+        Permission::new(exact.name().to_owned(), Json::new(extra)),
+        Permission::from(CanCompleteSorafsReplicationOrder {
+            provider_id: ProviderId::new([0; 32]),
+        }),
+    ] {
+        assert!(validate_initial_permission_payload_constraints(&malformed).is_err());
+    }
 }

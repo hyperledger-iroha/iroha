@@ -1180,7 +1180,7 @@ fn ivm_gas_fees_transfer_exact_signed_asset_quantity() {
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let meta = ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length: 0,
         max_cycles: 1_000_000,

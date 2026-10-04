@@ -21,8 +21,8 @@ use ivm_abi::{
     axt::{AxtDescriptor, ProofBlob, validate_descriptor, validate_proof_blob},
     metadata::{
         EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,
-        EmbeddedStateType, HEADER_SIZE, MAX_EMBEDDED_STATE_TYPE_DEPTH_V1, ParsedProgramMetadata,
-        ProgramMetadata, contract_code_hash, mode,
+        EmbeddedStateType, HEADER_SIZE, MAX_EMBEDDED_STATE_TYPE_DEPTH_V1, ParsedLiteralSection,
+        ParsedProgramMetadata, ProgramMetadata, contract_code_hash, mode,
     },
 };
 #[cfg(test)]
@@ -46,6 +46,7 @@ pub struct VerifiedContractArtifact {
     pub header_len: usize,
     /// Absolute executable-stream offset in the artifact.
     pub code_offset: usize,
+    literal_section: Option<ParsedLiteralSection>,
     /// Domain-separated identity of the complete deployable artifact.
     pub code_hash: Hash,
     /// ABI descriptor hash authenticated by the embedded interface.
@@ -54,6 +55,15 @@ pub struct VerifiedContractArtifact {
     pub contract_interface: EmbeddedContractInterfaceV1,
     /// Canonical unsigned on-chain manifest derived from the interface.
     pub manifest: ContractManifest,
+}
+impl VerifiedContractArtifact {
+    /// Structurally and semantically admitted literal ranges from the original artifact.
+    /// Native preparation consumes these coordinates on that same immutable input; this value
+    /// does not authenticate replacement bytes. No second metadata decode is needed.
+    #[must_use]
+    pub const fn literal_section(&self) -> Option<ParsedLiteralSection> {
+        self.literal_section
+    }
 }
 mod error;
 pub use error::ContractArtifactError;
@@ -105,7 +115,7 @@ fn verify_contract_artifact_owned(
         .expect("validated contract envelope retains its CNTR interface");
     Ok(verified_from_parts(artifact, parsed, contract_interface))
 }
-/// Verify a compiler-produced generic IVM 1.0 Kotodama test harness against
+/// Verify a compiler-produced generic IVM 1.1 Kotodama test harness against
 /// its compiler-owned interface sidecar.
 ///
 /// This is intentionally hidden from ordinary artifact consumers. Native IVM preparation uses it so
@@ -163,6 +173,7 @@ fn verified_from_parts(
         metadata: parsed.metadata,
         header_len: parsed.header_len,
         code_offset: parsed.code_offset,
+        literal_section: parsed.literal_section,
         code_hash,
         abi_hash,
         contract_interface,
@@ -175,9 +186,6 @@ fn parse_contract_metadata(
     ProgramMetadata::parse(artifact).map_err(|error| match error {
         VMError::ArtifactAbiHashMismatch { expected, actual } => {
             ContractArtifactError::abi_hash_mismatch(expected, actual)
-        }
-        _ if header_declares_contract_minor_one(artifact) && cntr_section_missing(artifact) => {
-            ContractArtifactError::invalid("missing required CNTR section")
         }
         other if other.execution_deferral().is_some() => {
             ContractArtifactError::preparation("metadata parse", other)
@@ -249,9 +257,9 @@ fn validate_koto_test_envelope(
     contract_interface: &EmbeddedContractInterfaceV1,
 ) -> Result<(), ContractArtifactError> {
     let metadata = &parsed.metadata;
-    if metadata.version_major != 1 || metadata.version_minor != 0 {
+    if metadata.version_major != 1 || metadata.version_minor != 1 {
         return Err(ContractArtifactError::invalid(format!(
-            "expected generic IVM 1.0 Kotodama test harness, got {}.{}",
+            "expected generic IVM 1.1 Kotodama test harness, got {}.{}",
             metadata.version_major, metadata.version_minor
         )));
     }
@@ -283,12 +291,12 @@ fn validate_koto_test_envelope(
     }
     if parsed.contract_interface.is_some() {
         return Err(ContractArtifactError::invalid(
-            "generic IVM 1.0 Kotodama test harness must not embed a CNTR section",
+            "generic IVM 1.1 Kotodama test harness must not embed a CNTR section",
         ));
     }
     if parsed.contract_debug.is_some() {
         return Err(ContractArtifactError::invalid(
-            "generic IVM 1.0 Kotodama test harness must not embed DBG1 metadata",
+            "generic IVM 1.1 Kotodama test harness must not embed DBG1 metadata",
         ));
     }
     let expected_abi_hash = ivm_abi::syscalls::compute_abi_hash(SyscallPolicy::AbiV1);
@@ -485,14 +493,6 @@ fn schedule_manifest_state_type_name<'a>(
         _ => unreachable!("scalar embedded state types returned before compound formatting"),
     }
 }
-fn header_declares_contract_minor_one(artifact: &[u8]) -> bool {
-    artifact.len() >= HEADER_SIZE && artifact[4] == 1 && artifact[5] == 1
-}
-fn cntr_section_missing(artifact: &[u8]) -> bool {
-    artifact.len() < HEADER_SIZE + 4
-        || artifact[HEADER_SIZE..HEADER_SIZE + 4]
-            != ivm_abi::metadata::CONTRACT_INTERFACE_SECTION_MAGIC
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -615,6 +615,74 @@ mod tests {
         assert_eq!(artifact, original);
     }
 
+    #[test]
+    fn retired_header_rejects_before_metadata_and_original_pool_admission() {
+        let mut artifact = contract_artifact_with_state_type(EmbeddedStateType::Bool);
+        let original = verify_contract_artifact(&artifact).unwrap();
+        artifact[5] = 0;
+        let budget = iroha_allocation::AllocationBudget::new(0);
+        let error = norito::core::with_decode_limits_scope(
+            norito::core::DecodeLimits::new(0, 0, 0, 0, 0),
+            || verify_contract_artifact_with_memory_budget(&artifact, &budget),
+        )
+        .unwrap_err();
+        assert!(error.local_vm_error().is_none());
+        assert!(error.to_string().contains("program version 1.0"), "{error}");
+        assert_eq!(budget.reserved_bytes(), 0);
+        artifact[5] = 1;
+        assert_eq!(
+            verify_contract_artifact(&artifact).unwrap().code_hash,
+            original.code_hash
+        );
+    }
+
+    #[test]
+    fn generic_debug_decode_refusal_is_not_reclassified_as_missing_cntr() {
+        use ivm_abi::metadata::{
+            EmbeddedContractDebugInfoV1, EmbeddedSourceLocation, EmbeddedSourceMapEntryV1,
+        };
+        let debug = EmbeddedContractDebugInfoV1 {
+            source_map: vec![EmbeddedSourceMapEntryV1 {
+                function_name: "main".to_owned(),
+                pc_start: 0,
+                pc_end: 4,
+                source: EmbeddedSourceLocation {
+                    source_path: Some("profile.ko".to_owned()),
+                    source_id: 0,
+                    byte_start: 0,
+                    byte_end: 1,
+                    line: 1,
+                    column: 1,
+                },
+            }],
+            budget_report: Vec::new(),
+        };
+        let mut artifact = ProgramMetadata::default().encode();
+        artifact.extend_from_slice(&debug.encode_section());
+        artifact.extend_from_slice(&ivm_abi::encoding::wide::encode_halt().to_le_bytes());
+        let parsed = parse_contract_metadata(&artifact).unwrap();
+        assert!(parsed.contract_interface.is_none());
+        assert_eq!(parsed.contract_debug, Some(debug));
+        let error = norito::core::with_decode_limits_scope(
+            norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+            || parse_contract_metadata(&artifact),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.into_vm_error(),
+            VMError::ExecutionDeferred(ivm_abi::error::ExecutionDeferral::ActiveMemoryCapacity,)
+        );
+        assert_eq!(
+            parse_contract_metadata(&artifact).unwrap().contract_debug,
+            parsed.contract_debug
+        );
+        assert!(
+            verify_contract_artifact(&artifact)
+                .unwrap_err()
+                .to_string()
+                .contains("DBG1")
+        );
+    }
     #[test]
     fn manifest_state_type_names_preserve_variant_spelling_and_order() {
         let scalar_cases = [

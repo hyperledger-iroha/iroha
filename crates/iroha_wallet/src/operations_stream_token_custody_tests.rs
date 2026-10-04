@@ -23,11 +23,13 @@ use std::{
 
 #[derive(Debug, Default)]
 struct Transport {
+    requests: AtomicUsize,
     quotes: AtomicUsize,
     submissions: AtomicUsize,
 }
 impl HttpTransport for Transport {
     fn send_blocking(&self, request: TransportRequest) -> Result<Response<Vec<u8>>> {
+        self.requests.fetch_add(1, Ordering::SeqCst);
         let (status, body) = match request.url.path() {
             "/v1/node/capabilities" => (
                 200,
@@ -107,6 +109,7 @@ fn service() -> (AccountService, Arc<Transport>) {
             config,
             client,
             deadline: None,
+            cancellation: None,
         },
         transport,
     )
@@ -924,4 +927,130 @@ fn fee_and_enrollment_bounds_are_checked_before_request_cloning() {
     assert!(CustodyExpectation::Enroll(&enroll).plan(1_000).is_err());
     enroll.enrollment.resize(SIGNER_CUSTODY_MAX_BYTES_V1 + 1, 0);
     assert!(CustodyExpectation::Enroll(&enroll).plan(1_000).is_err());
+}
+
+#[test]
+fn retain_stream_token_custody_configure_request_is_a_real_unsigned_zero_http_boundary() {
+    let (service, transport) = service();
+    let request = configure(&service.config, current_unix_ms().unwrap());
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("request-only-boundary");
+    let before = transport.requests.load(std::sync::atomic::Ordering::SeqCst);
+    let first = service
+        .retain_stream_token_custody_configure_request(&request, &path)
+        .unwrap();
+    assert_eq!(first.phase(), NativePreparationPhase::RequestOnly);
+    let commitment = first.request_sha256().unwrap().to_owned();
+    let original = std::fs::read(path.join("preparation.json")).unwrap();
+    assert!(!path.join("payload.json").exists());
+    assert!(!path.join("operation.json").exists());
+    assert!(!path.join("submission.json").exists());
+    let repeated = service
+        .retain_stream_token_custody_configure_request(&request, &path)
+        .unwrap();
+    assert_eq!(repeated.request_sha256(), Some(commitment.as_str()));
+    let mut changed = request.clone();
+    changed.deadline_unix_ms += 1;
+    assert!(
+        service
+            .retain_stream_token_custody_configure_request(&changed, &path)
+            .is_err()
+    );
+    assert_eq!(
+        transport.requests.load(std::sync::atomic::Ordering::SeqCst),
+        before
+    );
+    assert_eq!(
+        std::fs::read(path.join("preparation.json")).unwrap(),
+        original
+    );
+
+    service
+        .prepare_stream_token_custody_configure(&request, &path)
+        .unwrap();
+    let before = transport.requests.load(std::sync::atomic::Ordering::SeqCst);
+    let signed = service
+        .retain_stream_token_custody_configure_request(&request, &path)
+        .unwrap();
+    assert_eq!(signed.phase(), NativePreparationPhase::Signed);
+    assert_eq!(signed.request_sha256(), Some(commitment.as_str()));
+    assert_eq!(
+        std::fs::read(path.join("preparation.json")).unwrap(),
+        original
+    );
+    // Genuine durable prefix before signature publication; retain cannot finish the payload.
+    std::fs::remove_file(path.join("operation.json")).unwrap();
+    let partial = service
+        .retain_stream_token_custody_configure_request(&request, &path)
+        .unwrap();
+    assert_eq!(partial.phase(), NativePreparationPhase::PayloadRetained);
+    assert_eq!(partial.request_sha256(), Some(commitment.as_str()));
+    assert!(!path.join("operation.json").exists());
+    assert_eq!(
+        transport.requests.load(std::sync::atomic::Ordering::SeqCst),
+        before
+    );
+}
+
+#[test]
+fn retain_stream_token_custody_enroll_request_is_a_real_unsigned_zero_http_boundary() {
+    let (service, transport) = service();
+    let request = enroll(&service.config, current_unix_ms().unwrap());
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("request-only-boundary");
+    let before = transport.requests.load(std::sync::atomic::Ordering::SeqCst);
+    let first = service
+        .retain_stream_token_custody_enroll_request(&request, &path)
+        .unwrap();
+    assert_eq!(first.phase(), NativePreparationPhase::RequestOnly);
+    let commitment = first.request_sha256().unwrap().to_owned();
+    let original = std::fs::read(path.join("preparation.json")).unwrap();
+    assert!(!path.join("payload.json").exists());
+    assert!(!path.join("operation.json").exists());
+    assert!(!path.join("submission.json").exists());
+    let repeated = service
+        .retain_stream_token_custody_enroll_request(&request, &path)
+        .unwrap();
+    assert_eq!(repeated.request_sha256(), Some(commitment.as_str()));
+    let mut changed = request.clone();
+    changed.deadline_unix_ms += 1;
+    assert!(
+        service
+            .retain_stream_token_custody_enroll_request(&changed, &path)
+            .is_err()
+    );
+    assert_eq!(
+        transport.requests.load(std::sync::atomic::Ordering::SeqCst),
+        before
+    );
+    assert_eq!(
+        std::fs::read(path.join("preparation.json")).unwrap(),
+        original
+    );
+
+    service
+        .prepare_stream_token_custody_enroll(&request, &path)
+        .unwrap();
+    let before = transport.requests.load(std::sync::atomic::Ordering::SeqCst);
+    let signed = service
+        .retain_stream_token_custody_enroll_request(&request, &path)
+        .unwrap();
+    assert_eq!(signed.phase(), NativePreparationPhase::Signed);
+    assert_eq!(signed.request_sha256(), Some(commitment.as_str()));
+    assert_eq!(
+        std::fs::read(path.join("preparation.json")).unwrap(),
+        original
+    );
+    // Genuine durable prefix before signature publication; retain cannot finish the payload.
+    std::fs::remove_file(path.join("operation.json")).unwrap();
+    let partial = service
+        .retain_stream_token_custody_enroll_request(&request, &path)
+        .unwrap();
+    assert_eq!(partial.phase(), NativePreparationPhase::PayloadRetained);
+    assert_eq!(partial.request_sha256(), Some(commitment.as_str()));
+    assert!(!path.join("operation.json").exists());
+    assert_eq!(
+        transport.requests.load(std::sync::atomic::Ordering::SeqCst),
+        before
+    );
 }

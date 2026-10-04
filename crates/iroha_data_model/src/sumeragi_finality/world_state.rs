@@ -500,6 +500,29 @@ impl VerifiedWorldStateSnapshotV1 {
         self.verify_native_table_key_absent("world.assets", key)
     }
 
+    /// Prove this exact provider key is absent from the native credit table at this certified cut.
+    /// The caller must independently select the canonical native World schema. Transport errors,
+    /// missing partitions and query indexes cannot establish credit absence.
+    /// # Errors
+    /// The key is present, unencodable, or the fixed native field has an incompatible kind.
+    pub fn verify_provider_credit_absent(
+        &self,
+        provider: &crate::sorafs::capacity::ProviderId,
+    ) -> Result<(), FinalityError> {
+        self.verify_native_table_key_absent("world.provider_credit_ledger", provider)
+    }
+
+    /// Prove this provider key is absent from the complete native capacity table at this cut.
+    /// Absence grants no first-install CAS, capacity, funding or service authority.
+    /// # Errors
+    /// The key exists, has invalid encoding, or the fixed native field is not a table.
+    pub fn verify_capacity_declaration_absent(
+        &self,
+        provider: &crate::sorafs::capacity::ProviderId,
+    ) -> Result<(), FinalityError> {
+        self.verify_native_table_key_absent("world.capacity_declarations", provider)
+    }
+
     /// Authenticate every key original of the fixed canonical `world.asset_definition_alias_bindings` table.
     /// Values and interpretation require their separate exact native preimages.
     /// # Errors

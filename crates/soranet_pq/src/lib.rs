@@ -26,11 +26,12 @@ pub use crate::mldsa::{
 #[cfg(feature = "pqc")]
 pub use crate::mlkem::{
     MlKemCiphertext, MlKemError, MlKemKeyPair, MlKemMetadata, MlKemParameters, MlKemSharedSecret,
-    MlKemSuite, SuiteParseError, decapsulate_mlkem, encapsulate_mlkem, encapsulate_mlkem_from_os,
-    encapsulate_mlkem_from_rng, encapsulate_mlkem_from_seed, generate_mlkem_keypair,
-    generate_mlkem_keypair_from_os, generate_mlkem_keypair_from_rng,
-    generate_mlkem_keypair_from_seed, mlkem_metadata, mlkem_parameters, validate_mlkem_ciphertext,
-    validate_mlkem_key_pair, validate_mlkem_public_key, validate_mlkem_secret_key,
+    MlKemSuite, SuiteParseError, decapsulate_mlkem, decapsulate_mlkem_into, encapsulate_mlkem,
+    encapsulate_mlkem_from_os, encapsulate_mlkem_from_rng, encapsulate_mlkem_from_seed,
+    encapsulate_mlkem_into, generate_mlkem_keypair, generate_mlkem_keypair_from_os,
+    generate_mlkem_keypair_from_rng, generate_mlkem_keypair_from_seed, generate_mlkem_keypair_into,
+    mlkem_metadata, mlkem_parameters, validate_mlkem_ciphertext, validate_mlkem_key_pair,
+    validate_mlkem_public_key, validate_mlkem_secret_key,
 };
 #[cfg(not(feature = "pqc"))]
 pub use crate::wire::{MlDsaSuite, UnsupportedPqcError};

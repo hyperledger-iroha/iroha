@@ -8,6 +8,8 @@
     clippy::struct_excessive_bools
 )]
 #[cfg(feature = "app_api")]
+mod contract_return_attempt;
+#[cfg(feature = "app_api")]
 mod public_lane_rewards;
 #[cfg(feature = "app_api")]
 use public_lane_rewards::collect_pending_public_lane_rewards;
@@ -16057,16 +16059,19 @@ fn encode_contract_call_simulation_response_bounded(
     append_contract_simulation_json_literal(&mut out, b"}", max_bytes)?;
     Ok(out)
 }
-fn map_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> ContractViewVmDiagnosticDto {
+fn map_vm_diagnostic(
+    diag: ivm::VmExecutionDiagnostic<'_>,
+    error: &ivm::VMError,
+) -> ContractViewVmDiagnosticDto {
     ContractViewVmDiagnosticDto {
         trap_kind: format!("{:?}", diag.trap_kind),
-        message: diag.message.clone(),
+        message: error.to_string(),
         pc: diag.pc,
         function: diag
             .source
             .as_ref()
-            .and_then(|source| source.function.clone()),
-        source_path: diag.source.as_ref().and_then(|source| source.path.clone()),
+            .and_then(|source| source.function.map(str::to_owned)),
+        source_path: diag.source.as_ref().and_then(|source| source.path.map(str::to_owned)),
         line: diag.source.as_ref().and_then(|source| source.line),
         column: diag.source.as_ref().and_then(|source| source.column),
         gas_limit: diag.budget.gas_limit,
@@ -16077,7 +16082,7 @@ fn map_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> ContractViewVmDiagnos
         stack_limit_bytes: diag.budget.stack_limit_bytes,
         stack_bytes_used: diag.budget.stack_bytes_used,
         entrypoint_pc: diag.context.entrypoint_pc,
-        current_function: diag.context.current_function.clone(),
+        current_function: diag.context.current_function.map(str::to_owned),
         opcode: diag.context.opcode,
         syscall: diag.context.syscall,
         predecoded_loaded: diag.context.predecoded_loaded,
@@ -16445,7 +16450,7 @@ fn execute_contract_view(
     vm.run_with_host(&mut host)
         .map_err(|err| contract_vm_attempt_error(err, |err| ContractViewExecutionError {
             message: format!("contract view execution failed: {err}"),
-            vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
+            vm_diagnostic: vm.last_diagnostic().map(|diagnostic| map_vm_diagnostic(diagnostic, &err)),
         }))?;
     if let Some(violation) = host.output_budget_violation() {
         return Err(ContractViewExecutionError {
@@ -16470,16 +16475,17 @@ fn execute_contract_view(
     let value = descriptor.return_schema.as_ref().map_or_else(
         || Ok(Value::Null),
         |schema| {
-            iroha_core::smartcontracts::ivm::return_value::decode_entrypoint_return(&vm, schema)
-                .map_err(|err| ContractViewExecutionError {
+            contract_return_attempt::decode(&vm, schema).map_err(|error| {
+                error.map_rejection(|err| ContractViewExecutionError {
                     message: err.to_string(),
-                    vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
+                    vm_diagnostic: None,
                 })
+            })
         },
     )?;
     IrohaJson::from_norito_value_ref(&value).map_err(|error| ContractViewExecutionError {
         message: format!("contract view returned invalid or oversized JSON: {error}"),
-        vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
+        vm_diagnostic: None,
     }).map_err(Into::into)
 }
 fn execute_contract_call_simulation(
@@ -16671,7 +16677,9 @@ fn execute_contract_call_simulation(
     if let Some(violation) = host.output_budget_violation() {
         return Err(ContractCallSimulationError {
             message: format!("contract call simulation output budget exceeded: {violation:?}"),
-            vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
+            vm_diagnostic: run_result.as_ref().err().and_then(|error| {
+                vm.last_diagnostic().map(|diagnostic| map_vm_diagnostic(diagnostic, error))
+            }),
             normalized_payload: normalized_payload.clone(),
             gas_used: gas_limit.saturating_sub(vm.gas_remaining),
             queued_instructions: Vec::new(),
@@ -16684,7 +16692,7 @@ fn execute_contract_call_simulation(
     if let Err(err) = run_result {
         return Err(ContractCallSimulationError {
             message: format!("contract call simulation failed: {err}"),
-            vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
+            vm_diagnostic: vm.last_diagnostic().map(|diagnostic| map_vm_diagnostic(diagnostic, &err)),
             normalized_payload,
             gas_used,
             queued_instructions,
@@ -16694,14 +16702,16 @@ fn execute_contract_call_simulation(
         .return_schema
         .as_ref()
         .map(|schema| {
-            iroha_core::smartcontracts::ivm::return_value::decode_entrypoint_return(&vm, schema)
+            contract_return_attempt::decode(&vm, schema)
                 .map(IrohaJson::from)
-                .map_err(|err| ContractCallSimulationError {
-                    message: err.to_string(),
-                    vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
-                    normalized_payload: normalized_payload.clone(),
-                    gas_used,
-                    queued_instructions: queued_instructions.clone(),
+                .map_err(|error| {
+                    error.map_rejection(|err| ContractCallSimulationError {
+                        message: err.to_string(),
+                        vm_diagnostic: None,
+                        normalized_payload: normalized_payload.clone(),
+                        gas_used,
+                        queued_instructions: queued_instructions.clone(),
+                    })
                 })
         })
         .transpose()?;

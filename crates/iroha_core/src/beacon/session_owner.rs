@@ -1,9 +1,11 @@
 //! Exact original-pool construction of the sole canonical public session graph.
 //!
-//! This module owns actual nested buffers, compact keys and signature bytes. It
-//! neither grants transcript validity nor funds input decoding, validation scratch
-//! or the eventual shared control. The authenticated session constructor must bind
-//! this graph and its original ledger into that fully validated runtime owner.
+//! The materializer owns actual nested buffers, compact keys and signature bytes.
+//! The validated submodule admits its complete graph, verifier scratch and shared
+//! control from one original reservation, then shares the immutable authenticated
+//! owner with runtime lifecycle rows. The DKG child owns mutable rows and public
+//! phase output backing; raw input decoding and final credential/transport buffers
+//! retain separate explicit physical-ownership obligations.
 
 use std::alloc::Layout;
 
@@ -19,6 +21,21 @@ use iroha_data_model::consensus::{
     GlobalThresholdBeaconPublicShareV1,
 };
 use iroha_model_base::peer::PeerId;
+
+/// The standard writer facade over the original fixed byte backing.
+/// Each write uses the canonical bounded append kernel and cannot grow or replace it.
+pub(in crate::beacon) struct ChargedBytesWriter<'a>(
+    pub(in crate::beacon) &'a mut ChargedBuffer<u8>,
+);
+impl std::io::Write for ChargedBytesWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.append(bytes)?;
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 /// Concrete original source or physical construction failure; never an authentication result.
 #[derive(Debug, thiserror::Error)]
@@ -41,13 +58,19 @@ pub(super) enum SessionGraphError {
     /// A sealed original payload/ledger source invariant failed.
     #[error(transparent)]
     Retention(#[from] RetainedPayloadError),
+    /// A workspace encoder failed without authenticating its input.
+    #[error(transparent)]
+    Encoding(#[from] norito::Error),
+    /// A prepaid shared-control allocation could not be constructed.
+    #[error(transparent)]
+    Shared(#[from] iroha_allocation::PrepaidSharedError),
     /// A complete checked demand and materialization disagreed.
     #[error("canonical beacon session allocation plan changed")]
     PlanChanged,
 }
 
 #[derive(Default)]
-struct Demand {
+pub(in crate::beacon) struct Demand {
     bytes: usize,
     charges: usize,
 }
@@ -111,12 +134,12 @@ impl Demand {
 // Declared before every constructed payload local so their actual allocations
 // retire before the ledger on normal refusal. Like the existing schedule owner,
 // uncertain partial destruction during unwind conservatively retains its credits.
-struct Construction<'a> {
+pub(in crate::beacon) struct Construction<'a, 'r> {
     budget: &'a AllocationBudget,
-    reservation: AllocationReservation,
+    reservation: &'r mut AllocationReservation,
     charges: Option<ChargedBuffer<AllocationCharge>>,
 }
-impl Drop for Construction<'_> {
+impl Drop for Construction<'_, '_> {
     fn drop(&mut self) {
         if std::thread::panicking() {
             if let Some(charges) = self.charges.take() {
@@ -125,14 +148,23 @@ impl Drop for Construction<'_> {
         }
     }
 }
-impl<'a> Construction<'a> {
+impl<'a, 'r> Construction<'a, 'r> {
     fn new(
         source: &GlobalThresholdBeaconKeySessionV1,
         budget: &'a AllocationBudget,
+        reservation: &'r mut AllocationReservation,
     ) -> Result<Self, SessionGraphError> {
-        let demand = Demand::for_session(source)?;
-        let mut reservation = budget.try_reserve_bytes(demand.total_bytes()?)?;
-        let charges = ChargedBuffer::from_reservation(demand.charges, &mut reservation)?;
+        Self::with_demand(Demand::for_session(source)?, budget, reservation)
+    }
+    fn with_demand(
+        demand: Demand,
+        budget: &'a AllocationBudget,
+        reservation: &'r mut AllocationReservation,
+    ) -> Result<Self, SessionGraphError> {
+        if !reservation.belongs_to(budget) {
+            return Err(RetainedPayloadError::ForeignLedger.into());
+        }
+        let charges = ChargedBuffer::from_reservation(demand.charges, reservation)?;
         Ok(Self {
             budget,
             reservation,
@@ -211,104 +243,153 @@ impl<'a> Construction<'a> {
         self.retain(charge)?;
         Ok(signature)
     }
-    fn dealers(
+    fn dealer(
         &mut self,
-        source: &[GlobalThresholdBeaconDkgDealerCommitmentV1],
+        source: &GlobalThresholdBeaconDkgDealerCommitmentV1,
+    ) -> Result<GlobalThresholdBeaconDkgDealerCommitmentV1, SessionGraphError> {
+        Ok(GlobalThresholdBeaconDkgDealerCommitmentV1 {
+            dealer_index: source.dealer_index,
+            coefficient_commitments: self.copied(&source.coefficient_commitments)?,
+            constant_term_proof: source.constant_term_proof,
+            signature: self.signature(&source.signature)?,
+        })
+    }
+    fn recipient(
+        &mut self,
+        source: &GlobalThresholdBeaconDkgRecipientKeyV1,
+    ) -> Result<GlobalThresholdBeaconDkgRecipientKeyV1, SessionGraphError> {
+        Ok(GlobalThresholdBeaconDkgRecipientKeyV1 {
+            recipient_index: source.recipient_index,
+            validator: PeerId::new(self.key(source.validator.public_key())?),
+            x25519_public_key: source.x25519_public_key,
+            mlkem768_public_key: self.copied(&source.mlkem768_public_key)?,
+            signature: self.signature(&source.signature)?,
+        })
+    }
+    fn edge(
+        &mut self,
+        source: &GlobalThresholdBeaconDkgEncryptedShareV1,
+    ) -> Result<GlobalThresholdBeaconDkgEncryptedShareV1, SessionGraphError> {
+        Ok(GlobalThresholdBeaconDkgEncryptedShareV1 {
+            dealer_index: source.dealer_index,
+            recipient_index: source.recipient_index,
+            dealer_commitment_hash: source.dealer_commitment_hash,
+            recipient_key_hash: source.recipient_key_hash,
+            delivery_height: source.delivery_height,
+            ephemeral_x25519_public_key: source.ephemeral_x25519_public_key,
+            mlkem768_ciphertext: self.copied(&source.mlkem768_ciphertext)?,
+            encrypted_share: self.copied(&source.encrypted_share)?,
+            signature: self.signature(&source.signature)?,
+        })
+    }
+    fn acceptance(
+        &mut self,
+        source: &GlobalThresholdBeaconDkgShareAcceptanceV1,
+    ) -> Result<GlobalThresholdBeaconDkgShareAcceptanceV1, SessionGraphError> {
+        Ok(GlobalThresholdBeaconDkgShareAcceptanceV1 {
+            dealer_index: source.dealer_index,
+            recipient_index: source.recipient_index,
+            dealer_commitment_hash: source.dealer_commitment_hash,
+            encrypted_share_hash: source.encrypted_share_hash,
+            accepted_height: source.accepted_height,
+            signature: self.signature(&source.signature)?,
+        })
+    }
+    fn dealers<'s>(
+        &mut self,
+        source: impl ExactSizeIterator<Item = &'s GlobalThresholdBeaconDkgDealerCommitmentV1>,
     ) -> Result<Vec<GlobalThresholdBeaconDkgDealerCommitmentV1>, SessionGraphError> {
         let mut output = self.buffer(source.len())?;
         for source in source {
-            let coefficient_commitments = self.copied(&source.coefficient_commitments)?;
-            let signature = self.signature(&source.signature)?;
-            output.push_reserved(GlobalThresholdBeaconDkgDealerCommitmentV1 {
-                dealer_index: source.dealer_index,
-                coefficient_commitments,
-                constant_term_proof: source.constant_term_proof,
-                signature,
-            });
+            output.push_reserved(self.dealer(source)?);
         }
         self.vector(output)
     }
-    fn recipients(
+    fn recipients<'s>(
         &mut self,
-        source: &[GlobalThresholdBeaconDkgRecipientKeyV1],
+        source: impl ExactSizeIterator<Item = &'s GlobalThresholdBeaconDkgRecipientKeyV1>,
     ) -> Result<Vec<GlobalThresholdBeaconDkgRecipientKeyV1>, SessionGraphError> {
         let mut output = self.buffer(source.len())?;
         for source in source {
-            let validator = PeerId::new(self.key(source.validator.public_key())?);
-            let mlkem768_public_key = self.copied(&source.mlkem768_public_key)?;
-            let signature = self.signature(&source.signature)?;
-            output.push_reserved(GlobalThresholdBeaconDkgRecipientKeyV1 {
-                recipient_index: source.recipient_index,
-                validator,
-                x25519_public_key: source.x25519_public_key,
-                mlkem768_public_key,
-                signature,
-            });
+            output.push_reserved(self.recipient(source)?);
         }
         self.vector(output)
     }
-    fn edges(
+    fn edges<'s>(
         &mut self,
-        source: &[GlobalThresholdBeaconDkgEncryptedShareV1],
+        source: impl ExactSizeIterator<Item = &'s GlobalThresholdBeaconDkgEncryptedShareV1>,
     ) -> Result<Vec<GlobalThresholdBeaconDkgEncryptedShareV1>, SessionGraphError> {
         let mut output = self.buffer(source.len())?;
         for source in source {
-            let mlkem768_ciphertext = self.copied(&source.mlkem768_ciphertext)?;
-            let encrypted_share = self.copied(&source.encrypted_share)?;
-            let signature = self.signature(&source.signature)?;
-            output.push_reserved(GlobalThresholdBeaconDkgEncryptedShareV1 {
-                dealer_index: source.dealer_index,
-                recipient_index: source.recipient_index,
-                dealer_commitment_hash: source.dealer_commitment_hash,
-                recipient_key_hash: source.recipient_key_hash,
-                delivery_height: source.delivery_height,
-                ephemeral_x25519_public_key: source.ephemeral_x25519_public_key,
-                mlkem768_ciphertext,
-                encrypted_share,
-                signature,
-            });
+            output.push_reserved(self.edge(source)?);
         }
         self.vector(output)
     }
-    fn acceptances(
+    fn acceptances<'s>(
         &mut self,
-        source: &[GlobalThresholdBeaconDkgShareAcceptanceV1],
+        source: impl ExactSizeIterator<Item = &'s GlobalThresholdBeaconDkgShareAcceptanceV1>,
     ) -> Result<Vec<GlobalThresholdBeaconDkgShareAcceptanceV1>, SessionGraphError> {
         let mut output = self.buffer(source.len())?;
         for source in source {
-            let signature = self.signature(&source.signature)?;
-            output.push_reserved(GlobalThresholdBeaconDkgShareAcceptanceV1 {
-                dealer_index: source.dealer_index,
-                recipient_index: source.recipient_index,
-                dealer_commitment_hash: source.dealer_commitment_hash,
-                encrypted_share_hash: source.encrypted_share_hash,
-                accepted_height: source.accepted_height,
-                signature,
-            });
+            output.push_reserved(self.acceptance(source)?);
         }
         self.vector(output)
+    }
+    #[allow(unsafe_code)]
+    fn finish<T>(&mut self, payload: T) -> Result<RetainedPayload<T>, SessionGraphError> {
+        let charges = self
+            .charges
+            .take()
+            .expect("complete original construction ledger");
+        if charges.as_slice().len() != charges.capacity() {
+            drop(payload);
+            drop(charges);
+            return Err(SessionGraphError::PlanChanged);
+        }
+        // SAFETY: callers construct only the audited canonical fields through this
+        // exact materializer. Their nested storage moves unchanged with every
+        // original charge; the returned owner permits borrowing only.
+        match unsafe { RetainedPayload::try_new(payload, charges, self.budget) } {
+            Ok(owner) => Ok(owner),
+            Err((payload, charges, error)) => {
+                drop(payload);
+                drop(charges);
+                Err(error.into())
+            }
+        }
     }
 }
 
 /// Retain one complete canonical graph after preadmitting every destination allocation.
 /// This copies only original bytes; the result does not claim semantic validity.
 ///
-/// TODO: consume this exact materializer in the canonical validated-session/World
-/// cutover together with physical verifier workspaces and explicit shared-control
-/// admission. Do not wrap an existing ordinary deep clone or expose an unfunded
-/// parallel constructor when that integration lands.
-#[allow(unsafe_code)]
+#[cfg(test)]
 pub(super) fn retain_canonical_session(
     source: &GlobalThresholdBeaconKeySessionV1,
     budget: &AllocationBudget,
 ) -> Result<RetainedPayload<GlobalThresholdBeaconKeySessionV1>, SessionGraphError> {
-    let mut construction = Construction::new(source, budget)?;
+    let mut reservation = budget.try_reserve_bytes(Demand::for_session(source)?.total_bytes()?)?;
+    retain_prepaid_session(source, budget, &mut reservation)
+}
+
+/// Consume only the graph's exact part of the original aggregate session reservation.
+#[allow(unsafe_code)]
+fn retain_prepaid_session(
+    source: &GlobalThresholdBeaconKeySessionV1,
+    budget: &AllocationBudget,
+    reservation: &mut AllocationReservation,
+) -> Result<RetainedPayload<GlobalThresholdBeaconKeySessionV1>, SessionGraphError> {
+    let remainder = reservation
+        .remaining_bytes()
+        .checked_sub(Demand::for_session(source)?.total_bytes()?)
+        .ok_or(SessionGraphError::PlanChanged)?;
+    let mut construction = Construction::new(source, budget, reservation)?;
     let public_shares = construction.copied(&source.public_shares)?;
     let source_dkg = &source.adaptive_dkg;
-    let dealer_commitments = construction.dealers(&source_dkg.dealer_commitments)?;
-    let recipient_keys = construction.recipients(&source_dkg.recipient_keys)?;
-    let encrypted_shares = construction.edges(&source_dkg.encrypted_shares)?;
-    let share_acceptances = construction.acceptances(&source_dkg.share_acceptances)?;
+    let dealer_commitments = construction.dealers(source_dkg.dealer_commitments.iter())?;
+    let recipient_keys = construction.recipients(source_dkg.recipient_keys.iter())?;
+    let encrypted_shares = construction.edges(source_dkg.encrypted_shares.iter())?;
+    let share_acceptances = construction.acceptances(source_dkg.share_acceptances.iter())?;
     let qualified_dealers = construction.copied(&source_dkg.qualified_dealers)?;
     let adaptive_dkg = GlobalThresholdBeaconDkgTranscriptV1 {
         session: source_dkg.session,
@@ -335,30 +416,34 @@ pub(super) fn retain_canonical_session(
         dkg_contribution_hash: source.dkg_contribution_hash,
         transcript_hash: source.transcript_hash,
     };
-    if construction.reservation.remaining_bytes() != 0 {
+    if construction.reservation.remaining_bytes() != remainder {
         return Err(SessionGraphError::PlanChanged);
     }
-    let charges = construction
-        .charges
-        .take()
-        .expect("complete original ledger");
-    if charges.as_slice().len() != charges.capacity() {
-        drop(record);
-        drop(charges);
-        return Err(SessionGraphError::PlanChanged);
-    }
-    // SAFETY: every exact destination buffer, key and signature was allocated
-    // from the single original reservation and transferred unchanged above.
-    // The private immutable record has no allocation escape or mutable access.
-    match unsafe { RetainedPayload::try_new(record, charges, budget) } {
-        Ok(owner) => Ok(owner),
-        Err((record, charges, error)) => {
-            drop(record);
-            drop(charges);
-            Err(error.into())
-        }
-    }
+    construction.finish(record)
 }
+
+mod dkg;
+pub(in crate::beacon) use dkg::{
+    DkgMessageWorkspace, DkgRows, PendingRow, retain_finalized_dkg, validate_dkg_acceptance_bounds,
+    validate_dkg_dealer_bounds, validate_dkg_edge_bounds, validate_dkg_recipient_bounds,
+};
+pub use dkg::{
+    RetainedGlobalThresholdBeaconDkgFinalizationV1, RetainedGlobalThresholdBeaconDkgSnapshotV1,
+};
+mod prepared_input;
+pub use prepared_input::{
+    GlobalThresholdBeaconInputDestinationErrorV1, GlobalThresholdBeaconInputErrorV1,
+    PreparedGlobalThresholdBeaconDkgInputsV1,
+};
+mod lifecycle;
+mod validated;
+pub use lifecycle::RetainedFinalizedGlobalThresholdBeaconSessionV1;
+pub(super) use lifecycle::validate_lifecycle;
+pub(super) use validated::verify_borrowed_session;
+pub use validated::{
+    GlobalThresholdBeaconSessionError, PreparedGlobalThresholdBeaconSessionVerificationV1,
+    ValidatedGlobalThresholdBeaconSessionV1,
+};
 
 #[cfg(test)]
 mod tests;

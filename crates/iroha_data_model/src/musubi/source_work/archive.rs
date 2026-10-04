@@ -146,10 +146,12 @@ impl SourceGeometry {
     ) -> Result<(), SourceGeometryError> {
         let ProviderIngestCompletionAuthorityV1 {
             provider_owner,
+            completion_signer,
             signer_policy: _,
         } = value;
         self.node()?;
-        self.account(provider_owner)
+        self.account(provider_owner)?;
+        self.account(completion_signer)
     }
     pub(super) fn location(
         &mut self,

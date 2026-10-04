@@ -1,7 +1,7 @@
 //! A certified test chain (test support): a real signed genesis applied by
 //! [`startup::apply_genesis`], blocks built by the leader's payload builder, executed, prepared,
 //! stored and applied through the node's executor and block store, and every block certified by a
-//! `CommitQC` of the fixed four-validator genesis committee with real BLS-normal signatures. The
+//! `CommitQC` of the exact authenticated four-validator committee with real BLS-normal signatures. The
 //! [`certified_chain`](super::certified_chain) reader accepts its blocks as it accepts a running
 //! node's.
 //!
@@ -18,6 +18,8 @@ mod lane_authority;
 pub use lane_authority::TestLaneStoreAuthorities;
 #[path = "test_chain/availability.rs"]
 mod availability;
+#[path = "test_chain/committee_custody.rs"]
+mod committee_custody;
 #[cfg(test)]
 mod genesis_policy;
 mod local_certificate;
@@ -258,7 +260,6 @@ pub struct CertifiedTestChain {
     blocks: KuraBlockStore,
     availability: Arc<dyn AvailabilitySchedule>,
     signers: Vec<KeyPairSigner>,
-    committee: Committee,
     validators: Vec<(PeerId, Vec<u8>)>,
     crypto: Arc<BlsCrypto>,
     instance: Hash32,
@@ -266,6 +267,7 @@ pub struct CertifiedTestChain {
     tip: (u64, Hash32, Hash32),
     clock: KeyPair,
     pasta_seeds: Vec<zeroize::Zeroizing<[u8; 32]>>,
+    candidate_pasta_seeds: Vec<(PeerId, zeroize::Zeroizing<[u8; 32]>)>,
     lane_blocks: Arc<dyn crate::sumeragi::lanes::merge::LaneBlockSource>,
 }
 
@@ -618,13 +620,6 @@ impl CertifiedTestChain {
             .iter()
             .map(|key| KeyPairSigner::new(key).expect("BLS-normal fixture key"))
             .collect::<Vec<_>>();
-        let committee = Committee::new(
-            signers
-                .iter()
-                .map(|signer| signer.public_key().clone())
-                .collect(),
-        )
-        .expect("fixture committee");
         let authority = Arc::new(
             crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1::new(
                 generation,
@@ -662,13 +657,13 @@ impl CertifiedTestChain {
             blocks,
             availability,
             signers,
-            committee,
             validators,
             crypto,
             instance,
             tip: (GENESIS_HEIGHT, tip.block_hash, tip.result),
             clock,
             pasta_seeds,
+            candidate_pasta_seeds: Vec::new(),
             lane_blocks,
         })
     }
@@ -748,8 +743,8 @@ impl CertifiedTestChain {
     /// The absent case reaches the real boundary check without corrupting World indexes.
     fn npos_boundary_fixture_with_currency(include_currency: bool) -> Self {
         use crate::beacon::{
-            FinalizedGlobalThresholdBeaconKeySessionRecordV1,
             GlobalThresholdBeaconPartialSignerV1 as _, GlobalThresholdBeaconPulseAggregatorV1,
+            RetainedFinalizedGlobalThresholdBeaconSessionV1,
             prepared_session_and_signers_fixture_for_keys_v1,
         };
         use iroha_data_model::consensus::{
@@ -839,10 +834,13 @@ impl CertifiedTestChain {
                 acceptances_end_height: 4,
             },
             &pairs,
+            &chain.state().ivm_execution_budget(),
         );
-        let mut record =
-            FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(session.record().clone())
-                .unwrap();
+        let mut record = RetainedFinalizedGlobalThresholdBeaconSessionV1 {
+            session: session.clone(),
+            activated_at_height: None,
+            retired_at_height: None,
+        };
         record
             .activate(session.record().adaptive_dkg.finalized_at_height)
             .unwrap();
@@ -935,7 +933,8 @@ impl CertifiedTestChain {
         self.tip.0
     }
 
-    /// The validators with their proofs of possession, in committee order.
+    /// The original signed-genesis validators and their proofs of possession.
+    /// Later certificate authority is resolved from each authenticated scheduling context.
     #[must_use]
     pub fn validators(&self) -> &[(PeerId, Vec<u8>)] {
         &self.validators
@@ -1289,23 +1288,8 @@ impl CertifiedTestChain {
         attest: bool,
         signers: Signers,
     ) -> Qc {
-        let epoch = if height <= self.tip.0 {
-            super::schedule::core_epoch(&self.committed(height).commitment().schedule.current)
-                .unwrap()
-                .id
-        } else {
-            let view = self.state.view();
-            super::schedule::core_epoch(
-                &view
-                    .world()
-                    .consensus_schedule()
-                    .ready(height)
-                    .unwrap()
-                    .epoch,
-            )
-            .unwrap()
-            .id
-        };
+        let context = self.certificate_context(height);
+        let epoch = super::schedule::core_epoch(&context).unwrap().id;
         let witness = if attest {
             if height <= self.tip.0 {
                 self.committed_body(height)
@@ -1359,23 +1343,25 @@ impl CertifiedTestChain {
                 result
             );
         }
-        let epoch = if height <= self.tip.0 {
-            super::schedule::core_epoch(&self.committed(height).commitment().schedule.current)
-                .unwrap()
-                .id
-        } else {
-            let view = self.state.view();
-            super::schedule::core_epoch(
-                &view
-                    .world()
-                    .consensus_schedule()
-                    .ready(height)
-                    .unwrap()
-                    .epoch,
-            )
-            .unwrap()
-            .id
-        };
+        let context = self.certificate_context(height);
+        assert_eq!(context.committee.len(), 4, "four-seat component fixture");
+        let epoch = super::schedule::core_epoch(&context).unwrap().id;
+        let committee = Committee::new(
+            context
+                .committee
+                .iter()
+                .map(|member| super::crypto::core_key(member.validator.public_key()).unwrap())
+                .collect(),
+        )
+        .expect("the exact authenticated committee");
+        if let Some(witness) = &witness {
+            let original = super::commitment::ExecutionResultCommitment::decode(witness.as_slice())
+                .expect("original native execution witness");
+            assert_eq!(
+                original.schedule.current, context,
+                "certificate seats belong to the exact executed scheduling context"
+            );
+        }
         let votes = signers
             .indices()
             .iter()
@@ -1406,7 +1392,9 @@ impl CertifiedTestChain {
                     let result =
                         super::commitment::ExecutionResultCommitment::decode(witness.as_slice())
                             .unwrap();
-                    let custody = self.pasta_custody(signer);
+                    let custody = self
+                        .pasta_custody_for_peer(&context.committee[signer as usize].validator)
+                        .expect("provisioned exact scheduled Pasta custody");
                     let signer = custody
                         .signer_for_authority(&result.schedule.current.authority)
                         .unwrap();
@@ -1417,17 +1405,20 @@ impl CertifiedTestChain {
                         ),
                     });
                 }
-                vote.sig = self.signers[signer as usize].sign(&vote.preimage());
+                vote.sig = self
+                    .signer_for_member(&context.committee[signer as usize].validator)
+                    .expect("provisioned exact scheduled BLS custody")
+                    .sign(&vote.preimage());
                 vote
             })
             .collect::<Vec<_>>();
         let refs = votes.iter().collect::<Vec<_>>();
-        match form_qc(&*self.crypto, self.committee.n(), &refs) {
+        match form_qc(&*self.crypto, committee.n(), &refs) {
             Ok(qc) => qc,
             // Under- or oversized sets are refused by `form_qc`: aggregate by hand only
             // to supply a genuinely signed malformed certificate to negative tests.
             Err(_) => {
-                let mut signers_bitmap = iroha_sumeragi::types::Bitmap::new(self.committee.n());
+                let mut signers_bitmap = iroha_sumeragi::types::Bitmap::new(committee.n());
                 for vote in &votes {
                     signers_bitmap.set(vote.signer);
                 }

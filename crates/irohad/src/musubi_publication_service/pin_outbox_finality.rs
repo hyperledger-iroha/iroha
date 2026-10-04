@@ -142,14 +142,18 @@ impl MusubiPublicationPinOutboxHighWaterReaderV1 {
     /// This prepares an instruction; it does not sign, submit or open an outbox.
     ///
     /// # Errors
-    /// Rejects a different network, expired deadline or invalid independent binding.
+    /// Rejects a different network, expired deadline or invalid independent binding. Original
+    /// local State source or allocation refusals remain deferred without a completed verdict.
     pub fn begin_current_check(
         &self,
         expected: MusubiPinOutboxCheckExpectedV1,
         deadline: Instant,
-    ) -> Result<PreparedMusubiPinOutboxCheckV1, MusubiPinOutboxCheckErrorV1> {
+    ) -> Result<
+        PreparedMusubiPinOutboxCheckV1,
+        iroha_core::execution_attempt::ExecutionAttemptError<MusubiPinOutboxCheckErrorV1>,
+    > {
         if expected.network_id != self.network_id {
-            return Err(MusubiPinOutboxCheckErrorV1::Invalid);
+            return Err(MusubiPinOutboxCheckErrorV1::Invalid.into());
         }
         begin_musubi_pin_outbox_check_v1(Arc::clone(&self.state), expected, deadline)
     }

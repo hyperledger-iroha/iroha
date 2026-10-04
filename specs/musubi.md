@@ -1323,7 +1323,57 @@ when its bytes match. The opaque consumed result is read-only and grants no Queu
 signing or replacement-custody authority. Failed reads retain the unchanged paid
 Check, challenge and absolute deadline; retry discards an old verified cut and must
 verify fresh native history, without re-signing or resubmitting. These source
-boundaries still require current-candidate native test execution. Local custody computes
+boundaries still require current-candidate native test execution.
+
+After the observer returns its exact reply, the shared stream-token signer runtime
+retains completed evidence in its receiving continuation. One move-only phase keeps that reply, the
+original challenged expectation and native Pending with its absolute deadline, and
+borrows the original receipt, token, prepared operation and custody markers. Original
+canonical decoder, bounded-encoder and allocation refusals have typed local outcomes;
+malformed or invalid evidence retains its semantic rejection. The three evidence verifiers
+mutably borrow the caller-owned expectation and return only the original admission error.
+The private attempt is retired before verification begins; success, completed rejection and
+unwind leave it retired. Only an original retryable local admission result restores readiness
+for the same request and reply. Repeated use is rejected before decoding, without allocating
+or reconstructing the expectation. Bounded local backoff
+revalidates the same returned bytes and fresh handles/time without holding a State
+view or history lock. Separate authentication, native-verification and acceptance
+owners prevent token release before every phase succeeds. Daemon and broker service
+mappings distinguish operational unavailability from semantic rejection, but those
+fixed errors alone do not retain a continuation or authorize producer replay.
+
+The native completed-observation producer separately retains its actual verified
+Check and charged canonical frame through unsigned body construction, fallible
+signing-payload encoding, one observer signature, signed-frame encoding, and the
+late native floor/time check. It copies the absolute deadline only from the exact
+Prepared Check before consumption. Original evidence-admission or native execution
+refusals keep the same owner; bounded local backoff neither reobserves nor signs or
+submits another transaction. A successful signature is retained across later
+encoding/refusal, and cryptographic signing failures remain terminal because they
+carry no trusted allocation provenance. Once encoded, the exact reply buffer stays
+owned through the late check. This Check and Torii's separately prepared Check are
+distinct operations; neither is a substitute for the other.
+
+The broker observer client retains one fully received response frame with its
+original operation request, admission permit, locked connection and absolute
+15-second call deadline. Its receiving stage preserves successful frame, response,
+reply and observation decoding phases while retrying only original typed local
+codec or bounded-encoding refusals. It validates the same envelope and request
+binding, transfers the same reply leaves, and never performs another request,
+observe, sign, submit or socket read. Protocol ceilings, malformed results and
+immutable metadata changes remain terminal. Other broker capability routes keep
+their existing semantic validation and do not inherit this observer continuation.
+
+Combined `finalize_check` signing/submission, server post-observe/pre-write reply
+custody, and partial socket I/O still have transport-custody gaps. The server needs
+an absolute request bound established before provider dispatch; per-I/O timeouts
+cannot be reset into a completed-reply retry deadline. Nested receipt/custody codec provenance, late consumer
+native/current-State acceptance refusal ownership, and original-pool funding for
+existing buffers, serializer/decoder scratch and native proof graphs also remain
+open. These process-local continuations do not establish durable publication
+recovery. Stock publication remains closed.
+
+Local custody computes
 a domain-separated digest of the entire owner marker and sorted immutable signed-intent
 inventory; isolated rollback tests show an older, well-formed directory differs from a later
 high-water. The effectful stage → finalized advance → same-view inventory
@@ -1344,13 +1394,15 @@ precede stock publication activation.
 
 The remaining Queue handoff needs a separate durable control journal for exact signed
 Advance and Check transactions; control bytes cannot be included in the pin inventory
-whose digest they sign. The Unix filesystem substrate can now borrow the existing
+whose digest they sign. The native filesystem substrate can now borrow the existing
 private-directory authority and caller-owned basename for an opaque retained file,
 without cloning retained Rust lineage or names. It shares the owned file's strict
-custody checks, bounded I/O, consuming seal and one-use no-replace publication.
+custody checks, bounded I/O, consuming seal and one-use no-replace publication on
+Unix and Windows. Windows retains protected owner-only DACLs, reparse rejection,
+non-delete-sharing directory handles and publication through the original file handle.
 This does not fund the original directory, native ACL/directory scratch, inventory
-or recovery storage; equivalent Windows borrowing and the original caller's complete
-resource admission remain open. The control journal is still unlinked.
+or recovery storage; the original caller's complete resource admission and native
+Windows execution qualification remain open. The control journal is still unlinked.
 Restart must reconcile those originals and acquire a newly
 challenged native Check. The final handoff must consume live verified Check custody
 and retain the exact pin and pending Check on refusal. Its shared Queue owner must
@@ -1662,8 +1714,9 @@ header, and proves writer output can be bounded-decoded back to the same
 canonical value. Capacity pruning removes only the oldest delivered entries;
 active work and dead letters are retained. The raw transition engine and every
 API which accepts a caller-supplied UNIX timestamp are crate-private; the
-daemon-facing runtime owns one qualified sealed clock and exposes no timestamp
-parameter.
+daemon-facing runtime privately selects its qualified clock and exposes no timestamp
+parameter. Native software custody uses a crash-durable host-time floor; separately authenticated
+external clock semantics remain distinct. Neither host UTC nor local inventory proves finality.
 
 The nested
 `[sorafs.storage.provider_ingest_runtime.provider_attestation_journal]`
@@ -1672,29 +1725,27 @@ by default. `max_entries` is an independent count cap of 1--4,096 (default
 1,024), while `checkpoint_max_bytes` is an independent viable byte cap of
 4--128 MiB (default 64 MiB); the journal still rejects a write that exceeds
 either cap. Enabling requires three complete public qualification triplets:
-`clock_seal_{handle,revision,policy_digest_hex}`,
+`clock_{handle,revision,policy_digest_hex}`,
 `approval_signer_{handle,revision,policy_digest_hex}`, and
 `inventory_{handle,revision,policy_digest_hex}`. Handles must use the canonical
 non-test production grammar, revisions and digests must be non-zero, and the
 digests must be canonical lowercase hexadecimal. The triplets have no defaults
 and every binding field is forbidden while the table is disabled. Paths,
 deployment nonces, endpoints, credentials, tokens, and keys remain absent.
-The three bindings project to runtime-provider slots 57--59 in durability,
-signer, inventory order. Slot 57 is one combined durability provider with
-separate authenticated small-record namespaces for the monotonic UNIX-time
-floor and journal checkpoint head, plus immutable content-addressed checkpoint
-blob storage. Its single qualification covers all three surfaces; it does not
-make the time and checkpoint-head records one atomic object. Their catalog and
-resolved objects are all-or-none. Registry resolution compares each production
-handle and public qualification with the configured binding both before and
-after a second metadata snapshot. It does not invoke readiness or any storage,
-signing, or inventory effect. The stock broker has no implementation for these
-slots, so the standard stock launcher fails during pre-Tokio provider
-resolution when it encounters the unsupported roles. If an injected registry
-resolves and qualifies all three roles, the shared
-`Iroha::start_with_runtime_deps` activation gate still rejects the configured
-journal before supervisor startup. No capture child or durability, signing, or
-inventory mutation is created from this configuration today.
+Native completion-credential selection binds three fixed native effects. Explicit provisioning
+atomically publishes all initial files under `provider-attestation-native`; ordinary startup refuses
+missing or changed history. Native `iroha_fs` custody and one retained ownership lock fence journal,
+clock and immutable signed inventory. Bounded blocking jobs retain the same ownership and admission
+permit through actual completion even if the caller is canceled. The existing journal/capture loop
+reverifies the admitted bundle and current full completion authority before deterministic approval.
+The native daemon supervises that loop and lends the same inventory read side to the publication
+factory. Inventory is local retention only: the existing archive-manager publication journal owns
+Register signing and independent native inclusion. No single-provider result meets Musubi's
+three-distinct-provider publication floor.
+
+External selection still projects to runtime-provider slots 57--59 and retains independently
+qualified seal/signer/inventory semantics. It is not relabeled native software custody. Stock native
+startup rejects injected external substitutions, and non-native journal activation remains closed.
 
 `MusubiProviderAttestationJournalFileStoreV1` is the inert public local-store
 adapter for that CAS contract. On Linux and macOS it binds one root-fenced

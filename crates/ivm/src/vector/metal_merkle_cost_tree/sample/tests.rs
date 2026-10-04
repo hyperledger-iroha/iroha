@@ -110,3 +110,21 @@ fn tree_sample_admits_both_backings_before_work_and_retains_credit_until_drop() 
     );
     assert_eq!(owner.usage().host_bytes[0], 0);
 }
+
+#[cfg(feature = "metal-hardware-tests")]
+#[test]
+fn expired_calibration_reports_original_empty_arrays_without_starting_sample_work() {
+    let previous = crate::vector::set_thread_forced_simd(Some(crate::vector::SimdChoice::Scalar));
+    let context = Sha256Context::production();
+    let baseline = Sha256Baseline::capture(context).unwrap();
+    crate::vector::set_thread_forced_simd(previous);
+    let geometry = Geometry::new(8_192 * 32, 32).unwrap();
+    let expired = Instant::now().checked_sub(MAX_CALIBRATION).unwrap();
+    let (result, timings) = crate::vector::metal_receipts::timing::observe(|| {
+        calibrate(geometry, baseline, context, expired)
+    });
+    assert!(matches!(result, Err(Failure::Deadline)));
+    let timings = timings.expect("refused calibration still publishes original arrays");
+    assert_eq!(timings.cpu_ns, [[0; TRIALS]; 2]);
+    assert_eq!(timings.metal_ns, [[0; TRIALS]; 2]);
+}

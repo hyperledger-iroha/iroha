@@ -995,7 +995,7 @@ only private helpers and `#[test]` functions needs no runtime artifact; its
 tests, coverage, and profile data run from the test projection. This runner-only
 derivation is not available to ordinary production builds. The two projections
 retain separate immutable prepared artifacts, compiler reports, and code hashes.
-The test projection is a generic IVM 1.0 harness without deployable `CNTR` or
+The test projection is a generic IVM 1.1 harness without deployable `CNTR` or
 `DBG1` sections. Its compiler-owned interface is carried beside the immutable
 image, checked against the current ABI hash, and structurally validates the
 terminal `HALT` through the reserved `__koto_test_return` descriptor. Production

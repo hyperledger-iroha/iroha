@@ -18,6 +18,7 @@ categories.workspace = true
 workspace = true
 
 [features]
+test-fixtures = ["dep:iroha_model_base"]
 default = ["tls-rustls-native-roots"]
 tls-native = ["iroha/tls-native", "reqwest/native-tls"]
 tls-native-vendored = ["iroha/tls-native-vendored", "reqwest/native-tls-vendored"]
@@ -33,20 +34,23 @@ tls-rustls-webpki-roots = [
 [dependencies]
 base64 = { workspace = true }
 blake3 = { workspace = true }
+hex = { workspace = true }
 iroha = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
 iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }
-iroha_primitives = { workspace = true }
+iroha_fs = { workspace = true }
+iroha_model_base = { workspace = true, optional = true }
 iroha_telemetry = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 reqwest = { workspace = true, features = ["blocking"] }
-rustix = { version = "1.1.4", features = ["fs"] }
 sorafs_car = { workspace = true, features = ["manifest"] }
-tempfile = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+tempfile = { workspace = true }
 iroha_model_base = { workspace = true }
-hex = { workspace = true }
 iroha_service_model = { workspace = true }
 sorafs_manifest = { workspace = true }
+
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { version = "1.1.4", features = ["fs"] }

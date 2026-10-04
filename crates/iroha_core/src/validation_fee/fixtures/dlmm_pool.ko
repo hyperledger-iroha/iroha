@@ -684,10 +684,21 @@ seiyaku DlmmPool {
 
     // The two private directions share traversal/custody logic while keeping
     // their inverse price operations and exact floor/ceil policies explicit.
-    fn swap_output_from_gross(quantity gross, int fee_pips, decimal price, int output_scale, int base_input) -> quantity {
+    fn swap_output_from_gross(
+        quantity gross,
+        int fee_pips,
+        decimal price,
+        int output_scale,
+        int base_input,
+    ) -> quantity {
         let net = fee_adjusted_amount(amount_in: gross, fee_pips: fee_pips);
         if base_input == 1 {
-            return net.mul_div_round(multiplier: price, divisor: 1.0, scale: output_scale, mode: Rounding::floor);
+            return net.mul_div_round(
+                multiplier: price,
+                divisor: 1.0,
+                scale: output_scale,
+                mode: Rounding::floor,
+            );
         }
         return net.div_round(divisor: price, scale: output_scale, mode: Rounding::floor);
     }
@@ -696,7 +707,12 @@ seiyaku DlmmPool {
         if base_input == 1 {
             return available.div_round(divisor: price, scale: 28, mode: Rounding::ceil);
         }
-        return available.mul_div_round(multiplier: price, divisor: 1.0, scale: 28, mode: Rounding::ceil);
+        return available.mul_div_round(
+            multiplier: price,
+            divisor: 1.0,
+            scale: 28,
+            mode: Rounding::ceil,
+        );
     }
 
     fn swap_direction(
@@ -711,9 +727,13 @@ seiyaku DlmmPool {
         let input_scale = asset_scale(input_asset);
         let output_asset = base_input == 1 ? QuoteAsset : BaseAsset;
         let output_scale = asset_scale(output_asset);
-        require(floor_asset_amount(amount: amount_in, scale: input_scale) == amount_in, DlmmPoolError::InvalidAmount);
+        require(
+            floor_asset_amount(amount: amount_in, scale: input_scale) == amount_in,
+            DlmmPoolError::InvalidAmount,
+        );
         let fee_pips = FeePips;
-        let start_bin = base_input == 1 ? find_quote_liquidity_from_active() : find_base_liquidity_from_active();
+        let start_bin = base_input == 1 ? find_quote_liquidity_from_active() : find_base_liquidity_from_active(
+        );
         let start_price = bin_price(bin_id: start_bin, bin_step: BinStep);
         var current_bin = start_bin;
         var amount_remaining = amount_in;
@@ -740,32 +760,66 @@ seiyaku DlmmPool {
                 if reserve_in >= BinLiquidityCap {
                     gross_limit = zero_quantity();
                 } else {
-                    gross_limit = min_quantity(left: gross_limit, right: BinLiquidityCap - reserve_in);
+                    gross_limit = min_quantity(
+                        left: gross_limit,
+                        right: BinLiquidityCap - reserve_in,
+                    );
                 }
             }
             gross_limit = floor_asset_amount(amount: gross_limit, scale: input_scale);
             var gross_used = gross_limit;
-            var output = swap_output_from_gross(gross: gross_limit, fee_pips: fee_pips, price: price, output_scale: output_scale, base_input: base_input);
+            var output = swap_output_from_gross(
+                gross: gross_limit,
+                fee_pips: fee_pips,
+                price: price,
+                output_scale: output_scale,
+                base_input: base_input,
+            );
             if output > available && available > zero_quantity() {
-                let net_needed = swap_net_for_available(available: available, price: price, base_input: base_input);
-                gross_used = min_quantity(left: gross_limit, right: ceil_asset_amount(amount: gross_from_net(net_amount: net_needed, fee_pips: fee_pips), scale: input_scale));
-                output = swap_output_from_gross(gross: gross_used, fee_pips: fee_pips, price: price, output_scale: output_scale, base_input: base_input);
+                let net_needed = swap_net_for_available(
+                    available: available,
+                    price: price,
+                    base_input: base_input,
+                );
+                gross_used = min_quantity(
+                    left: gross_limit,
+                    right: ceil_asset_amount(
+                        amount: gross_from_net(net_amount: net_needed, fee_pips: fee_pips),
+                        scale: input_scale,
+                    ),
+                );
+                output = swap_output_from_gross(
+                    gross: gross_used,
+                    fee_pips: fee_pips,
+                    price: price,
+                    output_scale: output_scale,
+                    base_input: base_input,
+                );
                 if output > available {
                     output = available;
                 }
             }
             // Reserve deltas exactly equal ledger-payable quantities. Fractional
             // execution dust stays with liquidity and is never transferred or credited.
-            output = floor_asset_amount(amount: min_quantity(left: output, right: available), scale: output_scale);
+            output = floor_asset_amount(
+                amount: min_quantity(left: output, right: available),
+                scale: output_scale,
+            );
             if gross_used > zero_quantity() && output > zero_quantity() {
                 if base_input == 1 {
                     BinReserveBase[current_bin] = reserve_base + gross_used;
                     BinReserveQuote[current_bin] = reserve_quote - output;
-                    credit_bin_fee_growth_base(bin_id: current_bin, fee_paid: fee_paid_amount(amount_in: gross_used, fee_pips: fee_pips));
+                    credit_bin_fee_growth_base(
+                        bin_id: current_bin,
+                        fee_paid: fee_paid_amount(amount_in: gross_used, fee_pips: fee_pips),
+                    );
                 } else {
                     BinReserveQuote[current_bin] = reserve_quote + gross_used;
                     BinReserveBase[current_bin] = reserve_base - output;
-                    credit_bin_fee_growth_quote(bin_id: current_bin, fee_paid: fee_paid_amount(amount_in: gross_used, fee_pips: fee_pips));
+                    credit_bin_fee_growth_quote(
+                        bin_id: current_bin,
+                        fee_paid: fee_paid_amount(amount_in: gross_used, fee_pips: fee_pips),
+                    );
                 }
                 amount_remaining = amount_remaining - gross_used;
                 amount_used = amount_used + gross_used;
@@ -801,17 +855,53 @@ seiyaku DlmmPool {
             require(amount_used == amount_in, DlmmPoolError::PartialFill);
         }
         require(amount_out >= min_out, DlmmPoolError::Slippage);
-        move_asset_if_needed(source: trader, destination: VaultAccount, asset: input_asset, amount: amount_used);
-        move_asset_if_needed(source: VaultAccount, destination: recipient, asset: output_asset, amount: amount_out);
+        move_asset_if_needed(
+            source: trader,
+            destination: VaultAccount,
+            asset: input_asset,
+            amount: amount_used,
+        );
+        move_asset_if_needed(
+            source: VaultAccount,
+            destination: recipient,
+            asset: output_asset,
+            amount: amount_out,
+        );
         return amount_out;
     }
 
-    fn swap_base_for_quote(AccountId trader, AccountId recipient, quantity amount_in, quantity min_out, int require_full_fill) -> quantity {
-        return swap_direction(trader: trader, recipient: recipient, amount_in: amount_in, min_out: min_out, require_full_fill: require_full_fill, base_input: 1);
+    fn swap_base_for_quote(
+        AccountId trader,
+        AccountId recipient,
+        quantity amount_in,
+        quantity min_out,
+        int require_full_fill,
+    ) -> quantity {
+        return swap_direction(
+            trader: trader,
+            recipient: recipient,
+            amount_in: amount_in,
+            min_out: min_out,
+            require_full_fill: require_full_fill,
+            base_input: 1,
+        );
     }
 
-    fn swap_quote_for_base(AccountId trader, AccountId recipient, quantity amount_in, quantity min_out, int require_full_fill) -> quantity {
-        return swap_direction(trader: trader, recipient: recipient, amount_in: amount_in, min_out: min_out, require_full_fill: require_full_fill, base_input: 0);
+    fn swap_quote_for_base(
+        AccountId trader,
+        AccountId recipient,
+        quantity amount_in,
+        quantity min_out,
+        int require_full_fill,
+    ) -> quantity {
+        return swap_direction(
+            trader: trader,
+            recipient: recipient,
+            amount_in: amount_in,
+            min_out: min_out,
+            require_full_fill: require_full_fill,
+            base_input: 0,
+        );
     }
 
     fn swap_exact_in_impl(

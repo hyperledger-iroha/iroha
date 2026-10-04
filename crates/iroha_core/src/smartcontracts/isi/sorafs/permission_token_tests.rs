@@ -2,8 +2,8 @@
 #[test]
 fn sorafs_permission_tokens_reject_same_name_with_substituted_payload() {
     use iroha_executor_data_model::permission::sorafs::{
-        CanBindSorafsAlias, CanCompleteSorafsReplicationOrder, CanFileSorafsCapacityDispute,
-        CanIssueSorafsReplicationOrder, CanSetSorafsPricing, CanUpsertSorafsProviderCredit,
+        CanBindSorafsAlias, CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
+        CanSetSorafsPricing, CanUpsertSorafsProviderCredit,
     };
 
     let state = make_state();
@@ -11,7 +11,6 @@ fn sorafs_permission_tokens_reject_same_name_with_substituted_payload() {
     let mut transaction = block.transaction();
     for required in [
         Permission::from(CanBindSorafsAlias),
-        Permission::from(CanCompleteSorafsReplicationOrder),
         Permission::from(CanFileSorafsCapacityDispute),
         Permission::from(CanIssueSorafsReplicationOrder),
         Permission::from(CanSetSorafsPricing),

@@ -2,7 +2,7 @@ use super::{
     Error, PipelineStatusCache, ShutdownOnDrop, SocketAdmission, ToriiCriticalWorker,
     ToriiCriticalWorkerExit, ToriiCriticalWorkerFailure, ValidatedToriiHttpTransport,
     WriteTimeoutIo, bind_torii_tcp_listener, observe_torii_connection_completion,
-    rollback_torii_startup_workers, serve_torii_http, start_pipeline_status_projection_worker,
+    rollback_torii_startup_workers, serve_torii_public, start_pipeline_status_projection_worker,
     supervise_torii_critical_workers,
 };
 use axum::{Router, body::Body, routing::get};
@@ -55,7 +55,7 @@ async fn panicked_http_connection_is_contained_to_its_socket() {
         #[allow(unreachable_code)]
         (
             StdSocketAddr::from((Ipv4Addr::LOCALHOST, 41_337)),
-            Ok::<(), hyper::Error>(()),
+            Ok::<(), std::io::Error>(()),
         )
     }));
 
@@ -315,8 +315,9 @@ async fn partial_http_head_is_closed_at_listener_deadline() {
     let shutdown = ShutdownSignal::new();
     let server_shutdown = shutdown.clone();
     let server = tokio::spawn(async move {
-        serve_torii_http(
+        serve_torii_public(
             listener,
+            None,
             Router::new().route("/", get(|| async { "ok" })),
             ValidatedToriiHttpTransport::new(config).expect("valid test HTTP transport"),
             server_shutdown,
@@ -383,8 +384,9 @@ async fn shutdown_aborts_a_response_that_never_finishes() {
     let shutdown = ShutdownSignal::new();
     let server_shutdown = shutdown.clone();
     let server = tokio::spawn(async move {
-        serve_torii_http(
+        serve_torii_public(
             listener,
+            None,
             router,
             ValidatedToriiHttpTransport::new(config).expect("valid test HTTP transport"),
             server_shutdown,

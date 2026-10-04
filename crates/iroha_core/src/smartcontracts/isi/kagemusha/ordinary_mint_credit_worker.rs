@@ -341,7 +341,7 @@ mod tests {
     fn ordinary_producer_bounded_scan_preserves_exact_position_without_skipping_originals() {
         let fixture =
             iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture::new();
-        let block = iroha_data_model::block::decode_versioned_signed_block(
+        let block = iroha_data_model::block::decode_framed_signed_block(
             &fixture.genesis_proof().block_wire,
         )
         .unwrap();

@@ -1852,6 +1852,7 @@ mod tests {
                 completion_epoch: 6,
                 assignment_revision: 1,
                 completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                    (completed_by).clone(),
                     completed_by,
                     ProviderIngestCompletionSignerPolicyV1 {
                         policy_id: [0xA1; 32],

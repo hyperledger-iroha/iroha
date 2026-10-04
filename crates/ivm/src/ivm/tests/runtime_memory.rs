@@ -2,9 +2,8 @@
 
 use super::*;
 use crate::{
-    ivm::snapshot::{
-        checked_allocation_bytes, contract_debug_allocation_bytes, diagnostic_allocation_bytes,
-    },
+    error::VmBudgetSnapshot,
+    ivm::snapshot::{checked_allocation_bytes, contract_debug_allocation_bytes},
     metadata::{EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation, EmbeddedSourceMapEntryV1},
 };
 
@@ -681,43 +680,45 @@ fn fallible_worker_trace_copy_preserves_proof_logs_and_independent_buffers() {
     let mut gpr = [0; 256];
     gpr[7] = 91;
     vm.constraints.record(Constraint::Zero { reg: 8, cycle: 1 });
-    vm.trace_log.record(4, gpr, [false; 256]);
-    vm.delta_trace.record(4, gpr, [false; 256]);
+    vm.trace_log.prepare_batch(1, 256, 0, None).unwrap();
+    vm.trace_log.record_reserved(4, gpr, [false; 256]);
+    vm.delta_trace.prepare_batch(1, 256, 0, None).unwrap();
+    vm.delta_trace.record_reserved(4, gpr, [false; 256]);
     let reg_root = vm.registers.merkle_root();
     let mem_root = vm.memory.root();
     vm.step_log.prepare_cycles(1).expect("prepaid cycle row");
     vm.step_log.record_reserved(4, reg_root, mem_root);
-    vm.pc_trace.push(4);
+    vm.pc_trace.prepare(1, None).unwrap();
+    vm.pc_trace.record_reserved(4);
     vm.contract_return_stack.try_push(8).unwrap();
 
     let copied = vm
         .try_clone_snapshot()
         .expect("bounded diagnostic and proof logs");
     assert_eq!(copied.constraints.list, vm.constraints.list);
-    assert_eq!(copied.trace_log.entries, vm.trace_log.entries);
-    assert_eq!(copied.delta_trace.entries, vm.delta_trace.entries);
+    assert!(copied.trace_log.entries().eq(vm.trace_log.entries()));
+    assert!(copied.delta_trace.entries().eq(vm.delta_trace.entries()));
     assert_eq!(copied.step_log.as_slice(), vm.step_log.as_slice());
-    assert_eq!(copied.pc_trace, vm.pc_trace);
+    assert_eq!(copied.pc_trace.as_slice(), vm.pc_trace.as_slice());
     assert_eq!(
         &copied.contract_return_stack[..],
         &vm.contract_return_stack[..]
     );
-    vm.pc_trace[0] = 12;
-    vm.trace_log.entries[0].changes[7].1 = 0;
-    assert_ne!(copied.pc_trace, vm.pc_trace);
-    assert_ne!(copied.trace_log.entries, vm.trace_log.entries);
+    vm.pc_trace.clear();
+    vm.pc_trace.prepare(1, None).unwrap();
+    vm.pc_trace.record_reserved(12);
+    vm.trace_log.scrub();
+    vm.trace_log.prepare_batch(1, 256, 0, None).unwrap();
+    gpr[7] = 0;
+    vm.trace_log.record_reserved(4, gpr, [false; 256]);
+    assert_ne!(copied.pc_trace.as_slice(), vm.pc_trace.as_slice());
+    assert!(!copied.trace_log.entries().eq(vm.trace_log.entries()));
 }
-fn sample_worker_diagnostic() -> VmExecutionDiagnostic {
-    VmExecutionDiagnostic {
+fn sample_worker_diagnostic() -> super::super::diagnostic::TrapSnapshot {
+    super::super::diagnostic::TrapSnapshot {
         trap_kind: VmTrapKind::MemoryFault,
-        message: "out of bounds at nested call".to_owned(),
         pc: 32,
-        source: Some(VmSourceLocation {
-            function: Some("transfer".to_owned()),
-            path: Some("contracts/wallet.ko".to_owned()),
-            line: Some(12),
-            column: Some(4),
-        }),
+        source_index: Some(0),
         budget: VmBudgetSnapshot {
             gas_limit: 100,
             gas_remaining: 40,
@@ -727,14 +728,11 @@ fn sample_worker_diagnostic() -> VmExecutionDiagnostic {
             stack_limit_bytes: 4096,
             stack_bytes_used: 64,
         },
-        context: VmExecutionContext {
-            entrypoint_pc: Some(8),
-            current_function: Some("transfer".to_owned()),
-            opcode: Some(7),
-            syscall: None,
-            predecoded_loaded: true,
-            predecoded_hit: Some(true),
-        },
+        entrypoint_pc: Some(8),
+        opcode: Some(7),
+        syscall: None,
+        predecoded_loaded: true,
+        predecoded_hit: Some(true),
     }
 }
 #[test]
@@ -774,13 +772,18 @@ fn fallible_worker_metadata_copy_preserves_nested_fields_and_ownership() {
     assert_eq!(copied.contract_debug, vm.contract_debug);
     assert_eq!(copied.last_diagnostic, vm.last_diagnostic);
     assert!(contract_debug_allocation_bytes(vm.contract_debug.as_ref().unwrap()).unwrap() > 0);
-    assert!(diagnostic_allocation_bytes(vm.last_diagnostic.as_ref().unwrap()).unwrap() > 0);
+    assert_eq!(copied.last_diagnostic(), vm.last_diagnostic());
     vm.contract_debug.as_mut().unwrap().source_map[0]
         .function_name
         .push('X');
-    vm.last_diagnostic.as_mut().unwrap().message.push('X');
     assert_ne!(copied.contract_debug, vm.contract_debug);
-    assert_ne!(copied.last_diagnostic, vm.last_diagnostic);
+    assert_eq!(copied.last_diagnostic, vm.last_diagnostic);
+    assert_ne!(copied.last_diagnostic(), vm.last_diagnostic());
+    drop(vm);
+    assert_eq!(
+        copied.last_diagnostic().unwrap().context.current_function,
+        Some("transfer")
+    );
     let mut bytes = isize::MAX as usize;
     assert!(checked_allocation_bytes(&mut bytes, 1).is_err());
 }
@@ -829,10 +832,11 @@ fn worker_private_range_copy_refusal_leaves_source_intact() {
 fn idle_retention_rejects_live_trace_allocations_without_discarding_them() {
     let mut vm = quiet_vm(1_000_000);
     vm.constraints.record(Constraint::Zero { reg: 7, cycle: 1 });
-    vm.trace_log.record(4, [0; 256], [false; 256]);
-    let retained_trace = vm.trace_log.entries.clone();
+    vm.trace_log.prepare_batch(1, 256, 0, None).unwrap();
+    vm.trace_log.record_reserved(4, [0; 256], [false; 256]);
+    let retained_trace = vm.trace_log.try_clone_allocation(None).unwrap();
     assert!(!vm.try_retain_cache_allocations());
-    assert_eq!(vm.trace_log.entries, retained_trace);
+    assert!(vm.trace_log.entries().eq(retained_trace.entries()));
     assert_eq!(vm.constraints.list.len(), 1);
 }
 #[test]
@@ -964,7 +968,8 @@ fn diagnostic_snapshot_refusal_preserves_original_diagnostic() {
 #[test]
 fn trace_snapshot_refusal_preserves_original_trace() {
     let mut vm = quiet_vm(1_000_000);
-    vm.pc_trace.push(4);
+    vm.pc_trace.prepare(1, None).unwrap();
+    vm.pc_trace.record_reserved(4);
     let before_gas = vm.remaining_gas();
     REFUSE_TRACE_SNAPSHOT_FOR_TEST.with(|refuse| refuse.set(true));
     let refused = vm.try_clone_snapshot();
@@ -976,7 +981,7 @@ fn trace_snapshot_refusal_preserves_original_trace() {
         ))
     ));
     assert_eq!(vm.remaining_gas(), before_gas);
-    assert_eq!(vm.pc_trace, vec![4]);
+    assert_eq!(vm.pc_trace.as_slice(), &[4]);
     vm.try_clone_snapshot().expect("snapshot fits retry");
 }
 

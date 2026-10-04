@@ -86,7 +86,7 @@ fn report(
 ) -> Result<Report> {
     let (state, reason, attestation_norito_base64, genesis_execution_hash) = match outcome {
         GenesisFinalityReadiness::Ready(attestation) => {
-            let block = iroha::data_model::block::decode_versioned_signed_block(
+            let block = iroha::data_model::block::decode_framed_signed_block(
                 &attestation.body.finality_proof.block_wire,
             )?;
             let certificate = block

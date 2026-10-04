@@ -5,8 +5,10 @@
 use iroha_config::parameters::actual::{
     SorafsGatewayComplianceFeed, SorafsGatewayRuntimeProviderBinding,
 };
-use iroha_torii::sorafs::gateway::{
+use iroha_config::parameters::defaults::sorafs::gateway::compliance::{
     GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1, GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
+};
+use iroha_torii::sorafs::gateway::{
     GatewayComplianceFeedTransport, ProductionGatewayComplianceFeedTransport,
 };
 use std::{
@@ -68,7 +70,7 @@ pub(crate) fn resolve(
 mod tests {
     use super::*;
     use iroha_config::parameters::actual::SorafsGatewayComplianceFeedHost;
-    use iroha_torii::sorafs::gateway::gateway_compliance_feed_transport_policy_digest;
+    use sorafs_manifest::gateway_compliance::gateway_compliance_feed_transport_policy_digest;
     fn fixture() -> (
         SorafsGatewayRuntimeProviderBinding,
         Vec<SorafsGatewayComplianceFeed>,
@@ -112,8 +114,9 @@ mod tests {
         assert!(resolve(&binding, &feeds, None).is_err());
     }
     #[test]
-    fn native_selection_preserves_nonempty_public_dns_and_exact_pin_policy() {
+    fn native_selection_preserves_public_dns_and_exact_pin_policy() {
         let (binding, mut feeds) = fixture();
+        // The original nonempty binding must not silently become an empty inventory.
         assert!(resolve(&binding, &[], None).is_err());
         feeds[0].hosts[0].hostname = "127.0.0.1".into();
         assert!(resolve(&binding, &feeds, None).is_err());
@@ -137,5 +140,24 @@ mod tests {
         assert!(Arc::ptr_eq(&resolved, &injected));
         // The unchanged controller independently rejects a provider whose actual identity does
         // not match this external binding. Assembly does not relabel an injected provider.
+    }
+    #[test]
+    fn explicit_empty_native_inventory_qualifies_and_denies_every_external_host() {
+        let pins = BTreeMap::new();
+        let binding = SorafsGatewayRuntimeProviderBinding {
+            provider_handle: GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1.into(),
+            revision: GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
+            policy_digest: gateway_compliance_feed_transport_policy_digest(&pins).unwrap(),
+        };
+        let transport = resolve(&binding, &[], None).unwrap();
+        let identity = transport.qualification().unwrap();
+        assert!(!identity.test_marked);
+        assert_eq!(identity.policy_digest, binding.policy_digest);
+        assert!(matches!(
+            transport.resolve("not-configured.example", std::time::Duration::from_secs(1)),
+            Err(iroha_torii::sorafs::gateway::GatewayComplianceError::TrustPinMismatch)
+        ));
+        let (_, feeds) = fixture();
+        assert!(resolve(&binding, &feeds, None).is_err());
     }
 }

@@ -1,6 +1,5 @@
 //! Flat public-span register deltas, retaining their original physical owners.
 //!
-//! TODO: Link only with the coordinated runtime preflight and consumer migration.
 //! Logical changes retain the existing ascending-index trace order. Every row
 //! advances its physical change span by a public bound, including unchanged
 //! values, so private contents never choose an allocation size or growth point.
@@ -25,10 +24,10 @@ pub struct DeltaEntry<'a> {
     pub changes: &'a [(usize, u64, bool)],
 }
 #[derive(Clone)]
-struct Row {
-    pc: u64,
-    start: usize,
-    count: usize,
+pub(super) struct Row {
+    pub(super) pc: u64,
+    pub(super) start: usize,
+    pub(super) count: usize,
 }
 impl TraceCell for Row {
     fn scrub(&mut self) {
@@ -70,6 +69,13 @@ impl DeltaTraceLog {
             original: original.cloned(),
         }
     }
+    /// Validate original refund custody before a compound trace operation.
+    pub(crate) fn validate_scope(
+        &self,
+        scope: Option<&AllocationScope<'_>>,
+    ) -> Result<(), VMError> {
+        check_scope(self.original.as_ref(), scope)
+    }
     /// Reserve an entire public observation batch before its semantic effects.
     ///
     /// The first observation always needs all 256 registers. Subsequent bounds
@@ -83,9 +89,11 @@ impl DeltaTraceLog {
         repeated_changes: usize,
         scope: Option<&AllocationScope<'_>>,
     ) -> Result<(), VMError> {
-        check_scope(self.original.as_ref(), scope)?;
+        self.validate_scope(scope)?;
         if self.pending.is_some() || rows == 0 || first_changes > 256 || repeated_changes > 256 {
-            return Err(VMError::HostUnavailable);
+            return Err(VMError::ExecutionDeferred(
+                crate::error::ExecutionDeferral::TraceOwnerUnavailable,
+            ));
         }
         let first = if self.last.is_none() {
             256
@@ -198,6 +206,16 @@ impl DeltaTraceLog {
             repeated: pending.repeated,
         });
     }
+    /// Internal immutable capture inputs, including the full public capacities.
+    pub(super) fn capture_storage(
+        &self,
+    ) -> (
+        &TraceRows<Row>,
+        &TraceRows<(usize, u64, bool)>,
+        Option<&AllocationBudget>,
+    ) {
+        (&self.rows, &self.changes, self.original.as_ref())
+    }
     /// Number of initialized logical observations.
     pub fn len(&self) -> usize {
         self.rows.as_slice().len()
@@ -239,6 +257,15 @@ impl DeltaTraceLog {
         }
         self.last = None;
     }
+    /// Finish a refused or terminal batch without erasing prior observations.
+    ///
+    /// Only its enclosing instruction/invocation owner may discard this credit;
+    /// nested callbacks must leave the parent's pending observation intact.
+    /// Unobserved spans have no initialized contents, and their backing remains
+    /// charged to the original owner for a subsequent before-effects admission.
+    pub(crate) fn discard_unobserved(&mut self) {
+        self.pending = None;
+    }
     /// Scrub private contents, retaining original backing for subsequent batches.
     pub(crate) fn scrub(&mut self) {
         self.rows.clear();
@@ -248,7 +275,7 @@ impl DeltaTraceLog {
     }
     /// Retire storage while preserving the original pool identity.
     pub(crate) fn reset(&mut self, scope: Option<&AllocationScope<'_>>) -> Result<(), VMError> {
-        check_scope(self.original.as_ref(), scope)?;
+        self.validate_scope(scope)?;
         self.scrub();
         let rows = std::mem::replace(&mut self.rows, TraceRows::empty(self.original.is_some()));
         let changes =
@@ -262,7 +289,7 @@ impl DeltaTraceLog {
         &self,
         scope: Option<&AllocationScope<'_>>,
     ) -> Result<Self, VMError> {
-        check_scope(self.original.as_ref(), scope)?;
+        self.validate_scope(scope)?;
         let mut copy = Self::new(self.original.as_ref());
         // Preserve the full public capacity so copying never shrinks according
         // to private logical counts or loses already admitted future rows.

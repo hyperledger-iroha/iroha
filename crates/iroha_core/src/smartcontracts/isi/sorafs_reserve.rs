@@ -41,8 +41,9 @@ use iroha_data_model::{
             ReserveMovementStatusV1, ReserveProviderAccountPageV1, ReserveProviderAccountV1,
             ReserveTier,
             history::{
+                RESERVE_PROVIDER_STATE_KEY_PREFIX_V1, RESERVE_STATE_KEY_PREFIX_V1,
                 ReserveEventJournalHeadV1, ReserveStateV1, STATE_LIMITS, STATE_MAX_BYTES,
-                reserve_state_key,
+                is_reserve_state_key, reserve_provider_key, reserve_state_key,
             },
         },
     },
@@ -53,7 +54,6 @@ use mv::storage::StorageReadOnly;
 use norito::decode_canonical_with_limits;
 use sorafs_manifest::deal::XorQuantity;
 use std::str::FromStr;
-const PROVIDER_STATE_KEY_PREFIX: &str = "sorafs_reserve_provider_v1_";
 const MOVEMENT_STATE_KEY_PREFIX: &str = "sorafs_reserve_movement_v1_";
 const APPEAL_STATE_KEY_PREFIX: &str = "sorafs_reserve_appeal_v1_";
 const EVENT_STATE_KEY_PREFIX: &str = "sorafs_reserve_event_v1_";
@@ -226,9 +226,6 @@ fn require_governance(
 fn digest_key(prefix: &str, digest: [u8; 32]) -> StatePath {
     StatePath::from_str(&format!("{prefix}{}", hex::encode(digest)))
         .expect("static prefix plus lowercase hex is a valid state key")
-}
-fn provider_key(provider_id: ProviderId) -> StatePath {
-    digest_key(PROVIDER_STATE_KEY_PREFIX, *provider_id.as_bytes())
 }
 fn movement_key(movement_id: [u8; 32]) -> StatePath {
     digest_key(MOVEMENT_STATE_KEY_PREFIX, movement_id)
@@ -482,12 +479,13 @@ fn validate_event_journal_head(
 fn ensure_reserve_namespace_empty(
     world: &impl WorldReadOnly,
 ) -> Result<(), InstructionExecutionError> {
-    let prefix = StatePath::from_str("sorafs_reserve_").expect("static reserve prefix is valid");
+    let prefix =
+        StatePath::from_str(RESERVE_STATE_KEY_PREFIX_V1).expect("static reserve prefix is valid");
     if world
         .smart_contract_state()
         .range(prefix..)
         .next()
-        .is_some_and(|(key, _)| key.as_ref().starts_with("sorafs_reserve_"))
+        .is_some_and(|(key, _)| is_reserve_state_key(key.as_ref()))
     {
         return Err(corrupt_state(
             "initial reserve activation requires an empty reserve state namespace",
@@ -865,7 +863,10 @@ pub(super) fn read_provider(
     world: &impl WorldReadOnly,
     provider_id: ProviderId,
 ) -> Result<Option<ReserveProviderAccountV1>, InstructionExecutionError> {
-    let Some(bytes) = world.smart_contract_state().get(&provider_key(provider_id)) else {
+    let Some(bytes) = world
+        .smart_contract_state()
+        .get(&reserve_provider_key(provider_id))
+    else {
         return Ok(None);
     };
     decode_provider_record(bytes, provider_id).map(Some)
@@ -873,17 +874,20 @@ pub(super) fn read_provider(
 fn total_reserved_custody(
     world: &impl WorldReadOnly,
 ) -> Result<XorQuantity, InstructionExecutionError> {
-    let start =
-        StatePath::from_str(PROVIDER_STATE_KEY_PREFIX).expect("static provider prefix is valid");
+    let start = StatePath::from_str(RESERVE_PROVIDER_STATE_KEY_PREFIX_V1)
+        .expect("static provider prefix is valid");
     let mut total = XorQuantity::zero();
     for (key, payload) in world.smart_contract_state().range(start..) {
-        if !key.to_string().starts_with(PROVIDER_STATE_KEY_PREFIX) {
+        if !key
+            .to_string()
+            .starts_with(RESERVE_PROVIDER_STATE_KEY_PREFIX_V1)
+        {
             break;
         }
         let candidate: ReserveProviderAccountV1 =
             decode_state(payload, "reserve provider account")?;
         let provider_id = candidate.terms.provider_id;
-        if provider_key(provider_id) != *key {
+        if reserve_provider_key(provider_id) != *key {
             return Err(corrupt_state(
                 "authoritative reserve provider key does not match its account",
             ));
@@ -1104,7 +1108,7 @@ pub(super) fn seed_verified_provider_bond_for_test(
         updated_at_unix: 1,
     };
     state_transaction.world.smart_contract_state.insert(
-        provider_key(provider_id),
+        reserve_provider_key(provider_id),
         encode_state(&account, "test reserve provider account")?,
     );
     let custody_asset_id = AssetId::of(
@@ -1136,25 +1140,13 @@ fn validate_provider_record(
     account: ReserveProviderAccountV1,
     provider_id: ProviderId,
 ) -> Result<ReserveProviderAccountV1, InstructionExecutionError> {
-    if account.terms.provider_id != provider_id
-        || account.terms.capacity_gib == 0
-        || account.policy_digest == [0; 32]
-        || account.revision == 0
-        || account.debt_principal > account.credit_cap
-        || account.pending_movements > 256
-        || account.open_appeals > 16
-        || account.rent_charged_through_unix == 0
-        || account.interest_accrued_at_unix == 0
-        || account.updated_at_unix == 0
-        || account.rent_charged_through_unix > account.updated_at_unix
-        || account.interest_accrued_at_unix > account.updated_at_unix
-    {
-        return Err(corrupt_state(
-            "stored reserve provider account is inconsistent",
-        ));
-    }
+    // Preserve this layer's error type and charged decode owner. The model owns only
+    // the exact existing structural predicate; no additional decoding occurs here.
+    iroha_data_model::sorafs::reserve::history::validate_provider_record(&account, provider_id)
+        .map_err(|_| corrupt_state("stored reserve provider account is inconsistent"))?;
     Ok(account)
 }
+
 fn ensure_apr_rotation_has_no_debt(
     world: &impl WorldReadOnly,
     current: &ReserveAuthorityPolicyV1,
@@ -1178,15 +1170,18 @@ fn ensure_apr_rotation_has_no_debt(
     if !apr_changed {
         return Ok(());
     }
-    let start =
-        StatePath::from_str(PROVIDER_STATE_KEY_PREFIX).expect("static provider prefix is valid");
+    let start = StatePath::from_str(RESERVE_PROVIDER_STATE_KEY_PREFIX_V1)
+        .expect("static provider prefix is valid");
     for (key, payload) in world.smart_contract_state().range(start..) {
-        if !key.to_string().starts_with(PROVIDER_STATE_KEY_PREFIX) {
+        if !key
+            .to_string()
+            .starts_with(RESERVE_PROVIDER_STATE_KEY_PREFIX_V1)
+        {
             break;
         }
         let candidate: ReserveProviderAccountV1 =
             decode_state(payload, "reserve provider account")?;
-        if provider_key(candidate.terms.provider_id) != *key {
+        if reserve_provider_key(candidate.terms.provider_id) != *key {
             return Err(corrupt_state(
                 "authoritative reserve provider key does not match its account",
             ));
@@ -1525,7 +1520,7 @@ impl Execute for RegisterSorafsReserveAccount {
         state_transaction
             .world
             .smart_contract_state
-            .insert(provider_key(account.terms.provider_id), encoded);
+            .insert(reserve_provider_key(account.terms.provider_id), encoded);
         emit_reserve_event(
             state_transaction,
             SorafsReserveLedgerEventKind::ProviderRegistered,
@@ -1591,7 +1586,7 @@ impl Execute for RequestSorafsReserveMovement {
         state_transaction
             .world
             .smart_contract_state
-            .insert(provider_key(self.provider_id), encoded_account);
+            .insert(reserve_provider_key(self.provider_id), encoded_account);
         state_transaction
             .world
             .smart_contract_state
@@ -1750,7 +1745,7 @@ impl Execute for DecideSorafsReserveMovement {
         state_transaction
             .world
             .smart_contract_state
-            .insert(provider_key(movement.provider_id), encoded_account);
+            .insert(reserve_provider_key(movement.provider_id), encoded_account);
         state_transaction
             .world
             .smart_contract_state
@@ -1857,7 +1852,7 @@ impl Execute for ChargeSorafsReserveRent {
         state_transaction
             .world
             .smart_contract_state
-            .insert(provider_key(self.provider_id), encoded);
+            .insert(reserve_provider_key(self.provider_id), encoded);
         emit_reserve_event(
             state_transaction,
             SorafsReserveLedgerEventKind::RentCharged,
@@ -1944,7 +1939,7 @@ impl Execute for AdvanceSorafsReserveLifecycle {
         state_transaction
             .world
             .smart_contract_state
-            .insert(provider_key(self.provider_id), encoded);
+            .insert(reserve_provider_key(self.provider_id), encoded);
         emit_reserve_event(
             state_transaction,
             SorafsReserveLedgerEventKind::LifecycleAdvanced,
@@ -2002,7 +1997,7 @@ impl Execute for DrawSorafsReserveCredit {
         state_transaction
             .world
             .smart_contract_state
-            .insert(provider_key(self.provider_id), encoded);
+            .insert(reserve_provider_key(self.provider_id), encoded);
         emit_reserve_event(
             state_transaction,
             SorafsReserveLedgerEventKind::CreditDrawn,
@@ -2076,7 +2071,7 @@ impl Execute for RepaySorafsReserveCredit {
         state_transaction
             .world
             .smart_contract_state
-            .insert(provider_key(self.provider_id), encoded);
+            .insert(reserve_provider_key(self.provider_id), encoded);
         emit_reserve_event(
             state_transaction,
             SorafsReserveLedgerEventKind::CreditRepaid,
@@ -2146,7 +2141,7 @@ impl Execute for SubmitSorafsReserveAppeal {
         state_transaction
             .world
             .smart_contract_state
-            .insert(provider_key(self.provider_id), encoded_account);
+            .insert(reserve_provider_key(self.provider_id), encoded_account);
         state_transaction
             .world
             .smart_contract_state
@@ -2206,7 +2201,7 @@ impl Execute for DecideSorafsReserveAppeal {
         state_transaction
             .world
             .smart_contract_state
-            .insert(provider_key(appeal.provider_id), encoded_account);
+            .insert(reserve_provider_key(appeal.provider_id), encoded_account);
         state_transaction
             .world
             .smart_contract_state
@@ -2881,14 +2876,14 @@ impl ValidSingularQuery for FindSorafsReserveProviders {
         let after = self.after_provider_id;
         let start = after.map_or_else(
             || {
-                StatePath::from_str(PROVIDER_STATE_KEY_PREFIX)
+                StatePath::from_str(RESERVE_PROVIDER_STATE_KEY_PREFIX_V1)
                     .expect("static provider prefix is valid")
             },
-            provider_key,
+            reserve_provider_key,
         );
         let (accounts, has_more) = scan_reserve_records(
             world,
-            PROVIDER_STATE_KEY_PREFIX,
+            RESERVE_PROVIDER_STATE_KEY_PREFIX_V1,
             start,
             limit,
             &mut budget,
@@ -2896,7 +2891,7 @@ impl ValidSingularQuery for FindSorafsReserveProviders {
                 let candidate: ReserveProviderAccountV1 =
                     decode_state(payload, "reserve provider account").map_err(query_failure)?;
                 let provider_id = candidate.terms.provider_id;
-                if provider_key(provider_id) != *key {
+                if reserve_provider_key(provider_id) != *key {
                     return Err(QueryExecutionFail::Conversion(
                         "authoritative reserve provider key does not match its account".to_owned(),
                     ));

@@ -7,6 +7,8 @@ use iroha_crypto::{Algorithm, KeyPair, Signature};
 use norito::codec::Encode;
 
 use crate::signer::stream_token::receipt_test_support as receipt_fixture;
+#[path = "admission_tests.rs"]
+mod admission_tests;
 #[path = "observer_fixture.rs"]
 mod test_support;
 #[path = "wire_tests.rs"]
@@ -23,7 +25,7 @@ fn every_phase_produces_only_its_current_completed_or_release_marker() {
         let mut evidence = Evidence::new(phase);
         assert_eq!(evidence.request.magic, *b"IRSTKQ01");
         assert_eq!(evidence.state.body.magic, *b"IRSTKS01");
-        let pending_debug = format!("{:?}", evidence.attempt.as_ref().expect("pending request"));
+        let pending_debug = format!("{:?}", &evidence.attempt);
         for value in [
             &evidence.receipt.binding.key_handle,
             &evidence.receipt.token.body.token_id,
@@ -95,8 +97,6 @@ fn independent_request_and_observer_preimages_are_fixed_across_all_ten_layouts()
             assert_eq!(
                 evidence
                     .attempt
-                    .as_ref()
-                    .expect("retained attempt")
                     .request_bytes()
                     .expect("retained request bytes"),
                 request
@@ -178,13 +178,13 @@ fn independent_request_and_observer_preimages_are_fixed_across_all_ten_layouts()
 }
 
 #[test]
-fn owned_attempt_is_consumed_on_success_and_failure_and_recovery_uses_a_fresh_query() {
+fn owned_attempt_is_retired_on_success_and_rejection_and_new_operations_use_fresh_queries() {
     let mut evidence = Evidence::new(Phase::BeforeRelease);
     let original_receipt = evidence.receipt_bytes.clone();
     let cached = evidence.observation_bytes();
     assert_positive(&mut evidence);
     assert!(
-        evidence.attempt.take().is_none(),
+        evidence.attempt.is_retired(),
         "bounded runtime cannot dispatch this attempt again"
     );
     let old_request = request_digest(&evidence.request);
@@ -195,12 +195,12 @@ fn owned_attempt_is_consumed_on_success_and_failure_and_recovery_uses_a_fresh_qu
     assert_ne!(request_digest(&evidence.request), old_request);
     assert_eq!(evidence.receipt_bytes, original_receipt);
     assert_eq!(
-        evidence.verify_bytes(&cached).err(),
+        evidence.verify_bytes(&cached).err().map(rejection),
         Some(EvidenceError::SourceMismatch)
     );
     assert!(
-        evidence.attempt.take().is_none(),
-        "failed attempt cannot be reused either"
+        evidence.attempt.is_retired(),
+        "completed rejection retires its retained attempt"
     );
     evidence.now += 1;
     evidence.state.body.observed_at_unix_ms += 1;
@@ -510,10 +510,16 @@ fn phase_partition_nonzero_challenge_and_retained_floors_are_mandatory() {
         );
         if is_current(phase) {
             assert!(current.is_ok());
-            assert_eq!(completed.err(), Some(EvidenceError::SourceMismatch));
+            assert_eq!(
+                completed.err().map(rejection),
+                Some(EvidenceError::SourceMismatch)
+            );
         } else {
             assert!(completed.is_ok());
-            assert_eq!(current.err(), Some(EvidenceError::SourceMismatch));
+            assert_eq!(
+                current.err().map(rejection),
+                Some(EvidenceError::SourceMismatch)
+            );
         }
     }
     for invalid in 0..5 {
@@ -535,7 +541,8 @@ fn phase_partition_nonzero_challenge_and_retained_floors_are_mandatory() {
                 floor,
                 not_before
             )
-            .err(),
+            .err()
+            .map(rejection),
             Some(EvidenceError::SourceMismatch)
         );
     }
@@ -595,14 +602,18 @@ fn phase_partition_nonzero_challenge_and_retained_floors_are_mandatory() {
         let mut request = baseline.request.clone();
         mutate(&mut request);
         assert_eq!(
-            request.encode_canonical(),
+            request.encode_canonical().map_err(rejection),
             Err(EvidenceError::SourceMismatch)
         );
-        assert_eq!(request.digest(), Err(EvidenceError::SourceMismatch));
+        assert_eq!(
+            request.digest().map_err(rejection),
+            Err(EvidenceError::SourceMismatch)
+        );
         assert_eq!(
             SignerStreamTokenObservationRequestV1::decode_canonical(
                 &norito::encode_canonical(&request).expect("malformed semantic request")
-            ),
+            )
+            .map_err(rejection),
             Err(EvidenceError::SourceMismatch)
         );
     }
@@ -674,11 +685,15 @@ fn signed_subjects_and_completed_request_prevalidation_bind_exact_token_and_prov
     let mut bare_signature = baseline.receipt.token.clone();
     bare_signature.signature[0] ^= 1;
     assert_eq!(
-        prepare(&baseline.receipt_bytes, &bare_signature).err(),
+        prepare(&baseline.receipt_bytes, &bare_signature)
+            .err()
+            .map(rejection),
         Some(EvidenceError::Receipt(ReceiptError::InvalidSignature))
     );
     assert_eq!(
-        prepare(&baseline.receipt.token.signature, &baseline.receipt.token).err(),
+        prepare(&baseline.receipt.token.signature, &baseline.receipt.token)
+            .err()
+            .map(rejection),
         Some(EvidenceError::Receipt(ReceiptError::InvalidReceipt))
     );
     let mut missing = baseline.receipt.receipt.clone();
@@ -688,7 +703,8 @@ fn signed_subjects_and_completed_request_prevalidation_bind_exact_token_and_prov
             &norito::encode_canonical(&missing).expect("missing signature claim"),
             &baseline.receipt.token
         )
-        .err(),
+        .err()
+        .map(rejection),
         Some(EvidenceError::Receipt(ReceiptError::InvalidSignature))
     );
     let mut unsupported = baseline.receipt.receipt.clone();
@@ -699,13 +715,8 @@ fn signed_subjects_and_completed_request_prevalidation_bind_exact_token_and_prov
         .expect("limited prevalidation creates a query, not verified authority");
     let mut evidence = Evidence::new(Phase::BeforeRelease);
     evidence.attempt =
-        Some(prepare(&candidate, &baseline.receipt.token).expect("prevalidated public claim"));
-    evidence.request = evidence
-        .attempt
-        .as_ref()
-        .expect("pending")
-        .request()
-        .clone();
+        prepare(&candidate, &baseline.receipt.token).expect("prevalidated public claim");
+    evidence.request = evidence.attempt.request().clone();
     evidence.receipt_bytes = candidate;
     evidence.state.body.request_digest = request_digest(&evidence.request);
     evidence.resign();

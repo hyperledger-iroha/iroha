@@ -126,13 +126,21 @@ impl NativeStreamTokenSourceV1 {
         &self,
         prepared: PreparedStreamTokenCheckV1,
     ) -> Result<VerifiedStreamTokenCheckV1, SignerOperationErrorV1> {
-        let signed = self.transactions.sign(prepared.instruction(), true)?;
-        let pending = prepared
-            .bind_signed_transaction(signed.transaction.clone())
-            .map_err(|_| SignerOperationErrorV1::StateUnavailable)?;
-        self.transactions.submit_and_wait(&signed)?;
-        pending.verify_finalized(|| self.time().map_err(|_| iroha_core::query::stream_token_authority::observation::StreamTokenObservationErrorV1::Clock))
-            .map_err(|_| SignerOperationErrorV1::StateUnavailable)
+        let signed = self
+            .transactions
+            .sign(prepared.instruction(), true, prepared.deadline())?;
+        let pending =
+            crate::native_check_binding::complete_binding(prepared.bind_signed_transaction(signed))
+                .map_err(|_| SignerOperationErrorV1::StateUnavailable)?;
+        self.transactions
+            .submit_and_wait(pending.signed_transaction(), pending.deadline())?;
+        let verify = |pending: iroha_core::query::stream_token_authority::observation::PendingStreamTokenCheckV1| {
+            pending.verify_finalized(|| self.time().map_err(|_| iroha_core::query::stream_token_authority::observation::StreamTokenObservationErrorV1::Clock))
+        };
+        crate::native_check_binding::complete_check(verify(pending), |failure| {
+            verify(failure.into_pending())
+        })
+        .map_err(|_| SignerOperationErrorV1::StateUnavailable)
     }
     fn checked_context(
         &self,
@@ -175,9 +183,10 @@ impl NativeStreamTokenSourceV1 {
                 action,
             },
         };
-        let signed = self.transactions.sign(&instruction, false)?;
-        self.transactions.submit_and_wait(&signed)?;
-        Ok(*signed.transaction.hash().as_ref())
+        let deadline = self.transactions.start_deadline()?;
+        let signed = self.transactions.sign(&instruction, false, deadline)?;
+        self.transactions.submit_and_wait(&signed, deadline)?;
+        Ok(*signed.hash().as_ref())
     }
 }
 impl SignerOperationStateSourceV1 for NativeStreamTokenSourceV1 {

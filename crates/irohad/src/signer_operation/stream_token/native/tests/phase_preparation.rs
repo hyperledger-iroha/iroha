@@ -125,12 +125,10 @@ impl OperationCase {
         let signed = self
             .source
             .transactions
-            .sign(prepared.instruction(), true)
+            .sign(prepared.instruction(), true, prepared.deadline())
             .unwrap();
-        let pending = prepared
-            .bind_signed_transaction(signed.transaction.clone())
-            .unwrap();
-        assert!(self.fixture.commit_signed(signed.transaction, now_ms()));
+        let pending = prepared.bind_signed_transaction(signed.clone()).unwrap();
+        assert!(self.fixture.commit_signed(signed, now_ms()));
         let verified = pending
             .verify_finalized(|| {
                 self.source
@@ -313,13 +311,11 @@ fn intervening_permission_revocation_invalidates_the_prepared_phase() {
         let signed = case
             .source
             .transactions
-            .sign(prepared.instruction(), true)
+            .sign(prepared.instruction(), true, prepared.deadline())
             .unwrap();
-        let pending = prepared
-            .bind_signed_transaction(signed.transaction.clone())
-            .unwrap();
+        let pending = prepared.bind_signed_transaction(signed.clone()).unwrap();
         assert!(case.fixture.revoke_runtime_permission(observer, now_ms()));
-        assert!(!case.fixture.commit_signed(signed.transaction, now_ms()));
+        assert!(!case.fixture.commit_signed(signed, now_ms()));
         assert!(
             pending
                 .verify_finalized(|| case
@@ -340,9 +336,9 @@ fn intervening_permission_revocation_invalidates_the_prepared_phase() {
         let signed = case
             .source
             .transactions
-            .sign(next.instruction(), true)
+            .sign(next.instruction(), true, next.deadline())
             .unwrap();
-        assert!(!case.fixture.commit_signed(signed.transaction, now_ms()));
+        assert!(!case.fixture.commit_signed(signed, now_ms()));
     }
 }
 
@@ -359,13 +355,11 @@ fn intervening_complete_invalidates_reserved_phase_and_next_phase_captures_compl
     let signed = case
         .source
         .transactions
-        .sign(prepared.instruction(), true)
+        .sign(prepared.instruction(), true, prepared.deadline())
         .unwrap();
-    let pending = prepared
-        .bind_signed_transaction(signed.transaction.clone())
-        .unwrap();
+    let pending = prepared.bind_signed_transaction(signed.clone()).unwrap();
     case.complete();
-    assert!(!case.fixture.commit_signed(signed.transaction, now_ms()));
+    assert!(!case.fixture.commit_signed(signed, now_ms()));
     assert!(
         pending
             .verify_finalized(|| case
@@ -402,11 +396,9 @@ fn intervening_custody_revocation_is_not_hidden_by_preparation_reuse() {
     let signed = case
         .source
         .transactions
-        .sign(prepared.instruction(), true)
+        .sign(prepared.instruction(), true, prepared.deadline())
         .unwrap();
-    let pending = prepared
-        .bind_signed_transaction(signed.transaction.clone())
-        .unwrap();
+    let pending = prepared.bind_signed_transaction(signed.clone()).unwrap();
     assert!(
         case.fixture.commit_instruction(
             MutateSorafsStreamTokenCustody {
@@ -425,7 +417,7 @@ fn intervening_custody_revocation_is_not_hidden_by_preparation_reuse() {
             now_ms(),
         )
     );
-    assert!(!case.fixture.commit_signed(signed.transaction, now_ms()));
+    assert!(!case.fixture.commit_signed(signed, now_ms()));
     assert!(
         pending
             .verify_finalized(|| case

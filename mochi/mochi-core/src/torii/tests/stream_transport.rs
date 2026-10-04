@@ -342,7 +342,7 @@ async fn transport_protocol_error_has_no_invented_binary_length() {
         operation: "events.stream_websocket",
         details: "Torii streams require binary messages".to_owned(),
     };
-    sender.send(Err(error.clone())).unwrap();
+    sender.send(Err(error)).unwrap();
     match timeout(Duration::from_secs(1), receiver.recv())
         .await
         .unwrap()
@@ -351,7 +351,12 @@ async fn transport_protocol_error_has_no_invented_binary_length() {
         EventStreamEvent::DecodeError { error: failure } => {
             assert_eq!(failure.stage, EventDecodeStage::Stream);
             assert_eq!(failure.raw_len, None);
-            assert_eq!(failure.source.as_deref(), Some(&error));
+            assert!(matches!(
+                failure.source.as_deref(),
+                Some(iroha::Error::StreamProtocol { operation, details })
+                    if *operation == "events.stream_websocket"
+                        && details == "Torii streams require binary messages"
+            ));
         }
         other => panic!("expected structured protocol failure, got {other:?}"),
     }

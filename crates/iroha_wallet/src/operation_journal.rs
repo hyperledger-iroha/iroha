@@ -1,13 +1,11 @@
 //! Descriptor-anchored immutable public evidence shared by wallet operations.
 //!
-//! A journal is one owner-private directory holding, in order:
-//! - `operation.json`: the exact prepared operation (for example a signed
-//!   transaction), published atomically by [`Journal::create_prepared`];
-//! - `submission.json`: a durable marker recorded by
-//!   [`Journal::record_submission`] *before* the only dispatch, so a crash can
-//!   never cause a blind resubmission;
-//! - `applied.json`: the exact committed evidence, written once with
-//!   [`Journal::write_applied_evidence`].
+//! Native transaction journals publish `preparation.json` and the lock atomically, retain the
+//! exact quoted `payload.json` before local signing, and retain `operation.json` before dispatch.
+//! A distinct onboarding owner uses [`Journal::create_prepared`] to publish its complete operation.
+//! Both owners retain `submission.json` before their only dispatch and exact `applied.json`
+//! evidence afterward. Native RequestOnly retirement appends `retired.json` under the same lock;
+//! it never removes or renews evidence. Private staging siblings are never authority selectors.
 //!
 //! Every record is immutable: rewriting different bytes fails. The directory is
 //! pinned by descriptor, exclusively locked while open, and rejects links and
@@ -22,8 +20,37 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const MAX_JOURNAL_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) const MAX_JOURNAL_BYTES: usize = 4 * 1024 * 1024;
 const APPLIED_EVIDENCE: &str = "applied.json";
+
+/// Fixed native preparation stages; arbitrary journal names cannot enter this interface.
+#[derive(Clone, Copy)]
+pub enum NativeRecord {
+    /// Original finite request, retained before quotation or signing.
+    Request,
+    /// Exact quoted unsigned payload, retained before signing.
+    Payload,
+    /// Exact signed operation, retained before exposure.
+    Operation,
+    /// Explicit retirement of a request without any payload or exposure.
+    Retired,
+}
+impl NativeRecord {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Request => "preparation.json",
+            Self::Payload => "payload.json",
+            Self::Operation => "operation.json",
+            Self::Retired => "retired.json",
+        }
+    }
+}
+
+/// Count and charge the exact canonical output before allocating it.
+pub(crate) fn canonical_bytes<T: JsonSerialize + ?Sized>(value: &T) -> Result<Box<[u8]>> {
+    norito::json::to_json_bounded_boxed(value, MAX_JOURNAL_BYTES)
+        .map_err(|error| eyre!("bounded journal encoding: {error:?}"))
+}
 
 /// Retained private operation directory and its exclusive native process lock.
 pub struct Journal {
@@ -66,10 +93,20 @@ impl Journal {
     /// Invalid/oversized operation, unsafe or missing parent, existing destination, competing owner,
     /// or native publication failure. Private staging siblings can remain after interruption.
     pub fn create_prepared<T: JsonSerialize>(path: &Path, operation: &T) -> Result<Self> {
-        let bytes = json::to_vec(operation)?;
-        if bytes.len() > MAX_JOURNAL_BYTES {
-            eyre::bail!("operation exceeds the journal byte bound");
-        }
+        Self::publish_initial(path, "operation.json", operation)
+    }
+
+    /// Publish the sole native request before any quote, payload or local signature.
+    /// This is durable custody only; the purpose owner validates and signs the request.
+    ///
+    /// # Errors
+    /// Refuses oversized encoding, unsafe parents, existing custody, or native publication failure.
+    pub fn create_preparation<T: JsonSerialize>(path: &Path, request: &T) -> Result<Self> {
+        Self::publish_initial(path, "preparation.json", request)
+    }
+
+    fn publish_initial<T: JsonSerialize>(path: &Path, record: &str, value: &T) -> Result<Self> {
+        let bytes = canonical_bytes(value)?;
         let absolute = if path.is_absolute() {
             path.to_owned()
         } else {
@@ -77,15 +114,126 @@ impl Journal {
         };
         let name = absolute
             .file_name()
-            .ok_or_else(|| eyre!("journal must name an operation directory"))?;
+            .ok_or_else(|| eyre!("journal must name a directory"))?;
         let parent = OwnerDirectory::open(
             absolute
                 .parent()
                 .ok_or_else(|| eyre!("journal has no parent"))?,
         )?;
-        let directory =
-            parent.publish_private_child(name, &[("lock", &[]), ("operation.json", &bytes)])?;
+        let directory = parent.publish_private_child(name, &[("lock", &[]), (record, &bytes)])?;
         Self::lock_directory(directory, false)
+    }
+
+    /// Distinguish only a missing canonical name; malformed or incomplete custody is an error.
+    pub(crate) fn open_optional(path: &Path) -> Result<Option<Self>> {
+        let absolute = if path.is_absolute() {
+            path.to_owned()
+        } else {
+            std::env::current_dir()?.join(path)
+        };
+        let name = absolute
+            .file_name()
+            .ok_or_else(|| eyre!("journal must name a directory"))?;
+        let parent = OwnerDirectory::open(
+            absolute
+                .parent()
+                .ok_or_else(|| eyre!("journal has no parent"))?,
+        )?;
+        let selected = parent.path().join(name);
+        let outcome = match std::fs::symlink_metadata(&selected) {
+            Ok(_) => Self::open(&selected).map(Some),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        };
+        parent.revalidate()?;
+        outcome
+    }
+
+    /// Retirement never infers an unsigned history while unknown or incomplete material exists.
+    pub(crate) fn require_request_only_inventory(&self) -> Result<()> {
+        self.revalidate()?;
+        self.directory.visit_private_files(3, |name, _| {
+            if ["lock", "preparation.json", "retired.json"]
+                .iter()
+                .any(|allowed| name == std::ffi::OsStr::new(allowed))
+            {
+                Ok(())
+            } else {
+                Err(std::io::Error::other(
+                    "request retirement refuses unknown or later-stage material",
+                ))
+            }
+        })?;
+        self.revalidate()
+    }
+
+    /// Read one fixed native preparation record with exact canonical encoding.
+    /// Absence is a local file observation, never permission to sign or submit.
+    ///
+    /// # Errors
+    /// Refuses changed custody, malformed or noncanonical evidence, and resource limits.
+    pub fn read_native<T: JsonDeserialize + JsonSerialize>(
+        &self,
+        record: NativeRecord,
+    ) -> Result<Option<T>> {
+        let Some(bytes) = self.read_optional(record.name())? else {
+            return Ok(None);
+        };
+        let value = json::from_slice(&bytes).wrap_err("invalid native preparation evidence")?;
+        eyre::ensure!(
+            canonical_bytes(&value)?.as_ref() == bytes,
+            "noncanonical native preparation evidence"
+        );
+        Ok(Some(value))
+    }
+
+    /// Append one immutable fixed native preparation record.
+    /// The purpose owner enforces stage ordering; this method grants no dispatch authority.
+    ///
+    /// # Errors
+    /// Refuses an existing record, unsafe custody and unavailable durability or resources.
+    /// Purpose owners reconcile identical retained bytes before calling this append method.
+    pub fn write_native<T: JsonSerialize>(&self, record: NativeRecord, value: &T) -> Result<()> {
+        self.install(record.name(), &canonical_bytes(value)?)
+    }
+
+    /// Audit the complete fixed native journal namespace under the held operation lock.
+    /// Unknown files, directories and unsafe entries are never ignored as absent preparation.
+    /// This verifies storage shape only; the purpose owner must validate every present record.
+    ///
+    /// # Errors
+    /// Refuses changed custody, unexpected names, nonregular files or excessive entry count.
+    pub fn verify_native_inventory(&self) -> Result<()> {
+        self.revalidate()?;
+        self.directory.visit_private_files(7, |name, _| {
+            if [
+                "lock",
+                "preparation.json",
+                "payload.json",
+                "operation.json",
+                "retired.json",
+                "submission.json",
+                APPLIED_EVIDENCE,
+            ]
+            .iter()
+            .any(|allowed| name == std::ffi::OsStr::new(allowed))
+            {
+                Ok(())
+            } else {
+                Err(std::io::Error::other("unknown native journal evidence"))
+            }
+        })?;
+        self.revalidate()
+    }
+
+    /// Whether either exposure or applied evidence exists, without granting meaning to its bytes.
+    /// Purpose owners must verify that evidence against the exact signed original before use.
+    ///
+    /// # Errors
+    /// Refuses changed custody and unsafe or oversized evidence.
+    pub fn has_dispatch_evidence(&self) -> Result<bool> {
+        Ok(self.read_optional("submission.json")?.is_some()
+            || self.read_optional(APPLIED_EVIDENCE)?.is_some())
     }
 
     /// Reopen an existing journal and hold its exclusive lock.
@@ -144,7 +292,7 @@ impl Journal {
     /// # Errors
     /// Fails when an operation is already retained or the bytes exceed the bound.
     pub fn write_operation<T: JsonSerialize>(&self, operation: &T) -> Result<()> {
-        self.install("operation.json", &json::to_vec(operation)?)
+        self.install("operation.json", &canonical_bytes(operation)?)
     }
 
     /// Read the retained operation, requiring its exact canonical encoding.
@@ -156,7 +304,7 @@ impl Journal {
         let bytes = self.read("operation.json")?;
         let operation: T =
             json::from_slice(&bytes).wrap_err("invalid closed account-operation journal")?;
-        if json::to_vec(&operation)? != bytes {
+        if canonical_bytes(&operation)?.as_ref() != bytes {
             eyre::bail!("operation journal must retain its exact canonical encoding");
         }
         Ok(operation)
@@ -220,15 +368,36 @@ impl Journal {
     }
 
     fn read_optional(&self, name: &str) -> Result<Option<Vec<u8>>> {
+        use std::io::Read as _;
         self.revalidate()?;
-        match self.directory.read(name, MAX_JOURNAL_BYTES) {
-            Ok(bytes) => {
-                self.revalidate()?;
-                Ok(Some(bytes.to_vec()))
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error).wrap_err("cannot read private journal evidence"),
-        }
+        let mut file = match self.directory.open_read(name) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error).wrap_err("cannot open private journal evidence"),
+        };
+        let before = iroha_fs::FileSnapshot::of(&file, true)?;
+        let length = usize::try_from(file.metadata()?.len())?;
+        eyre::ensure!(
+            length <= MAX_JOURNAL_BYTES,
+            "journal evidence exceeds its byte bound"
+        );
+        norito::core::reserve_decode_allocation(length)?;
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(length)?;
+        bytes.resize(length, 0);
+        file.read_exact(&mut bytes)?;
+        let mut tail = [0_u8; 1];
+        eyre::ensure!(
+            file.read(&mut tail)? == 0 && iroha_fs::FileSnapshot::of(&file, true)? == before,
+            "journal evidence changed during read"
+        );
+        self.revalidate()?;
+        let current = self.directory.open_read(name)?;
+        eyre::ensure!(
+            iroha_fs::FileSnapshot::of(&current, true)? == before,
+            "journal evidence namespace changed"
+        );
+        Ok(Some(bytes))
     }
 
     fn read(&self, name: &str) -> Result<Vec<u8>> {
@@ -256,6 +425,80 @@ impl Journal {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn fixed_native_preparation_records_reopen_without_renewal_and_reject_unknown_inventory() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("native");
+        let request = norito::json!({"deadline_ms": 17, "nonce": 9});
+        let payload = norito::json!({"wire": "quoted-original"});
+        let signed = norito::json!({"wire": "signed-original"});
+        let journal = Journal::create_preparation(&path, &request).unwrap();
+        journal.verify_native_inventory().unwrap();
+        assert!(
+            journal
+                .read_native::<norito::json::Value>(NativeRecord::Payload)
+                .unwrap()
+                .is_none()
+        );
+        journal
+            .write_native(NativeRecord::Payload, &payload)
+            .unwrap();
+        journal
+            .write_native(NativeRecord::Operation, &signed)
+            .unwrap();
+        assert!(journal.record_submission(&signed).unwrap());
+        drop(journal);
+        let journal = Journal::open(&path).unwrap();
+        journal.verify_native_inventory().unwrap();
+        assert_eq!(
+            journal
+                .read_native::<norito::json::Value>(NativeRecord::Request)
+                .unwrap(),
+            Some(request)
+        );
+        assert_eq!(
+            journal
+                .read_native::<norito::json::Value>(NativeRecord::Payload)
+                .unwrap(),
+            Some(payload)
+        );
+        assert_eq!(
+            journal
+                .read_native::<norito::json::Value>(NativeRecord::Operation)
+                .unwrap(),
+            Some(signed.clone())
+        );
+        assert!(!journal.record_submission(&signed).unwrap());
+        assert!(
+            journal
+                .write_native(
+                    NativeRecord::Payload,
+                    &norito::json!({"wire":"replacement"})
+                )
+                .is_err()
+        );
+        journal
+            .directory
+            .write_atomic("unknown", b"partial", PublishMode::CreateNew)
+            .unwrap();
+        assert!(journal.verify_native_inventory().is_err());
+    }
+
+    #[test]
+    fn fixed_native_inventory_rejects_nested_directories_and_missing_original_lock() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("native");
+        let journal =
+            Journal::create_preparation(&path, &norito::json!({"original":true})).unwrap();
+        let unexpected = journal.directory.create_child("unexpected").unwrap();
+        assert!(journal.verify_native_inventory().is_err());
+        drop(unexpected);
+        drop(journal);
+        std::fs::remove_file(path.join("lock")).unwrap();
+        assert!(Journal::open(&path).is_err());
+        assert!(!path.join("lock").exists());
+    }
 
     #[test]
     fn prepared_creation_atomically_retains_original_bytes_and_survives_reopen() {

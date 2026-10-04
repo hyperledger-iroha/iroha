@@ -180,7 +180,10 @@ fn daemon_fresh_check_rejects_foreign_same_network_state_before_decode_or_histor
     let failure = norito::with_decode_limits_scope(limits, || {
         foreign.consume_current_check(verified).err().unwrap()
     });
-    assert_eq!(failure.error(), MusubiPinOutboxCheckErrorV1::CurrentState);
+    assert_eq!(
+        failure.rejection(),
+        Some(MusubiPinOutboxCheckErrorV1::CurrentState)
+    );
     let pending = failure.into_pending();
     assert_eq!(pending.signed_transaction(), &original);
     assert_eq!(pending.deadline(), deadline);
@@ -205,7 +208,10 @@ fn daemon_fresh_check_retains_unapplied_signed_transaction_for_same_attempt_retr
     let original = pending.signed_transaction().clone();
     let deadline = pending.deadline();
     let failure = pending.verify_finalized().err().unwrap();
-    assert_eq!(failure.error(), MusubiPinOutboxCheckErrorV1::NotApplied);
+    assert_eq!(
+        failure.rejection(),
+        Some(MusubiPinOutboxCheckErrorV1::NotApplied)
+    );
     let pending = failure.into_pending();
     assert_eq!(pending.signed_transaction(), &original);
     assert_eq!(pending.deadline(), deadline);
@@ -235,7 +241,7 @@ fn daemon_fresh_check_rejects_later_native_inventory_change() {
         reader
             .consume_current_check(verified)
             .err()
-            .map(|failure| failure.error()),
+            .and_then(|failure| failure.rejection()),
         Some(MusubiPinOutboxCheckErrorV1::CurrentState)
     );
     assert_eq!(fixture.row().unwrap().inventory_digest, [0x83; 32]);
@@ -252,7 +258,11 @@ fn daemon_fresh_check_keeps_independent_network_and_original_deadline() {
                 Instant::now() - Duration::from_secs(1),
             )
             .err(),
-        Some(MusubiPinOutboxCheckErrorV1::Expired)
+        Some(
+            iroha_core::execution_attempt::ExecutionAttemptError::Rejected(
+                MusubiPinOutboxCheckErrorV1::Expired
+            )
+        )
     );
     let mut wrong = fixture.expected(MusubiPinOutboxCheckExpectationV1::Absent);
     wrong.network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
@@ -263,6 +273,10 @@ fn daemon_fresh_check_keeps_independent_network_and_original_deadline() {
         norito::with_decode_limits_scope(limits, || reader
             .begin_current_check(wrong, Instant::now() + Duration::from_secs(60))
             .err()),
-        Some(MusubiPinOutboxCheckErrorV1::Invalid)
+        Some(
+            iroha_core::execution_attempt::ExecutionAttemptError::Rejected(
+                MusubiPinOutboxCheckErrorV1::Invalid
+            )
+        )
     );
 }

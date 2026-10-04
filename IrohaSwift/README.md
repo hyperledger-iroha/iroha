@@ -2329,6 +2329,7 @@ let complete = try SorafsReplicationInstructionBuilders.completeReplicationOrder
     completionEpoch: 27,
     expectedAuthority: try SorafsProviderIngestCompletionAuthorityV1(
         providerOwner: providerOwner,
+        completionSigner: completionSigner,
         signerPolicy: try SorafsProviderIngestCompletionSignerPolicyV1(
             policyId: policyId,
             revision: 2,
@@ -2355,7 +2356,7 @@ the fifth `musubi_archive` field as a canonical archive ID or `null`; the
 four-field pre-binding shape is rejected. Completion requires the exact six-field
 hard cut: `order_id`, `provider_id`, `completion_epoch`,
 `expected_authority`, `expected_assignment_revision`, and `finalized_anchor`.
-The authority retains the provider owner and four-part signer-policy chain;
+The authority retains the provider owner, mandatory completion signer, and four-part signer-policy chain;
 missing, retired three-field, alias, or unknown shapes are rejected.
 
 ## NoritoBridge packaging
@@ -2528,9 +2529,10 @@ canonical Swift package always requires the real ABI25 NoritoBridge artifact.
 
 `ValidatorStakingNoritoV1` decodes first-release authority generations, epoch
 authorizations, signed all-edge beacon DKG records, committee transitions,
-monetary plans, bounded reward claims with an explicit optional fee-custody
+typed registration, bond, withdrawal and slash plans, bounded reward claims with an explicit optional fee-custody
 payment, and peer rebinding. Its Rust-authored fixture is
 `fixtures/validator_staking/norito_v1.tsv`; the consumer tests also reject
-truncated records, retired reward-plan layouts, invalid fee custody and
+truncated records, malformed peer bindings, invalid withdrawal hash widths or markers,
+retired reward-plan layouts, invalid fee custody and
 noncanonical quantity decimals. This structural codec
 does not verify signatures, custody, or committee activation.

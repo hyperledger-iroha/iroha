@@ -4,6 +4,8 @@
 //! The route catalog uses only `std`; compile its actual descriptors instead of parsing Rust
 //! source or duplicating router metadata. Output is tab-separated and sorted by route identity.
 
+#[path = "../crates/iroha_torii_shared/src/multisig_execution_evidence/path.rs"]
+mod multisig_execution_evidence;
 #[path = "../crates/iroha_torii_shared/src/route_catalog.rs"]
 mod route_catalog;
 

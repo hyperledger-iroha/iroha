@@ -2,9 +2,7 @@
 
 use super::*;
 
-#[cfg(unix)]
 mod borrowed;
-#[cfg(unix)]
 pub use borrowed::{BorrowedPendingPrivateFile, BorrowedSealedPrivateFile};
 
 /// Validated private regular-file metadata from one bounded directory scan.

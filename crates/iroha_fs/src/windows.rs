@@ -11,6 +11,7 @@
 
 use super::*;
 use std::{
+    borrow::Borrow,
     ffi::c_void,
     io::Write as _,
     mem::{offset_of, size_of},
@@ -733,41 +734,7 @@ impl Directory {
         private: bool,
         create_new: bool,
     ) -> io::Result<RetainedFile> {
-        self.revalidate()?;
-        let file = open_file(
-            &self.path().join(name),
-            GENERIC_READ
-                | if create_new {
-                    GENERIC_WRITE | WRITE_DAC | DELETE
-                } else {
-                    0
-                },
-            FILE_SHARE_READ,
-            if create_new {
-                CREATE_NEW
-            } else {
-                OPEN_EXISTING
-            },
-            false,
-            create_new,
-        )?;
-        let before = snapshot(&file, private || create_new, false)?;
-        let retained = RetainedFile {
-            directory: self.clone(),
-            name: name.to_owned(),
-            file,
-            before,
-            private: private || create_new,
-            writable: create_new,
-            read_only: false,
-            publishable: create_new,
-        };
-        retained.revalidate()?;
-        if create_new {
-            retained.file.sync_all()?;
-            self.sync()?;
-        }
-        Ok(retained)
+        RetainedFile::open(self.clone(), name.to_owned(), private, create_new)
     }
 
     pub(super) fn read(
@@ -1071,6 +1038,77 @@ impl Directory {
         Ok(self)
     }
 
+    pub(super) fn reconcile_atomic_staging(
+        &self,
+        required: &[&str],
+        maximum_staged: usize,
+        maximum_bytes: usize,
+    ) -> io::Result<usize> {
+        let maximum_entries = required.len() + maximum_staged;
+        let names = self.entries(maximum_entries)?;
+        validate_atomic_staging_inventory(&names, required, maximum_staged)?;
+        let mut retained = Vec::with_capacity(names.len());
+        for name in &names {
+            let staged = is_atomic_staging_name(name);
+            let file = open_file(
+                &self.path().join(name),
+                GENERIC_READ | if staged { DELETE } else { 0 },
+                FILE_SHARE_READ | if staged { 0 } else { FILE_SHARE_WRITE },
+                OPEN_EXISTING,
+                false,
+                false,
+            )?;
+            let before = journal_snapshot(&file)?;
+            if staged && before.0.length > maximum_bytes as u64 {
+                return Err(invalid("atomic staging extent exceeds the bound"));
+            }
+            retained.push((file, before, staged));
+        }
+        // Staging handles exclude both write and delete sharing. Required files exclude
+        // delete sharing and permit the caller's already-owned read/write lock descriptor.
+        if self.entries(maximum_entries)? != names {
+            return Err(changed());
+        }
+        for (file, before, _) in &retained {
+            if journal_snapshot(file)? != *before {
+                return Err(changed());
+            }
+        }
+        let mut committed = Vec::with_capacity(required.len());
+        let mut removed = 0;
+        for (file, before, staged) in retained {
+            if staged {
+                self.revalidate()?;
+                if journal_snapshot(&file)? != before {
+                    return Err(changed());
+                }
+                let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+                // SAFETY: the retained no-reparse private file owns DELETE access and
+                // excludes delete sharing; disposition targets that exact opened object.
+                unsafe {
+                    win_ok(SetFileInformationByHandle(
+                        file.as_raw_handle(),
+                        FileDispositionInfo,
+                        from_ref(&disposition).cast(),
+                        native_size::<FILE_DISPOSITION_INFO>()?,
+                    ))?;
+                }
+                drop(file);
+                removed += 1;
+            } else {
+                committed.push((file, before));
+            }
+        }
+        self.sync()?;
+        validate_atomic_staging_inventory(&self.entries(required.len())?, required, 0)?;
+        for (file, before) in committed {
+            if journal_snapshot(&file)? != before {
+                return Err(changed());
+            }
+        }
+        Ok(removed)
+    }
+
     pub(super) fn clear_contents_preserving(&self, preserved: &[&OsStr]) -> io::Result<()> {
         self.revalidate()?;
         for name in preserved {
@@ -1154,9 +1192,9 @@ impl Directory {
 }
 
 #[derive(Debug)]
-pub(super) struct RetainedFile {
-    directory: Directory,
-    name: std::ffi::OsString,
+pub(super) struct RetainedFile<D = Directory, N = std::ffi::OsString> {
+    directory: D,
+    name: N,
     file: File,
     before: Snapshot,
     private: bool,
@@ -1165,7 +1203,46 @@ pub(super) struct RetainedFile {
     publishable: bool,
 }
 
-impl RetainedFile {
+impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
+    fn open(directory: D, name: N, private: bool, create_new: bool) -> io::Result<Self> {
+        let parent = directory.borrow();
+        parent.revalidate()?;
+        let file = open_file(
+            &parent.path().join(name.as_ref()),
+            GENERIC_READ
+                | if create_new {
+                    GENERIC_WRITE | WRITE_DAC | DELETE
+                } else {
+                    0
+                },
+            FILE_SHARE_READ,
+            if create_new {
+                CREATE_NEW
+            } else {
+                OPEN_EXISTING
+            },
+            false,
+            create_new,
+        )?;
+        let before = snapshot(&file, private || create_new, false)?;
+        let retained = Self {
+            directory,
+            name,
+            file,
+            before,
+            private: private || create_new,
+            writable: create_new,
+            read_only: false,
+            publishable: create_new,
+        };
+        retained.revalidate()?;
+        if create_new {
+            retained.file.sync_all()?;
+            retained.directory.borrow().sync()?;
+        }
+        Ok(retained)
+    }
+
     pub(super) fn snapshot(&self) -> io::Result<FileSnapshot> {
         self.revalidate()?;
         let value = FileSnapshot(snapshot(&self.file, self.private, false)?);
@@ -1177,7 +1254,7 @@ impl RetainedFile {
         self.revalidate()?;
         self.before = snapshot(&self.file, self.private, false)?;
         self.writable = false;
-        self.directory.sync()?;
+        self.directory.borrow().sync()?;
         Ok(self)
     }
     pub(super) fn file(&self) -> &File {
@@ -1193,7 +1270,7 @@ impl RetainedFile {
         Ok(self.before.id)
     }
     pub(super) fn revalidate(&self) -> io::Result<()> {
-        self.directory.revalidate()?;
+        self.directory.borrow().revalidate()?;
         let after = snapshot(&self.file, self.private, false)?;
         if self.read_only {
             private_files::validate_read_only(&self.file)?;
@@ -1202,7 +1279,7 @@ impl RetainedFile {
             return Err(changed());
         }
         let named = open_file(
-            &self.directory.path().join(&self.name),
+            &self.directory.borrow().path().join(self.name.as_ref()),
             FILE_READ_ATTRIBUTES,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             OPEN_EXISTING,
@@ -1212,7 +1289,7 @@ impl RetainedFile {
         if snapshot(&named, self.private, false)?.id != self.before.id {
             return Err(changed());
         }
-        self.directory.revalidate()
+        self.directory.borrow().revalidate()
     }
 }
 
@@ -1383,6 +1460,35 @@ mod tests {
         assert!(crate::read_regular(store.path().join("key"), 6).is_ok());
         set_dacl(&file, "D:P(A;;GA;;;WD)");
         assert!(crate::read_regular(store.path().join("key"), 6).is_err());
+    }
+
+    #[test]
+    fn borrowed_sealed_custody_rejects_an_external_dacl_change() {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = PrivateDirectory::open_or_create(temporary.path().join("private")).unwrap();
+        let name = OsStr::new("receipt");
+        let mut writer = store.create_borrowed_private(name, 16).unwrap();
+        writer.write_all(b"original").unwrap();
+        let acl_writer = open_file(
+            &store.path().join(name),
+            FILE_READ_ATTRIBUTES | WRITE_DAC,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            OPEN_EXISTING,
+            false,
+            false,
+        )
+        .unwrap();
+        let sealed = writer.seal_read_only().unwrap();
+        let reopened = store.open_borrowed_read_only(name, 16).unwrap();
+        assert_eq!(sealed.snapshot().unwrap(), reopened.snapshot().unwrap());
+        set_dacl(&acl_writer, "D:P(A;;GR;;;WD)");
+        assert!(sealed.snapshot().is_err());
+        assert!(sealed.revalidate().is_err());
+        assert!(reopened.snapshot().is_err());
+        assert!(reopened.revalidate().is_err());
+        assert!(store.open_borrowed_read_only(name, 16).is_err());
+        // Restore deletion rights for fixture cleanup after all invalid capabilities close.
+        set_dacl(&acl_writer, "D:P(A;;GA;;;WD)");
     }
 
     #[test]

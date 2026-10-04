@@ -7812,10 +7812,12 @@ mod tests {
             .expect("original wire is nonempty") ^= 1;
         let codec_error = iroha_data_model::block::decode_framed_signed_block(&corrupted_wire)
             .expect_err("altered source must fail its canonical frame checksum");
-        assert!(
-            matches!(&codec_error, iroha_version::error::Error::NoritoCodec(message)
-            if message == "checksum mismatch")
+        assert_eq!(
+            codec_error.kind(),
+            norito::core::DecodeAttemptErrorKind::Invalid
         );
+        let codec_error = codec_error.into_error();
+        assert!(matches!(codec_error, norito::Error::ChecksumMismatch));
         let expected_error = Error::Conversion(codec_error.to_string());
         fixture.store.corrupt_body(target_height);
         loop {
@@ -7891,10 +7893,12 @@ mod tests {
             .expect("original wire is nonempty") ^= 1;
         let codec_error = iroha_data_model::block::decode_framed_signed_block(&corrupted_wire)
             .expect_err("altered old source must fail its canonical frame checksum");
-        assert!(matches!(
-            &codec_error,
-            iroha_version::error::Error::NoritoCodec(message) if message == "checksum mismatch"
-        ));
+        assert_eq!(
+            codec_error.kind(),
+            norito::core::DecodeAttemptErrorKind::Invalid
+        );
+        let codec_error = codec_error.into_error();
+        assert!(matches!(codec_error, norito::Error::ChecksumMismatch));
         let expected_error = Error::Conversion(codec_error.to_string());
         fixture.store.corrupt_body(fixture.unrelated_height);
         let state_view = fixture.state.view();

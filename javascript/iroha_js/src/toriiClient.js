@@ -3147,6 +3147,51 @@ export class ToriiClient {
   }
 
   /**
+   * Observe exact staking signing inputs. This signs/submits no transaction and
+   * authenticates no ledger state. The expected XOR definition is an explicit
+   * operator pin; neither an alias nor the server response establishes that pin.
+   */
+  async preparePublicLanePlan(request, xorAssetDefinitionId, options = {}) {
+    const context = requireLocalDraftSigningContext(this._localSigningContext, "preparePublicLanePlan");
+    const opts = requirePlainObjectOption(options, "preparePublicLanePlan options");
+    if (Object.keys(opts).some((key) => key !== "signal")) rejectType("preparePublicLanePlan only accepts signal");
+    const configuredTimeoutMs = Number(this.#config.timeoutMs);
+    const timeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
+      ? Math.min(configuredTimeoutMs, BOUNDED_JSON_MAX_READ_TIMEOUT_MS)
+      : BOUNDED_JSON_MAX_READ_TIMEOUT_MS;
+    // Keep one original deadline alive across module preparation, headers, and
+    // every success/error body read. Per-attempt/header cleanup cannot reset it.
+    const operation = composeRequestSignal(opts.signal, timeoutMs);
+    const { signal } = operation;
+    try {
+      throwIfAborted(signal);
+      const xor = normalizeAssetDefinitionId(xorAssetDefinitionId, "staking preparation XOR pin");
+      const { encodeValidatorStakingPreparationFrameV1: encode, decodeValidatorStakingPreparationFrameV1: decode,
+        validateValidatorStakingPreparationV1: validate } = await waitForPromiseWithSignal(loadToriiOptionalModule(), signal);
+      const body = encode("PreparationRequest", request);
+      const retainedRequest = decode("PreparationRequest", body);
+      throwIfAborted(signal);
+      const response = await waitForResponseWithSignal(this._request("POST", "/v1/nexus/staking/prepare", {
+        headers: { "Content-Type": APPLICATION_NORITO, Accept: APPLICATION_NORITO },
+        body, signal, disableRetries: true, redirect: "error",
+      }), signal, "staking preparation");
+      await this._expectStatus(response, [200], { signal, maximumBodyBytes: 256 * 1024, responseLabel: "staking preparation" });
+      const type = this._getHeader(response, "content-type") ?? "";
+      if (!/^[ \t]*application\/x-norito[ \t]*$/iu.test(type)) {
+        cancelResponseBodyBestEffort(response, "staking preparation requires application/x-norito");
+        rejectType("staking preparation requires application/x-norito");
+      }
+      const { bytes } = await this._readBoundedResponseBytes(response, 256 * 1024, "staking preparation", { signal });
+      const prepared = decode("Preparation", bytes);
+      validate(prepared, retainedRequest, context.networkId, xor);
+      throwIfAborted(signal);
+      return prepared;
+    } finally {
+      operation.cleanup();
+    }
+  }
+
+  /**
    * Quote the exact unsigned payload that will subsequently be signed.
    * The account in `canonicalAuth` must identify the payload authority. Exact
    * aliases are resolved and enforced by Torii; I105 literals are compared by
@@ -18264,7 +18309,14 @@ function waitForPromiseWithSignal(promise, signal) {
   });
 }
 
-function waitForResponseWithSignal(promise, signal, context) { const awaited = waitForPromiseWithSignal(promise, signal); Promise.resolve(promise).then((response) => { if (signalIsAborted(signal)) cancelResponseBodyBestEffort(response, `${context} late response`); }, () => {}); return awaited; }
+function waitForResponseWithSignal(promise, signal, context) {
+  // Install disposal before observing cancellation: a custom fetch callback may
+  // abort synchronously and still produce a response after the caller returns.
+  Promise.resolve(promise).then((response) => {
+    if (signalIsAborted(signal)) cancelResponseBodyBestEffort(response, `${context} late response`);
+  }, () => {});
+  return waitForPromiseWithSignal(promise, signal);
+}
 
 const CONNECT_SID_BYTES = 32;
 const BASE64URL_BODY_PATTERN = /^[A-Za-z0-9_-]+$/;

@@ -183,15 +183,21 @@ impl Client {
     pub(crate) fn decode_canonical_norito_response<T>(
         response: &Response<Vec<u8>>,
         maximum: usize,
-        context: &'static str,
-    ) -> Result<T>
+        operation: &'static str,
+    ) -> crate::Result<T>
     where
         T: norito::core::NoritoSerialize,
         for<'de> T: norito::core::NoritoDeserialize<'de>,
     {
-        let body = Self::bounded_norito_response_body(response, StatusCode::OK, maximum, context)?;
-        norito::decode_canonical_with_limits(body, norito::canonical_decode_limits(body.len()))
-            .map_err(|error| eyre!("{context}: failed to decode canonical Norito payload: {error}"))
+        // Preserve the existing HTTP/media/body checks before decoding a success payload.
+        // The canonical decoder captures its original cause before its scopes unwind.
+        let body = Self::bounded_norito_response_body(response, StatusCode::OK, maximum, operation)
+            .map_err(|error| crate::Error::Decode {
+                operation,
+                details: error.to_string(),
+            })?;
+        norito::decode_canonical_for_admission(body, norito::canonical_decode_limits(body.len()))
+            .map_err(|source| crate::Error::CanonicalDecode { operation, source })
     }
 
     fn canonical_norito_get_request(
@@ -317,15 +323,7 @@ impl Client {
             norito::canonical_decode_limits(body.len()),
             || decode_framed_signed_block(body),
         )
-        .map_err(|error| eyre!("Failed to decode canonical executed block wire: {error}"))?;
-        let canonical = block
-            .encode_wire()
-            .map_err(|error| eyre!("Failed to re-encode canonical executed block wire: {error}"))?;
-        if canonical.as_slice() != body {
-            return Err(eyre!(
-                "executed block response is not the exact canonical SignedBlock wire"
-            ));
-        }
+        .wrap_err("Failed to decode canonical executed block wire")?;
         if block.header().height() != height {
             return Err(eyre!(
                 "executed block height {} does not match requested height {height}",
@@ -367,7 +365,8 @@ impl Client {
             ));
         }
         self.ensure_activation_evidence_deadline()?;
-        Ok(canonical)
+        // The framed decoder already proved exact canonical equality of these bytes.
+        Ok(response.into_body())
     }
 
     fn ensure_genesis_readiness_deadline(deadline: std::time::Instant) -> Result<()> {

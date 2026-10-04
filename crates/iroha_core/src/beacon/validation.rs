@@ -163,6 +163,44 @@ impl norito::core::SerializePayload for DkgSignaturePreimage<'_> {
     }
 }
 
+/// One signature-verification kernel, with explicit ownership of its exact message bytes.
+pub(super) trait DkgSignatureVerifier {
+    type Resource;
+    fn verify(
+        &mut self,
+        preimage: DkgSignaturePreimage<'_>,
+        signature: &iroha_crypto::Signature,
+        key: &iroha_crypto::PublicKey,
+    ) -> Result<bool, Self::Resource>;
+}
+
+/// Existing standalone DKG operations emit an actual ephemeral signed preimage.
+/// Session sealing uses the original prepaid workspace through the same verifier kernel.
+pub(super) struct AllocatingSignatureVerifier<'a, F>(&'a mut F);
+impl<'a, F> AllocatingSignatureVerifier<'a, F> {
+    pub(super) fn new(admit: &'a mut F) -> Self {
+        Self(admit)
+    }
+}
+impl<F, E> DkgSignatureVerifier for AllocatingSignatureVerifier<'_, F>
+where
+    F: FnMut(usize) -> Result<(), E>,
+{
+    type Resource = E;
+    fn verify(
+        &mut self,
+        preimage: DkgSignaturePreimage<'_>,
+        signature: &iroha_crypto::Signature,
+        key: &iroha_crypto::PublicKey,
+    ) -> Result<bool, E> {
+        (self.0)(preimage.encoded_len())?;
+        Ok(
+            iroha_crypto::verify_signature_borrowed(signature, key, &preimage.encode_exact())
+                .is_ok(),
+        )
+    }
+}
+
 /// One borrowed view of either a partial snapshot or a finalized transcript.
 pub(super) struct DkgSnapshotRef<'a> {
     session: &'a GlobalThresholdBeaconDkgSessionV1,
@@ -216,8 +254,27 @@ pub(super) fn unbudgeted<T>(
 }
 
 impl DkgSnapshotRef<'_> {
+    /// Borrow the exact commitments phase without copying its public rows.
+    pub(super) fn commitments<'a>(
+        session: &'a GlobalThresholdBeaconDkgSessionV1,
+        generator_h: &'a [u8; 96],
+        generator_v: &'a [u8; 96],
+        recipient_keys: &'a [GlobalThresholdBeaconDkgRecipientKeyV1],
+        dealer_commitments: &'a [GlobalThresholdBeaconDkgDealerCommitmentV1],
+    ) -> DkgSnapshotRef<'a> {
+        DkgSnapshotRef {
+            session,
+            generator_h,
+            generator_v,
+            recipient_keys,
+            dealer_commitments,
+            encrypted_shares: &[],
+            share_acceptances: &[],
+            last_updated_height: session.start_height,
+        }
+    }
     /// Refuse protocol-sized shapes before encoding or cryptographic parsing.
-    fn validate_bounds(&self) -> Result<(), GlobalThresholdBeaconError> {
+    pub(super) fn validate_bounds(&self) -> Result<(), GlobalThresholdBeaconError> {
         validate_dkg_session(self.session)?;
         let seats = usize::from(self.session.committee_size);
         let edges = seats
@@ -272,6 +329,14 @@ impl DkgSnapshotRef<'_> {
         &self,
         admit: &mut impl FnMut(usize) -> Result<(), E>,
     ) -> Result<(), GlobalThresholdBeaconVerificationError<E>> {
+        self.validate_with_verifier(&mut AllocatingSignatureVerifier::new(admit))
+    }
+
+    /// The same shape, order, signature and event checks with caller-owned message scratch.
+    pub(super) fn validate_with_verifier<V: DkgSignatureVerifier>(
+        &self,
+        verifier: &mut V,
+    ) -> Result<(), GlobalThresholdBeaconVerificationError<V::Resource>> {
         self.validate_bounds()?;
         validate_dkg_generators(self.session, self.generator_h, self.generator_v)?;
         if self
@@ -282,9 +347,7 @@ impl DkgSnapshotRef<'_> {
             return Err(GlobalThresholdBeaconError::InvalidDkgRecipientKey.into());
         }
         for (position, key) in self.recipient_keys.iter().enumerate() {
-            admit(DkgSignaturePreimage::RecipientKey(self.session, key).encoded_len())
-                .map_err(GlobalThresholdBeaconVerificationError::Resource)?;
-            verify_global_threshold_beacon_dkg_recipient_key_v1(self.session, key)?;
+            verify_global_threshold_beacon_dkg_recipient_key_v1_with(self.session, key, verifier)?;
             if self.recipient_keys[..position].iter().any(|existing| {
                 existing.validator == key.validator
                     || (existing.x25519_public_key == key.x25519_public_key
@@ -313,12 +376,11 @@ impl DkgSnapshotRef<'_> {
                 .binary_search_by_key(&dealer.dealer_index, |key| key.recipient_index)
                 .map(|index| &self.recipient_keys[index])
                 .map_err(|_| GlobalThresholdBeaconError::DealerCommitmentEquivocation)?;
-            admit(DkgSignaturePreimage::DealerCommitment(self.session, dealer).encoded_len())
-                .map_err(GlobalThresholdBeaconVerificationError::Resource)?;
-            verify_global_threshold_beacon_dkg_dealer_commitment_signature_v1(
+            verify_global_threshold_beacon_dkg_dealer_commitment_signature_v1_with(
                 self.session,
                 key,
                 dealer,
+                verifier,
             )?;
         }
         if self.encrypted_shares.windows(2).any(|pair| {
@@ -343,14 +405,13 @@ impl DkgSnapshotRef<'_> {
                 .binary_search_by_key(&edge.recipient_index, |key| key.recipient_index)
                 .map(|index| &self.recipient_keys[index])
                 .map_err(|_| GlobalThresholdBeaconError::InvalidDkgEncryptedShare)?;
-            admit(DkgSignaturePreimage::EncryptedShare(self.session, edge).encoded_len())
-                .map_err(GlobalThresholdBeaconVerificationError::Resource)?;
-            verify_global_threshold_beacon_dkg_encrypted_share_v1(
+            verify_global_threshold_beacon_dkg_encrypted_share_v1_with(
                 self.session,
                 dealer,
                 dealer_key,
                 recipient_key,
                 edge,
+                verifier,
             )?;
             if edge.delivery_height > self.last_updated_height {
                 return Err(GlobalThresholdBeaconError::InvalidDkgEncryptedShare.into());
@@ -387,13 +448,12 @@ impl DkgSnapshotRef<'_> {
             {
                 return Err(GlobalThresholdBeaconError::InvalidDkgShareAcceptance.into());
             }
-            admit(DkgSignaturePreimage::ShareAcceptance(self.session, acceptance).encoded_len())
-                .map_err(GlobalThresholdBeaconVerificationError::Resource)?;
-            verify_global_threshold_beacon_dkg_share_acceptance_v1(
+            verify_global_threshold_beacon_dkg_share_acceptance_v1_with(
                 self.session,
                 dealer,
                 recipient,
                 acceptance,
+                verifier,
             )?;
         }
         if ((!self.recipient_keys.is_empty() || !self.dealer_commitments.is_empty())
@@ -416,118 +476,60 @@ mod tests {
 
     #[test]
     fn beacon_verification_reserves_exact_buffers_and_refuses_before_unfunded_work() {
-        use iroha_crypto::threshold_bls::DasRenCoefficientCommitment;
-        use norito::core::DecodeResourceError;
+        use crate::{
+            beacon::GlobalThresholdBeaconSessionError, test_allocations::allocations_during,
+        };
+        use iroha_allocation::{AllocationBudget, AllocationRefusal};
 
         let fixture = adaptive_beacon_fixture();
-        let original = fixture.session.record();
-        let dkg = &original.adaptive_dkg;
-        let mut expected = Vec::new();
-        for key in &dkg.recipient_keys {
-            expected.push(DkgSignaturePreimage::RecipientKey(&dkg.session, key).encoded_len());
-        }
-        for dealer in &dkg.dealer_commitments {
-            expected
-                .push(DkgSignaturePreimage::DealerCommitment(&dkg.session, dealer).encoded_len());
-        }
-        for edge in &dkg.encrypted_shares {
-            expected.push(DkgSignaturePreimage::EncryptedShare(&dkg.session, edge).encoded_len());
-        }
-        for acceptance in &dkg.share_acceptances {
-            expected.push(
-                DkgSignaturePreimage::ShareAcceptance(&dkg.session, acceptance).encoded_len(),
-            );
-        }
-        expected.push(
-            dkg.dealer_commitments.len()
-                * core::mem::size_of::<ValidatedDealerCommitment<BeaconPurpose>>(),
-        );
-        for dealer in &dkg.dealer_commitments {
-            expected.push(
-                dealer.coefficient_commitments.len()
-                    * core::mem::size_of::<DasRenCoefficientCommitment<BeaconPurpose>>(),
-            );
-        }
-        // Inline finalized indices/shares add no phantom buffer admissions.
-        let total: usize = expected.iter().sum();
-        let mut observed = Vec::new();
-        let verified = validate_global_threshold_beacon_session_with_admission_v1(
-            original.clone(),
-            &fixture.binding,
-            &mut |bytes| {
-                observed.push(bytes);
-                Ok::<(), std::convert::Infallible>(())
-            },
-        )
-        .expect("all verifier buffers admitted");
-        assert_eq!(observed, expected);
-        assert_eq!(verified.record(), original);
-
-        // Each call owns one original cumulative Norito scope. Input copies
-        // are acquired before that scope; this test measures verifier storage.
-        let validate = |record, allowance| {
-            let limits =
-                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, allowance, 128);
-            norito::with_decode_limits(limits, || {
-                Ok(validate_global_threshold_beacon_session_with_admission_v1(
-                    record,
-                    &fixture.binding,
-                    &mut |bytes| {
-                        norito::core::reserve_decode_allocation(bytes).map_err(|error| {
-                            error
-                                .decode_resource_error()
-                                .expect("allocation admission returns a resource refusal")
-                        })
-                    },
-                ))
-            })
-            .expect("the verifier preserves its typed inner outcome")
+        let source = fixture.session.record();
+        let empty = AllocationBudget::new(0);
+        let error = validate_global_threshold_beacon_session_v1(source, &fixture.binding, &empty)
+            .unwrap_err();
+        let GlobalThresholdBeaconSessionError::Admission(AllocationRefusal::ExceedsLimit {
+            requested_bytes: total,
+            limit_bytes: 0,
+        }) = error
+        else {
+            panic!("actual complete original-pool demand")
         };
+        let pool = AllocationBudget::new(total);
+        let mut short = pool.try_reserve_bytes(total - 1).unwrap();
+        let mut result = None;
         assert_eq!(
-            validate(original.clone(), 0),
-            Err(GlobalThresholdBeaconVerificationError::Resource(
-                DecodeResourceError::TotalAllocationExceeded {
-                    attempted: expected[0] as u64,
-                    limit: 0
-                },
-            )),
+            allocations_during(|| {
+                result = Some(
+                    validate_global_threshold_beacon_session_from_reservation_v1(
+                        source,
+                        &fixture.binding,
+                        &pool,
+                        &mut short,
+                    ),
+                );
+            }),
+            0,
+            "no verifier, graph or control may allocate before complete admission"
         );
-        assert_eq!(
-            validate(original.clone(), total - 1),
-            Err(GlobalThresholdBeaconVerificationError::Resource(
-                DecodeResourceError::TotalAllocationExceeded {
-                    attempted: total as u64,
-                    limit: (total - 1) as u64
-                },
-            )),
+        assert!(
+            matches!(result.unwrap(), Err(GlobalThresholdBeaconSessionError::Reservation(iroha_allocation::InsufficientReservation { requested_bytes, remaining_bytes })) if requested_bytes == total && remaining_bytes == total - 1)
         );
-        assert_eq!(
-            validate(original.clone(), total)
-                .expect("exact same source with exact funding")
-                .into_record(),
-            *original
-        );
-        let mut malformed = original.clone();
-        malformed.adaptive_dkg.recipient_keys[0]
-            .mlkem768_public_key
-            .push(0);
-        assert_eq!(
-            validate(malformed, 0),
-            Err(GlobalThresholdBeaconVerificationError::Invalid(
-                GlobalThresholdBeaconError::InvalidDkgRecipientKey
-            )),
-            "cheap complete shape validation must precede every admission callback",
-        );
-        let mut forged = original.clone();
-        forged.adaptive_dkg.recipient_keys[0].signature =
-            forged.adaptive_dkg.dealer_commitments[0].signature.clone();
-        assert_eq!(
-            validate(forged, total),
-            Err(GlobalThresholdBeaconVerificationError::Invalid(
-                GlobalThresholdBeaconError::InvalidDkgRecipientKey
-            )),
-            "funding a forged signature must never turn it into a resource error or a valid session",
-        );
+        assert_eq!(short.remaining_bytes(), total - 1);
+        assert_eq!(pool.reserved_bytes(), total - 1);
+        drop(short);
+        let mut exact = pool.try_reserve_bytes(total).unwrap();
+        let verified = validate_global_threshold_beacon_session_from_reservation_v1(
+            source,
+            &fixture.binding,
+            &pool,
+            &mut exact,
+        )
+        .expect("same source and exact original physical admission");
+        assert_eq!(exact.remaining_bytes(), 0);
+        assert!(verified.belongs_to(&pool));
+        assert_eq!(verified.record(), source);
+        assert_eq!(pool.reserved_bytes(), verified.retained_allocation_bytes());
+        drop(verified);
+        assert_eq!(pool.reserved_bytes(), 0);
     }
 
     fn snapshot(
@@ -657,15 +659,18 @@ mod tests {
     }
 
     #[test]
-    fn consuming_verified_session_preserves_its_original_record_buffers() {
+    fn sharing_verified_session_preserves_its_original_record_buffers() {
         let fixture = adaptive_beacon_fixture();
         let before = fixture.session.record();
         let expected = before.clone();
         let recipients = before.adaptive_dkg.recipient_keys.as_ptr();
         let edges = before.adaptive_dkg.encrypted_shares.as_ptr();
         let public_shares = before.public_shares.as_ptr();
-        let record = fixture.session.into_record();
-        assert_eq!(record, expected);
+        let reader = fixture.session.clone();
+        assert!(reader.ptr_eq(&fixture.session));
+        drop(fixture.session);
+        let record = reader.record();
+        assert_eq!(record, &expected);
         assert_eq!(record.adaptive_dkg.recipient_keys.as_ptr(), recipients);
         assert_eq!(record.adaptive_dkg.encrypted_shares.as_ptr(), edges);
         assert_eq!(record.public_shares.as_ptr(), public_shares);
