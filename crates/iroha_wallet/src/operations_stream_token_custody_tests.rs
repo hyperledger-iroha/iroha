@@ -925,3 +925,127 @@ fn fee_and_enrollment_bounds_are_checked_before_request_cloning() {
     enroll.enrollment.resize(SIGNER_CUSTODY_MAX_BYTES_V1 + 1, 0);
     assert!(CustodyExpectation::Enroll(&enroll).plan(1_000).is_err());
 }
+
+fn assert_frame_identity<T: norito::NoritoSchema>(name: &str, hash: &str) {
+    assert_eq!(T::nominal_name(), name);
+    assert_eq!(T::static_nominal_name(), Some(name));
+    assert_eq!(T::frame_name(), name);
+    assert_eq!(T::static_frame_name(), Some(name));
+    assert_eq!(
+        hex::encode(norito::schema::identity::frame_hash::<T>()),
+        hash
+    );
+}
+
+fn roundtrip_frame<T>(value: &T) -> T
+where
+    T: norito::core::NoritoSerialize + for<'de> norito::core::NoritoDeserialize<'de>,
+{
+    let bytes = encode_bounded(value, MAX_PLAN_BYTES).unwrap();
+    let header = norito::core::Header::read(bytes.as_slice()).unwrap();
+    assert_eq!(header.schema, norito::schema::identity::frame_hash::<T>());
+    assert_eq!(bytes.len(), norito::canonical_frame_len(value).unwrap());
+    let decoded = decode_bounded::<T>(&bytes, MAX_PLAN_BYTES).unwrap();
+    assert_eq!(encode_bounded(&decoded, MAX_PLAN_BYTES).unwrap(), bytes);
+    assert!(encode_bounded(value, bytes.len() - 1).is_err());
+    assert!(decode_bounded::<T>(&bytes, bytes.len() - 1).is_err());
+    let mut trailing = bytes;
+    trailing.push(0);
+    assert!(decode_bounded::<T>(&trailing, MAX_PLAN_BYTES).is_err());
+    decoded
+}
+
+#[test]
+fn custody_schema_identities_are_explicit_and_distinct() {
+    assert_frame_identity::<StreamTokenCustodySelection>(
+        "iroha_wallet::operations::StreamTokenCustodySelection",
+        "adb2e9e4a6a3862fa2ca1be0afdd8945",
+    );
+    assert_frame_identity::<Action>(
+        "iroha_wallet::operations::stream_token_custody::Action",
+        "a64f78220e575339f580cd2c203d0de0",
+    );
+    assert_frame_identity::<Plan>(
+        "iroha_wallet::operations::stream_token_custody::Plan",
+        "33f75df80d445018fbb416cd20ddb755",
+    );
+}
+
+#[test]
+fn custody_original_selection_action_and_plan_frames_roundtrip() {
+    let (config, policy) = fixture();
+    for plan in [
+        configure_plan(policy.clone()),
+        enrolled_request_plan(&config, policy, false),
+    ] {
+        let selection = roundtrip_frame(&plan.selection);
+        assert_eq!(selection.provider_id, plan.selection.provider_id);
+        assert_eq!(selection.binding, plan.selection.binding);
+        assert_eq!(
+            selection.expected_revision,
+            plan.selection.expected_revision
+        );
+        assert_eq!(selection.expected_digest, plan.selection.expected_digest);
+        assert_eq!(selection.current, plan.selection.current);
+        let action = roundtrip_frame(&plan.action);
+        match (&action, &plan.action) {
+            (Action::Configure(actual), Action::Configure(expected)) => {
+                assert_eq!(actual, expected)
+            }
+            (
+                Action::Enroll {
+                    anchor: actual_anchor,
+                    anchor_observed_at_unix_ms: actual_observed,
+                    issued_at_unix_ms: actual_issued,
+                    expires_at_unix_ms: actual_expires,
+                    enrollment: actual_enrollment,
+                },
+                Action::Enroll {
+                    anchor: expected_anchor,
+                    anchor_observed_at_unix_ms: expected_observed,
+                    issued_at_unix_ms: expected_issued,
+                    expires_at_unix_ms: expected_expires,
+                    enrollment: expected_enrollment,
+                },
+            ) => {
+                assert_eq!(actual_anchor, expected_anchor);
+                assert_eq!(actual_observed, expected_observed);
+                assert_eq!(actual_issued, expected_issued);
+                assert_eq!(actual_expires, expected_expires);
+                assert_eq!(actual_enrollment, expected_enrollment);
+            }
+            _ => panic!("custody codec changed the action variant"),
+        }
+        let decoded = roundtrip_frame(&plan);
+        assert_eq!(decoded.validated_at_unix_ms, plan.validated_at_unix_ms);
+        assert_eq!(decoded.deadline_unix_ms, plan.deadline_unix_ms);
+        assert_eq!(
+            decoded.instruction(&config).unwrap(),
+            plan.instruction(&config).unwrap()
+        );
+    }
+}
+
+#[test]
+fn custody_decoders_reject_another_root_schema() {
+    let (_, policy) = fixture();
+    let plan = configure_plan(policy);
+    let selection_bytes = encode_bounded(&plan.selection, MAX_PLAN_BYTES).unwrap();
+    let action_bytes = encode_bounded(&plan.action, MAX_PLAN_BYTES).unwrap();
+    let plan_bytes = encode_bounded(&plan, MAX_PLAN_BYTES).unwrap();
+    assert!(matches!(
+        norito::decode_canonical::<Plan>(&selection_bytes),
+        Err(norito::Error::SchemaMismatch)
+    ));
+    assert!(matches!(
+        norito::decode_canonical::<StreamTokenCustodySelection>(&action_bytes),
+        Err(norito::Error::SchemaMismatch)
+    ));
+    assert!(matches!(
+        norito::decode_canonical::<Action>(&plan_bytes),
+        Err(norito::Error::SchemaMismatch)
+    ));
+    assert!(decode_bounded::<Plan>(&selection_bytes, MAX_PLAN_BYTES).is_err());
+    assert!(decode_bounded::<StreamTokenCustodySelection>(&action_bytes, MAX_PLAN_BYTES).is_err());
+    assert!(decode_bounded::<Action>(&plan_bytes, MAX_PLAN_BYTES).is_err());
+}

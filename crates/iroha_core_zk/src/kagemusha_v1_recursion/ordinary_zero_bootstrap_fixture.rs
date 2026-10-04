@@ -1,11 +1,12 @@
 //! Bare public mathematical originals. No release, FI, phone or Native owner is admitted.
 
-use super::*;
 use crate::kagemusha_v1_poseidon::{
     KAGEMUSHA_STATE_DOMAIN_V1, KagemushaPoseidonFieldV1, digest_limbs, empty_replay_root, encode,
     from_u128, hash, paired_commitment,
 };
-use crate::kagemusha_v1_state::{BootstrapStatementV1, DigestV1};
+use crate::kagemusha_v1_recursion::KagemushaGuardBundleRelationWitnessV1;
+use crate::kagemusha_v1_state::{BootstrapStatementV1, DigestV1, KagemushaStateV1};
+use halo2_proofs::halo2curves::pasta::{Fp, Fq};
 use iroha_crypto::{Algorithm, KeyPair, Signature as EdSignature};
 use iroha_data_model::kagemusha::{
     KagemushaAppKeySecurityLevelV1, KagemushaAppOperationApprovalChallengeV1,
@@ -18,19 +19,20 @@ use iroha_data_model::kagemusha::{
     kagemusha_ordinary_app_account_binding_v1, kagemusha_ordinary_financial_epoch_id_v1,
 };
 use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
+use sha2::{Digest as _, Sha256};
 
-pub(super) struct Fixture {
-    pub(super) state: KagemushaStateV1,
-    pub(super) statement: BootstrapStatementV1,
-    pub(super) relation: KagemushaGuardBundleRelationWitnessV1,
-    pub(super) credential: KagemushaOrdinaryAppCredentialV1,
-    pub(super) approval: KagemushaAppOperationApprovalV1,
-    pub(super) issuer_table:
+pub(in super::super) struct Fixture {
+    pub(in super::super) state: KagemushaStateV1,
+    pub(in super::super) statement: BootstrapStatementV1,
+    pub(in super::super) relation: KagemushaGuardBundleRelationWitnessV1,
+    pub(in super::super) credential: KagemushaOrdinaryAppCredentialV1,
+    pub(in super::super) approval: KagemushaAppOperationApprovalV1,
+    pub(in super::super) issuer_table:
         crate::kagemusha_v1_recursion::ordinary_issuer_config::OrdinaryIssuerTableV1,
-    pub(super) previous_counter: Option<u32>,
+    pub(in super::super) previous_counter: Option<u32>,
 }
 
-pub(super) fn resign_credential(c: &mut KagemushaOrdinaryAppCredentialV1) {
+pub(in super::super) fn resign_credential(c: &mut KagemushaOrdinaryAppCredentialV1) {
     // Known public fixture keys re-sign a foreign complete original. This ensures
     // substitution reaches the real relation rather than failing a data-only codec.
     let ed = KeyPair::from_seed(vec![5; 32], Algorithm::Ed25519);
@@ -113,7 +115,7 @@ fn seal_state(s: &mut KagemushaStateV1) {
         .expect("actual complete Native zero-State commitments");
 }
 
-pub(super) fn sign_approval(
+pub(in super::super) fn sign_approval(
     c: &KagemushaAppOperationApprovalChallengeV1,
     apple: bool,
 ) -> KagemushaAppOperationApprovalEvidenceV1 {
@@ -147,7 +149,7 @@ pub(super) fn sign_approval(
     KagemushaAppOperationApprovalEvidenceV1::AppleAppAttest { raw_assertion: raw }
 }
 
-pub(super) fn fixture(
+pub(in super::super) fn fixture(
     apple: bool,
     release_id: DigestV1,
     suite_id: DigestV1,
@@ -158,7 +160,7 @@ pub(super) fn fixture(
 
 /// Same bare mathematical credential/State fixture with the sole account binding formula.
 /// This supplies no release, enrollment, FI, source finality or Native owner capability.
-pub(super) fn fixture_for_account(
+pub(in super::super) fn fixture_for_account(
     apple: bool,
     release_id: DigestV1,
     suite_id: DigestV1,
@@ -423,7 +425,7 @@ fn fixture_with_account_binding(
 #[test]
 fn shared_bootstrap_original_binds_statement_state_and_approval_for_both_platforms() {
     for apple in [false, true] {
-        let account = super::ordinary_qualification_wallet_account_v1(62);
+        let account = super::super::ordinary_qualification_wallet_account_v1(62);
         let f = fixture_for_account(apple, [41; 32], [40; 32], [42; 32], &account);
         f.state.validate().unwrap();
         f.relation.validate().unwrap();

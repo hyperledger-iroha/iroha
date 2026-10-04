@@ -25,9 +25,7 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
     private var canonicalReadAuth: ToriiCanonicalRequestAuth {
         ToriiCanonicalRequestAuth(
             accountId: authority,
-            privateKey: canonicalSigningSeed,
-            timestampMs: 4_102_444_801_000,
-            nonce: "canonical-read-test"
+            privateKey: canonicalSigningSeed
         )
     }
 
@@ -68,6 +66,10 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
             defaultHeaders: defaultHeaders,
             localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical),
             canonicalRequestAuth: canonicalReadAuth,
+            canonicalRequestFreshness: ToriiCanonicalRequestFreshness(
+                timestampMs: { 4_102_444_801_000 },
+                nonce: { "canonical-read-test" }
+            ),
             operatorSigningContext: operatorSigningContext
         )
     }
@@ -1915,9 +1917,12 @@ final class ToriiAccountAndNodeBoundaryTests: XCTestCase {
             )
             XCTFail("Expected redirect response to fail closed")
         } catch {
-            guard case let ToriiClientError.httpStatus(code, message, rejectCode) = error else {
+            guard case let ToriiClientError.api(apiError) = error else {
                 return XCTFail("Expected HTTP status error, got \(error)")
             }
+            let code = apiError.status
+            let message: String? = apiError.message
+            let rejectCode = apiError.rejectCode
             XCTAssertEqual(code, 307)
             XCTAssertEqual(message, "server echoed <redacted>")
             XCTAssertEqual(rejectCode, "<redacted>")

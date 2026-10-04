@@ -7,13 +7,10 @@ fn parse_asset_definition_item_literal(literal: &str) -> Option<AssetDefinitionI
         .or_else(|| AssetDefinitionId::parse_address_literal(literal).ok())
 }
 #[cfg(feature = "app_api")]
-fn asset_item_home_dataspace_id(
+fn asset_row_home_dataspace_id(
     app: &AppState,
-    item: &Value,
+    object: &norito::json::Map,
 ) -> Result<Option<DataSpaceId>, Error> {
-    let Some(object) = item.as_object() else {
-        return Ok(None);
-    };
     if let Some(alias_literal) = object
         .get("asset_alias")
         .and_then(Value::as_str)
@@ -44,10 +41,7 @@ fn asset_item_home_dataspace_id(
     Ok(None)
 }
 #[cfg(feature = "app_api")]
-fn asset_item_has_global_scope(item: &Value) -> bool {
-    let Some(object) = item.as_object() else {
-        return false;
-    };
+fn asset_row_has_global_scope(object: &norito::json::Map) -> bool {
     if let Some(scope) = object.get("scope").and_then(Value::as_str) {
         return scope == "global";
     }
@@ -84,79 +78,26 @@ fn should_keep_authoritative_global_item(
     route: RoutingDecision,
     item: &Value,
 ) -> Result<bool, Error> {
-    if !asset_item_has_global_scope(item) {
+    item.as_object().map_or(Ok(true), |row| {
+        should_keep_authoritative_global_row(app, route, row)
+    })
+}
+/// Whether `route` serves this asset row. A global-scope balance is visible on
+/// every route but served only by its definition's home dataspace (or a
+/// public route when the home is unknown), so each row has one route.
+#[cfg(feature = "app_api")]
+fn should_keep_authoritative_global_row(
+    app: &AppState,
+    route: RoutingDecision,
+    row: &norito::json::Map,
+) -> Result<bool, Error> {
+    if !asset_row_has_global_scope(row) {
         return Ok(true);
     }
-    if let Some(home_dataspace_id) = asset_item_home_dataspace_id(app, item)? {
+    if let Some(home_dataspace_id) = asset_row_home_dataspace_id(app, row)? {
         return Ok(home_dataspace_id == route.dataspace_id);
     }
     Ok(route_is_public_or_universal(app, route))
-}
-#[cfg(feature = "app_api")]
-fn filter_non_authoritative_global_list_rows(
-    app: &AppState,
-    endpoint: ToriiReadEndpointV1,
-    payloads: Vec<(RoutingDecision, Value)>,
-) -> Result<Vec<(RoutingDecision, Value)>, Response> {
-    if !matches!(
-        endpoint,
-        ToriiReadEndpointV1::AccountAssetsGet
-            | ToriiReadEndpointV1::AccountAssetsQuery
-            | ToriiReadEndpointV1::AssetHoldersGet
-            | ToriiReadEndpointV1::AssetHoldersQuery
-    ) {
-        return Ok(payloads);
-    }
-    let mut payloads = payloads;
-    for (route, payload) in &mut payloads {
-        let Some(object) = payload.as_object_mut() else {
-            return Err(torii_internal_json_error(
-                "expected JSON object payload while filtering routed list response",
-            ));
-        };
-        let Some(items) = object.get_mut("items").and_then(Value::as_array_mut) else {
-            return Err(torii_internal_json_error(
-                "expected `items` array while filtering routed list response",
-            ));
-        };
-        let mut refusal = None;
-        items.retain(|item| {
-            if refusal.is_some() {
-                return true;
-            }
-            let keep = match should_keep_authoritative_global_item(app, *route, item) {
-                Ok(keep) => keep,
-                Err(error) => {
-                    refusal = Some(error);
-                    return true;
-                }
-            };
-            if !keep {
-                let asset = item
-                    .as_object()
-                    .and_then(|object| object.get("asset"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("<unknown>");
-                iroha_logger::debug!(
-                    dataspace_id = %route.dataspace_id,
-                    asset,
-                    "suppressing non-authoritative global asset row from routed Torii merge"
-                );
-            }
-            keep
-        });
-        if let Some(error) = refusal {
-            return Err(error_response_with_format(error, ResponseFormat::Json));
-        }
-        let total = u64::try_from(items.len()).unwrap_or(u64::MAX);
-        let Some(total_value) = object.get_mut("total") else {
-            return Err(torii_internal_json_error(
-                "expected `total` while filtering routed list response",
-            ));
-        };
-        *total_value = Value::from(total);
-    }
-    Ok(payloads)
 }
 #[cfg(feature = "app_api")]
 fn filter_non_authoritative_global_portfolio_rows(

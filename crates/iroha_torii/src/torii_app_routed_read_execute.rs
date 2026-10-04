@@ -971,6 +971,20 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
 ) -> Response {
     match merge {
         ToriiReadFanoutMergeV1::List => {
+            if let Some(target) = collection_target_for_read(endpoint, &path_args) {
+                return execute_collection_fanout(
+                    app,
+                    routes,
+                    route_scope,
+                    endpoint,
+                    target,
+                    path_args,
+                    query_string,
+                    body,
+                    proxy_memory,
+                )
+                .await;
+            }
             if endpoint == ToriiReadEndpointV1::AccountAssetsGet
                 && matches!(&route_scope, ToriiFanoutRouteScopeV1::TargetAccount { .. })
             {

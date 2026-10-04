@@ -273,34 +273,7 @@ class MusubiToriiClientV1 private constructor(builder: Builder) : AutoCloseable 
         target: URI,
         body: ByteArray,
         canonicalAuth: ToriiCanonicalRequestAuth,
-    ): Map<String, String> {
-        val timestampMs = canonicalAuth.timestampMs
-        val nonce = canonicalAuth.nonce
-        require((timestampMs == null) == (nonce == null)) {
-            "timestampMs and nonce must be provided together"
-        }
-        return if (timestampMs == null) {
-            CanonicalRequestSigner.buildHeaders(
-                localSigningContext.networkId(),
-                "POST",
-                target,
-                body,
-                canonicalAuth.accountId,
-                canonicalAuth.signer,
-            )
-        } else {
-            CanonicalRequestSigner.buildHeaders(
-                localSigningContext.networkId(),
-                "POST",
-                target,
-                body,
-                canonicalAuth.accountId,
-                canonicalAuth.signer,
-                timestampMs,
-                nonce!!,
-            )
-        }
-    }
+    ): Map<String, String> = canonicalAuth.headers(localSigningContext.networkId(), "POST", target, body)
 
     private fun requireCanonicalHeadersUnset(headers: Map<String, String>) {
         require(headers.keys.none { candidate ->

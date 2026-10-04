@@ -85,6 +85,8 @@ pub enum LocalnetCommand {
     Reset(ResetArgs),
     /// Generate an operator-owned network bundle without starting validators.
     Generate(localnet::Args),
+    /// Validate an isolated native beacon configuration and opaque descriptor handoff.
+    ValidateBeaconLaunch(localnet::ValidateBeaconLaunchArgs),
 }
 
 #[derive(Debug, Args)]
@@ -249,6 +251,7 @@ impl<T: Write> RunArgs<T> for LocalnetCommand {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         match self {
             Self::Generate(args) => args.run(writer),
+            Self::ValidateBeaconLaunch(args) => args.run(writer),
             Self::Up(args) => {
                 let store = args.named.store.open()?;
                 match up(&store, &args.named.name, args.timeout) {

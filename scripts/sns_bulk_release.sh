@@ -4,8 +4,9 @@
 set -euo pipefail
 
 SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_ROOT}/../../.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_ROOT}/.." && pwd)"
 PYTHON="${PYTHON:-python3}"
+CALLER_ROOT="$(pwd -P)"
 
 log() {
   printf '[alias-setup] %s\n' "$*" >&2
@@ -14,6 +15,15 @@ log() {
 err() {
   log "error: $*"
   exit 1
+}
+
+# Filesystem arguments are owned by the caller even while helper scripts run
+# from this checkout. Bare executable names retain their normal PATH lookup.
+absolute_caller_path() {
+  case "$1" in
+    /*) printf '%s\n' "$1" ;;
+    *) printf '%s/%s\n' "${CALLER_ROOT}" "$1" ;;
+  esac
 }
 
 usage() {
@@ -111,6 +121,18 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "${INTENT_PATH}" ]] || err "--intent is required"
+INTENT_PATH="$(absolute_caller_path "${INTENT_PATH}")"
+RELEASE_ROOT="$(absolute_caller_path "${RELEASE_ROOT}")"
+[[ -z "${PLAN_PATH}" ]] || PLAN_PATH="$(absolute_caller_path "${PLAN_PATH}")"
+[[ -z "${METRICS_PATH}" ]] || METRICS_PATH="$(absolute_caller_path "${METRICS_PATH}")"
+[[ -z "${SUMMARY_PATH}" ]] || SUMMARY_PATH="$(absolute_caller_path "${SUMMARY_PATH}")"
+[[ -z "${CLIENT_CONFIG}" ]] || CLIENT_CONFIG="$(absolute_caller_path "${CLIENT_CONFIG}")"
+case "${IROHA_CLI}" in
+  */*) IROHA_CLI="$(absolute_caller_path "${IROHA_CLI}")" ;;
+esac
+case "${PYTHON}" in
+  */*) PYTHON="$(absolute_caller_path "${PYTHON}")" ;;
+esac
 [[ -f "${INTENT_PATH}" ]] || err "alias setup intent is not a readable file"
 
 if [[ -z "${RELEASE_NAME}" ]]; then

@@ -40,9 +40,7 @@ final class ToriiApplicationPostAuthTests: XCTestCase {
             .accountId(networkPrefix: AccountId.defaultNetworkPrefix)
         return ToriiCanonicalRequestAuth(
             accountId: accountId,
-            privateKey: signingSeed,
-            timestampMs: 4_102_444_801_000,
-            nonce: "swift-application-post-auth"
+            privateKey: signingSeed
         )
     }
 
@@ -143,7 +141,7 @@ final class ToriiApplicationPostAuthTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testRwaQueryBindsExactGenesisPathAndBody() async throws {
+    func testRwaCollectionQueryBindsExactGenesisPathAndBody() async throws {
         var requests: [URLRequest] = []
         ApplicationPostURLProtocol.handler = { request in
             requests.append(request)
@@ -154,28 +152,21 @@ final class ToriiApplicationPostAuthTests: XCTestCase {
                     httpVersion: nil,
                     headerFields: ["Content-Type": "application/json"]
                 )!,
-                Data(#"{"items":[{"id":"lot-002$commodities.sora"}],"total":1}"#.utf8)
+                Data(#"{"items":[{"id":"lot-002$commodities.sora"}],"next_cursor":null,"total":1}"#.utf8)
             )
         }
-        let first = ToriiQueryEnvelope(
-            query: "recent-rwas",
-            select: [],
-            pagination: ToriiQueryPagination(limit: 1)
-        )
-        let second = ToriiQueryEnvelope(
-            query: "recent-rwas",
-            select: [],
-            pagination: ToriiQueryPagination(limit: 2)
-        )
+        let first = ToriiListQuery(select: ["id"], limit: 1)
+        let second = ToriiListQuery(select: ["id"], limit: 2)
 
-        let page = try await client(canonicalRequestAuth: auth).queryRwas(first)
+        let page = try await client(canonicalRequestAuth: auth).rwas.page(first, as: ToriiJSONObject.self)
         _ = try await client(
             networkId: TestNetworkIds.other,
             canonicalRequestAuth: auth
-        ).queryRwas(first)
-        _ = try await client(canonicalRequestAuth: auth).queryRwas(second)
+        ).rwas.page(first, as: ToriiJSONObject.self)
+        _ = try await client(canonicalRequestAuth: auth).rwas.page(second, as: ToriiJSONObject.self)
 
-        XCTAssertEqual(page.items.first?.id, "lot-002$commodities.sora")
+        XCTAssertEqual(page.items.first?["id"], .string("lot-002$commodities.sora"))
+        XCTAssertEqual(page.total, 1)
         XCTAssertEqual(requests.count, 3)
         let signatures = try requests.map {
             try XCTUnwrap($0.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature))
@@ -234,8 +225,8 @@ final class ToriiApplicationPostAuthTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testRwaQueryIsOneShotAndRejectsLegacyAuthBeforeDispatch() async {
-        let envelope = ToriiQueryEnvelope(select: [])
+    func testRwaCollectionQueryIsOneShotAndRejectsInvalidAuthBeforeDispatch() async {
+        let query = ToriiListQuery(limit: 1)
         var dispatches = 0
         ApplicationPostURLProtocol.handler = { request in
             dispatches += 1
@@ -250,10 +241,11 @@ final class ToriiApplicationPostAuthTests: XCTestCase {
             )
         }
         do {
-            _ = try await client(canonicalRequestAuth: auth).queryRwas(envelope)
+            _ = try await client(canonicalRequestAuth: auth).rwas.page(query)
             XCTFail("503 must fail closed")
         } catch {
             XCTAssertEqual(dispatches, 1)
+            XCTAssertEqual((error as? ToriiClientError)?.status, 503)
         }
 
         var invalidDispatched = false
@@ -270,17 +262,10 @@ final class ToriiApplicationPostAuthTests: XCTestCase {
             )
         }
         do {
-            _ = try await client().queryRwas(envelope)
-            XCTFail("missing canonical authentication must fail before dispatch")
-        } catch let ToriiClientError.invalidPayload(reason) {
-            XCTAssertTrue(reason.contains("requires canonical account authentication"))
-        } catch {
-            XCTFail("unexpected error: \(error)")
-        }
-        do {
-            _ = try await client(defaultHeaders: [
-                ToriiCanonicalRequest.headerSignature: "precomputed"
-            ]).queryRwas(envelope, canonicalAuth: auth)
+            _ = try await client(
+                defaultHeaders: [ToriiCanonicalRequest.headerSignature: "precomputed"],
+                canonicalRequestAuth: auth
+            ).rwas.page(query)
             XCTFail("precomputed canonical headers must fail before dispatch")
         } catch let ToriiClientError.invalidPayload(reason) {
             XCTAssertTrue(reason.contains("cannot be precomputed"))
@@ -292,7 +277,7 @@ final class ToriiApplicationPostAuthTests: XCTestCase {
             privateKey: signingSeed
         )
         do {
-            _ = try await client().queryRwas(envelope, canonicalAuth: aliasAuth)
+            _ = try await client(canonicalRequestAuth: aliasAuth).rwas.page(query)
             XCTFail("an alias must not authenticate the query")
         } catch let ToriiClientError.invalidPayload(reason) {
             XCTAssertTrue(reason.contains("canonical I105"))

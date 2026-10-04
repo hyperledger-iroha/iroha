@@ -1373,7 +1373,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             for name, value in assignments.items():
                 command.extend(("--set", f"{name}={value}"))
             command.extend(("--", str(tools / "cargo")))
-            return subprocess.run(command, text=True, capture_output=True, check=False)
+            return subprocess.run(command, cwd=self.root, text=True, capture_output=True, check=False)
 
         for profile in ("apple-ios-device", "apple-ios-simulator", "apple-macos"):
             selected = dict(environment)

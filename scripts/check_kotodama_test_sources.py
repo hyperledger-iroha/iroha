@@ -30,6 +30,21 @@ EXPECTED_SOURCES = (
 OUT_OF_LINE_TEST_SOURCES = {
     "crates/kotodama_lang/src/compiler.rs": "crates/kotodama_lang/src/compiler/tests.rs",
 }
+# These exact Rust child modules are part of the compiler's one test owner.
+EXPECTED_TEST_MODULES = {
+    "crates/kotodama_lang/src/compiler.rs": (
+        ("literal_helpers", "crates/kotodama_lang/src/compiler/tests/literal_helpers.rs"),
+        ("rematerialized", "crates/kotodama_lang/src/compiler/tests/rematerialized.rs"),
+    ),
+}
+# The canonical pool fixture intentionally has two independent compiler controls.
+# No other fixture or consumer is permitted to share an include.
+SHARED_EXTERNAL_FIXTURE_OWNERS = {
+    "crates/iroha_core/src/validation_fee/fixtures/dlmm_pool.ko": frozenset({
+        ("crates/kotodama_lang/src/compiler.rs", "canonical_dlmm_literal_folding_measures_same_compiler_artifacts_and_public_metadata", True),
+        ("crates/kotodama_lang/src/compiler.rs", "canonical_dlmm_rematerialization_measures_same_compiler_artifacts_and_metadata", True),
+    }),
+}
 EXPECTED_TEST_INCLUDES = {
     "crates/kotodama_lang/src/compiler.rs": (
         "compiler/tests/staged_mint_access_hints.rs",
@@ -78,6 +93,7 @@ EXPECTED_EXTERNAL_FIXTURES = {
         "crates/kotodama_lang/src/samples/mint_rose_trigger.ko",
         "crates/kotodama_lang/src/samples/zk_vote_ballot.ko",
         "crates/kotodama_lang/fixtures/koto_v1/staged_mint_access_hints/001.ko",
+        "crates/iroha_core/src/validation_fee/fixtures/dlmm_pool.ko",
     ),
 }
 ROOT_KEYS = frozenset(
@@ -96,6 +112,7 @@ SOURCE_KEYS = frozenset(
         "fixture_directories",
         "external_fixtures",
         "test_includes",
+        "test_modules",
         "test_names",
         "test_names_sha256",
     }
@@ -525,6 +542,33 @@ def _logical_source(root: Path, source_path: str) -> str:
     if source.count(declaration) != 1:
         _fail(f"out-of-line test declaration changed in {source_path}")
     test_source = _regular_bytes(root / test_path, test_path).decode("utf-8")
+    modules = EXPECTED_TEST_MODULES.get(source_path, ())
+    masked = _mask_rust(test_source)
+    observed_modules = re.findall(r"\bmod\s+(?:r#)?([^\W\d]\w*)\s*;", masked)
+    if observed_modules != [name for name, _ in modules]:
+        _fail(f"Rust test module inventory changed in {test_path}: {observed_modules}")
+    for name, child_path in modules:
+        relative_child = posixpath.relpath(child_path, str(PurePosixPath(test_path).parent))
+        child_declaration = f'#[path = "{relative_child}"]\nmod {name};'
+        if test_source.count(child_declaration) != 1:
+            _fail(f"Rust test module declaration changed in {test_path}: {name}")
+        child_source = _regular_bytes(root / child_path, child_path).decode("utf-8")
+        child_masked = _mask_rust(child_source)
+        if re.search(r"\bmod\s+(?:r#)?([^\W\d]\w*)\s*;", child_masked):
+            _fail(f"Rust test module nesting is not sealed in {child_path}")
+        child_edits = []
+        for match in re.finditer(
+            r'\b(?P<macro>include|include_str|include_bytes)!\(\s*"(?P<path>[^"\n]+)"\s*\)',
+            child_source,
+        ):
+            if not child_masked[match.start():].startswith(match.group("macro") + "!"):
+                continue
+            target = _resolved_include_path(child_path, match.group("path"), "test module include")
+            rebased = posixpath.relpath(target, str(PurePosixPath(test_path).parent))
+            child_edits.append((match.start("path"), match.end("path"), rebased))
+        for start, end, rebased in reversed(child_edits):
+            child_source = child_source[:start] + rebased + child_source[end:]
+        test_source = test_source.replace(child_declaration, f"mod {name} {{\n{child_source}\n}}")
     masked = _mask_rust(test_source)
     includes = re.compile(
         r'\b(?P<macro>include|include_str|include_bytes)!\(\s*"(?P<path>[^"\n]+)"\s*\)'
@@ -547,6 +591,7 @@ def _capture_manifest(root: Path) -> dict[str, Any]:
     sources: list[dict[str, Any]] = []
     fixtures: list[dict[str, Any]] = []
     seen_assets: set[str] = set()
+    shared_consumers: dict[str, set[tuple[str, str, bool]]] = {}
     for source_path in EXPECTED_SOURCES:
         source = _logical_source(root, source_path)
         names = _expanded_test_names(root, source_path, source)
@@ -558,6 +603,7 @@ def _capture_manifest(root: Path) -> dict[str, Any]:
                 "fixture_directories": list(directories),
                 "external_fixtures": list(external),
                 "test_includes": list(EXPECTED_TEST_INCLUDES[source_path]),
+                "test_modules": [list(module) for module in EXPECTED_TEST_MODULES.get(source_path, ())],
                 "test_names": names,
                 "test_names_sha256": hashlib.sha256(
                     ("\n".join(names) + "\n").encode("utf-8")
@@ -596,11 +642,18 @@ def _capture_manifest(root: Path) -> dict[str, Any]:
                     _fail(
                         f"fixture include is outside the owned fixture inventory: {asset}"
                     )
-                if asset in seen_assets:
+                owner = _owner(spans, match.start())
+                consumer = (owner_source, owner.name, owner.is_test)
+                shared = SHARED_EXTERNAL_FIXTURE_OWNERS.get(asset)
+                if shared is not None:
+                    observed = shared_consumers.setdefault(asset, set())
+                    if consumer not in shared or consumer in observed:
+                        _fail(f"shared fixture consumer changed: {asset} {consumer}")
+                    observed.add(consumer)
+                elif asset in seen_assets:
                     _fail(f"duplicate fixture include: {asset}")
                 seen_assets.add(asset)
                 root_assets.add(asset)
-                owner = _owner(spans, match.start())
                 try:
                     data = _regular_bytes(root / asset, asset)
                 except FileNotFoundError:
@@ -640,6 +693,8 @@ def _capture_manifest(root: Path) -> dict[str, Any]:
                 )
         if set(external) - root_assets:
             _fail(f"external fixture include inventory changed in {source_path}")
+    if shared_consumers != SHARED_EXTERNAL_FIXTURE_OWNERS:
+        _fail("shared external fixture consumer inventory changed")
     return {
         "format": FORMAT,
         "schema_version": SCHEMA_VERSION,

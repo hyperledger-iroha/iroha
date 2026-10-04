@@ -1139,34 +1139,7 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
         target: URI,
         body: ByteArray,
         sponsorAuth: ToriiCanonicalRequestAuth,
-    ): Map<String, String> {
-        val timestampMs = sponsorAuth.timestampMs
-        val nonce = sponsorAuth.nonce
-        require((timestampMs == null) == (nonce == null)) {
-            "timestampMs and nonce must be provided together"
-        }
-        return if (timestampMs == null) {
-            CanonicalRequestSigner.buildHeaders(
-                localSigningContext.networkId(),
-                method,
-                target,
-                body,
-                sponsorAuth.accountId,
-                sponsorAuth.signer,
-            )
-        } else {
-            CanonicalRequestSigner.buildHeaders(
-                localSigningContext.networkId(),
-                method,
-                target,
-                body,
-                sponsorAuth.accountId,
-                sponsorAuth.signer,
-                timestampMs,
-                checkNotNull(nonce),
-            )
-        }
-    }
+    ): Map<String, String> = sponsorAuth.headers(localSigningContext.networkId(), method, target, body)
 
     private fun buildRequest(
         method: String,

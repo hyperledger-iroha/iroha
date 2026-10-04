@@ -206,12 +206,14 @@ fn deployment_peer_clients_reject_runtime_chain_pin_mismatch_before_io() {
             trust.peers[0].torii_origin.parse().unwrap(),
         ),
         filesystem_config: crate::client_config::FilesystemConfig::default(),
+        offline_fallback: false,
         operator_key_pair: None,
         transaction_metadata: None,
         fee_payment: crate::FeePaymentArgs::default(),
         input_instructions: false,
         output_instructions: false,
         output_format: crate::CliOutputFormat::Json,
+        json_lines: false,
         i18n: iroha_i18n::Localizer::new(iroha_i18n::Bundle::Cli, iroha_i18n::Language::English),
     };
     assert_eq!(peer_clients(&context, &trust).unwrap().len(), 4);

@@ -234,8 +234,14 @@ fn both_satisfied(f: &Originals, public_mutations: bool) -> Result<bool, String>
     assert_eq!(eq_public.len(), 113);
     assert_eq!(ep_public.len(), 113);
     let eq = build_ordinary_mint_eq_v1(&eq_parameters, &witness(f), root, &f.table)?;
-    let geometry = eq.jobs.capacity_profile().unwrap();
-    println!("Mint113 Fp fixedK16 SHA jobs/blocks/rows: {geometry:?}");
+    let geometry = eq
+        .jobs
+        .capacity_profile_for_lanes::<ORDINARY_MINT_SHA_LANES_V1>()
+        .unwrap();
+    println!(
+        "Mint113 Fp fixedK16 SHA{ORDINARY_MINT_SHA_LANES_V1} jobs/blocks/rows: {geometry:?}; public Base layout: {:?}",
+        eq.builder.config_params
+    );
     assert!(geometry.2 <= (1usize << KAGEMUSHA_HALO2_K_V1) - 9);
     let eq_pass = MockProver::run(KAGEMUSHA_HALO2_K_V1, &eq, vec![eq_public.clone()])
         .map_err(|e| format!("Eq Mint synthesis: {e:?}"))?
@@ -258,12 +264,18 @@ fn both_satisfied(f: &Originals, public_mutations: bool) -> Result<bool, String>
     drop(eq);
     halo2_proofs::release_allocator_slack();
     let ep = build_ordinary_mint_ep_v1(&ep_parameters, &witness(f), root, &f.table)?;
-    let ep_geometry = ep.jobs.capacity_profile().unwrap();
+    let ep_geometry = ep
+        .jobs
+        .capacity_profile_for_lanes::<ORDINARY_MINT_SHA_LANES_V1>()
+        .unwrap();
     assert_eq!(
         geometry, ep_geometry,
         "exact both-field compression topology"
     );
-    println!("Mint113 Fq fixedK16 SHA jobs/blocks/rows: {ep_geometry:?}");
+    println!(
+        "Mint113 Fq fixedK16 SHA{ORDINARY_MINT_SHA_LANES_V1} jobs/blocks/rows: {ep_geometry:?}; public Base layout: {:?}",
+        ep.builder.config_params
+    );
     let ep_pass = MockProver::run(KAGEMUSHA_HALO2_K_V1, &ep, vec![ep_public.clone()])
         .map_err(|e| format!("Ep Mint synthesis: {e:?}"))?
         .verify()

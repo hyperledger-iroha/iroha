@@ -1,21 +1,6 @@
 //! Streaming decode enforces the configured max archive length.
 use norito::{Error, core, stream_vec_collect_from_reader};
 use std::io::Cursor;
-struct MaxArchiveGuard {
-    prev: u64,
-}
-impl MaxArchiveGuard {
-    fn new(limit: u64) -> Self {
-        let prev = core::max_archive_len();
-        core::set_max_archive_len(limit);
-        Self { prev }
-    }
-}
-impl Drop for MaxArchiveGuard {
-    fn drop(&mut self) {
-        core::set_max_archive_len(self.prev);
-    }
-}
 fn make_header<T: core::NoritoSerialize>(len: u64) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(core::Header::SIZE);
     bytes.extend_from_slice(b"NRT0");
@@ -30,15 +15,44 @@ fn make_header<T: core::NoritoSerialize>(len: u64) -> Vec<u8> {
 }
 #[test]
 fn stream_vec_rejects_over_limit_payload() {
-    let _guard = MaxArchiveGuard::new(8);
-    let bytes = make_header::<Vec<u32>>(16);
+    // Do not lower the process-wide limit while other grouped tests decode.
+    let limit = core::max_archive_len();
+    let length = limit
+        .checked_add(1)
+        .expect("archive limit leaves an invalid length");
+    let bytes = make_header::<Vec<u32>>(length);
     let err = stream_vec_collect_from_reader::<_, u32>(Cursor::new(bytes))
         .expect_err("over-limit payload must fail");
     assert!(matches!(
         err,
         Error::ArchiveLengthExceeded {
-            length: 16,
-            limit: 8
-        }
+            length: observed_length,
+            limit: observed_limit
+        } if observed_length == length && observed_limit == limit
     ));
+}
+
+#[test]
+fn stream_vec_rejects_over_limit_before_reading_payload() {
+    let limit = core::max_archive_len();
+    let length = limit
+        .checked_add(1)
+        .expect("archive limit leaves an invalid length");
+    let mut bytes = make_header::<Vec<u32>>(length);
+    let payload = [0xa5; 8];
+    bytes.extend_from_slice(&payload);
+    let mut reader = Cursor::new(bytes);
+
+    let err = stream_vec_collect_from_reader::<_, u32>(&mut reader)
+        .expect_err("over-limit header must fail before payload reads");
+    assert!(matches!(
+        err,
+        Error::ArchiveLengthExceeded {
+            length: observed_length,
+            limit: observed_limit
+        } if observed_length == length && observed_limit == limit
+    ));
+    assert_eq!(reader.position(), core::Header::SIZE as u64);
+    assert_eq!(&reader.get_ref()[core::Header::SIZE..], &payload);
+    assert_eq!(core::max_archive_len(), limit);
 }

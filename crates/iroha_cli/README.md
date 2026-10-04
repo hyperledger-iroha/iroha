@@ -34,7 +34,19 @@ the current installation instructions.
 
 ## Usage
 The CLI will attempt to detect your system language for messages. Use `--language <CODE>` to override this selection.
-For automation, prefer `--output-format json --machine` to suppress startup chatter and fail fast when `client.toml` is missing.
+`-o/--output-format` selects `text`, `json` (one pretty document) or `jsonl`
+(compact JSON, one value per line; list results print one element per line and
+event streams one event per line). Without the option the CLI prints text when
+stdout is a terminal and JSON otherwise, so scripts that capture stdout always
+receive JSON. `--machine` always defaults to JSON and loads client configuration
+strictly; it is the recommended flag for automation.
+
+Errors go to stderr. Text errors list every distinct cause once under
+`Caused by:` and end with an actionable `hint:` when one is known; JSON errors
+carry the same data as `{"error": {"kind", "message", "causes", "hints",
+"exit_code"}}`. Exit codes: 1 command failure, 3 configuration, 4 invalid input,
+7 internal. Invoking a command group without a subcommand prints that group's
+help to stderr and exits 2.
 
 Validator summaries retain complete activation heights and tenure bounds.
 Space Directory and ZK JSON inputs use Norito's shared JSON nesting limit
@@ -209,12 +221,22 @@ operations also support machine output without a populated `client.toml`.
 
 ### Client configuration
 
+Runtime commands read `client.toml` from the current directory, or the file
+passed with `-c/--config`; relative paths are resolved against the current
+directory. Offline helpers (`tools address`, `tools crypto`, `tools ivm` and
+`tools version`) run without a configuration, also with `--machine`;
+`tools version` then reports only the client build.
+
 Select a public network with `[account].profile`. The supported `taira` and
 `minamoto` profiles derive the correct I105 chain discriminant; the top-level
-`chain` value does not select that profile.
+`chain` value does not select that profile. `network_id` is required: it is the
+genesis-derived identity that every signed request binds. A node advertises it
+at `GET <torii_url>/v1/accounts/capabilities`; confirm it through an
+independent channel before trusting it.
 
 ```toml
 chain = "fc56984b-2be7-431d-840e-21514d1883f0"
+network_id = "<genesis-derived network id>"
 torii_url = "https://taira.sora.org/"
 
 [account]
@@ -696,45 +718,87 @@ Raw `ledger domain register` is reserved for genesis/bootstrap and is not expose
 
 ### Create new Account
 
-To create an account, specify the entity type (`account`) and the command (`register`). Then pass a canonical I105 `AccountId` via `--id`:
+To create an account, pass its canonical I105 `AccountId` to `account register`.
+Every submitted transaction names its fee source explicitly with
+`--fee-payer authority` (or `--fee-payer sponsor --fee-program <id>
+--fee-program-revision <revision>`) and waits for `Applied` finality unless
+`--no-wait` is given:
 
 ```bash
-iroha account register \
+iroha --fee-payer authority account register \
   --id "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
 ```
 
-### Mint Asset to Account
+### Register and mint an asset
 
-To add assets to the account, you must first register an Asset Definition. Specify the `asset` entity and then use the `register` and `mint` commands respectively. Here is an example of adding Assets of the type `Quantity` to the account:
+An asset definition is addressed by its checksummed Base58 identifier and may
+also carry an alias such as `usd#wonderland.universal`. `--scale` fixes the
+number of decimal places; omit it for an unconstrained quantity.
 
 ```bash
-iroha ledger asset register --id "6UoZbEC1BVBbDo99CSvY7qud73yh" --type Quantity
-iroha ledger asset mint --id "<ASSET_ID>" --quantity 1010
+iroha --fee-payer authority ledger asset definition register \
+  --id "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --name USD --scale 2 \
+  --alias "usd#wonderland.universal"
+iroha --fee-payer authority ledger asset mint \
+  --definition "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --account "<I105_ACCOUNT>" --quantity 1010
+iroha --fee-payer authority ledger asset transfer \
+  --definition-alias "usd#wonderland.universal" --account "<I105_ACCOUNT>" \
+  --to "<I105_RECIPIENT>" --quantity 10.50
 ```
 
-With this, you created an asset of type `Quantity` under the canonical asset-definition identifier `6UoZbEC1BVBbDo99CSvY7qud73yh`, and then gave `1010` units of that asset to a target account.
+### Read balances and entities
 
-### Query Account Assets Quantity
-
-You can use Query API to check that your instructions were applied and the _world_ is in the desired state. For example, to know how many units of a particular asset an account has, use `asset get` with the specified account and asset:
+Point reads use exact by-id queries:
 
 ```bash
-iroha ledger asset get --id "<ASSET_ID>"
+iroha ledger asset get --definition "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --account "<I105_ACCOUNT>"
+iroha ledger asset definition get --alias "usd#wonderland.universal"
+iroha ledger domain get --id wonderland.universal
+iroha account get --id "<I105_ACCOUNT>"
 ```
 
-This query returns the quantity of the selected account-scoped asset.
+### List collections
 
-You can also filter based on either account, asset or domain id by using the filtering API provided by the Iroha client CLI. Generally, filtering follows the `iroha ledger ENTITY list filter PREDICATE` pattern for ledger entities such as asset or domain, and `iroha account list filter PREDICATE` for accounts, where PREDICATE is condition used for filtering serialized using JSON (check `iroha::data_model::predicate::value::ValuePredicate` type).
+Every Torii collection has one `list` command with the same flags and the same
+output, following [`specs/torii/collection_queries.md`](../../specs/torii/collection_queries.md):
 
-Here are some examples of filtering:
+| Command | Collection |
+| --- | --- |
+| `iroha ledger domain list` | domains |
+| `iroha account list` | accounts |
+| `iroha ledger asset definition list` | asset definitions |
+| `iroha ledger nft list` | NFTs |
+| `iroha ledger rwa list` | RWA lots |
+| `iroha ledger asset list [--account <ID>]` | balances of one account (default: the configured account) |
+| `iroha ledger asset holders --definition <ID>` | holders of one asset definition |
+| `iroha tx list [--account <ID>]` | transactions of one account (default: the configured account) |
+| `iroha app repo list` | repo agreements |
+
+- `--filter <FILTER>` (alias `--where`) keeps matching rows; filters read like a
+  SQL `WHERE` clause: `owned_by = "sorau…" and quantity >= 10.5`,
+  `status in ["active", "paused"]`, ``not exists(metadata.`ui-order`)``.
+- `--sort -quantity,id` orders rows (`-` is descending); `--select id,quantity`
+  returns only those fields.
+- `--limit N` sets the page size; `--cursor <next_cursor>` continues after a
+  page; `--all` follows every cursor; `--include-total` adds the exact `total`.
+
+The default output is one page document, `{"items": [...], "next_cursor": ...,
+"total": ...}` (`total` only with `--include-total`). With `--all`, `-o json`
+prints every row in one document, while `-o jsonl` prints one row per line as
+pages arrive. Text output is a table of the collection's main columns, or of the
+`--select` fields. Invalid flags and Torii's `invalid_*` rejections exit with 4
+and show Torii's hint.
 
 ```bash
-# Filter domains by id
-iroha ledger domain list filter '{"Atom": {"Id": {"Atom": {"Equals": "wonderland"}}}}'
-# Filter accounts by domain
-iroha account list filter '{"Atom": {"Id": {"Domain": {"Atom": {"Equals": "wonderland"}}}}}'
-# Filter asset by domain
-iroha ledger asset list filter '{"Or": [{"Atom": {"Id": {"Definition": {"Domain": {"Atom": {"Equals": "wonderland"}}}}}}, {"Atom": {"Id": {"Account": {"Domain": {"Atom": {"Equals": "wonderland"}}}}}}]}'
+# Asset definitions owned by an account in descending id order, one page of 20
+iroha ledger asset definition list --filter 'owned_by = "<I105_ACCOUNT>"' --sort -id --limit 20
+# Every balance of the configured account, streamed as JSON lines
+iroha -o jsonl ledger asset list --all
+# Holders of an asset with at least 100 units, with the exact count
+iroha ledger asset holders --definition-alias "usd#wonderland.universal" \
+  --filter 'quantity >= 100' --sort -quantity --include-total
+# Recent failed transactions of one account
+iroha tx list --account "<I105_ACCOUNT>" --filter 'result_ok = false' --limit 10
 ```
 
 ### Contract Developer Workflow
@@ -751,63 +815,53 @@ They do not own another project manifest or package build workflow.
 
 ### Execute IVM transaction
 
-Use `--file` to specify a path to the IVM bytecode file (typically a `.to` file produced by compiling Kotodama `.ko` source):
+Use `--path` to submit an IVM bytecode file (typically a `.to` file produced by
+compiling Kotodama `.ko` source), or omit it to read the bytecode from standard
+input. IVM transactions require a signature-bound `--gas-limit`:
 
 ```bash
-iroha tx ivm --file /path/to/contract.to
-```
-
-Or skip `--file` to read IVM bytecode from standard input:
-
-```bash
-cat /path/to/contract.to | iroha tx ivm
+iroha --fee-payer authority tx ivm --path /path/to/contract.to --gas-limit 1000000
+cat /path/to/contract.to | iroha --fee-payer authority tx ivm --gas-limit 1000000
 ```
 
 These subcommands submit the provided IVM bytecode as an `Executable` to be executed outside a trigger context.
 
 ### Execute Multi-instruction Transactions
 
-The reference implementation of the Rust client, `iroha`, is often used for diagnosing problems in other implementations.
-
-To test transactions in the JSON format (used in the genesis block and by other SDKs), pipe the transaction into the client and add the `tx stdin` subcommand to the arguments:
+`--emit-instructions` prints a command's instructions as a JSON array instead of
+submitting them, and `--stdin-instructions` runs a JSON array read from stdin
+before the command's own instructions. Together they compose one transaction from
+several commands; `tx stdin` submits a finished array:
 
 ```bash
-cat fuzz/cli_dsl/transaction_log_message.json | iroha tx stdin
+iroha --emit-instructions ledger asset definition register \
+  --id "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --name USD --scale 2 > instructions.json
+iroha --emit-instructions --stdin-instructions ledger asset mint \
+  --definition "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --account "<I105_ACCOUNT>" --quantity 1010 \
+  < instructions.json > batch.json
+iroha --fee-payer authority tx stdin < batch.json
 ```
 
 ### Request arbitrary query
 
-```bash
-cat fuzz/cli_dsl/iterable_accounts_query.json | iroha ledger query stdin
-```
-
-### Experimental: IDs-only projection (`--select ids`)
-
-When built with the `ids_projection` feature, the CLI can request that iterable queries return only IDs instead of full objects by passing `--select ids`.
-
-Examples (feature-gated):
+`ledger query stdin` reads one query envelope: `{"singular": {"type": ...,
+"payload": {...}}}` or `{"iterable": {"type": ..., "params": {...},
+"predicate": {...}}}`.
 
 ```bash
-# List only domain identifiers (requires --features ids_projection)
-cargo run --bin iroha --features ids_projection -- \
-  ledger domain list all --select ids
-
-# List only account identifiers with sorting/pagination
-cargo run --bin iroha --features ids_projection -- \
-  account list all --select ids --sort-by-metadata-key rank --order desc --offset 10 --limit 5
+echo '{"singular": {"type": "FindParameters"}}' | iroha ledger query stdin
+echo '{"iterable": {"type": "FindAccounts", "params": {"limit": 10}}}' | iroha ledger query stdin
 ```
 
-Expected output format is the same JSON as for full objects, but the entries are now identifier values, for example:
+### Stream events
 
-```json
-[
-  "w2",
-  "w1",
-  "w0"
-]
+`--timeout` is a deadline for the whole subscription, not an idle timeout. Use
+`-o jsonl` for one compact JSON event per line:
+
+```bash
+iroha -o jsonl ledger events transaction --timeout 30s
+iroha -o jsonl ledger blocks 1 --timeout 1m
 ```
-
-Note: This feature is experimental and off by default; enable it for testing and iterative development. Behavior and flags may change.
 ## Rendering Markdown Help
 
 Ensure the CLI builds, then run:

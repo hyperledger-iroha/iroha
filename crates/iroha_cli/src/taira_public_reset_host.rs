@@ -17,16 +17,21 @@ pub(super) mod stopped_runtime;
 #[path = "taira_public_reset_occupied.rs"]
 pub(super) mod occupied;
 
+#[path = "taira_public_reset_write_canary.rs"]
+mod write_canary;
+pub(super) use write_canary::CoreWriteTransport;
+
 use super::executor_model::{ExecutionStep, RecoveryProgress, ResetTransport};
 use super::{
-    AdmittedReset, ArtifactV1, AuthorizationEnvelopeV1, EdgeV1, EndpointV1, InventoryV1,
-    PUBLIC_ROOT, PinnedArtifact, PriorValidatorServiceStateV1, RecoveryIntentV1,
-    RecoveryMutationStateV1, RecoveryMutationV1, RecoveryOutcome, TrustedKeyV1, ValidatorV1,
-    artifact, authorization_semantic_sha256, ensure_authorization_current, ensure_pinned_unchanged,
-    now_unix_ms, open_pinned_regular, pin_owner_private_file, read_pinned_bytes, read_private_json,
-    revalidate_pinned, sha256_hex, validate_inventory, validate_owner_private_dir,
-    validate_validator_genesis_config, validate_validator_operator_config,
-    validator_operator_public_key, verify_execution_authorization,
+    AccountOnboardingPlanRequestV1, AdmittedReset, ArtifactV1, AuthorizationEnvelopeV1, EdgeV1,
+    EndpointV1, InventoryV1, PUBLIC_ROOT, PinnedArtifact, PriorValidatorServiceStateV1,
+    RecoveryIntentV1, RecoveryMutationStateV1, RecoveryMutationV1, RecoveryOutcome, TrustedKeyV1,
+    ValidatorV1, artifact, authorization_semantic_sha256, ensure_authorization_current,
+    ensure_pinned_unchanged, now_unix_ms, open_pinned_regular, pin_owner_private_file,
+    read_pinned_bytes, read_private_json, revalidate_pinned, sha256_hex, validate_inventory,
+    validate_owner_private_dir, validate_validator_genesis_config,
+    validate_validator_operator_config, validator_operator_public_key,
+    verify_execution_authorization,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use eyre::{Context as _, Result, ensure, eyre};
@@ -539,7 +544,7 @@ struct PreparedMutationV1 {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PreparedMutationLifetimeCheck {
+pub(super) enum PreparedMutationLifetimeCheck {
     Structural,
     LiveForward,
 }
@@ -1421,9 +1426,97 @@ fn prepared_mutation_from_request(admitted: &HostAdmission) -> Result<PreparedMu
     })
 }
 
+/// Exact chain identity and operator policy shared by both write-child transports.
+#[derive(Clone)]
+pub(super) struct CoreWriteIdentity {
+    pub(super) authorization_sha256: String,
+    pub(super) authorization_nonce: String,
+    pub(super) not_before_unix_ms: u64,
+    pub(super) execution_expires_at_unix_ms: u64,
+    pub(super) origin: String,
+    pub(super) chain_id: String,
+    pub(super) genesis_hash: String,
+    pub(super) onboarding_request: AccountOnboardingPlanRequestV1,
+    pub(super) fee_payment: FeePaymentIntent,
+    pub(super) faucet_policy: AccountFaucetPolicyV1,
+}
+
+impl CoreWriteIdentity {
+    fn from_inventory(
+        inventory: &InventoryV1,
+        authorization: &AuthorizationEnvelopeV1,
+        authorization_sha256: &str,
+        phase: &str,
+    ) -> Result<Self> {
+        Ok(Self {
+            authorization_sha256: authorization_sha256.to_owned(),
+            authorization_nonce: inventory.authorization_nonce.clone(),
+            not_before_unix_ms: authorization.claims.not_before_unix_ms,
+            execution_expires_at_unix_ms: authorization.claims.execution_expires_at_unix_ms,
+            origin: mutation_probe_root(inventory, phase)?.to_owned(),
+            chain_id: inventory.chain_id.clone(),
+            genesis_hash: inventory.next_genesis_hash.clone(),
+            onboarding_request: inventory.canary_onboarding_request.clone(),
+            fee_payment: inventory_fee_payment_intent(inventory)?,
+            faucet_policy: inventory_faucet_policy(inventory)?,
+        })
+    }
+}
+
 fn validate_prepared_mutation_envelope(
     admitted: &HostAdmission,
     bytes: &[u8],
+    lifetime_check: PreparedMutationLifetimeCheck,
+) -> Result<(String, String, String)> {
+    let identity = CoreWriteIdentity::from_inventory(
+        &admitted.inventory,
+        &admitted.authorization,
+        &admitted.authorization_sha256,
+        &admitted.request.mutation_phase,
+    )?;
+    validate_prepared_mutation_envelope_context(
+        &identity,
+        Some(&admitted.inventory),
+        bytes,
+        &admitted.request.mutation_kind,
+        &admitted.request.mutation_phase,
+        &admitted.request.mutation_idempotency_key,
+        lifetime_check,
+    )
+}
+
+/// Validate a private stage envelope through the same canonical protocol validator.
+pub(super) fn validate_core_prepared_envelope(
+    identity: &CoreWriteIdentity,
+    bytes: &[u8],
+    kind: &str,
+    phase: &str,
+    idempotency_key: &str,
+    lifetime_check: PreparedMutationLifetimeCheck,
+) -> Result<(String, String, String)> {
+    if !matches!(kind, "onboarding" | "faucet" | "write_canary") {
+        return Err(eyre!(
+            "private stage accepts only the three core write children"
+        ));
+    }
+    validate_prepared_mutation_envelope_context(
+        identity,
+        None,
+        bytes,
+        kind,
+        phase,
+        idempotency_key,
+        lifetime_check,
+    )
+}
+
+fn validate_prepared_mutation_envelope_context(
+    identity: &CoreWriteIdentity,
+    inrou_inventory: Option<&InventoryV1>,
+    bytes: &[u8],
+    kind: &str,
+    phase: &str,
+    idempotency_key: &str,
     lifetime_check: PreparedMutationLifetimeCheck,
 ) -> Result<(String, String, String)> {
     if bytes.is_empty() || bytes.len() > MAX_PREPARED_ENVELOPE_BYTES || bytes.last() != Some(&b'\n')
@@ -1456,27 +1549,22 @@ fn validate_prepared_mutation_envelope(
         .get("execution_expires_at_unix_ms")
         .and_then(norito::json::Value::as_u64)
         .ok_or_else(|| eyre!("prepared mutation binding omits execution expiry"))?;
-    if binding_string("authorization_sha256")? != admitted.authorization_sha256
-        || binding_string("authorization_nonce")? != admitted.inventory.authorization_nonce
-        || binding_string("kind")? != admitted.request.mutation_kind
-        || binding_string("phase")? != admitted.request.mutation_phase
-        || binding_string("idempotency_key")? != admitted.request.mutation_idempotency_key
-        || execution_expiry != admitted.authorization.claims.execution_expires_at_unix_ms
+    if binding_string("authorization_sha256")? != identity.authorization_sha256
+        || binding_string("authorization_nonce")? != identity.authorization_nonce
+        || binding_string("kind")? != kind
+        || binding_string("phase")? != phase
+        || binding_string("idempotency_key")? != idempotency_key
+        || execution_expiry != identity.execution_expires_at_unix_ms
     {
         return Err(eyre!(
-            "prepared mutation envelope binding differs from the signed authorization"
+            "prepared mutation envelope binding differs from the admitted operator identity"
         ));
     }
     let is_inrou = matches!(
-        admitted.request.mutation_kind.as_str(),
+        kind,
         "inrou_bundle_pin" | "inrou_guest_pin" | "inrou_discovery_pin" | "inrou_canary"
     );
-    if !is_inrou
-        && !matches!(
-            admitted.request.mutation_kind.as_str(),
-            "onboarding" | "faucet" | "write_canary"
-        )
-    {
+    if !is_inrou && !matches!(kind, "onboarding" | "faucet" | "write_canary") {
         return Err(eyre!("prepared mutation child kind is outside exact V1"));
     }
     require_exact_json_fields(
@@ -1542,13 +1630,9 @@ fn validate_prepared_mutation_envelope(
         .wrap_err("prepared mutation network identity is not canonical")?;
     let canonical_network_id = json::to_value(&network_id)
         .wrap_err("failed to encode the canonical prepared mutation network identity")?;
-    let expected_genesis_hash = hex::decode(&admitted.inventory.next_genesis_hash)
+    let expected_genesis_hash = hex::decode(&identity.genesis_hash)
         .wrap_err("signed inventory next genesis hash is invalid")?;
-    let canary_authority_literal = admitted
-        .inventory
-        .canary_onboarding_request
-        .account_id
-        .as_str();
+    let canary_authority_literal = identity.onboarding_request.account_id.as_str();
     let canary_authority = AccountId::parse_encoded(canary_authority_literal)
         .wrap_err("signed canary authority is not canonical")?;
     if canary_authority.to_string() != canary_authority_literal {
@@ -1559,23 +1643,20 @@ fn validate_prepared_mutation_envelope(
         || root
             .get("public_root")
             .and_then(norito::json::Value::as_str)
-            != Some(mutation_probe_root(
-                &admitted.inventory,
-                &admitted.request.mutation_phase,
-            )?)
+            != Some(identity.origin.as_str())
         || root.get("chain_id").and_then(norito::json::Value::as_str)
-            != Some(admitted.inventory.chain_id.as_str())
+            != Some(identity.chain_id.as_str())
         || canonical_network_id != *network_id_value
         || network_id.as_bytes().as_slice() != expected_genesis_hash.as_slice()
         || root.get("authority").and_then(norito::json::Value::as_str)
             != Some(canary_authority_literal)
     {
         return Err(eyre!(
-            "prepared mutation envelope differs from the signed public Taira canary identity"
+            "prepared mutation envelope differs from the admitted canary identity"
         ));
     }
     if is_inrou
-        && (admitted.request.mutation_phase != "pre_edge"
+        && (phase != "pre_edge"
             || root
                 .get("probe_scope")
                 .and_then(norito::json::Value::as_str)
@@ -1625,14 +1706,14 @@ fn validate_prepared_mutation_envelope(
         let exact_binding = exact_write_binding
             .as_ref()
             .expect("proof-required onboarding uses a write binding");
-        if admitted.request.mutation_kind != "onboarding"
+        if kind != "onboarding"
             || proof_required.len() != 3
             || proof_required
                 .get("schema")
                 .and_then(norito::json::Value::as_str)
                 != Some("iroha.taira.prepared-onboarding-proof-required.v1")
             || exact_binding.onboarding_binding(&receipt)? != result.binding
-            || receipt.body.request != admitted.inventory.canary_onboarding_request
+            || receipt.body.request != identity.onboarding_request
         {
             return Err(eyre!(
                 "proof-required onboarding envelope is outside its exact tagged V1 closure"
@@ -1640,7 +1721,7 @@ fn validate_prepared_mutation_envelope(
         }
         verify_account_onboarding_proof_required_result_v1(
             network_id,
-            &admitted.inventory.canary_onboarding_request,
+            &identity.onboarding_request,
             &result,
             &receipt,
             &exact_binding.onboarding_binding(&receipt)?,
@@ -1653,7 +1734,7 @@ fn validate_prepared_mutation_envelope(
         ));
     }
     if operation.len() != 2
-        || ((is_inrou || admitted.request.mutation_kind == "write_canary")
+        || ((is_inrou || kind == "write_canary")
             && operation_envelope.get("binding") != root.get("binding"))
     {
         return Err(eyre!(
@@ -1664,8 +1745,7 @@ fn validate_prepared_mutation_envelope(
         .get("operation")
         .and_then(norito::json::Value::as_str)
         .ok_or_else(|| eyre!("prepared mutation operation omits its label"))?;
-    let (expected_tag, expected_operation) =
-        prepared_operation_identity(&admitted.request.mutation_kind)?;
+    let (expected_tag, expected_operation) = prepared_operation_identity(&kind)?;
     if operation_kind != expected_tag || operation_label != expected_operation {
         return Err(eyre!(
             "prepared mutation operation tag or label does not match its child kind"
@@ -1703,7 +1783,9 @@ fn validate_prepared_mutation_envelope(
             ],
             "prepared Inrou stage identity",
         )?;
-        let canary = admitted.inventory.inrou_canary()?;
+        let inventory = inrou_inventory
+            .ok_or_else(|| eyre!("Inrou envelope requires public reset inventory"))?;
+        let canary = inventory.inrou_canary()?;
         for (field, expected) in [
             ("service_name", canary.service_name.as_str()),
             ("service_version", canary.service_version.as_str()),
@@ -1769,7 +1851,7 @@ fn validate_prepared_mutation_envelope(
                 .ok_or_else(|| eyre!("prepared Inrou stage identity omits placement targets"))?,
         )
         .wrap_err("prepared Inrou stage placement targets are invalid")?;
-        if placement_targets != inventory_inrou_placement_targets(&admitted.inventory)? {
+        if placement_targets != inventory_inrou_placement_targets(inventory)? {
             return Err(eyre!(
                 "prepared Inrou stage placement targets differ from the exact validator-client inventory"
             ));
@@ -1800,9 +1882,9 @@ fn validate_prepared_mutation_envelope(
     } else {
         None
     };
-    let expected_fee_payment = inventory_fee_payment_intent(&admitted.inventory)?;
-    let expected_faucet_policy = inventory_faucet_policy(&admitted.inventory)?;
-    match admitted.request.mutation_kind.as_str() {
+    let expected_fee_payment = &identity.fee_payment;
+    let expected_faucet_policy = &identity.faucet_policy;
+    match kind {
         "onboarding" => {
             let prepared: AccountOnboardingPreparedTransactionV1 =
                 json::from_value(norito::json::Value::Object(operation_envelope.clone()))
@@ -1815,7 +1897,7 @@ fn validate_prepared_mutation_envelope(
                         .as_ref()
                         .expect("onboarding custody")
                         .onboarding_binding(&prepared.receipt)?
-                || prepared.receipt.body.request != admitted.inventory.canary_onboarding_request
+                || prepared.receipt.body.request != identity.onboarding_request
             {
                 return Err(eyre!(
                     "prepared onboarding operation is outside its exact typed V1 closure"
@@ -1827,7 +1909,7 @@ fn validate_prepared_mutation_envelope(
             )?;
             verify_account_onboarding_prepared_transaction_v1(
                 network_id,
-                &admitted.inventory.canary_onboarding_request,
+                &identity.onboarding_request,
                 &prepared,
                 &prepared.receipt,
                 &exact_write_binding
@@ -1850,7 +1932,7 @@ fn validate_prepared_mutation_envelope(
                         .as_ref()
                         .expect("faucet custody")
                         .faucet_binding(&prepared.claim)?
-                || prepared.account_id != admitted.inventory.canary_onboarding_request.account_id
+                || prepared.account_id != identity.onboarding_request.account_id
             {
                 return Err(eyre!(
                     "prepared faucet operation is outside its exact typed V1 closure"
@@ -1984,14 +2066,12 @@ fn validate_prepared_mutation_envelope(
     }
     if transaction.network_id() != Some(&network_id) {
         return Err(eyre!(
-            "prepared mutation transaction network differs from the signed reset network"
+            "prepared mutation transaction network differs from the admitted canary network"
         ));
     }
-    if (is_inrou || admitted.request.mutation_kind == "write_canary")
-        && transaction.authority() != &canary_authority
-    {
+    if (is_inrou || kind == "write_canary") && transaction.authority() != &canary_authority {
         return Err(eyre!(
-            "prepared canary transaction authority differs from the signed reset authority"
+            "prepared canary transaction authority differs from the admitted canary authority"
         ));
     }
     let creation_ms = u64::try_from(transaction.creation_time().as_millis())
@@ -2011,7 +2091,7 @@ fn validate_prepared_mutation_envelope(
         creation_ms,
         ttl_ms,
         now_ms,
-        admitted.authorization.claims.not_before_unix_ms,
+        identity.not_before_unix_ms,
         execution_expiry,
         lifetime_check,
     )?;
@@ -2021,30 +2101,23 @@ fn validate_prepared_mutation_envelope(
         .wrap_err("prepared mutation fee payment is invalid")?;
     if !expected_fee_payment.has_same_payer_and_gas_bound(transaction.fee_payment_intent()) {
         return Err(eyre!(
-            "prepared mutation fee payer or sponsor revision differs from the signed reset inventory"
+            "prepared mutation fee payer or sponsor revision differs from the admitted canary policy"
         ));
     }
     let signed_sponsor = transaction
         .fee_payment_intent()
         .sponsor_program()
         .map(|(program, revision)| (program.to_string(), revision));
-    let inventory_fee_matches = match admitted.inventory.fee_intent.payer.as_str() {
-        "authority" => signed_sponsor.is_none(),
-        "sponsor" => signed_sponsor.as_ref().is_some_and(|(program, revision)| {
-            admitted.inventory.fee_intent.sponsor_program.as_deref() == Some(program.as_str())
-                && admitted.inventory.fee_intent.sponsor_program_revision == Some(*revision)
-        }),
-        _ => false,
-    };
+    let expected_sponsor = expected_fee_payment
+        .sponsor_program()
+        .map(|(program, revision)| (program.to_string(), revision));
+    let inventory_fee_matches = signed_sponsor == expected_sponsor;
     if !inventory_fee_matches {
         return Err(eyre!(
-            "prepared mutation fee payer differs from the signed reset inventory"
+            "prepared mutation fee payer differs from the admitted canary policy"
         ));
     }
-    let public_operation = matches!(
-        admitted.request.mutation_kind.as_str(),
-        "onboarding" | "faucet"
-    );
+    let public_operation = matches!(kind, "onboarding" | "faucet");
     let binding_json = json::to_json(
         if public_operation {
             operation_envelope.get("binding")
@@ -2077,7 +2150,7 @@ fn validate_prepared_mutation_envelope(
             "prepared transaction fee payment differs from its signed wire"
         ));
     }
-    if is_inrou || admitted.request.mutation_kind == "write_canary" {
+    if is_inrou || kind == "write_canary" {
         let fee_quote_value = operation_envelope
             .get("fee_quote")
             .and_then(norito::json::Value::as_object)
@@ -2103,38 +2176,38 @@ fn validate_prepared_mutation_envelope(
                 .get(&Name::from_str("taira_public_reset_authorization_sha256")?)
                 .and_then(|value| value.try_into_any_norito::<String>().ok())
                 .as_deref()
-                != Some(admitted.authorization_sha256.as_str())
+                != Some(identity.authorization_sha256.as_str())
             || transaction
                 .metadata()
                 .get(&Name::from_str("taira_public_reset_authorization_nonce")?)
                 .and_then(|value| value.try_into_any_norito::<String>().ok())
                 .as_deref()
-                != Some(admitted.inventory.authorization_nonce.as_str())
+                != Some(identity.authorization_nonce.as_str())
             || transaction
                 .metadata()
                 .get(&Name::from_str("taira_public_reset_mutation_kind")?)
                 .and_then(|value| value.try_into_any_norito::<String>().ok())
                 .as_deref()
-                != Some(admitted.request.mutation_kind.as_str())
+                != Some(kind)
             || transaction
                 .metadata()
                 .get(&Name::from_str("taira_public_reset_mutation_phase")?)
                 .and_then(|value| value.try_into_any_norito::<String>().ok())
                 .as_deref()
-                != Some(admitted.request.mutation_phase.as_str())
+                != Some(phase)
             || transaction
                 .metadata()
                 .get(&Name::from_str("taira_public_reset_idempotency_key")?)
                 .and_then(|value| value.try_into_any_norito::<String>().ok())
                 .as_deref()
-                != Some(admitted.request.mutation_idempotency_key.as_str())
+                != Some(idempotency_key)
             || transaction
                 .metadata()
                 .get(&Name::from_str(
                     "taira_public_reset_execution_expires_at_unix_ms",
                 )?)
                 .and_then(|value| value.try_into_any_norito::<u64>().ok())
-                != Some(admitted.authorization.claims.execution_expires_at_unix_ms)
+                != Some(identity.execution_expires_at_unix_ms)
             || transaction
                 .metadata()
                 .get(&Name::from_str("taira_public_reset_mutation_operation")?)
@@ -2146,7 +2219,7 @@ fn validate_prepared_mutation_envelope(
                 "prepared Inrou transaction metadata is outside its exact V1 closure"
             ));
         }
-        let prepared_operation = match admitted.request.mutation_kind.as_str() {
+        let prepared_operation = match kind {
             "inrou_bundle_pin" => crate::soracloud::TairaInrouCanaryPreparedOperationV1::BundlePin,
             "inrou_guest_pin" => crate::soracloud::TairaInrouCanaryPreparedOperationV1::GuestPin,
             "inrou_discovery_pin" => {
@@ -2163,7 +2236,7 @@ fn validate_prepared_mutation_envelope(
             inrou_stage
                 .as_ref()
                 .expect("prepared Inrou stage identity was validated above"),
-            &admitted.request.mutation_idempotency_key,
+            &idempotency_key,
         )
         .wrap_err("prepared Inrou transaction executable authentication failed")?;
     } else {
@@ -2171,9 +2244,9 @@ fn validate_prepared_mutation_envelope(
             .get("semantic_hash_hex")
             .and_then(norito::json::Value::as_str)
             .ok_or_else(|| eyre!("prepared write transaction omits its semantic hash"))?;
-        let is_final_canary = admitted.request.mutation_kind == "write_canary";
+        let is_final_canary = kind == "write_canary";
         if transaction.metadata().iter().count()
-            != match admitted.request.mutation_kind.as_str() {
+            != match kind {
                 "write_canary" => 5,
                 "faucet" => 4,
                 _ => 3,
@@ -2202,7 +2275,7 @@ fn validate_prepared_mutation_envelope(
                         .get(&Name::from_str("taira_write_canary_idempotency_v1")?)
                         .and_then(|value| value.try_into_any_norito::<String>().ok())
                         .as_deref()
-                        != Some(admitted.request.mutation_idempotency_key.as_str())))
+                        != Some(idempotency_key)))
         {
             return Err(eyre!(
                 "prepared write transaction metadata is outside its exact V1 closure"
@@ -2568,7 +2641,7 @@ fn validate_prepared_mutation_proof_required_evidence(
     Ok(sha256_hex(bytes))
 }
 
-fn prepared_onboarding_proof_required_result(
+pub(super) fn prepared_onboarding_proof_required_result(
     envelope: &[u8],
 ) -> Result<AccountOnboardingProofRequiredPrepareResponseV1> {
     let value: norito::json::Value = json::from_slice(envelope)
@@ -2587,6 +2660,27 @@ fn prepared_onboarding_proof_required_result(
 
 fn prove_fresh_onboarding_current_state(
     admitted: &HostAdmission,
+    account_id_literal: &str,
+    alias_literal: &str,
+) -> Result<()> {
+    let identity = CoreWriteIdentity::from_inventory(
+        &admitted.inventory,
+        &admitted.authorization,
+        &admitted.authorization_sha256,
+        &admitted.request.mutation_phase,
+    )?;
+    prove_core_onboarding_current_state(
+        &identity,
+        admitted.action_deadline,
+        account_id_literal,
+        alias_literal,
+    )
+}
+
+/// Re-prove the transaction-free onboarding result against one current atomic snapshot.
+pub(super) fn prove_core_onboarding_current_state(
+    identity: &CoreWriteIdentity,
+    deadline: Instant,
     account_id_literal: &str,
     alias_literal: &str,
 ) -> Result<()> {
@@ -2613,26 +2707,22 @@ fn prove_fresh_onboarding_current_state(
     let request_body = json::to_vec(&request)
         .wrap_err("failed to encode exact atomic onboarding state request")?;
 
-    let genesis_hash: [u8; Hash::LENGTH] = hex::decode(&admitted.inventory.next_genesis_hash)
+    let genesis_hash: [u8; Hash::LENGTH] = hex::decode(&identity.genesis_hash)
         .wrap_err("signed inventory next genesis hash is invalid")?
         .try_into()
         .map_err(|_| eyre!("signed inventory next genesis hash is not 32 bytes"))?;
     let expected_network_id = NetworkId::from_genesis_hash(
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(genesis_hash)),
     );
-    let remaining = admitted
-        .action_deadline
+    let remaining = deadline
         .checked_duration_since(Instant::now())
         .ok_or_else(|| eyre!("fresh onboarding proof deadline has elapsed"))?;
     let timeout = remaining.min(Duration::from_secs(30));
     if timeout.is_zero() {
         return Err(eyre!("fresh onboarding proof has no remaining deadline"));
     }
-    let root = Url::parse(&format!(
-        "{}/",
-        mutation_probe_root(&admitted.inventory, &admitted.request.mutation_phase,)?
-    ))
-    .wrap_err("signed Taira mutation probe root is invalid")?;
+    let root = Url::parse(&format!("{}/", identity.origin))
+        .wrap_err("signed Taira mutation probe root is invalid")?;
     let proof_url = root
         .join("v1/accounts/onboarding/current-state")
         .wrap_err("failed to construct atomic onboarding state URL")?;
@@ -2790,31 +2880,56 @@ fn prepared_mutation_state(
         }
         let (marker, _) =
             read_private_json::<PreparedMutationStateV1>(&path, "prepared mutation state")?;
-        if marker.schema != PREPARED_MUTATION_STATE_SCHEMA_V1
-            || marker.inventory_sha256 != prepared.inventory_sha256
-            || marker.authorization_sha256 != prepared.authorization_sha256
-            || marker.authorization_nonce != prepared.authorization_nonce
-            || marker.kind != prepared.kind
-            || marker.phase != prepared.phase
-            || marker.idempotency_key != prepared.idempotency_key
-            || marker.prepared_sha256 != prepared.prepared_sha256
-            || marker.transaction_hash != prepared.transaction_hash
-            || marker.state != state
-            || (state == "applied") != !marker.evidence_sha256.is_empty()
-            || (!marker.evidence_sha256.is_empty()
-                && require_lower_sha256(
-                    &marker.evidence_sha256,
-                    "prepared mutation evidence digest",
-                )
-                .is_err())
-        {
-            return Err(eyre!(
-                "prepared mutation state marker does not bind its immutable envelope"
-            ));
-        }
+        validate_core_state_marker(
+            [
+                &marker.schema,
+                &marker.inventory_sha256,
+                &marker.authorization_sha256,
+                &marker.authorization_nonce,
+                &marker.kind,
+                &marker.phase,
+                &marker.idempotency_key,
+                &marker.prepared_sha256,
+                &marker.transaction_hash,
+                &marker.state,
+            ],
+            [
+                PREPARED_MUTATION_STATE_SCHEMA_V1,
+                &prepared.inventory_sha256,
+                &prepared.authorization_sha256,
+                &prepared.authorization_nonce,
+                &prepared.kind,
+                &prepared.phase,
+                &prepared.idempotency_key,
+                &prepared.prepared_sha256,
+                &prepared.transaction_hash,
+                state,
+            ],
+            &marker.evidence_sha256,
+        )?;
         return Ok(state);
     }
     Ok("prepared")
+}
+
+/// Check immutable store identity and the exact submitted/applied evidence shape.
+pub(super) fn validate_core_state_marker(
+    actual: [&str; 10],
+    expected: [&str; 10],
+    evidence: &str,
+) -> Result<()> {
+    let state = expected[9];
+    if actual != expected
+        || !matches!(state, "submitted" | "applied")
+        || (state == "applied") != !evidence.is_empty()
+        || (!evidence.is_empty()
+            && require_lower_sha256(evidence, "prepared mutation evidence digest").is_err())
+    {
+        return Err(eyre!(
+            "prepared mutation state marker does not bind its immutable envelope"
+        ));
+    }
+    Ok(())
 }
 
 fn prepared_mutation_receipt(
@@ -11220,9 +11335,9 @@ pub(super) struct ProcessSpec {
 
 #[derive(Debug)]
 pub(super) struct ProcessOutput {
-    status: ExitStatus,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
+    pub(super) status: ExitStatus,
+    pub(super) stdout: Vec<u8>,
+    pub(super) stderr: Vec<u8>,
 }
 
 pub(super) trait ProcessRunner {
@@ -11853,7 +11968,13 @@ fn prepared_child_error_kind(output: &ProcessOutput) -> &'static str {
         let value: norito::json::Value = json::from_slice(&output.stderr).ok()?;
         let root = value.as_object()?;
         let error = root.get("error")?.as_object()?;
-        if root.len() != 1 || error.len() != 3 || error.get("message")?.as_str().is_none() {
+        // The CLI error document is exactly `{kind, message, causes, hints, exit_code}`.
+        if root.len() != 1
+            || error.len() != 5
+            || error.get("message")?.as_str().is_none()
+            || error.get("causes")?.as_array().is_none()
+            || error.get("hints")?.as_array().is_none()
+        {
             return None;
         }
         let (kind, expected_exit) = match error.get("kind")?.as_str()? {
@@ -13235,7 +13356,7 @@ fn ensure_local_deadline(deadline: Option<Instant>) -> Result<()> {
     Ok(())
 }
 
-fn inherited_client_config_args(
+pub(super) fn inherited_client_config_args(
     input: &super::PinnedInput,
     label: &str,
 ) -> Result<(Vec<OsString>, File)> {
@@ -13470,7 +13591,7 @@ impl ParentHeldSshInputs {
 }
 
 /// Retain an input for FD-only child arguments without creating a procfs path.
-fn inherited_input_file(input: &super::PinnedInput, label: &str) -> Result<File> {
+pub(super) fn inherited_input_file(input: &super::PinnedInput, label: &str) -> Result<File> {
     revalidate_pinned(input, label)?;
     input
         .file
@@ -13652,22 +13773,22 @@ pub(super) struct OpenSshTransport<'a, R = RealProcessRunner> {
 }
 
 #[derive(Clone, Copy)]
-struct MutationReservationIdentity<'a> {
-    operation: &'a str,
-    kind: &'a str,
-    phase: &'a str,
-    idempotency_key: &'a str,
-    prepared: Option<&'a [u8]>,
-    prepared_sha256: &'a str,
-    transaction_hash: &'a str,
-    evidence: Option<&'a [u8]>,
+pub(super) struct MutationReservationIdentity<'a> {
+    pub(super) operation: &'a str,
+    pub(super) kind: &'a str,
+    pub(super) phase: &'a str,
+    pub(super) idempotency_key: &'a str,
+    pub(super) prepared: Option<&'a [u8]>,
+    pub(super) prepared_sha256: &'a str,
+    pub(super) transaction_hash: &'a str,
+    pub(super) evidence: Option<&'a [u8]>,
 }
 
-struct RetainedPreparedMutation {
-    state: String,
-    bytes: Vec<u8>,
-    sha256: String,
-    transaction_hash: String,
+pub(super) struct RetainedPreparedMutation {
+    pub(super) state: String,
+    pub(super) bytes: Vec<u8>,
+    pub(super) sha256: String,
+    pub(super) transaction_hash: String,
 }
 
 impl RetainedPreparedMutation {
@@ -13761,7 +13882,6 @@ fn core_prepared_write_outcome(
 
 #[derive(Clone, Copy)]
 enum PreparedChildProtocol {
-    WriteCanary,
     Inrou,
 }
 
@@ -13802,7 +13922,7 @@ pub(super) fn run_journaled_submitted_mutation(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WriteCanaryChildAction {
+pub(super) enum WriteCanaryChildAction {
     Prepare,
     Submit,
     Recover,
@@ -14759,13 +14879,13 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         phase: &str,
         kind: &str,
     ) -> Result<()> {
-        self.run_journaled_prepared_child(
+        CoreWriteTransport::run_core_write_child(
+            self,
             progress,
             mutation_index,
             timeout_secs,
             phase,
             kind,
-            PreparedChildProtocol::WriteCanary,
         )
     }
 
@@ -14782,18 +14902,13 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             .checked_add(Duration::from_secs(timeout_secs))
             .ok_or_else(|| eyre!("journaled prepared child deadline overflow"))?;
         let prepared = match protocol {
-            PreparedChildProtocol::WriteCanary => {
-                self.prepare_write_canary_child_until(deadline, timeout_secs, phase, kind)?
-            }
             PreparedChildProtocol::Inrou => {
                 self.prepare_inrou_child_until(deadline, timeout_secs, phase, kind)?
             }
         };
         run_journaled_submitted_mutation(progress, mutation_index, || {
             let already_applied = prepared.state == "applied";
-            let proof_required = matches!(protocol, PreparedChildProtocol::WriteCanary)
-                && prepared.requires_onboarding_proof(kind)?;
-            let prepared = if already_applied || proof_required {
+            let prepared = if already_applied {
                 prepared
             } else {
                 self.coordinate_shared_prepared_mutation(
@@ -14813,15 +14928,8 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                     remaining_seconds(deadline)?,
                 )?
             };
-            let recover_only = already_applied || proof_required;
+            let recover_only = already_applied;
             let outcome = match protocol {
-                PreparedChildProtocol::WriteCanary => self.run_write_canary_prepared_until(
-                    deadline,
-                    phase,
-                    kind,
-                    &prepared,
-                    recover_only,
-                )?,
                 PreparedChildProtocol::Inrou => {
                     self.run_inrou_prepared_until(deadline, phase, kind, &prepared, recover_only)?
                 }
@@ -14846,63 +14954,12 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         phase: &str,
         kind: &str,
     ) -> Result<RetainedPreparedMutation> {
-        let idempotency_key = child_mutation_idempotency_key(
-            &self.admitted.inventory.authorization_nonce,
-            phase,
-            kind,
-        );
-        let existing = self.coordinate_shared_prepared_mutation(
-            "fetch",
-            kind,
-            phase,
-            &idempotency_key,
-            None,
-            "",
-            "",
-            None,
-            false,
-            remaining_seconds(deadline)?,
-        )?;
-        if existing.state != "absent" {
-            return Ok(existing);
-        }
-        let prerequisite = mutation_predecessor_kind(kind, phase)
-            .map(|predecessor| {
-                self.fetch_shared_prepared_mutation(
-                    phase,
-                    predecessor,
-                    false,
-                    remaining_seconds(deadline)?,
-                )
-            })
-            .transpose()?
-            .filter(|value| value.state == "applied");
-        if mutation_predecessor_kind(kind, phase).is_some() && prerequisite.is_none() {
-            return Err(eyre!(
-                "write child preparation requires its exact Applied predecessor envelope"
-            ));
-        }
-        let (candidate, _prepare_report) = self.run_write_canary_prepare_until(
+        CoreWriteTransport::prepare_write_canary_child_until(
+            self,
             deadline,
             timeout_secs,
             phase,
             kind,
-            &idempotency_key,
-            prerequisite.as_ref(),
-        )?;
-        let candidate_sha256 = sha256_hex(&candidate);
-        let transaction_hash = prepared_envelope_transaction_hash(&candidate)?;
-        self.coordinate_shared_prepared_mutation(
-            "prepare",
-            kind,
-            phase,
-            &idempotency_key,
-            Some(&candidate),
-            &candidate_sha256,
-            &transaction_hash,
-            None,
-            false,
-            remaining_seconds(deadline)?,
         )
     }
 
@@ -14913,19 +14970,10 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         recovery_only: bool,
         timeout_secs: u64,
     ) -> Result<RetainedPreparedMutation> {
-        self.coordinate_shared_prepared_mutation(
-            "fetch",
-            kind,
+        CoreWriteTransport::fetch_shared_prepared_mutation(
+            self,
             phase,
-            &child_mutation_idempotency_key(
-                &self.admitted.inventory.authorization_nonce,
-                phase,
-                kind,
-            ),
-            None,
-            "",
-            "",
-            None,
+            kind,
             recovery_only,
             timeout_secs,
         )
@@ -14939,31 +14987,9 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         evidence: &[u8],
         deadline: Instant,
     ) -> Result<()> {
-        let result = self.coordinate_shared_prepared_mutation(
-            "applied",
-            kind,
-            phase,
-            &child_mutation_idempotency_key(
-                &self.admitted.inventory.authorization_nonce,
-                phase,
-                kind,
-            ),
-            None,
-            "",
-            "",
-            Some(evidence),
-            true,
-            remaining_seconds(deadline)?,
-        )?;
-        if result.state != "applied"
-            || result.sha256 != prepared.sha256
-            || result.transaction_hash != prepared.transaction_hash
-        {
-            return Err(eyre!(
-                "shared prepared mutation Applied marker changed its immutable envelope"
-            ));
-        }
-        Ok(())
+        CoreWriteTransport::mark_shared_prepared_applied(
+            self, phase, kind, prepared, evidence, deadline,
+        )
     }
 
     fn run_write_canary_prepare_until(
@@ -14975,96 +15001,15 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         idempotency_key: &str,
         prerequisite: Option<&RetainedPreparedMutation>,
     ) -> Result<(Vec<u8>, Vec<u8>)> {
-        let scratch = self
-            .local_receipt_root
-            .join(format!(".{idempotency_key}.candidate.next"));
-        if scratch.exists() {
-            let metadata = fs::symlink_metadata(&scratch)?;
-            #[cfg(unix)]
-            if metadata.file_type().is_symlink()
-                || !metadata.is_file()
-                || metadata.uid() != rustix::process::geteuid().as_raw()
-                || metadata.nlink() != 1
-            {
-                return Err(eyre!("prepared envelope scratch file has unsafe custody"));
-            }
-            fs::remove_file(&scratch)?;
-            sync_directory(&self.local_receipt_root)?;
-        }
-        let output_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&scratch)?;
-        let mut output_reader = output_file.try_clone()?;
-        let output_path = inherited_file_path(&output_file)?;
-        let (mut args, mut inherited_files) = self.write_canary_base_args(
-            phase,
-            kind,
-            idempotency_key,
-            timeout_secs,
-            WriteCanaryChildAction::Prepare,
-        )?;
-        WriteCanaryChildAction::Prepare.append_envelope_args(&mut args, output_file.as_raw_fd());
-        debug_assert_eq!(
-            output_path,
-            PathBuf::from(format!("/proc/self/fd/{}", output_file.as_raw_fd()))
-        );
-        inherited_files.push(output_file);
-        if let Some(prerequisite) = prerequisite {
-            let file = self.open_retained_prepared_envelope(prerequisite)?;
-            args.push(OsString::from("--prerequisite-envelope-fd"));
-            args.push(file.as_raw_fd().to_string().into());
-            inherited_files.push(file);
-        }
-        let stdout = self.run_local_cli_until(
-            args,
-            inherited_files,
-            timeout_secs,
+        CoreWriteTransport::run_write_canary_prepare_until(
+            self,
             deadline,
-            false,
-            "prepare exact write-canary child envelope",
-        )?;
-        let report = parse_json_report(&stdout, "prepared write child")?;
-        let outcome = report
-            .as_object()
-            .and_then(|object| object.get("recovery_outcome"))
-            .and_then(norito::json::Value::as_str)
-            .ok_or_else(|| eyre!("prepared write child report omits recovery_outcome"))?;
-        if !matches!(outcome, "Prepared" | "ProofRequired") {
-            return Err(eyre!(
-                "prepared write child produced an invalid preparation outcome"
-            ));
-        }
-        validate_prepared_write_report(
-            &report,
-            self.admitted,
+            timeout_secs,
             phase,
             kind,
             idempotency_key,
-            outcome,
-            None,
-        )?;
-        output_reader.rewind()?;
-        let mut bytes = Vec::new();
-        std::io::Read::by_ref(&mut output_reader)
-            .take(u64::try_from(MAX_PREPARED_ENVELOPE_BYTES + 1).expect("bounded"))
-            .read_to_end(&mut bytes)?;
-        output_reader.sync_all()?;
-        fs::remove_file(&scratch)?;
-        sync_directory(&self.local_receipt_root)?;
-        if bytes.is_empty() || bytes.len() > MAX_PREPARED_ENVELOPE_BYTES {
-            return Err(eyre!("prepared write child envelope is empty or oversized"));
-        }
-        validate_prepared_report_envelope_bytes(&report, &bytes)?;
-        let transaction_hash = prepared_envelope_transaction_hash(&bytes)?;
-        if (outcome == "ProofRequired") != transaction_hash.is_empty() {
-            return Err(eyre!(
-                "prepared write child proof requirement does not match its tagged envelope"
-            ));
-        }
-        Ok((bytes, stdout))
+            prerequisite,
+        )
     }
 
     fn run_write_canary_prepared_until(
@@ -15075,44 +15020,14 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         prepared: &RetainedPreparedMutation,
         recover_only: bool,
     ) -> Result<PreparedMutationOutcome> {
-        let idempotency_key = child_mutation_idempotency_key(
-            &self.admitted.inventory.authorization_nonce,
+        CoreWriteTransport::run_write_canary_prepared_until(
+            self,
+            deadline,
             phase,
             kind,
-        );
-        let file = self.open_retained_prepared_envelope(prepared)?;
-        let action = if recover_only {
-            WriteCanaryChildAction::Recover
-        } else {
-            WriteCanaryChildAction::Submit
-        };
-        let (mut args, mut inherited_files) = self.write_canary_base_args(
-            phase,
-            kind,
-            &idempotency_key,
-            remaining_seconds(deadline)?,
-            action,
-        )?;
-        action.append_envelope_args(&mut args, file.as_raw_fd());
-        inherited_files.push(file);
-        let process =
-            self.run_local_cli_process_until(args, inherited_files, deadline, recover_only)?;
-        let value = parse_prepared_child_report(process, "exact prepared write child")?;
-        let outcome = value
-            .as_object()
-            .and_then(|object| object.get("recovery_outcome"))
-            .and_then(norito::json::Value::as_str)
-            .ok_or_else(|| eyre!("prepared write child report omits recovery_outcome"))?;
-        validate_prepared_write_report(
-            &value,
-            self.admitted,
-            phase,
-            kind,
-            &idempotency_key,
-            outcome,
-            Some(prepared),
-        )?;
-        core_prepared_write_outcome(value, prepared)
+            prepared,
+            recover_only,
+        )
     }
 
     fn write_canary_base_args(
@@ -15123,102 +15038,18 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         timeout_secs: u64,
         action: WriteCanaryChildAction,
     ) -> Result<(Vec<OsString>, Vec<File>)> {
-        let (mut args, config_file) = inherited_client_config_args(
-            &self.runtime.client_config,
-            "Taira runtime client config",
-        )?;
-        let mut inherited_files = vec![config_file];
-        args.extend(self.runtime.fee_args.iter().cloned());
-        args.extend([
-            OsString::from("taira"),
-            OsString::from("write-canary"),
-            OsString::from("--public-root"),
-            OsString::from(mutation_probe_root(&self.admitted.inventory, phase)?),
-            OsString::from("--timeout-secs"),
-            OsString::from(timeout_secs.to_string()),
-            OsString::from("--operation"),
-            OsString::from(match kind {
-                "onboarding" => "onboarding",
-                "faucet" => "faucet",
-                "write_canary" => "final-canary",
-                _ => return Err(eyre!("unsupported prepared write child kind")),
-            }),
-            OsString::from("--authorization-sha256"),
-            OsString::from(&self.admitted.authorization_sha256),
-            OsString::from("--authorization-nonce"),
-            OsString::from(&self.admitted.inventory.authorization_nonce),
-            OsString::from("--mutation-phase"),
-            OsString::from(phase),
-            OsString::from("--idempotency-key"),
-            OsString::from(idempotency_key),
-            OsString::from("--execution-expires-at-unix-ms"),
-            OsString::from(
-                self.admitted
-                    .authorization
-                    .claims
-                    .execution_expires_at_unix_ms
-                    .to_string(),
-            ),
-        ]);
-        if kind == "faucet" {
-            args.extend([
-                OsString::from("--faucet-authority"),
-                OsString::from(&self.admitted.inventory.faucet_policy.authority),
-                OsString::from("--faucet-asset-id"),
-                OsString::from(&self.admitted.inventory.faucet_policy.asset_definition_id),
-                OsString::from("--faucet-amount"),
-                OsString::from(self.admitted.inventory.faucet_policy.amount.to_string()),
-            ]);
-        }
-        if kind == "write_canary" && action == WriteCanaryChildAction::Prepare {
-            args.extend([
-                OsString::from("--predecessor-faucet-authority"),
-                OsString::from(&self.admitted.inventory.faucet_policy.authority),
-                OsString::from("--predecessor-faucet-asset-id"),
-                OsString::from(&self.admitted.inventory.faucet_policy.asset_definition_id),
-                OsString::from("--predecessor-faucet-amount"),
-                OsString::from(self.admitted.inventory.faucet_policy.amount.to_string()),
-            ]);
-        }
-        if kind == "onboarding" && action != WriteCanaryChildAction::Recover {
-            let token_file = inherited_input_file(
-                self.runtime
-                    .onboarding_token
-                    .as_ref()
-                    .ok_or_else(|| eyre!("write-canary submission lacks onboarding custody"))?,
-                "Taira onboarding token",
-            )?;
-            args.push(OsString::from("--onboarding-token-fd"));
-            args.push(token_file.as_raw_fd().to_string().into());
-            inherited_files.push(token_file);
-        }
-        args.push(OsString::from("--json"));
-        Ok((args, inherited_files))
+        CoreWriteTransport::write_canary_base_args(
+            self,
+            phase,
+            kind,
+            idempotency_key,
+            timeout_secs,
+            action,
+        )
     }
 
     fn open_retained_prepared_envelope(&self, prepared: &RetainedPreparedMutation) -> Result<File> {
-        if prepared.bytes.is_empty()
-            || prepared.bytes.len() > MAX_PREPARED_ENVELOPE_BYTES
-            || sha256_hex(&prepared.bytes) != prepared.sha256
-        {
-            return Err(eyre!("retained prepared envelope identity is invalid"));
-        }
-        let root = self.local_receipt_root.join("prepared-envelopes-v1");
-        ensure_private_directory(&root)?;
-        let name = format!("{}.json", prepared.sha256);
-        publish_private_noreplace(&root, &name, &prepared.bytes)?;
-        let path = root.join(name);
-        let file = File::open(&path)?;
-        let metadata = file.metadata()?;
-        #[cfg(unix)]
-        if !metadata.is_file()
-            || metadata.uid() != rustix::process::geteuid().as_raw()
-            || metadata.mode() & 0o7777 != 0o600
-            || metadata.nlink() != 1
-        {
-            return Err(eyre!("retained prepared envelope has unsafe custody"));
-        }
-        Ok(file)
+        CoreWriteTransport::open_retained_prepared_envelope(self, prepared)
     }
 
     fn recover_write_canary_child_until(
@@ -15226,39 +15057,12 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         deadline: Instant,
         mutation: &RecoveryMutationV1,
     ) -> Result<PreparedMutationOutcome> {
-        let prepared = self.fetch_shared_prepared_mutation(
-            &mutation.phase,
-            &mutation.kind,
-            true,
-            remaining_seconds(deadline)?,
-        )?;
-        if !prepared.write_recovery_requires_observation(&mutation.kind)? {
-            return Ok(PreparedMutationOutcome::Rejected(
-                "prepared_child_not_submitted".to_owned(),
-            ));
-        }
-        let outcome = self.run_write_canary_prepared_until(
+        CoreWriteTransport::recover_core_write_child(
+            self,
             deadline,
             &mutation.phase,
             &mutation.kind,
-            &prepared,
-            true,
-        )?;
-        match outcome {
-            PreparedMutationOutcome::Applied { value, evidence } => {
-                if prepared.state != "applied" {
-                    self.mark_shared_prepared_applied(
-                        &mutation.phase,
-                        &mutation.kind,
-                        &prepared,
-                        &evidence,
-                        deadline,
-                    )?;
-                }
-                Ok(PreparedMutationOutcome::Applied { value, evidence })
-            }
-            other => Ok(other),
-        }
+        )
     }
 
     fn recover_inrou_prepared_child_until(
@@ -16203,7 +16007,7 @@ fn reconcile_local_receipt_staging_at(
     Ok(())
 }
 
-fn canonical_local_report(report: &norito::json::Value) -> Result<norito::json::Value> {
+pub(super) fn canonical_local_report(report: &norito::json::Value) -> Result<norito::json::Value> {
     let Some(source) = report.as_object() else {
         return Err(eyre!("local CLI report root must be an object"));
     };
@@ -16316,6 +16120,99 @@ fn recovery_child_mutation(
             .unwrap_or_else(|| format!("{}-{}.json", kind.replace('_', "-"), phase)),
         state: RecoveryMutationStateV1::Prepared,
     }
+}
+
+impl<R: ProcessRunner> CoreWriteTransport for OpenSshTransport<'_, R> {
+    fn core_write_identity(&self, phase: &str) -> Result<CoreWriteIdentity> {
+        CoreWriteIdentity::from_inventory(
+            &self.admitted.inventory,
+            &self.admitted.authorization,
+            &self.admitted.authorization_sha256,
+            phase,
+        )
+    }
+    fn core_receipt_root(&self) -> &Path {
+        &self.local_receipt_root
+    }
+    fn core_client_args(&self) -> Result<(Vec<OsString>, Vec<File>)> {
+        let (mut args, file) = inherited_client_config_args(
+            &self.runtime.client_config,
+            "Taira runtime client config",
+        )?;
+        args.extend(self.runtime.fee_args.iter().cloned());
+        Ok((args, vec![file]))
+    }
+    fn core_onboarding_token(&self) -> Result<File> {
+        inherited_input_file(
+            self.runtime
+                .onboarding_token
+                .as_ref()
+                .ok_or_else(|| eyre!("write-canary submission lacks onboarding custody"))?,
+            "Taira onboarding token",
+        )
+    }
+    fn core_run_process(
+        &mut self,
+        args: Vec<OsString>,
+        files: Vec<File>,
+        deadline: Instant,
+        recovery_only: bool,
+    ) -> Result<ProcessOutput> {
+        self.run_local_cli_process_until(args, files, deadline, recovery_only)
+    }
+    fn core_publish_receipt(&self, name: &str, value: &norito::json::Value) -> Result<()> {
+        self.publish_local_receipt(name, value)
+    }
+    fn coordinate_shared_prepared_mutation(
+        &mut self,
+        operation: &str,
+        kind: &str,
+        phase: &str,
+        key: &str,
+        prepared: Option<&[u8]>,
+        digest: &str,
+        transaction_hash: &str,
+        evidence: Option<&[u8]>,
+        recovery_only: bool,
+        timeout_secs: u64,
+    ) -> Result<RetainedPreparedMutation> {
+        OpenSshTransport::coordinate_shared_prepared_mutation(
+            self,
+            operation,
+            kind,
+            phase,
+            key,
+            prepared,
+            digest,
+            transaction_hash,
+            evidence,
+            recovery_only,
+            timeout_secs,
+        )
+    }
+}
+
+/// Execute the held native candidate CLI without accepting an executable path.
+pub(super) fn run_native_core_cli<R: ProcessRunner>(
+    executable: &File,
+    mut args: Vec<OsString>,
+    mut inherited_files: Vec<File>,
+    deadline: Instant,
+    runner: &mut R,
+) -> Result<ProcessOutput> {
+    let executable = executable.try_clone()?;
+    let program = inherited_file_path(&executable)?;
+    inherited_files.push(executable);
+    args.insert(0, OsString::from("--machine"));
+    runner.run(&ProcessSpec {
+        program,
+        args,
+        stdin_prefix: Vec::new(),
+        stdin_file: None,
+        stdin_files: Vec::new(),
+        inherited_files,
+        deadline,
+    })
 }
 
 impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
@@ -16724,7 +16621,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
     }
 }
 
-fn child_mutation_idempotency_key(nonce: &str, phase: &str, child_kind: &str) -> String {
+pub(super) fn child_mutation_idempotency_key(nonce: &str, phase: &str, child_kind: &str) -> String {
     let mut digest = Sha256::new();
     update_frame(
         &mut digest,
@@ -17121,11 +17018,34 @@ fn validate_prepared_write_report(
     expected_outcome: &str,
     retained: Option<&RetainedPreparedMutation>,
 ) -> Result<()> {
-    validate_common_report(
-        value,
-        "taira_write_canary",
-        mutation_probe_root(&admitted.inventory, phase)?,
+    let identity = CoreWriteIdentity::from_inventory(
+        &admitted.inventory,
+        &admitted.authorization,
+        &admitted.authorization_sha256,
+        phase,
     )?;
+    validate_core_write_report(
+        value,
+        &identity,
+        phase,
+        kind,
+        idempotency_key,
+        expected_outcome,
+        retained,
+    )
+}
+
+/// Bind an exact core child report to its admitted identity and immutable envelope.
+pub(super) fn validate_core_write_report(
+    value: &norito::json::Value,
+    identity: &CoreWriteIdentity,
+    phase: &str,
+    kind: &str,
+    idempotency_key: &str,
+    expected_outcome: &str,
+    retained: Option<&RetainedPreparedMutation>,
+) -> Result<()> {
+    validate_common_report(value, "taira_write_canary", identity.origin.as_str())?;
     let object = value.as_object().expect("common report checked object");
     require_exact_json_fields(
         object,
@@ -17159,8 +17079,8 @@ fn validate_prepared_write_report(
             "prepared write report outcome is outside the exact V1 transition"
         ));
     }
-    if string("authorization_sha256")? != admitted.authorization_sha256
-        || string("authorization_nonce")? != admitted.inventory.authorization_nonce
+    if string("authorization_sha256")? != identity.authorization_sha256
+        || string("authorization_nonce")? != identity.authorization_nonce
         || string("mutation_kind")? != kind
         || string("mutation_phase")? != phase
         || string("idempotency_key")? != idempotency_key
@@ -17169,7 +17089,7 @@ fn validate_prepared_write_report(
         || object
             .get("execution_expires_at_unix_ms")
             .and_then(norito::json::Value::as_u64)
-            != Some(admitted.authorization.claims.execution_expires_at_unix_ms)
+            != Some(identity.execution_expires_at_unix_ms)
     {
         return Err(eyre!(
             "prepared write report does not bind its exact authorization child"
@@ -18239,7 +18159,7 @@ fn validate_receipt_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn publish_private_noreplace(directory: &Path, name: &str, bytes: &[u8]) -> Result<()> {
+pub(super) fn publish_private_noreplace(directory: &Path, name: &str, bytes: &[u8]) -> Result<()> {
     validate_owner_private_dir(directory, "local receipt directory")?;
     let destination = directory.join(name);
     if destination.exists() {
@@ -18620,7 +18540,7 @@ fn verify_remote_reservation_receipt(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     include!("taira_public_reset_host_canary_args_tests.rs");
@@ -19243,7 +19163,7 @@ mod tests {
         ] {
             let rendered = crate::render_cli_error(
                 &error_stack::Report::new(context),
-                crate::CliOutputFormat::Json,
+                crate::OutputSelection::resolve(Some(crate::OutputFormatArg::Json), true, false),
             );
             assert_eq!(rendered.kind.exit_code(), exit_code);
             let stderr = rendered.output.into_bytes();
@@ -19269,11 +19189,13 @@ mod tests {
     fn prepared_child_failure_does_not_trust_unknown_or_mismatched_error_kind() {
         use std::os::unix::process::ExitStatusExt as _;
         for stderr in [
-            br#"{"error":{"kind":"runtime-secret","exit_code":1,"message":"private"}}"#.as_slice(),
-            br#"{"error":{"kind":"config","exit_code":3,"message":"private"}}"#,
-            br#"{"error":{"kind":"command","exit_code":4,"message":"private"}}"#,
-            br#"{"error":{"kind":"command","exit_code":1,"message":"private","extra":"private"}}"#,
-            br#"{"error":{"kind":"command","exit_code":1,"message":"private"},"extra":"private"}"#,
+            br#"{"error":{"kind":"runtime-secret","exit_code":1,"message":"private","causes":[],"hints":[]}}"#.as_slice(),
+            br#"{"error":{"kind":"config","exit_code":3,"message":"private","causes":[],"hints":[]}}"#,
+            br#"{"error":{"kind":"command","exit_code":4,"message":"private","causes":[],"hints":[]}}"#,
+            br#"{"error":{"kind":"command","exit_code":1,"message":"private","causes":[],"hints":[],"extra":"private"}}"#,
+            br#"{"error":{"kind":"command","exit_code":1,"message":"private","causes":[],"hints":[]},"extra":"private"}"#,
+            br#"{"error":{"kind":"command","exit_code":1,"message":"private","causes":"private","hints":[]}}"#,
+            br#"{"error":{"kind":"command","exit_code":1,"message":"private"}}"#,
             b"startup banner\nprivate malformed error",
         ] {
             let error = parse_prepared_child_report(
@@ -21213,7 +21135,7 @@ mod tests {
         );
         assert_eq!(json::to_json(&progress).unwrap(), before);
 
-        let directory = tempfile::tempdir().unwrap();
+        let directory = super::super::private_custody_test_dir("completed-host-action-replay-");
         let name = host_receipt_name(HostAction::Install, "").unwrap();
         assert!(
             read_existing_host_receipt(directory.path(), &name, &admitted, HostAction::Install)
@@ -23445,6 +23367,21 @@ time.sleep(30)
             ("inrou_canary", "service_mutation")
         );
         assert!(prepared_operation_identity("final_canary").is_err());
+    }
+
+    pub(in crate::taira_public_reset) fn core_proof_required_store_fixture(
+        origin: &str,
+    ) -> (CoreWriteIdentity, Vec<u8>, Vec<u8>, String) {
+        let (admitted, prepared, envelope, _, _) = authenticated_proof_required_fixture(origin);
+        let identity = CoreWriteIdentity::from_inventory(
+            &admitted.inventory,
+            &admitted.authorization,
+            &admitted.authorization_sha256,
+            &prepared.phase,
+        )
+        .expect("fixture core identity");
+        let evidence = proof_required_evidence(&admitted, &prepared);
+        (identity, envelope, evidence, prepared.idempotency_key)
     }
 
     fn authenticated_proof_required_fixture(

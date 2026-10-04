@@ -567,7 +567,9 @@ test("public browser aggregate audits eager, lazy, and unique combined closures"
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
-  assert.equal(Object.keys(result.metafile.inputs).length, 105);
+  // Includes the shared Torii query core (query/*, toriiErrors.js,
+  // toriiEventStream.js, toriiClientEncoding.js).
+  assert.equal(Object.keys(result.metafile.inputs).length, 113);
   assertSplitByteInventory(result, metrics);
   assert.deepEqual(metrics.lazyChunks.map(({ specifier }) => specifier), [
     "./sumeragiTyped.js",
@@ -610,7 +612,7 @@ test("IVM artifact browser leaf excludes Node and Buffer shims", async () => {
 
 test("bundle targets retain canonical module ownership and accurate byte inventories", async () => {
   const expected = new Map([
-    ["toriiClient.js", { modules: 129 }],
+    ["toriiClient.js", { modules: 136 }],
     ["transactionCodec.js (browser)", { modules: 64 }],
     ["nexusApp.js (browser)", { modules: 73 }],
     ["canonicalRequest.js (browser)", { modules: 47 }],

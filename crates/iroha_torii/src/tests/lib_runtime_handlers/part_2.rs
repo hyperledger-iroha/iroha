@@ -1448,7 +1448,9 @@ async fn global_asset_definition_and_own_balance_ignore_unrelated_restricted_rou
             State(app.clone()),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            None,
+            Some(crate::utils::extractors::ExtractAccept(
+                axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+            )),
             crate::NoritoQuery(QueryOptions::default()),
             versioned_query_for_test(signed),
         )
@@ -2968,7 +2970,6 @@ async fn handler_account_assets_fanout_reports_merged_route_headers() {
         HeaderMap::new(),
         crate::loopback_connect_info(),
         AxPath(authority.to_string()),
-        AxQuery(crate::routing::AccountAssetsGetParams::default()),
     )
     .await
     .expect("account assets should execute")
@@ -3003,7 +3004,6 @@ async fn handler_account_assets_fanout_reports_merged_route_headers() {
         HeaderMap::new(),
         crate::loopback_connect_info(),
         AxPath(missing.to_string()),
-        AxQuery(crate::routing::AccountAssetsGetParams::default()),
     )
     .await
     .expect("missing account assets should preserve the empty public response")
@@ -3252,7 +3252,6 @@ async fn anonymous_accounts_list_excludes_restricted_private_ingress_route() {
         "/v1/accounts".parse().expect("valid accounts list uri"),
         HeaderMap::new(),
         crate::loopback_connect_info(),
-        AxQuery(crate::routing::ListFilterParams::default()),
     )
     .await
     .expect("accounts list should execute")
@@ -3291,7 +3290,6 @@ async fn handler_account_assets_fan_outs_across_visible_dataspaces() {
         HeaderMap::new(),
         crate::loopback_connect_info(),
         AxPath(authority.to_string()),
-        AxQuery(crate::routing::AccountAssetsGetParams::default()),
     )
     .await
     .expect("account assets should execute")
@@ -3326,25 +3324,12 @@ async fn handler_transactions_query_fan_outs_across_dataspaces() {
         super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
         "test requires multiple dataspace routes"
     );
-    let env = crate::filter::QueryEnvelope {
-        query: None,
-        filter: None,
-        select: None,
-        aggregate: None,
-        sort: Vec::new(),
-        pagination: crate::filter::Pagination {
-            limit: Some(10),
-            offset: 0,
-        },
-        fetch_size: None,
-        count_mode: Some("exact".to_owned()),
-    };
     let response = super::handler_transactions_query(
         State(app),
         Extension(super::ToriiAccountReadVisibility::None),
         HeaderMap::new(),
         crate::loopback_connect_info(),
-        NoritoJson(env),
+        crate::JsonOnly(norito::json!({ "limit": 10 })),
     )
     .await
     .expect("transactions query should execute")
@@ -4013,5 +3998,35 @@ fn signed_query_scope_exact_transaction_recovery_is_shared_and_bounded() {
     assert_eq!(
         super::signed_query_scope(&request_for_test(&authority, continuation)),
         super::SignedQueryScope::AuthorityRouted
+    );
+}
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn account_assets_reject_invalid_queries_before_routing() {
+    let authority =
+        checked_torii_test_account_id(0xf7, "derive account assets validation fixture key");
+    // The minimal app has no visible route for this account, which used to
+    // answer every query, valid or not, with an empty page.
+    let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let uri: axum::http::Uri =
+        format!("/v1/accounts/{authority}/assets?filter=unknown_field%20%3D%201")
+            .parse()
+            .expect("valid account assets uri");
+    let error = super::handler_account_assets(
+        State(app),
+        axum::http::Method::GET,
+        uri,
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        AxPath(authority.to_string()),
+    )
+    .await
+    .err()
+    .expect("an unknown filter field is rejected before routing");
+    let response = error.into_response();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        torii_response_header(&response, "x-iroha-reject-code"),
+        Some("invalid_filter")
     );
 }

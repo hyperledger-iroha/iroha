@@ -442,7 +442,7 @@ public sealed partial class ToriiClient
 
             var decodedAuthority = ToriiSubmitValidation.RequireCanonicalAuthority(authority);
             var expectedAuthority = AccountAddress
-                .Parse(authorityAccountId, AccountAddress.DefaultChainDiscriminant)
+                .Parse(authorityAccountId)
                 .ControllerBytes();
             if (!decodedAuthority.AsSpan().SequenceEqual(expectedAuthority))
             {

@@ -71,9 +71,16 @@ fn lifecycle_ordinary_transaction(
 }
 
 async fn lifecycle_submit(app: &SharedAppState, transaction: SignedTransaction) -> Response {
-    super::submit_signed_transaction_for_ingress(app.clone(), HeaderMap::new(), None, transaction)
-        .await
-        .unwrap_or_else(IntoResponse::into_response)
+    super::submit_signed_transaction_for_ingress(
+        app.clone(),
+        HeaderMap::new(),
+        Some(crate::utils::extractors::ExtractAccept(
+            axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+        )),
+        transaction,
+    )
+    .await
+    .unwrap_or_else(IntoResponse::into_response)
 }
 
 #[tokio::test]

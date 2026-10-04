@@ -351,7 +351,7 @@ class HttpClientTransportVpnParserTest {
         val paymentTxHash = "44".repeat(32)
         val meteringKey = validEd25519PublicKeyHex
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth(
+        fun auth() = ToriiCanonicalRequestAuth(
             "alice@universal",
             RequestSigner.ed25519(keyPair.private),
             1_700_000_000_050L,
@@ -373,20 +373,20 @@ class HttpClientTransportVpnParserTest {
 
         assertRejected(201, vpnProfileJson()) { it.getVpnProfile().join() }
         assertRejected(200, vpnQuoteJson(quoteId, meteringKey)) {
-            it.createVpnQuote(VpnQuoteCreateRequest("standard", "0x$meteringKey"), auth).join()
+            it.createVpnQuote(VpnQuoteCreateRequest("standard", "0x$meteringKey"), auth()).join()
         }
         assertRejected(200, vpnSessionJson(sessionId, quoteId, paymentTxHash)) {
-            it.createVpnSession(VpnSessionCreateRequest("standard", quoteId, "0x$paymentTxHash", meteringKey), auth).join()
+            it.createVpnSession(VpnSessionCreateRequest("standard", quoteId, "0x$paymentTxHash", meteringKey), auth()).join()
         }
         assertRejected(201, vpnSessionJson(sessionId, quoteId, paymentTxHash)) {
-            it.getVpnSession(sessionId, auth).join()
+            it.getVpnSession(sessionId, auth()).join()
         }
         assertRejected(200, vpnReceiptJson(sessionId, quoteId, leaseId, paymentTxHash, settled = true)) {
-            it.submitVpnReceipt(VpnReceiptSubmitRequest("0xCAFE", "BEEF", "0x$leaseId"), auth).join()
+            it.submitVpnReceipt(VpnReceiptSubmitRequest("0xCAFE", "BEEF", "0x$leaseId"), auth()).join()
         }
         val receipt = vpnReceiptJson(sessionId, quoteId, leaseId, paymentTxHash, settled = true)
         assertRejected(201, """{"items":[$receipt],"total":1}""") {
-            it.listVpnReceipts(auth).join()
+            it.listVpnReceipts(auth()).join()
         }
     }
 

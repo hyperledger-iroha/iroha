@@ -161,7 +161,7 @@ is-it-maintained-open-issues = { repository = "https://github.com/hyperledger-ir
 maintenance = { status = "actively-developed" }
 
 [dependencies]
-iroha_core_privacy = { workspace = true }
+iroha_core_privacy = { workspace = true, default-features = false }
 iroha_core_timed_ovn = { workspace = true }
 iroha_allocation = { workspace = true }
 iroha_model_base = { workspace = true }
@@ -237,7 +237,7 @@ rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [dev-dependencies]
 mv = { workspace = true, features = ["test"] }
-iroha_core_privacy = { workspace = true, features = ["test-utils"] }
+iroha_core_privacy = { workspace = true, default-features = false, features = ["test-utils"] }
 iroha_core_timed_ovn = { workspace = true, features = ["test-utils"] }
 kotodama_lang = { workspace = true }
 iroha_core_zk = { workspace = true, default-features = false, features = ["test-utils"] }

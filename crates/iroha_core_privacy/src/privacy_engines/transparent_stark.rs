@@ -862,6 +862,7 @@ pub(crate) fn goldilocks_fft_v1(
 }
 /// In-place FFT for a column whose bounded batch already owns parallelism.
 /// Validation and arithmetic use the same kernel as the single-column route.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn goldilocks_fft_coarse_v1(
     values: &mut [GoldilocksFieldV1],
     root: GoldilocksFieldV1,
@@ -1032,6 +1033,7 @@ pub(crate) fn goldilocks_ifft_v1(
     goldilocks_ifft_with_inner_parallelism_v1::<true>(values, root)
 }
 /// In-place inverse FFT for a column in an already parallel bounded batch.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn goldilocks_ifft_coarse_v1(
     values: &mut [GoldilocksFieldV1],
     root: GoldilocksFieldV1,

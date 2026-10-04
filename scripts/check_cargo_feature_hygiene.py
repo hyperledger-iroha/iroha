@@ -21,6 +21,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised on Python <3.11
 FOUNDATIONAL_DEPENDENCIES = frozenset(
     {
         "iroha_core",
+        "iroha_core_privacy",
         "iroha_core_zk",
         "iroha_crypto",
         "iroha_data_model",
@@ -64,6 +65,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "application": ("rand", "json", "ecc-batch", "bfv-accel", "pqc"),
         "bfv-accel": (),
         "bls": (
+            "dep:arrayvec",
             "dep:ark-serialize",
             "dep:blst",
             "dep:blstrs",
@@ -540,7 +542,6 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
 NONSHIPPING_EXPLICIT_OPT_IN_DEPENDENCY_ALLOWLIST: tuple[
     tuple[str, str, str], ...
 ] = (
-    ("executor_custom_data_model", "iroha_data_model", "fault_injection"),
     ("xtask", "iroha", "test-fixtures"),
     ("xtask", "iroha_torii", "profiling"),
     ("xtask", "iroha_torii", "ws_integration_tests"),

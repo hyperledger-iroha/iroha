@@ -152,9 +152,7 @@ async fn wait_for_account_in_query(
     account_literal: &str,
 ) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(30);
-    let body = format!(
-        r#"{{"filter":{{"op":"eq","args":["id","{account_literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
-    );
+    let body = format!(r#"{{"filter":{{"op":"eq","args":["id","{account_literal}"]}},"limit":4}}"#);
     loop {
         let resp = http
             .post(url.clone())
@@ -475,9 +473,7 @@ async fn accounts_query_accepts_i105_filter_literals() -> Result<()> {
     };
     network.ensure_blocks(1).await?;
     let expected = ALICE_ID.to_string();
-    let body = format!(
-        r#"{{"filter":{{"op":"eq","args":["id","{expected}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
-    );
+    let body = format!(r#"{{"filter":{{"op":"eq","args":["id","{expected}"]}},"limit":4}}"#);
     let http = http_client();
     let url = network
         .client()
@@ -567,9 +563,7 @@ async fn accounts_query_rejects_dotted_i105_filter_literals() -> Result<()> {
         .expect_err("dotted I105 literal must fail strict parsing")
         .reason()
         .to_string();
-    let body = format!(
-        r#"{{"filter":{{"op":"eq","args":["id","{literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
-    );
+    let body = format!(r#"{{"filter":{{"op":"eq","args":["id","{literal}"]}},"limit":4}}"#);
     let http = http_client();
     let url = network
         .client()
@@ -648,7 +642,7 @@ async fn accounts_query_supports_i105_response() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-    let body = r#"{"filter":null,"sort":[],"pagination":{"limit":8,"offset":0},"fetch_size":null,"select":null}"#;
+    let body = r#"{"limit":8}"#;
     let http = http_client();
     let url = network
         .client()
@@ -902,9 +896,7 @@ async fn asset_holders_query_rejects_dotted_i105_filter_literals() -> Result<()>
         .expect_err("dotted I105 literal must fail strict parsing")
         .reason()
         .to_string();
-    let body = format!(
-        r#"{{"filter":{{"op":"eq","args":["account_id","{literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null}}"#
-    );
+    let body = format!(r#"{{"filter":{{"op":"eq","args":["account_id","{literal}"]}},"limit":4}}"#);
     let http = http_client();
     let Some(definition_literal) =
         find_asset_definition_with_holders(&http, network.client().client().endpoint()).await?
@@ -1138,7 +1130,7 @@ async fn account_transactions_query_returns_i105_literals() -> Result<()> {
         &account_literal,
         &["transactions", "query"],
     );
-    let default_body = r#"{"filter":null,"sort":[],"pagination":{"offset":0,"limit":8},"fetch_size":null,"select":null}"#;
+    let default_body = r#"{"limit":8}"#;
     let authorities = {
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
@@ -1181,7 +1173,7 @@ async fn account_transactions_query_returns_i105_literals() -> Result<()> {
         "I105 default query should include canonical literal {account_literal}, got {authorities:?}"
     );
     assert_authorities_are_i105(&authorities)?;
-    let i105_body = r#"{"filter":null,"sort":[],"pagination":{"offset":0,"limit":8},"fetch_size":null,"select":null}"#;
+    let i105_body = r#"{"limit":8}"#;
     let resp = http
         .post(url.clone())
         .header("Content-Type", "application/json")
@@ -1554,9 +1546,7 @@ async fn accounts_query_rejects_selector_prefixed_filter_literals() -> Result<()
         .expect_err("selector-prefixed literal must fail to parse")
         .reason()
         .to_owned();
-    let body = format!(
-        r#"{{"filter":{{"op":"eq","args":["id","{literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
-    );
+    let body = format!(r#"{{"filter":{{"op":"eq","args":["id","{literal}"]}},"limit":4}}"#);
     let http = http_client();
     let url = network
         .client()
@@ -1599,9 +1589,7 @@ async fn accounts_query_rejects_public_key_filter_literals() -> Result<()> {
         .expect_err("public-key@domain literal must fail strict parsing")
         .reason()
         .to_string();
-    let body = format!(
-        r#"{{"filter":{{"op":"eq","args":["id","{literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
-    );
+    let body = format!(r#"{{"filter":{{"op":"eq","args":["id","{literal}"]}},"limit":4}}"#);
     let http = http_client();
     let url = network
         .client()
@@ -1664,9 +1652,8 @@ async fn accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals() 
     wait_for_account_in_query(&http, url.clone(), &expected).await?;
     let alias_literal = format!("{}@{}", label.label, domain_id);
     let i105_literal = dotted_i105_literal(&account_id.to_string());
-    let alias_body = format!(
-        r#"{{"filter":{{"op":"eq","args":["id","{alias_literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
-    );
+    let alias_body =
+        format!(r#"{{"filter":{{"op":"eq","args":["id","{alias_literal}"]}},"limit":4}}"#);
     let alias_resp = http
         .post(url.clone())
         .header("Content-Type", "application/json")
@@ -1691,9 +1678,7 @@ async fn accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals() 
         alias_ids.iter().all(|id| !id.contains('@')),
         "alias query should still return canonical ids, got {alias_ids:?}"
     );
-    let body = format!(
-        r#"{{"filter":{{"op":"eq","args":["id","{i105_literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
-    );
+    let body = format!(r#"{{"filter":{{"op":"eq","args":["id","{i105_literal}"]}},"limit":4}}"#);
     let resp = http
         .post(url.clone())
         .header("Content-Type", "application/json")
@@ -1872,9 +1857,8 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         "repo agreements should honour canonical I105 for counterparties"
     );
     let query_url = base.join("/v1/repo/agreements/query")?;
-    let query_body = format!(
-        r#"{{"filter":{{"op":"eq","args":["id","{agreement_literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
-    );
+    let query_body =
+        format!(r#"{{"filter":{{"op":"eq","args":["id","{agreement_literal}"]}},"limit":4}}"#);
     let resp = http
         .post(query_url)
         .header("Content-Type", "application/json")

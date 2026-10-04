@@ -583,6 +583,70 @@ def test_rejects_workspace_feature_injection(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.parametrize("defaults", [None, True])
+def test_rejects_privacy_workspace_default_feature_drift(
+    tmp_path: Path, defaults: bool | None,
+) -> None:
+    _write_fixture(tmp_path)
+    assert FEATURE_HYGIENE.check_repository(tmp_path) == []
+    manifest = tmp_path / "Cargo.toml"
+    row = 'iroha_core_privacy = { path = "deps/iroha_core_privacy", default-features = false }'
+    replacement = (
+        'iroha_core_privacy = { path = "deps/iroha_core_privacy" }'
+        if defaults is None else row.replace("false", "true")
+    )
+    source = manifest.read_text(encoding="utf-8")
+    assert source.count(row) == 1
+    manifest.write_text(source.replace(row, replacement), encoding="utf-8")
+
+    assert FEATURE_HYGIENE.check_repository(tmp_path) == [
+        f"{manifest}: workspace dependency `iroha_core_privacy` "
+        "must set `default-features = false`"
+    ]
+
+
+@pytest.mark.parametrize("feature", ["simd", "zk-stark"])
+def test_rejects_privacy_workspace_feature_injection(
+    tmp_path: Path, feature: str,
+) -> None:
+    _write_fixture(tmp_path)
+    assert FEATURE_HYGIENE.check_repository(tmp_path) == []
+    manifest = tmp_path / "Cargo.toml"
+    row = 'iroha_core_privacy = { path = "deps/iroha_core_privacy", default-features = false }'
+    source = manifest.read_text(encoding="utf-8")
+    assert source.count(row) == 1
+    manifest.write_text(
+        source.replace(row, row[:-2] + f', features = ["{feature}"] }}'),
+        encoding="utf-8",
+    )
+
+    assert FEATURE_HYGIENE.check_repository(tmp_path) == [
+        f"{manifest}: workspace dependency `iroha_core_privacy` "
+        "must not inject features"
+    ]
+
+
+@pytest.mark.parametrize("defaults", [None, True])
+def test_rejects_privacy_member_default_feature_drift(
+    tmp_path: Path, defaults: bool | None,
+) -> None:
+    _write_fixture(tmp_path)
+    assert FEATURE_HYGIENE.check_repository(tmp_path) == []
+    rows = _member_rows()
+    row = "iroha_core_privacy = { workspace = true, default-features = false }"
+    rows[rows.index(row)] = (
+        "iroha_core_privacy = { workspace = true }"
+        if defaults is None else row.replace("false", "true")
+    )
+    _write_member(tmp_path, "crates/consumer", rows)
+
+    assert FEATURE_HYGIENE.check_repository(tmp_path) == [
+        f"{tmp_path / 'crates/consumer/Cargo.toml'}: [dependencies] "
+        "`iroha_core_privacy` must set `default-features = false` "
+        "and select features locally"
+    ]
+
+
 def test_rejects_implicit_default_features_in_default_member(tmp_path: Path) -> None:
     _write_fixture(tmp_path, member_defaults=True)
 
@@ -696,3 +760,51 @@ def test_cli_executable_keeps_only_real_target_and_option_features() -> None:
     assert document["features"]["cli"] == []
     assert document["features"]["dev-tools"] == ["cli"]
     assert set(document["features"]["default"]) == {"cli", "bridge", "offline-visual-codecs"}
+
+
+def test_bls_requires_explicit_arrayvec_dependency_forwarding() -> None:
+    """BLS must activate the bounded threshold transcript's optional dependency."""
+
+    document = _guarded_document("iroha_crypto")
+    assert _guarded_errors("iroha_crypto", document) == []
+    assert "dep:arrayvec" in document["features"]["bls"]
+    changed = copy.deepcopy(document)
+    changed["features"]["bls"].remove("dep:arrayvec")
+    assert changed != document
+
+    errors = _guarded_errors("iroha_crypto", changed)
+
+    assert any(
+        "feature `bls` must be" in error and "'dep:arrayvec'" in error
+        for error in errors
+    ), errors
+
+
+def test_sample_fault_injection_is_dev_only_and_rejects_normal_dependency(
+    monkeypatch,
+) -> None:
+    """The sample's test opt-in cannot leak back into its ordinary model graph."""
+
+    manifest = ROOT / "data_model/samples/executor_custom_data_model/Cargo.toml"
+    document = FEATURE_HYGIENE._load_toml(manifest)
+    assert "fault_injection" not in document["dependencies"]["iroha_data_model"]["features"]
+    assert "fault_injection" in document["dev-dependencies"]["iroha_data_model"]["features"]
+    assert FEATURE_HYGIENE.check_repository(ROOT) == []
+    changed = copy.deepcopy(document)
+    changed["dependencies"]["iroha_data_model"]["features"].append("fault_injection")
+    assert changed != document
+    original_load = FEATURE_HYGIENE._load_toml
+
+    def mutated_load(path: Path) -> dict:
+        return copy.deepcopy(changed) if path == manifest else original_load(path)
+
+    monkeypatch.setattr(FEATURE_HYGIENE, "_load_toml", mutated_load)
+    errors = FEATURE_HYGIENE.check_repository(ROOT)
+
+    assert any(
+        "package `executor_custom_data_model` [dependencies] dependency `iroha_data_model`"
+        in error
+        and "selects explicit opt-in feature `fault_injection` from a non-dev dependency declaration"
+        in error
+        for error in errors
+    ), errors

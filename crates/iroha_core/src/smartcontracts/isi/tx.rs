@@ -1193,10 +1193,76 @@ pub(crate) fn visit_committed_transactions(
         TransactionHistoryCursor,
     ) -> Result<ControlFlow<()>, QueryExecutionFail>,
 ) -> Result<bool, QueryExecutionFail> {
+    walk_committed_transactions(
+        state_ro,
+        filter,
+        anchor,
+        resume.map(HistoryResume::After),
+        max_row_bytes,
+        before_project,
+        |transaction, matches, visit| visitor(transaction, matches, visit.next),
+    )
+}
+/// Where a history walk resumes.
+#[derive(Debug, Clone, Copy)]
+enum HistoryResume {
+    /// Just after a projected transaction (an iterable-query continuation).
+    After(TransactionHistoryCursor),
+    /// Strictly before the transaction at these block coordinates.
+    Before(TransactionHistoryPosition),
+}
+impl HistoryResume {
+    /// Highest carrier height the walk may still visit.
+    fn height(self) -> usize {
+        match self {
+            Self::After(cursor) => cursor.height,
+            // Nothing in the block precedes its first transaction.
+            Self::Before(position) if position.block_index == 0 => {
+                position.height.saturating_sub(1)
+            }
+            Self::Before(position) => position.height,
+        }
+    }
+    /// Newest-first offset at which the walk re-enters the carrier at `height`.
+    fn offset_in(
+        self,
+        height: usize,
+        transaction_count: usize,
+    ) -> Result<usize, QueryExecutionFail> {
+        match self {
+            Self::After(cursor) if cursor.height == height => Ok(cursor.transaction_offset),
+            Self::Before(position) if position.height == height => transaction_count
+                .checked_sub(position.block_index)
+                .ok_or(QueryExecutionFail::CursorMismatch),
+            _ => Ok(0),
+        }
+    }
+}
+/// One visited transaction's coordinates.
+#[derive(Debug, Clone, Copy)]
+struct HistoryVisit {
+    /// Continuation just after the transaction.
+    next: TransactionHistoryCursor,
+    /// Block coordinates of the transaction.
+    position: TransactionHistoryPosition,
+}
+fn walk_committed_transactions(
+    state_ro: &impl StateReadOnly,
+    filter: &CompoundPredicate<CommittedTransaction>,
+    anchor: TransactionHistoryAnchor,
+    resume: Option<HistoryResume>,
+    max_row_bytes: u64,
+    before_project: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
+    mut visitor: impl FnMut(
+        CommittedTransaction,
+        bool,
+        HistoryVisit,
+    ) -> Result<ControlFlow<()>, QueryExecutionFail>,
+) -> Result<bool, QueryExecutionFail> {
     anchor.validate(state_ro)?;
     let (predicate_json, candidate_heights) = transaction_query_plan(filter, state_ro);
     reject_unbounded_emergency_fast_transaction_history(state_ro, candidate_heights.as_ref())?;
-    let maximum_height = resume.map_or(anchor.height, |cursor| cursor.height.min(anchor.height));
+    let maximum_height = resume.map_or(anchor.height, |resume| resume.height().min(anchor.height));
     let candidates = candidate_heights.map(|mut heights| {
         heights.retain(|height| height.get() <= maximum_height);
         heights
@@ -1243,10 +1309,10 @@ pub(crate) fn visit_committed_transactions(
                     0,
                 )?;
                 let projection = NetworkCarrierProjection::new(block)?;
-                let transaction_offset = resume
-                    .filter(|cursor| cursor.height == height.get())
-                    .map_or(0, |cursor| cursor.transaction_offset);
                 let transaction_count = projection.count as usize;
+                let transaction_offset = resume.map_or(Ok(0), |resume| {
+                    resume.offset_in(height.get(), transaction_count)
+                })?;
                 if transaction_offset > transaction_count {
                     return Err(QueryExecutionFail::CursorMismatch);
                 }
@@ -1269,7 +1335,14 @@ pub(crate) fn visit_committed_transactions(
                             transaction_offset: 0,
                         }
                     };
-                    if visitor(transaction, matches, next_cursor)?.is_break() {
+                    let visit = HistoryVisit {
+                        next: next_cursor,
+                        position: TransactionHistoryPosition {
+                            height: height.get(),
+                            block_index: input_index as usize,
+                        },
+                    };
+                    if visitor(transaction, matches, visit)?.is_break() {
                         return Ok(ControlFlow::Break(()));
                     }
                 }
@@ -1351,6 +1424,126 @@ pub fn visit_committed_transactions_with_work_budget(
         |transaction, matches, _| visitor(transaction, matches),
     )
 }
+/// Block coordinates of a committed transaction: its block height and its
+/// index among that block's transactions.
+///
+/// Coordinates are global: every peer holds the same blocks, so a position
+/// issued by one peer resumes a walk on any other. Walks run newest first and
+/// resume strictly before a position; transactions committed after a position
+/// was issued sit at greater heights and are never revisited, so paging
+/// through history is stable while the chain grows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TransactionHistoryPosition {
+    height: usize,
+    block_index: usize,
+}
+
+impl TransactionHistoryPosition {
+    /// Coordinates of the transaction at `block_index` in the block at `height`.
+    pub fn new(height: u64, block_index: u64) -> Option<Self> {
+        Some(Self {
+            height: usize::try_from(height).ok()?,
+            block_index: usize::try_from(block_index).ok()?,
+        })
+    }
+
+    /// Height of the block holding the transaction.
+    pub fn height(self) -> u64 {
+        self.height as u64
+    }
+
+    /// Index of the transaction within its block, in commit order.
+    pub fn block_index(self) -> u64 {
+        self.block_index as u64
+    }
+}
+
+/// How one page of a resumable history walk ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionHistoryPageEnd {
+    /// The visitor stopped at the transaction at this position.
+    Stopped(TransactionHistoryPosition),
+    /// The page's work or byte budget ran out after visiting the transaction
+    /// at this position; resume strictly before it.
+    BudgetSpent(TransactionHistoryPosition),
+    /// The budget ran out before the walk reached a transaction: the blocks
+    /// above the starting position alone exceed it, so no page with this
+    /// budget can start this deep.
+    OutOfReach,
+    /// No older history remains.
+    Exhausted,
+}
+
+/// Visit one page of committed transactions newest first, strictly before `resume`.
+///
+/// Every walk authenticates history downward from the newest block, so a
+/// page's work and bytes include every block above its starting position, not
+/// only the transactions it visits. Running out of budget after visiting a
+/// transaction ends the page with the position to resume from
+/// ([`TransactionHistoryPageEnd::BudgetSpent`]); running out before reaching
+/// one ends it with [`TransactionHistoryPageEnd::OutOfReach`].
+///
+/// # Errors
+/// Rejects zero or oversized limits, unavailable history and an anchor that
+/// moved underneath the walk.
+pub fn visit_committed_transaction_page(
+    state_ro: &impl StateReadOnly,
+    resume: Option<TransactionHistoryPosition>,
+    max_projection_work: u64,
+    max_history_bytes: u64,
+    mut visitor: impl FnMut(CommittedTransaction, TransactionHistoryPosition) -> ControlFlow<()>,
+) -> Result<TransactionHistoryPageEnd, QueryExecutionFail> {
+    let canonical_max = iroha_data_model::query::parameters::MAX_FETCH_SIZE.get();
+    if max_projection_work == 0 || max_projection_work > canonical_max || max_history_bytes == 0 {
+        return Err(QueryExecutionFail::FetchSizeTooBig);
+    }
+    let mut total_work = 0_u64;
+    let mut total_bytes = 0_u64;
+    let mut budget_spent = false;
+    let mut last = None;
+    let mut stopped = false;
+    let walk = walk_committed_transactions(
+        state_ro,
+        &CompoundPredicate::PASS,
+        TransactionHistoryAnchor::capture(state_ro),
+        resume.map(HistoryResume::Before),
+        max_history_bytes,
+        |items, bytes| {
+            let work = total_work
+                .checked_add(items)
+                .filter(|work| *work <= max_projection_work);
+            let size = total_bytes
+                .checked_add(bytes)
+                .filter(|size| *size <= max_history_bytes);
+            if let (Some(work), Some(size)) = (work, size) {
+                total_work = work;
+                total_bytes = size;
+                Ok(())
+            } else {
+                budget_spent = true;
+                Err(QueryExecutionFail::GasBudgetExceeded)
+            }
+        },
+        |transaction, _matches, visit| {
+            last = Some(visit.position);
+            let flow = visitor(transaction, visit.position);
+            stopped = flow.is_break();
+            Ok(flow)
+        },
+    );
+    match (walk, last) {
+        (Ok(_), Some(position)) if stopped => Ok(TransactionHistoryPageEnd::Stopped(position)),
+        (Ok(_), _) => Ok(TransactionHistoryPageEnd::Exhausted),
+        (Err(QueryExecutionFail::GasBudgetExceeded), Some(position)) if budget_spent => {
+            Ok(TransactionHistoryPageEnd::BudgetSpent(position))
+        }
+        (Err(QueryExecutionFail::GasBudgetExceeded), None) if budget_spent => {
+            Ok(TransactionHistoryPageEnd::OutOfReach)
+        }
+        (Err(error), _) => Err(error),
+    }
+}
+
 /// Collect a small committed-transaction snapshot within explicit retention bounds.
 ///
 /// Carrier work is bounded independently before source/output validation and proof construction. Transactions are visited
@@ -2483,6 +2676,100 @@ pub(crate) mod tests {
             error, expected_error,
             "query must reject the exact original execution commitment mismatch"
         );
+    }
+    #[test]
+    fn transaction_history_pages_resume_strictly_before_their_position() {
+        let fixture = canonical_query_fixture();
+        let state_view = fixture.state.view();
+        let walk = |resume, work, stop_after: usize| {
+            let mut page = Vec::new();
+            let end = visit_committed_transaction_page(
+                &state_view,
+                resume,
+                work,
+                TRANSACTION_HISTORY_MAX_BYTES,
+                |transaction, position| {
+                    page.push((transaction.entrypoint_hash, position));
+                    if page.len() == stop_after {
+                        ControlFlow::Break(())
+                    } else {
+                        ControlFlow::Continue(())
+                    }
+                },
+            )
+            .expect("history page");
+            (page, end)
+        };
+        let (all, end) = walk(None, 1_000, usize::MAX);
+        assert_eq!(end, TransactionHistoryPageEnd::Exhausted);
+        assert!(all.len() >= 4, "fixture spans several carriers");
+        assert!(
+            all.windows(2).all(|pair| pair[0].1 > pair[1].1),
+            "newest first with strictly decreasing coordinates"
+        );
+        let mut paged = Vec::new();
+        let mut resume = None;
+        loop {
+            let (page, end) = walk(resume, 1_000, 3);
+            paged.extend(page);
+            match end {
+                TransactionHistoryPageEnd::Stopped(position) => resume = Some(position),
+                TransactionHistoryPageEnd::Exhausted => break,
+                TransactionHistoryPageEnd::BudgetSpent(_)
+                | TransactionHistoryPageEnd::OutOfReach => {
+                    panic!("the budget is ample")
+                }
+            }
+        }
+        assert_eq!(
+            paged, all,
+            "stopped pages resume strictly before their position"
+        );
+        // The smallest budget that reaches the newest transaction.
+        let work = (1..1_000)
+            .find(|work| !walk(None, *work, usize::MAX).0.is_empty())
+            .expect("an ample budget reaches the newest transaction");
+        let mut budgeted = Vec::new();
+        let mut resume = None;
+        let mut pages = 0;
+        let out_of_reach = loop {
+            let (page, end) = walk(resume, work, usize::MAX);
+            budgeted.extend(page);
+            pages += 1;
+            match end {
+                TransactionHistoryPageEnd::BudgetSpent(position) => resume = Some(position),
+                TransactionHistoryPageEnd::OutOfReach => break true,
+                TransactionHistoryPageEnd::Exhausted => break false,
+                TransactionHistoryPageEnd::Stopped(_) => unreachable!("the visitor never stops"),
+            }
+        };
+        assert!(pages > 1, "a minimal budget spreads history over pages");
+        assert!(!budgeted.is_empty());
+        assert_eq!(
+            budgeted[..],
+            all[..budgeted.len()],
+            "spent budgets end pages without skipping or repeating rows"
+        );
+        assert!(
+            out_of_reach || budgeted == all,
+            "a walk ends only when history is exhausted or out of reach"
+        );
+        let oldest = all[all.len() - 1].1;
+        let (rest, end) = walk(Some(oldest), 1_000, usize::MAX);
+        assert!(rest.is_empty(), "nothing precedes the oldest transaction");
+        assert_eq!(end, TransactionHistoryPageEnd::Exhausted);
+        // Every walk reads the newer blocks first, so a one-block budget
+        // cannot reach a position below the newest block.
+        let newest_height = all[0].1.height();
+        let deep = all
+            .iter()
+            .map(|(_, position)| *position)
+            .filter(|position| position.height() < newest_height)
+            .max()
+            .expect("history spans several blocks");
+        let (rest, end) = walk(Some(deep), 1, usize::MAX);
+        assert!(rest.is_empty());
+        assert_eq!(end, TransactionHistoryPageEnd::OutOfReach);
     }
     #[test]
     fn fallible_transaction_visitor_reads_only_carriers_needed_by_bounded_page() {

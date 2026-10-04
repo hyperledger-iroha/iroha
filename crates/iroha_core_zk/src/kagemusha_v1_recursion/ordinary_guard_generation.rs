@@ -14,11 +14,12 @@ use super::super::{
 };
 use super::*;
 
+/// Canonical role material stays owned through the complete generated pair lifetime.
 pub(crate) struct GeneratedOrdinaryGuardEqV1 {
-    pub(crate) parameters: Arc<[u8]>,
-    pub(crate) proving_key: Arc<[u8]>,
-    pub(crate) verifying_key: Arc<[u8]>,
-    pub(crate) base_params: BaseCircuitParams,
+    pub(crate) _parameters: Arc<[u8]>,
+    pub(crate) _proving_key: Arc<[u8]>,
+    pub(crate) _verifying_key: Arc<[u8]>,
+    pub(crate) _base_params: BaseCircuitParams,
     pub(crate) protocol: PlonkProtocol<EqAffine>,
     pub(crate) protocol_digest: [u8; 32],
     pub(crate) instances: Vec<Fp>,
@@ -26,11 +27,12 @@ pub(crate) struct GeneratedOrdinaryGuardEqV1 {
     pub(crate) history: KagemushaEqAccumulatorV1,
 }
 
+/// Retain the same Ep role originals alongside its authenticated proof and history.
 pub(crate) struct GeneratedOrdinaryGuardEpV1 {
-    pub(crate) parameters: Arc<[u8]>,
-    pub(crate) proving_key: Arc<[u8]>,
-    pub(crate) verifying_key: Arc<[u8]>,
-    pub(crate) base_params: BaseCircuitParams,
+    pub(crate) _parameters: Arc<[u8]>,
+    pub(crate) _proving_key: Arc<[u8]>,
+    pub(crate) _verifying_key: Arc<[u8]>,
+    pub(crate) _base_params: BaseCircuitParams,
     pub(crate) protocol: PlonkProtocol<EpAffine>,
     pub(crate) protocol_digest: [u8; 32],
     pub(crate) instances: Vec<Fq>,
@@ -200,10 +202,10 @@ pub(crate) fn generate_ordinary_guard_pair_v1(
         .map_err(|error| KagemushaArtifactGenerationErrorV1::CircuitBuild(error.to_string()))?;
     Ok(GeneratedOrdinaryGuardPairV1 {
         eq: GeneratedOrdinaryGuardEqV1 {
-            parameters: eq_parameter_bytes,
-            proving_key: eq_pk_bytes,
-            verifying_key: eq_vk_bytes,
-            base_params: eq_base_params,
+            _parameters: eq_parameter_bytes,
+            _proving_key: eq_pk_bytes,
+            _verifying_key: eq_vk_bytes,
+            _base_params: eq_base_params,
             protocol: eq_protocol,
             protocol_digest: eq_protocol_digest,
             instances: eq_instances,
@@ -211,10 +213,10 @@ pub(crate) fn generate_ordinary_guard_pair_v1(
             history: eq_history,
         },
         ep: GeneratedOrdinaryGuardEpV1 {
-            parameters: ep_parameter_bytes,
-            proving_key: ep_pk_bytes,
-            verifying_key: ep_vk_bytes,
-            base_params: ep_base_params,
+            _parameters: ep_parameter_bytes,
+            _proving_key: ep_pk_bytes,
+            _verifying_key: ep_vk_bytes,
+            _base_params: ep_base_params,
             protocol: ep_protocol,
             protocol_digest: ep_protocol_digest,
             instances: ep_instances,

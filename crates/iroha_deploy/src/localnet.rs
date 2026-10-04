@@ -4690,6 +4690,913 @@ fn parse_localnet_peer_config(
     actual::Root::from_toml_source(source)
         .map_err(|_| eyre!("generated peer config is invalid while deriving consensus policies"))
 }
+
+/// Validate an isolated post-DKG Taira launch without changing its initial configuration.
+///
+/// Only the native reader handles configuration and credential bodies. The public result
+/// binds the checked configuration hash and retained filesystem identities for an opaque
+/// FD 198/199/200 handoff by the generated launcher.
+///
+/// # Errors
+/// Refuses unsafe paths or custody, changed node settings, mismatched beacon shares, and
+/// occupied or overlapping private loopback listeners.
+pub fn validate_beacon_launch(
+    network_dir: &Path,
+    peer_index: u16,
+    beacon_config: &Path,
+    beacon_credential: &Path,
+) -> Result<norito::json::Value> {
+    #[cfg(not(unix))]
+    {
+        let _ = (network_dir, peer_index, beacon_config, beacon_credential);
+        Err(eyre!(
+            "Taira private beacon launch requires native Unix descriptor custody"
+        ))
+    }
+    #[cfg(unix)]
+    {
+        use iroha_core::beacon::credential::MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1;
+        use std::net::SocketAddr as NativeSocketAddr;
+
+        ensure!(
+            peer_index < 4,
+            "private Taira launch requires a four-peer index"
+        );
+        ensure!(
+            network_dir.is_absolute(),
+            "network directory must be absolute"
+        );
+        let network = iroha_fs::PrivateDirectory::open(network_dir)?;
+        ensure!(
+            network.path() == network_dir && fs::canonicalize(network_dir)? == network_dir,
+            "network directory must be canonical"
+        );
+        let seat = private_beacon_seat(network_dir, beacon_config, beacon_credential)?;
+
+        let initial_path = network_dir.join(format!("peer{peer_index}.toml"));
+        let (initial_bytes, initial_identity) =
+            read_beacon_launch_input(&initial_path, 1024 * 1024)?;
+        let (beacon_bytes, beacon_identity) = read_beacon_launch_input(beacon_config, 1024 * 1024)?;
+        let initial_text = std::str::from_utf8(&initial_bytes)
+            .map_err(|_| eyre!("initial config is not UTF-8"))?;
+        let beacon_text =
+            std::str::from_utf8(&beacon_bytes).map_err(|_| eyre!("beacon config is not UTF-8"))?;
+        validate_beacon_config_projection(initial_text, beacon_text)?;
+        let initial = parse_localnet_peer_config(initial_text, Some(&initial_path))?;
+        let projected = parse_localnet_peer_config(beacon_text, Some(beacon_config))?;
+        ensure!(
+            initial.common.chain.to_string() == PUBLIC_TAIRA_CHAIN_ID
+                && *initial.common.chain_discriminant.value() == 369,
+            "private beacon launch requires the native Taira profile"
+        );
+        ensure!(
+            initial.common.peer.id() == projected.common.peer.id()
+                && initial.genesis.expected_hash == projected.genesis.expected_hash,
+            "beacon projection changed the peer or genesis identity"
+        );
+
+        let mut addresses = Vec::new();
+        let mut generated_roster = BTreeSet::new();
+        for index in 0..4 {
+            let path = network_dir.join(format!("peer{index}.toml"));
+            let bytes = iroha_fs::read_private(&path, 1024 * 1024)?;
+            let text = std::str::from_utf8(&bytes)
+                .map_err(|_| eyre!("initial peer config is not UTF-8"))?;
+            let peer = parse_localnet_peer_config(text, Some(&path))?;
+            ensure!(
+                peer.common.chain == initial.common.chain
+                    && peer.genesis.expected_hash == initial.genesis.expected_hash,
+                "private Taira peers must share one exact genesis identity"
+            );
+            validate_private_beacon_state(&peer, network_dir, index)?;
+            ensure!(
+                generated_roster.insert(peer.common.peer.id().clone()),
+                "private Taira peers must have distinct validator identities"
+            );
+            let mut peer_addresses = Vec::new();
+            for listener in [peer.network.address.value(), peer.torii.address.value()] {
+                let address = listener
+                    .to_string()
+                    .parse::<NativeSocketAddr>()
+                    .map_err(|_| {
+                        eyre!("private beacon launch requires numeric loopback listeners")
+                    })?;
+                peer_addresses.push(address);
+            }
+            addresses.push([peer_addresses[0], peer_addresses[1]]);
+        }
+        // Retain both reservations until validation finishes, so the listeners cannot collide
+        // with each other during the native preflight. Startup performs the actual bind.
+        let _reservations = reserve_private_beacon_listeners(&addresses, usize::from(peer_index))?;
+
+        let provider = &projected.sumeragi;
+        let handle = provider
+            .global_beacon_partial_signer_provider_handle
+            .as_deref()
+            .ok_or_else(|| eyre!("beacon projection omits its native provider"))?;
+        let revision = provider
+            .global_beacon_partial_signer_provider_revision
+            .ok_or_else(|| eyre!("beacon projection omits its provider revision"))?;
+        let digest = provider
+            .global_beacon_partial_signer_provider_policy_digest
+            .ok_or_else(|| eyre!("beacon projection omits its provider policy digest"))?;
+        let network_id = NetworkId::from_genesis_hash(initial.genesis.expected_hash);
+        let genesis_path = network_dir.join("genesis.signed.nrt");
+        ensure!(
+            initial.genesis.file.as_ref().map(|file| file.value()) == Some(&genesis_path),
+            "private Taira genesis must remain inside this generated network"
+        );
+        let genesis = read_signed_genesis(&genesis_path)?;
+        ensure!(
+            genesis.hash() == initial.genesis.expected_hash,
+            "private Taira signed genesis differs from its native configuration anchor"
+        );
+        let roster = iroha_core::sumeragi::startup::genesis_committee_peers(&genesis)?;
+        ensure!(
+            roster.len() == 4
+                && roster.iter().cloned().collect::<BTreeSet<_>>() == generated_roster,
+            "private Taira config identities differ from the exact genesis roster"
+        );
+        let expected_session = iroha_data_model::consensus::GlobalThresholdBeaconDkgSessionV1 {
+            version: iroha_data_model::consensus::GLOBAL_THRESHOLD_BEACON_VERSION_V1,
+            network_id,
+            session_id: iroha_core::beacon::ceremony::global_beacon_genesis_session_id_v1(
+                network_id,
+            ),
+            attempt_id: iroha_core::beacon::ceremony::global_beacon_genesis_attempt_id_v1(
+                network_id,
+            ),
+            authority_generation: 0,
+            roster_hash: iroha_core::beacon::global_threshold_beacon_roster_hash_v1(&roster),
+            committee_size: 4,
+            threshold: 2,
+            start_height: 1,
+            commitments_end_height: 2,
+            deliveries_end_height: 3,
+            acceptances_end_height: 4,
+        };
+        let (credential_bytes, credential_identity) = read_beacon_launch_input(
+            beacon_credential,
+            MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1,
+        )?;
+        validate_beacon_credential_seat(
+            &credential_bytes,
+            &network_id,
+            handle,
+            revision,
+            digest,
+            initial.common.peer.id(),
+            seat,
+            &expected_session,
+        )?;
+
+        let signer_path = network_dir
+            .join("runtime")
+            .join(TAIRA_RUNTIME_SIGNER_DIRECTORY)
+            .join(format!("peer{peer_index}.private_key"));
+        let mint_path = network_dir
+            .join("runtime")
+            .join(MINT_FINALITY_SEED_DIRECTORY)
+            .join(format!("peer{peer_index}.seed"));
+        let (signer, signer_identity) = read_beacon_launch_input(&signer_path, 71)?;
+        ensure!(
+            signer.len() == 71,
+            "runtime signer requires its exact canonical record"
+        );
+        let signer_text =
+            std::str::from_utf8(&signer).map_err(|_| eyre!("runtime signer is not UTF-8"))?;
+        let signer_key: ExposedPrivateKey = signer_text
+            .strip_suffix('\n')
+            .ok_or_else(|| eyre!("runtime signer omits its canonical newline"))?
+            .parse()
+            .map_err(|_| eyre!("runtime signer is not a native private key"))?;
+        let signer_key = KeyPair::from_private_key(signer_key.0)?;
+        let (_, public_bytes) = signer_key.public_key().try_to_bytes()?;
+        let table = crate::secret_toml::Table::new(crate::secret_toml::parse_table(
+            initial_text,
+            "initial config",
+        )?);
+        ensure!(
+            table
+                .get("soracloud_runtime")
+                .and_then(|value| value.get("submission"))
+                .and_then(|value| value.get("signer"))
+                .and_then(|value| value.get("public_key_hex"))
+                .and_then(toml::Value::as_str)
+                == Some(hex::encode(public_bytes).as_str()),
+            "runtime signer does not match this peer's native provider"
+        );
+        let (mint, mint_identity) = read_beacon_launch_input(&mint_path, 32)?;
+        ensure!(
+            mint.len() == 32,
+            "mint signer requires its exact seed record"
+        );
+        network.revalidate()?;
+        let beacon_config_path = beacon_config.to_path_buf();
+        let credential_path = beacon_credential.to_path_buf();
+        let config_blake3 = blake3::hash(&beacon_bytes).to_hex().to_string();
+        let signer_size = signer.len();
+        let mint_size = mint.len();
+        let credential_size = credential_bytes.len();
+        let result = norito::json!({
+            "schema": "iroha.taira.private-beacon-launch.v1",
+            "peer_index": peer_index,
+            "initial_config": initial_path,
+            "initial_identity": initial_identity,
+            "beacon_config": beacon_config_path,
+            "beacon_identity": beacon_identity,
+            "config_blake3": config_blake3,
+            "sources": [
+                {"descriptor": 198, "path": signer_path, "size": signer_size, "identity": signer_identity},
+                {"descriptor": 199, "path": mint_path, "size": mint_size, "identity": mint_identity},
+                {"descriptor": 200, "path": credential_path, "size": credential_size, "identity": credential_identity}
+            ]
+        });
+        ensure!(
+            norito::json::to_vec(&result)?.len() <= 16384,
+            "public launch selection exceeds its bound"
+        );
+        Ok(result)
+    }
+}
+
+#[cfg(unix)]
+fn validate_private_beacon_state(
+    config: &actual::Root,
+    network: &Path,
+    peer_index: usize,
+) -> Result<()> {
+    let paths = LocalnetPeerStoragePaths::new(network, peer_index);
+    let records = paths.state.join(LOCALNET_SUMERAGI_RECORDS_DIR);
+    let installation = paths.state.join(LOCALNET_SUMERAGI_INSTALLATION_LOG);
+    ensure!(
+        config.data_dir.is_none()
+            && config.kura.store_dir.value() == &paths.kura
+            && config.sumeragi.records_dir == records
+            && config.sumeragi.installation_log == installation
+            && config.soracloud_runtime.state_dir == paths.soracloud_runtime
+            && config.tiered_state.cold_store_root.as_ref() == Some(&paths.tiered_state)
+            && config.tiered_state.da_store_root.as_ref() == Some(&paths.da_store)
+            && config.streaming.session_store_dir == paths.streaming_sessions
+            && config
+                .network
+                .soranet_handshake
+                .pow
+                .revocation_store_path
+                .as_ref()
+                == paths.soranet_ticket_revocations.to_string_lossy()
+            && config.torii.data_dir == paths.torii
+            && config.torii.da_ingest.replay_cache_store_dir == paths.torii_da_replay_cache
+            && config.torii.da_ingest.manifest_store_dir == paths.torii_da_manifests
+            && config.torii.sorafs_storage.data_dir == paths.sorafs
+            && config.torii.sorafs_por.state_dir == paths.sorafs_por
+            && config.snapshot.store_dir.value() == &paths.kura.join("snapshot"),
+        "private Taira state paths must match this generated peer's isolated roots"
+    );
+    // Some optional workers create descendants only at first use. Validate each existing
+    // ancestry through native no-follow custody, including paths that will later be created.
+    for directory in [
+        &paths.kura,
+        &paths.state,
+        &records,
+        &paths.soracloud_runtime,
+        &paths.tiered_state,
+        &paths.da_store,
+        &paths.streaming_sessions,
+        &paths.torii,
+        &paths.torii_da_replay_cache,
+        &paths.torii_da_manifests,
+        &paths.sorafs,
+        &paths.sorafs_por,
+        &paths.kura.join("snapshot"),
+        &paths.state.join("snapshot"),
+    ] {
+        validate_private_beacon_ancestry(directory)?;
+    }
+    for file in [&installation, &paths.soranet_ticket_revocations] {
+        let parent = file
+            .parent()
+            .ok_or_else(|| eyre!("private state file has no parent"))?;
+        validate_private_beacon_ancestry(parent)?;
+        match fs::symlink_metadata(file) {
+            Ok(_) => {
+                let owner = iroha_fs::PrivateDirectory::open(parent)?;
+                let descriptor = owner.open_read(
+                    file.file_name()
+                        .ok_or_else(|| eyre!("private state file has no name"))?,
+                )?;
+                iroha_fs::FileSnapshot::of(&descriptor, true)?;
+                owner.revalidate()?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_private_beacon_ancestry(path: &Path) -> Result<()> {
+    let mut existing = path;
+    loop {
+        match fs::symlink_metadata(existing) {
+            Ok(_) => return Ok(iroha_fs::PrivateDirectory::open(existing)?.revalidate()?),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                existing = existing
+                    .parent()
+                    .ok_or_else(|| eyre!("private state path has no existing ancestor"))?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn private_beacon_seat(network_dir: &Path, beacon_config: &Path, credential: &Path) -> Result<u16> {
+    let run = network_dir
+        .parent()
+        .ok_or_else(|| eyre!("network directory has no private run root"))?;
+    let seat_dir = beacon_config
+        .parent()
+        .ok_or_else(|| eyre!("beacon config has no seat directory"))?;
+    let seat = seat_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix("seat-"))
+        .and_then(|seat| seat.parse::<u16>().ok())
+        .filter(|seat| (1..=4).contains(seat))
+        .ok_or_else(|| eyre!("beacon config requires an exact seat-1..4 directory"))?;
+    ensure!(
+        network_dir.is_absolute()
+            && seat_dir == run.join("beacon").join(format!("seat-{seat}"))
+            && beacon_config == seat_dir.join("beacon.toml")
+            && credential == seat_dir.join("iroha-global-beacon-partial-signer-v1.norito"),
+        "beacon inputs must belong to this isolated run's exact seat directory"
+    );
+    Ok(seat)
+}
+
+#[cfg(unix)]
+fn reserve_private_beacon_listeners(
+    addresses: &[[std::net::SocketAddr; 2]],
+    peer_index: usize,
+) -> Result<Vec<std::net::TcpListener>> {
+    ensure!(
+        addresses.len() == 4 && peer_index < 4,
+        "private Taira listener selection requires exactly four peers"
+    );
+    let mut ports = BTreeSet::new();
+    for address in addresses.iter().flatten() {
+        ensure!(
+            address.ip().is_loopback() && address.port() != 0,
+            "private beacon launch requires non-zero loopback listeners"
+        );
+        ensure!(
+            ports.insert(address.port()),
+            "private peer listener ports overlap"
+        );
+    }
+    addresses[peer_index]
+        .iter()
+        .map(|address| {
+            std::net::TcpListener::bind(address)
+                .map_err(|_| eyre!("private peer listener is already occupied"))
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+fn validate_beacon_credential_seat(
+    bytes: &[u8],
+    network_id: &NetworkId,
+    handle: &str,
+    revision: u64,
+    digest: [u8; 32],
+    peer: &PeerId,
+    seat: u16,
+    expected_session: &iroha_data_model::consensus::GlobalThresholdBeaconDkgSessionV1,
+) -> Result<()> {
+    let shares =
+        iroha_core::beacon::credential::decode_global_beacon_partial_signer_credential_shares_v1(
+            bytes, network_id, handle, revision, digest,
+        )
+        .map_err(|_| eyre!("beacon credential does not authenticate this provider and network"))?;
+    ensure!(
+        shares.len() == 1,
+        "fresh private beacon launch requires one native key session"
+    );
+    let share = &shares[0];
+    ensure!(
+        share.public_session().adaptive_dkg.session == *expected_session
+            && share.public_session().network_id == *network_id
+            && share.public_session().session_id == expected_session.session_id
+            && share.public_session().committee_size == 4
+            && share.public_session().threshold == 2,
+        "beacon credential differs from the exact fresh four-validator genesis session"
+    );
+    let recipient = share
+        .public_session()
+        .adaptive_dkg
+        .recipient_keys
+        .iter()
+        .find(|recipient| recipient.recipient_index == share.signer_index())
+        .ok_or_else(|| eyre!("beacon credential omits its signer roster entry"))?;
+    ensure!(
+        share.signer_index() == seat && &recipient.validator == peer,
+        "beacon credential belongs to a different validator seat"
+    );
+    Ok(())
+}
+
+fn validate_beacon_config_projection(initial: &str, projected: &str) -> Result<()> {
+    let original =
+        crate::secret_toml::Table::new(crate::secret_toml::parse_table(initial, "initial config")?);
+    let mut beacon = crate::secret_toml::Table::new(crate::secret_toml::parse_table(
+        projected,
+        "beacon config",
+    )?);
+    ensure!(
+        !original.contains_key("extends") && !beacon.contains_key("extends"),
+        "private beacon configs must be flattened"
+    );
+    let original_sumeragi = original
+        .get("sumeragi")
+        .and_then(toml::Value::as_table)
+        .ok_or_else(|| eyre!("initial config omits sumeragi"))?;
+    let beacon_sumeragi = beacon
+        .get_mut("sumeragi")
+        .and_then(toml::Value::as_table_mut)
+        .ok_or_else(|| eyre!("beacon config omits sumeragi"))?;
+    for field in [
+        "global_beacon_partial_signer_provider_handle",
+        "global_beacon_partial_signer_provider_revision",
+        "global_beacon_partial_signer_provider_policy_digest_hex",
+    ] {
+        ensure!(
+            !original_sumeragi.contains_key(field) && beacon_sumeragi.contains_key(field),
+            "private beacon projection requires exactly the new provider binding"
+        );
+        crate::secret_toml::remove(beacon_sumeragi, field);
+    }
+    ensure!(
+        *original == *beacon,
+        "beacon projection changed initial node settings"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+fn read_beacon_launch_input(
+    path: &Path,
+    maximum: usize,
+) -> Result<(Zeroizing<Vec<u8>>, Vec<norito::json::Value>)> {
+    use std::{io::Read as _, os::unix::fs::MetadataExt as _};
+    ensure!(
+        path.is_absolute() && fs::canonicalize(path)? == path,
+        "private launch input must use its canonical absolute path"
+    );
+    let parent = iroha_fs::PrivateDirectory::open(
+        path.parent()
+            .ok_or_else(|| eyre!("launch input has no parent"))?,
+    )?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| eyre!("launch input has no name"))?;
+    let mut file = parent.open_read(name)?;
+    let snapshot = iroha_fs::FileSnapshot::of(&file, true)?;
+    let metadata = file.metadata()?;
+    ensure!(
+        metadata.len() > 0 && metadata.len() <= maximum as u64,
+        "private launch input exceeds its size bound"
+    );
+    let mut bytes = Zeroizing::new(Vec::with_capacity(metadata.len() as usize));
+    (&mut file)
+        .take(maximum as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    parent.revalidate()?;
+    ensure!(
+        bytes.len() as u64 == metadata.len()
+            && iroha_fs::FileSnapshot::of(&file, true)? == snapshot
+            && iroha_fs::FileSnapshot::of(&parent.open_read(name)?, true)? == snapshot,
+        "private launch input identity changed during native validation"
+    );
+    let nanos = |seconds: i64, fraction: i64| {
+        seconds
+            .checked_mul(1_000_000_000)
+            .and_then(|seconds| seconds.checked_add(fraction))
+            .ok_or_else(|| eyre!("native launch identity timestamp is out of range"))
+    };
+    let identity = vec![
+        metadata.dev().into(),
+        metadata.ino().into(),
+        metadata.uid().into(),
+        metadata.gid().into(),
+        metadata.mode().into(),
+        metadata.nlink().into(),
+        metadata.len().into(),
+        nanos(metadata.mtime(), metadata.mtime_nsec())?.into(),
+        nanos(metadata.ctime(), metadata.ctime_nsec())?.into(),
+    ];
+    Ok((bytes, identity))
+}
+
+#[cfg(all(test, unix))]
+mod private_beacon_launch_tests {
+    use super::*;
+    use std::{
+        net::TcpListener,
+        os::unix::fs::{MetadataExt as _, PermissionsExt as _},
+    };
+
+    const INITIAL: &str = "# original bytes remain intact\nchain = 'taira'\n[network]\naddress = '127.0.0.1:18081'\n[sumeragi]\nrole = 'validator'\nsafety_records_dir = '/private/run/network/state/peer0/sumeragi-records'\n";
+
+    fn projection() -> String {
+        format!(
+            "{INITIAL}global_beacon_partial_signer_provider_handle = 'software://iroha/beacon/seat-1'\nglobal_beacon_partial_signer_provider_revision = 1\nglobal_beacon_partial_signer_provider_policy_digest_hex = '{}'\n",
+            "ab".repeat(32)
+        )
+    }
+
+    #[test]
+    fn separate_beacon_projection_preserves_initial_bytes_and_state() {
+        let root = localnet_test_helpers::private_tempdir().unwrap();
+        let initial = root.path().join("peer0.toml");
+        custody::write(&initial, INITIAL.as_bytes()).unwrap();
+        let before = fs::metadata(&initial).unwrap();
+        let before_hash = blake3::hash(INITIAL.as_bytes());
+        validate_beacon_config_projection(INITIAL, &projection()).unwrap();
+        let (bytes, identity) = read_beacon_launch_input(&initial, 1024).unwrap();
+        assert_eq!(bytes.as_slice(), INITIAL.as_bytes());
+        assert_eq!(blake3::hash(&bytes), before_hash);
+        assert_eq!(identity[0], norito::json::Value::from(before.dev()));
+        assert_eq!(identity[1], norito::json::Value::from(before.ino()));
+        assert_eq!(fs::metadata(&initial).unwrap().ino(), before.ino());
+        for changed in [
+            projection().replace("127.0.0.1:18081", "127.0.0.1:8080"),
+            projection().replace("/private/run/network/state", "/var/lib/taira"),
+            projection().replace("chain = 'taira'", "chain = 'other'"),
+            projection().replace("role = 'validator'", "role = 'observer'"),
+            format!("extends = 'other.toml'\n{}", projection()),
+            INITIAL.to_owned(),
+        ] {
+            assert!(validate_beacon_config_projection(INITIAL, &changed).is_err());
+        }
+        assert!(validate_beacon_config_projection(&projection(), &projection()).is_err());
+        assert_eq!(fs::read(&initial).unwrap(), INITIAL.as_bytes());
+    }
+
+    #[test]
+    fn beacon_inputs_reject_other_run_seat_and_credential_paths() {
+        let network = Path::new("/private/run/network");
+        let config = Path::new("/private/run/beacon/seat-2/beacon.toml");
+        let credential =
+            Path::new("/private/run/beacon/seat-2/iroha-global-beacon-partial-signer-v1.norito");
+        assert_eq!(private_beacon_seat(network, config, credential).unwrap(), 2);
+        for config in [
+            Path::new("/private/other/beacon/seat-2/beacon.toml"),
+            Path::new("/private/run/beacon/seat-02/beacon.toml"),
+            Path::new("/private/run/beacon/seat-0/beacon.toml"),
+            Path::new("/private/run/beacon/seat-2/peer0.toml"),
+            Path::new("/var/lib/taira/taira-validator-1/beacon.toml"),
+        ] {
+            assert!(private_beacon_seat(network, config, credential).is_err());
+        }
+        assert!(
+            private_beacon_seat(
+                network,
+                config,
+                Path::new(
+                    "/private/run/beacon/seat-1/iroha-global-beacon-partial-signer-v1.norito"
+                )
+            )
+            .is_err()
+        );
+        let root = localnet_test_helpers::private_tempdir().unwrap();
+        let network = root.path().join("network");
+        custody::ensure_directory(&network).unwrap();
+        assert!(validate_beacon_launch(&network, 4, config, credential).is_err());
+        assert!(validate_beacon_launch(&network, 0, config, credential).is_err());
+    }
+
+    #[test]
+    fn private_beacon_listener_selection_rejects_collisions_and_public_binds() {
+        let held = (0..8)
+            .map(|_| TcpListener::bind("127.0.0.1:0").unwrap())
+            .collect::<Vec<_>>();
+        let mut addresses = held
+            .chunks_exact(2)
+            .map(|pair| [pair[0].local_addr().unwrap(), pair[1].local_addr().unwrap()])
+            .collect::<Vec<_>>();
+        assert!(
+            reserve_private_beacon_listeners(&addresses, 0)
+                .unwrap_err()
+                .to_string()
+                .contains("occupied")
+        );
+        addresses[1][0] = addresses[0][0];
+        assert!(
+            reserve_private_beacon_listeners(&addresses, 0)
+                .unwrap_err()
+                .to_string()
+                .contains("overlap")
+        );
+        addresses[1][0] = "0.0.0.0:1234".parse().unwrap();
+        assert!(
+            reserve_private_beacon_listeners(&addresses, 0)
+                .unwrap_err()
+                .to_string()
+                .contains("loopback")
+        );
+        addresses[1][0] = held[2].local_addr().unwrap();
+        drop(held);
+        assert_eq!(
+            reserve_private_beacon_listeners(&addresses, 0)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn beacon_credential_validation_rejects_malformed_native_frames() {
+        let network = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([1; 32]),
+        ));
+        let peer = PeerId::new(REAL_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
+        let expected_session = iroha_data_model::consensus::GlobalThresholdBeaconDkgSessionV1 {
+            version: 1,
+            network_id: network,
+            session_id: [1; 32],
+            attempt_id: [2; 32],
+            authority_generation: 0,
+            roster_hash: [3; 32],
+            committee_size: 4,
+            threshold: 2,
+            start_height: 1,
+            commitments_end_height: 2,
+            deliveries_end_height: 3,
+            acceptances_end_height: 4,
+        };
+        for bytes in [b"".as_slice(), b"not a native beacon credential".as_slice()] {
+            assert!(
+                validate_beacon_credential_seat(
+                    bytes,
+                    &network,
+                    "software://iroha/beacon/seat-1",
+                    1,
+                    [2; 32],
+                    &peer,
+                    1,
+                    &expected_session
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn native_launch_input_rejects_aliases_permissions_and_relative_paths() {
+        let root = localnet_test_helpers::private_tempdir().unwrap();
+        let source = root.path().join("source");
+        let alias = root.path().join("alias");
+        custody::write(&source, b"native source").unwrap();
+        assert!(read_beacon_launch_input(&source, 3).is_err());
+        std::os::unix::fs::symlink(&source, &alias).unwrap();
+        assert!(read_beacon_launch_input(&alias, 1024).is_err());
+        fs::remove_file(&alias).unwrap();
+        fs::hard_link(&source, &alias).unwrap();
+        assert!(read_beacon_launch_input(&source, 1024).is_err());
+        fs::remove_file(&alias).unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(read_beacon_launch_input(&source, 1024).is_err());
+        assert!(read_beacon_launch_input(Path::new("source"), 1024).is_err());
+    }
+
+    #[test]
+    fn private_beacon_state_rejects_serving_roots_and_linked_candidate_storage() {
+        let _resources = crate::managed::native_test_guard();
+        let root = localnet_test_helpers::private_tempdir().unwrap();
+        let network = root.path().join("network");
+        let ports = crate::managed::LocalnetPorts::reserve().unwrap();
+        let prepared = prepare_localnet("local", &network, &ports).unwrap();
+        let path = &prepared.peers[0].config_path;
+        let bytes = iroha_fs::read_private(path, 1024 * 1024).unwrap();
+        // The private beacon launcher selects the operator-owned generator layout.
+        // Managed data_dir is deliberately refused rather than projected into serving roots.
+        let managed =
+            parse_localnet_peer_config(std::str::from_utf8(&bytes).unwrap(), Some(path)).unwrap();
+        assert!(validate_private_beacon_state(&managed, &network, 0).is_err());
+        let paths = LocalnetPeerStoragePaths::new(&network, 0);
+        custody::ensure_directory(&paths.kura).unwrap();
+        custody::ensure_directory(&paths.state).unwrap();
+        let mut config = managed;
+        config.data_dir = None;
+        *config.kura.store_dir.value_mut() = paths.kura.clone();
+        config.sumeragi.records_dir = paths.state.join(LOCALNET_SUMERAGI_RECORDS_DIR);
+        config.sumeragi.installation_log = paths.state.join(LOCALNET_SUMERAGI_INSTALLATION_LOG);
+        config.soracloud_runtime.state_dir = paths.soracloud_runtime.clone();
+        config.tiered_state.cold_store_root = Some(paths.tiered_state.clone());
+        config.tiered_state.da_store_root = Some(paths.da_store.clone());
+        config.streaming.session_store_dir = paths.streaming_sessions.clone();
+        config.network.soranet_handshake.pow.revocation_store_path = paths
+            .soranet_ticket_revocations
+            .to_string_lossy()
+            .into_owned()
+            .into();
+        config.torii.data_dir = paths.torii.clone();
+        config.torii.da_ingest.replay_cache_store_dir = paths.torii_da_replay_cache.clone();
+        config.torii.da_ingest.manifest_store_dir = paths.torii_da_manifests.clone();
+        config.torii.sorafs_storage.data_dir = paths.sorafs.clone();
+        config.torii.sorafs_por.state_dir = paths.sorafs_por.clone();
+        *config.snapshot.store_dir.value_mut() = paths.kura.join("snapshot");
+        validate_private_beacon_state(&config, &network, 0).unwrap();
+        config.sumeragi.records_dir = PathBuf::from("/var/lib/taira/serving/sumeragi-records");
+        assert!(validate_private_beacon_state(&config, &network, 0).is_err());
+        config.sumeragi.records_dir = paths.state.join(LOCALNET_SUMERAGI_RECORDS_DIR);
+        std::os::unix::fs::symlink(&paths.state, &paths.soracloud_runtime).unwrap();
+        assert!(validate_private_beacon_state(&config, &network, 0).is_err());
+        fs::remove_file(&paths.soracloud_runtime).unwrap();
+        validate_private_beacon_ancestry(&paths.state.join("future/child")).unwrap();
+        fs::remove_dir(&paths.kura).unwrap();
+        std::os::unix::fs::symlink(&paths.state, &paths.kura).unwrap();
+        assert!(validate_private_beacon_state(&config, &network, 0).is_err());
+    }
+
+    #[test]
+    fn private_beacon_launcher_hands_off_three_opaque_fds_and_rejects_changed_sources() {
+        let root = localnet_test_helpers::private_tempdir().unwrap();
+        for (name, bytes) in [
+            ("initial.toml", b"initial exact bytes".as_slice()),
+            ("beacon.toml", b"projected exact bytes".as_slice()),
+            ("key", &[0x41; 71]),
+            ("mint", &[0x42; 32]),
+            ("credential", &[0x43; 257]),
+        ] {
+            custody::write(root.path().join(name), bytes).unwrap();
+        }
+        let python = format!(
+            "import errno\nimport os\nimport stat\nimport subprocess\nimport sys\n{TAIRA_RUNTIME_LAUNCH_PY}\n{}",
+            r#"
+root = sys.argv[1]
+def capture_taira_start(*_args):
+    pass
+env = os.environ.copy()
+env.update(IROHA_PEER_LOG=os.path.join(root, "peer.log"), IROHA_PEER_PROCESS_RECORD=os.path.join(root, "peer.process.json"), IROHA_PEER_INDEX="0")
+records = [(os.path.join(root, source), os.path.join(root, "fd" + str(fd)), size, fd) for source, size, fd in (("key", 71, 198), ("mint", 32, 199), ("credential", 257, 200))]
+def selection():
+    return {"initial_config": os.path.join(root, "initial.toml"), "initial_identity": _taira_file_identity(os.lstat(os.path.join(root, "initial.toml"))),
+        "beacon_config": os.path.join(root, "beacon.toml"), "beacon_identity": _taira_file_identity(os.lstat(os.path.join(root, "beacon.toml"))),
+        "sources": [{"path": source, "size": size, "descriptor": fd, "identity": _taira_file_identity(os.lstat(source))} for source, _launch, size, fd in records]}
+consumer = "import os; exec('for fd,size in ((198,71),(199,32),(200,257)):\\n assert len(os.read(fd,size+1))==size\\n os.lseek(fd,0,0)\\n assert os.write(fd,bytes(size))==size\\n os.fsync(fd)\\n os.ftruncate(fd,0)\\n os.fsync(fd)')"
+process = launch_taira_process([sys.executable, "-c", consumer], env, records, selection())
+assert process.wait(timeout=10) == 0
+assert all(os.lstat(launch).st_size == 0 for _source, launch, _size, _fd in records)
+checked = selection()
+with open(records[0][0], "r+b") as source:
+    source.write(b"B")
+try:
+    launch_taira_process([sys.executable, "-c", "raise AssertionError('must not start')"], env, records, checked)
+except RuntimeError as error:
+    assert "identity changed" in str(error)
+else:
+    raise AssertionError("changed signing source was accepted")
+checked = selection()
+with open(checked["initial_config"], "ab") as source:
+    source.write(b"changed")
+try:
+    launch_taira_process([sys.executable, "-c", "raise AssertionError('must not start')"], env, records, checked)
+except RuntimeError as error:
+    assert "configuration identity changed" in str(error)
+else:
+    raise AssertionError("changed original configuration was accepted")
+placeholder = os.open(os.devnull, os.O_RDONLY)
+os.dup2(placeholder, 200)
+try:
+    try:
+        launch_taira_process([sys.executable, "-c", "raise AssertionError('must not start')"], env, records, selection())
+    except RuntimeError as error:
+        assert "occupied" in str(error)
+    else:
+        raise AssertionError("occupied beacon FD200 was accepted")
+    os.fstat(200)
+finally:
+    os.close(200)
+    os.close(placeholder)
+"#
+        );
+        let output = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(python)
+            .arg(root.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            fs::read(root.path().join("credential")).unwrap(),
+            [0x43; 257]
+        );
+        assert_eq!(
+            fs::read(root.path().join("beacon.toml")).unwrap(),
+            b"projected exact bytes"
+        );
+        assert_eq!(
+            fs::metadata(root.path().join("credential"))
+                .unwrap()
+                .nlink(),
+            1
+        );
+    }
+
+    #[test]
+    fn private_beacon_launch_arguments_require_explicit_complete_selection() {
+        let mut arguments = Vec::new();
+        write_taira_launch_arguments(&mut arguments, true).unwrap();
+        let parser = format!(
+            "set -euo pipefail\nPEER_COUNT=4\nSELECTED_PEERS=all\n{}\nprintf '%s' \"$SELECTED_PEERS|$BEACON_CONFIG|$BEACON_CREDENTIAL|$KAGAMI_BIN\"\n",
+            String::from_utf8(arguments).unwrap()
+        );
+        let invoke = |args: &[&str]| {
+            std::process::Command::new("bash")
+                .arg("-c")
+                .arg(&parser)
+                .arg("start.sh")
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        assert_eq!(invoke(&[]).stdout, b"all|||");
+        assert_eq!(invoke(&["--peer-index", "0"]).stdout, b"0|||");
+        let complete = [
+            "--peer-index",
+            "2",
+            "--beacon-config",
+            "/private/run/beacon/seat-1/beacon.toml",
+            "--beacon-credential",
+            "/private/run/beacon/seat-1/iroha-global-beacon-partial-signer-v1.norito",
+            "--kagami-bin",
+            "/private/run/bin/kagami",
+        ];
+        assert!(invoke(&complete).status.success());
+        for args in [
+            vec!["--peer-index", "4"],
+            vec!["--peer-index", "00"],
+            vec!["--peer-index", "0", "--peer-index", "1"],
+            vec![
+                "--peer-index",
+                "0",
+                "--beacon-config",
+                "/private/beacon.toml",
+            ],
+            vec!["--beacon-config", "/private/beacon.toml"],
+            vec!["--beacon-credential", "/private/credential"],
+            vec!["--kagami-bin", "/private/bin/kagami"],
+            vec!["--runtime-toggle", "true"],
+            vec!["--peer-index"],
+        ] {
+            assert_eq!(invoke(&args).status.code(), Some(2));
+        }
+        let mut arguments = Vec::new();
+        write_taira_launch_arguments(&mut arguments, false).unwrap();
+        let stop = format!(
+            "set -euo pipefail\nPEER_COUNT=4\nSELECTED_PEERS=all\n{}",
+            String::from_utf8(arguments).unwrap()
+        );
+        assert!(
+            std::process::Command::new("bash")
+                .arg("-c")
+                .arg(&stop)
+                .arg("stop.sh")
+                .args([
+                    "--peer-index",
+                    "2",
+                    "--beacon-config",
+                    "/private/run/beacon/seat-1/beacon.toml"
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            !std::process::Command::new("bash")
+                .arg("-c")
+                .arg(&stop)
+                .arg("stop.sh")
+                .args([
+                    "--peer-index",
+                    "2",
+                    "--beacon-credential",
+                    "/private/credential"
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+}
 fn resolve_localnet_da_proof_policies(config: &actual::Root) -> DaProofPolicyBundle {
     iroha_core::da::proof_policy_bundle(&config.nexus.lane_config)
 }
@@ -5053,7 +5960,7 @@ def launch_ordinary_validator_with_mint_seed(cmd, env):
 const TAIRA_RUNTIME_LAUNCH_PY: &str = r#"
 def _taira_file_identity(metadata):
     return tuple(getattr(metadata, field) for field in (
-        "st_dev", "st_ino", "st_uid", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns"))
+        "st_dev", "st_ino", "st_uid", "st_gid", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns"))
 
 def _require_taira_fd_vacant(descriptor):
     try:
@@ -5065,13 +5972,13 @@ def _require_taira_fd_vacant(descriptor):
     raise RuntimeError("refusing occupied Taira runtime descriptor {}".format(descriptor))
 
 def _reserve_taira_fds(reserved):
-    for descriptor in (198, 199):
+    for descriptor in (198, 199, 200):
         _require_taira_fd_vacant(descriptor)
     placeholder = os.open(os.devnull, os.O_RDONLY | os.O_CLOEXEC)
-    if placeholder in (198, 199):
+    if placeholder in (198, 199, 200):
         reserved.add(placeholder)
     try:
-        for descriptor in (198, 199):
+        for descriptor in (198, 199, 200):
             if descriptor not in reserved:
                 _require_taira_fd_vacant(descriptor)
                 os.dup2(placeholder, descriptor, inheritable=False)
@@ -5080,18 +5987,24 @@ def _reserve_taira_fds(reserved):
         if placeholder not in reserved:
             os.close(placeholder)
 
-def _preflight_taira_seed_paths(records):
-    if len(records) != 2 or tuple(record[3] for record in records) != (198, 199):
+def _preflight_taira_seed_paths(records, expected_identities=None):
+    descriptors = tuple(record[3] for record in records)
+    if descriptors not in ((198, 199), (198, 199, 200)):
         raise RuntimeError("Taira requires exactly the fixed runtime descriptors")
+    if 200 in descriptors and expected_identities is None:
+        raise RuntimeError("Taira beacon descriptor requires native validation")
+    if expected_identities is not None and set(expected_identities) != set(descriptors):
+        raise RuntimeError("native Taira descriptor selection does not match the handoff")
     paths = [path for source, launch, _size, _descriptor in records for path in (source, launch)]
-    if len(set(os.path.realpath(path) for path in paths)) != 4:
+    if len(set(os.path.realpath(path) for path in paths)) != len(paths):
         raise RuntimeError("Taira retained sources and launch paths must be distinct")
     identities = set()
     retained = []
     stale = []
     try:
         for source, launch, size, descriptor in records:
-            if (descriptor, size) not in ((198, 71), (199, 32)):
+            if ((descriptor, size) not in ((198, 71), (199, 32))
+                    and not (descriptor == 200 and type(size) is int and 0 < size <= 16 * 1024 * 1024)):
                 raise RuntimeError("Taira private record length does not match its fixed descriptor")
             source_fd = os.open(source, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
             retained.append((source_fd, None, launch, size, descriptor))
@@ -5100,6 +6013,10 @@ def _preflight_taira_seed_paths(records):
                     or stat.S_IMODE(before.st_mode) != 0o600 or before.st_nlink != 1 or before.st_size != size):
                 raise RuntimeError("untrusted persistent Taira runtime signer file")
             retained[-1] = (source_fd, before, launch, size, descriptor)
+            if (_taira_file_identity(os.lstat(source)) != _taira_file_identity(before)
+                    or (expected_identities is not None
+                        and _taira_file_identity(before) != tuple(expected_identities[descriptor]))):
+                raise RuntimeError("Taira source path or native descriptor identity changed")
             identity = (before.st_dev, before.st_ino)
             if identity in identities:
                 raise RuntimeError("Taira private paths alias one inode")
@@ -5127,7 +6044,7 @@ def _preflight_taira_seed_paths(records):
             os.close(source_fd)
         raise
 
-def _stage_taira_seed(record, owned):
+def _stage_taira_seed(record, owned, source_path=None):
     source_fd, before, launch, size, descriptor = record
     launch_fd = os.open(launch, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
     try:
@@ -5145,7 +6062,9 @@ def _stage_taira_seed(record, owned):
             if count <= 0:
                 raise RuntimeError("short Taira runtime signer source")
             offset += count
-        if _taira_file_identity(os.fstat(source_fd)) != _taira_file_identity(before):
+        if (_taira_file_identity(os.fstat(source_fd)) != _taira_file_identity(before)
+                or (source_path is not None
+                    and _taira_file_identity(os.lstat(source_path)) != _taira_file_identity(before))):
             raise RuntimeError("Taira runtime signer source changed while staging")
         offset = 0
         while offset < size:
@@ -5201,20 +6120,34 @@ def _erase_owned_taira_launch(record):
     if failures:
         raise RuntimeError("Taira owned launch erasure encountered an I/O failure") from failures[0]
 
-def launch_taira_process(cmd, env, records):
+def _check_taira_selection_files(selection):
+    for path_field, identity_field in (("initial_config", "initial_identity"), ("beacon_config", "beacon_identity")):
+        if _taira_file_identity(os.lstat(selection[path_field])) != tuple(selection[identity_field]):
+            raise RuntimeError("native Taira configuration identity changed before launch")
+
+def launch_taira_process(cmd, env, records, selection=None):
     reserved, retained, owned = set(), [], []
     started = False
     process = None
     try:
         _reserve_taira_fds(reserved)
-        retained, stale = _preflight_taira_seed_paths(records)
+        expected_identities = None
+        if selection is not None:
+            _check_taira_selection_files(selection)
+            expected_identities = {source["descriptor"]: source["identity"] for source in selection["sources"]}
+            if [(source["path"], source["size"], source["descriptor"]) for source in selection["sources"]] != [
+                    (source, size, descriptor) for source, _launch, size, descriptor in records]:
+                raise RuntimeError("native Taira source selection does not match launch paths")
+        retained, stale = _preflight_taira_seed_paths(records, expected_identities)
         for launch, previous in stale:
             if _taira_file_identity(os.lstat(launch)) != _taira_file_identity(previous):
                 raise RuntimeError("Taira stale launch file changed before replacement")
             os.unlink(launch)
-        for record in retained:
-            _stage_taira_seed(record, owned)
-        pass_fds = (198, 199)
+        for record, source in zip(retained, records):
+            _stage_taira_seed(record, owned, source[0])
+        if selection is not None:
+            _check_taira_selection_files(selection)
+        pass_fds = (198, 199) if selection is None else (198, 199, 200)
         with open(env["IROHA_PEER_LOG"], "ab", buffering=0) as log:
             process = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env,
                 close_fds=True, pass_fds=pass_fds, start_new_session=True)
@@ -5432,9 +6365,15 @@ def _validate_record(record, peer_index, config_path, executable_path=None):
         raise RuntimeError("Taira process record contains a malformed executable path")
     if executable_path is not None and executable != executable_path:
         raise RuntimeError("Taira process record names a substituted executable")
-    if record["argv"] not in (
-            [executable, "--sora", "--config", config_path],
-            [executable, "--sora", "--config", config_path, "--sumeragi-assert-fresh-key"]):
+    argv = record["argv"]
+    if type(argv) is not list or argv[:4] != [executable, "--sora", "--config", config_path]:
+        raise RuntimeError("Taira process record does not bind the exact daemon argv/config")
+    tail = argv[4:]
+    if tail[:1] == ["--config-blake3"]:
+        if len(tail) < 2 or type(tail[1]) is not str or re.fullmatch("[0-9a-f]{64}", tail[1]) is None:
+            raise RuntimeError("Taira process record contains an invalid native configuration digest")
+        tail = tail[2:]
+    if tail not in ([], ["--sumeragi-assert-fresh-key"]):
         raise RuntimeError("Taira process record does not bind the exact daemon argv/config")
     return record
 
@@ -5563,7 +6502,7 @@ def preflight_taira_start(record_path, peer_index, expected_argv):
         try:
             observed = _bound_observation(descriptor, pid)
             argv = None if observed is None else observed["argv"]
-            if (type(argv) is list and len(argv) in (4, 5)
+            if (type(argv) is list and len(argv) >= 4
                     and os.path.basename(argv[0]) == "iroha3d_taira"
                     and argv[1:4] == ["--sora", "--config", config_path]):
                 raise RuntimeError("unrecorded Taira process already owns the exact peer config")
@@ -5622,6 +6561,122 @@ def stop_taira_process(record_path, peer_index, config_path):
     finally:
         os.close(descriptor)
 "#;
+
+const TAIRA_BEACON_SELECTION_PY: &str = r#"
+def select_taira_beacon_launch(env, config_path, credential_path, kagami):
+    if not os.path.isabs(kagami) or os.path.realpath(kagami) != kagami or not os.access(kagami, os.X_OK):
+        raise RuntimeError("beacon launch requires the explicit native Kagami executable")
+    native = subprocess.Popen([kagami, "localnet", "validate-beacon-launch",
+        "--network-dir", env["IROHA_NETWORK_DIR"], "--peer-index", env["IROHA_PEER_INDEX"],
+        "--beacon-config", config_path, "--beacon-credential", credential_path],
+        stdout=subprocess.PIPE, close_fds=True)
+    try:
+        deadline = time.monotonic() + 60.0
+        payload = bytearray()
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not select.select([native.stdout], [], [], remaining)[0]:
+                raise RuntimeError("native Taira launch selection exceeded its deadline")
+            chunk = os.read(native.stdout.fileno(), 16385 - len(payload))
+            if not chunk:
+                break
+            payload.extend(chunk)
+            if len(payload) > 16384:
+                raise RuntimeError("native Taira launch selection exceeds its bound")
+        if native.wait(timeout=max(0.001, deadline - time.monotonic())) != 0:
+            raise RuntimeError("native Taira beacon launch validation failed")
+    finally:
+        native.stdout.close()
+        if native.poll() is None:
+            native.terminate()
+            try:
+                native.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                native.kill()
+                native.wait(timeout=5)
+    selection = json.loads(payload, object_pairs_hook=_no_duplicates)
+    if (type(selection) is not dict or set(selection) != {
+            "schema", "peer_index", "initial_config", "initial_identity", "beacon_config",
+            "beacon_identity", "config_blake3", "sources"}
+            or selection["schema"] != "iroha.taira.private-beacon-launch.v1"
+            or type(selection["peer_index"]) is not int
+            or selection["peer_index"] != int(env["IROHA_PEER_INDEX"])
+            or selection["initial_config"] != os.path.join(env["IROHA_NETWORK_DIR"], "peer{}.toml".format(env["IROHA_PEER_INDEX"]))
+            or selection["beacon_config"] != config_path
+            or type(selection["config_blake3"]) is not str
+            or re.fullmatch("[0-9a-f]{64}", selection["config_blake3"]) is None):
+        raise RuntimeError("native Taira launch selection violates its exact public schema")
+    sources = selection["sources"]
+    if type(sources) is not list or len(sources) != 3:
+        raise RuntimeError("native Taira launch selection omits fixed descriptors")
+    for source, descriptor in zip(sources, (198, 199, 200)):
+        if (type(source) is not dict or set(source) != {"descriptor", "path", "size", "identity"}
+                or type(source["descriptor"]) is not int or source["descriptor"] != descriptor
+                or type(source["path"]) is not str or not os.path.isabs(source["path"])
+                or type(source["size"]) is not int or source["size"] <= 0):
+            raise RuntimeError("native Taira launch selection has an invalid descriptor record")
+    for identity in [selection["initial_identity"], selection["beacon_identity"]] + [source["identity"] for source in sources]:
+        if type(identity) is not list or len(identity) != 9 or any(type(field) is not int for field in identity):
+            raise RuntimeError("native Taira launch selection has an invalid file identity")
+    if sources[2]["path"] != credential_path:
+        raise RuntimeError("native Taira launch selection changed the beacon credential path")
+    return selection
+"#;
+
+fn write_taira_launch_arguments(writer: &mut impl Write, start: bool) -> Result<()> {
+    writer.write_all(br#"BEACON_CONFIG=""
+BEACON_CREDENTIAL=""
+KAGAMI_BIN=""
+peer_index=""
+while [ "$#" -gt 0 ]; do
+  if [ "$#" -lt 2 ]; then echo "missing launch argument value" >&2; exit 2; fi
+  case "$1" in
+    --peer-index)
+      if [ -n "$peer_index" ] || [[ ! $2 =~ ^(0|[1-9][0-9]{0,4})$ ]]; then echo "invalid or repeated peer index" >&2; exit 2; fi
+      peer_index=$((10#$2))
+      if (( peer_index >= PEER_COUNT )); then echo "peer index out of range" >&2; exit 2; fi
+      SELECTED_PEERS="$peer_index"
+      ;;
+    --beacon-config)
+      if [ -n "$BEACON_CONFIG" ] || [[ $2 != /* ]]; then echo "invalid or repeated beacon config" >&2; exit 2; fi
+      BEACON_CONFIG="$2"
+      ;;
+"#)?;
+    if start {
+        writer.write_all(br#"    --beacon-credential)
+      if [ -n "$BEACON_CREDENTIAL" ] || [[ $2 != /* ]]; then echo "invalid or repeated beacon credential" >&2; exit 2; fi
+      BEACON_CREDENTIAL="$2"
+      ;;
+    --kagami-bin)
+      if [ -n "$KAGAMI_BIN" ] || [[ $2 != /* ]]; then echo "invalid or repeated native Kagami path" >&2; exit 2; fi
+      KAGAMI_BIN="$2"
+      ;;
+"#)?;
+    }
+    writer.write_all(
+        br#"    *) echo "unknown private launch argument: $1" >&2; exit 2 ;;
+  esac
+  shift 2
+done
+if [ -n "$BEACON_CONFIG" ] && [ -z "$peer_index" ]; then
+  echo "beacon selection requires an explicit peer index" >&2; exit 2
+fi
+"#,
+    )?;
+    if start {
+        writer.write_all(
+            br#"if [ -n "$BEACON_CONFIG" ]; then
+  if [ -z "$BEACON_CREDENTIAL" ] || [ -z "$KAGAMI_BIN" ]; then
+    echo "beacon selection requires --beacon-credential and --kagami-bin" >&2; exit 2
+  fi
+elif [ -n "$BEACON_CREDENTIAL" ] || [ -n "$KAGAMI_BIN" ]; then
+  echo "beacon credential and native Kagami require --beacon-config" >&2; exit 2
+fi
+"#,
+        )?;
+    }
+    Ok(())
+}
 
 fn write_scripts(
     out_dir: &Path,
@@ -5683,31 +6738,39 @@ fn write_start_script(
         start_file,
         "SELECTED_PEERS=\"$(seq 0 \"$((PEER_COUNT - 1))\")\""
     )?;
-    writeln!(start_file, "if [ \"$#\" -ne 0 ]; then")?;
-    writeln!(
-        start_file,
-        "  if [ \"$#\" -ne 2 ] || [ \"$1\" != \"--peer-index\" ]; then"
-    )?;
-    writeln!(
-        start_file,
-        "    echo \"usage: $0 [--peer-index INDEX]\" >&2"
-    )?;
-    writeln!(start_file, "    exit 2")?;
-    writeln!(start_file, "  fi")?;
-    writeln!(
-        start_file,
-        "  if [[ ! $2 =~ ^(0|[1-9][0-9]{{0,4}})$ ]]; then"
-    )?;
-    writeln!(start_file, "    echo \"invalid peer index: $2\" >&2")?;
-    writeln!(start_file, "    exit 2")?;
-    writeln!(start_file, "  fi")?;
-    writeln!(start_file, "  peer_index=$((10#$2))")?;
-    writeln!(start_file, "  if (( peer_index >= PEER_COUNT )); then")?;
-    writeln!(start_file, "    echo \"invalid peer index: $2\" >&2")?;
-    writeln!(start_file, "    exit 2")?;
-    writeln!(start_file, "  fi")?;
-    writeln!(start_file, "  SELECTED_PEERS=\"$peer_index\"")?;
-    writeln!(start_file, "fi")?;
+    if taira {
+        write_taira_launch_arguments(&mut start_file, true)?;
+    } else {
+        writeln!(
+            start_file,
+            "BEACON_CONFIG=\"\"; BEACON_CREDENTIAL=\"\"; KAGAMI_BIN=\"\""
+        )?;
+        writeln!(start_file, "if [ \"$#\" -ne 0 ]; then")?;
+        writeln!(
+            start_file,
+            "  if [ \"$#\" -ne 2 ] || [ \"$1\" != \"--peer-index\" ]; then"
+        )?;
+        writeln!(
+            start_file,
+            "    echo \"usage: $0 [--peer-index INDEX]\" >&2"
+        )?;
+        writeln!(start_file, "    exit 2")?;
+        writeln!(start_file, "  fi")?;
+        writeln!(
+            start_file,
+            "  if [[ ! $2 =~ ^(0|[1-9][0-9]{{0,4}})$ ]]; then"
+        )?;
+        writeln!(start_file, "    echo \"invalid peer index: $2\" >&2")?;
+        writeln!(start_file, "    exit 2")?;
+        writeln!(start_file, "  fi")?;
+        writeln!(start_file, "  peer_index=$((10#$2))")?;
+        writeln!(start_file, "  if (( peer_index >= PEER_COUNT )); then")?;
+        writeln!(start_file, "    echo \"invalid peer index: $2\" >&2")?;
+        writeln!(start_file, "    exit 2")?;
+        writeln!(start_file, "  fi")?;
+        writeln!(start_file, "  SELECTED_PEERS=\"$peer_index\"")?;
+        writeln!(start_file, "fi")?;
+    }
     if !taira {
         writeln!(start_file, "pid_is_running() {{")?;
         writeln!(start_file, "  pid=\"$1\"")?;
@@ -5831,11 +6894,12 @@ fn write_start_script(
     writeln!(start_file, "  if command -v python3 >/dev/null 2>&1; then")?;
     writeln!(
         start_file,
-        "    peer_pid=$(SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" LOG_LEVEL=\"${{LOG_LEVEL:-info}}\" LOG_FILTER=\"${{LOG_FILTER:-}}\" IROHAD_BIN=\"$IROHAD_BIN\" IROHA_NETWORK_DIR=\"$DIR\" IROHA_PEER_INDEX=\"$i\" IROHA_PEER_CONFIG=\"$DIR/peer${{i}}.toml\" IROHA_PEER_LOG=\"$DIR/peer${{i}}.log\" IROHA_PEER_PROCESS_RECORD=\"${{PROCESS_RECORD:-}}\" IROHA_SORA_MODE=\"{sora_mode_env}\" IROHA_TAIRA_MODE=\"{taira_mode_env}\" IROHA_PEER_FRESH_KEY=\"$FRESH_KEY_ARG\" python3 - <<'PY'"
+        "    peer_pid=$(SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" LOG_LEVEL=\"${{LOG_LEVEL:-info}}\" LOG_FILTER=\"${{LOG_FILTER:-}}\" IROHAD_BIN=\"$IROHAD_BIN\" IROHA_NETWORK_DIR=\"$DIR\" IROHA_PEER_INDEX=\"$i\" IROHA_PEER_CONFIG=\"${{BEACON_CONFIG:-$DIR/peer${{i}}.toml}}\" IROHA_PEER_LOG=\"$DIR/peer${{i}}.log\" IROHA_PEER_PROCESS_RECORD=\"${{PROCESS_RECORD:-}}\" IROHA_SORA_MODE=\"{sora_mode_env}\" IROHA_TAIRA_MODE=\"{taira_mode_env}\" IROHA_PEER_FRESH_KEY=\"$FRESH_KEY_ARG\" python3 - \"$BEACON_CONFIG\" \"$BEACON_CREDENTIAL\" \"$KAGAMI_BIN\" <<'PY'"
     )?;
     writeln!(start_file, "import os")?;
     writeln!(start_file, "import stat")?;
     writeln!(start_file, "import subprocess")?;
+    writeln!(start_file, "import sys")?;
     if taira {
         start_file.write_all(TAIRA_PROCESS_IDENTITY_PY.as_bytes())?;
     }
@@ -5854,6 +6918,19 @@ fn write_start_script(
         start_file,
         "cmd.extend([\"--config\", env[\"IROHA_PEER_CONFIG\"]])"
     )?;
+    if taira {
+        start_file.write_all(TAIRA_BEACON_SELECTION_PY.as_bytes())?;
+        writeln!(start_file, "selection = None")?;
+        writeln!(start_file, "if sys.argv[1]:")?;
+        writeln!(
+            start_file,
+            "    selection = select_taira_beacon_launch(env, *sys.argv[1:])"
+        )?;
+        writeln!(
+            start_file,
+            "    cmd.extend([\"--config-blake3\", selection[\"config_blake3\"]])"
+        )?;
+    }
     writeln!(start_file, "if env.get(\"IROHA_PEER_FRESH_KEY\"):")?;
     writeln!(start_file, "    cmd.append(env[\"IROHA_PEER_FRESH_KEY\"])")?;
     if taira {
@@ -5874,9 +6951,15 @@ fn write_start_script(
             "    (os.path.join(env[\"IROHA_NETWORK_DIR\"], \"runtime\", \"{MINT_FINALITY_SEED_DIRECTORY}\", \"peer{{}}.seed\".format(env[\"IROHA_PEER_INDEX\"])), os.path.join(env[\"IROHA_NETWORK_DIR\"], \"runtime\", \"{MINT_FINALITY_SEED_DIRECTORY}\", \"peer{{}}.fd199\".format(env[\"IROHA_PEER_INDEX\"])), 32, 199),"
         )?;
         writeln!(start_file, "]")?;
+        writeln!(start_file, "if selection is not None:")?;
+        writeln!(start_file, "    credential = selection[\"sources\"][2]")?;
         writeln!(
             start_file,
-            "process = launch_taira_process(cmd, env, records)"
+            "    records.append((credential[\"path\"], os.path.join(os.path.dirname(credential[\"path\"]), \"peer{{}}.fd200\".format(env[\"IROHA_PEER_INDEX\"])), credential[\"size\"], 200))"
+        )?;
+        writeln!(
+            start_file,
+            "process = launch_taira_process(cmd, env, records, selection)"
         )?;
     } else {
         start_file.write_all(ORDINARY_MINT_FINALITY_LAUNCH_PY.as_bytes())?;
@@ -5930,28 +7013,32 @@ fn write_stop_script(stop: &Path, peers: u16, taira: bool) -> Result<()> {
         stop_file,
         "SELECTED_PEERS=\"$(seq 0 \"$((PEER_COUNT - 1))\")\""
     )?;
-    writeln!(stop_file, "if [ \"$#\" -ne 0 ]; then")?;
-    writeln!(
-        stop_file,
-        "  if [ \"$#\" -ne 2 ] || [ \"$1\" != \"--peer-index\" ]; then"
-    )?;
-    writeln!(stop_file, "    echo \"usage: $0 [--peer-index INDEX]\" >&2")?;
-    writeln!(stop_file, "    exit 2")?;
-    writeln!(stop_file, "  fi")?;
-    writeln!(
-        stop_file,
-        "  if [[ ! $2 =~ ^(0|[1-9][0-9]{{0,4}})$ ]]; then"
-    )?;
-    writeln!(stop_file, "    echo \"invalid peer index: $2\" >&2")?;
-    writeln!(stop_file, "    exit 2")?;
-    writeln!(stop_file, "  fi")?;
-    writeln!(stop_file, "  peer_index=$((10#$2))")?;
-    writeln!(stop_file, "  if (( peer_index >= PEER_COUNT )); then")?;
-    writeln!(stop_file, "    echo \"invalid peer index: $2\" >&2")?;
-    writeln!(stop_file, "    exit 2")?;
-    writeln!(stop_file, "  fi")?;
-    writeln!(stop_file, "  SELECTED_PEERS=\"$peer_index\"")?;
-    writeln!(stop_file, "fi")?;
+    if taira {
+        write_taira_launch_arguments(&mut stop_file, false)?;
+    } else {
+        writeln!(stop_file, "if [ \"$#\" -ne 0 ]; then")?;
+        writeln!(
+            stop_file,
+            "  if [ \"$#\" -ne 2 ] || [ \"$1\" != \"--peer-index\" ]; then"
+        )?;
+        writeln!(stop_file, "    echo \"usage: $0 [--peer-index INDEX]\" >&2")?;
+        writeln!(stop_file, "    exit 2")?;
+        writeln!(stop_file, "  fi")?;
+        writeln!(
+            stop_file,
+            "  if [[ ! $2 =~ ^(0|[1-9][0-9]{{0,4}})$ ]]; then"
+        )?;
+        writeln!(stop_file, "    echo \"invalid peer index: $2\" >&2")?;
+        writeln!(stop_file, "    exit 2")?;
+        writeln!(stop_file, "  fi")?;
+        writeln!(stop_file, "  peer_index=$((10#$2))")?;
+        writeln!(stop_file, "  if (( peer_index >= PEER_COUNT )); then")?;
+        writeln!(stop_file, "    echo \"invalid peer index: $2\" >&2")?;
+        writeln!(stop_file, "    exit 2")?;
+        writeln!(stop_file, "  fi")?;
+        writeln!(stop_file, "  SELECTED_PEERS=\"$peer_index\"")?;
+        writeln!(stop_file, "fi")?;
+    }
     if taira {
         write_taira_pidfd_preflight(&mut stop_file)?;
         writeln!(stop_file, "for i in $SELECTED_PEERS; do")?;
@@ -5965,7 +7052,7 @@ fn write_stop_script(stop: &Path, peers: u16, taira: bool) -> Result<()> {
         )?;
         writeln!(
             stop_file,
-            "  IROHA_PEER_INDEX=\"$i\" IROHA_PEER_CONFIG=\"$DIR/peer${{i}}.toml\" IROHA_PEER_PROCESS_RECORD=\"$PROCESS_RECORD\" python3 - <<'PY'"
+            "  IROHA_PEER_INDEX=\"$i\" IROHA_PEER_CONFIG=\"${{BEACON_CONFIG:-$DIR/peer${{i}}.toml}}\" IROHA_PEER_PROCESS_RECORD=\"$PROCESS_RECORD\" python3 - <<'PY'"
         )?;
         writeln!(stop_file, "import os")?;
         writeln!(stop_file, "import stat")?;

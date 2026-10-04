@@ -6,6 +6,7 @@ pub mod account_address;
 pub mod account_bootstrap;
 pub mod blocking;
 pub mod client;
+pub mod collections;
 pub mod config;
 pub mod da;
 mod error;
@@ -23,8 +24,8 @@ pub mod sns;
 pub mod stream;
 pub mod subscriptions;
 pub use error::{
-    Error, Result, StatusFailureReason, TransactionPreparationError, TransactionSigningError,
-    TransportErrorKind,
+    ApiError, ApiErrorDetails, Error, Result, StatusFailureReason, TransactionPreparationError,
+    TransactionSigningError, TransportErrorKind,
 };
 pub use iroha_crypto as crypto;
 pub use iroha_data_model as data_model;

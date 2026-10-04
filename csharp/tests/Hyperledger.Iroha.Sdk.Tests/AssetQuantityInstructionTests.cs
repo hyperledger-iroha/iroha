@@ -127,7 +127,6 @@ public sealed class AssetQuantityInstructionTests
     [MemberData(nameof(InvalidQuantitySpellings))]
     public void ToriiAssetRwaAndUaidReadbacksRejectInvalidQuantityText(string quantity)
     {
-        Assert.Throws<ArgumentException>(() => new ToriiAssetBalance { Quantity = quantity });
         Assert.Throws<ArgumentException>(() => new ToriiExplorerAsset { Value = quantity });
         Assert.Throws<ArgumentException>(() => new ToriiExplorerRwaParent { Quantity = quantity });
         Assert.Throws<ArgumentException>(() => new ToriiExplorerRwa { Quantity = quantity });
@@ -140,17 +139,11 @@ public sealed class AssetQuantityInstructionTests
     public void RawToriiAssetRwaAndUaidJsonRejectInvalidQuantityText(string quantity)
     {
         var encoded = JsonSerializer.Serialize(quantity);
-        var assetBalance = "{\"asset\":\"asset\",\"account_id\":"
-            + JsonSerializer.Serialize(AccountId)
-            + ",\"scope\":\"global\",\"asset_name\":\"asset\",\"asset_alias\":null,\"quantity\":"
-            + encoded
-            + "}";
         var rwaParent = "{\"rwa\":\"gold-lot\",\"quantity\":" + encoded + "}";
         var uaidAsset = "{\"asset_id\":\"asset\",\"asset_definition_id\":\"definition\",\"quantity\":"
             + encoded
             + "}";
 
-        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ToriiAssetBalance>(assetBalance));
         Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ToriiExplorerRwaParent>(rwaParent));
         Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ToriiUaidPortfolioAsset>(uaidAsset));
     }

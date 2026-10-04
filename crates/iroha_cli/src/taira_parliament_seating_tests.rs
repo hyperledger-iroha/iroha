@@ -10,6 +10,7 @@ use iroha::data_model::{
         KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
         KagemushaMintFinalityGenesisParametersV1,
     },
+    parameter::{Parameter, system::SumeragiNposParameters},
 };
 use iroha_model_base::{domain::DomainId, peer::PeerId};
 use iroha_primitives::numeric::NumericSpec;
@@ -694,6 +695,9 @@ fn generated_genesis(instructions: Vec<InstructionBox>) -> iroha_genesis::RawGen
     let mut builder =
         iroha_genesis::GenesisBuilder::new_without_executor(TAIRA_CHAIN_ID.into(), ".")
             .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
+            .append_parameter(Parameter::Custom(
+                SumeragiNposParameters::default().into_custom_parameter(),
+            ))
             .with_kagemusha_mint_finality_genesis_parameters(
                 KagemushaMintFinalityGenesisParametersV1 {
                     authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {

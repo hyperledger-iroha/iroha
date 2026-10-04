@@ -11097,8 +11097,8 @@ mod mint_transport_tests;
 mod lookup_recovery_tests;
 
 #[cfg(test)]
-#[path = "ordinary_zero_bootstrap_fixture.rs"]
-mod ordinary_zero_bootstrap_fixture;
+#[path = "ordinary_originals.rs"]
+mod ordinary_originals;
 
 #[cfg(test)]
 #[path = "ordinary_zero_bootstrap_qualification_tests.rs"]

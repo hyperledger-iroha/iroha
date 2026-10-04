@@ -213,7 +213,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
 
     func testNativeAssetEntryPointsRejectNoncanonicalQuantitiesBeforeDispatch() throws {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: 15, count: 32))
-        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let authority = try AccountId.make(publicKey: keypair.publicKey)
         let assetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
 
         for quantity in ["-1", "01", "1.0", "1.2300", " 1", "1e0"] {

@@ -285,9 +285,12 @@ fn original_ca_local_composition_matches_complete_relation_with_only_public_alph
         );
     }
     let mut bad = alphas.clone();
-    bad[0] = E::from_base(F(
-        crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1,
-    ));
+    bad[0] = E::from_raw_coefficients_for_testing([
+        F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1),
+        F::ZERO,
+        F::ZERO,
+        F::ZERO,
+    ]);
     assert!(
         state
             .local_composition_v1(&bad, &mut StdRng::seed_from_u64(917))

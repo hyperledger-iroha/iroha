@@ -1005,7 +1005,8 @@ final class ToriiAssetTransferTests: XCTestCase {
                     request(creationTimeMs: value.server - 10_000)
                 )
                 XCTFail("stubbed transfer failure was accepted")
-            } catch let ToriiClientError.httpStatus(code, _, _) {
+            } catch let ToriiClientError.api(apiError) {
+                let code = apiError.status
                 XCTAssertEqual(code, 503)
             } catch {
                 XCTFail("corrected transfer time failed before HTTP: \(error)")
@@ -1089,9 +1090,10 @@ final class ToriiAssetTransferTests: XCTestCase {
             return XCTFail("HTTP 409 replay conflict must be uncertain")
         } catch let error as ToriiDetachedAssetTransferSubmissionUncertainError {
             uncertain = error
-            guard case let .httpStatus(code, _, _) = error.cause else {
+            guard case let .api(apiError) = error.cause else {
                 return XCTFail("409 used unexpected cause: \(error.cause)")
             }
+            let code = apiError.status
             XCTAssertEqual(code, 409)
         }
 
@@ -1157,7 +1159,8 @@ final class ToriiAssetTransferTests: XCTestCase {
             XCTFail("definite HTTP 400 must fail")
         } catch is ToriiDetachedAssetTransferSubmissionUncertainError {
             XCTFail("definite ordinary 4xx must not be marked uncertain")
-        } catch let ToriiClientError.httpStatus(code, _, _) {
+        } catch let ToriiClientError.api(apiError) {
+            let code = apiError.status
             XCTAssertEqual(code, 400)
         }
     }
@@ -1616,9 +1619,10 @@ final class ToriiAssetTransferTests: XCTestCase {
             XCTFail("a status-absent replay rejection must preserve uncertain evidence")
         } catch let error as ToriiDetachedAssetTransferSubmissionUncertainError {
             XCTAssertEqual(error.evidence, evidence)
-            guard case let .httpStatus(code, _, _) = error.cause else {
+            guard case let .api(apiError) = error.cause else {
                 return XCTFail("unexpected replay rejection cause: \(error.cause)")
             }
+            let code = apiError.status
             XCTAssertEqual(code, 400)
         }
         XCTAssertEqual(postCalls, 1)

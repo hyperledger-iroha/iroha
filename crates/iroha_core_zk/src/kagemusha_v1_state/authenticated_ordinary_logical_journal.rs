@@ -176,9 +176,6 @@ impl KagemushaAuthenticatedOrdinaryHistoricalApprovalV1<'_> {
     pub(crate) fn app_attest_counter(&self) -> Option<u32> {
         self.original.app_attest_counter()
     }
-    pub(crate) fn proof_binding_digest(&self) -> DigestV1 {
-        self.original.proof_binding_digest()
-    }
     pub(crate) fn authorization_binding_digest(&self) -> Result<DigestV1, KagemushaStateErrorV1> {
         iroha_data_model::kagemusha::kagemusha_ordinary_financial_authorization_proof_binding_digest_v1(
             self.original.proof_binding_digest(),

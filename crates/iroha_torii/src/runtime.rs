@@ -136,10 +136,6 @@ pub struct NodeCurveCapabilities {
 pub struct NodeQueryCapabilities {
     /// Aggregate query support exposed today.
     pub aggregate: NodeAggregateQueryCapabilities,
-    /// Whether aggregate responses report a durable indexed snapshot marker.
-    pub indexed_snapshot_marker: bool,
-    /// Additional alias-aware fields injected into aggregate-capable row responses.
-    pub row_enrichment_fields: Vec<String>,
     /// Reserved DA-backed projection checkpoint contract.
     pub projection: NodeProjectionCapabilities,
 }
@@ -152,7 +148,7 @@ pub struct NodeAggregateQueryCapabilities {
     pub v1: bool,
     /// Whether the current aggregate implementation is exact rather than approximate.
     pub exact_results: bool,
-    /// Resource families that currently accept aggregate mode.
+    /// Collections (`specs/torii/collection_queries.md`) whose reads accept `aggregate`.
     pub supported_resources: Vec<String>,
 }
 #[derive(norito::NoritoSchema)]
@@ -390,18 +386,15 @@ pub async fn handle_node_capabilities(
     #[cfg(not(feature = "sm"))]
     let (neon_sm3, neon_sm4, policy_string) = (false, false, "scalar-only".to_string());
     #[cfg(feature = "app_api")]
-    let aggregate_supported_resources = crate::generic_query::aggregate_supported_resources()
-        .iter()
-        .map(|resource| (*resource).to_owned())
+    let aggregate_supported_resources = crate::collections::aggregate_collections()
+        .map(str::to_owned)
         .collect::<Vec<_>>();
     #[cfg(not(feature = "app_api"))]
     let aggregate_supported_resources = Vec::new();
     #[cfg(feature = "app_api")]
-    let projection_export_supported_resources =
-        crate::generic_query::projection_export_supported_resources()
-            .iter()
-            .map(|resource| (*resource).to_owned())
-            .collect::<Vec<_>>();
+    let projection_export_supported_resources = crate::collections::PROJECTION_EXPORT_COLLECTIONS
+        .map(str::to_owned)
+        .to_vec();
     #[cfg(not(feature = "app_api"))]
     let projection_export_supported_resources = Vec::new();
     Ok(NodeCapabilitiesResponse {
@@ -430,14 +423,6 @@ pub async fn handle_node_capabilities(
                 exact_results: true,
                 supported_resources: aggregate_supported_resources,
             },
-            indexed_snapshot_marker: true,
-            row_enrichment_fields: vec![
-                "primary_alias".to_string(),
-                "primary_alias_name".to_string(),
-                "primary_alias_dataspace".to_string(),
-                "primary_alias_domain".to_string(),
-                "has_primary_alias".to_string(),
-            ],
             projection: NodeProjectionCapabilities {
                 checkpoint_contract_v1: true,
                 da_v1_enabled: false,
@@ -1658,26 +1643,14 @@ mod tests {
         assert!(resp.query.aggregate.v1);
         assert!(resp.query.aggregate.exact_results);
         #[cfg(feature = "app_api")]
-        let supported_resources = crate::generic_query::aggregate_supported_resources()
-            .iter()
-            .map(|resource| (*resource).to_owned())
+        let supported_resources = crate::collections::aggregate_collections()
+            .map(str::to_owned)
             .collect::<Vec<_>>();
         #[cfg(not(feature = "app_api"))]
         let supported_resources = Vec::<String>::new();
         assert_eq!(
             resp.query.aggregate.supported_resources,
             supported_resources
-        );
-        assert!(resp.query.indexed_snapshot_marker);
-        assert_eq!(
-            resp.query.row_enrichment_fields,
-            vec![
-                "primary_alias".to_string(),
-                "primary_alias_name".to_string(),
-                "primary_alias_dataspace".to_string(),
-                "primary_alias_domain".to_string(),
-                "has_primary_alias".to_string()
-            ]
         );
         assert!(resp.query.projection.checkpoint_contract_v1);
         assert!(!resp.query.projection.da_v1_enabled);
@@ -1710,10 +1683,9 @@ mod tests {
         #[cfg(feature = "app_api")]
         assert_eq!(
             resp.query.projection.export_supported_resources,
-            crate::generic_query::projection_export_supported_resources()
-                .iter()
-                .map(|resource| (*resource).to_owned())
-                .collect::<Vec<_>>()
+            crate::collections::PROJECTION_EXPORT_COLLECTIONS
+                .map(str::to_owned)
+                .to_vec()
         );
         #[cfg(not(feature = "app_api"))]
         assert!(resp.query.projection.export_supported_resources.is_empty());

@@ -41,7 +41,7 @@ cuda = ["ivm/cuda"]
 [dependencies]
 iroha_fs = { workspace = true }
 iroha = { workspace = true }
-iroha_core_privacy = { workspace = true, features = ["zk-stark"] }
+iroha_core_privacy = { workspace = true, default-features = false, features = ["zk-stark"] }
 iroha_core_timed_ovn = { workspace = true }
 iroha_model_base = { workspace = true }
 norito = { path = "../norito", version = "2.0.0-rc.2.0", default-features = false, features = ["node-codec"] }
@@ -73,7 +73,7 @@ tempfile = { workspace = true }
 
 [dev-dependencies]
 iroha_core_zk = { workspace = true, default-features = false, features = ["test-utils"] }
-iroha_core_privacy = { workspace = true, features = ["test-utils"] }
+iroha_core_privacy = { workspace = true, default-features = false, features = ["test-utils"] }
 iroha_core_timed_ovn = { workspace = true, features = ["test-utils"] }
 # Synthetic portable-proof fixtures remain test-only; production exports no fixture constructors.
 iroha_data_model = { workspace = true, default-features = false, features = ["test-fixtures", "transparent_api"] }

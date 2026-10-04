@@ -1089,9 +1089,8 @@ async fn runtime_metrics_and_node_capabilities_ok() {
     assert_eq!(caps.query.aggregate.supported_resources, {
         #[cfg(feature = "app_api")]
         {
-            crate::generic_query::aggregate_supported_resources()
-                .iter()
-                .map(|resource| (*resource).to_owned())
+            crate::collections::aggregate_collections()
+                .map(str::to_owned)
                 .collect::<Vec<_>>()
         }
         #[cfg(not(feature = "app_api"))]
@@ -1099,12 +1098,6 @@ async fn runtime_metrics_and_node_capabilities_ok() {
             Vec::<String>::new()
         }
     });
-    assert!(caps.query.indexed_snapshot_marker);
-    assert!(
-        caps.query
-            .row_enrichment_fields
-            .contains(&"primary_alias_domain".to_string())
-    );
     assert!(caps.query.projection.checkpoint_contract_v1);
     assert!(!caps.query.projection.da_v1_enabled);
     assert_eq!(
@@ -1137,10 +1130,9 @@ async fn runtime_metrics_and_node_capabilities_ok() {
     {
         assert_eq!(
             caps.query.projection.export_supported_resources,
-            crate::generic_query::projection_export_supported_resources()
-                .iter()
-                .map(|resource| (*resource).to_owned())
-                .collect::<Vec<_>>()
+            crate::collections::PROJECTION_EXPORT_COLLECTIONS
+                .map(str::to_owned)
+                .to_vec()
         );
     }
     #[cfg(not(feature = "app_api"))]
@@ -1203,7 +1195,9 @@ async fn node_query_projection_checkpoint_handler_returns_persisted_payload() {
         State(app),
         HeaderMap::new(),
         crate::loopback_connect_info(),
-        None,
+        Some(crate::utils::extractors::ExtractAccept(
+            axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+        )),
     )
     .await
     .expect("ok");
@@ -1216,7 +1210,7 @@ async fn node_query_projection_checkpoint_handler_returns_persisted_payload() {
     );
     let body = torii_body_bytes(response, "body").await;
     let checkpoint: crate::runtime::NodeProjectionCheckpointResponse =
-        norito::decode_from_bytes(&body).expect("decode default Norito response");
+        norito::decode_from_bytes(&body).expect("decode requested Norito response");
     let canonical = crate::frame_test_support::assert_current_frame(
         &checkpoint,
         "iroha_torii::runtime::NodeProjectionCheckpointResponse",
@@ -1244,7 +1238,9 @@ async fn node_query_projection_shard_catalog_handler_returns_catalog_payload() {
         }),
         HeaderMap::new(),
         crate::loopback_connect_info(),
-        None,
+        Some(crate::utils::extractors::ExtractAccept(
+            axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+        )),
     )
     .await
     .expect("ok");
@@ -1257,7 +1253,7 @@ async fn node_query_projection_shard_catalog_handler_returns_catalog_payload() {
     );
     let body = torii_body_bytes(response, "body").await;
     let catalog: crate::runtime::NodeProjectionShardCatalogResponse =
-        norito::decode_from_bytes(&body).expect("decode default Norito response");
+        norito::decode_from_bytes(&body).expect("decode requested Norito response");
     let canonical = crate::frame_test_support::assert_current_frame(
         &catalog,
         "iroha_torii::runtime::NodeProjectionShardCatalogResponse",

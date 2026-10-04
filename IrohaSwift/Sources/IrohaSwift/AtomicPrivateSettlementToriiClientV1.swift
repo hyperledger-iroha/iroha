@@ -355,6 +355,7 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
     public let timeout: TimeInterval
     private let session: URLSession
     private let responseVerifier: any AtomicPrivateSettlementResponseVerifyingV1
+    private let canonicalRequestFreshness: ToriiCanonicalRequestFreshness
 
     public init(
         baseURL: URL,
@@ -362,6 +363,7 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         session: URLSession = .shared,
         timeout: TimeInterval = 30,
         defaultHeaders: [String: String] = [:],
+        canonicalRequestFreshness: ToriiCanonicalRequestFreshness = .system,
         responseVerifier: any AtomicPrivateSettlementResponseVerifyingV1 =
             AtomicPrivateSettlementNativeResponseVerifierV1()
     ) throws {
@@ -383,6 +385,7 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         self.session = session
         self.timeout = timeout
         self.defaultHeaders = defaultHeaders
+        self.canonicalRequestFreshness = canonicalRequestFreshness
         self.responseVerifier = responseVerifier
     }
 
@@ -773,19 +776,15 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         body: Data,
         auth: ToriiCanonicalRequestAuth
     ) throws -> [String: String] {
-        guard (auth.timestampMs == nil) == (auth.nonce == nil) else {
-            throw AtomicPrivateSettlementClientErrorV1.invalidPreparedRequest
-        }
-        return try ToriiCanonicalRequest.buildHeaders(
+        try ToriiCanonicalRequest.buildHeaders(
             method: method,
             url: target,
             body: body,
             accountId: auth.accountId,
             privateKey: auth.privateKey,
             networkId: localSigningContext.networkId,
-            timestampMs: auth.timestampMs
-                ?? UInt64(max(0, Date().timeIntervalSince1970 * 1_000).rounded()),
-            nonce: auth.nonce ?? UUID().uuidString.replacingOccurrences(of: "-", with: "")
+            timestampMs: canonicalRequestFreshness.timestampMs(),
+            nonce: canonicalRequestFreshness.nonce()
         )
     }
 

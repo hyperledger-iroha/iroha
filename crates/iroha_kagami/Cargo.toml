@@ -19,7 +19,7 @@ iroha_deploy = { workspace = true }
 iroha_fs = { workspace = true }
 iroha_contract_deploy = { path = "../iroha_contract_deploy" }
 musubi = { path = "../musubi" }
-iroha_core_privacy = { workspace = true }
+iroha_core_privacy = { workspace = true, default-features = false }
 iroha_model_base = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 iroha_executor_data_model.workspace = true

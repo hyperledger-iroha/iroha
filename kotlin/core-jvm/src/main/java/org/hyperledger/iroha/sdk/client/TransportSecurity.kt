@@ -29,25 +29,43 @@ internal object TransportSecurity {
         "\"key_seed_b64\"",
     )
 
+    /**
+     * Require `https` for requests carrying credentials or key material, on the configured base
+     * authority. [allowPlaintextLoopback] (an explicit client opt-in for local development
+     * networks) also admits plain `http` when the target host is a loopback address.
+     */
     fun requireHttpRequestAllowed(
         context: String,
         baseUri: URI,
         targetUri: URI,
         headers: Map<String, String>?,
         body: ByteArray?,
+        allowPlaintextLoopback: Boolean = false,
     ) {
         if (!isSensitive(headers, body)) return
         val targetScheme = normalize(targetUri.scheme)
-        require(targetScheme == "https") {
-            "$context refuses insecure transport over ${renderScheme(targetScheme)}; use https."
+        val plaintextLoopback = allowPlaintextLoopback && targetScheme == "http" && isLoopbackHost(targetUri.host)
+        require(targetScheme == "https" || plaintextLoopback) {
+            "$context refuses insecure transport over ${renderScheme(targetScheme)}; use https " +
+                "(plain http is only allowed to loopback hosts with ClientConfig.setAllowPlaintextLoopback(true))."
         }
         val baseScheme = normalize(baseUri.scheme)
         require(targetScheme == baseScheme) {
             "$context refuses sensitive requests over mismatched scheme ${renderScheme(targetScheme)}; use relative paths derived from the configured base URL."
         }
-        require(sameAuthority(baseUri, targetUri, "https")) {
+        require(sameAuthority(baseUri, targetUri, targetScheme)) {
             "$context refuses sensitive requests to mismatched host ${renderHost(targetUri)}; use relative paths on the configured base URL."
         }
+    }
+
+    /** `localhost`, `*.localhost`, `127.0.0.0/8` or `::1`, decided without DNS. */
+    fun isLoopbackHost(host: String?): Boolean {
+        val normalized = normalize(host).removePrefix("[").removeSuffix("]")
+        if (normalized == "localhost" || normalized.endsWith(".localhost")) return true
+        if (normalized == "::1" || normalized == "0:0:0:0:0:0:0:1") return true
+        val octets = normalized.split('.')
+        return octets.size == 4 && octets[0] == "127" &&
+            octets.all { octet -> octet.isNotEmpty() && octet.length <= 3 && octet.all { it in '0'..'9' } && octet.toInt() <= 255 }
     }
 
     fun requireWebSocketRequestAllowed(

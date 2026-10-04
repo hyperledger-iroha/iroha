@@ -3052,6 +3052,7 @@ class HttpClientTransportTest {
             TransactionPayload(
                 networkId = verifyingKeyNetworkId,
                 authority = authority,
+                executable = Executable.ivm(byteArrayOf()),
                 feePayment = alternateIntent,
             ),
         )
@@ -3403,7 +3404,7 @@ class HttpClientTransportTest {
             )
         )
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth("alice@universal", RequestSigner.ed25519(keyPair.private), 1_700_000_000_001L, "vpn-nonce-2")
+        fun auth() = ToriiCanonicalRequestAuth("alice@universal", RequestSigner.ed25519(keyPair.private), 1_700_000_000_001L, "vpn-nonce-2")
         val transport = HttpClientTransport(
             executor = executor,
             config = signedClientConfig("https://torii.example"),
@@ -3411,14 +3412,14 @@ class HttpClientTransportTest {
 
         val session = transport.createVpnSession(
             VpnSessionCreateRequest("standard", quoteId, "0x$paymentTxHash", meteringKey),
-            auth,
+            auth(),
         ).join()
-        val fetched = transport.getVpnSession(sessionId, auth).join()
+        val fetched = transport.getVpnSession(sessionId, auth()).join()
         val submitted = transport.submitVpnReceipt(
             VpnReceiptSubmitRequest("0xCAFE", "BEEF", "0x$leaseId"),
-            auth,
+            auth(),
         ).join()
-        val receipts = transport.listVpnReceipts(auth).join()
+        val receipts = transport.listVpnReceipts(auth()).join()
 
         assertEquals(sessionId, session.sessionId)
         assertEquals("55".repeat(1_952), session.relayMldsa65PublicKeyHex)
@@ -4171,7 +4172,7 @@ class HttpClientTransportTest {
     @Test
     fun proofRequiredCurrentStateUsesOneAtomicPostAndClassifiesExactSnapshot() {
         val fixture = atomicOnboardingProofFixture()
-        val canonicalAuth = applicationAuth()
+        fun canonicalAuth() = applicationAuth()
         val blockHash = AccountOnboardingBlockHashV1(verifyingKeyNetworkId.literal)
         val responses = listOf(
             fixture.accountId to AccountOnboardingCurrentStateV1.Outcome.APPLIED,
@@ -4206,7 +4207,7 @@ class HttpClientTransportTest {
                 fixture.binding,
                 fixture.authority,
                 verifyingKeyNetworkId,
-                canonicalAuth,
+                canonicalAuth(),
             ).join()
 
             assertEquals(expectedOutcome, result.outcome)
@@ -4234,7 +4235,7 @@ class HttpClientTransportTest {
     @Test
     fun proofRequiredCurrentStateRejectsSubstitutionOpenShapeAndInvalidAnchor() {
         val fixture = atomicOnboardingProofFixture()
-        val canonicalAuth = applicationAuth()
+        fun canonicalAuth() = applicationAuth()
         val exact = linkedMapOf<String, Any?>(
             "version" to 1,
             "network_id" to verifyingKeyNetworkId.literal,
@@ -4278,7 +4279,7 @@ class HttpClientTransportTest {
                     fixture.binding,
                     fixture.authority,
                     verifyingKeyNetworkId,
-                    canonicalAuth,
+                    canonicalAuth(),
                 ).join()
             }
             assertEquals(1, executor.requestCount, "invalid response $index")
@@ -4653,7 +4654,7 @@ class HttpClientTransportTest {
                 ).join()
             }
             assertIs<TransactionStatusHttpException>(error.cause)
-            assertEquals(statusCode, (error.cause as TransactionStatusHttpException).statusCode)
+            assertEquals(statusCode, (error.cause as TransactionStatusHttpException).status)
         }
     }
 

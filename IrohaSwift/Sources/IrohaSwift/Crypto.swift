@@ -739,13 +739,14 @@ public enum AccountId {
     /// Default network prefix for i105 encoding (Iroha mainnet).
     public static let defaultNetworkPrefix: UInt16 = 0x02F1
 
-    /// Build an encoded account id literal (i105).
-    public static func make(publicKey: Data) -> String {
-        do {
-            return try makeI105(publicKey: publicKey)
-        } catch {
-            preconditionFailure("Invalid account id inputs: \(error)")
-        }
+    /// Build the I105 account id literal of an Ed25519 `publicKey` on the
+    /// default network prefix.
+    ///
+    /// - Throws: `AccountAddressError` when the key is not a valid Ed25519
+    ///   public key. Use `makeI105(publicKey:algorithm:distid:networkPrefix:)`
+    ///   for other algorithms or networks.
+    public static func make(publicKey: Data) throws -> String {
+        try makeI105(publicKey: publicKey)
     }
 
     /// Build i105 format account ID string required by Torii API.

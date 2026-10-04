@@ -70,7 +70,6 @@ pub(super) struct OrdinaryReceiverRequestOpeningV1<F: KagemushaPoseidonFieldV1> 
     pub(super) credential_digest: Bytes<F>,
     pub(super) encryption_key: Bytes<F>,
     pub(super) recipient_lane: Bytes<F>,
-    pub(super) request_id: Bytes<F>,
 }
 fn equal<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
@@ -411,12 +410,15 @@ pub(super) fn constrain_ordinary_receiver_request_opening_v1<F: KagemushaPoseido
             .try_into()
             .map_err(|_| "receiver digest width".into())
     };
+    let encryption_key = select(ctx, &range, enabled, as_digest("recipient_encryption_key")?);
+    let recipient_lane = select(ctx, &range, enabled, as_digest("recipient_lane_id")?);
+    // Retain the request ID's gated constraints and fallible width check in the same synthesis order.
+    let _request_id = select(ctx, &range, enabled, as_digest("request_id")?);
     Ok(OrdinaryReceiverRequestOpeningV1 {
         request_digest,
         credential_digest,
-        encryption_key: select(ctx, &range, enabled, as_digest("recipient_encryption_key")?),
-        recipient_lane: select(ctx, &range, enabled, as_digest("recipient_lane_id")?),
-        request_id: select(ctx, &range, enabled, as_digest("request_id")?),
+        encryption_key,
+        recipient_lane,
     })
 }
 

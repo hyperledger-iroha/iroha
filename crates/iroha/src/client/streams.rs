@@ -83,6 +83,23 @@ impl Events<'_> {
     /// deadline. No reconnect or replay occurs automatically. The returned
     /// stream owns its connection and can outlive this account context.
     ///
+    /// ```no_run
+    /// use futures_util::StreamExt as _;
+    /// use iroha::data_model::events::pipeline::TransactionEventFilter;
+    ///
+    /// # async fn example(account: &iroha::client::AccountClient) -> iroha::Result<()> {
+    /// let mut events = account
+    ///     .events()
+    ///     .subscribe([TransactionEventFilter::default()])
+    ///     .await?;
+    /// if let Some(event) = events.next().await {
+    ///     let _event = event?;
+    /// }
+    /// events.close().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
     /// # Errors
     /// Returns signing, invalid-filter, transport, timeout or protocol errors.
     pub async fn subscribe(

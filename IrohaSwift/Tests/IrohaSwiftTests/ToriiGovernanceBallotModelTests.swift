@@ -48,18 +48,14 @@ final class ToriiGovernanceBallotModelTests: XCTestCase {
     private var canonicalReadAuth: ToriiCanonicalRequestAuth {
         ToriiCanonicalRequestAuth(
             accountId: authority,
-            privateKey: canonicalSigningSeed,
-            timestampMs: 4_102_444_801_000,
-            nonce: "canonical-read-test"
+            privateKey: canonicalSigningSeed
         )
     }
 
     private func governanceAuth(accountId: String) -> ToriiCanonicalRequestAuth {
         ToriiCanonicalRequestAuth(
             accountId: accountId,
-            privateKey: Data(repeating: 1, count: 32),
-            timestampMs: 4_102_444_801_000,
-            nonce: "governance-ballot-test"
+            privateKey: Data(repeating: 1, count: 32)
         )
     }
 
@@ -382,9 +378,10 @@ final class ToriiGovernanceBallotModelTests: XCTestCase {
                 canonicalAuth: governanceAuth(accountId: owner)
             )
         ) { error in
-            guard case let ToriiClientError.httpStatus(code, _, _) = error else {
+            guard case let ToriiClientError.api(apiError) = error else {
                 return XCTFail("unexpected redirect error: \(error)")
             }
+            let code = apiError.status
             XCTAssertEqual(code, 307)
         }
         XCTAssertEqual(dispatchCount, 1)

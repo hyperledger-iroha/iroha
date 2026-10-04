@@ -12,13 +12,25 @@ from requests.structures import CaseInsensitiveDict
 import iroha_python
 import iroha_python.client as client_module
 from iroha_python import (
+    BlockEvent,
     EventCursor,
+    F,
+    GenericEvent,
     NetworkId,
     OperatorSigningContext,
+    PipelineWarningEvent,
+    ProofId,
+    ProofPrunedEvent,
+    ProofRejectedEvent,
+    ProofVerifiedEvent,
+    SseEvent,
     SseStreamError,
     ToriiCanonicalRequestAuth,
     ToriiClient,
+    TransactionEvent,
+    WitnessEvent,
     canonical_network_request_signature_message,
+    decode_event,
 )
 
 from .helpers import StubResponse
@@ -132,13 +144,6 @@ def operator_context() -> OperatorSigningContext:
 
 _LIVE_STREAM_HELPERS = (
     "stream_events",
-    "stream_verifying_key_events",
-    "stream_proof_events",
-    "stream_trigger_events",
-    "stream_pipeline_transactions",
-    "stream_pipeline_blocks",
-    "stream_pipeline_witnesses",
-    "stream_pipeline_merges",
     "stream_sumeragi_status",
 )
 
@@ -162,7 +167,7 @@ def test_live_stream_signatures_expose_no_replay_controls() -> None:
     with pytest.raises(TypeError, match="unexpected keyword argument 'last_event_id'"):
         client.stream_events(last_event_id="stale")  # type: ignore[call-arg]
     with pytest.raises(TypeError, match="unexpected keyword argument 'resume'"):
-        client.stream_pipeline_transactions(resume=True)  # type: ignore[call-arg]
+        client.stream_events(resume=True)  # type: ignore[call-arg]
 
 
 def test_sse_stream_has_a_mandatory_event_bound_and_never_redirects() -> None:
@@ -295,6 +300,13 @@ def test_retired_sumeragi_new_view_surface_is_absent() -> None:
         "get_sumeragi_new_view",
         "get_sumeragi_new_view_typed",
         "stream_sumeragi_new_view",
+        "stream_verifying_key_events",
+        "stream_proof_events",
+        "stream_trigger_events",
+        "stream_pipeline_transactions",
+        "stream_pipeline_blocks",
+        "stream_pipeline_witnesses",
+        "stream_pipeline_merges",
     )
     for name in retired_methods:
         assert not hasattr(ToriiClient, name), name
@@ -310,8 +322,19 @@ def test_retired_sumeragi_new_view_surface_is_absent() -> None:
         assert name not in iroha_python.__all__, name
 
 
+_QUEUED = {
+    "category": "Pipeline",
+    "event": "Transaction",
+    "hash": "ab" * 32,
+    "lane_id": 0,
+    "dataspace_id": 0,
+    "block_height": None,
+    "status": "Queued",
+}
+
+
 def test_specialized_live_stream_filters_normally_and_surfaces_terminal_error() -> None:
-    event_payload = {"Pipeline": {"Transaction": {"status": "Queued"}}}
+    event_payload = dict(_QUEUED)
     terminal_payload = {
         "code": "stream_lagged",
         "message": "The event stream lost buffered events and cannot replay them.",
@@ -339,12 +362,14 @@ def test_specialized_live_stream_filters_normally_and_surfaces_terminal_error() 
         max_retries=0,
     )
 
-    events = client.stream_pipeline_transactions(
-        status="Queued",
+    events = client.stream_events(
+        filter=F.tx_status == "Queued",
         max_retries=0,
         on_event=lambda payload, event_id: observed.append((payload, event_id)),
     )
-    assert next(events) == event_payload
+    first = next(events)
+    assert first == TransactionEvent(hash="ab" * 32, status="Queued", lane_id=0, dataspace_id=0)
+    assert first.raw == event_payload
     with pytest.raises(SseStreamError) as raised:
         next(events)
 
@@ -355,19 +380,18 @@ def test_specialized_live_stream_filters_normally_and_surfaces_terminal_error() 
     assert error.replay_available is False
     assert error.payload == terminal_payload
     assert error.malformed_reason is None
-    assert observed == [(event_payload, None)]
+    assert observed == [(first, None)]
 
     call = session.calls[0]
     assert call["stream"] is True
     assert call["headers"]["Accept"] == "text/event-stream"
     assert all(name.lower() != "last-event-id" for name in call["headers"])
     assert all(not name.lower().startswith("x-iroha-") for name in call["headers"])
-    encoded_filter = json.loads(call["params"]["filter"])
-    assert encoded_filter["Pipeline"]["Transaction"]["status"] == "Queued"
+    assert call["params"]["filter"] == 'tx_status = "Queued"'
 
 
 def test_live_event_stream_optionally_signs_exact_final_uri() -> None:
-    event_payload = {"Pipeline": {"Transaction": {"status": "Queued"}}}
+    event_payload = dict(_QUEUED)
     session = SequencedSession(
         [SseStubResponse([f"data: {json.dumps(event_payload)}", ""])]
     )
@@ -390,7 +414,7 @@ def test_live_event_stream_optionally_signs_exact_final_uri() -> None:
         max_retries=3,
     )
 
-    assert next(client.stream_pipeline_transactions(status="Queued", max_retries=0)) == event_payload
+    assert next(client.stream_events(filter=F.tx_status == "Queued", max_retries=0)).raw == event_payload
 
     call = session.calls[0]
     prepared = urlsplit(str(call["url"]))
@@ -582,3 +606,200 @@ def test_stream_error_is_decoded_even_when_normal_payload_json_decode_is_disable
 
     assert raised.value.code == "stream_source_closed"
     assert raised.value.replay_available is False
+
+
+_PROOF = {
+    "backend": "halo2/ipa",
+    "proof_hash": "11" * 32,
+    "call_hash": None,
+    "envelope_hash": "22" * 32,
+    "vk_ref": "halo2/ipa::vk_transfer",
+    "vk_commitment": None,
+}
+
+_EVENT_CASES = [
+    (
+        {
+            **_QUEUED,
+            "block_height": 7,
+            "status": "Rejected",
+            "rejection_code": "validation",
+            "rejection_reason": "Transaction validation failed.",
+        },
+        TransactionEvent(
+            hash="ab" * 32,
+            status="Rejected",
+            lane_id=0,
+            dataspace_id=0,
+            block_height=7,
+            rejection_code="validation",
+            rejection_reason="Transaction validation failed.",
+        ),
+    ),
+    ({"category": "Pipeline", "event": "Block", "status": "Committed"}, BlockEvent(status="Committed")),
+    (
+        {
+            "category": "Pipeline",
+            "event": "Block",
+            "status": "Rejected",
+            "rejection_code": "ConsensusBlockRejection",
+        },
+        BlockEvent(status="Rejected", rejection_code="ConsensusBlockRejection"),
+    ),
+    (
+        {"category": "Pipeline", "event": "Warning", "kind": "slow", "details": "late", "height": 3},
+        PipelineWarningEvent(kind="slow", details="late", height=3),
+    ),
+    (
+        {
+            "category": "Pipeline",
+            "event": "Witness",
+            "block_hash": "cd" * 32,
+            "height": 4,
+            "view": 1,
+            "epoch": 0,
+            "read_count": 5,
+            "write_count": 2,
+        },
+        WitnessEvent(block_hash="cd" * 32, height=4, view=1, epoch=0, read_count=5, write_count=2),
+    ),
+    (
+        {"category": "Data", "event": "ProofVerified", **_PROOF},
+        ProofVerifiedEvent(
+            backend="halo2/ipa",
+            proof_hash="11" * 32,
+            envelope_hash="22" * 32,
+            vk_ref="halo2/ipa::vk_transfer",
+        ),
+    ),
+    (
+        {"category": "Data", "event": "ProofRejected", **_PROOF},
+        ProofRejectedEvent(
+            backend="halo2/ipa",
+            proof_hash="11" * 32,
+            envelope_hash="22" * 32,
+            vk_ref="halo2/ipa::vk_transfer",
+        ),
+    ),
+    (
+        {
+            "category": "Data",
+            "event": "ProofPruned",
+            "backend": "halo2/ipa",
+            "removed_count": 1,
+            "remaining": 9,
+            "cap": 10,
+            "grace_blocks": 2,
+            "prune_batch": 4,
+            "pruned_at_height": 12,
+            "pruned_by": "authority",
+            "origin": "Insert",
+            "removed": [{"backend": "halo2/ipa", "proof_hash": "33" * 32}],
+        },
+        ProofPrunedEvent(
+            backend="halo2/ipa",
+            removed=(ProofId("halo2/ipa", "33" * 32),),
+            removed_count=1,
+            remaining=9,
+            cap=10,
+            grace_blocks=2,
+            prune_batch=4,
+            pruned_at_height=12,
+            pruned_by="authority",
+            origin="Insert",
+        ),
+    ),
+    (
+        {"category": "Data", "event": "Asset", "summary": "Asset(Added(..))"},
+        GenericEvent(category="Data", event="Asset", summary="Asset(Added(..))"),
+    ),
+    (
+        {"category": "Other", "event": "Time", "summary": "Time(..)"},
+        GenericEvent(category="Other", event="Time", summary="Time(..)"),
+    ),
+    (
+        {"category": "Pipeline", "event": "Fork", "depth": 2},
+        GenericEvent(category="Pipeline", event="Fork"),
+    ),
+    ({"category": "Telemetry", "event": "Tick"}, GenericEvent(category="Telemetry", event="Tick")),
+]
+
+
+@pytest.mark.parametrize(("payload", "expected"), _EVENT_CASES, ids=[case[1].event for case in _EVENT_CASES])
+def test_event_payloads_decode_to_typed_records(payload: dict, expected: object) -> None:
+    decoded = decode_event(json.dumps(payload))
+    assert decoded == expected
+    assert type(decoded) is type(expected)
+    assert decoded.raw == payload
+    assert (decoded.category, decoded.event) == (payload["category"], payload["event"])
+    assert decode_event(payload) == expected
+
+
+def test_event_stream_yields_typed_events_and_never_fails_on_unknown_kinds() -> None:
+    lines: list[str] = [": heartbeat", "", "retry: 10", ""]
+    for payload, _ in _EVENT_CASES:
+        lines += [f"data: {json.dumps(payload)}", ""]
+    session = SequencedSession([SseStubResponse(lines)])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    events = list(client.stream_events(max_retries=0))
+
+    assert events == [expected for _, expected in _EVENT_CASES]
+
+
+def test_event_stream_metadata_and_raw_text_modes() -> None:
+    session = SequencedSession(
+        [
+            SseStubResponse([f"data: {json.dumps(_QUEUED)}", ""]),
+            SseStubResponse([f"data: {json.dumps(_QUEUED)}", ""]),
+        ]
+    )
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    seen: list[Any] = []
+
+    frame = next(client.stream_events(max_retries=0, with_metadata=True, on_event=seen.append))
+    assert isinstance(frame, SseEvent) and isinstance(frame.data, TransactionEvent)
+    assert frame.data.raw == _QUEUED and frame.raw == f"data: {json.dumps(_QUEUED)}"
+    assert seen == [frame]
+    assert next(client.stream_events(max_retries=0, decode_json=False)) == json.dumps(_QUEUED)
+
+
+@pytest.mark.parametrize(
+    ("data", "needle"),
+    [
+        ('Pipeline(Transaction { status: Queued })', "must be a JSON object"),
+        (json.dumps([_QUEUED]), "must be a JSON object"),
+        (json.dumps({"Pipeline": {"Transaction": {"status": "Queued"}}}), "`category` and `event`"),
+        ('{"category": "Pipeline", "category": "Pipeline", "event": "Block"}', "duplicate JSON member"),
+        (json.dumps({**_QUEUED, "status": None}), "`status` must be a string"),
+        (json.dumps({**_QUEUED, "block_height": -1}), "`block_height` must be an unsigned"),
+        (json.dumps({"category": "Data", "event": "Asset", "summary": 1}), "`summary` must be a string"),
+    ],
+)
+def test_malformed_event_payloads_fail_the_stream(data: str, needle: str) -> None:
+    session = SequencedSession([SseStubResponse([f"data: {data}", ""])])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    with pytest.raises(ValueError, match=needle):
+        next(client.stream_events(max_retries=0))
+
+
+def test_closing_the_event_iterator_releases_the_stream() -> None:
+    class TrackedResponse(SseStubResponse):
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    response = TrackedResponse([f"data: {json.dumps(_QUEUED)}", "", f"data: {json.dumps(_QUEUED)}", ""])
+    client = ToriiClient(
+        "http://torii.example",
+        session=SequencedSession([response]),
+        max_retries=0,
+    )
+
+    events = client.stream_events(max_retries=0)
+    assert isinstance(next(events), TransactionEvent)
+    assert response.closed is False
+    events.close()
+    assert response.closed is True

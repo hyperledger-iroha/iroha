@@ -16,12 +16,11 @@ from iroha_python import (
     AggregateFn,
     AggregateMetric,
     AggregateSpec,
+    F,
+    ListQueryError,
     NetworkId,
-    QueryEnvelope,
     ToriiClient,
     TriggerCompletionList,
-    account_query_envelope,
-    asset_holders_query_envelope,
 )
 from iroha_python.address import AccountAddress, AccountAddressError
 from iroha_python.crypto import (
@@ -520,94 +519,7 @@ def test_submit_and_wait_rejects_noncanonical_envelope_hash_before_submission(
     assert submissions == []
 
 
-def test_account_query_envelope_omits_canonical_i105() -> None:
-    payload = account_query_envelope()
-    assert "canonical_i105" not in payload
-
-
-def test_asset_holders_envelope_omits_canonical_i105() -> None:
-    payload = asset_holders_query_envelope()
-    assert "canonical_i105" not in payload
-
-
-def test_query_envelope_normalizes_string_and_object_select_entries() -> None:
-    payload = QueryEnvelope(
-        select=[" id ", {"metadata": {"amount": True}}],
-    ).to_dict()
-    assert payload["select"] == ["id", {"metadata": {"amount": True}}]
-
-
-def test_account_query_envelope_accepts_select_projection_entries() -> None:
-    payload = account_query_envelope(
-        select=[" authority ", {"metadata": {"memo": True}}],
-    )
-    assert payload["select"] == ["authority", {"metadata": {"memo": True}}]
-
-
-def test_query_envelope_normalizes_query_name_to_query_wire_field() -> None:
-    payload = QueryEnvelope(query_name=" recent-accounts ").to_dict()
-
-    assert payload["query"] == "recent-accounts"
-    assert "query_name" not in payload
-
-
-def test_query_envelope_rejects_bad_query_name() -> None:
-    with pytest.raises(ValueError, match="query_name must be a non-empty string"):
-        QueryEnvelope(query_name=" ").to_dict()
-    with pytest.raises(TypeError, match="query_name must be a string"):
-        QueryEnvelope(query_name=7).to_dict()  # type: ignore[arg-type]
-
-
-def test_query_envelope_rejects_bad_select_entries() -> None:
-    with pytest.raises(TypeError, match="select must be a sequence"):
-        QueryEnvelope(select="id").to_dict()
-    with pytest.raises(ValueError, match=r"select\[0].*non-empty"):
-        QueryEnvelope(select=[" "]).to_dict()
-    with pytest.raises(TypeError, match=r"select\[1].*field-path string or mapping"):
-        QueryEnvelope(select=["id", 7]).to_dict()
-
-
-def test_query_envelope_serializes_typed_aggregate_spec() -> None:
-    payload = QueryEnvelope(
-        aggregate=AggregateSpec(
-            group_by=["result_ok"],
-            metrics=[
-                AggregateMetric("transactions", AggregateFn.COUNT),
-                AggregateMetric("distinct_assets", "distinct_count", "asset_id"),
-            ],
-        )
-    ).to_dict()
-
-    assert payload["aggregate"] == {
-        "group_by": ["result_ok"],
-        "metrics": [
-            {"alias": "transactions", "fn": "count"},
-            {
-                "alias": "distinct_assets",
-                "fn": "distinct_count",
-                "field": "asset_id",
-            },
-        ],
-    }
-
-
-def test_query_envelope_rejects_invalid_aggregate_shape() -> None:
-    with pytest.raises(ValueError, match="select and aggregate are mutually exclusive"):
-        QueryEnvelope(
-            select=["authority"],
-            aggregate=AggregateSpec(metrics=[AggregateMetric("count", "count")]),
-        ).to_dict()
-    with pytest.raises(ValueError, match="sum requires a field"):
-        AggregateMetric("total", AggregateFn.SUM).to_dict()
-    with pytest.raises(ValueError, match="must not declare a field"):
-        AggregateMetric("count", AggregateFn.COUNT, "authority").to_dict()
-    with pytest.raises(ValueError, match="at most eight"):
-        AggregateSpec(
-            metrics=[AggregateMetric(f"count_{index}", AggregateFn.COUNT) for index in range(9)]
-        ).to_dict()
-
-
-def test_query_transactions_routes_aggregate_query() -> None:
+def test_transactions_collection_routes_list_queries_and_rejects_aggregates() -> None:
     session = RecordingSession()
     client = authenticated_query_client(session)
     aggregate = AggregateSpec(
@@ -615,13 +527,21 @@ def test_query_transactions_routes_aggregate_query() -> None:
         metrics=[AggregateMetric("transactions", AggregateFn.COUNT)],
     )
 
-    client.query_transactions(aggregate=aggregate)
+    with pytest.raises(ListQueryError) as raised:
+        client.transactions.rows(aggregate=aggregate)
+    assert raised.value.code == "invalid_aggregate"
+    assert session.calls == []
+
+    client.transactions.rows(filter=F.result_ok == False, select=["entrypoint_hash"], limit=5)  # noqa: E712
 
     call = session.calls[0]
     assert call["method"] == "POST"
     assert call["url"] == "https://torii.example/v1/transactions/query"
-    body = json.loads(call["data"].decode("utf-8"))
-    assert body["aggregate"] == aggregate.to_dict()
+    assert json.loads(call["data"].decode("utf-8")) == {
+        "filter": {"op": "eq", "args": ["result_ok", False]},
+        "select": ["entrypoint_hash"],
+        "limit": 5,
+    }
 
 
 def test_list_trigger_completions_returns_typed_step_evidence() -> None:
@@ -695,52 +615,41 @@ def test_list_trigger_completions_validates_filters_before_request() -> None:
     assert session.calls == []
 
 
-def test_list_accounts_omits_canonical_i105_param() -> None:
+def test_accounts_query_body_carries_only_list_query_controls() -> None:
     client, session = _client_with_session()
 
-    client.list_accounts()
+    client.accounts.list()
 
-    params = session.calls[0]["params"]
-    assert "canonical_i105" not in params
+    call = session.calls[0]
+    assert call["url"] == "http://localhost:8080/v1/accounts/query"
+    assert json.loads(call["data"].decode("utf-8")) == {}
 
 
-def test_list_accounts_rejects_removed_canonical_i105_arg() -> None:
+def test_accounts_list_rejects_removed_canonical_i105_arg() -> None:
     client, _ = _client_with_session()
 
     with pytest.raises(TypeError):
-        client.list_accounts(canonical_i105="i105")
+        client.accounts.list(canonical_i105="i105")  # type: ignore[call-arg]
 
 
-def test_query_accounts_omits_canonical_i105() -> None:
+def test_signed_accounts_query_body_carries_only_list_query_controls() -> None:
     session = RecordingSession()
     client = authenticated_query_client(session)
 
-    client.query_accounts()
+    client.accounts.list(limit=5)
 
-    body = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert "canonical_i105" not in body
+    assert json.loads(session.calls[0]["data"].decode("utf-8")) == {"limit": 5}
 
 
-def test_list_asset_holders_omits_canonical_i105() -> None:
+def test_asset_holders_query_percent_encodes_the_definition_selector() -> None:
     client, session = _client_with_session()
 
-    client.list_asset_holders("xor#wonderland")
+    client.asset_definitions.holders("xor#wonderland").list()
 
     assert session.calls[0]["url"] == (
-        "http://localhost:8080/v1/assets/xor%23wonderland/holders"
+        "http://localhost:8080/v1/assets/xor%23wonderland/holders/query"
     )
-    assert "canonical_i105" not in session.calls[0]["params"]
-    assert session.calls[0]["url"].endswith("/v1/assets/xor%23wonderland/holders")
-
-
-def test_query_asset_holders_omits_canonical_i105() -> None:
-    session = RecordingSession()
-    client = authenticated_query_client(session)
-
-    client.query_asset_holders("xor#wonderland")
-
-    body = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert "canonical_i105" not in body
+    assert json.loads(session.calls[0]["data"].decode("utf-8")) == {}
 
 
 def test_i105_roundtrip_uses_halfwidth_iroha_poem_alphabet() -> None:
@@ -973,11 +882,11 @@ def test_i105_rejects_noncanonical_fullwidth_kana_payload() -> None:
         AccountAddress.parse_encoded(noncanonical, expected_discriminant=0x02F1)
 
 
-def test_query_asset_holders_rejects_removed_canonical_i105_arg() -> None:
+def test_asset_holders_list_rejects_removed_canonical_i105_arg() -> None:
     client, _ = _client_with_session()
 
     with pytest.raises(TypeError):
-        client.query_asset_holders("xor#wonderland", canonical_i105="i105")
+        client.asset_definitions.holders("xor#wonderland").list(canonical_i105="i105")  # type: ignore[call-arg]
 
 
 def test_generic_multisig_proposal_is_not_inherited_by_first_release_sdk() -> None:

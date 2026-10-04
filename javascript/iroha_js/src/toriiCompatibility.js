@@ -40,14 +40,15 @@ export class ToriiDataModelMismatchError extends Error {
 /**
  * Cache and coalesce the node-capability probe required before transaction
  * admission. The private state record is owned by ToriiClient.
+ *
+ * Only a successful match is cached. A mismatch, a malformed advert or a
+ * failed request is reported to the caller and probed again next time, so a
+ * transient failure or a node upgrade never leaves the client unusable.
  */
 export function ensureNodeDataModelCompatibility(state, fetchCapabilities) {
   const expected = EXPECTED_DATA_MODEL_VERSION;
   if (state.dataModelValidation.status === "matched") {
     return;
-  }
-  if (state.dataModelValidation.status === "mismatched") {
-    throw new ToriiDataModelMismatchError(expected, state.dataModelValidation.actual);
   }
   if (state.dataModelValidationPromise) {
     return state.dataModelValidationPromise;
@@ -58,6 +59,7 @@ export function ensureNodeDataModelCompatibility(state, fetchCapabilities) {
       capabilities = await fetchCapabilities();
     } catch (error) {
       if (error instanceof ValidationError) {
+        // Torii answered, but its advert does not carry a usable data-model version.
         state.dataModelValidation = { status: "mismatched", actual: null };
         throw new ToriiDataModelMismatchError(expected, null, error);
       }

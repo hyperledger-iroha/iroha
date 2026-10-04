@@ -142,6 +142,7 @@ mod ordinary_integrity_union;
 mod ordinary_issuer_equation;
 mod ordinary_platform_equation;
 mod ordinary_platform_union;
+#[cfg(test)]
 mod ordinary_terminal_subject_binding;
 #[cfg(test)]
 // TODO: Verify a pinned shard protocol and contiguous full-carrier coverage in the

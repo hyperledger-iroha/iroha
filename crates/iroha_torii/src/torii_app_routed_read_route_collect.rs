@@ -64,7 +64,6 @@ async fn execute_torii_fanout_json_payloads_resolved_routes(
             diagnostics,
         ));
     }
-    let payloads = filter_non_authoritative_global_list_rows(app.as_ref(), endpoint, payloads)?;
     let payloads =
         filter_non_authoritative_global_portfolio_rows(app.as_ref(), endpoint, payloads)?;
     let mut values = budget.try_retained_vec(payloads.len())?;

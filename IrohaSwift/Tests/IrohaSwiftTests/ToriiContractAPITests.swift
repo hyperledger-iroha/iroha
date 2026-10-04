@@ -53,6 +53,10 @@ final class ToriiContractAPITests: XCTestCase {
                 networkId: TestNetworkIds.canonical
             ),
             canonicalRequestAuth: includeCanonicalAuth ? canonicalReadAuth : nil,
+            canonicalRequestFreshness: ToriiCanonicalRequestFreshness(
+                timestampMs: { 4_102_444_801_000 },
+                nonce: { "canonical-read-test" }
+            ),
             currentTimeMilliseconds: { 4_102_444_801_000 }
         )
     }
@@ -60,9 +64,7 @@ final class ToriiContractAPITests: XCTestCase {
     private var canonicalReadAuth: ToriiCanonicalRequestAuth {
         ToriiCanonicalRequestAuth(
             accountId: authority,
-            privateKey: signingSeed,
-            timestampMs: 4_102_444_801_000,
-            nonce: "canonical-read-test"
+            privateKey: signingSeed
         )
     }
 

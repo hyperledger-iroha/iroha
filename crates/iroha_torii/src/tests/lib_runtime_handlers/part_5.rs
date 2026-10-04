@@ -3177,7 +3177,9 @@ async fn transaction_details_allows_sender_and_batch_recipient_but_rejects_other
             State(app.clone()),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            None,
+            Some(crate::utils::extractors::ExtractAccept(
+                axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+            )),
             versioned_query_for_test(signed_transaction_details_query(
                 &app,
                 key_pair,
@@ -3226,7 +3228,9 @@ async fn transaction_details_allows_sender_and_batch_recipient_but_rejects_other
         State(app.clone()),
         HeaderMap::new(),
         crate::loopback_connect_info(),
-        None,
+        Some(crate::utils::extractors::ExtractAccept(
+            axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+        )),
         versioned_query_for_test(signed_transaction_details_query(
             &app,
             &unrelated_key,
@@ -3327,7 +3331,9 @@ async fn transaction_details_authenticates_executed_native_registration_and_tran
                     State(app.clone()),
                     HeaderMap::new(),
                     crate::loopback_connect_info(),
-                    None,
+                    Some(crate::utils::extractors::ExtractAccept(
+                        axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+                    )),
                     versioned_query_for_test(signed_transaction_details_query(
                         &app,
                         key,
@@ -3515,7 +3521,9 @@ async fn transaction_details_rejects_uncertified_native_beneficiary_claims() {
                     State(app.clone()),
                     HeaderMap::new(),
                     crate::loopback_connect_info(),
-                    None,
+                    Some(crate::utils::extractors::ExtractAccept(
+                        axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+                    )),
                     versioned_query_for_test(signed_transaction_details_query(
                         &app,
                         key_pair,
@@ -3565,7 +3573,9 @@ async fn transaction_details_allows_operator_and_rejects_wrong_network_and_repla
         State(app.clone()),
         HeaderMap::new(),
         crate::loopback_connect_info(),
-        None,
+        Some(crate::utils::extractors::ExtractAccept(
+            axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+        )),
         versioned_query_for_test(first),
     )
     .await
@@ -3575,7 +3585,9 @@ async fn transaction_details_allows_operator_and_rejects_wrong_network_and_repla
         State(app.clone()),
         HeaderMap::new(),
         crate::loopback_connect_info(),
-        None,
+        Some(crate::utils::extractors::ExtractAccept(
+            axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+        )),
         versioned_query_for_test(replayed),
     )
     .await
@@ -3598,7 +3610,9 @@ async fn transaction_details_allows_operator_and_rejects_wrong_network_and_repla
         State(app.clone()),
         HeaderMap::new(),
         crate::loopback_connect_info(),
-        None,
+        Some(crate::utils::extractors::ExtractAccept(
+            axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+        )),
         versioned_query_for_test(wrong_network),
     )
     .await

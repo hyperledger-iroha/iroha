@@ -19,68 +19,22 @@ use super::*;
 use crate::kagemusha_v1_state::DigestV1;
 
 /// Actual role material is retained only as canonical structured/processed originals.
+/// Unread role originals remain owned until this exact key holder drops.
 /// The full financial corridor may inspect it but has no artifact-installation authority.
 pub(super) struct OrdinaryCashRoleKeysForTestingV1 {
-    pub(super) eq_parameters: Arc<[u8]>,
-    pub(super) eq_proving_key: Arc<[u8]>,
+    pub(super) _eq_parameters: Arc<[u8]>,
+    pub(super) _eq_proving_key: Arc<[u8]>,
     pub(super) eq_verifying_key: Arc<[u8]>,
-    pub(super) ep_parameters: Arc<[u8]>,
-    pub(super) ep_proving_key: Arc<[u8]>,
+    pub(super) _ep_parameters: Arc<[u8]>,
+    pub(super) _ep_proving_key: Arc<[u8]>,
     pub(super) ep_verifying_key: Arc<[u8]>,
-    pub(super) eq_base: BaseCircuitParams,
-    pub(super) ep_base: BaseCircuitParams,
+    pub(super) _eq_base: BaseCircuitParams,
+    pub(super) _ep_base: BaseCircuitParams,
 }
 /// Data from real proof generation. Independent Native/service admission is still mandatory.
 pub(super) struct OrdinaryCashProofForTestingV1 {
     pub(super) keys: OrdinaryCashRoleKeysForTestingV1,
     pub(super) generated: GeneratedOrdinaryCashPairV1,
-}
-
-/// Discover only the genuine Wrapper physical descriptor over selected83-cell Terminal parsers.
-/// This emits no PK/current proof/history grant. The final full-cycle caller must compare its
-/// final actually proved Wrapper descriptor to this exact candidate before accepting the graph.
-pub(super) fn discover_ordinary_wrapper_layout_for_testing_v1(
-    mut witness: OrdinaryCashCommitWrapperWitnessV1<'_>,
-) -> (PlonkProtocol<EqAffine>, PlonkProtocol<EpAffine>) {
-    let eq = canonical_kagemusha_eq_parameters_v1();
-    let ep = canonical_kagemusha_ep_parameters_v1();
-    let audits = collect_ordinary_cash_commit_wrapper_audits_v1(&eq, &ep, &witness).unwrap();
-    witness.public.eq_deferred_audit = audits.eq_digest;
-    witness.public.ep_deferred_audit = audits.ep_digest;
-    let (circuit, _) = build_ordinary_cash_commit_wrapper_eq_v1(&eq, &witness, &audits).unwrap();
-    let vk = keygen_vk_with_helper_resource_preflight_consuming_v1(
-        &eq,
-        circuit,
-        KagemushaPastaParityV1::Eq,
-        "ordinary Wrapper layout",
-        "value-free graph discovery",
-    )
-    .unwrap();
-    let eq_protocol = compile(
-        &eq,
-        &vk,
-        snark_verifier::system::halo2::Config::ipa()
-            .with_num_instance(vec![ORDINARY_TERMINAL_PUBLIC_INSTANCES_V1]),
-    );
-    drop(vk);
-    halo2_proofs::release_allocator_slack();
-    let (circuit, _) = build_ordinary_cash_commit_wrapper_ep_v1(&ep, &witness, &audits).unwrap();
-    let vk = keygen_vk_with_helper_resource_preflight_consuming_v1(
-        &ep,
-        circuit,
-        KagemushaPastaParityV1::Ep,
-        "ordinary Wrapper layout",
-        "value-free graph discovery",
-    )
-    .unwrap();
-    let ep_protocol = compile(
-        &ep,
-        &vk,
-        snark_verifier::system::halo2::Config::ipa()
-            .with_num_instance(vec![ORDINARY_TERMINAL_PUBLIC_INSTANCES_V1]),
-    );
-    drop(vk);
-    (eq_protocol, ep_protocol)
 }
 
 /// Generate and prove the same full ordinary Terminal body used by the shipping producer.
@@ -253,14 +207,14 @@ pub(super) fn generate_ordinary_terminal_for_testing_v1(
     .unwrap();
     OrdinaryCashProofForTestingV1 {
         keys: OrdinaryCashRoleKeysForTestingV1 {
-            eq_parameters,
-            eq_proving_key,
+            _eq_parameters: eq_parameters,
+            _eq_proving_key: eq_proving_key,
             eq_verifying_key,
-            ep_parameters,
-            ep_proving_key,
+            _ep_parameters: ep_parameters,
+            _ep_proving_key: ep_proving_key,
             ep_verifying_key,
-            eq_base,
-            ep_base,
+            _eq_base: eq_base,
+            _ep_base: ep_base,
         },
         generated,
     }
@@ -442,14 +396,14 @@ pub(super) fn generate_ordinary_wrapper_for_testing_v1(
     .unwrap();
     OrdinaryCashProofForTestingV1 {
         keys: OrdinaryCashRoleKeysForTestingV1 {
-            eq_parameters,
-            eq_proving_key,
+            _eq_parameters: eq_parameters,
+            _eq_proving_key: eq_proving_key,
             eq_verifying_key,
-            ep_parameters,
-            ep_proving_key,
+            _ep_parameters: ep_parameters,
+            _ep_proving_key: ep_proving_key,
             ep_verifying_key,
-            eq_base,
-            ep_base,
+            _eq_base: eq_base,
+            _ep_base: ep_base,
         },
         generated,
     }

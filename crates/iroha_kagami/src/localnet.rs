@@ -11,6 +11,37 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+/// Native validation of one isolated post-DKG Taira peer launch.
+#[derive(ClapArgs)]
+pub struct ValidateBeaconLaunchArgs {
+    /// Absolute directory containing the unchanged generated peer0..3 configurations.
+    #[arg(long)]
+    network_dir: PathBuf,
+    /// Zero-based generated peer index.
+    #[arg(long, value_parser = clap::value_parser!(u16).range(0..=3))]
+    peer_index: u16,
+    /// Separate native configuration in the private run's beacon/seat-N directory.
+    #[arg(long)]
+    beacon_config: PathBuf,
+    /// Owner-only native beacon credential beside the separate configuration.
+    #[arg(long)]
+    beacon_credential: PathBuf,
+}
+
+impl<T: Write> RunArgs<T> for ValidateBeaconLaunchArgs {
+    fn run(self, writer: &mut BufWriter<T>) -> Outcome {
+        let selection = validate_beacon_launch(
+            &self.network_dir,
+            self.peer_index,
+            &self.beacon_config,
+            &self.beacon_credential,
+        )?;
+        writer.write_all(&norito::json::to_vec(&selection)?)?;
+        writeln!(writer)?;
+        Ok(())
+    }
+}
+
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConsensusModeArg {
     Permissioned,
@@ -236,6 +267,39 @@ mod tests {
     };
     use iroha_genesis::{RawGenesisTransaction, read_signed_genesis};
     use std::fs;
+    #[test]
+    fn beacon_launch_cli_requires_all_explicit_native_selectors() {
+        use clap::Parser as _;
+        #[derive(clap::Parser)]
+        struct TestArgs {
+            #[command(flatten)]
+            launch: ValidateBeaconLaunchArgs,
+        }
+        let values = [
+            "validate-beacon-launch",
+            "--network-dir",
+            "/private/run/network",
+            "--peer-index",
+            "0",
+            "--beacon-config",
+            "/private/run/beacon/seat-1/beacon.toml",
+            "--beacon-credential",
+            "/private/run/beacon/seat-1/iroha-global-beacon-partial-signer-v1.norito",
+        ];
+        let parsed = TestArgs::try_parse_from(values).unwrap();
+        assert_eq!(parsed.launch.peer_index, 0);
+        for missing in [1, 3, 5, 7] {
+            let mut absent = values.to_vec();
+            absent.drain(missing..missing + 2);
+            assert!(TestArgs::try_parse_from(absent).is_err());
+        }
+        let mut invalid = values;
+        invalid[4] = "4";
+        assert!(TestArgs::try_parse_from(invalid).is_err());
+        let mut extra = values.to_vec();
+        extra.extend(["--runtime-toggle", "true"]);
+        assert!(TestArgs::try_parse_from(extra).is_err());
+    }
     #[test]
     fn private_dataspace_cli_selector_is_typed_and_fail_closed() {
         use clap::Parser as _;

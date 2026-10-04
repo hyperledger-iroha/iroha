@@ -19,7 +19,8 @@ use std::{
 
 mod compress_selectors;
 
-/// Disjoint fixed-column modes, with constant taking precedence over binary.
+/// Disjoint diagnostic value classes, with constant taking precedence over binary.
+/// Canonical storage separately chooses its smallest eligible payload, including sparse zero.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct FixedColumnModeCounts {
     pub(crate) constant: usize,
@@ -42,41 +43,36 @@ impl FixedColumnModeCounts {
 /// Classifies the actual field values without evaluating rational assignments.
 #[derive(Debug)]
 pub(crate) struct FixedColumnModeAccumulator<F: Field> {
-    first: Option<Assigned<F>>,
-    constant: bool,
-    binary: bool,
+    encoding: super::fixed_column_codec::FixedColumnAccumulator<F>,
 }
 
 impl<F: Field> FixedColumnModeAccumulator<F> {
     pub(crate) fn new() -> Self {
         Self {
-            first: None,
-            constant: true,
-            binary: true,
+            encoding: super::fixed_column_codec::FixedColumnAccumulator::new(),
         }
     }
-
-    /// Zero multiplicities do not contribute a value to the column.
     pub(crate) fn observe(&mut self, value: Assigned<F>, multiplicity: usize) {
-        if multiplicity == 0 {
-            return;
-        }
-        // Assigned equality includes zero denominators and equivalent fractions, so this
-        // requires neither individual inversions nor an expanded copy of the column.
-        let first = self.first.get_or_insert(value);
-        self.constant = self.constant && value == *first;
-        self.binary =
-            self.binary && (value == Assigned::Zero || value == Assigned::Trivial(F::ONE));
+        self.encoding.observe(value, multiplicity);
     }
-
-    pub(crate) fn finish(self) -> FixedColumnModeCounts {
-        assert!(self.first.is_some(), "fixed-column domains are nonempty");
-        if self.constant {
+    pub(crate) fn encoded_bytes(&self, scalar_bytes: usize) -> Option<u64> {
+        self.encoding
+            .encoding(scalar_bytes)
+            .ok()?
+            .payload_bytes
+            .checked_add(1)
+    }
+    pub(crate) fn finish(&self) -> FixedColumnModeCounts {
+        assert!(
+            self.encoding.nonempty(),
+            "fixed-column domains are nonempty"
+        );
+        if self.encoding.constant() {
             FixedColumnModeCounts {
                 constant: 1,
                 ..Default::default()
             }
-        } else if self.binary {
+        } else if self.encoding.binary() {
             FixedColumnModeCounts {
                 binary: 1,
                 ..Default::default()
@@ -87,6 +83,39 @@ impl<F: Field> FixedColumnModeAccumulator<F> {
                 ..Default::default()
             }
         }
+    }
+}
+
+/// Exact bytes and diagnostic value classes share one actual assignment observation.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FixedColumnResourceProfile {
+    pub(crate) modes: FixedColumnModeCounts,
+    pub(crate) encoded_bytes: Option<u64>,
+}
+impl Default for FixedColumnResourceProfile {
+    fn default() -> Self {
+        Self {
+            modes: FixedColumnModeCounts::default(),
+            encoded_bytes: Some(0),
+        }
+    }
+}
+impl FixedColumnResourceProfile {
+    pub(crate) fn observe(
+        &mut self,
+        column: &FixedColumnModeAccumulator<impl Field>,
+        scalar_bytes: usize,
+    ) {
+        self.modes.add(column.finish());
+        self.encoded_bytes = self
+            .encoded_bytes
+            .and_then(|bytes| bytes.checked_add(column.encoded_bytes(scalar_bytes)?));
+    }
+    pub(crate) fn add(&mut self, other: Self) {
+        self.modes.add(other.modes);
+        self.encoded_bytes = self
+            .encoded_bytes
+            .and_then(|bytes| bytes.checked_add(other.encoded_bytes?));
     }
 }
 
@@ -2096,8 +2125,17 @@ impl<F: Field> ConstraintSystem<F> {
         &self,
         selectors: &[Vec<bool>],
     ) -> FixedColumnModeCounts {
+        self.compressed_selector_resource_profile(selectors, 32)
+            .modes
+    }
+
+    pub(crate) fn compressed_selector_resource_profile(
+        &self,
+        selectors: &[Vec<bool>],
+        scalar_bytes: usize,
+    ) -> FixedColumnResourceProfile {
         assert_eq!(selectors.len(), self.num_selectors);
-        compress_selectors::combination_modes::<F>(
+        compress_selectors::combination_resource_profile::<F>(
             &selectors
                 .iter()
                 .cloned()
@@ -2112,20 +2150,29 @@ impl<F: Field> ConstraintSystem<F> {
                 })
                 .collect::<Vec<_>>(),
             self.degree(),
+            scalar_bytes,
         )
     }
 
     pub(crate) fn direct_selector_modes(&self, selectors: &[Vec<bool>]) -> FixedColumnModeCounts {
+        self.direct_selector_resource_profile(selectors, 32).modes
+    }
+
+    pub(crate) fn direct_selector_resource_profile(
+        &self,
+        selectors: &[Vec<bool>],
+        scalar_bytes: usize,
+    ) -> FixedColumnResourceProfile {
         assert_eq!(selectors.len(), self.num_selectors);
-        let mut modes = FixedColumnModeCounts::default();
+        let mut profile = FixedColumnResourceProfile::default();
         for selector in selectors {
             let active = selector.iter().filter(|&&active| active).count();
             let mut column = FixedColumnModeAccumulator::new();
             column.observe(Assigned::Trivial(F::ONE), active);
             column.observe(Assigned::Zero, selector.len() - active);
-            modes.add(column.finish());
+            profile.observe(&column, scalar_bytes);
         }
-        modes
+        profile
     }
 
     /// Returns a configure-only lower bound on the number of fixed columns produced by selector

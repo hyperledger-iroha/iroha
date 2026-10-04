@@ -118,7 +118,7 @@ maintenance = { status = "actively-developed" }
 
 [dependencies]
 iroha_fs = { workspace = true }
-iroha_core_privacy = { workspace = true }
+iroha_core_privacy = { workspace = true, default-features = false }
 iroha_core_timed_ovn = { workspace = true }
 iroha_allocation = { workspace = true }
 iroha_model_base = { workspace = true }

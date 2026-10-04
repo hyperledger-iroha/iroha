@@ -65,12 +65,14 @@ def test_asset_balance_rejects_noncanonical_or_untyped_quantities(quantity: obje
                 {
                     "items": [
                         {
-                            "asset_id": "canonical-ds-id#adult@is",
+                            "asset": "canonical-ds-id",
                             "asset_alias": "ds#wonderland.is",
+                            "scope": "global",
+                            "account_id": "adult@is",
                             "quantity": quantity,
                         }
                     ],
-                    "total": 1,
+                    "next_cursor": None,
                 },
             )
         ]

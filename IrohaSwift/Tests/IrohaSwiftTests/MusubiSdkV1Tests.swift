@@ -1851,7 +1851,10 @@ final class MusubiSdkV1Tests: XCTestCase {
                 request: try jsonData(fixtureRoute["request"])
             )
             XCTFail("a non-success response must retain HTTP status classification")
-        } catch let ToriiClientError.httpStatus(code, message, rejectCode) {
+        } catch let ToriiClientError.api(apiError) {
+            let code = apiError.status
+            let message: String? = apiError.message
+            let rejectCode = apiError.rejectCode
             XCTAssertEqual(code, 503)
             XCTAssertEqual(message?.utf8.count, 4 * 1024)
             XCTAssertEqual(rejectCode, "MUSUBI_UNAVAILABLE")

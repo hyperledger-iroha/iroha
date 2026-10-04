@@ -571,39 +571,6 @@ impl_recursive_circuit!(
     "Kagemusha Ep recursive state"
 );
 
-/// Build both mutually-audited recursive circuits from one exact state transition.
-pub(super) fn build_kagemusha_recursive_state_pair_v1(
-    eq_params: &ParamsIPA<EqAffine>,
-    ep_params: &ParamsIPA<EpAffine>,
-    witness: KagemushaRecursiveStateWitnessV1<'_>,
-) -> Result<
-    (
-        KagemushaRecursiveStateEqCircuitV1,
-        KagemushaRecursiveStateEpCircuitV1,
-        [u8; 32],
-        [u8; 32],
-    ),
-    String,
-> {
-    if witness.hash_claim.is_none() {
-        return Err("recursive state requires its authenticated complete SHA claim".to_owned());
-    }
-    match build_recursive_state_pair_impl_v1(
-        eq_params,
-        ep_params,
-        witness,
-        false,
-        RecursiveStateConstructionV1::Production,
-    )? {
-        RecursiveStateBuildV1::Authenticated(eq, ep, eq_audit, ep_audit) => {
-            Ok((eq, ep, eq_audit, ep_audit))
-        }
-        RecursiveStateBuildV1::Messages(_, _) => {
-            Err("recursive state discovery cannot produce an authenticated circuit".to_owned())
-        }
-    }
-}
-
 pub(super) enum RecursiveStateBuildV1 {
     Authenticated(
         KagemushaRecursiveStateEqCircuitV1,
@@ -612,31 +579,6 @@ pub(super) enum RecursiveStateBuildV1 {
         DigestV1,
     ),
     Messages(Vec<Vec<u8>>, Vec<Vec<u8>>),
-}
-
-/// Discover exact typed messages without exposing an unauthenticated circuit or changing bytes.
-///
-/// The queue depends on state/Guard semantics and already-existing incoming/mint proofs. Neither
-/// this state's successor recursive history nor its deferred audit is hashed, so the completed
-/// claim may subsequently be merged into that history without creating a self-reference.
-pub(super) fn recursive_state_sha_messages_v1(
-    eq_params: &ParamsIPA<EqAffine>,
-    ep_params: &ParamsIPA<EpAffine>,
-    mut witness: KagemushaRecursiveStateWitnessV1<'_>,
-) -> Result<(Vec<Vec<u8>>, Vec<Vec<u8>>), String> {
-    witness.hash_claim = None;
-    match build_recursive_state_pair_impl_v1(
-        eq_params,
-        ep_params,
-        witness,
-        true,
-        RecursiveStateConstructionV1::Production,
-    )? {
-        RecursiveStateBuildV1::Messages(eq, ep) => Ok((eq, ep)),
-        RecursiveStateBuildV1::Authenticated(_, _, _, _) => {
-            Err("recursive state discovery unexpectedly constructed a circuit".to_owned())
-        }
-    }
 }
 
 /// Closed construction dispatch. The shipping variant preserves the explicit refusal.

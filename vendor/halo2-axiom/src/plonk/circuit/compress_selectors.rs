@@ -1,4 +1,7 @@
-use super::{Assigned, Expression, FixedColumnModeAccumulator, FixedColumnModeCounts};
+use super::{
+    Assigned, Expression, FixedColumnModeAccumulator, FixedColumnModeCounts,
+    FixedColumnResourceProfile,
+};
 use ff::Field;
 
 /// This describes a selector and where it is activated.
@@ -159,10 +162,18 @@ pub(super) fn combination_modes<F: Field>(
     selectors: &[SelectorDescription],
     max_degree: usize,
 ) -> FixedColumnModeCounts {
+    combination_resource_profile::<F>(selectors, max_degree, 32).modes
+}
+
+pub(super) fn combination_resource_profile<F: Field>(
+    selectors: &[SelectorDescription],
+    max_degree: usize,
+    scalar_bytes: usize,
+) -> FixedColumnResourceProfile {
     let n = selectors
         .first()
         .map_or(0, |selector| selector.activations.len());
-    let mut modes = FixedColumnModeCounts::default();
+    let mut modes = FixedColumnResourceProfile::default();
     for combination in plan(&borrowed_descriptions(selectors), max_degree) {
         let mut column = FixedColumnModeAccumulator::new();
         let mut covered = 0;
@@ -182,7 +193,7 @@ pub(super) fn combination_modes<F: Field>(
             Assigned::Zero,
             n.checked_sub(covered).expect("disjoint selector rows"),
         );
-        modes.add(column.finish());
+        modes.observe(&column, scalar_bytes);
     }
     modes
 }

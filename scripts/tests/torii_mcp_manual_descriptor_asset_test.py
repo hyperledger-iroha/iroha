@@ -14,9 +14,9 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_torii/src/mcp.rs"
 ASSET_PATH = ROOT / "crates/iroha_torii/src/mcp/manual_tool_descriptors_v1.json"
 # Manual asset formatting owner: one-space JSON indentation, enforced below.
-EXPECTED_ASSET_LENGTH = 109_610
-EXPECTED_ASSET_SHA256 = "dd5712b9432008b1c55ae38eb96ffd8ea833a65d9c58b70cce8263269c38c90e"
-EXPECTED_SEMANTIC_SHA256 = "f546351a80bd7d7d3ed4d0437068b9ca4845fde56b12cbfe909b4e1f7c9a748d"
+EXPECTED_ASSET_LENGTH = 108_863
+EXPECTED_ASSET_SHA256 = "0e47d1ac4b3b54a3c7e3f89f638e5604768147fbd13ba00bdc8ce76647bc5a38"
+EXPECTED_SEMANTIC_SHA256 = "ec11b42c21b8f09666b2b0b96b058b9ad1202b0c90efe8e70af705e391bec643"
 EXPECTED_HISTORICAL_RUST_PREIMAGE_SHA256 = (
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4"
 )
@@ -24,7 +24,7 @@ EXPECTED_RETAINED_DIRECT_SHA256 = (
     "82bd748c1058777b8bfd8dda6947c3dd556d4c383bed07ea9830664f78170f6e"
 )
 EXPECTED_LOADER_SOURCE_SHA256 = (
-    "f3a0a64f1e46c5a5368b0f59a7f6218f858134eceb9af27021bfbd24b9e4eb30"
+    "43d633a1ddced4591e42f4515d3d16bc60a2a83dc110bfaaeb4e8027ebadffa5"
 )
 EXPECTED_WRAPPERS = (
     ('iroha_connect_ws_ticket_tool', 'iroha.connect.ws.ticket'),
@@ -102,6 +102,25 @@ RETAINED_DIRECT_BUILDERS = (
     "iroha_transactions_submit_tool",
     "iroha_transactions_submit_and_wait_tool",
 )
+# Collection tools name their query shape; the Rust loader expands the marker
+# into the one shared definition of the collection query controls.
+COLLECTION_QUERY_MARKER = "x-iroha-mcp-collection-query"
+EXPECTED_COLLECTION_SHAPES = {
+    "iroha.accounts.list": ("get", None),
+    "iroha.accounts.query": ("post", None),
+    "iroha.domains.list": ("get", None),
+    "iroha.domains.query": ("post", None),
+    "iroha.assets.definitions": ("get", None),
+    "iroha.assets.definitions.query": ("post", None),
+    "iroha.nfts.query": ("post", None),
+    "iroha.rwas.query": ("post", None),
+    "iroha.accounts.transactions": ("history_get", "account_id"),
+    "iroha.accounts.transactions.query": ("history_post", "account_id"),
+    "iroha.accounts.assets": ("get", "account_id"),
+    "iroha.accounts.assets.query": ("post", "account_id"),
+    "iroha.assets.holders": ("get", "definition_id"),
+    "iroha.assets.holders.query": ("post", "definition_id"),
+}
 EXPECTED_RECORD_KEYS = (
     "function",
     "name",
@@ -561,6 +580,38 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
                     (1, 100, 25),
                 )
             self.assertIn("Optional canonical target authentication", descriptors[name]["description"])
+
+    def test_collection_descriptors_declare_only_their_query_shape(self) -> None:
+        descriptors = {
+            record["name"]: record for record in _parse_asset(self.asset)["descriptors"]
+        }
+        for name, (shape, path_key) in EXPECTED_COLLECTION_SHAPES.items():
+            with self.subTest(name=name):
+                record = descriptors[name]
+                schema = record["input_schema"]
+                self.assertEqual(schema.get(COLLECTION_QUERY_MARKER), shape)
+                self.assertIs(schema.get("additionalProperties"), False)
+                self.assertEqual(
+                    record["method"], "POST" if shape.endswith("post") else "GET"
+                )
+                transport = {"headers", "accept"}
+                if path_key is None:
+                    self.assertNotIn("required", schema)
+                    self.assertEqual(set(schema["properties"]), transport)
+                else:
+                    self.assertEqual(schema.get("required"), ["path"])
+                    self.assertEqual(set(schema["properties"]), transport | {"path"})
+                    path = schema["properties"]["path"]
+                    self.assertEqual(path.get("required"), [path_key])
+                    self.assertIs(path.get("additionalProperties"), False)
+                for needle in ("Fields:", "Example:", "`next_cursor` as `cursor`"):
+                    self.assertIn(needle, record["description"])
+                self.assertEqual(
+                    "newest first" in record["description"], shape.startswith("history")
+                )
+        for name, record in descriptors.items():
+            if name not in EXPECTED_COLLECTION_SHAPES:
+                self.assertNotIn(COLLECTION_QUERY_MARKER, record["input_schema"], name)
 
     def test_contract_artifacts_require_exact_dataspace_and_hash(self) -> None:
         descriptors = {record["name"]: record for record in _parse_asset(self.asset)["descriptors"]}

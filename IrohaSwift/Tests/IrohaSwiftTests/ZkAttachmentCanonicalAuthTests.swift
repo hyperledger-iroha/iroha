@@ -20,9 +20,7 @@ final class ZkAttachmentCanonicalAuthTests: XCTestCase {
     private var auth: ToriiCanonicalRequestAuth {
         ToriiCanonicalRequestAuth(
             accountId: accountId,
-            privateKey: seed,
-            timestampMs: timestampMs,
-            nonce: nonce
+            privateKey: seed
         )
     }
 
@@ -34,7 +32,11 @@ final class ZkAttachmentCanonicalAuthTests: XCTestCase {
             session: URLSession(configuration: configuration),
             localSigningContext: withContext
                 ? ToriiLocalSigningContext(networkId: TestNetworkIds.canonical)
-                : nil
+                : nil,
+            canonicalRequestFreshness: ToriiCanonicalRequestFreshness(
+                timestampMs: { [timestampMs] in timestampMs },
+                nonce: { [nonce] in nonce }
+            )
         )
     }
 

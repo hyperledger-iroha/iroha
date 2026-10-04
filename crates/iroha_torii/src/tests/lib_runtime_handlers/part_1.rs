@@ -483,18 +483,6 @@ pub fn mk_app_state_for_tests_with_world_and_push(
 ) -> SharedAppState {
     mk_app_state_for_tests_with_world_and_options(world, None, None, None, Some(push))
 }
-#[cfg(feature = "app_api")]
-pub fn reconfigure_sorafs_runtime_for_tests(
-    app: SharedAppState,
-    sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>,
-    sorafs_node: sorafs_node::NodeHandle,
-) -> SharedAppState {
-    let mut inner =
-        Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state for reconfigure"));
-    inner.sorafs_cache = sorafs_cache;
-    inner.sorafs_node = sorafs_node;
-    Arc::new(inner)
-}
 pub(crate) fn app_auth_test_guard(
     config: crate::app_auth::CanonicalRequestAuthConfig,
 ) -> impl Drop {
