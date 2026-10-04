@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 import unittest
 
@@ -53,15 +54,16 @@ class AppleNativeReleaseProfileTests(unittest.TestCase):
 
     def test_packaging_limits_remain_the_existing_release_limits(self) -> None:
         specification = importlib.util.spec_from_file_location(
-            "norito_renderer_budget", ROOT / "scripts/render_norito_bridge_podspec.py"
+            "norito_archive_budget", ROOT / "scripts/validate_norito_bridge_archive.py"
         )
         self.assertIsNotNone(specification)
         self.assertIsNotNone(specification.loader)
-        renderer = importlib.util.module_from_spec(specification)
-        specification.loader.exec_module(renderer)
-        self.assertEqual(renderer.MAX_ENTRY_BYTES, 256 * 1024 * 1024)
-        self.assertEqual(renderer.MAX_ARCHIVE_BYTES, 512 * 1024 * 1024)
-        self.assertEqual(renderer.MAX_TOTAL_UNCOMPRESSED_BYTES, 1024 * 1024 * 1024)
+        archive = importlib.util.module_from_spec(specification)
+        sys.modules[specification.name] = archive
+        specification.loader.exec_module(archive)
+        self.assertEqual(archive.MAX_ENTRY_BYTES, 256 * 1024 * 1024)
+        self.assertEqual(archive.MAX_ARCHIVE_BYTES, 512 * 1024 * 1024)
+        self.assertEqual(archive.MAX_TOTAL_UNCOMPRESSED_BYTES, 1024 * 1024 * 1024)
 
     def test_all_five_slice_commands_and_provenance_paths_use_the_same_profile(self) -> None:
         builder = (ROOT / "scripts/build_norito_xcframework.sh").read_text()

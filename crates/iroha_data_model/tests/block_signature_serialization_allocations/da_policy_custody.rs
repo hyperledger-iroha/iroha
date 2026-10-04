@@ -4,13 +4,11 @@ use iroha_allocation::{
     AllocationBudget, ChargedBuffer, ChargedBufferFromChargeError, SharedFromChargeError,
 };
 use iroha_crypto::Hash;
-use iroha_data_model::{
-    da::commitment::{
-        DaProofPolicy, DaProofPolicyBundle, DaProofPolicyCustodyError, DaProofScheme,
-        PreparedDaProofPolicyBundle,
-    },
-    nexus::{DataSpaceId, LaneId},
+use iroha_data_model::da::commitment::{
+    DaProofPolicy, DaProofPolicyBundle, DaProofPolicyCustodyError, DaProofScheme,
+    PreparedDaProofPolicyBundle,
 };
+use iroha_model_base::topology::{DataSpaceId, LaneId};
 use norito::core::SequenceSpan;
 fn fixture() -> DaProofPolicyBundle {
     DaProofPolicyBundle::new(vec![
@@ -226,7 +224,7 @@ fn da_policy_every_physical_refusal_keeps_original_siblings_before_string_fill_a
                 matches!(error,DaProofPolicyCustodyError::Buffer(ChargedBufferFromChargeError::Allocator {layout}) if layout==layouts[selected])
             );
         }
-        let expected = if selected < 2 {
+        let expected: usize = if selected < 2 {
             layouts[..2].iter().map(Layout::size).sum()
         } else {
             layouts.iter().map(Layout::size).sum()

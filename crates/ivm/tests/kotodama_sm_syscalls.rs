@@ -53,7 +53,7 @@ fn install_sm_entrypoint(
             norito::json::Value::String(value.to_string()),
         );
     }
-    let record = ivm::encode_argument_record_from_json(
+    let record = ivm_abi::arguments::encode_argument_record_from_json(
         schema,
         &Json::from(norito::json::Value::Object(payload)),
     )

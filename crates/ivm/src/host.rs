@@ -3869,7 +3869,7 @@ impl IVMHost for DefaultHost {
                 let blind_kind = crate::private_input::validate_private_numeric_envelope(&blind)?;
                 let commitment =
                     crate::private_input::valcom(value_kind, &value, blind_kind, &blind)?;
-                let output = crate::numeric_tlv::encode_int(&commitment)?;
+                let output = ivm_abi::numeric_tlv::encode_int(&commitment)?;
                 let pointer = vm.alloc_host_tlv(&output)?;
                 vm.set_register(10, pointer);
                 Ok(PRIVATE_NUMERIC_VALCOM_GAS)
@@ -6297,7 +6297,7 @@ mod tests {
         let mut host = DefaultHost::new();
         let value = iroha_primitives::bigint::BigInt::from_twos_bytes(&[0x7f; 64])
             .expect("wide signed integer");
-        let inner = crate::numeric_tlv::encode_int(&value).expect("canonical Int pointer");
+        let inner = ivm_abi::numeric_tlv::encode_int(&value).expect("canonical Int pointer");
         let source = vm.alloc_input_tlv(&inner).expect("allocate Int");
         vm.set_register(10, source);
         assert_eq!(

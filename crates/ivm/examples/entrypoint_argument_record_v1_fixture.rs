@@ -3,7 +3,8 @@ use std::{env, fs, path::Path};
 #[path = "support/atomic_write.rs"]
 mod fixture_io;
 use iroha_primitives::json::Json;
-use ivm::{ProgramMetadata, encode_argument_record_from_json};
+use ivm::ProgramMetadata;
+use ivm_abi::arguments::encode_argument_record_from_json;
 use norito::json::{Map, Value};
 const SOURCE: &str = r#"seiyaku ArgumentRecordFixture {
   view fn quote(int count, int exact_int, decimal exact_decimal, quantity exact_quantity, bool active, string memo, bytes digest) -> int {
@@ -88,7 +89,7 @@ pub fn render_fixture() -> String {
         ("codec", Value::from("EntrypointArgumentRecordV1")),
         (
             "generator",
-            Value::from("ivm::encode_argument_record_from_json"),
+            Value::from("ivm_abi::arguments::encode_argument_record_from_json"),
         ),
         (
             "contract",

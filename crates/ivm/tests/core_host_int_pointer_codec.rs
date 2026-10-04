@@ -28,7 +28,7 @@ fn core_host_int_pointer_codec_preserves_signed_512_boundary() {
     for signed in [[0x7f_u8; 64], [0x80_u8; 64]] {
         let value = iroha_primitives::bigint::BigInt::from_twos_bytes(&signed)
             .expect("signed 512-bit value");
-        let inner = ivm::numeric_tlv::encode_int(&value).expect("Int pointer");
+        let inner = ivm_abi::numeric_tlv::encode_int(&value).expect("Int pointer");
         let outer = make_tlv(PointerType::NoritoBytes, &inner);
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(CoreHost::new());

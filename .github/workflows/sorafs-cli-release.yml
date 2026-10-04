@@ -149,7 +149,7 @@ on:
       - "scripts/tests/check_sorafs_mobile_parity_reports_test.py"
       - "scripts/tests/check_build_efficiency_provenance_test.py"
       - "scripts/tests/check_sorafs_provider_ingest_runtime_contract_test.py"
-      - "IrohaSwift/IrohaSwift.podspec"
+      - "IrohaSwift/Package.swift"
       - "IrohaSwift/VERSION"
       - "IrohaSwift/README.md"
       - "specs/sdk/swift/index.md"

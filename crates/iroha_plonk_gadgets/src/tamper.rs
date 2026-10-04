@@ -14,6 +14,17 @@
 //! the floor planner and the checker are the production ones. Free inputs
 //! that a circuit never uses are not pinned by anything and would be
 //! reported; circuits under test copy or expose every value they assign.
+//!
+//! # Scope
+//!
+//! An empty result shows that every assigned cell is pinned by a gate, a
+//! lookup or a copy. It does not show that the relation is semantically
+//! complete. A free witness that is only copied into a hash input is pinned
+//! by that copy, so a one-cell change is caught, yet a prover who assigns a
+//! different value consistently (every copy and every downstream digest
+//! recomputed) still satisfies the circuit. Whether such a value is bound to
+//! anything the verifier checks is a property of the relation, which needs
+//! its own consistent-forgery tests.
 
 use iroha_pasta::PastaField;
 use iroha_plonk::{

@@ -21,7 +21,6 @@ iroha_primitives = { workspace = true }
 iroha_torii_shared = { workspace = true }
 iroha_version = { workspace = true }
 ivm_abi = { workspace = true }
-ivm = { workspace = true }
 ivm_artifact_admission = { path = "../ivm_artifact_admission" }
 norito = { workspace = true, default-features = false, features = ["json"] }
 eyre = { workspace = true }

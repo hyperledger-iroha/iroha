@@ -195,7 +195,8 @@ fn glue_proofs_on_both_curves() {
     assert_eq!(vesta, pallas);
 }
 
-/// The prototype statement digest over 32 witness fields (folded prefix).
+/// The prototype statement digest over its 25 fields as witnesses (folded
+/// prefix).
 fn statement<F: PoseidonField>(
     chips: &mut Chips<F>,
     region: &mut Region<'_, F>,
@@ -224,10 +225,10 @@ where
 }
 
 #[test]
-#[ignore = "k = 10 proofs of the 17-block statement digest; run in release"]
+#[ignore = "k = 10 proofs of the 13-block statement digest; run in release"]
 fn statement_digest_proofs_on_both_curves() {
     let vesta = statement_case::<Eq>();
     let pallas = statement_case::<Ep>();
     assert_eq!(vesta, pallas);
-    println!("statement digest proof bytes (k = 10, 17 Pow5 blocks): {vesta}");
+    println!("statement digest proof bytes (k = 10, 13 Pow5 blocks): {vesta}");
 }

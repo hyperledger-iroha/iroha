@@ -46,6 +46,16 @@ impl ToriiRoutedReadMemoryBudget {
         })
     }
 }
+/// Configuration geometry only validates framing before acquiring the owner.
+fn torii_routed_read_request_preflight_plan(
+    app: &SharedAppState,
+) -> Result<ToriiRoutedReadRequestDecodePlan, Response> {
+    ToriiRoutedReadMemoryBudget::new(
+        app.query_fanout_working_set_bytes,
+        app.torii_proxy_max_response_bytes,
+    )?
+    .request_decode_plan()
+}
 fn torii_routed_read_request_decode_plan(
     app: &SharedAppState,
 ) -> Result<ToriiRoutedReadRequestDecodePlan, Response> {

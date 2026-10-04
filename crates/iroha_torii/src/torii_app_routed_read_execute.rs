@@ -24,7 +24,13 @@ async fn resolve_torii_proof_record_for_routes(
     Response,
 > {
     let reservation = try_acquire_query_fanout_memory(app)?;
-    match resolve_torii_proof_record_for_supported_routes(app, routes, proof_id).await {
+    match COLLECTION_READ_MEMORY_RESERVATION
+        .scope(
+            reservation.clone(),
+            resolve_torii_proof_record_for_supported_routes(app, routes, proof_id),
+        )
+        .await
+    {
         Ok((record, diagnostics, routed_by)) => Ok((record, diagnostics, routed_by, reservation)),
         Err(response) => Err(hold_query_fanout_memory_in_response_body(
             response,
@@ -52,10 +58,7 @@ async fn resolve_torii_proof_record_for_supported_routes(
     let mut diagnostics = ToriiFanoutDiagnostics::default();
     let mut last_not_found = None;
     let mut last_route_unavailable = None;
-    let mut budget = ToriiRoutedReadMemoryBudget::new(
-        app.query_fanout_working_set_bytes,
-        app.torii_proxy_max_response_bytes,
-    )?;
+    let mut budget = torii_local_routed_read_budget(app)?;
     let payload_capacity = routes
         .len()
         .checked_add(1)
@@ -252,15 +255,15 @@ where
         Ok(reservation) => reservation,
         Err(response) => return response,
     };
-    let admission = match ToriiRoutedReadMemoryBudget::new(
-        app.query_fanout_working_set_bytes,
+    let admission = ToriiRoutedReadMemoryBudget::from_envelope(
+        match reservation.admitted_envelope(app) {
+            Ok(envelope) => envelope,
+            Err(response) => {
+                return hold_query_fanout_memory_in_response_body(response, reservation);
+            }
+        },
         app.torii_proxy_max_response_bytes,
-    ) {
-        Ok(admission) => admission,
-        Err(response) => {
-            return hold_query_fanout_memory_in_response_body(response, reservation);
-        }
-    };
+    );
     let empty_body: Vec<u8> = Vec::new();
     let request_bytes = match torii_routed_read_request_bytes(
         &path_args,
@@ -276,16 +279,20 @@ where
     if let Err(response) = admission.admit_request_bytes(request_bytes) {
         return hold_query_fanout_memory_in_response_body(response, reservation);
     }
-    let response = execute_torii_trusted_internal_read_for_resolved_routes_admitted::<T>(
-        app,
-        routes,
-        endpoint,
-        path_args,
-        query_string,
-        format,
-        response_label,
-    )
-    .await;
+    let response = COLLECTION_READ_MEMORY_RESERVATION
+        .scope(
+            reservation.clone(),
+            execute_torii_trusted_internal_read_for_resolved_routes_admitted::<T>(
+                app,
+                routes,
+                endpoint,
+                path_args,
+                query_string,
+                format,
+                response_label,
+            ),
+        )
+        .await;
     hold_query_fanout_memory_in_response_body(response, reservation)
 }
 #[cfg(feature = "app_api")]
@@ -318,10 +325,7 @@ where
     let mut diagnostics = ToriiFanoutDiagnostics::default();
     let mut saw_not_found = false;
     let mut saw_route_unavailable = false;
-    let mut budget = match ToriiRoutedReadMemoryBudget::new(
-        app.query_fanout_working_set_bytes,
-        app.torii_proxy_max_response_bytes,
-    ) {
+    let mut budget = match torii_local_routed_read_budget(app) {
         Ok(budget) => budget,
         Err(response) => return response,
     };
@@ -484,10 +488,7 @@ async fn execute_torii_account_read_for_resolved_routes(
     let mut diagnostics = ToriiFanoutDiagnostics::default();
     let mut last_not_found = None;
     let mut last_route_unavailable = None;
-    let mut budget = match ToriiRoutedReadMemoryBudget::new(
-        app.query_fanout_working_set_bytes,
-        app.torii_proxy_max_response_bytes,
-    ) {
+    let mut budget = match torii_local_routed_read_budget(app) {
         Ok(budget) => budget,
         Err(response) => return response,
     };
@@ -591,6 +592,15 @@ async fn execute_incoming_torii_read_request_locally_bounded(
     read_request: ToriiReadProxyRequestV1,
     routing_decision: RoutingDecision,
 ) -> Response {
+    execute_torii_read_request_locally(app, read_request, routing_decision, "proxy").await
+}
+#[cfg(feature = "app_api")]
+async fn execute_torii_read_request_locally(
+    app: &SharedAppState,
+    read_request: ToriiReadProxyRequestV1,
+    routing_decision: RoutingDecision,
+    routed_by: &'static str,
+) -> Response {
     let reservation = match try_acquire_query_fanout_memory(app) {
         Ok(reservation) => reservation,
         Err(response) => return response,
@@ -622,7 +632,12 @@ async fn execute_incoming_torii_read_request_locally_bounded(
     let response = COLLECTION_READ_MEMORY_RESERVATION
         .scope(
             reservation.clone(),
-            execute_torii_read_request_locally(app, read_request, routing_decision, "proxy"),
+            execute_torii_read_request_locally_admitted(
+                app,
+                read_request,
+                routing_decision,
+                routed_by,
+            ),
         )
         .await;
     let response =
@@ -648,15 +663,15 @@ async fn execute_torii_read_for_supported_resolved_routes(
         Ok(reservation) => reservation,
         Err(response) => return response,
     };
-    let admission = match ToriiRoutedReadMemoryBudget::new(
-        app.query_fanout_working_set_bytes,
+    let admission = ToriiRoutedReadMemoryBudget::from_envelope(
+        match reservation.admitted_envelope(app) {
+            Ok(envelope) => envelope,
+            Err(response) => {
+                return hold_query_fanout_memory_in_response_body(response, reservation);
+            }
+        },
         app.torii_proxy_max_response_bytes,
-    ) {
-        Ok(admission) => admission,
-        Err(response) => {
-            return hold_query_fanout_memory_in_response_body(response, reservation);
-        }
-    };
+    );
     let request_bytes = match torii_routed_read_request_bytes(
         &path_args,
         path_args.capacity(),
@@ -671,19 +686,23 @@ async fn execute_torii_read_for_supported_resolved_routes(
     if let Err(response) = admission.admit_request_bytes(request_bytes) {
         return hold_query_fanout_memory_in_response_body(response, reservation);
     }
-    let response = execute_torii_read_fanout_for_resolved_routes_admitted(
-        app,
-        routes,
-        route_scope,
-        merge,
-        endpoint,
-        path_args,
-        query_string,
-        body,
-        response_format,
-        proxy_memory,
-    )
-    .await;
+    let response = COLLECTION_READ_MEMORY_RESERVATION
+        .scope(
+            reservation.clone(),
+            execute_torii_read_fanout_for_resolved_routes_admitted(
+                app,
+                routes,
+                route_scope,
+                merge,
+                endpoint,
+                path_args,
+                query_string,
+                body,
+                response_format,
+                proxy_memory,
+            ),
+        )
+        .await;
     hold_query_fanout_memory_in_response_body(response, reservation)
 }
 #[cfg(feature = "app_api")]
@@ -709,7 +728,7 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
                 Ok(query) => query,
                 Err(response) => return response,
             };
-        let (query, _) = match prepare_collection_forward(app, &target, query) {
+        let (query, _, _reservation) = match prepare_collection_forward(app, &target, query) {
             Ok(prepared) => prepared,
             Err(error) => return error.into_response(),
         };
@@ -793,7 +812,10 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
                 let collected = match collect_torii_pipeline_status_json_payloads(
                     &routes,
                     &hash,
-                    app.query_fanout_working_set_bytes,
+                    match current_routed_read_memory_envelope(app) {
+                        Ok(envelope) => envelope.working_set_bytes,
+                        Err(response) => return response,
+                    },
                     app.torii_proxy_max_response_bytes,
                     |route| {
                         execute_torii_read_for_route(
@@ -826,7 +848,10 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
             }
             let collected = match collect_torii_singleton_json_payloads(
                 &routes,
-                app.query_fanout_working_set_bytes,
+                match current_routed_read_memory_envelope(app) {
+                    Ok(envelope) => envelope.working_set_bytes,
+                    Err(response) => return response,
+                },
                 app.torii_proxy_max_response_bytes,
                 |route| {
                     execute_torii_read_for_route(

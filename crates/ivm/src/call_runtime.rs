@@ -506,7 +506,7 @@ mod tests {
         let mut vm = IVM::new(100_000);
         let pointer = vm
             .alloc_host_tlv(
-                &crate::numeric_tlv::encode_envelope(PointerType::Blob, b"value").unwrap(),
+                &ivm_abi::numeric_tlv::encode_envelope(PointerType::Blob, b"value").unwrap(),
             )
             .unwrap();
         let before = vm.remaining_gas();
@@ -523,7 +523,9 @@ mod tests {
             Err(VMError::OutOfGas)
         );
         let pointer = vm
-            .alloc_host_tlv(&crate::numeric_tlv::encode_envelope(PointerType::Int, b"bad").unwrap())
+            .alloc_host_tlv(
+                &ivm_abi::numeric_tlv::encode_envelope(PointerType::Int, b"bad").unwrap(),
+            )
             .unwrap();
         vm.set_gas_limit(100_000);
         assert_eq!(
@@ -543,7 +545,7 @@ mod tests {
         let invalid_payload = b"not a cursor";
         let invalid_pointer = vm
             .alloc_host_tlv(
-                &crate::numeric_tlv::encode_envelope(PointerType::NoritoBytes, invalid_payload)
+                &ivm_abi::numeric_tlv::encode_envelope(PointerType::NoritoBytes, invalid_payload)
                     .unwrap(),
             )
             .unwrap();
@@ -572,7 +574,7 @@ mod tests {
         let valid_payload = cursor.encode_frame().unwrap();
         let valid_pointer = vm
             .alloc_host_tlv(
-                &crate::numeric_tlv::encode_envelope(PointerType::NoritoBytes, &valid_payload)
+                &ivm_abi::numeric_tlv::encode_envelope(PointerType::NoritoBytes, &valid_payload)
                     .unwrap(),
             )
             .unwrap();
@@ -603,7 +605,7 @@ mod tests {
         let payload = cursor.encode_frame().unwrap();
         let pointer = vm
             .alloc_host_tlv(
-                &crate::numeric_tlv::encode_envelope(PointerType::NoritoBytes, &payload).unwrap(),
+                &ivm_abi::numeric_tlv::encode_envelope(PointerType::NoritoBytes, &payload).unwrap(),
             )
             .unwrap();
         (
@@ -788,7 +790,7 @@ mod tests {
         for value in [BigInt::from(0), BigInt::pow10(120).unwrap()] {
             let record = crate::private_input::int_record(value).unwrap();
             let envelope =
-                crate::numeric_tlv::encode_envelope(PointerType::Int, &record.payload).unwrap();
+                ivm_abi::numeric_tlv::encode_envelope(PointerType::Int, &record.payload).unwrap();
             let pointer = vm.alloc_host_private_tlv(&envelope).unwrap();
             vm.memory.store_u64(slot, pointer).unwrap();
             vm.record_memory_store_privacy(slot, 8, true);

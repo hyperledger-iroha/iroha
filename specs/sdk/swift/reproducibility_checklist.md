@@ -14,7 +14,7 @@ directory; generated native artifacts and evidence do not belong in Git.
 
 ## Prerequisites and directories
 
-- A macOS host with the approved Xcode toolchain, Swift 5.9 or newer, CocoaPods,
+- A macOS host with the approved full Xcode toolchain, Swift 5.9 or newer,
   and isolated Python 3.12. Record the actual tool identities.
 - Exact Rust 1.93.1 `cargo`, `rustc`, and `rustdoc`, with all five targets:
   `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `x86_64-apple-ios`,
@@ -31,13 +31,14 @@ directory; generated native artifacts and evidence do not belong in Git.
 - Reviewed canonical Norito fixtures and two absent absolute external fixture
   publication roots when regeneration is required.
 
-The shared pod, tag, and archive SemVer comes only from `IrohaSwift/VERSION`.
+The Swift package, tag, and archive SemVer comes only from `IrohaSwift/VERSION`.
 Select session paths before invoking the builder:
 
 ```bash
 export SWIFT_RELEASE_VERSION="$(cat IrohaSwift/VERSION)"
 export SWIFT_RELEASE_DIR=/absolute/release-evidence/swift-release
-export SWIFT_RELEASE_LOCKFILE="$PWD/Cargo.lock"
+export SWIFT_RELEASE_LOCKFILE=/absolute/read-only-release-input/Cargo.lock
+export IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH="$SWIFT_RELEASE_LOCKFILE"
 export CARGO_TARGET_DIR=/absolute/cache/iroha-apple-cargo
 export NORITO_BRIDGE_BUILD_DIR=/absolute/cache/iroha-apple-build
 export NORITO_BRIDGE_OUT_DIR=/absolute/cache/iroha-apple-artifacts
@@ -73,9 +74,9 @@ release contract before compilation.
 | 2. Verify fixtures | When regenerating, run `cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures --output-root <absent-absolute-external-root>` at two independent roots. Require identical path sets, entry types, modes, completion manifests, and every file byte before applying the reviewed identity-relative tracked patch. Then run `norito-rpc-verify` and `make swift-fixtures-check`. | Both sealed owner-publication identities and tracked-tree verification in `swift_fixture_state.json`. Include fixture changes in the reviewed source before the native build. |
 | 3. Build the native prerequisite | `scripts/build_norito_xcframework.sh --lockfile-path "$SWIFT_RELEASE_LOCKFILE" --archive-output "$NORITO_BRIDGE_ARCHIVE_OUTPUT"` | Exact ABI-25 XCFramework, embedded manifest, source/lock/tool provenance, export checks, and immutable ZIP. All five target libraries become device, universal simulator, and universal macOS slices. |
 | 4. Authenticate the framework | `scripts/check_mobile_sdk_artifacts.sh --apple-only --lockfile-path "$SWIFT_RELEASE_LOCKFILE"` | Current-source validation of the external generation and exact three-slice inventory. Retain the embedded manifest and integrity output. `/usr/bin/unzip -t "$NORITO_BRIDGE_ARCHIVE_OUTPUT"` is an additional archive check. |
-| 5. Run Swift tests | `swift test --package-path IrohaSwift --configuration release --disable-automatic-resolution --scratch-path "$MOBILE_SDK_SWIFT_SCRATCH_DIR"` | Capture `IrohaSwift-tests.log`, successful exit, full test results, and the reviewed `Package.resolved`. Native fixture and crypto tests must execute against the authenticated framework. |
-| 6. Build the Release consumer | `swift build --package-path IrohaSwift --configuration release --disable-automatic-resolution --scratch-path "$MOBILE_SDK_SWIFT_SCRATCH_DIR"` | Capture `IrohaSwift-build.log` and successful native linking. Preserve the workflow's separate fresh SwiftPM ZIP consumer check. |
-| 7. Package and lint CocoaPods | `scripts/package_mobile_sdk_artifacts.sh --apple --lockfile-path "$SWIFT_RELEASE_LOCKFILE" --version "$MOBILE_SDK_VERSION"`, then `ci/check_swift_pod_bridge.sh`. | Exact packaged Apple inventory, checksums, generated checksum-pinned binary podspec, and successful binary/source Release iOS lint logs. |
+| 5. Run complete Swift tests | `ci/check_privacy_swift_sdk.sh` | Capture `IrohaSwift-tests.log`, successful exit, full test results, and the reviewed `Package.resolved`. The gate reauthenticates the external artifact and canonical lock, then executes all package tests with real native fixture, crypto and lifecycle support. |
+| 6. Execute the Release SDK consumer | Use an ordinary external SwiftPM application depending on the public `IrohaSwift` product; run it with `--configuration release --disable-automatic-resolution` and a stable external scratch directory. | Successful native key generation, public-key derivation, directional-key agreement, all-zero peer rejection and exact ABI-25 admission without unsafe linker flags. An SDK library build alone is insufficient. |
+| 7. Package and validate the SwiftPM ZIP | `scripts/package_mobile_sdk_artifacts.sh --apple --lockfile-path "$SWIFT_RELEASE_LOCKFILE" --version "$MOBILE_SDK_VERSION"`; authenticate the result with `scripts/validate_norito_bridge_archive.py` and run the workflow's separate SwiftPM binary-target ZIP consumer. | Exact packaged Apple inventory, authenticated archive and embedded manifest, checksums, package provenance and successful consumer linking. |
 | 8. Capture parity dashboards | `make swift-ci`, with the selected `SWIFT_PARITY_FEED`, `SWIFT_CI_FEED`, and pipeline metadata feed. Copy those exact inputs into the external evidence directory. | `mobile_parity.json`, `mobile_ci.json`, pipeline metadata, and dashboard validation output. Sample feeds establish dashboard validation only; retain actual candidate feeds for release claims. |
 | 9. Export status | Invoke `ci/swift_status_export.sh` with the retained feed/output paths below. | `swift_status.md`, `swift_status.json`, `swift_status.prom`, and persistent `swift_status_state.json`. |
 | 10. Retain consumer smoke evidence | Retain actual sample/XCFramework smoke results, selected destinations, and native artifact identity. | Simulator coverage and physical-device qualification have separate verdicts. An absent or skipped device run does not establish physical qualification. |
@@ -108,9 +109,9 @@ and feeds into an evidence `SHA256SUMS` inventory.
   iOS and Release consumption.
 - SwiftPM's path-based binary target requires the verified framework to be
   materialized before package resolution. A Git tag alone does not install it.
-- CocoaPods lint verifies the package-local archive and source wiring. Public
-  installation readiness additionally requires the immutable release asset,
-  both same-version specs, and a clean registry `pod install`/Release build with
-  signed provenance, as described in the release contract.
+- SwiftPM is the sole supported Swift packaging path. Public installation
+  readiness requires the immutable release asset, reviewed package source,
+  installed ordinary Release consumer and signed provenance, as described in
+  the release contract.
 - Keep generated native artifacts, packages, and evidence external and
   untracked. Only `dist/.gitkeep` belongs in Git under the repository `dist/`.

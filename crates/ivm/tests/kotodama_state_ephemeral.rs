@@ -3,7 +3,7 @@ use iroha_primitives::{
     bigint::BigInt,
     numeric::{Numeric, Quantity},
 };
-use ivm::{CoreHost, IVM, numeric_tlv};
+use ivm::{CoreHost, IVM};
 use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 mod common;
 fn execute_int_result(source: &str) -> i64 {
@@ -40,12 +40,12 @@ fn encoded_order_inversion(quantity: bool) -> (String, String) {
                     .expect("non-negative generated quantity");
                 (
                     value.to_string(),
-                    numeric_tlv::encode_quantity(&value).expect("encode quantity key"),
+                    ivm_abi::numeric_tlv::encode_quantity(&value).expect("encode quantity key"),
                 )
             } else {
                 (
                     numeric.to_string(),
-                    numeric_tlv::encode_decimal(&numeric).expect("encode decimal key"),
+                    ivm_abi::numeric_tlv::encode_decimal(&numeric).expect("encode decimal key"),
                 )
             };
             values.push((numeric, spelling, envelope));

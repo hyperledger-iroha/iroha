@@ -62,7 +62,7 @@ fn argument_host(program: &[u8], payload: &Json) -> Result<DefaultHost, VMError>
         .argument_schema
         .as_ref()
         .expect("parameterized run entrypoint schema");
-    let record = ivm::encode_argument_record_from_json(schema, payload)?;
+    let record = ivm_abi::arguments::encode_argument_record_from_json(schema, payload)?;
     let key: Name = "trigger_event_json".parse().expect("public input key");
     Ok(DefaultHost::new().with_public_inputs(BTreeMap::from([(
         key,

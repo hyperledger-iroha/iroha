@@ -1,9 +1,17 @@
-//! The prototype G1 statement encoding (split lineage, owner approval
-//! pending; not a protocol format): the in-circuit digest equals the native
-//! `StatementV1::digest` on both parities and both relations, the
-//! other-parity limbs go through the canonical S6 encoding (values at or
-//! above the foreign modulus are unsatisfiable, so `s >= p` cannot pass as
-//! `s mod p`), plus the tamper suite and the inventory (17 folded blocks).
+//! The prototype step statement encoding (split lineage, owner approval
+//! pending; not a protocol format) and the canonical limb encodings of spec
+//! S6:
+//!
+//! - the in-circuit statement digest equals the native
+//!   `StatementV1::digest` on both parities and both steps (the lineage
+//!   inputs of a Send are cells, those of a Receive the constant zero);
+//! - foreign limbs go through the canonical S6 encoding: values at or above
+//!   the foreign modulus are unsatisfiable, so `s >= p` cannot pass as
+//!   `s mod p`;
+//! - a word of the circuit's own field decomposes only into its canonical
+//!   limbs (the halves of its canonical encoding);
+//! - the tamper suites and the inventory (13 folded blocks; 4 range checks
+//!   per canonical value).
 
 mod common;
 
@@ -11,7 +19,7 @@ use common::{
     Chips, GadgetCircuit, Inputs, RANGE_COLUMN, Shape, accepts, assigned, extent, lane_columns,
     report,
 };
-use ff::Field as _;
+use ff::{Field as _, PrimeField};
 use iroha_pasta::{Fp, Fq, PastaField, poseidon::PoseidonField};
 use iroha_plonk::{
     check::{CheckFailure, CheckMode, check_circuit},
@@ -22,140 +30,138 @@ use iroha_plonk_gadgets::{
     cells::low_u128,
     poseidon::ROWS_PER_PERMUTATION,
     statement::{
-        STATEMENT_DOMAIN, STATEMENT_FIELDS, StatementCells, StatementV1, StepRelation,
-        assign_foreign_scalar, bytes_to_limbs, foreign_limbs, foreign_value_native, limb_fields,
-        statement_digest,
+        EFFECT_UNION_FIELDS, STATEMENT_DOMAIN, STATEMENT_FIELDS, StatementCells, StatementV1,
+        StepRelation, assign_canonical_limbs, assign_foreign_scalar, bytes_to_limbs,
+        foreign_limbs, foreign_value_native, limb_fields, statement_digest,
     },
     tamper::{Tamper, assigned_advice_cells, check_tampered},
 };
 
-/// Plain statement fields before the effect: scheme (2), credential (2),
-/// asset (2), lifecycle, sequence, next load, predecessor, successor.
+/// Plain statement fields before the lineage inputs and the effect: scheme
+/// (2), asset (2), credential (2), lifecycle, sequence, predecessor,
+/// successor, enabled-controls mask.
 const PLAIN: usize = 11;
-/// `k` of the statement circuits (17 folded blocks, 9-bit limbs).
+/// `k` of the statement circuits (13 folded blocks, 9-bit limbs).
 const K: u32 = 10;
+/// The relation identifier of the sample statements.
+const RELATION_ID: u128 = u128::from_le_bytes(*b"gadget-test-rel1");
 
-/// Inputs: the plain fields, the effect (`arg 1` fields), then the
-/// predecessor's and successor's other-parity limbs. `arg 0` selects the
-/// relation (0 Send, 1 Receive).
-fn statement_program<F: PoseidonField, G: PastaField>(
+/// The lineage inputs (`burned_total`, pending-outgoing root) of `step`.
+const fn lineage_fields(step: StepRelation) -> usize {
+    match step {
+        StepRelation::Send => 2,
+        StepRelation::Receive => 0,
+    }
+}
+
+/// The step of program argument 0 (0 Send, 1 Receive).
+fn step_of(inputs: &Inputs<impl Copy>) -> StepRelation {
+    if inputs.arg(0) == 0 {
+        StepRelation::Send
+    } else {
+        StepRelation::Receive
+    }
+}
+
+/// Inputs: the plain fields, the lineage inputs (Send), then the effect
+/// (`arg 1` fields).
+fn statement_program<F: PoseidonField>(
     chips: &mut Chips<F>,
     region: &mut Region<'_, F>,
     inputs: &Inputs<F>,
 ) -> Result<Vec<Word<F>>, Error> {
+    let step = step_of(inputs);
     let effect = usize::try_from(inputs.arg(1)).map_err(|_| Error::Synthesis)?;
-    let plain = (0..PLAIN + effect)
+    let lineage = lineage_fields(step);
+    let values = (0..PLAIN + lineage + effect)
         .map(|i| inputs.get(i))
         .collect::<Vec<_>>();
-    let words = chips.glue.witnesses(region, &plain)?;
-    let limbs = |first: usize| {
-        inputs
-            .get(first)
-            .zip(inputs.get(first + 1))
-            .map(|(lo, hi)| [low_u128(&lo), low_u128(&hi)])
-    };
-    let mut uint = UintChip::new(&mut chips.glue, &mut chips.range);
-    let predecessor_other =
-        assign_foreign_scalar::<F, G>(&mut uint, region, limbs(PLAIN + effect))?;
-    let successor_other =
-        assign_foreign_scalar::<F, G>(&mut uint, region, limbs(PLAIN + effect + 2))?;
+    let words = chips.glue.witnesses(region, &values)?;
     let cells = StatementCells {
         scheme_id: [&words[0], &words[1]],
-        credential: [&words[2], &words[3]],
-        asset: [&words[4], &words[5]],
+        asset: [&words[2], &words[3]],
+        credential: [&words[4], &words[5]],
         lifecycle: &words[6],
         sequence: &words[7],
-        next_load: &words[8],
-        predecessor: &words[9],
-        predecessor_other: [predecessor_other.lo().word(), predecessor_other.hi().word()],
-        successor: &words[10],
-        successor_other: [successor_other.lo().word(), successor_other.hi().word()],
-        effect: &words[PLAIN..],
-    };
-    let relation = if inputs.arg(0) == 0 {
-        StepRelation::Send
-    } else {
-        StepRelation::Receive
+        predecessor: &words[8],
+        successor: &words[9],
+        enabled_controls: &words[10],
+        burned_total: (lineage > 0).then(|| &words[PLAIN]),
+        pending_outgoing_root: (lineage > 0).then(|| &words[PLAIN + 1]),
+        effect: &words[PLAIN + lineage..],
     };
     Ok(vec![statement_digest(
         &mut chips.sponges[0],
         region,
-        relation,
+        RELATION_ID,
+        step,
         &cells,
     )?])
 }
 
-/// A statement with distinct field values; the other-parity components are
-/// the canonical encodings of `G` elements unless overridden.
-fn sample_statement<F: PoseidonField, G: PastaField>(
-    relation: StepRelation,
-    effect: usize,
-) -> StatementV1<F> {
+/// A statement with distinct field values.
+fn sample_statement<F: PoseidonField>(step: StepRelation, effect: usize) -> StatementV1<F> {
     let bytes = |seed: u8| {
         core::array::from_fn(|i| {
             seed.wrapping_mul(31)
                 .wrapping_add(u8::try_from(i).unwrap_or(0))
         })
     };
+    let send = step == StepRelation::Send;
     StatementV1 {
-        relation,
+        relation_id: RELATION_ID,
+        step,
         scheme_id: bytes(1),
-        credential: bytes(2),
         asset: bytes(3),
+        credential: bytes(2),
         lifecycle: 1,
         sequence: (1 << 70) + 3,
-        next_load: 12,
         predecessor: F::from(0xdead_beef_u64),
-        predecessor_other: (-G::from(5u64)).to_repr(),
         successor: -F::from(77u64),
-        successor_other: G::from(1_000_003u64).to_repr(),
+        enabled_controls: 0,
+        burned_total: if send { 40 } else { 0 },
+        pending_outgoing_root: if send { F::from(1_000_003u64) } else { F::ZERO },
         effect: (0..effect).map(|i| F::from(100 + i as u64)).collect(),
     }
 }
 
 /// The circuit of `statement` and its public digest.
-fn circuit<F: PoseidonField, G: PastaField>(
-    statement: &StatementV1<F>,
-) -> (GadgetCircuit<F>, Vec<F>) {
+fn circuit<F: PoseidonField>(statement: &StatementV1<F>) -> (GadgetCircuit<F>, Vec<F>) {
     let limbs = |bytes: &[u8; 32]| limb_fields::<F>(bytes_to_limbs(bytes));
     let mut inputs = Vec::new();
-    for bytes in [
-        &statement.scheme_id,
-        &statement.credential,
-        &statement.asset,
-    ] {
+    for bytes in [&statement.scheme_id, &statement.asset, &statement.credential] {
         inputs.extend(limbs(bytes));
     }
     inputs.extend([
         F::from(statement.lifecycle),
         F::from_u128(statement.sequence),
-        F::from_u128(statement.next_load),
         statement.predecessor,
         statement.successor,
+        F::from(statement.enabled_controls),
     ]);
+    if statement.step == StepRelation::Send {
+        inputs.extend([
+            F::from_u128(statement.burned_total),
+            statement.pending_outgoing_root,
+        ]);
+    }
     inputs.extend(statement.effect.iter().copied());
-    inputs.extend(limbs(&statement.predecessor_other));
-    inputs.extend(limbs(&statement.successor_other));
-    let relation = u64::from(statement.relation == StepRelation::Receive);
+    let step = u64::from(statement.step == StepRelation::Receive);
     let effect = u64::try_from(statement.effect.len()).expect("effect length");
     let shape = Shape::new(1, 9, 1)
-        .with_args(&[relation, effect])
+        .with_args(&[step, effect])
         .folding(&[(STATEMENT_DOMAIN, STATEMENT_FIELDS)]);
-    let digest = statement.digest().expect("at most 13 effect fields");
+    let digest = statement.digest().expect("at most 9 effect fields");
     (
-        GadgetCircuit::new(shape, statement_program::<F, G>, inputs),
+        GadgetCircuit::new(shape, statement_program::<F>, inputs),
         vec![digest],
     )
 }
 
-fn digests_match<F: PoseidonField, G: PastaField>() {
-    for (relation, effect) in [(StepRelation::Send, 13), (StepRelation::Receive, 7)] {
-        let statement = sample_statement::<F, G>(relation, effect);
-        // The other-parity limbs are canonical encodings of G elements.
-        let limbs = bytes_to_limbs(&statement.predecessor_other);
-        assert_eq!(limbs, foreign_limbs(&-G::from(5u64)));
-        assert!(foreign_value_native::<G>(limbs).is_some());
-        let (circuit, public) = circuit::<F, G>(&statement);
+fn digests_match<F: PoseidonField>() {
+    for (step, effect) in [(StepRelation::Send, 9), (StepRelation::Receive, 5)] {
+        let statement = sample_statement::<F>(step, effect);
+        let (circuit, public) = circuit::<F>(&statement);
         assert!(
             accepts(&circuit, K, &public),
             "{}",
@@ -164,13 +170,53 @@ fn digests_match<F: PoseidonField, G: PastaField>() {
         let mut wrong = public.clone();
         wrong[0] += F::ONE;
         assert!(!accepts(&circuit, K, &wrong));
+        // Every statement field is bound by the digest.
+        let mut other = statement.clone();
+        other.burned_total += 1;
+        if step == StepRelation::Send {
+            assert_ne!(other.digest(), statement.digest());
+        }
+        other = statement.clone();
+        other.relation_id ^= 1;
+        assert_ne!(other.digest(), statement.digest());
     }
 }
 
 #[test]
 fn in_circuit_digest_equals_the_native_statement_digest() {
-    digests_match::<Fp, Fq>();
-    digests_match::<Fq, Fp>();
+    digests_match::<Fp>();
+    digests_match::<Fq>();
+}
+
+/// Inputs: the two limbs (`lo`, `hi`) of a value of the foreign field `G`;
+/// the outputs are the checked limbs.
+fn foreign_program<F: PoseidonField, G: PastaField>(
+    chips: &mut Chips<F>,
+    region: &mut Region<'_, F>,
+    inputs: &Inputs<F>,
+) -> Result<Vec<Word<F>>, Error> {
+    let limbs = inputs
+        .get(0)
+        .zip(inputs.get(1))
+        .map(|(lo, hi)| [low_u128(&lo), low_u128(&hi)]);
+    let mut uint = UintChip::new(&mut chips.glue, &mut chips.range);
+    let scalar = assign_foreign_scalar::<F, G>(&mut uint, region, limbs)?;
+    Ok(scalar.words().map(Clone::clone).to_vec())
+}
+
+/// The foreign-scalar circuit of `limbs` and its public limbs.
+fn foreign_circuit<F: PoseidonField, G: PastaField>(
+    limbs: [u128; 2],
+) -> (GadgetCircuit<F>, Vec<F>) {
+    let public = limb_fields::<F>(limbs).to_vec();
+    (
+        GadgetCircuit::new(
+            Shape::new(1, 9, 2),
+            foreign_program::<F, G>,
+            public.clone(),
+        ),
+        public,
+    )
 }
 
 /// Whether the strict check fails, and only through range lookups.
@@ -185,12 +231,6 @@ fn only_range_failures<F: PoseidonField>(circuit: &GadgetCircuit<F>, public: &[F
 
 fn non_canonical_limbs_are_unsatisfiable<F: PoseidonField, G: PastaField>() {
     let [max_lo, max_hi] = foreign_limbs(&-G::ONE);
-    let encode = |[lo, hi]: [u128; 2]| {
-        let mut bytes = [0_u8; 32];
-        bytes[..16].copy_from_slice(&lo.to_le_bytes());
-        bytes[16..].copy_from_slice(&hi.to_le_bytes());
-        bytes
-    };
     // The modulus itself, the modulus + 5 (whose reduction is 5: `s >= p`
     // passed in place of `s mod p`), a high limb above the modulus's, and a
     // high limb of 2^127.
@@ -202,20 +242,18 @@ fn non_canonical_limbs_are_unsatisfiable<F: PoseidonField, G: PastaField>() {
         [0, 1 << 127],
     ] {
         assert_eq!(foreign_value_native::<G>(limbs), None);
-        let mut statement = sample_statement::<F, G>(StepRelation::Send, 4);
-        statement.successor_other = encode(limbs);
-        let (circuit, public) = circuit::<F, G>(&statement);
+        let (circuit, public) = foreign_circuit::<F, G>(limbs);
         assert!(only_range_failures(&circuit, &public), "limbs {limbs:x?}");
     }
-    // The largest canonical value is accepted.
-    let mut statement = sample_statement::<F, G>(StepRelation::Send, 4);
-    statement.successor_other = encode([max_lo, max_hi]);
-    let (circuit, public) = circuit::<F, G>(&statement);
-    assert!(
-        accepts(&circuit, K, &public),
-        "{}",
-        report(&circuit, K, &public)
-    );
+    // The largest canonical value and a small one are accepted.
+    for limbs in [[max_lo, max_hi], foreign_limbs(&G::from(5u64))] {
+        let (circuit, public) = foreign_circuit::<F, G>(limbs);
+        assert!(
+            accepts(&circuit, K, &public),
+            "{}",
+            report(&circuit, K, &public)
+        );
+    }
 }
 
 #[test]
@@ -224,14 +262,61 @@ fn s6_non_canonical_foreign_limbs_are_unsatisfiable() {
     non_canonical_limbs_are_unsatisfiable::<Fq, Fp>();
 }
 
+/// Input: a value of the circuit's own field; the outputs are its canonical
+/// limbs.
+fn canonical_program<F: PoseidonField>(
+    chips: &mut Chips<F>,
+    region: &mut Region<'_, F>,
+    inputs: &Inputs<F>,
+) -> Result<Vec<Word<F>>, Error> {
+    let value = chips.glue.witness(region, inputs.get(0))?;
+    let mut uint = UintChip::new(&mut chips.glue, &mut chips.range);
+    let scalar = assign_canonical_limbs(&mut uint, region, &value)?;
+    Ok(scalar.words().map(Clone::clone).to_vec())
+}
+
+/// The canonical-limbs circuit of `value` and its public limbs.
+fn canonical_circuit<F: PoseidonField>(value: F) -> (GadgetCircuit<F>, Vec<F>) {
+    (
+        GadgetCircuit::new(Shape::new(1, 9, 2), canonical_program::<F>, vec![value]),
+        limb_fields::<F>(foreign_limbs(&value)).to_vec(),
+    )
+}
+
+fn canonical_limbs_decompose<F: PoseidonField + PrimeField<Repr = [u8; 32]>>() {
+    for value in [F::ZERO, F::ONE, -F::ONE, F::from(0xdead_beef_u64).square()] {
+        let (circuit, public) = canonical_circuit(value);
+        assert!(
+            accepts(&circuit, K, &public),
+            "{}",
+            report(&circuit, K, &public)
+        );
+        // The limbs are the halves of the canonical 32-byte encoding.
+        assert_eq!(
+            public,
+            limb_fields::<F>(bytes_to_limbs(&value.to_repr())).to_vec()
+        );
+        // Claimed limbs of another value are rejected.
+        let mut wrong = public.clone();
+        wrong[1] += F::ONE;
+        assert!(!accepts(&circuit, K, &wrong));
+    }
+}
+
 #[test]
-fn an_effect_longer_than_13_fields_is_an_error() {
-    let statement = sample_statement::<Fp, Fq>(StepRelation::Send, 14);
+fn own_field_words_decompose_into_their_canonical_limbs() {
+    canonical_limbs_decompose::<Fp>();
+    canonical_limbs_decompose::<Fq>();
+}
+
+#[test]
+fn an_effect_longer_than_9_fields_is_an_error() {
+    let statement = sample_statement::<Fp>(StepRelation::Send, EFFECT_UNION_FIELDS + 1);
     assert_eq!(statement.digest(), None);
-    let short = sample_statement::<Fp, Fq>(StepRelation::Send, 13);
-    let (mut circuit, public) = circuit::<Fp, Fq>(&short);
-    circuit.shape.args[1] = 14;
-    circuit.inputs.insert(PLAIN + 13, Fp::ONE);
+    let short = sample_statement::<Fp>(StepRelation::Send, EFFECT_UNION_FIELDS);
+    let (mut circuit, public) = circuit::<Fp>(&short);
+    circuit.shape.args[1] = 10;
+    circuit.inputs.push(Fp::ONE);
     assert_eq!(
         synthesize(&circuit, K, Some(&[public][..])).map(|_| ()),
         Err(Error::Synthesis)
@@ -239,18 +324,21 @@ fn an_effect_longer_than_13_fields_is_an_error() {
 }
 
 #[test]
-fn inventory_17_blocks_and_the_s6_checks() {
-    let statement = sample_statement::<Fp, Fq>(StepRelation::Receive, 7);
-    let (circuit, public) = circuit::<Fp, Fq>(&statement);
+fn inventory_13_blocks_and_the_s6_checks() {
+    let statement = sample_statement::<Fp>(StepRelation::Receive, 5);
+    let (circuit, public) = circuit::<Fp>(&statement);
     let flags = assigned(&circuit, K, &public);
-    // The folded statement digest: 17 blocks.
+    // The folded statement digest: 13 blocks.
     assert_eq!(
         extent(&flags[lane_columns(0)[0]]),
-        17 * ROWS_PER_PERMUTATION
+        13 * ROWS_PER_PERMUTATION
     );
-    // Each foreign scalar: four range checks (lo 128, hi 127, the bound of
+    assert_eq!(extent(&flags[RANGE_COLUMN]), 0);
+    // A canonical value: four range checks (lo 128, hi 127, the bound of
     // hi 127, the conditional bound of lo 128) of 16 rows at b = 9.
-    assert_eq!(extent(&flags[RANGE_COLUMN]), 2 * 4 * 16);
+    let (canonical, limbs) = canonical_circuit(-Fp::ONE);
+    let flags = assigned(&canonical, K, &limbs);
+    assert_eq!(extent(&flags[RANGE_COLUMN]), 4 * 16);
     // Every gate of the composite circuit keeps the degree policy, and the
     // circuit degree (lookups included) is exactly the policy bound.
     let (cs, _) = configure(&circuit).expect("configure");
@@ -285,11 +373,11 @@ fn undetected<F: PoseidonField>(
 }
 
 #[test]
-fn glue_range_and_boundary_lane_cells_are_pinned() {
-    // Every glue and range cell, and every lane cell of the first and last
-    // blocks (the lane suites tamper every block of smaller sponges).
-    let statement = sample_statement::<Fq, Fp>(StepRelation::Send, 13);
-    let (circuit, public) = circuit::<Fq, Fp>(&statement);
+fn glue_and_boundary_lane_cells_are_pinned() {
+    // Every glue cell, and every lane cell of the first and last blocks (the
+    // lane suites tamper every block of smaller sponges).
+    let statement = sample_statement::<Fq>(StepRelation::Send, 9);
+    let (circuit, public) = circuit::<Fq>(&statement);
     let lane = lane_columns(0);
     let cells = assigned_advice_cells(&circuit, K, std::slice::from_ref(&public))
         .expect("cells")
@@ -297,17 +385,27 @@ fn glue_range_and_boundary_lane_cells_are_pinned() {
         .filter(|(column, row)| {
             !lane.contains(column)
                 || *row < ROWS_PER_PERMUTATION
-                || *row >= 16 * ROWS_PER_PERMUTATION
+                || *row >= 12 * ROWS_PER_PERMUTATION
         })
         .collect::<Vec<_>>();
     assert_eq!(undetected(&circuit, &public, &cells), Vec::new());
 }
 
 #[test]
-#[ignore = "every cell of the 17-block statement circuit; run in release"]
+fn every_canonical_limb_cell_is_pinned() {
+    for value in [-Fp::ONE, Fp::from(12_345u64)] {
+        let (circuit, public) = canonical_circuit(value);
+        let cells =
+            assigned_advice_cells(&circuit, K, std::slice::from_ref(&public)).expect("cells");
+        assert_eq!(undetected(&circuit, &public, &cells), Vec::new());
+    }
+}
+
+#[test]
+#[ignore = "every cell of the 13-block statement circuit; run in release"]
 fn every_statement_cell_is_pinned() {
-    let statement = sample_statement::<Fp, Fq>(StepRelation::Receive, 7);
-    let (circuit, public) = circuit::<Fp, Fq>(&statement);
+    let statement = sample_statement::<Fp>(StepRelation::Receive, 5);
+    let (circuit, public) = circuit::<Fp>(&statement);
     let cells = assigned_advice_cells(&circuit, K, std::slice::from_ref(&public)).expect("cells");
     assert_eq!(undetected(&circuit, &public, &cells), Vec::new());
 }

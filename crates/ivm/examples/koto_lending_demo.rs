@@ -5,8 +5,9 @@ use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use ivm::{
     AccountId, AssetDefinitionId, IVM, MockWorldStateView, PermissionToken, PointerType,
-    ProgramMetadata, encode_argument_record_from_json, mock_wsv::WsvHost,
+    ProgramMetadata, mock_wsv::WsvHost,
 };
+use ivm_abi::arguments::encode_argument_record_from_json;
 use kotodama_lang::compiler::Compiler as KotodamaCompiler;
 use std::collections::BTreeMap;
 fn fixture_account(_domain: &str, hex_public_key: &str) -> AccountId {

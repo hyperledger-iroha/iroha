@@ -40,7 +40,11 @@ fn current_routed_read_memory_envelope(
     {
         return envelope;
     }
-    QueryFanoutMemoryEnvelope::for_body_admission(app.query_fanout_working_set_bytes)
+    Err(torii_proxy_error_response(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "query_memory_owner_missing",
+        "Collection execution requires its admitted query memory owner.",
+    ))
 }
 
 /// Largest accepted `GET` collection query string.
@@ -145,7 +149,12 @@ fn prepare_collection_forward(
     app: &SharedAppState,
     target: &routing::collection_sources::CollectionTarget,
     mut query: ListQuery,
-) -> Result<(ListQuery, Vec<u8>), Error> {
+) -> Result<(ListQuery, Vec<u8>, QueryFanoutMemoryReservation), Error> {
+    let reservation = try_acquire_query_fanout_memory(app)
+        .map_err(|_| collections::memory::capacity("working set"))?;
+    let envelope = reservation
+        .admitted_envelope(app)
+        .map_err(|_| collections::memory::capacity("working set"))?;
     let telemetry = app.telemetry_handle();
     routing::collection_sources::canonicalize_collection_query(
         app.state.as_ref(),
@@ -153,10 +162,14 @@ fn prepare_collection_forward(
         &mut query,
         &telemetry,
     )?;
-    let limits = routing::collection_sources::collection_execution_limits(Some(app))?;
+    let mut limits = routing::collection_sources::collection_limits();
+    limits.bytes = collections::memory::BytePolicy::for_admitted_read(
+        envelope,
+        app.torii_proxy_max_response_bytes,
+    );
     collections::prepare(target.spec(), target.scope(), &query, &limits)?;
     let body = collection_query_body(&query, limits.bytes)?;
-    Ok((query, body))
+    Ok((query, body, reservation))
 }
 
 /// Execute a validated collection read under the caller's visible routes.
@@ -169,7 +182,7 @@ async fn forward_visible_collection_read(
     path_args: Vec<String>,
     query: ListQuery,
 ) -> Result<Response, Error> {
-    let (query, body) = prepare_collection_forward(app, &target, query)?;
+    let (query, body, reservation) = prepare_collection_forward(app, &target, query)?;
     let routes = torii_visible_account_read_routes(app.as_ref(), caller);
     let Some(route) = collection_execution_route(app.as_ref(), &routes) else {
         return Ok(empty_collection_page_response(
@@ -180,7 +193,10 @@ async fn forward_visible_collection_read(
     let scope = ToriiFanoutRouteScopeV1::VisibleAccount {
         caller_account_id: caller.map(ToString::to_string),
     };
-    Ok(execute_collection_on_route(app, route, scope, endpoint, path_args, body).await)
+    Ok(
+        execute_collection_on_route(app, route, scope, endpoint, path_args, body, reservation)
+            .await,
+    )
 }
 
 /// The one route a collection read executes on.
@@ -214,11 +230,8 @@ async fn execute_collection_on_route(
     endpoint: ToriiReadEndpointV1,
     path_args: Vec<String>,
     body: Vec<u8>,
+    reservation: QueryFanoutMemoryReservation,
 ) -> Response {
-    let reservation = match try_acquire_query_fanout_memory(app) {
-        Ok(reservation) => reservation,
-        Err(response) => return response,
-    };
     let mut budget = ToriiRoutedReadMemoryBudget::from_envelope(
         match reservation.admitted_envelope(app) {
             Ok(envelope) => envelope,
@@ -359,6 +372,22 @@ async fn execute_direct_collection_read(
     target: routing::collection_sources::CollectionTarget,
     query: ListQuery,
 ) -> Result<Response, Error> {
+    execute_scoped_direct_collection_read(
+        app,
+        target,
+        query,
+        routing::DataspaceReadVisibility::new(std::collections::BTreeSet::new(), true),
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+async fn execute_scoped_direct_collection_read(
+    app: &SharedAppState,
+    target: routing::collection_sources::CollectionTarget,
+    query: ListQuery,
+    visibility: routing::DataspaceReadVisibility,
+) -> Result<Response, Error> {
     let reservation = match try_acquire_query_fanout_memory(app) {
         Ok(reservation) => reservation,
         Err(response) => return Ok(response),
@@ -372,8 +401,7 @@ async fn execute_direct_collection_read(
                 &target,
                 query,
                 &telemetry,
-                // Directly served collections are public and carry no dataspace scoping.
-                &routing::DataspaceReadVisibility::new(std::collections::BTreeSet::new(), true),
+                &visibility,
             )
             .await
         })

@@ -304,7 +304,7 @@ fn preview_wrapper_effects(
     for (index, amount) in [(0i128, "10"), (1, minimum_output)] {
         let base: Name = "ValidationFeeConversion".parse().unwrap();
         let encoded =
-            ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(index))
+            ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(index))
                 .unwrap();
         let relative = ivm::host::canonical_state_map_path(&base, &encoded).unwrap();
         stx.world.smart_contract_state.insert(

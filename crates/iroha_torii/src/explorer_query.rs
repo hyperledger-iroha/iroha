@@ -9,7 +9,7 @@ use super::*;
 use crate::collections::specs::{FieldSpec, FieldType};
 use crate::collections::{CollectionError, CollectionSpec, Limits, RowPage, prepare};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use iroha_torii_shared::list_query::{CURSOR_MAX_BYTES, FilterExpr, ListQuery, Page};
+use iroha_torii_shared::list_query::{CURSOR_MAX_BYTES, FilterExpr, ListQuery};
 use norito::json::{Map, Value};
 
 const fn field(name: &'static str, ty: FieldType) -> FieldSpec {
@@ -185,6 +185,7 @@ struct ScanQuery {
     selectors: BTreeMap<String, String>,
     native: explorer::ExplorerCursorQuery,
     digest: [u8; 32],
+    limits: Limits,
 }
 
 impl ScanQuery {
@@ -192,6 +193,7 @@ impl ScanQuery {
         spec: &'static CollectionSpec,
         query: ListQuery,
         visibility: [u8; 32],
+        limits: Limits,
     ) -> Result<Self, Error> {
         query.validate().map_err(CollectionError::from)?;
         for (unsupported, present) in [
@@ -209,15 +211,32 @@ impl ScanQuery {
         let filter = query
             .filter
             .as_ref()
-            .map(|filter| filter.to_string())
+            .map(|filter| limits.bytes.key(filter))
+            .transpose()?
             .unwrap_or_default();
-        let mut scope = Vec::new();
+        let scope_bytes = b"iroha-explorer-list-query-v1\0"
+            .len()
+            .checked_add(spec.id.len())
+            .and_then(|n| n.checked_add(1 + 32))
+            .and_then(|n| n.checked_add(filter.len()))
+            .ok_or_else(|| collections::memory::capacity("Explorer query digest"))?;
+        collections::memory::ensure(
+            collections::memory::add(scope_bytes, filter.capacity())?,
+            limits.bytes.scratch_bytes,
+            "Explorer query digest",
+        )?;
+        let mut scope = collections::memory::vector::<u8>(
+            scope_bytes,
+            limits.bytes.scratch_bytes,
+            "Explorer query digest",
+        )?;
         scope.extend_from_slice(b"iroha-explorer-list-query-v1\0");
         scope.extend_from_slice(spec.id.as_bytes());
         scope.push(0);
         scope.extend_from_slice(&visibility);
         scope.extend_from_slice(filter.as_bytes());
         let digest = *iroha_crypto::Hash::new(scope).as_ref();
+        drop(filter);
         let native_cursor = query
             .cursor
             .as_deref()
@@ -232,7 +251,7 @@ impl ScanQuery {
             .map(|expr| extract_selectors(expr, synthetic_fields(spec), &mut selectors))
             .transpose()?
             .flatten();
-        let plan = prepare(spec, "", &rows, &limits())?;
+        let plan = prepare(spec, "", &rows, &limits)?;
         let native = explorer::ExplorerCursorQuery {
             cursor: native_cursor,
             limit: u32::try_from(plan.limit()).expect("bounded limit"),
@@ -243,6 +262,7 @@ impl ScanQuery {
             selectors,
             native,
             digest,
+            limits,
         })
     }
 
@@ -268,44 +288,55 @@ impl ScanQuery {
         String::from_utf8(bytes[37..].to_vec()).map_err(|_| fail())
     }
 
-    fn wrap_cursor(&self, native: &str) -> Result<String, Error> {
-        let mut bytes = b"IEL1".to_vec();
-        bytes.push(self.spec.tag);
-        bytes.extend_from_slice(&self.digest);
-        bytes.extend_from_slice(native.as_bytes());
-        let token = URL_SAFE_NO_PAD.encode(bytes);
-        if token.len() > CURSOR_MAX_BYTES {
+    fn wrap_cursor(&self, native: &str, scratch_bytes: usize) -> Result<String, Error> {
+        let frame_bytes = 37usize
+            .checked_add(native.len())
+            .ok_or_else(|| collections::memory::capacity("Explorer cursor"))?;
+        let encoded_bytes = base64::encoded_len(frame_bytes, false)
+            .ok_or_else(|| collections::memory::capacity("Explorer cursor"))?;
+        if encoded_bytes > CURSOR_MAX_BYTES {
             return Err(invalid(
                 "cursor",
                 "Explorer scan position exceeds the cursor bound",
             ));
         }
-        Ok(token)
+        collections::memory::ensure(
+            collections::memory::add(frame_bytes, encoded_bytes)?,
+            scratch_bytes,
+            "Explorer cursor frame and encoding",
+        )?;
+        let mut bytes =
+            collections::memory::vector::<u8>(frame_bytes, scratch_bytes, "Explorer cursor")?;
+        bytes.extend_from_slice(b"IEL1");
+        bytes.push(self.spec.tag);
+        bytes.extend_from_slice(&self.digest);
+        bytes.extend_from_slice(native.as_bytes());
+        let mut encoded = collections::memory::vector::<u8>(
+            encoded_bytes,
+            scratch_bytes - frame_bytes,
+            "Explorer cursor encoding",
+        )?;
+        encoded.resize(encoded_bytes, 0);
+        URL_SAFE_NO_PAD
+            .encode_slice(&bytes, &mut encoded)
+            .map_err(|_| collections::memory::capacity("Explorer cursor"))?;
+        String::from_utf8(encoded)
+            .map_err(|_| collections::memory::capacity("Explorer cursor").into())
     }
 
-    fn page(&self, scan: Value) -> Result<Page<Value>, Error> {
-        let plan = prepare(self.spec, "", &self.rows, &limits())?;
-        let items = scan
-            .get("items")
-            .and_then(Value::as_array)
-            .ok_or_else(|| invalid("query", "Explorer scan did not produce rows"))?;
-        let items = items
-            .iter()
-            .map(|item| {
-                item.as_object()
-                    .cloned()
-                    .ok_or_else(|| invalid("query", "Explorer scan row must be an object"))
-            })
-            .collect::<Result<Vec<Map>, Error>>()?
-            .into_iter()
-            .filter(|row| plan.matches(row))
-            .collect();
+    fn page(&self, scan: Value) -> Result<RowPage, Error> {
+        let plan = prepare(self.spec, "", &self.rows, &self.limits)?;
+        let Value::Object(mut scan) = scan else {
+            return Err(invalid("query", "Explorer scan must be an object"));
+        };
         let cursor = scan
             .get("pagination")
             .and_then(|meta| meta.get("next_cursor"));
         let next_cursor = match cursor {
             Some(Value::Null) => None,
-            Some(Value::String(token)) if !token.is_empty() => Some(self.wrap_cursor(token)?),
+            Some(Value::String(token)) if !token.is_empty() => {
+                Some(self.wrap_cursor(token, plan.runtime_bytes().scratch_bytes)?)
+            }
             _ => {
                 return Err(invalid(
                     "query",
@@ -313,13 +344,38 @@ impl ScanQuery {
                 ));
             }
         };
-        Ok(plan
-            .project(RowPage {
-                items,
-                next_cursor,
-                total: None,
-            })?
-            .into_page())
+        let Some(Value::Array(source)) = scan.remove("items") else {
+            return Err(invalid("query", "Explorer scan did not produce rows"));
+        };
+        let cursor_bytes = next_cursor.as_ref().map_or(0, String::capacity);
+        let scratch = plan
+            .runtime_bytes()
+            .scratch_bytes
+            .checked_sub(cursor_bytes)
+            .ok_or_else(|| collections::memory::capacity("Explorer retained cursor"))?;
+        let mut items =
+            collections::memory::vector::<Map>(source.len(), scratch, "Explorer projection slots")?;
+        let mut retained = collections::memory::slots::<Map>(items.capacity())?;
+        for item in source {
+            let Value::Object(row) = item else {
+                return Err(invalid("query", "Explorer scan row must be an object"));
+            };
+            if plan.matches(&row) {
+                retained =
+                    collections::memory::add(retained, collections::memory::map_heap_bytes(&row)?)?;
+                collections::memory::ensure(
+                    retained,
+                    self.limits.bytes.retained_bytes,
+                    "Explorer retained page",
+                )?;
+                items.push(row);
+            }
+        }
+        Ok(plan.project(RowPage {
+            items,
+            next_cursor,
+            total: None,
+        })?)
     }
 }
 
@@ -408,7 +464,18 @@ async fn execute(
             .map_err(|error| invalid("filter", error.to_string()))?;
         }
     }
-    let query = ScanQuery::new(spec, query, visibility.visible_route_set_digest())?;
+    let mut query_limits = limits();
+    query_limits.bytes = collections::memory::BytePolicy::for_admitted_read(
+        current_routed_read_memory_envelope(app)
+            .map_err(|_| collections::memory::capacity("working set"))?,
+        app.torii_proxy_max_response_bytes,
+    );
+    let query = ScanQuery::new(
+        spec,
+        query,
+        visibility.visible_route_set_digest(),
+        query_limits,
+    )?;
     if !limits::is_allowed_by_cidr(headers, Some(remote), &app.api_rate_limit_bypass_nets) {
         let cost = routing::app_query_limits().rate_limit_cost(u64::from(query.native.limit));
         check_access_enforced_with_cost(app, headers, Some(remote), spec.id, true, cost).await?;
@@ -536,14 +603,37 @@ async fn execute(
     if response.status() != StatusCode::OK {
         return Ok(response);
     }
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+    let bytes = axum::body::to_bytes(response.into_body(), query.limits.bytes.source_frame_bytes)
         .await
         .map_err(|error| invalid("query", error.to_string()))?;
     let admission = acquire_query_admission(app.as_ref(), true).await?;
     routing::run_admitted_blocking(admission, "Explorer projection worker failed", move || {
-        let scan = norito::json::from_slice(&bytes)
-            .map_err(|error| invalid("query", error.to_string()))?;
-        Ok(JsonBody(query.page(scan)?).into_response())
+        let policy = query.limits.bytes;
+        let decode_limits = norito::DecodeLimits::new(
+            policy.source_frame_bytes,
+            policy.row_bytes,
+            policy.row_bytes,
+            policy.row_bytes,
+            norito::core::MAX_VALUE_NESTING_DEPTH,
+        );
+        norito::json::preflight_slice(
+            &bytes,
+            norito::json::JsonPreflightLimits::from_decode_limits(
+                policy.source_frame_bytes,
+                decode_limits,
+            ),
+        )
+        .map_err(|_| collections::memory::capacity("Explorer scan graph"))?;
+        let (scan, usage) = norito::core::with_decode_limits_measured(decode_limits, || {
+            norito::json::from_slice::<Value>(&bytes)
+        });
+        let scan = scan.map_err(|error| invalid("query", error.to_string()))?;
+        collections::memory::ensure(
+            usage.total_allocated_bytes(),
+            policy.row_bytes,
+            "Explorer scan graph",
+        )?;
+        routing::collection_sources::row_page_response(query.page(scan)?, policy)
     })
     .await
 }
@@ -553,18 +643,26 @@ mod tests {
     use super::*;
     use iroha_torii_shared::list_query::{FieldPath, field};
 
+    fn standalone_scan(
+        spec: &'static CollectionSpec,
+        query: ListQuery,
+        visibility: [u8; 32],
+    ) -> Result<ScanQuery, Error> {
+        ScanQuery::new(spec, query, visibility, limits())
+    }
+
     #[test]
     fn shared_filter_projection_preserves_counters_and_empty_continuations() {
         let query = ListQuery::new()
             .filter(field("owned_assets").gte(2))
             .select([FieldPath::from("id"), FieldPath::from("owned_assets")]);
-        let query = ScanQuery::new(&ACCOUNTS, query, [1; 32]).expect("query");
+        let query = standalone_scan(&ACCOUNTS, query, [1; 32]).expect("query");
         let page = query.page(norito::json!({"items":[{"id":"alice","owned_assets":1}],"pagination":{"next_cursor":"native"}})).expect("page");
         assert!(page.items.is_empty());
         let token = page
             .next_cursor
             .expect("continue after an empty filtered page");
-        let next = ScanQuery::new(
+        let next = standalone_scan(
             &ACCOUNTS,
             ListQuery {
                 cursor: Some(token.clone()),
@@ -576,7 +674,7 @@ mod tests {
         .expect("projection may change");
         assert_eq!(next.native.cursor.as_deref(), Some("native"));
         assert!(
-            ScanQuery::new(
+            standalone_scan(
                 &ACCOUNTS,
                 ListQuery {
                     cursor: Some(token),
@@ -589,7 +687,12 @@ mod tests {
         let page = query.page(norito::json!({"items":[{"id":"bob","owned_assets":3,"network_prefix":753}],"pagination":{"next_cursor":null}})).expect("page");
         assert_eq!(
             page.items,
-            vec![norito::json!({"id":"bob","owned_assets":3})]
+            vec![
+                norito::json!({"id":"bob","owned_assets":3})
+                    .as_object()
+                    .unwrap()
+                    .clone()
+            ]
         );
         assert!(page.next_cursor.is_none());
         assert!(page.total.is_none());
@@ -597,11 +700,13 @@ mod tests {
 
     #[test]
     fn cursor_rejects_different_visibility_collection_and_legacy_position() {
-        let query = ScanQuery::new(&ACCOUNTS, ListQuery::new(), [1; 32]).expect("query");
-        let token = query.wrap_cursor("native").expect("cursor");
+        let query = standalone_scan(&ACCOUNTS, ListQuery::new(), [1; 32]).expect("query");
+        let token = query
+            .wrap_cursor("native", query.limits.bytes.scratch_bytes)
+            .expect("cursor");
         for (spec, scope) in [(&ACCOUNTS, [2; 32]), (&DOMAINS, [1; 32])] {
             assert!(
-                ScanQuery::new(
+                standalone_scan(
                     spec,
                     ListQuery {
                         cursor: Some(token.clone()),
@@ -613,7 +718,7 @@ mod tests {
             );
         }
         assert!(
-            ScanQuery::new(
+            standalone_scan(
                 &ACCOUNTS,
                 ListQuery {
                     cursor: Some("native".into()),
@@ -632,7 +737,7 @@ mod tests {
                 .eq("wonderland")
                 .and(field("owned_assets").gt(1)),
         );
-        let query = ScanQuery::new(&ACCOUNTS, query, [0; 32]).expect("conjunctive selector");
+        let query = standalone_scan(&ACCOUNTS, query, [0; 32]).expect("conjunctive selector");
         assert_eq!(
             query.selectors.get("domain").map(String::as_str),
             Some("wonderland")
@@ -642,7 +747,7 @@ mod tests {
             field("domain").eq("a").or(field("id").eq("b")),
             field("domain").eq("a").and(field("domain").eq("b")),
         ] {
-            assert!(ScanQuery::new(&ACCOUNTS, ListQuery::new().filter(filter), [0; 32]).is_err());
+            assert!(standalone_scan(&ACCOUNTS, ListQuery::new().filter(filter), [0; 32]).is_err());
         }
         for query in [
             ListQuery {
@@ -655,8 +760,34 @@ mod tests {
             },
             ListQuery::new().filter(field("unknown").eq(1)),
         ] {
-            assert!(ScanQuery::new(&ACCOUNTS, query, [0; 32]).is_err());
+            assert!(standalone_scan(&ACCOUNTS, query, [0; 32]).is_err());
         }
+    }
+
+    #[test]
+    fn explorer_cursor_checks_transport_and_scratch_before_allocation() {
+        let query = standalone_scan(&ACCOUNTS, ListQuery::new(), [1; 32]).unwrap();
+        let frame = 37 + "native".len();
+        let encoded = base64::encoded_len(frame, false).unwrap();
+        assert!(query.wrap_cursor("native", frame + encoded).is_ok());
+        assert!(query.wrap_cursor("native", frame + encoded - 1).is_err());
+        assert!(
+            query
+                .wrap_cursor(&"x".repeat(CURSOR_MAX_BYTES), usize::MAX)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn explorer_projection_enforces_admitted_retained_graph() {
+        let mut bounds = limits();
+        bounds.bytes.retained_bytes = 1;
+        let query = ScanQuery::new(&ACCOUNTS, ListQuery::new(), [1; 32], bounds).unwrap();
+        assert!(
+            query
+                .page(norito::json!({"items":[{"id":"alice"}],"pagination":{"next_cursor":null}}))
+                .is_err()
+        );
     }
 
     #[test]

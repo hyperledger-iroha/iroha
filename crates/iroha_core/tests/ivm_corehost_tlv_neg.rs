@@ -22,7 +22,7 @@ fn build_tlv(type_id: u16, version: u8, payload: &[u8], corrupt_hash: bool) -> V
     v
 }
 fn quantity_tlv(value: u64) -> Vec<u8> {
-    ivm::numeric_tlv::encode_quantity(&Quantity::from(value))
+    ivm_abi::numeric_tlv::encode_quantity(&Quantity::from(value))
         .expect("encode quantity pointer envelope")
 }
 fn local_contract_debug_host(authority: AccountId) -> CoreHost {

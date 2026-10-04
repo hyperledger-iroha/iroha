@@ -10244,7 +10244,7 @@ seiyaku DynamicAccessCounter {
             "both co-batched contract calls must succeed: {results:?}"
         );
         let encoded_key =
-            ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(7))
+            ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(7))
                 .expect("encode canonical StateMap int key");
         let logical_path = format!("Counters/{}", hex::encode(encoded_key));
         let scope_id = contract_address.to_string();
@@ -10510,7 +10510,7 @@ seiyaku DynamicTarget {
             "all dynamic-target calls must succeed: {results:?}"
         );
         let encoded_key =
-            ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(2))
+            ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(2))
                 .expect("encode canonical StateMap int key");
         let logical_path = format!("Counters/{}", hex::encode(encoded_key));
         let scope_digest = hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
@@ -10528,7 +10528,7 @@ seiyaku DynamicTarget {
             "a key selected during live re-execution must retain source-order conflict semantics"
         );
         let guarded_key =
-            ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(3))
+            ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(3))
                 .expect("encode canonical guarded StateMap int key");
         let guarded_path: StatePath =
             format!("sc/{scope_digest}/Counters/{}", hex::encode(guarded_key))

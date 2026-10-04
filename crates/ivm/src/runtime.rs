@@ -117,7 +117,7 @@ mod tests {
             .argument_schema
             .as_ref()
             .expect("argument schema");
-        let canonical = crate::encode_argument_record_from_json(
+        let canonical = ivm_abi::arguments::encode_argument_record_from_json(
             schema,
             &Json::from(norito::json!({"ready": true})),
         )

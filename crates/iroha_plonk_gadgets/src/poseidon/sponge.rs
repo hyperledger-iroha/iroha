@@ -280,4 +280,29 @@ mod tests {
         folded_state_continues_the_native_sponge::<Fp>();
         folded_state_continues_the_native_sponge::<Fq>();
     }
+
+    #[test]
+    fn configured_prefixes_are_folded_once() {
+        let statement = u64::from_le_bytes(*b"kgspstm1");
+        let chain = u64::from_le_bytes(*b"kgspsnd1");
+        let mut meta = ConstraintSystem::<Fp>::new();
+        let lane = Pow5Columns::allocate(&mut meta);
+        let round_constants = RoundConstantColumns::allocate(&mut meta);
+        // A repeated prefix is folded once.
+        let config = SpongeConfig::configure(
+            &mut meta,
+            lane,
+            round_constants,
+            &[(statement, 25), (chain, 8), (statement, 25)],
+        );
+        assert!(config.is_folded(statement, 25));
+        assert!(config.is_folded(chain, 8));
+        // Another arity or domain is not.
+        assert!(!config.is_folded(statement, 24));
+        assert!(!config.is_folded(u64::from_le_bytes(*b"kgspcrd1"), 24));
+        let sponge = SpongeChip::new(config.clone());
+        assert_eq!(sponge.permutations(statement, 25), 13);
+        assert_eq!(sponge.permutations(statement, 24), 14);
+        assert_eq!(config.pow5(), sponge.lane().config());
+    }
 }

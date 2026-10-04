@@ -52,7 +52,7 @@ artifact for the Rust IVM team, Swift bridge owners, and telemetry tooling.
 ### C FFI (`connect_norito_bridge`)
 - The single current `connect_norito_acceleration_config` includes the complete 80-byte process resource-limit record at offset 104; the complete C record is 184 bytes on supported 64-bit targets. The setter returns status (`0` applied requested policy, `-2` malformed without mutation, `-3` wrong record length). All three V1 exports require exact caller lengths and are mandatory native-loader admission symbols. Retired size-less exports and prior layout decoders are removed.
 - Getter coverage now includes `connect_norito_acceleration_config_get_v1` (config only) and `connect_norito_acceleration_state_get_v1` (config + parity) to mirror the setter.
-- Document struct layout in header comments for SPM/CocoaPods consumers.
+- Document struct layout in header comments for SwiftPM/XCFramework consumers.
 
 ### Swift (`AccelerationSettings`)
 - Defaults: SIMD, Metal and CUDA enabled, optional counts omitted (inherit), and the same finite process resource envelope as Rust. Actual use still requires supported qualified hardware.

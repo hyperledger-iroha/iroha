@@ -10437,7 +10437,7 @@ fn encode_contract_state_pointer_tlv_bytes(
     let (type_id, payload) = match ty {
         ivm::EmbeddedStateType::Int => {
             let value = raw.parse::<iroha_primitives::bigint::BigInt>().ok()?;
-            return ivm::numeric_tlv::encode_int(&value).ok();
+            return ivm_abi::numeric_tlv::encode_int(&value).ok();
         }
         ivm::EmbeddedStateType::Decimal => {
             let value = raw
@@ -10445,7 +10445,7 @@ fn encode_contract_state_pointer_tlv_bytes(
                 .ok()?
                 .canonicalize_decimal()
                 .ok()?;
-            return ivm::numeric_tlv::encode_decimal(&value).ok();
+            return ivm_abi::numeric_tlv::encode_decimal(&value).ok();
         }
         ivm::EmbeddedStateType::Quantity => {
             let value = raw
@@ -10454,7 +10454,7 @@ fn encode_contract_state_pointer_tlv_bytes(
                 .canonicalize_decimal()
                 .ok()?;
             let value = iroha_primitives::numeric::Quantity::try_from_numeric(value).ok()?;
-            return ivm::numeric_tlv::encode_quantity(&value).ok();
+            return ivm_abi::numeric_tlv::encode_quantity(&value).ok();
         }
         ivm::EmbeddedStateType::String => (PointerType::Blob, raw.as_bytes().to_vec()),
         ivm::EmbeddedStateType::Bytes => {
@@ -12727,17 +12727,17 @@ mod contract_state_tests {
             (
                 ivm::EmbeddedStateType::Int,
                 "42",
-                ivm::numeric_tlv::encode_int(&int).expect("encode int"),
+                ivm_abi::numeric_tlv::encode_int(&int).expect("encode int"),
             ),
             (
                 ivm::EmbeddedStateType::Decimal,
                 "7.00",
-                ivm::numeric_tlv::encode_decimal(&decimal).expect("encode decimal"),
+                ivm_abi::numeric_tlv::encode_decimal(&decimal).expect("encode decimal"),
             ),
             (
                 ivm::EmbeddedStateType::Quantity,
                 "7.00",
-                ivm::numeric_tlv::encode_quantity(&quantity).expect("encode quantity"),
+                ivm_abi::numeric_tlv::encode_quantity(&quantity).expect("encode quantity"),
             ),
         ] {
             let expected = hex::encode(expected);
@@ -12761,13 +12761,13 @@ mod contract_state_tests {
         let decimal_record = make_state_record(
             &decimal_ty,
             vec![StateValueAtomV1::Pointer(
-                ivm::numeric_tlv::encode_decimal(&decimal).expect("encode decimal"),
+                ivm_abi::numeric_tlv::encode_decimal(&decimal).expect("encode decimal"),
             )],
         );
         let quantity_record = make_state_record(
             &quantity_ty,
             vec![StateValueAtomV1::Pointer(
-                ivm::numeric_tlv::encode_quantity(&quantity).expect("encode quantity"),
+                ivm_abi::numeric_tlv::encode_quantity(&quantity).expect("encode quantity"),
             )],
         );
         let decimal_json = decode_contract_state_scalar_json(&decimal_record, &decimal_ty)
@@ -13162,7 +13162,7 @@ fn encode_contract_argument_record(
         (None, None) => Ok(None),
         (None, Some(_)) => Err("zero-parameter entrypoint must not receive a payload".to_owned()),
         (Some(_), None) => Err("parameterized entrypoint requires a payload".to_owned()),
-        (Some(schema), Some(payload)) => ivm::encode_argument_record_from_json(schema, payload)
+        (Some(schema), Some(payload)) => ivm_abi::arguments::encode_argument_record_from_json(schema, payload)
             .map(Some)
             .map_err(|error| format!("payload does not match entrypoint schema: {error}")),
     }
@@ -15201,7 +15201,7 @@ fn normalize_contract_payload(
                     descriptor.name
                 ))
             })?;
-            ivm::encode_argument_record_from_json(schema, &canonical).map_err(|error| {
+            ivm_abi::arguments::encode_argument_record_from_json(schema, &canonical).map_err(|error| {
                 conversion_error(format!(
                     "contract payload for entrypoint `{}` does not match its exact argument schema: {error}",
                     descriptor.name
@@ -19842,9 +19842,9 @@ mod contract_payload_normalization_tests {
             .as_ref()
             .expect("argument schema");
         assert_eq!(
-            ivm::encode_argument_record_from_json(schema, &normalized)
+            ivm_abi::arguments::encode_argument_record_from_json(schema, &normalized)
                 .expect("validated canonical argument record"),
-            ivm::encode_argument_record_from_json(schema, &canonical)
+            ivm_abi::arguments::encode_argument_record_from_json(schema, &canonical)
                 .expect("input canonical argument record"),
         );
     }

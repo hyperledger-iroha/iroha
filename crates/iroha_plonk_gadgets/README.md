@@ -23,10 +23,14 @@ Chips for the Iroha-native PIPA-v1 PLONKish engine (`iroha_plonk`,
   satisfying assignment.
 - `arith`: the glue gate `q_m a b + q_a a + q_b b + q_c c + q_d d + q_k` with
   boolean, select and is-zero gates.
-- `statement`: **prototype** only. The M7 32-field G1 statement encoding of
+- `statement`: **prototype** only. The 25-field step statement encoding of
   the split-lineage step relations (owner approval pending; not wired into any
-  protocol path) and the canonical cross-field limb encoding of spec S6
-  (`lo < 2^128`, `hi < 2^127`, `lo + 2^128 hi < modulus`).
+  protocol path): relation identity, scheme, asset, credential, successor
+  lifecycle and sequence, both state commitments, the enabled-controls mask,
+  the lineage inputs of a Send and the effect. Also the canonical
+  cross-field limb encoding of spec S6 (`lo < 2^128`, `hi < 2^127`,
+  `lo + 2^128 hi < modulus`) and the decomposition of an own-field word into
+  those canonical limbs.
 - `cells`: typed cells (`Word`, `Bit`, `Uint`) and row cursors; `tamper`: the
   per-cell tamper harness.
 
@@ -36,7 +40,11 @@ cursor.
 
 Each chip has typed cells, a native reference, shared vectors, a per-cell
 tamper suite (each assigned advice cell, changed alone, makes the strict
-constraint checker fail) and an inventory test:
+constraint checker fail) and an inventory test. The tamper suite shows that
+every cell is pinned by a gate, a lookup or a copy. It does not show that a
+composed relation binds what it should: a free witness that is only copied
+into a hash is pinned by that copy whatever value it claims, so relations
+need their own consistent-forgery tests.
 
 - `tests/pow5_tamper.rs`: parity with `iroha_pasta::poseidon::permute`, every
   `m8_custom_gate_checks` Poseidon case, 37 rows / 148 cells / degree 6, lane
@@ -49,7 +57,8 @@ constraint checker fail) and an inventory test:
   native reference, the M8 u128 cases (a sum of exactly `2^128`, a
   subtraction below zero, a wrong sum) and the M7 u64 windows;
 - `tests/statement_digest.rs`: the in-circuit statement digest equals
-  `StatementV1::digest`; non-canonical foreign limbs are unsatisfiable;
+  `StatementV1::digest`; non-canonical foreign limbs are unsatisfiable; an
+  own-field word decomposes only into its canonical limbs;
 - `tests/real_proofs.rs`: PIPA-v1 proofs on Pallas and Vesta with both
   transcripts.
 

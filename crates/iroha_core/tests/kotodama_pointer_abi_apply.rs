@@ -56,7 +56,7 @@ fn prepare_kotodama_arguments(
         .unwrap_or_else(|| {
             panic!("Kotodama V1 entrypoint `{entrypoint_name}` must declare an argument schema")
         });
-    let canonical = ivm::encode_argument_record_from_json(schema, payload)
+    let canonical = ivm_abi::arguments::encode_argument_record_from_json(schema, payload)
         .unwrap_or_else(|error| panic!("encode `{entrypoint_name}` arguments: {error}"));
     ivm::prepare_argument_record_with_gas_limit(schema, Arc::from(canonical), u64::MAX)
         .unwrap_or_else(|error| panic!("prepare `{entrypoint_name}` arguments: {error:?}"))

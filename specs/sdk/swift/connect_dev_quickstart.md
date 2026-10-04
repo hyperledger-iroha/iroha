@@ -11,23 +11,24 @@ This guide shows how to wire the Swift SDK into an iOS/macOS app, enable the Nor
 
 ## Prerequisites
 - Platforms: iOS 15+ / macOS 12+ (Swift 5.9 toolchain).
-- Norito bridge: bundle `NoritoBridge.xcframework` alongside the app (SPM binary target or CocoaPods vendored framework). Connect frame and native crypto operations fail closed when the required bridge is absent.
+- Norito bridge: materialize the authenticated `NoritoBridge.xcframework` before resolving the SwiftPM binary target. Connect frame and native crypto operations fail closed when the required bridge is absent.
 
 ## Install the SDK
 **Swift Package Manager**
 ```swift
 // Package.swift (application)
-.package(url: "https://github.com/hyperledger/iroha-swift.git", branch: "main"),
+.package(name: "IrohaSwift", path: "../../IrohaSwift"),
 // target dependencies:
-.product(name: "IrohaSwift", package: "iroha-swift")
+.product(name: "IrohaSwift", package: "IrohaSwift")
 ```
-Ensure the `NoritoBridge` binary target is present under `dist/` or provided by your workspace; the package enables the bridge automatically when found and surfaces the expected bridge path in build/runtime hints when the bundle is missing.
-
-**CocoaPods (Podspec consumer)**
-```ruby
-pod 'IrohaSwift', :path => '../IrohaSwift' # or your internal mirror
-```
-Bundle `NoritoBridge.xcframework` under the repository `dist/` directory or add it to your app’s `Frameworks` folder; a missing bridge is an installation error, not a codec fallback.
+SwiftPM is the sole supported Swift packaging path. Authenticate the XCFramework
+ZIP and materialize it under the ignored repository `dist/` directory or a
+canonical external directory selected by `MOBILE_SDK_APPLE_ARTIFACT_DIR`. Set
+`MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1` for reviewed external builds.
+Missing or incomplete artifacts fail package resolution; no codec fallback is
+selected. Qualify an ordinary dependency consumer in Release with actual native
+operations and no unsafe linker flags. Published coordinates require separate
+installation evidence; see the [release contract](../../../docs/norito_bridge_release.md).
 
 ## Sample projects
 - `examples/ios/ConnectMinimalApp/` — SwiftPM executable harness that opens a Connect session, logs events, and exports diagnostics/bundles. Use it to validate bridge bundling and queue exports locally.

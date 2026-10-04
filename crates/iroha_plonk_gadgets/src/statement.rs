@@ -1,64 +1,76 @@
-//! **Prototype**: the G1 statement field encoding of the split-lineage step
-//! relations, as measured in M7 (`g3_proof_scaling_measurement_tests.rs`,
-//! `m7_step`).
+//! **Prototype**: the step statement field encoding of the split-lineage step
+//! relations, and the canonical limb encodings of spec S6.
 //!
 //! The split-lineage design (step proofs `sigma_send`/`sigma_recv` on the
-//! payment path, the recursive lineage proof in the background) is a
+//! payment path, the recursive lineage proof in the background;
+//! `specs/kagemusha_single_design_proposal.md` sections 3.1 and 3.2) is a
 //! proposal whose owner approval is pending. Nothing in this module is a
-//! protocol format: the domain, relation identifiers and field order are
-//! the M7 measurement labels, kept so the prototype step relations hash the
-//! same statement M7 measured. No protocol path uses this module; a frozen
-//! encoding will get its own versioned type and vectors.
+//! protocol format: the domain and field order are prototype labels. No
+//! protocol path uses this module; a frozen encoding will get its own
+//! versioned type and vectors.
 //!
-//! # Encoding (32 field elements of the proof's own parity `F`)
+//! # Encoding (25 field elements of the proof's own parity `F`)
 //!
 //! | index | field |
 //! | --- | --- |
 //! | 0 | version (1) |
-//! | 1-2 | scheme id, two little-endian 128-bit limbs |
-//! | 3-4 | relation id (`u128`), 0 |
-//! | 5-6 | credential digest limbs |
-//! | 7-8 | asset id limbs |
-//! | 9 | successor lifecycle |
-//! | 10 | successor sequence |
-//! | 11 | next load ordinal |
-//! | 12 | predecessor commitment, own parity |
-//! | 13-14 | predecessor commitment, other parity, two limbs |
-//! | 15 | successor commitment, own parity |
-//! | 16-17 | successor commitment, other parity, two limbs |
-//! | 18 | effect tag (Send 3, Receive 4) |
-//! | 19-31 | the effect union, zero padded to 13 fields |
+//! | 1 | relation id (`u128`; the caller's, distinct per relation) |
+//! | 2-3 | scheme id, two little-endian 128-bit limbs |
+//! | 4-5 | asset id limbs |
+//! | 6-7 | credential digest limbs |
+//! | 8 | successor lifecycle |
+//! | 9 | successor sequence |
+//! | 10 | predecessor state commitment |
+//! | 11 | successor state commitment |
+//! | 12 | enabled-controls mask |
+//! | 13 | `burned_total` taken from the predecessor's lineage proof (Send; 0 for Receive) |
+//! | 14 | pending-outgoing root taken from the predecessor's lineage proof (Send; 0 for Receive) |
+//! | 15 | effect tag (Send 3, Receive 4) |
+//! | 16-24 | the effect, zero padded to 9 fields |
 //!
-//! The digest is the KAGEMUSHA sponge `hash_with_domain(m7stmnt1, fields)`,
-//! 18 permutations, or 17 with the folded prefix. A verifier recomputes it
-//! natively from the canonical statement, so the limbs in it are bound by
+//! The state commitments are values of the proof's own field. The statement
+//! carries no other-parity component: a consumer on the other Pasta field
+//! compares these values through their canonical limbs
+//! ([`foreign_limbs`]), never through limbs a prover chose.
+//!
+//! The digest is the KAGEMUSHA sponge `hash_with_domain(kgspstm1, fields)`,
+//! 14 permutations, or 13 with the folded prefix. A verifier recomputes it
+//! natively from the canonical statement, so every field in it is bound by
 //! the public digest.
 //!
-//! # Cross-field values (spec S6)
+//! # Canonical limbs (spec S6)
 //!
-//! A value of the other Pasta field enters this circuit's field as two
-//! limbs. Where a relation must also reason about such a value (not only
-//! hash it), [`assign_foreign_scalar`] constrains the limbs to the canonical
-//! injective encoding `lo < 2^128`, `hi < 2^127`, `lo + 2^128 hi < modulus`,
-//! so `s >= modulus` cannot be passed as `s mod modulus`.
+//! A value of a Pasta field enters a circuit as two limbs `lo + 2^128 hi`.
+//! [`assign_foreign_scalar`] constrains limbs of the other field to the
+//! canonical injective encoding `lo < 2^128`, `hi < 2^127`,
+//! `lo + 2^128 hi < modulus`, so `s >= modulus` cannot be passed as
+//! `s mod modulus`. [`assign_canonical_limbs`] decomposes a word of the
+//! circuit's own field into those canonical limbs, so a digest computed in
+//! circuit can be carried as the 32-byte identifier its canonical encoding
+//! is.
 
 use iroha_pasta::{PastaField, poseidon::PoseidonField};
 use iroha_plonk::frontend::{Error, Region, Value};
 
 use crate::{
+    arith::GlueChip,
     cells::{Bit, U128, Uint, Word},
     poseidon::{AbsorbInput, SpongeChip},
     range::u128::UintChip,
 };
 
 /// Fields of the statement encoding.
-pub const STATEMENT_FIELDS: usize = 32;
+pub const STATEMENT_FIELDS: usize = 25;
+/// Fields before the effect.
+pub const STATEMENT_HEADER_FIELDS: usize = 16;
 /// Fields of the effect union.
-pub const EFFECT_UNION_FIELDS: usize = 13;
-/// The prototype statement domain (M7 label).
-pub const STATEMENT_DOMAIN: u64 = u64::from_le_bytes(*b"m7stmnt1");
+pub const EFFECT_UNION_FIELDS: usize = 9;
+/// The prototype statement domain.
+pub const STATEMENT_DOMAIN: u64 = u64::from_le_bytes(*b"kgspstm1");
 /// The statement version.
 pub const STATEMENT_VERSION: u64 = 1;
+
+const _: () = assert!(STATEMENT_HEADER_FIELDS + EFFECT_UNION_FIELDS == STATEMENT_FIELDS);
 
 /// The prototype step relation a statement belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -70,15 +82,6 @@ pub enum StepRelation {
 }
 
 impl StepRelation {
-    /// The relation identifier (M7 label).
-    #[must_use]
-    pub const fn relation_id(self) -> u128 {
-        match self {
-            Self::Send => u128::from_le_bytes(*b"m7-sigma-send-v1"),
-            Self::Receive => u128::from_le_bytes(*b"m7-sigma-recv-v1"),
-        }
-    }
-
     /// The effect tag.
     #[must_use]
     pub const fn effect_tag(self) -> u64 {
@@ -108,34 +111,39 @@ pub fn limb_fields<F: PastaField>(limbs: [u128; 2]) -> [F; 2] {
 /// The native prototype statement (own parity `F`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StatementV1<F> {
-    /// The step relation.
-    pub relation: StepRelation,
+    /// The relation identifier.
+    pub relation_id: u128,
+    /// The step relation (its effect tag).
+    pub step: StepRelation,
     /// The scheme identifier.
     pub scheme_id: [u8; 32],
-    /// The credential digest.
-    pub credential: [u8; 32],
     /// The asset identifier.
     pub asset: [u8; 32],
+    /// The credential digest.
+    pub credential: [u8; 32],
     /// The successor lifecycle.
     pub lifecycle: u64,
     /// The successor sequence number.
     pub sequence: u128,
-    /// The next load ordinal.
-    pub next_load: u128,
-    /// The predecessor commitment component of this parity.
+    /// The predecessor state commitment.
     pub predecessor: F,
-    /// The canonical encoding of the predecessor's other-parity component.
-    pub predecessor_other: [u8; 32],
-    /// The successor commitment component of this parity.
+    /// The successor state commitment.
     pub successor: F,
-    /// The canonical encoding of the successor's other-parity component.
-    pub successor_other: [u8; 32],
-    /// The effect fields (at most 13).
+    /// The enabled-controls mask.
+    pub enabled_controls: u64,
+    /// `burned_total` taken from the predecessor's lineage proof (zero for
+    /// Receive).
+    pub burned_total: u128,
+    /// The pending-outgoing root taken from the predecessor's lineage proof
+    /// (zero for Receive).
+    pub pending_outgoing_root: F,
+    /// The effect fields (at most [`EFFECT_UNION_FIELDS`]).
     pub effect: Vec<F>,
 }
 
 impl<F: PoseidonField> StatementV1<F> {
-    /// The 32-field encoding, or `None` for more than 13 effect fields.
+    /// The 25-field encoding, or `None` for more than
+    /// [`EFFECT_UNION_FIELDS`] effect fields.
     #[must_use]
     pub fn encode(&self) -> Option<[F; STATEMENT_FIELDS]> {
         if self.effect.len() > EFFECT_UNION_FIELDS {
@@ -143,37 +151,33 @@ impl<F: PoseidonField> StatementV1<F> {
         }
         let limbs = |bytes: &[u8; 32]| limb_fields::<F>(bytes_to_limbs(bytes));
         let [scheme_lo, scheme_hi] = limbs(&self.scheme_id);
-        let [credential_lo, credential_hi] = limbs(&self.credential);
         let [asset_lo, asset_hi] = limbs(&self.asset);
-        let [predecessor_lo, predecessor_hi] = limbs(&self.predecessor_other);
-        let [successor_lo, successor_hi] = limbs(&self.successor_other);
+        let [credential_lo, credential_hi] = limbs(&self.credential);
         let mut fields = vec![
             F::from(STATEMENT_VERSION),
+            F::from_u128(self.relation_id),
             scheme_lo,
             scheme_hi,
-            F::from_u128(self.relation.relation_id()),
-            F::ZERO,
-            credential_lo,
-            credential_hi,
             asset_lo,
             asset_hi,
+            credential_lo,
+            credential_hi,
             F::from(self.lifecycle),
             F::from_u128(self.sequence),
-            F::from_u128(self.next_load),
             self.predecessor,
-            predecessor_lo,
-            predecessor_hi,
             self.successor,
-            successor_lo,
-            successor_hi,
-            F::from(self.relation.effect_tag()),
+            F::from(self.enabled_controls),
+            F::from_u128(self.burned_total),
+            self.pending_outgoing_root,
+            F::from(self.step.effect_tag()),
         ];
         fields.extend_from_slice(&self.effect);
         fields.resize(STATEMENT_FIELDS, F::ZERO);
         fields.try_into().ok()
     }
 
-    /// The statement digest, or `None` for more than 13 effect fields.
+    /// The statement digest, or `None` for more than
+    /// [`EFFECT_UNION_FIELDS`] effect fields.
     #[must_use]
     pub fn digest(&self) -> Option<F> {
         self.encode()
@@ -187,72 +191,76 @@ impl<F: PoseidonField> StatementV1<F> {
 pub struct StatementCells<'a, F: PastaField> {
     /// The scheme identifier limbs.
     pub scheme_id: [&'a Word<F>; 2],
-    /// The credential digest limbs.
-    pub credential: [&'a Word<F>; 2],
     /// The asset identifier limbs.
     pub asset: [&'a Word<F>; 2],
+    /// The credential digest limbs.
+    pub credential: [&'a Word<F>; 2],
     /// The successor lifecycle.
     pub lifecycle: &'a Word<F>,
     /// The successor sequence number.
     pub sequence: &'a Word<F>,
-    /// The next load ordinal.
-    pub next_load: &'a Word<F>,
-    /// The predecessor commitment component of this parity.
+    /// The predecessor state commitment.
     pub predecessor: &'a Word<F>,
-    /// The predecessor's other-parity component limbs.
-    pub predecessor_other: [&'a Word<F>; 2],
-    /// The successor commitment component of this parity.
+    /// The successor state commitment.
     pub successor: &'a Word<F>,
-    /// The successor's other-parity component limbs.
-    pub successor_other: [&'a Word<F>; 2],
-    /// The effect fields (at most 13; the rest are zero).
+    /// The enabled-controls mask.
+    pub enabled_controls: &'a Word<F>,
+    /// `burned_total` from the predecessor's lineage proof (`None`: the
+    /// constant zero, for Receive).
+    pub burned_total: Option<&'a Word<F>>,
+    /// The pending-outgoing root from the predecessor's lineage proof
+    /// (`None`: the constant zero, for Receive).
+    pub pending_outgoing_root: Option<&'a Word<F>>,
+    /// The effect fields (at most [`EFFECT_UNION_FIELDS`]; the rest are
+    /// zero).
     pub effect: &'a [Word<F>],
 }
 
-/// Hashes the statement encoding of `cells` for `relation` and returns the
-/// digest cell.
+/// Hashes the statement encoding of `cells` for the relation `relation_id`
+/// of step `step` and returns the digest cell.
 ///
 /// # Errors
 ///
-/// [`Error::Synthesis`] for more than 13 effect fields, and [`Error`] from
-/// the layout.
+/// [`Error::Synthesis`] for more than [`EFFECT_UNION_FIELDS`] effect fields,
+/// and [`Error`] from the layout.
 pub fn statement_digest<F: PoseidonField>(
     sponge: &mut SpongeChip<F>,
     region: &mut Region<'_, F>,
-    relation: StepRelation,
+    relation_id: u128,
+    step: StepRelation,
     cells: &StatementCells<'_, F>,
 ) -> Result<Word<F>, Error> {
     if cells.effect.len() > EFFECT_UNION_FIELDS {
         return Err(Error::Synthesis);
     }
     let word = AbsorbInput::Word;
+    let optional =
+        |cell: Option<&Word<F>>| cell.map_or(AbsorbInput::Constant(F::ZERO), AbsorbInput::Word);
     let mut inputs = vec![
         AbsorbInput::Constant(F::from(STATEMENT_VERSION)),
+        AbsorbInput::Constant(F::from_u128(relation_id)),
         word(cells.scheme_id[0]),
         word(cells.scheme_id[1]),
-        AbsorbInput::Constant(F::from_u128(relation.relation_id())),
-        AbsorbInput::Constant(F::ZERO),
-        word(cells.credential[0]),
-        word(cells.credential[1]),
         word(cells.asset[0]),
         word(cells.asset[1]),
+        word(cells.credential[0]),
+        word(cells.credential[1]),
         word(cells.lifecycle),
         word(cells.sequence),
-        word(cells.next_load),
         word(cells.predecessor),
-        word(cells.predecessor_other[0]),
-        word(cells.predecessor_other[1]),
         word(cells.successor),
-        word(cells.successor_other[0]),
-        word(cells.successor_other[1]),
-        AbsorbInput::Constant(F::from(relation.effect_tag())),
+        word(cells.enabled_controls),
+        optional(cells.burned_total),
+        optional(cells.pending_outgoing_root),
+        AbsorbInput::Constant(F::from(step.effect_tag())),
     ];
     inputs.extend(cells.effect.iter().map(AbsorbInput::Word));
     inputs.resize(STATEMENT_FIELDS, AbsorbInput::Constant(F::ZERO));
     sponge.hash(region, STATEMENT_DOMAIN, &inputs)
 }
 
-/// The canonical limbs `(lo, hi)` of a field element `value`.
+/// The canonical limbs `(lo, hi)` of a field element `value` (the halves of
+/// its canonical little-endian 32-byte encoding).
 #[must_use]
 pub fn foreign_limbs<G: PastaField>(value: &G) -> [u128; 2] {
     let limbs = value.to_canonical_limbs();
@@ -273,9 +281,9 @@ pub fn foreign_value_native<G: PastaField>(limbs: [u128; 2]) -> Option<G> {
     Option::from(G::from_canonical_limbs(words))
 }
 
-/// A cross-field value in its canonical injective encoding (spec S6):
-/// `lo < 2^128`, `hi < 2^127` and `lo + 2^128 hi < |G|` for the foreign
-/// field `G` it was checked against.
+/// A value in its canonical injective limb encoding (spec S6): `lo < 2^128`,
+/// `hi < 2^127` and `lo + 2^128 hi < |G|` for the field `G` it was checked
+/// against.
 #[derive(Clone, Debug)]
 pub struct ForeignScalar<F: PastaField> {
     lo: U128<F>,
@@ -293,6 +301,12 @@ impl<F: PastaField> ForeignScalar<F> {
     #[must_use]
     pub const fn hi(&self) -> &Uint<F, 127> {
         &self.hi
+    }
+
+    /// Both limbs, low first.
+    #[must_use]
+    pub const fn words(&self) -> [&Word<F>; 2] {
+        [self.lo.word(), self.hi.word()]
     }
 }
 
@@ -325,22 +339,75 @@ pub fn assign_foreign_scalar<F: PastaField, G: PastaField>(
     Ok(ForeignScalar { lo, hi })
 }
 
+/// `2^128` in `F`.
+fn two_pow_128<F: PastaField>() -> F {
+    F::from_u128(1 << 127).double()
+}
+
+/// Decomposes `value`, a word of the circuit's own field, into its canonical
+/// limbs: `lo + 2^128 hi = value` with the canonical encoding of
+/// [`assign_foreign_scalar`] (checked against `F` itself), so the limbs are
+/// the unique halves of the canonical 32-byte encoding of `value`
+/// ([`foreign_limbs`]) and the alias `value + modulus` is unsatisfiable.
+///
+/// # Errors
+///
+/// [`Error`] from the layout.
+pub fn assign_canonical_limbs<F: PastaField>(
+    uint: &mut UintChip<'_, F>,
+    region: &mut Region<'_, F>,
+    value: &Word<F>,
+) -> Result<ForeignScalar<F>, Error> {
+    let limbs = value.value().map(|value| foreign_limbs(&value));
+    canonical_limbs_with_witness(uint, region, value, limbs)
+}
+
+/// [`assign_canonical_limbs`] with the limbs supplied by the caller (tests
+/// force non-canonical limbs through it).
+pub(crate) fn canonical_limbs_with_witness<F: PastaField>(
+    uint: &mut UintChip<'_, F>,
+    region: &mut Region<'_, F>,
+    value: &Word<F>,
+    limbs: Value<[u128; 2]>,
+) -> Result<ForeignScalar<F>, Error> {
+    let scalar = assign_foreign_scalar::<F, F>(uint, region, limbs)?;
+    let recomposed = uint.glue().linear(
+        region,
+        &[
+            (F::ONE, scalar.lo.word()),
+            (two_pow_128::<F>(), scalar.hi.word()),
+        ],
+        F::ZERO,
+    )?;
+    GlueChip::assert_equal(region, &recomposed, value)?;
+    Ok(scalar)
+}
+
 #[cfg(test)]
 mod tests {
     use ff::{Field, PrimeField};
     use iroha_pasta::{Fp, Fq};
+    use iroha_plonk::{
+        check::{CheckMode, check_circuit},
+        cs::ConstraintSystem,
+        frontend::{Circuit, Layouter, SimpleFloorPlanner},
+    };
 
     use super::*;
+    use crate::{
+        arith::GlueConfig,
+        range::running_sum::{LimbBits, RunningSumChip, RunningSumConfig},
+    };
 
     #[test]
     fn relation_labels() {
         assert_ne!(
-            StepRelation::Send.relation_id(),
-            StepRelation::Receive.relation_id()
+            StepRelation::Send.effect_tag(),
+            StepRelation::Receive.effect_tag()
         );
         assert_eq!(StepRelation::Send.effect_tag(), 3);
         assert_eq!(StepRelation::Receive.effect_tag(), 4);
-        assert_eq!(STATEMENT_DOMAIN, u64::from_le_bytes(*b"m7stmnt1"));
+        assert_eq!(STATEMENT_DOMAIN.to_le_bytes(), *b"kgspstm1");
     }
 
     #[test]
@@ -353,7 +420,7 @@ mod tests {
         assert_eq!(limb_fields::<Fp>([3, 4]), [Fp::from(3u64), Fp::from(4u64)]);
     }
 
-    fn foreign_round_trip<G: PastaField>() {
+    fn foreign_round_trip<G: PastaField + PrimeField<Repr = [u8; 32]>>() {
         let max = -G::ONE;
         let limbs = foreign_limbs(&max);
         assert_eq!(limbs[1], 1 << 126);
@@ -365,42 +432,57 @@ mod tests {
             foreign_value_native::<G>(foreign_limbs(&seven)),
             Some(seven)
         );
+        // The canonical limbs are the halves of the canonical encoding.
+        assert_eq!(bytes_to_limbs(&max.to_repr()), limbs);
+        // lo + 2^128 hi recomposes the value.
+        let [lo, hi] = limbs;
+        assert_eq!(
+            G::from_u128(lo) + two_pow_128::<G>() * G::from_u128(hi),
+            max
+        );
     }
 
     #[test]
     fn foreign_limbs_are_canonical() {
         foreign_round_trip::<Fp>();
         foreign_round_trip::<Fq>();
+        assert_eq!(two_pow_128::<Fp>(), Fp::from(2u64).pow_vartime([128]));
     }
 
     #[test]
     fn statement_encoding_layout() {
         let statement = StatementV1::<Fq> {
-            relation: StepRelation::Receive,
+            relation_id: 0x1234,
+            step: StepRelation::Send,
             scheme_id: [1; 32],
-            credential: [2; 32],
             asset: [3; 32],
+            credential: [2; 32],
             lifecycle: 1,
             sequence: 9,
-            next_load: 4,
             predecessor: Fq::from(5u64),
-            predecessor_other: [6; 32],
             successor: Fq::from(7u64),
-            successor_other: [8; 32],
-            effect: vec![Fq::from(10u64); 7],
+            enabled_controls: 0,
+            burned_total: 40,
+            pending_outgoing_root: Fq::from(11u64),
+            effect: vec![Fq::from(10u64); 9],
         };
         let fields = statement.encode().expect("encoding");
         assert_eq!(fields[0], Fq::ONE);
+        assert_eq!(fields[1], Fq::from(0x1234u64));
         assert_eq!(
-            fields[3],
-            Fq::from_u128(StepRelation::Receive.relation_id())
+            [fields[2], fields[3]],
+            limb_fields(bytes_to_limbs(&[1; 32]))
         );
-        assert_eq!(fields[4], Fq::ZERO);
-        assert_eq!(fields[12], Fq::from(5u64));
-        assert_eq!(fields[15], Fq::from(7u64));
-        assert_eq!(fields[18], Fq::from(4u64));
-        assert_eq!(fields[25], Fq::from(10u64));
-        assert_eq!(fields[26], Fq::ZERO);
+        assert_eq!(
+            [fields[6], fields[7]],
+            limb_fields(bytes_to_limbs(&[2; 32]))
+        );
+        assert_eq!(fields[10], Fq::from(5u64));
+        assert_eq!(fields[11], Fq::from(7u64));
+        assert_eq!(fields[13], Fq::from(40u64));
+        assert_eq!(fields[14], Fq::from(11u64));
+        assert_eq!(fields[15], Fq::from(3u64));
+        assert_eq!(fields[24], Fq::from(10u64));
         assert_eq!(
             statement.digest(),
             Some(iroha_pasta::poseidon::hash_with_domain(
@@ -408,9 +490,100 @@ mod tests {
                 &fields
             ))
         );
+        let mut short = statement.clone();
+        short.effect.truncate(5);
+        assert_eq!(short.encode().expect("encoding")[21], Fq::ZERO);
         let mut long = statement;
         long.effect = vec![Fq::ONE; EFFECT_UNION_FIELDS + 1];
         assert_eq!(long.encode(), None);
         assert_eq!(long.digest(), None);
+    }
+
+    /// `assign_canonical_limbs` of a value with chosen limbs.
+    #[derive(Clone, Copy)]
+    struct ForcedLimbs {
+        value: Fp,
+        limbs: [u128; 2],
+    }
+
+    impl Circuit<Fp> for ForcedLimbs {
+        type Config = (GlueConfig, RunningSumConfig);
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+
+        fn without_witnesses(&self) -> Self {
+            *self
+        }
+
+        fn configure(meta: &mut ConstraintSystem<Fp>) -> Self::Config {
+            let advice = core::array::from_fn(|_| meta.advice_column());
+            let constants = meta.fixed_column();
+            let glue = GlueConfig::configure(meta, advice, constants);
+            let z = meta.advice_column();
+            let bits = LimbBits::new(8).unwrap_or_else(|| unreachable!("valid width"));
+            (glue, RunningSumConfig::configure(meta, z, bits))
+        }
+
+        fn synthesize(
+            &self,
+            (glue, range): Self::Config,
+            mut layouter: impl Layouter<Fp>,
+        ) -> Result<(), Error> {
+            let mut glue = GlueChip::new(glue);
+            let mut range = RunningSumChip::new(range);
+            range.load_table(&mut layouter)?;
+            layouter.assign_region(
+                || "forced limbs",
+                |mut region| {
+                    let value = glue.witness(&mut region, Value::known(self.value))?;
+                    let mut uint = UintChip::new(&mut glue, &mut range);
+                    canonical_limbs_with_witness(
+                        &mut uint,
+                        &mut region,
+                        &value,
+                        Value::known(self.limbs),
+                    )
+                    .map(|_| ())
+                },
+            )
+        }
+    }
+
+    /// The strict checker report of `ForcedLimbs`.
+    fn forced(value: Fp, limbs: [u128; 2]) -> iroha_plonk::check::CheckReport<Fp> {
+        check_circuit(&ForcedLimbs { value, limbs }, 9, &[], CheckMode::Strict).expect("check")
+    }
+
+    /// `limbs + modulus` as limbs (the alias `value + p` of a value).
+    fn plus_modulus([lo, hi]: [u128; 2]) -> [u128; 2] {
+        let [max_lo, max_hi] = foreign_limbs(&-Fp::ONE);
+        // p = (max_lo + 1) + 2^128 max_hi; max_lo + 1 does not overflow.
+        let (sum, carry) = lo.overflowing_add(max_lo + 1);
+        [sum, hi + max_hi + u128::from(carry)]
+    }
+
+    #[test]
+    fn canonical_limbs_are_the_only_decomposition() {
+        for value in [Fp::ZERO, Fp::ONE, -Fp::ONE, Fp::from(0x1234_5678u64).invert().unwrap()] {
+            let limbs = foreign_limbs(&value);
+            assert!(forced(value, limbs).is_satisfied(), "{value:?}");
+            // value + p recomposes to the same field element, but its high
+            // limb is out of range: only range lookups fail.
+            let alias = plus_modulus(limbs);
+            assert_ne!(alias, limbs);
+            assert_eq!(
+                Fp::from_u128(alias[0]) + two_pow_128::<Fp>() * Fp::from_u128(alias[1]),
+                value
+            );
+            let report = forced(value, alias);
+            assert!(!report.is_satisfied());
+            assert!(report.failures().iter().all(|failure| matches!(
+                failure,
+                iroha_plonk::check::CheckFailure::LookupInputMissing { .. }
+            )));
+            // Limbs of another value fail the recomposition copy.
+            let wrong = [limbs[0] ^ 1, limbs[1]];
+            assert!(!forced(value, wrong).is_satisfied());
+        }
     }
 }

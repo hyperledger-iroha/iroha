@@ -26,7 +26,7 @@ fn tlv_envelope<T: NoritoSerialize>(type_id: PointerType, val: &T) -> Vec<u8> {
     blob
 }
 fn quantity_tlv(value: &Quantity) -> Vec<u8> {
-    ivm::numeric_tlv::encode_quantity(value).expect("encode quantity pointer envelope")
+    ivm_abi::numeric_tlv::encode_quantity(value).expect("encode quantity pointer envelope")
 }
 fn select_kotodama_entrypoint(vm: &mut IVM, program: &[u8], name: &str) {
     let metadata = ProgramMetadata::parse(program).expect("parse Kotodama V1 artifact");

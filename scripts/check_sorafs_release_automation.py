@@ -861,7 +861,7 @@ SORAFS_CLI_PROVIDER_INGEST_TRIGGER_PATHS = frozenset(
 )
 SORAFS_CLI_VERSION_MAP_TRIGGER_PATHS = frozenset(
     {
-        "IrohaSwift/IrohaSwift.podspec",
+        "IrohaSwift/Package.swift",
         "IrohaSwift/README.md",
         "IrohaSwift/VERSION",
         "specs/sdk/swift/index.md",

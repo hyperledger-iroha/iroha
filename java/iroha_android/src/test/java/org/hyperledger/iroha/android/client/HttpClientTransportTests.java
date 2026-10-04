@@ -4202,7 +4202,7 @@ public final class HttpClientTransportTests {
         loadSharedFixture("fixtures/kotodama/entrypoint_argument_record_v1.json");
     assert "EntrypointArgumentRecordV1".equals(fixture.get("codec"))
         : "Argument-record fixture codec mismatch";
-    assert "ivm::encode_argument_record_from_json".equals(fixture.get("generator"))
+    assert "ivm_abi::arguments::encode_argument_record_from_json".equals(fixture.get("generator"))
         : "Argument-record fixture generator mismatch";
     final Map<String, Object> schema = object(fixture, "entrypoint_argument_schema_v1");
     assert string(schema, "schema_hash_hex").matches("[0-9a-f]{64}")
