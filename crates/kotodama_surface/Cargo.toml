@@ -8,8 +8,8 @@ license = "Apache-2.0"
 repository = "https://github.com/hyperledger-iroha/iroha"
 documentation = "https://docs.rs/kotodama_surface"
 
-# TODO: adopt [lints] workspace = true once builtins docs satisfy missing_docs
-# (kept without [lints] for parity with kotodama_lang).
+[lints]
+workspace = true
 
 [dependencies]
 ivm_abi = { path = "../ivm_abi" }

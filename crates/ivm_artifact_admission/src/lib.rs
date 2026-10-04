@@ -31,12 +31,7 @@ use std::fmt::Write as _;
 mod policy;
 /// Maximum executable-image bytes admitted by IVM code memory.
 pub const MAX_CONTRACT_IMAGE_BYTES: u64 = ivm_abi::metadata::MAX_PROGRAM_IMAGE_BYTES_V1 as u64;
-/// One fixed-width decoded instruction in the executable stream.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct DecodedOp {
-    pub(crate) pc: u64,
-    pub(crate) inst: u32,
-}
+use decoded::DecodedOp;
 /// Admission outputs derived from the artifact itself.
 #[derive(Clone, Debug)]
 pub struct VerifiedContractArtifact {

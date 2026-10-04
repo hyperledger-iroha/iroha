@@ -1,6 +1,6 @@
 //! Closed public attachment diagnostics; underlying errors never cross this boundary.
 
-use super::Error;
+use super::{Error, ManagedBootstrapFailure};
 use crate::{
     attachment::AttachmentError, bootstrap::BootstrapError, provisioning::ProvisioningError,
     verify::finality::FinalityError,
@@ -189,10 +189,30 @@ impl From<FinalityError> for ManagedAttachmentFailure {
 impl From<Error> for ManagedAttachmentFailure {
     fn from(error: Error) -> Self {
         match error {
+            Error::Bootstrap(reason) => match reason {
+                ManagedBootstrapFailure::Cancelled => Self::WorkerUnavailable,
+                ManagedBootstrapFailure::TransitionPending
+                | ManagedBootstrapFailure::SignedUnresolved => Self::RecoveryFailed,
+                // Expired unsigned authorization or source custody does not establish a
+                // terminal rejection or expiry of an independently signed operation.
+                ManagedBootstrapFailure::AuthorizationExpired
+                | ManagedBootstrapFailure::PayloadExpired
+                | ManagedBootstrapFailure::EnrollmentExpired
+                | ManagedBootstrapFailure::EnrollmentObservationExpired
+                | ManagedBootstrapFailure::EnrollmentPredecessorChanged
+                | ManagedBootstrapFailure::ProfileExpired
+                | ManagedBootstrapFailure::EpochLimit
+                | ManagedBootstrapFailure::ReplacementLimit => Self::ContextRejected,
+            },
             Error::Io(_) | Error::Busy(_) => Self::CustodyUnavailable,
             Error::ParentDeadline | Error::Timeout(_) => Self::AwaitingCompletion,
             Error::ParentProgressDeadline { failure, .. } => failure,
-            Error::NoSelection | Error::Invalid(_) => Self::ContextRejected,
+            // A retained service bootstrap that cannot advance under this authorization
+            // invalidates the selected context; it is never a parent completion signal.
+            Error::NoSelection
+            | Error::Invalid(_)
+            | Error::Bootstrap(_)
+            | Error::ContractCall { .. } => Self::ContextRejected,
         }
     }
 }

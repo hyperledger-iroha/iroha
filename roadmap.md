@@ -17,7 +17,7 @@ the linked specifications. Routine repair receipts belong in PRs and CI.
 4. Validate the combined fixture/runtime repairs through fresh workspace,
    genuine fixture and native SDK artifacts on one source candidate. Qualify the
    joint X509 relation and transcript privacy, and resolve its proving-time and
-   RSS observer failures;
+   hardware-specific address-space failures;
    produce current q77 maximum proofs without widening resource limits.
 
 The [first-release goals](specs/first_release_completion_goals.md),
@@ -90,13 +90,13 @@ and [verification checklist](specs/kagemusha_evidence_gate.md).
 | S3 | C# API/package | C#/native bridge | Canonical prepared operations, faucet metadata, immutable parsing, documented API/allocation checks and real Windows/native packaging. |
 | S4 | Shared wire/activity | SDKs/Torii | Canonical signing/executable/account fixtures, multisig witnesses and snapshot-bound activity with bounded cursors and expiry. |
 | S5 | Kotlin closure | Kotlin/Android | Finish Java/JNI/publication retirement; release transport/attestation/Nearby and CUDA hardware qualification with separate host/device evidence. |
-| S6 | Native release matrix | Bridge/platform owners | Signed same-source current-bridge AAR/XCFramework/JNI/wheel/host packages; all SDK checkpoint/wire/alias/SNS and OS/architecture matrices; retired layouts fail closed. |
+| S6 | Native release matrix | Bridge/platform owners | Signed same-source current-bridge AAR/XCFramework/JNI/wheel/host packages; all SDK checkpoint/wire/alias/SNS and OS/architecture matrices; retired layouts fail closed. Swift framework construction, installation and native suite qualification follow the [completion goals](specs/sdk/swift/native_framework_completion_goals.md). |
 | S7 | Recursive KAGEMUSHA | Core/coordinator/proofs | G3/G4 (G1 objects and vectors exist in `kagemusha_wallet_v1`): owner-approved relation architecture that meets the 10,000-byte bounds; one fixed relation consuming the G1 objects; complete proof/receipt lineage, irreversible Send, exact Payment replay, permanent receive deduplication and offline onward spending; retire refund paths and duplicate monetary engines. |
 | S8 | Durable money | Native/platform/reserves | G2/G5: stock-OS journal/marker Advance, recoverable exact successor and platform enrollment; reserve-backed loads, one-use redemption/fee claims, optional controls default off. |
 | S9 | Mobile/Nearby/NFC | SDKs/device providers | G4/G6/G7: shared Rust core with Swift/Kotlin adapters and one envelope over NFC/radio/QR/Petal; record device recovery, replay/restore, memory/thermal, size and latency results while integrating and using the POC. |
 | S10 | Private-file/ZK-ACE SDK | JS/privacy/native | Governed two-pass intent signing, nonserializable private witnesses/erasure; Windows secure storage and authenticated native packages. |
 | S11 | Petal Stream devices | Petal/SDKs/device providers | [Device protocol](specs/petal_stream.md#8-qualification): 20 timed runs per device and distance on governed profiles including a low-end 480p–720p Android phone, a modern iPhone and a webcam; `ScanStats` lane rates filed per device with exposure compensation at 0, −1 and −2 EV, and the Swift/Kotlin/JS/Python/C# readers re-run against the same recorded camera captures. Field results tune the inferred-corner search and the 500 ms tracking window, and measure tracking on hand-held phones. |
-| S12 | Collection queries | Torii/SDKs/CLI/MCP | One [query language](specs/torii/collection_queries.md) serves the ten collections; complete exact cross-route aggregates and totals over disjoint route partitions, give transaction history an authenticated per-height read path so pages deeper than one scan budget below the tip stay reachable, move the explorer, account-history and contract-activity feeds and the trigger routes onto the contract, and qualify multi-dataspace paging and every SDK suite on live peers. |
+| S12 | Collection query qualification | Torii/SDKs/CLI/MCP | Move remaining trigger list routes onto the collection contract. Qualify the [shared query contract](specs/torii/collection_queries.md) on current-source live peers: multi-dataspace visibility and exact totals/aggregates, deep history after restart, changing authorization between pages, bounded sparse scans and every SDK's installed/native suite. The [implementation completion goals](specs/torii/query_completion_goals.md) define the component contract; they do not establish release readiness. |
 
 ## Cryptography and VM
 

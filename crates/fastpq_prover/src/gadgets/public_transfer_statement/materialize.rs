@@ -5,7 +5,11 @@
 //! full keys and path allocation belong to the shared public preparation engine.
 //! Derived roots describe the touched-state tree and establish no finality.
 
-use std::collections::BTreeMap;
+use std::fmt;
+
+use iroha_allocation::{AllocationBudget, AllocationReservation};
+
+mod funded_tree;
 
 use iroha_crypto::Hash;
 use iroha_data_model::fastpq::{FastpqQuantityUnits, TransferSmtWitness};
@@ -152,6 +156,21 @@ impl TransferSmtBuildLimits {
             max_node_hashes: max_updates.checked_mul(2 * HEIGHT)?,
         })
     }
+
+    /// Checked conservative bytes for all tree scratch and returned path backing.
+    ///
+    /// The caller admits this demand from its original finite pool as part of the
+    /// complete operation. Construction partitions these prepaid bytes without
+    /// acquiring another pool. Unused scratch credit refunds on return; output
+    /// vector, path, sibling and ledger credits remain with their physical owners.
+    /// Public preparation, error diagnostics and enclosing owners are separate.
+    ///
+    /// # Errors
+    /// Rejects count/sibling caps, inconsistent empty or odd update counts and
+    /// unrepresentable concrete layouts or layout sums before allocating.
+    pub fn allocation_bytes(self, updates: usize, unique_keys: usize) -> Result<usize> {
+        funded_tree::allocation_bytes(self, updates, unique_keys)
+    }
 }
 
 /// Exact bounded private-tree work, excluding already checked public leaf hashes.
@@ -171,13 +190,33 @@ pub struct TransferSmtBuildWork {
 
 /// Locally generated private paths in original pair and sequential update order.
 /// For transfers, the first update is the debit and the second is the credit.
-/// These data establish no source authority or proof-verification result.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// The move-only owner retains original allocation credit; borrowed witnesses
+/// cannot detach its backing or grow its vectors. These data establish no source
+/// authority or proof-verification result.
 pub struct DerivedTransferSmtWitnesses {
     roots: ([u8; 32], [u8; 32]),
-    pairs: Vec<[TransferSmtWitness; 2]>,
+    pairs: funded_tree::WitnessPairs,
     work: TransferSmtBuildWork,
 }
+
+impl fmt::Debug for DerivedTransferSmtWitnesses {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DerivedTransferSmtWitnesses")
+            .field("roots", &self.roots)
+            .field("pairs", &self.pairs())
+            .field("work", &self.work)
+            .finish()
+    }
+}
+
+impl PartialEq for DerivedTransferSmtWitnesses {
+    fn eq(&self, other: &Self) -> bool {
+        self.roots == other.roots && self.pairs() == other.pairs() && self.work == other.work
+    }
+}
+
+impl Eq for DerivedTransferSmtWitnesses {}
 
 impl DerivedTransferSmtWitnesses {
     /// Exact initial and final roots of the constructed touched-state tree.
@@ -199,7 +238,7 @@ impl DerivedTransferSmtWitnesses {
     pub fn intermediate_roots(
         &self,
     ) -> impl ExactSizeIterator<Item = [u8; 32]> + DoubleEndedIterator + '_ {
-        self.pairs[..self.pairs.len().saturating_sub(1)]
+        self.pairs()[..self.pairs().len().saturating_sub(1)]
             .iter()
             .map(|pair| pair[1].root_after)
     }
@@ -207,7 +246,7 @@ impl DerivedTransferSmtWitnesses {
     /// Private update paths, preserving every chronological occurrence.
     #[must_use]
     pub fn pairs(&self) -> &[[TransferSmtWitness; 2]] {
-        &self.pairs
+        self.pairs.as_slice()
     }
 
     /// Exact node/sibling work retained with this complete successful result.
@@ -273,14 +312,18 @@ impl QuantityTransferMaterialization {
 impl<V> PreparedPublicTransfers<'_, V> {
     /// Build private paths and require both derived roots to equal this table's inputs.
     /// No transcript quantities, identities or public ports are repaired.
+    /// The supplied reservation must come from `budget` and cover
+    /// [`TransferSmtBuildLimits::allocation_bytes`] for this table.
     ///
     /// # Errors
     /// Rejects construction limits, inconsistent internal ports or mismatching roots.
     pub fn build_smt_witnesses(
         &self,
         limits: TransferSmtBuildLimits,
+        budget: &AllocationBudget,
+        reservation: &mut AllocationReservation,
     ) -> Result<DerivedTransferSmtWitnesses> {
-        let built = derive(self, limits)?;
+        let built = derive(self, limits, budget, reservation)?;
         if built.roots != (self.public_inputs.old_root, self.public_inputs.new_root) {
             return Err(invariant(
                 "derived transfer SMT roots differ from public inputs",
@@ -387,6 +430,8 @@ pub fn quantity_rows_for_public_preparation(
 /// the caller's unchanged roots and remains subject to the ordinary/AXT profile rules.
 ///
 /// This produces local facts, not authenticated state, an admitted profile or a proof.
+/// `budget` and `reservation` fund the private tree only; canonical public row and
+/// preparation storage remains a separate caller admission obligation.
 ///
 /// # Errors
 /// Rejects malformed claims, arithmetic/chronology failures, unsupported semantics,
@@ -397,6 +442,8 @@ pub fn materialize_quantity_public_transfers(
     semantics: ProofSemantics,
     public_limits: PublicTransferLimits,
     tree_limits: TransferSmtBuildLimits,
+    budget: &AllocationBudget,
+    reservation: &mut AllocationReservation,
 ) -> Result<QuantityTransferMaterialization> {
     let transitions = quantity_rows_for_public_preparation(
         claims,
@@ -412,7 +459,7 @@ pub fn materialize_quantity_public_transfers(
     }
     let prepared =
         prepare_quantity_public_transfers(&transitions, claims, scratch, semantics, public_limits)?;
-    let witnesses = derive(&prepared, tree_limits)?;
+    let witnesses = derive(&prepared, tree_limits, budget, reservation)?;
     (public_inputs.old_root, public_inputs.new_root) = witnesses.roots;
     let bound = prepare_quantity_public_transfers(
         &transitions,
@@ -440,74 +487,13 @@ fn digest(limbs: [u32; 8]) -> Result<Hash> {
     Ok(Hash::prehashed(bytes))
 }
 
-fn preflight<T: CheckedUpdateTable + ?Sized>(
-    prepared: &T,
-    limits: TransferSmtBuildLimits,
-) -> Result<TransferSmtBuildWork> {
-    let updates = prepared
-        .pair_count()
-        .checked_mul(2)
-        .ok_or_else(|| invariant("SMT update count overflows"))?;
-    let unique_keys = prepared.keys().len();
-    check_limit("max_transfer_smt_updates", updates, limits.max_updates)?;
-    check_limit("max_transfer_smt_keys", unique_keys, limits.max_unique_keys)?;
-    check_limit(
-        "max_transfer_smt_nodes",
-        unique_keys,
-        limits.max_retained_nodes,
-    )?;
-    if updates != prepared.row_count() || (updates == 0) != (unique_keys == 0) {
-        return Err(invariant("SMT public table cardinality is inconsistent"));
-    }
-    let sibling_hashes = updates
-        .checked_mul(HEIGHT)
-        .ok_or_else(|| invariant("SMT sibling count overflows"))?;
-    check_limit(
-        "max_transfer_smt_siblings",
-        sibling_hashes,
-        limits.max_sibling_hashes,
-    )?;
-    let mut paths: Vec<_> = prepared.keys().iter().map(|key| key.path).collect();
-    paths.sort_unstable();
-    if paths.windows(2).any(|pair| pair[0] == pair[1]) {
-        return Err(invariant("SMT public key paths are not unique"));
-    }
-    let mut retained_nodes = 0_usize;
-    for level in 0..=HEIGHT {
-        let mut previous = None;
-        for path in &paths {
-            let parent = u64::from(*path) >> level;
-            if previous != Some(parent) {
-                retained_nodes = checked_add(retained_nodes, 1)?;
-                check_limit(
-                    "max_transfer_smt_nodes",
-                    retained_nodes,
-                    limits.max_retained_nodes,
-                )?;
-                previous = Some(parent);
-            }
-        }
-    }
-    let node_hashes = checked_add(retained_nodes - unique_keys, sibling_hashes)?;
-    check_limit(
-        "max_transfer_smt_node_hashes",
-        node_hashes,
-        limits.max_node_hashes,
-    )?;
-    Ok(TransferSmtBuildWork {
-        updates,
-        unique_keys,
-        retained_nodes,
-        sibling_hashes,
-        node_hashes,
-    })
-}
-
 fn derive<V>(
     prepared: &PreparedPublicTransfers<'_, V>,
     limits: TransferSmtBuildLimits,
+    budget: &AllocationBudget,
+    reservation: &mut AllocationReservation,
 ) -> Result<DerivedTransferSmtWitnesses> {
-    derive_two_update_smt(prepared, limits)
+    derive_two_update_smt(prepared, limits, budget, reservation)
 }
 
 /// Materialize one immutable, strictly prepared sequence of two-update effects.
@@ -515,169 +501,18 @@ fn derive<V>(
 /// This is the sole private-tree implementation for transfer and execution-effect
 /// preparation. It rechecks cardinality, exact occurrence/leg/key ports, unique
 /// paths and chronological leaves under the existing bounded tree-work rules.
+/// The caller supplies the original pool and prepaid allocation demand. Returned
+/// witnesses retain all their backing credit until actual deallocation.
 /// Nonempty roots are derived locally; callers binding expected public roots must
 /// compare them afterward. Empty construction requires an unchanged supplied root.
 /// Neither result roots nor successful preparation authenticate source finality.
 pub(in crate::gadgets) fn derive_two_update_smt<T: CheckedUpdateTable + ?Sized>(
     prepared: &T,
     limits: TransferSmtBuildLimits,
+    budget: &AllocationBudget,
+    reservation: &mut AllocationReservation,
 ) -> Result<DerivedTransferSmtWitnesses> {
-    let work = preflight(prepared, limits)?;
-    if work.updates == 0 {
-        let public_inputs = prepared.public_inputs();
-        if public_inputs.old_root != public_inputs.new_root {
-            return Err(invariant("empty SMT update sequence changes its root"));
-        }
-        return Ok(DerivedTransferSmtWitnesses {
-            roots: (public_inputs.old_root, public_inputs.new_root),
-            pairs: Vec::new(),
-            work,
-        });
-    }
-    let pads = core::array::from_fn(padding);
-    let mut tree = Tree {
-        levels: core::array::from_fn(|_| BTreeMap::new()),
-        pads,
-        hashes: 0,
-    };
-    let mut initial = vec![false; work.unique_keys];
-    let mut rows_seen = vec![false; work.updates];
-    let pair_count = work.updates / 2;
-    for ordinal in 0..pair_count {
-        let pair = prepared
-            .pair(ordinal)
-            .ok_or_else(|| invariant("SMT pair index is invalid"))?;
-        if pair.occurrence[2] as usize != ordinal {
-            return Err(invariant("SMT pair occurrence order is inconsistent"));
-        }
-        for (leg, index) in pair.row_indices.into_iter().enumerate() {
-            let seen = rows_seen
-                .get_mut(index)
-                .ok_or_else(|| invariant("SMT row index is invalid"))?;
-            let row = prepared
-                .row(index)
-                .ok_or_else(|| invariant("SMT row index is invalid"))?;
-            let key = prepared
-                .keys()
-                .get(row.key_index)
-                .ok_or_else(|| invariant("SMT key index is invalid"))?;
-            if std::mem::replace(seen, true)
-                || row.leg != leg
-                || row.update != pair.updates[leg]
-                || row.update.path != key.path
-                || row.occurrence != pair.occurrence
-            {
-                return Err(invariant(
-                    "SMT pair ports differ from their exact public rows",
-                ));
-            }
-            if !initial[row.key_index] {
-                tree.levels[0].insert(key.path, digest(row.update.old_leaf)?);
-                initial[row.key_index] = true;
-            }
-        }
-    }
-    if rows_seen.iter().any(|seen| !seen) {
-        return Err(invariant("SMT row lacks a chronological occurrence"));
-    }
-    if initial.iter().any(|seen| !seen) {
-        return Err(invariant("SMT key lacks a first public occurrence"));
-    }
-    tree.seed();
-    let old_root = tree.root().into();
-    let mut pairs = Vec::with_capacity(pair_count);
-    for ordinal in 0..pair_count {
-        let pair = prepared
-            .pair(ordinal)
-            .ok_or_else(|| invariant("SMT pair index is invalid"))?;
-        let first = tree.update(pair.updates[0])?;
-        let second = tree.update(pair.updates[1])?;
-        pairs.push([first, second]);
-    }
-    if tree.hashes != work.node_hashes
-        || tree.levels.iter().map(BTreeMap::len).sum::<usize>() != work.retained_nodes
-    {
-        return Err(invariant("SMT construction work differs from preflight"));
-    }
-    Ok(DerivedTransferSmtWitnesses {
-        roots: (old_root, tree.root().into()),
-        pairs,
-        work,
-    })
-}
-
-struct Tree {
-    levels: [BTreeMap<u32, Hash>; HEIGHT + 1],
-    pads: [Hash; HEIGHT + 1],
-    hashes: usize,
-}
-
-impl Tree {
-    fn node(&mut self, level: usize, parent: u32) -> Hash {
-        let left = self.levels[level]
-            .get(&(parent << 1))
-            .unwrap_or(&self.pads[level]);
-        let right = self.levels[level]
-            .get(&((parent << 1) | 1))
-            .unwrap_or(&self.pads[level]);
-        let hash = Hash::new_from_chunks(&[NODE_DOMAIN, left.as_ref(), right.as_ref()]);
-        self.hashes += 1; // The checked preflight bounds every seed/update hash.
-        hash
-    }
-
-    fn seed(&mut self) {
-        for level in 0..HEIGHT {
-            let parents: Vec<_> = self.levels[level].keys().map(|path| path >> 1).collect();
-            let mut previous = None;
-            for parent in parents {
-                if previous != Some(parent) {
-                    let hash = self.node(level, parent);
-                    self.levels[level + 1].insert(parent, hash);
-                    previous = Some(parent);
-                }
-            }
-        }
-    }
-
-    fn root(&self) -> Hash {
-        self.levels[HEIGHT]
-            .get(&0)
-            .copied()
-            .unwrap_or(self.pads[HEIGHT])
-    }
-
-    fn update(&mut self, update: PublicUpdate) -> Result<TransferSmtWitness> {
-        let before = digest(update.old_leaf)?;
-        let after = digest(update.new_leaf)?;
-        if self.levels[0].get(&update.path) != Some(&before) {
-            return Err(invariant(
-                "SMT chronological pre-leaf does not match current state",
-            ));
-        }
-        let root_before = self.root().into();
-        let mut siblings = Vec::with_capacity(HEIGHT);
-        let mut path = update.path;
-        self.levels[0].insert(path, after);
-        for level in 0..HEIGHT {
-            siblings.push(
-                self.levels[level]
-                    .get(&(path ^ 1))
-                    .copied()
-                    .unwrap_or(self.pads[level])
-                    .into(),
-            );
-            let parent = path >> 1;
-            let hash = self.node(level, parent);
-            self.levels[level + 1].insert(parent, hash);
-            path = parent;
-        }
-        Ok(TransferSmtWitness::new(
-            root_before,
-            self.root().into(),
-            update.path.to_le_bytes().to_vec(),
-            siblings,
-        ))
-    }
+    funded_tree::derive(prepared, limits, budget, reservation)
 }
 
 #[cfg(test)]
@@ -685,3 +520,6 @@ mod tests;
 
 #[cfg(test)]
 mod checked_tests;
+
+#[cfg(test)]
+mod test_funding;

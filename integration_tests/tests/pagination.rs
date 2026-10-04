@@ -30,7 +30,7 @@ fn pagination_behaves() -> Result<()> {
     // limits_should_work
     let vec = client
         .client()
-        .query(FindAssetsDefinitions::new())
+        .query(FindAssetDefinitions::new())
         .with_pagination(Pagination::new(Some(nonzero!(7_u64)), 0))
         .execute_all()?;
     assert_eq!(vec.len(), 7);
@@ -39,7 +39,7 @@ fn pagination_behaves() -> Result<()> {
     // the lower bound and streams the rest through cursors.
     let mut iter = client
         .client()
-        .query(FindAssetsDefinitions::new())
+        .query(FindAssetDefinitions::new())
         .with_pagination(Pagination::new(Some(nonzero!(7_u64)), 0))
         .with_fetch_size(FetchSize::new(Some(nonzero!(3_u64))))
         .execute()?;

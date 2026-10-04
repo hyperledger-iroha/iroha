@@ -512,7 +512,7 @@ fn find_asset_definitions_filters_owner_with_owner_index() {
     let view = state.view();
     let predicate =
         CompoundPredicate::<AssetDefinition>::build(|p| p.equals("owned_by", ALICE_ID.to_string()));
-    let results: Vec<_> = FindAssetsDefinitions
+    let results: Vec<_> = FindAssetDefinitions
         .execute(predicate, &view)
         .unwrap()
         .map(|definition| definition.id().clone())

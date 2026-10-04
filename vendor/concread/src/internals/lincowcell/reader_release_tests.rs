@@ -29,7 +29,7 @@ fn pending(wait: &mut iroha_allocation::release::ReleaseFuture<'_>) -> bool {
 #[test]
 fn original_public_map_read_releases_wait_until_after_the_caller_fence() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 
@@ -116,7 +116,7 @@ fn a_foreign_batch_refuses_before_blocking_acquisition_or_any_notice() {
 #[test]
 fn busy_acquires_nothing_and_an_empty_batch_cannot_fabricate_a_release() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 
@@ -148,7 +148,7 @@ fn busy_acquires_nothing_and_an_empty_batch_cannot_fabricate_a_release() {
 #[test]
 fn acquired_poison_is_recorded_only_after_actual_unlock_and_batch_release() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 
@@ -195,7 +195,7 @@ fn acquired_poison_is_recorded_only_after_actual_unlock_and_batch_release() {
 #[test]
 fn successful_reads_coalesce_without_retaining_physical_locks() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 
@@ -219,7 +219,7 @@ fn successful_reads_coalesce_without_retaining_physical_locks() {
 #[test]
 fn retained_reader_and_release_batch_have_independent_lifetimes() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 
@@ -261,7 +261,7 @@ fn one_original_batch_can_span_distinct_committed_generations() {
 #[test]
 fn outer_unwind_keeps_completed_immutable_reads_unpoisoned_and_deferred() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 
@@ -288,7 +288,7 @@ fn outer_unwind_keeps_completed_immutable_reads_unpoisoned_and_deferred() {
 #[test]
 fn actual_guard_unwind_transfer_records_poison_before_any_batch_callback() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 
@@ -320,7 +320,7 @@ fn actual_guard_unwind_transfer_records_poison_before_any_batch_callback() {
 #[test]
 fn actual_original_batch_survives_map_destruction_without_losing_wake() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 
@@ -340,7 +340,7 @@ fn actual_original_batch_survives_map_destruction_without_losing_wake() {
 #[test]
 fn existing_default_read_still_notifies_its_actual_release_immediately() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 

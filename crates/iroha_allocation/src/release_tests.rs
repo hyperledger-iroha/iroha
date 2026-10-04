@@ -54,9 +54,6 @@ fn release_before_registration_is_retained_and_other_sources_do_not_wake() {
 
 #[test]
 fn first_registered_wake_reenters_unlocked_source_after_original_node_is_detached() {
-    let registration_budget =
-        AllocationBudget::new(1 * ReleaseRegistration::allocation_layout().size());
-    let [mut registration_0] = registrations(&registration_budget);
     struct FirstWake {
         source: Arc<ReleaseNotification>,
         calls: AtomicUsize,
@@ -69,6 +66,10 @@ fn first_registered_wake_reenters_unlocked_source_after_original_node_is_detache
             self.calls.fetch_add(1, Ordering::SeqCst);
         }
     }
+
+    let registration_budget =
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0] = registrations(&registration_budget);
 
     let source = Arc::new(ReleaseNotification::default());
     let mut wait = source.observe().wait_for_release(&mut registration_0);
@@ -93,9 +94,6 @@ fn first_registered_wake_reenters_unlocked_source_after_original_node_is_detache
 
 #[test]
 fn panicking_first_waker_still_notifies_the_remaining_original_cohort() {
-    let registration_budget =
-        AllocationBudget::new(2 * ReleaseRegistration::allocation_layout().size());
-    let [mut registration_0, mut registration_1] = registrations(&registration_budget);
     struct FirstWake {
         source: Arc<ReleaseNotification>,
         calls: Arc<AtomicUsize>,
@@ -120,6 +118,10 @@ fn panicking_first_waker_still_notifies_the_remaining_original_cohort() {
             assert!(!self.panic_in_drop, "first wake destructor panicked");
         }
     }
+
+    let registration_budget =
+        AllocationBudget::new(2 * ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0, mut registration_1] = registrations(&registration_budget);
 
     for panic_in_drop in [false, true] {
         let source = Arc::new(ReleaseNotification::default());
@@ -225,7 +227,7 @@ impl Drop for ObserveOnDrop {
 #[test]
 fn replacing_a_waker_allows_its_destructor_to_observe_the_same_source() {
     let registration_budget =
-        AllocationBudget::new(1 * ReleaseRegistration::allocation_layout().size());
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
     let [mut registration_0] = registrations(&registration_budget);
     let source = Arc::new(ReleaseNotification::default());
     let mut wait = source.observe().wait_for_release(&mut registration_0);
@@ -254,9 +256,6 @@ fn replacing_a_waker_allows_its_destructor_to_observe_the_same_source() {
 
 #[test]
 fn ready_wait_releases_its_last_waker_outside_the_notification_lock() {
-    let registration_budget =
-        AllocationBudget::new(2 * ReleaseRegistration::allocation_layout().size());
-    let [mut registration_0, mut registration_1] = registrations(&registration_budget);
     use std::sync::mpsc;
 
     struct PausedWake {
@@ -269,6 +268,10 @@ fn ready_wait_releases_its_last_waker_outside_the_notification_lock() {
             self.resume.lock().unwrap().recv().unwrap();
         }
     }
+
+    let registration_budget =
+        AllocationBudget::new(2 * ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0, mut registration_1] = registrations(&registration_budget);
 
     let source = Arc::new(ReleaseNotification::default());
     let observation = source.observe();
@@ -318,7 +321,7 @@ fn ready_wait_releases_its_last_waker_outside_the_notification_lock() {
 #[test]
 fn release_racing_first_poll_cannot_be_lost() {
     let registration_budget =
-        AllocationBudget::new(1 * ReleaseRegistration::allocation_layout().size());
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
     let [mut registration_0] = registrations(&registration_budget);
     for _ in 0..128 {
         let source = ReleaseNotification::default();
@@ -347,7 +350,7 @@ fn release_racing_first_poll_cannot_be_lost() {
 #[test]
 fn ownership_phase_transfer_defers_original_release_until_final_owner_drops() {
     let registration_budget =
-        AllocationBudget::new(1 * ReleaseRegistration::allocation_layout().size());
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
     let [mut registration_0] = registrations(&registration_budget);
     let source = ReleaseNotification::default();
     let lock = Mutex::new(());
@@ -372,7 +375,7 @@ fn ownership_phase_transfer_defers_original_release_until_final_owner_drops() {
 #[test]
 fn ownership_phase_transfer_unwind_releases_and_poisons_original_observation() {
     let registration_budget =
-        AllocationBudget::new(1 * ReleaseRegistration::allocation_layout().size());
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
     let [mut registration_0] = registrations(&registration_budget);
     let source = ReleaseNotification::default();
     let lock = Mutex::new(());
@@ -398,15 +401,16 @@ fn ownership_phase_transfer_unwind_releases_and_poisons_original_observation() {
 
 #[test]
 fn physical_release_disarms_only_later_retirement_poisoning() {
-    let registration_budget =
-        AllocationBudget::new(1 * ReleaseRegistration::allocation_layout().size());
-    let [mut registration_0] = registrations(&registration_budget);
     struct PanickingRetirement;
     impl Drop for PanickingRetirement {
         fn drop(&mut self) {
             panic!("cleanup after physical release");
         }
     }
+
+    let registration_budget =
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0] = registrations(&registration_budget);
 
     for released in [false, true] {
         let source = ReleaseNotification::default();
@@ -437,9 +441,6 @@ fn physical_release_disarms_only_later_retirement_poisoning() {
 
 #[test]
 fn paired_release_uses_actual_poison_and_unlocks_both_before_callback_unwind() {
-    let registration_budget =
-        AllocationBudget::new(2 * ReleaseRegistration::allocation_layout().size());
-    let [mut registration_0, mut registration_1] = registrations(&registration_budget);
     struct Tail(bool);
     impl Drop for Tail {
         fn drop(&mut self) {
@@ -471,6 +472,10 @@ fn paired_release_uses_actual_poison_and_unlocks_both_before_callback_unwind() {
             );
         }
     }
+
+    let registration_budget =
+        AllocationBudget::new(2 * ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0, mut registration_1] = registrations(&registration_budget);
     for mode in 0..4 {
         let first = Arc::new(Mutex::new(()));
         let second = Arc::new(Mutex::new(()));
@@ -533,9 +538,6 @@ fn paired_release_uses_actual_poison_and_unlocks_both_before_callback_unwind() {
 
 #[test]
 fn observed_release_reports_existing_physical_poison_and_excludes_later_wake_panic() {
-    let registration_budget =
-        AllocationBudget::new(1 * ReleaseRegistration::allocation_layout().size());
-    let [mut registration_0] = registrations(&registration_budget);
     struct Probe {
         lock: Arc<Mutex<()>>,
         unavailable: AtomicBool,
@@ -555,6 +557,10 @@ fn observed_release_reports_existing_physical_poison_and_excludes_later_wake_pan
             assert!(!self.panic, "wake after physical release");
         }
     }
+
+    let registration_budget =
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0] = registrations(&registration_budget);
     for already_poisoned in [false, true] {
         for panic_after_release in [false, true] {
             let lock = Arc::new(Mutex::new(()));
@@ -647,7 +653,7 @@ fn pair_construction_transfers_both_original_guards_without_early_release() {
 #[test]
 fn deferred_release_keeps_original_wait_and_ignores_later_cleanup_unwind() {
     let registration_budget =
-        AllocationBudget::new(1 * ReleaseRegistration::allocation_layout().size());
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
     let [mut registration_0] = registrations(&registration_budget);
     for panic_after in [false, true] {
         let source = ReleaseNotification::default();
@@ -679,7 +685,7 @@ fn deferred_release_keeps_original_wait_and_ignores_later_cleanup_unwind() {
 #[test]
 fn fallible_phase_transfer_retains_the_original_guard_and_owned_cleanup() {
     let registration_budget =
-        AllocationBudget::new(1 * ReleaseRegistration::allocation_layout().size());
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
     let [mut registration_0] = registrations(&registration_budget);
     let source = ReleaseNotification::default();
     #[expect(
@@ -718,7 +724,7 @@ fn fallible_phase_transfer_retains_the_original_guard_and_owned_cleanup() {
 #[test]
 fn release_batch_empty_and_foreign_transfer_preserve_original_custody() {
     let registration_budget =
-        AllocationBudget::new(1 * ReleaseRegistration::allocation_layout().size());
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
     let [mut registration_0] = registrations(&registration_budget);
     let source = ReleaseNotification::default();
     let foreign = ReleaseNotification::default();
@@ -756,15 +762,6 @@ fn release_batch_empty_and_foreign_transfer_preserve_original_custody() {
 
 #[test]
 fn release_batch_coalesces_reacquisitions_without_allocating_or_early_wakes() {
-    let registration_budget =
-        AllocationBudget::new(5 * ReleaseRegistration::allocation_layout().size());
-    let [
-        mut registration_0,
-        mut registration_1,
-        mut registration_2,
-        mut registration_3,
-        mut registration_4,
-    ] = registrations(&registration_budget);
     use crate::test_support::without_allocations;
     struct Reenter {
         source: Arc<ReleaseNotification>,
@@ -780,6 +777,16 @@ fn release_batch_coalesces_reacquisitions_without_allocating_or_early_wakes() {
             self.wakes.fetch_add(1, Ordering::SeqCst);
         }
     }
+
+    let registration_budget =
+        AllocationBudget::new(5 * ReleaseRegistration::allocation_layout().size());
+    let [
+        mut registration_0,
+        mut registration_1,
+        mut registration_2,
+        mut registration_3,
+        mut registration_4,
+    ] = registrations(&registration_budget);
     let source = Arc::new(ReleaseNotification::default());
     let physical = Arc::new(Mutex::new(()));
     // Initialize platform mutex storage before measuring release bookkeeping.
@@ -856,7 +863,7 @@ fn release_batch_coalesces_reacquisitions_without_allocating_or_early_wakes() {
 #[test]
 fn release_batch_records_actual_physical_poison_without_later_cleanup_poison() {
     let registration_budget =
-        AllocationBudget::new(1 * ReleaseRegistration::allocation_layout().size());
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
     let [mut registration_0] = registrations(&registration_budget);
     for during_release in [false, true] {
         let source = ReleaseNotification::default();
@@ -893,7 +900,7 @@ fn release_batch_records_actual_physical_poison_without_later_cleanup_poison() {
 #[test]
 fn retained_phase_transfer_and_refusal_keep_original_source_without_early_wake() {
     let registration_budget =
-        AllocationBudget::new(1 * ReleaseRegistration::allocation_layout().size());
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
     let [mut registration_0] = registrations(&registration_budget);
     let source = ReleaseNotification::default();
     let foreign = ReleaseNotification::default();
@@ -952,10 +959,11 @@ fn retained_phase_transfer_and_refusal_keep_original_source_without_early_wake()
 
 #[test]
 fn retained_phase_unwind_records_actual_release_without_running_waiter() {
-    let registration_budget =
-        AllocationBudget::new(1 * ReleaseRegistration::allocation_layout().size());
-    let [mut registration_0] = registrations(&registration_budget);
     use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let registration_budget =
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0] = registrations(&registration_budget);
     let source = ReleaseNotification::default();
     let lock = Mutex::new(());
     let mut batch = source.deferred_batch();
@@ -1015,15 +1023,16 @@ fn retained_observed_release_preserves_poison_predating_normal_cleanup() {
 
 #[test]
 fn charged_notification_retains_original_control_through_observers_and_deferred_releases() {
-    let registration_budget =
-        AllocationBudget::new(1 * ReleaseRegistration::allocation_layout().size());
-    let [mut registration_0] = registrations(&registration_budget);
     struct Charge(Arc<AtomicUsize>);
     impl Drop for Charge {
         fn drop(&mut self) {
             self.0.fetch_add(1, Ordering::SeqCst);
         }
     }
+
+    let registration_budget =
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
+    let [mut registration_0] = registrations(&registration_budget);
     assert_eq!(
         ReleaseNotification::allocation_layout::<Charge>(),
         Shared::<Mutex<State>, Charge>::layout(),
@@ -1048,7 +1057,7 @@ fn charged_notification_retains_original_control_through_observers_and_deferred_
 #[test]
 fn deferred_notice_merge_retains_exact_source_and_never_wakes_early() {
     let registration_budget =
-        AllocationBudget::new(1 * ReleaseRegistration::allocation_layout().size());
+        AllocationBudget::new(ReleaseRegistration::allocation_layout().size());
     let [mut registration_0] = registrations(&registration_budget);
     let source = ReleaseNotification::default();
     let foreign = ReleaseNotification::default();

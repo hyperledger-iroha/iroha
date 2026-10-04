@@ -118,7 +118,7 @@ class SeatedNetwork:
             (self.target / f"peer{index}.toml").write_text(text, encoding="utf-8")
         (self.target / "client.toml").write_text(
             'torii_url = "http://127.0.0.1:29080/"\n'
-            '[account]\npublic_key = "ed0120' + "A5" * 32 + '"\n',
+            '[account]\nchain_discriminant = 369\npublic_key = "ed0120' + "A5" * 32 + '"\n',
             encoding="utf-8",
         )
         self.write_citizens(citizens)

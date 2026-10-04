@@ -109,191 +109,6 @@ internal static class ToriiExplorerJson
         RequireExactEvenLengthHex(response.Encoded, $"{context}.encoded");
     }
 
-    internal static void ValidateExplorerBlocksPage(ToriiExplorerBlocksPage response, string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-        ValidateExplorerHistoryCursorPage(response.Pagination, response.Items, context);
-        ValidateExplorerItems(response.Items, $"{context}.items", ValidateExplorerBlock);
-    }
-
-    internal static void ValidateExplorerTransactionsPage(ToriiExplorerTransactionsPage response, string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-        ValidateExplorerHistoryCursorPage(response.Pagination, response.Items, context);
-        ValidateExplorerItems(response.Items, $"{context}.items", ValidateExplorerTransaction);
-    }
-
-    internal static void ValidateExplorerLatestTransactionsResponse(
-        ToriiExplorerLatestTransactionsResponse response,
-        string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-        RequireExactNonEmptyText(response.SampledAt, $"{context}.sampled_at");
-        ValidateExplorerHistoryCursorPage(response.Pagination, response.Items, context);
-        ValidateExplorerItems(response.Items, $"{context}.items", ValidateExplorerTransaction);
-    }
-
-    internal static void ValidateExplorerInstructionsPage(ToriiExplorerInstructionsPage response, string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-        ValidateExplorerHistoryCursorPage(response.Pagination, response.Items, context);
-        ValidateExplorerItems(response.Items, $"{context}.items", ValidateExplorerInstruction);
-    }
-
-    internal static void ValidateExplorerLatestInstructionsResponse(
-        ToriiExplorerLatestInstructionsResponse response,
-        string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-        RequireExactNonEmptyText(response.SampledAt, $"{context}.sampled_at");
-        ValidateExplorerHistoryCursorPage(response.Pagination, response.Items, context);
-        ValidateExplorerItems(response.Items, $"{context}.items", ValidateExplorerInstruction);
-    }
-
-    internal static void ValidateExplorerHistoryCursor(
-        ToriiExplorerHistoryCursorMeta? response,
-        string context)
-    {
-        if (response is null)
-        {
-            throw new JsonException($"{context} must not be null.");
-        }
-
-        if (response.Limit is 0 or > ToriiExplorerDirectMetadata.ExplorerCursorLimitMaximum)
-        {
-            throw new JsonException(
-                $"{context}.limit must be between 1 and {ToriiExplorerDirectMetadata.ExplorerCursorLimitMaximum}.");
-        }
-
-        if (response.SnapshotHash is not null)
-        {
-            try
-            {
-                ToriiExplorerDirectMetadata.RequireExactSizedHex(
-                    response.SnapshotHash,
-                    nameof(ToriiExplorerHistoryCursorMeta.SnapshotHash),
-                    32);
-            }
-            catch (ArgumentException error)
-            {
-                throw DirectMetadataErrorToJsonException(error, context);
-            }
-        }
-
-        if ((response.SnapshotHeight == 0) != (response.SnapshotHash is null))
-        {
-            throw new JsonException(
-                $"{context}.snapshot_height and {context}.snapshot_hash must agree: "
-                + "snapshot_hash must be null exactly when snapshot_height is zero.");
-        }
-
-        if (response.NextCursor is not null)
-        {
-            try
-            {
-                ToriiExplorerDirectMetadata.RequireCanonicalExplorerCursor(
-                    response.NextCursor,
-                    nameof(ToriiExplorerHistoryCursorMeta.NextCursor));
-            }
-            catch (ArgumentException error)
-            {
-                throw DirectMetadataErrorToJsonException(error, context);
-            }
-        }
-
-        if (response.SnapshotHeight == 0 && response.NextCursor is not null)
-        {
-            throw new JsonException(
-                $"{context}.next_cursor must be null when snapshot_height is zero.");
-        }
-
-        if (response.HasMore != (response.NextCursor is not null))
-        {
-            throw new JsonException(
-                $"{context}.has_more must be true exactly when next_cursor is present.");
-        }
-    }
-
-    internal static void ValidateExplorerHistoryCursorPage<T>(
-        ToriiExplorerHistoryCursorMeta? pagination,
-        IReadOnlyList<T>? items,
-        string context)
-    {
-        ValidateExplorerHistoryCursor(pagination, $"{context}.pagination");
-        if (items is null)
-        {
-            throw new JsonException($"{context}.items must not be null.");
-        }
-
-        if (items.Count > pagination!.Limit)
-        {
-            throw new JsonException($"{context}.items must not contain more entries than pagination.limit.");
-        }
-
-        if (pagination.SnapshotHeight == 0 && items.Count != 0)
-        {
-            throw new JsonException($"{context}.items must be empty when pagination.snapshot_height is zero.");
-        }
-    }
-
-    internal static void ValidateExplorerCursor(ToriiExplorerCursorMeta? response, string context)
-    {
-        if (response is null)
-        {
-            throw new JsonException($"{context} must not be null.");
-        }
-
-        if (response.Limit is 0 or > ToriiExplorerDirectMetadata.ExplorerCursorLimitMaximum)
-        {
-            throw new JsonException(
-                $"{context}.limit must be between 1 and {ToriiExplorerDirectMetadata.ExplorerCursorLimitMaximum}.");
-        }
-
-        if (response.NextCursor is not null)
-        {
-            try
-            {
-                ToriiExplorerDirectMetadata.RequireCanonicalExplorerCursor(
-                    response.NextCursor,
-                    nameof(ToriiExplorerCursorMeta.NextCursor));
-            }
-            catch (ArgumentException error)
-            {
-                throw DirectMetadataErrorToJsonException(error, context);
-            }
-        }
-
-        if (response.HasMore != (response.NextCursor is not null))
-        {
-            throw new JsonException(
-                $"{context}.has_more must be true exactly when next_cursor is present.");
-        }
-    }
-
-    internal static void ValidateExplorerCursorPage<T>(
-        ToriiExplorerCursorMeta? pagination,
-        IReadOnlyList<T>? items,
-        string context)
-    {
-        ValidateExplorerCursor(pagination, $"{context}.pagination");
-        if (items is null)
-        {
-            throw new JsonException($"{context}.items must not be null.");
-        }
-
-        if (items.Count > pagination!.Limit)
-        {
-            throw new JsonException($"{context}.items must not contain more entries than pagination.limit.");
-        }
-    }
-
-    internal static void ValidateExplorerAccountsPage(ToriiExplorerAccountsPage response, string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-        ValidateExplorerCursorPage(response.Pagination, response.Items, context);
-        ValidateExplorerItems(response.Items, $"{context}.items", ValidateExplorerAccount);
-    }
-
     internal static void ValidateExplorerAccount(ToriiExplorerAccount? response, string context)
     {
         if (response is null)
@@ -303,13 +118,6 @@ internal static class ToriiExplorerJson
 
         RequireCanonicalAccountId(response.Id, $"{context}.id");
         RequireCanonicalAccountId(response.I105Address, $"{context}.i105_address");
-    }
-
-    internal static void ValidateExplorerDomainsPage(ToriiExplorerDomainsPage response, string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-        ValidateExplorerCursorPage(response.Pagination, response.Items, context);
-        ValidateExplorerItems(response.Items, $"{context}.items", ValidateExplorerDomain);
     }
 
     internal static void ValidateExplorerDomain(ToriiExplorerDomain? response, string context)
@@ -322,15 +130,6 @@ internal static class ToriiExplorerJson
         RequireExactTokenText(response.Id, $"{context}.id");
         RequireOptionalExactTokenText(response.Logo, $"{context}.logo");
         RequireCanonicalAccountId(response.OwnedBy, $"{context}.owned_by");
-    }
-
-    internal static void ValidateExplorerAssetDefinitionsPage(
-        ToriiExplorerAssetDefinitionsPage response,
-        string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-        ValidateExplorerCursorPage(response.Pagination, response.Items, context);
-        ValidateExplorerItems(response.Items, $"{context}.items", ValidateExplorerAssetDefinition);
     }
 
     internal static void ValidateExplorerAssetDefinition(ToriiExplorerAssetDefinition? response, string context)
@@ -470,13 +269,6 @@ internal static class ToriiExplorerJson
         ValidateFiniteUnitIntervalDouble(response.Share, $"{context}.share");
     }
 
-    internal static void ValidateExplorerAssetsPage(ToriiExplorerAssetsPage response, string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-        ValidateExplorerCursorPage(response.Pagination, response.Items, context);
-        ValidateExplorerItems(response.Items, $"{context}.items", ValidateExplorerAsset);
-    }
-
     internal static void ValidateExplorerAsset(ToriiExplorerAsset? response, string context)
     {
         if (response is null)
@@ -490,13 +282,6 @@ internal static class ToriiExplorerJson
         ValidateCanonicalQuantityText(response.Value, $"{context}.value");
     }
 
-    internal static void ValidateExplorerNftsPage(ToriiExplorerNftsPage response, string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-        ValidateExplorerCursorPage(response.Pagination, response.Items, context);
-        ValidateExplorerItems(response.Items, $"{context}.items", ValidateExplorerNft);
-    }
-
     internal static void ValidateExplorerNft(ToriiExplorerNft? response, string context)
     {
         if (response is null)
@@ -506,13 +291,6 @@ internal static class ToriiExplorerJson
 
         RequireExactTokenText(response.Id, $"{context}.id");
         RequireCanonicalAccountId(response.OwnedBy, $"{context}.owned_by");
-    }
-
-    internal static void ValidateExplorerRwasPage(ToriiExplorerRwasPage response, string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-        ValidateExplorerCursorPage(response.Pagination, response.Items, context);
-        ValidateExplorerItems(response.Items, $"{context}.items", ValidateExplorerRwa);
     }
 
     internal static void ValidateExplorerRwa(ToriiExplorerRwa? response, string context)
@@ -753,57 +531,6 @@ internal static class ToriiExplorerJson
     internal static JsonNode? ReadOptionalNode(JsonObject payload, string propertyName)
     {
         return payload.TryGetPropertyValue(propertyName, out var value) ? value?.DeepClone() : null;
-    }
-
-    internal static ToriiExplorerHistoryCursorMeta ReadRequiredHistoryCursorPagination(
-        JsonObject payload,
-        string propertyName,
-        string field)
-    {
-        if (!payload.TryGetPropertyValue(propertyName, out var value) || value is null)
-        {
-            throw new JsonException($"{field} must not be null.");
-        }
-
-        if (value is not JsonObject)
-        {
-            throw new JsonException($"{field} must be an object.");
-        }
-
-        try
-        {
-            return value.Deserialize<ToriiExplorerHistoryCursorMeta>()
-                ?? throw new JsonException($"{field} must not be null.");
-        }
-        catch (JsonException exception)
-        {
-            throw RewriteContext(exception, "explorer history cursor pagination", field);
-        }
-    }
-
-    internal static ToriiExplorerCursorMeta ReadRequiredCursorPagination(
-        JsonObject payload,
-        string propertyName,
-        string field)
-    {
-        if (!payload.TryGetPropertyValue(propertyName, out var value) || value is null)
-        {
-            throw new JsonException($"{field} must not be null.");
-        }
-
-        if (value is not JsonObject)
-        {
-            throw new JsonException($"{field} must be an object.");
-        }
-
-        try
-        {
-            return value.Deserialize<ToriiExplorerCursorMeta>() ?? throw new JsonException($"{field} must not be null.");
-        }
-        catch (JsonException exception)
-        {
-            throw RewriteContext(exception, "explorer cursor pagination", field);
-        }
     }
 
     internal static IReadOnlyList<T> ReadRequiredItems<T>(
@@ -1303,139 +1030,6 @@ internal static class ToriiExplorerJson
     }
 }
 
-internal sealed class ToriiExplorerHistoryCursorMetaJsonConverter
-    : JsonConverter<ToriiExplorerHistoryCursorMeta>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiExplorerHistoryCursorMeta Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        var payload = ToriiExplorerJson.ReadObject(ref reader, "explorer history cursor pagination");
-        ToriiExplorerJson.RequireExactProperties(
-            payload,
-            "explorer history cursor pagination",
-            "limit",
-            "snapshot_height",
-            "snapshot_hash",
-            "next_cursor",
-            "has_more");
-        try
-        {
-            var response = new ToriiExplorerHistoryCursorMeta
-            {
-                Limit = ToriiExplorerJson.ReadRequiredUInt32(
-                    payload,
-                    "limit",
-                    "explorer history cursor pagination.limit"),
-                SnapshotHeight = ToriiExplorerJson.ReadRequiredUInt64(
-                    payload,
-                    "snapshot_height",
-                    "explorer history cursor pagination.snapshot_height"),
-                SnapshotHash = ToriiExplorerJson.ReadOptionalString(
-                    payload,
-                    "snapshot_hash",
-                    "explorer history cursor pagination.snapshot_hash"),
-                NextCursor = ToriiExplorerJson.ReadOptionalString(
-                    payload,
-                    "next_cursor",
-                    "explorer history cursor pagination.next_cursor"),
-                HasMore = ToriiExplorerJson.ReadRequiredBool(
-                    payload,
-                    "has_more",
-                    "explorer history cursor pagination.has_more"),
-            };
-            ToriiExplorerJson.ValidateExplorerHistoryCursor(
-                response,
-                "explorer history cursor pagination");
-            return response;
-        }
-        catch (ArgumentException error) when (error.ParamName is not null)
-        {
-            throw ToriiExplorerJson.DirectMetadataErrorToJsonException(
-                error,
-                "explorer history cursor pagination");
-        }
-    }
-
-    public override void Write(
-        Utf8JsonWriter writer,
-        ToriiExplorerHistoryCursorMeta value,
-        JsonSerializerOptions options)
-    {
-        ToriiExplorerJson.ValidateExplorerHistoryCursor(
-            value,
-            "explorer history cursor pagination");
-
-        writer.WriteStartObject();
-        writer.WriteNumber("limit", value.Limit);
-        writer.WriteNumber("snapshot_height", value.SnapshotHeight);
-        ToriiExplorerJson.WriteNullableString(writer, "snapshot_hash", value.SnapshotHash);
-        ToriiExplorerJson.WriteNullableString(writer, "next_cursor", value.NextCursor);
-        writer.WriteBoolean("has_more", value.HasMore);
-        writer.WriteEndObject();
-    }
-}
-
-internal sealed class ToriiExplorerCursorMetaJsonConverter : JsonConverter<ToriiExplorerCursorMeta>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiExplorerCursorMeta Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        var payload = ToriiExplorerJson.ReadObject(ref reader, "explorer cursor pagination");
-        ToriiExplorerJson.RequireExactProperties(
-            payload,
-            "explorer cursor pagination",
-            "limit",
-            "next_cursor",
-            "has_more");
-        try
-        {
-            var response = new ToriiExplorerCursorMeta
-            {
-                Limit = ToriiExplorerJson.ReadRequiredUInt32(
-                    payload,
-                    "limit",
-                    "explorer cursor pagination.limit"),
-                NextCursor = ToriiExplorerJson.ReadOptionalString(
-                    payload,
-                    "next_cursor",
-                    "explorer cursor pagination.next_cursor"),
-                HasMore = ToriiExplorerJson.ReadRequiredBool(
-                    payload,
-                    "has_more",
-                    "explorer cursor pagination.has_more"),
-            };
-            ToriiExplorerJson.ValidateExplorerCursor(response, "explorer cursor pagination");
-            return response;
-        }
-        catch (ArgumentException error) when (error.ParamName is not null)
-        {
-            throw ToriiExplorerJson.DirectMetadataErrorToJsonException(error, "explorer cursor pagination");
-        }
-    }
-
-    public override void Write(
-        Utf8JsonWriter writer,
-        ToriiExplorerCursorMeta value,
-        JsonSerializerOptions options)
-    {
-        ToriiExplorerJson.ValidateExplorerCursor(value, "explorer cursor pagination");
-
-        writer.WriteStartObject();
-        writer.WriteNumber("limit", value.Limit);
-        ToriiExplorerJson.WriteNullableString(writer, "next_cursor", value.NextCursor);
-        writer.WriteBoolean("has_more", value.HasMore);
-        writer.WriteEndObject();
-    }
-}
-
 internal sealed class ToriiExplorerAccountJsonConverter : JsonConverter<ToriiExplorerAccount>
 {
     public override bool HandleNull => true;
@@ -1499,48 +1093,6 @@ internal sealed class ToriiExplorerAccountJsonConverter : JsonConverter<ToriiExp
     }
 }
 
-internal sealed class ToriiExplorerAccountsPageJsonConverter : JsonConverter<ToriiExplorerAccountsPage>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiExplorerAccountsPage Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        var payload = ToriiExplorerJson.ReadObject(ref reader, "explorer accounts page");
-        ToriiExplorerJson.RequireExactProperties(payload, "explorer accounts page", "pagination", "items");
-        var response = new ToriiExplorerAccountsPage
-        {
-            Pagination = ToriiExplorerJson.ReadRequiredCursorPagination(
-                payload,
-                "pagination",
-                "explorer accounts page.pagination"),
-            Items = ToriiExplorerJson.ReadRequiredItems<ToriiExplorerAccount>(
-                payload,
-                "items",
-                "explorer accounts page.items",
-                "explorer account"),
-        };
-        ToriiExplorerJson.ValidateExplorerAccountsPage(response, "explorer accounts page");
-        return response;
-    }
-
-    public override void Write(
-        Utf8JsonWriter writer,
-        ToriiExplorerAccountsPage value,
-        JsonSerializerOptions options)
-    {
-        ToriiExplorerJson.ValidateExplorerAccountsPage(value, "explorer accounts page");
-
-        writer.WriteStartObject();
-        writer.WritePropertyName("pagination");
-        JsonSerializer.Serialize(writer, value.Pagination, options);
-        ToriiExplorerJson.WriteItems(writer, "items", value.Items, options);
-        writer.WriteEndObject();
-    }
-}
-
 internal sealed class ToriiExplorerDomainJsonConverter : JsonConverter<ToriiExplorerDomain>
 {
     public override bool HandleNull => true;
@@ -1588,48 +1140,6 @@ internal sealed class ToriiExplorerDomainJsonConverter : JsonConverter<ToriiExpl
         writer.WriteNumber("accounts", value.Accounts);
         writer.WriteNumber("assets", value.Assets);
         writer.WriteNumber("nfts", value.Nfts);
-        writer.WriteEndObject();
-    }
-}
-
-internal sealed class ToriiExplorerDomainsPageJsonConverter : JsonConverter<ToriiExplorerDomainsPage>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiExplorerDomainsPage Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        var payload = ToriiExplorerJson.ReadObject(ref reader, "explorer domains page");
-        ToriiExplorerJson.RequireExactProperties(payload, "explorer domains page", "pagination", "items");
-        var response = new ToriiExplorerDomainsPage
-        {
-            Pagination = ToriiExplorerJson.ReadRequiredCursorPagination(
-                payload,
-                "pagination",
-                "explorer domains page.pagination"),
-            Items = ToriiExplorerJson.ReadRequiredItems<ToriiExplorerDomain>(
-                payload,
-                "items",
-                "explorer domains page.items",
-                "explorer domain"),
-        };
-        ToriiExplorerJson.ValidateExplorerDomainsPage(response, "explorer domains page");
-        return response;
-    }
-
-    public override void Write(
-        Utf8JsonWriter writer,
-        ToriiExplorerDomainsPage value,
-        JsonSerializerOptions options)
-    {
-        ToriiExplorerJson.ValidateExplorerDomainsPage(value, "explorer domains page");
-
-        writer.WriteStartObject();
-        writer.WritePropertyName("pagination");
-        JsonSerializer.Serialize(writer, value.Pagination, options);
-        ToriiExplorerJson.WriteItems(writer, "items", value.Items, options);
         writer.WriteEndObject();
     }
 }
@@ -1715,53 +1225,6 @@ internal sealed class ToriiExplorerAssetDefinitionJsonConverter : JsonConverter<
         writer.WriteString("total_quantity", value.TotalQuantity);
         ToriiExplorerJson.WriteNullableString(writer, "locked_quantity", value.LockedQuantity);
         ToriiExplorerJson.WriteNullableString(writer, "circulating_quantity", value.CirculatingQuantity);
-        writer.WriteEndObject();
-    }
-}
-
-internal sealed class ToriiExplorerAssetDefinitionsPageJsonConverter :
-    JsonConverter<ToriiExplorerAssetDefinitionsPage>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiExplorerAssetDefinitionsPage Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        var payload = ToriiExplorerJson.ReadObject(ref reader, "explorer asset definitions page");
-        ToriiExplorerJson.RequireExactProperties(
-            payload,
-            "explorer asset definitions page",
-            "pagination",
-            "items");
-        var response = new ToriiExplorerAssetDefinitionsPage
-        {
-            Pagination = ToriiExplorerJson.ReadRequiredCursorPagination(
-                payload,
-                "pagination",
-                "explorer asset definitions page.pagination"),
-            Items = ToriiExplorerJson.ReadRequiredItems<ToriiExplorerAssetDefinition>(
-                payload,
-                "items",
-                "explorer asset definitions page.items",
-                "explorer asset definition"),
-        };
-        ToriiExplorerJson.ValidateExplorerAssetDefinitionsPage(response, "explorer asset definitions page");
-        return response;
-    }
-
-    public override void Write(
-        Utf8JsonWriter writer,
-        ToriiExplorerAssetDefinitionsPage value,
-        JsonSerializerOptions options)
-    {
-        ToriiExplorerJson.ValidateExplorerAssetDefinitionsPage(value, "explorer asset definitions page");
-
-        writer.WriteStartObject();
-        writer.WritePropertyName("pagination");
-        JsonSerializer.Serialize(writer, value.Pagination, options);
-        ToriiExplorerJson.WriteItems(writer, "items", value.Items, options);
         writer.WriteEndObject();
     }
 }
@@ -2310,48 +1773,6 @@ internal sealed class ToriiExplorerAssetJsonConverter : JsonConverter<ToriiExplo
     }
 }
 
-internal sealed class ToriiExplorerAssetsPageJsonConverter : JsonConverter<ToriiExplorerAssetsPage>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiExplorerAssetsPage Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        var payload = ToriiExplorerJson.ReadObject(ref reader, "explorer assets page");
-        ToriiExplorerJson.RequireExactProperties(payload, "explorer assets page", "pagination", "items");
-        var response = new ToriiExplorerAssetsPage
-        {
-            Pagination = ToriiExplorerJson.ReadRequiredCursorPagination(
-                payload,
-                "pagination",
-                "explorer assets page.pagination"),
-            Items = ToriiExplorerJson.ReadRequiredItems<ToriiExplorerAsset>(
-                payload,
-                "items",
-                "explorer assets page.items",
-                "explorer asset"),
-        };
-        ToriiExplorerJson.ValidateExplorerAssetsPage(response, "explorer assets page");
-        return response;
-    }
-
-    public override void Write(
-        Utf8JsonWriter writer,
-        ToriiExplorerAssetsPage value,
-        JsonSerializerOptions options)
-    {
-        ToriiExplorerJson.ValidateExplorerAssetsPage(value, "explorer assets page");
-
-        writer.WriteStartObject();
-        writer.WritePropertyName("pagination");
-        JsonSerializer.Serialize(writer, value.Pagination, options);
-        ToriiExplorerJson.WriteItems(writer, "items", value.Items, options);
-        writer.WriteEndObject();
-    }
-}
-
 internal sealed class ToriiExplorerNftJsonConverter : JsonConverter<ToriiExplorerNft>
 {
     public override bool HandleNull => true;
@@ -2391,48 +1812,6 @@ internal sealed class ToriiExplorerNftJsonConverter : JsonConverter<ToriiExplore
         writer.WriteString("owned_by", value.OwnedBy);
         writer.WritePropertyName("metadata");
         JsonSerializer.Serialize(writer, value.Metadata, options);
-        writer.WriteEndObject();
-    }
-}
-
-internal sealed class ToriiExplorerNftsPageJsonConverter : JsonConverter<ToriiExplorerNftsPage>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiExplorerNftsPage Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        var payload = ToriiExplorerJson.ReadObject(ref reader, "explorer NFTs page");
-        ToriiExplorerJson.RequireExactProperties(payload, "explorer NFTs page", "pagination", "items");
-        var response = new ToriiExplorerNftsPage
-        {
-            Pagination = ToriiExplorerJson.ReadRequiredCursorPagination(
-                payload,
-                "pagination",
-                "explorer NFTs page.pagination"),
-            Items = ToriiExplorerJson.ReadRequiredItems<ToriiExplorerNft>(
-                payload,
-                "items",
-                "explorer NFTs page.items",
-                "explorer NFT"),
-        };
-        ToriiExplorerJson.ValidateExplorerNftsPage(response, "explorer NFTs page");
-        return response;
-    }
-
-    public override void Write(
-        Utf8JsonWriter writer,
-        ToriiExplorerNftsPage value,
-        JsonSerializerOptions options)
-    {
-        ToriiExplorerJson.ValidateExplorerNftsPage(value, "explorer NFTs page");
-
-        writer.WriteStartObject();
-        writer.WritePropertyName("pagination");
-        JsonSerializer.Serialize(writer, value.Pagination, options);
-        ToriiExplorerJson.WriteItems(writer, "items", value.Items, options);
         writer.WriteEndObject();
     }
 }
@@ -2539,48 +1918,6 @@ internal sealed class ToriiExplorerRwaJsonConverter : JsonConverter<ToriiExplore
     }
 }
 
-internal sealed class ToriiExplorerRwasPageJsonConverter : JsonConverter<ToriiExplorerRwasPage>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiExplorerRwasPage Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        var payload = ToriiExplorerJson.ReadObject(ref reader, "explorer RWAs page");
-        ToriiExplorerJson.RequireExactProperties(payload, "explorer RWAs page", "pagination", "items");
-        var response = new ToriiExplorerRwasPage
-        {
-            Pagination = ToriiExplorerJson.ReadRequiredCursorPagination(
-                payload,
-                "pagination",
-                "explorer RWAs page.pagination"),
-            Items = ToriiExplorerJson.ReadRequiredItems<ToriiExplorerRwa>(
-                payload,
-                "items",
-                "explorer RWAs page.items",
-                "explorer RWA"),
-        };
-        ToriiExplorerJson.ValidateExplorerRwasPage(response, "explorer RWAs page");
-        return response;
-    }
-
-    public override void Write(
-        Utf8JsonWriter writer,
-        ToriiExplorerRwasPage value,
-        JsonSerializerOptions options)
-    {
-        ToriiExplorerJson.ValidateExplorerRwasPage(value, "explorer RWAs page");
-
-        writer.WriteStartObject();
-        writer.WritePropertyName("pagination");
-        JsonSerializer.Serialize(writer, value.Pagination, options);
-        ToriiExplorerJson.WriteItems(writer, "items", value.Items, options);
-        writer.WriteEndObject();
-    }
-}
-
 internal sealed class ToriiExplorerBlockJsonConverter : JsonConverter<ToriiExplorerBlock>
 {
     public override bool HandleNull => true;
@@ -2627,48 +1964,6 @@ internal sealed class ToriiExplorerBlockJsonConverter : JsonConverter<ToriiExplo
         ToriiExplorerJson.WriteNullableString(writer, "transactions_hash", value.TransactionsHash);
         writer.WriteNumber("transactions_rejected", value.TransactionsRejected);
         writer.WriteNumber("transactions_total", value.TransactionsTotal);
-        writer.WriteEndObject();
-    }
-}
-
-internal sealed class ToriiExplorerBlocksPageJsonConverter : JsonConverter<ToriiExplorerBlocksPage>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiExplorerBlocksPage Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        var payload = ToriiExplorerJson.ReadObject(ref reader, "explorer blocks page");
-        ToriiExplorerJson.RequireExactProperties(payload, "explorer blocks page", "pagination", "items");
-        var response = new ToriiExplorerBlocksPage
-        {
-            Pagination = ToriiExplorerJson.ReadRequiredHistoryCursorPagination(
-                payload,
-                "pagination",
-                "explorer blocks page.pagination"),
-            Items = ToriiExplorerJson.ReadRequiredItems<ToriiExplorerBlock>(
-                payload,
-                "items",
-                "explorer blocks page.items",
-                "explorer block"),
-        };
-        ToriiExplorerJson.ValidateExplorerBlocksPage(response, "explorer blocks page");
-        return response;
-    }
-
-    public override void Write(
-        Utf8JsonWriter writer,
-        ToriiExplorerBlocksPage value,
-        JsonSerializerOptions options)
-    {
-        ToriiExplorerJson.ValidateExplorerBlocksPage(value, "explorer blocks page");
-
-        writer.WriteStartObject();
-        writer.WritePropertyName("pagination");
-        JsonSerializer.Serialize(writer, value.Pagination, options);
-        ToriiExplorerJson.WriteItems(writer, "items", value.Items, options);
         writer.WriteEndObject();
     }
 }
@@ -2861,118 +2156,6 @@ internal sealed class ToriiExplorerTransactionDetailJsonConverter :
     }
 }
 
-internal sealed class ToriiExplorerTransactionsPageJsonConverter : JsonConverter<ToriiExplorerTransactionsPage>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiExplorerTransactionsPage Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        var payload = ToriiExplorerJson.ReadObject(ref reader, "explorer transactions page");
-        ToriiExplorerJson.RequireExactProperties(
-            payload,
-            "explorer transactions page",
-            "pagination",
-            "items");
-        var response = new ToriiExplorerTransactionsPage
-        {
-            Pagination = ToriiExplorerJson.ReadRequiredHistoryCursorPagination(
-                payload,
-                "pagination",
-                "explorer transactions page.pagination"),
-            Items = ToriiExplorerJson.ReadRequiredItems<ToriiExplorerTransaction>(
-                payload,
-                "items",
-                "explorer transactions page.items",
-                "explorer transaction"),
-        };
-        ToriiExplorerJson.ValidateExplorerTransactionsPage(response, "explorer transactions page");
-        return response;
-    }
-
-    public override void Write(
-        Utf8JsonWriter writer,
-        ToriiExplorerTransactionsPage value,
-        JsonSerializerOptions options)
-    {
-        ToriiExplorerJson.ValidateExplorerTransactionsPage(value, "explorer transactions page");
-
-        writer.WriteStartObject();
-        writer.WritePropertyName("pagination");
-        JsonSerializer.Serialize(writer, value.Pagination, options);
-        ToriiExplorerJson.WriteItems(writer, "items", value.Items, options);
-        writer.WriteEndObject();
-    }
-}
-
-internal sealed class ToriiExplorerLatestTransactionsResponseJsonConverter
-    : JsonConverter<ToriiExplorerLatestTransactionsResponse>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiExplorerLatestTransactionsResponse Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        var payload = ToriiExplorerJson.ReadObject(ref reader, "explorer latest transactions response");
-        ToriiExplorerJson.RequireExactProperties(
-            payload,
-            "explorer latest transactions response",
-            "sampled_at",
-            "pagination",
-            "items");
-        try
-        {
-            var response = new ToriiExplorerLatestTransactionsResponse
-            {
-                SampledAt = ToriiExplorerJson.ReadRequiredString(
-                    payload,
-                    "sampled_at",
-                    "explorer latest transactions response.sampled_at"),
-                Pagination = ToriiExplorerJson.ReadRequiredHistoryCursorPagination(
-                    payload,
-                    "pagination",
-                    "explorer latest transactions response.pagination"),
-                Items = ToriiExplorerJson.ReadRequiredItems<ToriiExplorerTransaction>(
-                    payload,
-                    "items",
-                    "explorer latest transactions response.items",
-                    "explorer transaction"),
-            };
-            ToriiExplorerJson.ValidateExplorerLatestTransactionsResponse(
-                response,
-                "explorer latest transactions response");
-            return response;
-        }
-        catch (ArgumentException error) when (error.ParamName is not null)
-        {
-            throw ToriiExplorerJson.DirectMetadataErrorToJsonException(
-                error,
-                "explorer latest transactions response");
-        }
-    }
-
-    public override void Write(
-        Utf8JsonWriter writer,
-        ToriiExplorerLatestTransactionsResponse value,
-        JsonSerializerOptions options)
-    {
-        ToriiExplorerJson.ValidateExplorerLatestTransactionsResponse(
-            value,
-            "explorer latest transactions response");
-
-        writer.WriteStartObject();
-        writer.WriteString("sampled_at", value.SampledAt);
-        writer.WritePropertyName("pagination");
-        JsonSerializer.Serialize(writer, value.Pagination, options);
-        ToriiExplorerJson.WriteItems(writer, "items", value.Items, options);
-        writer.WriteEndObject();
-    }
-}
-
 internal sealed class ToriiExplorerInstructionJsonJsonConverter : JsonConverter<ToriiExplorerInstructionJson>
 {
     public override bool HandleNull => true;
@@ -3124,118 +2307,6 @@ internal sealed class ToriiExplorerInstructionJsonConverter : JsonConverter<Tori
         writer.WriteString("transaction_status", value.TransactionStatus);
         writer.WriteNumber("block", value.Block);
         writer.WriteNumber("index", value.Index);
-        writer.WriteEndObject();
-    }
-}
-
-internal sealed class ToriiExplorerInstructionsPageJsonConverter : JsonConverter<ToriiExplorerInstructionsPage>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiExplorerInstructionsPage Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        var payload = ToriiExplorerJson.ReadObject(ref reader, "explorer instructions page");
-        ToriiExplorerJson.RequireExactProperties(
-            payload,
-            "explorer instructions page",
-            "pagination",
-            "items");
-        var response = new ToriiExplorerInstructionsPage
-        {
-            Pagination = ToriiExplorerJson.ReadRequiredHistoryCursorPagination(
-                payload,
-                "pagination",
-                "explorer instructions page.pagination"),
-            Items = ToriiExplorerJson.ReadRequiredItems<ToriiExplorerInstruction>(
-                payload,
-                "items",
-                "explorer instructions page.items",
-                "explorer instruction"),
-        };
-        ToriiExplorerJson.ValidateExplorerInstructionsPage(response, "explorer instructions page");
-        return response;
-    }
-
-    public override void Write(
-        Utf8JsonWriter writer,
-        ToriiExplorerInstructionsPage value,
-        JsonSerializerOptions options)
-    {
-        ToriiExplorerJson.ValidateExplorerInstructionsPage(value, "explorer instructions page");
-
-        writer.WriteStartObject();
-        writer.WritePropertyName("pagination");
-        JsonSerializer.Serialize(writer, value.Pagination, options);
-        ToriiExplorerJson.WriteItems(writer, "items", value.Items, options);
-        writer.WriteEndObject();
-    }
-}
-
-internal sealed class ToriiExplorerLatestInstructionsResponseJsonConverter
-    : JsonConverter<ToriiExplorerLatestInstructionsResponse>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiExplorerLatestInstructionsResponse Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        var payload = ToriiExplorerJson.ReadObject(ref reader, "explorer latest instructions response");
-        ToriiExplorerJson.RequireExactProperties(
-            payload,
-            "explorer latest instructions response",
-            "sampled_at",
-            "pagination",
-            "items");
-        try
-        {
-            var response = new ToriiExplorerLatestInstructionsResponse
-            {
-                SampledAt = ToriiExplorerJson.ReadRequiredString(
-                    payload,
-                    "sampled_at",
-                    "explorer latest instructions response.sampled_at"),
-                Pagination = ToriiExplorerJson.ReadRequiredHistoryCursorPagination(
-                    payload,
-                    "pagination",
-                    "explorer latest instructions response.pagination"),
-                Items = ToriiExplorerJson.ReadRequiredItems<ToriiExplorerInstruction>(
-                    payload,
-                    "items",
-                    "explorer latest instructions response.items",
-                    "explorer instruction"),
-            };
-            ToriiExplorerJson.ValidateExplorerLatestInstructionsResponse(
-                response,
-                "explorer latest instructions response");
-            return response;
-        }
-        catch (ArgumentException error) when (error.ParamName is not null)
-        {
-            throw ToriiExplorerJson.DirectMetadataErrorToJsonException(
-                error,
-                "explorer latest instructions response");
-        }
-    }
-
-    public override void Write(
-        Utf8JsonWriter writer,
-        ToriiExplorerLatestInstructionsResponse value,
-        JsonSerializerOptions options)
-    {
-        ToriiExplorerJson.ValidateExplorerLatestInstructionsResponse(
-            value,
-            "explorer latest instructions response");
-
-        writer.WriteStartObject();
-        writer.WriteString("sampled_at", value.SampledAt);
-        writer.WritePropertyName("pagination");
-        JsonSerializer.Serialize(writer, value.Pagination, options);
-        ToriiExplorerJson.WriteItems(writer, "items", value.Items, options);
         writer.WriteEndObject();
     }
 }

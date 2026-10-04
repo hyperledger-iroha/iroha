@@ -17,8 +17,8 @@ Domain context is represented explicitly:
 - SNS leases use their explicit `NameSelectorV1` namespace and label; and
 - ownership indexes map owners directly to complete `DomainId` values.
 
-There is no persistent account-address-to-domain selector index and no node
-configuration for a default account domain. A wallet may offer a local input
+There is no persistent account-address-to-domain selector index and no node or
+client configuration for a default account domain. A wallet may offer a local input
 shortcut, but it must resolve that input to a complete `DomainId` or alias
 before constructing a transaction.
 

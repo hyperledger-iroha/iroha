@@ -2600,12 +2600,13 @@
    "function": "iroha_account_history_tool",
    "name": "iroha.accounts.history",
    "effect": "read",
-   "description": "List indexed account activity, including incoming and outgoing account history.",
+   "description": "Query account movements, newest first (descending block_height, block_index, movement_index). Fields: id, source, type, status, result_ok, direction, account_id, counterparty_account_id, asset_id, asset_definition_id, amount, tx_hash, timestamp_ms, block_height, block_index, movement_index, operation_id, expires_at_ms, finalized_at_ms, requesting_fi_id. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Example: {\"path\":{\"account_id\":\"<I105 account id>\"},\"filter\":\"direction = 'incoming'\"}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
    "method": "GET",
    "path_template": "/v1/accounts/{account_id}/history",
    "input_schema": {
     "type": "object",
-    "additionalProperties": true,
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "history_get",
     "required": [
      "path"
     ],
@@ -2622,19 +2623,357 @@
        }
       }
      },
-     "query": {
+     "headers": {
       "type": "object",
-      "additionalProperties": true
+      "additionalProperties": {
+       "type": "string"
+      }
      },
-     "asset_id": {
+     "accept": {
       "type": "string"
+     }
+    }
+   }
+  },
+  {
+   "function": "iroha_account_history_query_tool",
+   "name": "iroha.accounts.history.query",
+   "effect": "read",
+   "description": "Query account movements, newest first (descending block_height, block_index, movement_index). Fields: id, source, type, status, result_ok, direction, account_id, counterparty_account_id, asset_id, asset_definition_id, amount, tx_hash, timestamp_ms, block_height, block_index, movement_index, operation_id, expires_at_ms, finalized_at_ms, requesting_fi_id. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Example: {\"path\":{\"account_id\":\"<I105 account id>\"},\"filter\":\"direction = 'incoming'\"}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
+   "method": "POST",
+   "path_template": "/v1/accounts/{account_id}/history/query",
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "history_post",
+    "required": [
+     "path"
+    ],
+    "properties": {
+     "path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "account_id"
+      ],
+      "properties": {
+       "account_id": {
+        "type": "string"
+       }
+      }
      },
-     "limit": {
-      "type": "integer"
+     "headers": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      }
      },
-     "offset": {
-      "type": "integer"
+     "accept": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  {
+   "function": "iroha_contracts_activity_query_tool",
+   "name": "iroha.contracts.activity.query",
+   "effect": "read",
+   "description": "Query committed contract calls, newest first (descending block_height, block_index). Fields: authority, entrypoint_hash, contract_address, contract_alias, contract_entrypoint, timestamp_ms, block_height, block_index, result_ok, contract_payload, fee_payment. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Example: {\"filter\":\"result_ok = true\",\"select\":[\"entrypoint_hash\",\"contract_entrypoint\"]}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
+   "method": "POST",
+   "path_template": "/v1/contracts/activity/query",
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "history_post",
+    "properties": {
+     "headers": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      }
      },
+     "accept": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  {
+   "function": "iroha_contracts_events_query_tool",
+   "name": "iroha.contracts.events.query",
+   "effect": "read",
+   "description": "Query committed contract events, newest first (descending block_height, block_index). Fields: event_id, provenance, authority, tx_hash_hex, block_hash_hex, contract_address, contract_alias, module, event_kind, schema_version, timestamp_ms, block_height, block_index, result_ok, participants, asset_ids, numeric_fields, payload, fee_payment. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Example: {\"filter\":\"result_ok = true\",\"select\":[\"event_id\",\"event_kind\"]}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
+   "method": "POST",
+   "path_template": "/v1/contracts/events/query",
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "history_post",
+    "properties": {
+     "headers": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      }
+     },
+     "accept": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  {
+   "function": "iroha_explorer_accounts_query_tool",
+   "name": "iroha.explorer.accounts.query",
+   "effect": "read",
+   "description": "Query Explorer accounts. Fields: id, network_prefix, owned_domains, owned_assets, owned_nfts, metadata.*. Fixed bounded order: canonical index order; default limit 25, maximum 100. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Filter-only selectors domain, with_asset require one string equality in the outer conjunction. Example: {\"filter\":\"owned_assets > 0\",\"select\":[\"id\",\"owned_assets\"]}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
+   "method": "POST",
+   "path_template": "/v1/explorer/accounts/query",
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "history_post",
+    "properties": {
+     "headers": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      }
+     },
+     "accept": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  {
+   "function": "iroha_explorer_domains_query_tool",
+   "name": "iroha.explorer.domains.query",
+   "effect": "read",
+   "description": "Query Explorer domains. Fields: id, logo, owned_by, accounts, assets, nfts, metadata.*. Fixed bounded order: canonical index order; default limit 25, maximum 100. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Example: {\"filter\":\"accounts > 0\",\"select\":[\"id\",\"accounts\"]}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
+   "method": "POST",
+   "path_template": "/v1/explorer/domains/query",
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "history_post",
+    "properties": {
+     "headers": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      }
+     },
+     "accept": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  {
+   "function": "iroha_explorer_asset_definitions_query_tool",
+   "name": "iroha.explorer.asset_definitions.query",
+   "effect": "read",
+   "description": "Query Explorer asset_definitions. Fields: id, owning_domain, mintable, logo, owned_by, assets, total_quantity, locked_quantity, circulating_quantity, metadata.*. Fixed bounded order: canonical index order; default limit 25, maximum 100. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Example: {\"filter\":\"total_quantity > 0\",\"select\":[\"id\",\"total_quantity\"]}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
+   "method": "POST",
+   "path_template": "/v1/explorer/asset-definitions/query",
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "history_post",
+    "properties": {
+     "headers": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      }
+     },
+     "accept": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  {
+   "function": "iroha_explorer_assets_query_tool",
+   "name": "iroha.explorer.assets.query",
+   "effect": "read",
+   "description": "Query Explorer assets. Fields: id, definition_id, account_id, value. Fixed bounded order: canonical index order; default limit 25, maximum 100. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Example: {\"filter\":\"value > 0\",\"select\":[\"id\",\"value\"]}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
+   "method": "POST",
+   "path_template": "/v1/explorer/assets/query",
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "history_post",
+    "properties": {
+     "headers": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      }
+     },
+     "accept": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  {
+   "function": "iroha_explorer_nfts_query_tool",
+   "name": "iroha.explorer.nfts.query",
+   "effect": "read",
+   "description": "Query Explorer nfts. Fields: id, owned_by, metadata.*. Fixed bounded order: canonical index order; default limit 25, maximum 100. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Filter-only selectors domain require one string equality in the outer conjunction. Example: {\"select\":[\"id\",\"owned_by\"],\"limit\":10}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
+   "method": "POST",
+   "path_template": "/v1/explorer/nfts/query",
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "history_post",
+    "properties": {
+     "headers": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      }
+     },
+     "accept": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  {
+   "function": "iroha_explorer_rwas_query_tool",
+   "name": "iroha.explorer.rwas.query",
+   "effect": "read",
+   "description": "Query Explorer rwas. Fields: id, owned_by, quantity, held_quantity, primary_reference, status, is_frozen, parents, metadata.*. Fixed bounded order: canonical index order; default limit 25, maximum 100. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Filter-only selectors domain require one string equality in the outer conjunction. Example: {\"filter\":\"is_frozen = false\",\"select\":[\"id\",\"quantity\"]}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
+   "method": "POST",
+   "path_template": "/v1/explorer/rwas/query",
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "history_post",
+    "properties": {
+     "headers": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      }
+     },
+     "accept": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  {
+   "function": "iroha_explorer_blocks_query_tool",
+   "name": "iroha.explorer.blocks.query",
+   "effect": "read",
+   "description": "Query Explorer blocks. Fields: hash, height, created_at, prev_block_hash, transactions_hash, transactions_rejected, transactions_total. Fixed bounded order: newest first; default limit 25, maximum 100. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Example: {\"filter\":\"height >= 1200\",\"select\":[\"hash\",\"height\"]}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
+   "method": "POST",
+   "path_template": "/v1/explorer/blocks/query",
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "history_post",
+    "properties": {
+     "headers": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      }
+     },
+     "accept": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  {
+   "function": "iroha_explorer_transactions_query_tool",
+   "name": "iroha.explorer.transactions.query",
+   "effect": "read",
+   "description": "Query Explorer transactions. Fields: authority, hash, block, created_at, executable, status. Fixed bounded order: newest first; default limit 25, maximum 100. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Filter-only selectors asset_id require one string equality in the outer conjunction. Example: {\"filter\":\"block >= 1200\",\"select\":[\"hash\",\"status\"]}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
+   "method": "POST",
+   "path_template": "/v1/explorer/transactions/query",
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "history_post",
+    "properties": {
+     "headers": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      }
+     },
+     "accept": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  {
+   "function": "iroha_explorer_transactions_latest_query_tool",
+   "name": "iroha.explorer.transactions.latest.query",
+   "effect": "read",
+   "description": "Query Explorer transactions.latest. Fields: authority, hash, block, created_at, executable, status. Fixed bounded order: newest first; default limit 25, maximum 100. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Filter-only selectors asset_id require one string equality in the outer conjunction. Example: {\"filter\":\"block >= 1200\",\"select\":[\"hash\",\"status\"]}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
+   "method": "POST",
+   "path_template": "/v1/explorer/transactions/latest/query",
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "history_post",
+    "properties": {
+     "headers": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      }
+     },
+     "accept": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  {
+   "function": "iroha_explorer_instructions_query_tool",
+   "name": "iroha.explorer.instructions.query",
+   "effect": "read",
+   "description": "Query Explorer instructions. Fields: authority, created_at, kind, box, box.encoded, box.framed_sha256, box.json, transaction_hash, transaction_status, block, index. Fixed bounded order: newest first; default limit 25, maximum 100. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Filter-only selectors account, asset_id require one string equality in the outer conjunction. Example: {\"filter\":\"block >= 1200\",\"select\":[\"transaction_hash\",\"kind\"]}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
+   "method": "POST",
+   "path_template": "/v1/explorer/instructions/query",
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "history_post",
+    "properties": {
+     "headers": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      }
+     },
+     "accept": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  {
+   "function": "iroha_explorer_instructions_latest_query_tool",
+   "name": "iroha.explorer.instructions.latest.query",
+   "effect": "read",
+   "description": "Query Explorer instructions.latest. Fields: authority, created_at, kind, box, box.encoded, box.framed_sha256, box.json, transaction_hash, transaction_status, block, index. Fixed bounded order: newest first; default limit 25, maximum 100. Use filter, select, limit, cursor; sort, include_total, aggregate are rejected. Filter-only selectors account, asset_id require one string equality in the outer conjunction. Example: {\"filter\":\"block >= 1200\",\"select\":[\"transaction_hash\",\"kind\"]}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
+   "method": "POST",
+   "path_template": "/v1/explorer/instructions/latest/query",
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "x-iroha-mcp-collection-query": "history_post",
+    "properties": {
      "headers": {
       "type": "object",
       "additionalProperties": {
@@ -2768,7 +3107,7 @@
    "function": "iroha_account_permissions_tool",
    "name": "iroha.accounts.permissions",
    "effect": "read",
-   "description": "List permissions granted to canonical `path.account_id`.",
+   "description": "List effective direct and role permissions. Fields: name, payload; default order name then payload. Use filter, sort, select, limit, cursor, include_total. Example: {\"path\":{\"account_id\":\"<I105 account id>\"},\"select\":\"name\"}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
    "method": "GET",
    "path_template": "/v1/accounts/{account_id}/permissions",
    "input_schema": {
@@ -2799,7 +3138,175 @@
      "accept": {
       "type": "string"
      }
-    }
+    },
+    "x-iroha-mcp-collection-query": "get"
+   }
+  },
+  {
+   "function": "iroha_account_permissions_query_tool",
+   "name": "iroha.accounts.permissions.query",
+   "effect": "read",
+   "description": "Query effective direct and role permissions. Fields: name, payload; default order name then payload. Use filter, sort, select, limit, cursor, include_total. POST also accepts aggregate or one complete query in body. Example: {\"path\":{\"account_id\":\"<I105 account id>\"},\"select\":\"name\"}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
+   "method": "POST",
+   "path_template": "/v1/accounts/{account_id}/permissions/query",
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "path"
+    ],
+    "properties": {
+     "path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "account_id"
+      ],
+      "properties": {
+       "account_id": {
+        "type": "string"
+       }
+      }
+     },
+     "headers": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      }
+     },
+     "accept": {
+      "type": "string"
+     }
+    },
+    "x-iroha-mcp-collection-query": "post"
+   }
+  },
+  {
+   "function": "iroha_subscriptions_plans_query_tool",
+   "name": "iroha.subscriptions.plans.query",
+   "effect": "read",
+   "description": "Query subscription plans. Fields: id, provider, billing, pricing; default order id. Use filter, sort, select, limit, cursor, include_total. POST also accepts aggregate or one complete query in body. Example: {\"select\":\"id,provider\",\"limit\":10}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
+   "method": "POST",
+   "path_template": "/v1/subscriptions/plans/query",
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+     "headers": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      }
+     },
+     "accept": {
+      "type": "string"
+     }
+    },
+    "x-iroha-mcp-collection-query": "post"
+   }
+  },
+  {
+   "function": "iroha_subscriptions_query_tool",
+   "name": "iroha.subscriptions.query",
+   "effect": "read",
+   "description": "Query subscriptions. Fields: id, owned_by, plan_id, provider, subscriber, status, billing_trigger_id, current_period_start_ms, current_period_end_ms, next_charge_ms, cancel_at_ms, failure_count, cancel_at_period_end, usage_accumulated, invoice, plan; default order id. Use filter, sort, select, limit, cursor, include_total. POST also accepts aggregate or one complete query in body. Example: {\"filter\":\"status = 'active'\",\"select\":\"id,status\"}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
+   "method": "POST",
+   "path_template": "/v1/subscriptions/query",
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+     "headers": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      }
+     },
+     "accept": {
+      "type": "string"
+     }
+    },
+    "x-iroha-mcp-collection-query": "post"
+   }
+  },
+  {
+   "function": "iroha_uaid_manifests_tool",
+   "name": "iroha.space_directory.manifests",
+   "effect": "read",
+   "description": "List manifests for path.uaid. Fields: dataspace_id, dataspace_alias, manifest_hash, status, manifest, lifecycle, accounts; default order dataspace_id. Use filter, sort, select, limit, cursor, include_total. Example: {\"path\":{\"uaid\":\"<UAID>\"},\"filter\":\"status = 'Active'\"}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
+   "method": "GET",
+   "path_template": "/v1/space-directory/uaids/{uaid}/manifests",
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "path"
+    ],
+    "properties": {
+     "path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "uaid"
+      ],
+      "properties": {
+       "uaid": {
+        "type": "string",
+        "description": "Canonical uaid:<64-lowercase-hex>."
+       }
+      }
+     },
+     "headers": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      }
+     },
+     "accept": {
+      "type": "string"
+     }
+    },
+    "x-iroha-mcp-collection-query": "get"
+   }
+  },
+  {
+   "function": "iroha_uaid_manifests_query_tool",
+   "name": "iroha.space_directory.manifests.query",
+   "effect": "read",
+   "description": "Query manifests for path.uaid. Fields: dataspace_id, dataspace_alias, manifest_hash, status, manifest, lifecycle, accounts; default order dataspace_id. Use filter, sort, select, limit, cursor, include_total. POST also accepts aggregate or one complete query in body. Example: {\"path\":{\"uaid\":\"<UAID>\"},\"filter\":\"status = 'Active'\"}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
+   "method": "POST",
+   "path_template": "/v1/space-directory/uaids/{uaid}/manifests/query",
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "path"
+    ],
+    "properties": {
+     "path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "uaid"
+      ],
+      "properties": {
+       "uaid": {
+        "type": "string",
+        "description": "Canonical uaid:<64-lowercase-hex>."
+       }
+      }
+     },
+     "headers": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      }
+     },
+     "accept": {
+      "type": "string"
+     }
+    },
+    "x-iroha-mcp-collection-query": "post"
    }
   },
   {
@@ -2938,26 +3445,13 @@
    "function": "iroha_subscriptions_plans_list_tool",
    "name": "iroha.subscriptions.plans.list",
    "effect": "read",
-   "description": "List subscription plans with optional flat query filters.",
+   "description": "List subscription plans. Fields: id, provider, billing, pricing; default order id. Use filter, sort, select, limit, cursor, include_total. Example: {\"select\":\"id,provider\",\"limit\":10}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
    "method": "GET",
    "path_template": "/v1/subscriptions/plans",
    "input_schema": {
     "type": "object",
-    "additionalProperties": true,
+    "additionalProperties": false,
     "properties": {
-     "query": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "provider": {
-      "type": "string"
-     },
-     "limit": {
-      "type": "integer"
-     },
-     "offset": {
-      "type": "integer"
-     },
      "headers": {
       "type": "object",
       "additionalProperties": {
@@ -2967,7 +3461,8 @@
      "accept": {
       "type": "string"
      }
-    }
+    },
+    "x-iroha-mcp-collection-query": "get"
    }
   },
   {
@@ -3002,32 +3497,13 @@
    "function": "iroha_subscriptions_list_tool",
    "name": "iroha.subscriptions.list",
    "effect": "read",
-   "description": "List subscriptions with optional flat query filters.",
+   "description": "List subscriptions. Fields: id, owned_by, plan_id, provider, subscriber, status, billing_trigger_id, current_period_start_ms, current_period_end_ms, next_charge_ms, cancel_at_ms, failure_count, cancel_at_period_end, usage_accumulated, invoice, plan; default order id. Use filter, sort, select, limit, cursor, include_total. Example: {\"filter\":\"status = 'active'\",\"select\":\"id,status\"}. Page: {items, next_cursor}; pass `next_cursor` as `cursor` until null, even after empty pages.",
    "method": "GET",
    "path_template": "/v1/subscriptions",
    "input_schema": {
     "type": "object",
-    "additionalProperties": true,
+    "additionalProperties": false,
     "properties": {
-     "query": {
-      "type": "object",
-      "additionalProperties": true
-     },
-     "owned_by": {
-      "type": "string"
-     },
-     "provider": {
-      "type": "string"
-     },
-     "status": {
-      "type": "string"
-     },
-     "limit": {
-      "type": "integer"
-     },
-     "offset": {
-      "type": "integer"
-     },
      "headers": {
       "type": "object",
       "additionalProperties": {
@@ -3037,7 +3513,8 @@
      "accept": {
       "type": "string"
      }
-    }
+    },
+    "x-iroha-mcp-collection-query": "get"
    }
   },
   {

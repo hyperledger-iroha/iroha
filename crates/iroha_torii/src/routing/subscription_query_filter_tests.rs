@@ -1,3 +1,4 @@
+use iroha_torii_shared::list_query::ListQuery;
 // Subscription route and query-filter adapter regressions.
 fn sample_subscription_state(
     plan_id: AssetDefinitionId,
@@ -149,11 +150,13 @@ async fn handle_v1_subscription_plans_filters_provider() {
         ],
         Vec::new(),
     );
-    let params = SubscriptionPlanListParams {
-        provider: Some(provider.to_string()),
-        limit: None,
-        offset: 0,
-        count_mode: Some("exact".to_owned()),
+    let params = ListQuery {
+        filter: Some(FilterExpr::Eq(
+            FieldPath("provider".to_owned()),
+            Value::from(provider.to_string()),
+        )),
+        include_total: true,
+        ..ListQuery::default()
     };
     let resp = handle_v1_subscription_plans(state, crate::NoritoQuery(params))
         .await
@@ -165,7 +168,7 @@ async fn handle_v1_subscription_plans_filters_provider() {
     assert_eq!(items.len(), 1);
     assert_eq!(json["total"].as_u64(), Some(1));
     let plan_id = plan_primary_id.to_string();
-    assert_eq!(items[0]["plan_id"].as_str(), Some(plan_id.as_str()));
+    assert_eq!(items[0]["id"].as_str(), Some(plan_id.as_str()));
 }
 #[tokio::test]
 async fn handle_v1_subscription_plans_filters_provider_alias() {
@@ -205,11 +208,13 @@ async fn handle_v1_subscription_plans_filters_provider_alias() {
         Vec::new(),
     );
     bind_account_alias_for_test(&state, &provider, "billing@universal");
-    let params = SubscriptionPlanListParams {
-        provider: Some("billing@universal".to_string()),
-        limit: None,
-        offset: 0,
-        count_mode: Some("exact".to_owned()),
+    let params = ListQuery {
+        filter: Some(FilterExpr::Eq(
+            FieldPath("provider".to_owned()),
+            Value::from("billing@universal".to_string()),
+        )),
+        include_total: true,
+        ..ListQuery::default()
     };
     let rejected = match handle_v1_subscription_plans(state.clone(), crate::NoritoQuery(params))
         .await
@@ -219,17 +224,18 @@ async fn handle_v1_subscription_plans_filters_provider_alias() {
     };
     assert!(matches!(
         rejected,
-        Error::Query(ValidationFail::QueryFailed(iroha_data_model::query::error::QueryExecutionFail::Conversion(ref message)))
-            if message.contains("canonical I105")
+        Error::CollectionQuery(ref error) if error.code == "invalid_filter" && error.message.contains("canonical I105")
     ));
     let resolved =
         resolve_account_alias_with_exact_permission_for_test(&state, &other, "billing@universal");
     assert_eq!(resolved, provider);
-    let params = SubscriptionPlanListParams {
-        provider: Some(resolved.to_string()),
-        limit: None,
-        offset: 0,
-        count_mode: Some("exact".to_owned()),
+    let params = ListQuery {
+        filter: Some(FilterExpr::Eq(
+            FieldPath("provider".to_owned()),
+            Value::from(resolved.to_string()),
+        )),
+        include_total: true,
+        ..ListQuery::default()
     };
     let resp = handle_v1_subscription_plans(state, crate::NoritoQuery(params))
         .await
@@ -241,7 +247,7 @@ async fn handle_v1_subscription_plans_filters_provider_alias() {
     assert_eq!(items.len(), 1);
     assert_eq!(json["total"].as_u64(), Some(1));
     let plan_id = plan_primary_id.to_string();
-    assert_eq!(items[0]["plan_id"].as_str(), Some(plan_id.as_str()));
+    assert_eq!(items[0]["id"].as_str(), Some(plan_id.as_str()));
 }
 #[tokio::test]
 async fn handle_v1_subscriptions_filters_status() {
@@ -295,13 +301,19 @@ async fn handle_v1_subscriptions_filters_status() {
             (paused_id.clone(), paused_state, None),
         ],
     );
-    let params = SubscriptionListParams {
-        owned_by: Some(subscriber.to_string()),
-        provider: None,
-        status: Some("paused".to_string()),
-        limit: None,
-        offset: 0,
-        count_mode: None,
+    let params = ListQuery {
+        filter: Some(FilterExpr::And(vec![
+            FilterExpr::Eq(
+                FieldPath("owned_by".to_owned()),
+                Value::from(subscriber.to_string()),
+            ),
+            FilterExpr::Eq(
+                FieldPath("status".to_owned()),
+                Value::from("paused".to_string()),
+            ),
+        ])),
+        include_total: false,
+        ..ListQuery::default()
     };
     let resp = handle_v1_subscriptions(state, crate::NoritoQuery(params))
         .await
@@ -312,13 +324,8 @@ async fn handle_v1_subscriptions_filters_status() {
     let items = json["items"].as_array().unwrap();
     assert_eq!(items.len(), 1);
     let paused_id_str = paused_id.to_string();
-    assert_eq!(
-        items[0]["subscription_id"].as_str(),
-        Some(paused_id_str.as_str())
-    );
-    let decoded_state: SubscriptionState =
-        norito::json::from_value(items[0]["subscription"].clone()).unwrap();
-    assert_eq!(decoded_state.status, SubscriptionStatus::Paused);
+    assert_eq!(items[0]["id"].as_str(), Some(paused_id_str.as_str()));
+    assert_eq!(items[0]["status"].as_str(), Some("paused"));
 }
 #[tokio::test]
 async fn handle_v1_subscriptions_filters_account_aliases() {
@@ -374,13 +381,23 @@ async fn handle_v1_subscriptions_filters_account_aliases() {
     );
     bind_account_alias_for_test(&state, &provider, "billing@universal");
     bind_account_alias_for_test(&state, &subscriber, "member@universal");
-    let params = SubscriptionListParams {
-        owned_by: Some("member@universal".to_string()),
-        provider: Some("billing@universal".to_string()),
-        status: Some("paused".to_string()),
-        limit: None,
-        offset: 0,
-        count_mode: None,
+    let params = ListQuery {
+        filter: Some(FilterExpr::And(vec![
+            FilterExpr::Eq(
+                FieldPath("owned_by".to_owned()),
+                Value::from("member@universal".to_string()),
+            ),
+            FilterExpr::Eq(
+                FieldPath("provider".to_owned()),
+                Value::from("billing@universal".to_string()),
+            ),
+            FilterExpr::Eq(
+                FieldPath("status".to_owned()),
+                Value::from("paused".to_string()),
+            ),
+        ])),
+        include_total: false,
+        ..ListQuery::default()
     };
     let rejected = match handle_v1_subscriptions(state.clone(), crate::NoritoQuery(params)).await {
         Ok(_) => {
@@ -390,8 +407,7 @@ async fn handle_v1_subscriptions_filters_account_aliases() {
     };
     assert!(matches!(
         rejected,
-        Error::Query(ValidationFail::QueryFailed(iroha_data_model::query::error::QueryExecutionFail::Conversion(ref message)))
-            if message.contains("canonical I105")
+        Error::CollectionQuery(ref error) if error.code == "invalid_filter" && error.message.contains("canonical I105")
     ));
     let resolved_provider = resolve_account_alias_with_exact_permission_for_test(
         &state,
@@ -402,13 +418,23 @@ async fn handle_v1_subscriptions_filters_account_aliases() {
         resolve_account_alias_with_exact_permission_for_test(&state, &provider, "member@universal");
     assert_eq!(resolved_provider, provider);
     assert_eq!(resolved_subscriber, subscriber);
-    let provider_alias_only = SubscriptionListParams {
-        owned_by: Some(resolved_subscriber.to_string()),
-        provider: Some("billing@universal".to_owned()),
-        status: Some("paused".to_owned()),
-        limit: None,
-        offset: 0,
-        count_mode: None,
+    let provider_alias_only = ListQuery {
+        filter: Some(FilterExpr::And(vec![
+            FilterExpr::Eq(
+                FieldPath("owned_by".to_owned()),
+                Value::from(resolved_subscriber.to_string()),
+            ),
+            FilterExpr::Eq(
+                FieldPath("provider".to_owned()),
+                Value::from("billing@universal".to_owned()),
+            ),
+            FilterExpr::Eq(
+                FieldPath("status".to_owned()),
+                Value::from("paused".to_owned()),
+            ),
+        ])),
+        include_total: false,
+        ..ListQuery::default()
     };
     let rejected =
         match handle_v1_subscriptions(state.clone(), crate::NoritoQuery(provider_alias_only)).await
@@ -420,16 +446,25 @@ async fn handle_v1_subscriptions_filters_account_aliases() {
         };
     assert!(matches!(
         rejected,
-        Error::Query(ValidationFail::QueryFailed(iroha_data_model::query::error::QueryExecutionFail::Conversion(ref message)))
-            if message.contains("canonical I105")
+        Error::CollectionQuery(ref error) if error.code == "invalid_filter" && error.message.contains("canonical I105")
     ));
-    let params = SubscriptionListParams {
-        owned_by: Some(resolved_subscriber.to_string()),
-        provider: Some(resolved_provider.to_string()),
-        status: Some("paused".to_owned()),
-        limit: None,
-        offset: 0,
-        count_mode: None,
+    let params = ListQuery {
+        filter: Some(FilterExpr::And(vec![
+            FilterExpr::Eq(
+                FieldPath("owned_by".to_owned()),
+                Value::from(resolved_subscriber.to_string()),
+            ),
+            FilterExpr::Eq(
+                FieldPath("provider".to_owned()),
+                Value::from(resolved_provider.to_string()),
+            ),
+            FilterExpr::Eq(
+                FieldPath("status".to_owned()),
+                Value::from("paused".to_owned()),
+            ),
+        ])),
+        include_total: false,
+        ..ListQuery::default()
     };
     let resp = handle_v1_subscriptions(state, crate::NoritoQuery(params))
         .await
@@ -440,13 +475,8 @@ async fn handle_v1_subscriptions_filters_account_aliases() {
     let items = json["items"].as_array().unwrap();
     assert_eq!(items.len(), 1);
     let paused_id_str = paused_id.to_string();
-    assert_eq!(
-        items[0]["subscription_id"].as_str(),
-        Some(paused_id_str.as_str())
-    );
-    let decoded_state: SubscriptionState =
-        norito::json::from_value(items[0]["subscription"].clone()).unwrap();
-    assert_eq!(decoded_state.status, SubscriptionStatus::Paused);
+    assert_eq!(items[0]["id"].as_str(), Some(paused_id_str.as_str()));
+    assert_eq!(items[0]["status"].as_str(), Some("paused"));
 }
 #[tokio::test]
 async fn handle_v1_subscription_get_includes_invoice() {

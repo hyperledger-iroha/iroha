@@ -4,22 +4,24 @@
 //! before any physical trace is expanded. Only one segment is expanded at a time.
 //! The returned canonical artifact must pass the same public offline verifier.
 
+use iroha_allocation::{AllocationBudget, AllocationReservation};
+
 use std::sync::{Mutex, MutexGuard, TryLockError};
 
 use iroha_crypto::Hash;
 use iroha_data_model::fastpq::{
-    FastpqAxtCompactArtifactV1, FastpqOrdinaryCompactArtifactV1, FastpqPublicTransferStatementV1,
-    FastpqQuantityUnits, TransferSmtWitness,
+    FastpqAxtCompactArtifactV1, FastpqPublicTransferStatementV1, FastpqQuantityUnits,
+    TransferSmtWitness,
 };
 use norito::NoritoSerialize;
 
 use super::{
     compact_axt_batch::AxtTransferBatch,
     compact_axt_context::preflight_context,
-    compact_bundle::{self, AxtBundleWire, BundleWire},
+    compact_bundle::{self, AxtBundleWire},
     compact_model_statement::with_prepared_quantity_statement,
     compact_prover_resources::check_segment_charge,
-    compact_public_batch::{BatchContextLimits, PublicTransferBatch, preflight_prepared},
+    compact_public_batch::{BatchContextLimits, preflight_prepared},
     deep_engine,
     deep_proof::MAX_FRAME_BYTES,
     deep_prover::{ConstructionLimits, ProducerPlan},
@@ -140,53 +142,21 @@ fn check_statement(
     Ok(count)
 }
 
-#[allow(
-    clippy::large_enum_variant,
-    reason = "one short-lived artifact exists per proving call; boxing the AXT payload would \
-              add an allocation and change the payload type the sibling tests frame directly"
-)]
-enum Artifact {
-    Ordinary(FastpqOrdinaryCompactArtifactV1),
-    Axt(FastpqAxtCompactArtifactV1),
-}
+struct Artifact(FastpqAxtCompactArtifactV1);
 
 impl Artifact {
-    fn new(
-        statement: &FastpqPublicTransferStatementV1,
-        axt: Option<ExpectedAxtContext<'_>>,
-    ) -> Self {
-        let profile_id = super::offline_compact::quantity_profile_id();
-        axt.map_or_else(
-            || {
-                Self::Ordinary(FastpqOrdinaryCompactArtifactV1 {
-                    profile_id,
-                    statement: statement.clone(),
-                    bundle_frame: Vec::new(),
-                })
-            },
-            |axt| {
-                Self::Axt(FastpqAxtCompactArtifactV1 {
-                    profile_id,
-                    statement: statement.clone(),
-                    binding: axt.binding.clone(),
-                    metadata: axt.metadata.clone(),
-                    mirrors: axt.mirrors,
-                    remote_spend_claims: axt.remote_spend_claims.map(<[_]>::to_vec),
-                    bundle_frame: Vec::new(),
-                })
-            },
-        )
+    fn new(statement: &FastpqPublicTransferStatementV1, axt: ExpectedAxtContext<'_>) -> Self {
+        Self(FastpqAxtCompactArtifactV1 {
+            profile_id: super::offline_compact::quantity_profile_id(),
+            statement: statement.clone(),
+            binding: axt.binding.clone(),
+            metadata: axt.metadata.clone(),
+            mirrors: axt.mirrors,
+            remote_spend_claims: axt.remote_spend_claims.map(<[_]>::to_vec),
+            bundle_frame: Vec::new(),
+        })
     }
-
-    #[allow(
-        clippy::large_types_passed_by_value,
-        reason = "the 272-byte `Copy` policy is copied once per proving call; the sibling test \
-                  module calls this directly with owned policy values"
-    )]
-    fn preflight(&self, count: usize, limits: VerificationLimits) -> Result<()> {
-        // Each scalar/sequence field has at most ten compact prefix bytes.
-        // These deliberately conservative framing allowances avoid allocating
-        // dummy proof frames while retaining the exact final codec checks.
+    fn preflight(&self, count: usize, limits: &VerificationLimits) -> Result<()> {
         let carrier = quantity_artifact_resources(count, 0)?.maximum_bundle_frame_bytes;
         check(
             "max_bundle_wire_bytes",
@@ -198,38 +168,20 @@ impl Artifact {
             carrier,
             limits.transport.max_bundle_frame_bytes,
         )?;
-        let empty = match self {
-            Self::Ordinary(value) => norito::core::encoded_frame_len(value)?,
-            Self::Axt(value) => norito::core::encoded_frame_len(value)?,
-        };
         check(
             "max_compact_producer_artifact_bytes",
-            add(empty, add(carrier, 32)?)?,
+            add(norito::core::encoded_frame_len(&self.0)?, add(carrier, 32)?)?,
             limits.transport.max_wire_bytes,
         )
     }
-
-    #[allow(
-        clippy::large_types_passed_by_value,
-        reason = "the 272-byte `Copy` policy is copied once per proving call; the sibling test \
-                  module calls this directly with owned policy values"
-    )]
-    fn finish(mut self, bundle: Vec<u8>, limits: VerificationLimits) -> Result<Vec<u8>> {
+    fn finish(mut self, bundle: Vec<u8>, limits: &VerificationLimits) -> Result<Vec<u8>> {
         check(
             "max_compact_producer_bundle_bytes",
             bundle.len(),
             limits.transport.max_bundle_frame_bytes,
         )?;
-        match &mut self {
-            Self::Ordinary(value) => {
-                value.bundle_frame = bundle;
-                encode_artifact(value, &limits)
-            }
-            Self::Axt(value) => {
-                value.bundle_frame = bundle;
-                encode_artifact(value, &limits)
-            }
-        }
+        self.0.bundle_frame = bundle;
+        encode_artifact(&self.0, limits)
     }
 }
 
@@ -335,18 +287,24 @@ fn segments<R: DeepRelation>(
 }
 
 #[allow(
+    clippy::too_many_arguments,
     clippy::large_types_passed_by_value,
-    reason = "the 272-byte `Copy` policy is copied once per proving call; the sibling test \
+    reason = "independent statement/context/work policies and original pool/reservation are explicit; the 272-byte `Copy` policy is copied once per proving call; the sibling test \
               module calls this directly with owned policy values"
 )]
 fn prepare_and_prove(
     prepared: &PreparedPublicTransfers<'_, FastpqQuantityUnits>,
     statement: &FastpqPublicTransferStatementV1,
     expected: ExpectedStatement,
-    axt: Option<ExpectedAxtContext<'_>>,
+    axt: ExpectedAxtContext<'_>,
     proving: ProvingLimits,
     verification: VerificationLimits,
+    budget: &AllocationBudget,
+    reservation: &mut AllocationReservation,
 ) -> Result<Vec<u8>> {
+    if !reservation.belongs_to(budget) {
+        return Err(Error::AllocationForeignPool);
+    }
     let count = prepared.pairs().len();
     check(
         "max_transitions",
@@ -366,7 +324,7 @@ fn prepare_and_prove(
         max_total_statement_bytes: verification.bundle.max_total_statement_bytes,
     };
     preflight_prepared(prepared, root_count, contexts)?;
-    if let Some(axt) = axt {
+    {
         let context = axt.internal();
         preflight_context(
             prepared,
@@ -383,9 +341,14 @@ fn prepare_and_prove(
         validate_axt_public_metadata(context.binding, context.metadata, context.mirrors)?;
     }
     let artifact = Artifact::new(statement, axt);
-    artifact.preflight(count, verification)?;
+    artifact.preflight(count, &verification)?;
     // Unlike the diagnostic materializer, this does not replace supplied roots.
-    let private = prepared.build_smt_witnesses(proving.private_smt)?;
+    let tree_bytes = proving
+        .private_smt
+        .allocation_bytes(prepared.transitions().len(), prepared.keys().len())?;
+    let mut tree_reservation = reservation.try_partition_bytes(tree_bytes)?;
+    let private =
+        prepared.build_smt_witnesses(proving.private_smt, budget, &mut tree_reservation)?;
     if private.pairs().len() != count {
         return Err(invalid(
             "quantity producer private/public pair count differs",
@@ -397,7 +360,7 @@ fn prepare_and_prove(
         .take(root_count)
         .map(|pair| pair[1].root_after)
         .collect();
-    let bundle = if let Some(axt) = axt {
+    let bundle = {
         let batch = AxtTransferBatch::new(
             prepared,
             &expected.internal(),
@@ -421,72 +384,53 @@ fn prepare_and_prove(
             count,
             verification.bundle.internal(),
         )?
-    } else {
-        let batch = PublicTransferBatch::new(prepared, &expected.internal(), &roots, contexts)?;
-        let frames = segments(
-            batch.statements(),
-            private.pairs(),
-            |i| batch.segment(i),
-            proving,
-            verification,
-        )?;
-        compact_bundle::encode_wire(
-            &BundleWire {
-                version: 1,
-                intermediate_roots: roots,
-                segments: frames,
-            },
-            count,
-            verification.bundle.internal(),
-        )?
     };
     drop(private);
-    artifact.finish(bundle, verification)
+    artifact.finish(bundle, &verification)
 }
 
 pub(super) fn prove(
     statement: &FastpqPublicTransferStatementV1,
     expected: ExpectedStatement,
-    axt: Option<ExpectedAxtContext<'_>>,
+    axt: ExpectedAxtContext<'_>,
     proving: ProvingLimits,
     verification: &VerificationLimits,
+    budget: &AllocationBudget,
+    reservation: &mut AllocationReservation,
 ) -> std::result::Result<Vec<u8>, ProvingError> {
+    if !reservation.belongs_to(budget) {
+        return Err(Error::AllocationForeignPool.into());
+    }
     let _exclusive = acquire(&PRODUCER)?;
     let _canonical = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     check_statement(statement, expected, proving, *verification)?;
     crate::digest384_batch::preflight_last_fields_execution(proving.digest_execution)?;
-    let semantics = if axt.is_some() {
-        ProofSemantics::AxtTransferClaim
-    } else {
-        ProofSemantics::StateTransition
-    };
+    let semantics = ProofSemantics::AxtTransferClaim;
     let bytes = with_prepared_quantity_statement(
         statement,
         &expected.internal(),
         semantics,
         verification.public_statement,
-        |prepared| prepare_and_prove(prepared, statement, expected, axt, proving, *verification),
+        |prepared| {
+            prepare_and_prove(
+                prepared,
+                statement,
+                expected,
+                axt,
+                proving,
+                *verification,
+                budget,
+                reservation,
+            )
+        },
     )?;
-    match axt {
-        Some(context) => {
-            super::offline_compact::verify_quantity_axt_artifact(
-                &bytes,
-                expected,
-                context,
-                *verification,
-            )?;
-        }
-        None => {
-            super::offline_compact::verify_quantity_ordinary_artifact(
-                &bytes,
-                expected,
-                *verification,
-            )?;
-        }
-    }
+    super::offline_compact::verify_quantity_axt_artifact(&bytes, expected, axt, *verification)?;
     Ok(bytes)
 }
 
 #[cfg(test)]
 #[path = "compact_quantity_producer/tests.rs"]
 mod tests;
+
+#[path = "compact_quantity_producer/execution_effect.rs"]
+pub(super) mod execution_effect;

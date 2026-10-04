@@ -94,6 +94,7 @@ pub enum LocalnetServiceProfile {
     norito::Decode,
     norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_deploy::localnet::service_authorities::StreamTokenAuthorityRole")]
 #[norito(
     tag = "role",
     content = "value",
@@ -168,6 +169,7 @@ const ROLES: [StreamTokenAuthorityRole; 10] = [
     norito::Decode,
     norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_deploy::localnet::service_authorities::StreamTokenAuthority")]
 #[norito(deny_unknown_fields)]
 pub struct StreamTokenAuthority {
     /// Purpose whose fixed filename is exposed by [`StreamTokenAuthorityRole::credential_filename`].
@@ -191,6 +193,7 @@ pub struct StreamTokenAuthority {
     norito::Decode,
     norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_deploy::localnet::service_authorities::StreamTokenReserveAccounts")]
 #[norito(deny_unknown_fields)]
 pub struct StreamTokenReserveAccounts {
     /// Pooled native reserve custody, initially unfunded.
@@ -236,6 +239,7 @@ fn reserve_accounts(operations: &AccountId) -> Result<StreamTokenReserveAccounts
     norito::Decode,
     norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_deploy::localnet::service_authorities::NetworkServiceAuthorityRole")]
 #[norito(
     tag = "role",
     content = "value",
@@ -274,6 +278,7 @@ const NETWORK_ROLES: [NetworkServiceAuthorityRole; 2] = [
     norito::Decode,
     norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_deploy::localnet::service_authorities::NetworkServiceAuthority")]
 #[norito(deny_unknown_fields)]
 pub struct NetworkServiceAuthority {
     /// Fixed signing purpose.
@@ -293,6 +298,7 @@ pub struct NetworkServiceAuthority {
     norito::Decode,
     norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_deploy::localnet::service_authorities::NetworkServiceInventory")]
 #[norito(deny_unknown_fields)]
 pub struct NetworkServiceInventory {
     /// Exactly two original accounts in canonical network-role order.
@@ -346,6 +352,7 @@ impl NetworkServiceInventory {
     norito::Decode,
     norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_deploy::localnet::service_authorities::ProviderServiceInventory")]
 #[norito(deny_unknown_fields)]
 pub struct ProviderServiceInventory {
     /// Fixed slot, equal to its original validator peer index (zero, one or two).
@@ -421,8 +428,64 @@ pub struct StreamTokenAuthorityManifest {
     /// One network-wide inventory, pricing/council and reserve account selection.
     pub network: NetworkServiceInventory,
     /// Exactly three provider inventories in fixed original peer order.
+    #[norito(json = "provider_inventory_json")]
     pub providers: [ProviderServiceInventory; PROVIDER_COUNT],
 }
+
+/// The manifest owns the exact three-provider JSON array while retaining its fixed public type.
+mod provider_inventory_json {
+    use super::{PROVIDER_COUNT, ProviderServiceInventory};
+    use norito::json::{BoundedJsonError, Error, JsonSerialize, JsonWriteSink, Parser, SeqVisitor};
+
+    pub(super) fn serialize(
+        providers: &[ProviderServiceInventory; PROVIDER_COUNT],
+        output: &mut String,
+    ) {
+        output.push('[');
+        for (index, provider) in providers.iter().enumerate() {
+            if index != 0 {
+                output.push(',');
+            }
+            provider.json_serialize(output);
+        }
+        output.push(']');
+    }
+
+    pub(super) fn serialize_bounded(
+        providers: &[ProviderServiceInventory; PROVIDER_COUNT],
+        output: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        output.begin_container()?;
+        output.push('[')?;
+        for (index, provider) in providers.iter().enumerate() {
+            if index != 0 {
+                output.push(',')?;
+            }
+            provider.json_serialize_to(output)?;
+        }
+        output.push(']')?;
+        output.end_container();
+        Ok(())
+    }
+
+    pub(super) fn deserialize(
+        parser: &mut Parser<'_>,
+    ) -> Result<[ProviderServiceInventory; PROVIDER_COUNT], Error> {
+        let cardinality = || Error::Message("expected exactly three provider inventories".into());
+        let mut sequence = SeqVisitor::new(parser)?;
+        let mut next = || {
+            sequence
+                .next_element::<ProviderServiceInventory>()?
+                .ok_or_else(cardinality)
+        };
+        let providers = [next()?, next()?, next()?];
+        if !sequence.is_finished() {
+            return Err(cardinality());
+        }
+        Ok(providers)
+    }
+}
+
 impl StreamTokenAuthorityManifest {
     /// Select exact public original provider intent, without manufacturing native authority.
     /// # Errors

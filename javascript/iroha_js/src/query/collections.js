@@ -11,10 +11,11 @@
  * executor that performs the request (transport, signing, error decoding) is
  * supplied by the client that owns the collection.
  *
- * Transaction collections are history collections: rows come newest first by
+ * Transaction, contract and account history collections: rows come newest first by
  * block position, and `sort`, `includeTotal` and `aggregate` are rejected. A
  * page may hold fewer than `limit` items (even none) and still carry a
- * `nextCursor`; the iterators keep following it.
+ * `nextCursor`; the iterators keep following it. Explorer feeds use the same
+ * bounded controls with their fixed server order.
  */
 import { ListQueryError, ToriiError } from "../toriiErrors.js";
 import { ListQuery } from "./listQuery.js";
@@ -28,10 +29,25 @@ export const TORII_COLLECTION_PATHS = Object.freeze({
   rwas: "/v1/rwas",
   repoAgreements: "/v1/repo/agreements",
   transactions: "/v1/transactions",
+  subscriptionPlans: "/v1/subscriptions/plans",
+  subscriptions: "/v1/subscriptions",
+  contractActivity: "/v1/contracts/activity",
+  contractEvents: "/v1/contracts/events",
+  explorerAccounts: "/v1/explorer/accounts",
+  explorerDomains: "/v1/explorer/domains",
+  explorerAssetDefinitions: "/v1/explorer/asset-definitions",
+  explorerAssets: "/v1/explorer/assets",
+  explorerNfts: "/v1/explorer/nfts",
+  explorerRwas: "/v1/explorer/rwas",
+  explorerBlocks: "/v1/explorer/blocks",
+  explorerTransactions: "/v1/explorer/transactions",
+  explorerLatestTransactions: "/v1/explorer/transactions/latest",
+  explorerInstructions: "/v1/explorer/instructions",
+  explorerLatestInstructions: "/v1/explorer/instructions/latest",
 });
 
 /** Collections read in history order (newest first), without sort, total or aggregates. */
-const HISTORY_COLLECTIONS = new Set(["transactions"]);
+const HISTORY_COLLECTIONS = new Set(["transactions", "contractActivity", "contractEvents"]);
 
 function abortReason(signal) {
   if (signal.reason !== undefined) return signal.reason;
@@ -86,17 +102,17 @@ function historyQuery(query) {
   if (query.sort.length > 0) {
     throw new ListQueryError(
       "sort",
-      "transaction history is always newest first and cannot be sorted",
+      "this collection uses a fixed order and cannot be sorted",
     );
   }
   if (query.includeTotal) {
     throw new ListQueryError(
       "include_total",
-      "transaction history has no total; counting would scan the whole history",
+      "history has no total; counting would scan the whole history",
     );
   }
   if (query.aggregate !== undefined) {
-    throw new ListQueryError("aggregate", "transaction history cannot be aggregated");
+    throw new ListQueryError("aggregate", "history cannot be aggregated");
   }
   return query;
 }
@@ -110,15 +126,28 @@ export class ToriiCollection {
   /**
    * @param {string} path collection path such as `/v1/assets/definitions`
    * @param {(path: string, query: ListQuery, options: unknown) => Promise<object>} execute
-   * @param {{history?: boolean}} [options] `history` marks a transaction history collection
+   * @param {{history?: boolean}} [options] `history` marks a history collection
    */
   constructor(path, execute, { history = false } = {}) {
     if (typeof execute !== "function") {
       throw new TypeError("ToriiCollection requires an executor function");
     }
     this.#path = path;
-    this.#execute = execute;
     this.#history = history === true;
+    this.#execute = async (target, query, options) => {
+      const page = await execute(target, query, options);
+      if (query.limit !== undefined && page.items.length > query.limit) {
+        throw new ToriiError(`${target} returned more items than the requested limit`, {
+          code: "invalid_response", details: { field: "items" },
+        });
+      }
+      if (this.#history && page.total !== undefined) {
+        throw new ToriiError(`${target} must omit total for a bounded collection`, {
+          code: "invalid_response", details: { field: "total" },
+        });
+      }
+      return page;
+    };
     Object.freeze(this);
   }
 
@@ -127,7 +156,7 @@ export class ToriiCollection {
     return this.#path;
   }
 
-  /** Whether this is a history collection (newest first; no sort, total or aggregate). */
+  /** Whether this is a bounded collection (fixed order; no sort, total or aggregate). */
   get history() {
     return this.#history;
   }
@@ -164,16 +193,32 @@ export class ToriiCollection {
  *
  * @param {(path: string, query: ListQuery, options: unknown) => Promise<{items: unknown[], nextCursor: string | null, total?: number}>} execute
  */
-export function createToriiCollections(execute) {
-  const collection = (path, history = false) => new ToriiCollection(path, execute, { history });
+export function createToriiCollections(execute, decoders = {}) {
+  const collection = (path, history = false, decode = undefined) => {
+    const transport = decode === undefined ? execute : async (target, query, options) => {
+      const page = await execute(target, query, options);
+      // Projected/aggregate rows have the selected shape, not the complete row schema.
+      return query.select !== undefined || query.aggregate !== undefined
+        ? page
+        : { ...page, items: page.items.map(decode) };
+    };
+    return new ToriiCollection(path, transport, { history });
+  };
   const fixed = {};
   for (const [name, path] of Object.entries(TORII_COLLECTION_PATHS)) {
-    fixed[name] = collection(path, HISTORY_COLLECTIONS.has(name));
+    fixed[name] = collection(path, HISTORY_COLLECTIONS.has(name) || name.startsWith("explorer"), decoders[name]);
   }
   return Object.freeze({
     ...fixed,
     accountAssets: (accountId) =>
       collection(`/v1/accounts/${pathSegment(accountId, "accountId")}/assets`),
+    accountHistory: (accountId) =>
+      collection(`/v1/accounts/${pathSegment(accountId, "accountId")}/history`, true),
+    accountPermissions: (accountId) =>
+      collection(`/v1/accounts/${pathSegment(accountId, "accountId")}/permissions`, false, decoders.accountPermission),
+    uaidManifests: (uaid) =>
+      collection(`/v1/space-directory/uaids/${pathSegment(uaid, "uaid")}/manifests`, false,
+        decoders.uaidManifest === undefined ? undefined : (row) => decoders.uaidManifest(row, uaid)),
     assetHolders: (assetDefinitionId) =>
       collection(`/v1/assets/${pathSegment(assetDefinitionId, "assetDefinitionId")}/holders`),
     accountTransactions: (accountId) =>

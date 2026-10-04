@@ -2893,7 +2893,7 @@ state_test! { sync state_snapshot_rejects_serialized_asset_definition_domain_ind
 }
 state_test! { sync explicit_asset_ownership_survives_alias_changes_and_snapshot_restore
     use iroha_data_model::events::{EventFilter, data::prelude::*};
-    use iroha_data_model::query::asset::{FindAssets, FindAssetsDefinitions};
+    use iroha_data_model::query::asset::{FindAssets, FindAssetDefinitions};
     let (mut state, definition_id, asset_id) = snapshot_state_with_numeric_asset();
     let_row! { domain_id = state .world_view() .asset_definitions() .get(&definition_id) .expect("fixture definition") .owning_domain() .clone() .expect("fixture definition has an explicit owner") };
     let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 1, 0));
@@ -2962,7 +2962,7 @@ state_test! { sync explicit_asset_ownership_survives_alias_changes_and_snapshot_
     assert_eq!(assets.len(), 1);
     assert_eq!(assets[0].id().definition(), &definition_id);
     let_row! { definition_filter = CompoundPredicate::<AssetDefinition>::build(|predicate| { predicate.equals("domain", domain_id.to_string()) }) };
-    let_row! { definitions: Vec<_> = FindAssetsDefinitions .execute(definition_filter, &view) .expect("domain-filtered definition query after restart") .collect() };
+    let_row! { definitions: Vec<_> = FindAssetDefinitions .execute(definition_filter, &view) .expect("domain-filtered definition query after restart") .collect() };
     assert_eq!(definitions.len(), 1);
     assert_eq!(definitions[0].id(), &definition_id);
     drop(view);
@@ -19984,33 +19984,15 @@ state_test! { sync asset_total_amount_reads_tracked_definition_total
     );
 }
 state_test! { sync capture_exec_witness_stashes_reads_and_writes
-    use iroha_data_model::{asset::AssetDefinitionId, asset::AssetId, block::BlockHeader};
-    let world = World::default();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new(world, kura, query_handle);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let original = iroha_data_model::block::builder::BlockBuilder::new(header)
-        .build_with_signature(0, ALICE_KEYPAIR.private_key());
-    let (mut state_block, _recording) =
-        ValidBlock::start_component_execution(&original, &state)
-            .expect("original witness component recorder");
-    let_row! { asset_def_id = AssetDefinitionId::derive_from_components( DomainId::try_new("wonderland", "universal").unwrap(), "rose".parse().unwrap(), ) };
-    let asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
-    crate::exec_witness::record_write_asset(&asset_id, &Quantity::from(42_u32));
-    // Direct fixture execution has no external or time entrypoint wires.
+    crate::state::native_capture_fixture::with_native_capture_source(true, |_, mut state_block, _recording, mut source, _| {
     let tx_set_hash: [u8; 32] =
-        iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
-            std::iter::empty::<&iroha_data_model::transaction::TransactionEntrypoint>(),
-        )
-        .unwrap()
-        .into();
-    state_block.set_fastpq_tx_set_hash(tx_set_hash);
-    state_block.finalize_fastpq_source_inventory(&[], &[], &[]).unwrap();
+        iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(source.external_entrypoints_slice().iter()).unwrap().into();
+    crate::state::native_capture_fixture::seal_native_source(&mut state_block, &mut source).unwrap();
     assert_eq!(state_block.fastpq_source_inventory().unwrap().unwrap().tx_set_hash(), tx_set_hash);
     state_block.capture_exec_witness().unwrap();
     let witness = state_block.take_exec_witness().expect("witness captured");
-    assert_eq!(witness.writes.len(), 4);
+    assert_eq!(witness.writes.len(), 6);
+    assert!(witness.writes.iter().any(|write| write.key.as_slice() == iroha_data_model::execution_witness::FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1));
     assert!(witness.writes.iter().any(|write| {
         write.key.as_slice()
             == iroha_data_model::sumeragi_finality::SUMERAGI_LANE_STATE_WITNESS_KEY
@@ -20024,6 +20006,7 @@ state_test! { sync capture_exec_witness_stashes_reads_and_writes
             == iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_WITNESS_KEY_V1
     }));
     assert!(state_block.take_exec_witness().is_none());
+    });
 }
 state_test! { sync capture_exec_witness_refuses_a_pristine_scope_without_its_original_recorder
     let state = blank_state();

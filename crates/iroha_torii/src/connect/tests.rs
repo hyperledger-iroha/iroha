@@ -2941,8 +2941,8 @@ async fn default_handshake_budget_admits_ten_thousand_operations_with_one_bucket
     config.ws_per_ip_max_sessions =
         iroha_config::parameters::defaults::connect::WS_PER_IP_MAX_SESSIONS;
     let bus = Bus::from_config(&config, test_network_id());
-    assert_eq!(bus.policy.ws_rate_per_ip_per_min, 600_000);
-    assert_eq!(Policy::default().ws_rate_per_ip_per_min, 600_000);
+    assert_eq!(bus.policy.ws_rate_per_ip_per_min, 60_000_000);
+    assert_eq!(Policy::default().ws_rate_per_ip_per_min, 60_000_000);
     let ip: IpAddr = "198.51.100.10".parse().expect("client IP");
     bus.pre_session_create(ip)
         .await

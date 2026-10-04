@@ -68,6 +68,27 @@ operation and one prepare, retained-envelope submit, or read-only recovery
 action; it is not a one-shot operator command. Keep onboarding tokens and all
 signing inputs in owner-only runtime files outside the repository.
 
+`iroha taira public-reset torii-rate-config-amend --config-fd 3
+--config-source-path /private/runtime/validator/config.toml --rate-per-second 1000000
+--burst 10000000 --output /private/runtime/validator/config.next.toml` creates a fresh
+0600 flat configuration beside its source and emits only public budget/provenance metadata.
+The native launcher supplies the read-only descriptor; configuration bodies and credentials
+never enter argv or stdout. Repeat `--section` to select `torii`, `mcp`, `push`, `content`,
+`connect`, `gateway`, `operator-auth`, `privacy-ingest`, or `recipient-lookup`; omission
+selects all. The `torii` section covers query, transaction, deploy, pre-auth, proof and
+Soracloud requests. Absent optional recipient lookup stays absent. Gateway windows and
+all non-rate settings remain unchanged. Validate the result with the exact installed
+daemon's `--check-config --json` before installing it and restarting validators; running
+Torii buckets do not reload from disk. An output hash does not establish release qualification.
+`scripts/taira_validator_unit.py --role taira-validator-1 --amend-unit
+/etc/systemd/system/iroha3d-taira-validator-1.service --rate-config-receipt
+/private/runtime/native-rate-receipt.json --output
+/private/runtime/next/iroha3d-taira-validator-1.service` prepares the matching public
+unit by replacing only its old config fingerprint. It verifies the native receipt's
+source binding and fresh output metadata without reading config or signer bodies.
+The config path and full launcher stay unchanged; installation and restart remain
+separate, supervised deployment steps after native daemon validation.
+
 A sealed occupied deployment uses the native
 [`prepare-dispatcher-transition` / `dispatcher-transition` owner](DISPATCHER_TRANSITION.md)
 to advance the fixed dispatcher and its five guards before preparing the next
@@ -240,15 +261,16 @@ network_id = "<genesis-derived network id>"
 torii_url = "https://taira.sora.org/"
 
 [account]
-domain = "universal"
 profile = "taira"
 public_key = "..."
 private_key = "..."
 ```
 
-For a custom network, set `[account].chain_discriminant` explicitly instead.
-The corresponding environment overrides are `ACCOUNT_PROFILE` and
-`ACCOUNT_CHAIN_DISCRIMINANT`.
+For a local or custom network, set `[account].chain_discriminant` to its I105
+chain discriminant instead (the default local genesis uses `753`). One of the
+two is required: there is no default network, and a configuration that sets
+both must keep them consistent. The corresponding environment overrides are
+`ACCOUNT_PROFILE` and `ACCOUNT_CHAIN_DISCRIMINANT`.
 
 The CLI owns two optional filesystem settings that are deliberately absent from
 the reusable Rust SDK configuration:
@@ -773,6 +795,12 @@ output, following [`specs/torii/collection_queries.md`](../../specs/torii/collec
 | `iroha ledger asset holders --definition <ID>` | holders of one asset definition |
 | `iroha tx list [--account <ID>]` | transactions of one account (default: the configured account) |
 | `iroha app repo list` | repo agreements |
+| `iroha contract activity` | contract activity history |
+| `iroha contract events` | contract event history |
+| `iroha account permission list --id <ID>` | effective account permissions |
+| `iroha app subscriptions plan list` | subscription plans |
+| `iroha app subscriptions subscription list` | subscriptions |
+| `iroha app space-directory manifest fetch --uaid <UAID>` | UAID capability manifests |
 
 - `--filter <FILTER>` (alias `--where`) keeps matching rows; filters read like a
   SQL `WHERE` clause: `owned_by = "sorau…" and quantity >= 10.5`,
@@ -846,11 +874,16 @@ iroha --fee-payer authority tx stdin < batch.json
 
 `ledger query stdin` reads one query envelope: `{"singular": {"type": ...,
 "payload": {...}}}` or `{"iterable": {"type": ..., "params": {...},
-"predicate": {...}}}`.
+"predicate": {...}}}`. Torii's signed `/v1/query` admits singular queries and
+only the unfiltered `FindPeers`, `FindAccountIds`, `FindTriggers` and
+`FindActiveTriggerIds` iterable shapes; it refuses every other iterable with
+`signed_query_shape_not_admitted` (see
+[`specs/query_json.md`](../../specs/query_json.md)). List collections with the
+`list` commands above.
 
 ```bash
 echo '{"singular": {"type": "FindParameters"}}' | iroha ledger query stdin
-echo '{"iterable": {"type": "FindAccounts", "params": {"limit": 10}}}' | iroha ledger query stdin
+echo '{"iterable": {"type": "FindAccountIds", "params": {"limit": 10}}}' | iroha ledger query stdin
 ```
 
 ### Stream events
@@ -894,3 +927,10 @@ file lock. Existing state rejects initialization flags. Scalar JSON checkpoint
 files and the former height/context-id arguments are rejected. `ballot status`
 reads existing custody without changing it; `ballot dropout` authenticates its
 context whenever a state file is selected, including through a lost key's path.
+
+`iroha account history [--id ACCOUNT]` reads account movements. Explorer feeds
+use `iroha explorer accounts`, `domains`, `asset-definitions`, `assets`, `nfts`,
+`rwas`, `blocks`, `transactions`, `transactions-latest`, `instructions` or
+`instructions-latest`. All accept shared list flags (`--filter`, `--select`,
+`--limit`, `--cursor`, `--all`); history and Explorer feeds reject sorting,
+totals and aggregates.

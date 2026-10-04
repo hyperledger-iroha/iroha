@@ -879,6 +879,7 @@ pub(crate) struct GoldilocksFftPowersV1 {
     root: GoldilocksFieldV1,
     size: usize,
 }
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl GoldilocksFftPowersV1 {
     /// Minimum public payload, including the inline owner, before allocation.
     pub(crate) fn required_payload_bytes_v1(size: usize) -> Result<usize, TransparentStarkErrorV1> {
@@ -935,6 +936,7 @@ impl GoldilocksFftPowersV1 {
 }
 
 /// Coarse FFT using an admitted public power table and the original shared kernel.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn goldilocks_fft_coarse_with_powers_v1(
     values: &mut [GoldilocksFieldV1],
     root: GoldilocksFieldV1,
@@ -945,6 +947,7 @@ pub(crate) fn goldilocks_fft_coarse_with_powers_v1(
 
 /// Coarse inverse FFT using a table constructed from the inverse public root.
 /// Original root validation, inversion, domain checks and scaling retain their order.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn goldilocks_ifft_coarse_with_powers_v1(
     values: &mut [GoldilocksFieldV1],
     root: GoldilocksFieldV1,
@@ -1067,6 +1070,15 @@ pub(crate) fn goldilocks_evaluate_coset_v1(
     root: GoldilocksFieldV1,
     shift: GoldilocksFieldV1,
 ) -> Result<Vec<GoldilocksFieldV1>, TransparentStarkErrorV1> {
+    goldilocks_evaluate_coset_with_inner_parallelism_v1::<true>(coefficients, size, root, shift)
+}
+
+fn goldilocks_evaluate_coset_with_inner_parallelism_v1<const PARALLEL_INNER: bool>(
+    coefficients: &[GoldilocksFieldV1],
+    size: usize,
+    root: GoldilocksFieldV1,
+    shift: GoldilocksFieldV1,
+) -> Result<Vec<GoldilocksFieldV1>, TransparentStarkErrorV1> {
     if coefficients.len() > size
         || size == 0
         || !size.is_power_of_two()
@@ -1087,7 +1099,7 @@ pub(crate) fn goldilocks_evaluate_coset_v1(
         *target = coefficient.mul(shift_power);
         shift_power = shift_power.mul(shift);
     }
-    goldilocks_fft_v1(&mut evaluations, root)?;
+    goldilocks_fft_with_inner_parallelism_v1::<PARALLEL_INNER>(&mut evaluations, root)?;
     Ok(evaluations)
 }
 /// In-place radix-two FFT over the quartic Goldilocks extension.
@@ -1306,6 +1318,33 @@ pub(crate) fn masked_trace_coefficients_on_coset_v1(
     base_log_size: u8,
     evaluation_log_size: u8,
 ) -> Result<Vec<GoldilocksFieldV1>, TransparentStarkErrorV1> {
+    masked_trace_coefficients_on_coset_with_inner_parallelism_v1::<true>(
+        coefficients,
+        base_log_size,
+        evaluation_log_size,
+    )
+}
+
+/// Diagnostic-only alternative for a bounded batch that owns outer parallelism.
+/// Production dispatch remains on the original inner-parallel function above.
+#[cfg(test)]
+pub(crate) fn masked_trace_coefficients_on_coset_coarse_for_test_v1(
+    coefficients: &[GoldilocksFieldV1],
+    base_log_size: u8,
+    evaluation_log_size: u8,
+) -> Result<Vec<GoldilocksFieldV1>, TransparentStarkErrorV1> {
+    masked_trace_coefficients_on_coset_with_inner_parallelism_v1::<false>(
+        coefficients,
+        base_log_size,
+        evaluation_log_size,
+    )
+}
+
+fn masked_trace_coefficients_on_coset_with_inner_parallelism_v1<const PARALLEL_INNER: bool>(
+    coefficients: &[GoldilocksFieldV1],
+    base_log_size: u8,
+    evaluation_log_size: u8,
+) -> Result<Vec<GoldilocksFieldV1>, TransparentStarkErrorV1> {
     let base_size = 1_usize
         .checked_shl(u32::from(base_log_size))
         .ok_or(TransparentStarkErrorV1::InvalidDomain)?;
@@ -1325,7 +1364,12 @@ pub(crate) fn masked_trace_coefficients_on_coset_v1(
     {
         return Err(TransparentStarkErrorV1::InvalidDomain);
     }
-    goldilocks_evaluate_coset_v1(coefficients, evaluation_size, evaluation_root, shift)
+    goldilocks_evaluate_coset_with_inner_parallelism_v1::<PARALLEL_INNER>(
+        coefficients,
+        evaluation_size,
+        evaluation_root,
+        shift,
+    )
 }
 /// Interpolate and mask one trace column before evaluating its LDE.
 ///

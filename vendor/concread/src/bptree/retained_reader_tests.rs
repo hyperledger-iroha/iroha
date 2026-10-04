@@ -40,7 +40,7 @@ fn equal_foreign_family_cannot_reopen_retained_reader() {
 #[test]
 fn pinned_reader_reopens_while_actual_active_lock_is_owned_without_a_notice() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 

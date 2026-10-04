@@ -235,3 +235,20 @@ mod application_account_auth_tests {
         ));
     }
 }
+
+define_optional_dataspace_application_query_mount!(
+    mount_account_permissions_query,
+    ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_QUERY_POST,
+    handler_account_permissions_query
+);
+define_optional_dataspace_application_query_mount!(
+    mount_uaid_manifests_query,
+    SPACE_DIRECTORY_UAIDS_BY_UAID_MANIFESTS_QUERY_POST,
+    handler_space_directory_manifests_query
+);
+
+define_optional_dataspace_application_query_mount!(
+    mount_account_history_query,
+    ACCOUNTS_BY_ACCOUNT_ID_HISTORY_QUERY_POST,
+    handler_account_history_query
+);

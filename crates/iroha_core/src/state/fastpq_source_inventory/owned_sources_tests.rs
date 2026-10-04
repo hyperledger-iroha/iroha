@@ -376,7 +376,10 @@ fn source_inspection_refuses_capture_and_publication_across_success_error_and_un
         let mut escaped_inventory = None;
         let completed = catch_unwind(AssertUnwindSafe(|| {
             block.inspect_owned_execution_sources_for_test(&source, |state, sources| {
-                state.finalize_owned_fastpq_source_inventory_with_pending(sources, None)?;
+                state.finalize_owned_fastpq_source_inventory_with_pending(sources, None).map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => panic!("completed source control encountered original local deferral: {reason}"),
+            })?;
                 assert!(state.fastpq_source_inventory().unwrap().is_some());
                 let captured = state.verified_fastpq_source_inventory_for_capture();
                 assert_eq!(

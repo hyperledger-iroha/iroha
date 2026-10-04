@@ -118,10 +118,25 @@ that must also be zeroed.
 
 Every Torii collection uses one query language and one page envelope
 (`{"items": [...], "next_cursor": ..., "total": ...}`; see
-`specs/torii/collection_queries.md`). `ToriiClient` exposes the ten collections as
+`specs/torii/collection_queries.md`). `ToriiClient` exposes collections as
 `ToriiCollection<T>` values with typed rows: `Domains`, `Accounts`, `AssetDefinitions`,
 `Nfts`, `Rwas`, `RepoAgreements`, `AccountAssets(accountId)`,
-`AssetHolders(assetDefinitionId)`, `Transactions` and `AccountTransactions(accountId)`.
+`AssetHolders(assetDefinitionId)`, `Transactions`, `AccountTransactions(accountId)`,
+`AccountPermissions(accountId)`, `SubscriptionPlans`, `Subscriptions` and
+`UaidManifests(uaid)`. `ContractActivity`, `ContractEvents` and
+`AccountHistory(accountId)` expose history rows as JSON objects with the same
+filter/select/limit/cursor controls. Page envelopes require an explicit
+`next_cursor` (null or a nonempty token) and reject retired or unknown fields.
+Explorer collections use the same API: `ExplorerAccounts`, `ExplorerDomains`,
+`ExplorerAssetDefinitions`, `ExplorerAssets`, `ExplorerNfts`, `ExplorerRwas`,
+`ExplorerBlocks`, `ExplorerTransactions`, `ExplorerLatestTransactions`,
+`ExplorerInstructions` and `ExplorerLatestInstructions`. Their rows retain the
+strict Explorer DTO validation. These bounded feeds have fixed server order,
+accept `Filter`, `Select` (through `.Rows`), `Limit` and `Cursor`, and reject
+`Sort`, `IncludeTotal` and `Aggregate`. Torii defaults to 25 rows and caps
+Explorer pages at 100. An empty page with a cursor still has more work; iterators
+follow it. Detail and event stream methods remain separate.
+
 Reads are public; when credentials are configured the request is signed, which only widens
 visibility into restricted dataspaces. Row identity fields (`Id`; `AccountId`, `Asset`,
 `Scope` and `Quantity` for balances; `EntrypointHash`, `BlockHeight` and `BlockIndex` for
@@ -162,9 +177,10 @@ await foreach (var holder in client.Torii.AssetHolders(assetDefinitionId)
   `GroupBy` and filter JSON arguments use raw dotted paths (`"metadata.ui-order"`).
 - Projections (`Select`) and aggregates (`Aggregate`) return partial or computed rows;
   read them as `JsonObject` through `.Rows`, for example
-  `client.Torii.AssetHolders(id).Rows.GetPageAsync(aggregateQuery)`. A read whose visible
-  rows span several dataspace routes cannot be aggregated exactly and fails with
-  `invalid_aggregate`; page through the rows instead.
+  `client.Torii.AssetHolders(id).Rows.GetPageAsync(aggregateQuery)`. Torii executes
+  each collection query once over the caller-visible global state. For collections
+  that support totals and `POST` aggregates, visible rows contribute exactly once
+  even when they span several dataspace routes.
 - `Cursor` resumes after a page (`query with { Cursor = page.NextCursor }`);
   `IncludeTotal = true` adds `Page<T>.Total`.
 

@@ -170,6 +170,27 @@ def validate_server_template(path: pathlib.Path) -> str:
     )
 
 
+def _require_account_network_context(account: Mapping[str, object], label: str) -> None:
+    """Require the explicit client network context; client configs have no default network."""
+
+    profile = account.get("profile")
+    discriminant = account.get("chain_discriminant")
+    if profile is None and discriminant is None:
+        raise ProvisioningTemplateError(
+            f"{label} must set `profile` or `chain_discriminant`; client configs have no default network"
+        )
+    if profile is not None and (not isinstance(profile, str) or not profile.strip()):
+        raise ProvisioningTemplateError(f"{label}.profile must be a nonempty string")
+    if discriminant is not None and (
+        isinstance(discriminant, bool)
+        or not isinstance(discriminant, int)
+        or not 0 < discriminant <= 0xFFFF
+    ):
+        raise ProvisioningTemplateError(
+            f"{label}.chain_discriminant must be an integer in 1..=65535"
+        )
+
+
 def validate_client_template(path: pathlib.Path) -> str:
     """Validate the public client template and return its exact network identity."""
 
@@ -182,6 +203,7 @@ def validate_client_template(path: pathlib.Path) -> str:
             f"{path} embeds forbidden runtime secret field `account.private_key`"
         )
     _require_secret_file(account, "private_key_file", f"{path}.account")
+    _require_account_network_context(account, f"{path}.account")
     return _require_public_identity_source(
         table, "network_id", "network_id_file", str(path)
     )

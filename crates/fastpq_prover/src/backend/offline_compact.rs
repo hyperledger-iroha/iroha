@@ -8,28 +8,33 @@
 //! Success establishes mathematical consistency with those expectations, not
 //! their authority, ledger finality, replay admission or production qualification.
 //! Proving uses explicit work limits and constructs one segment at a time.
-//! The fixed canonical profile is available in every build. Callers bind their
-//! authenticated statement and enforce finality and replay policy at use.
+//! The caller supplies its original finite allocation pool and prepaid reservation.
+//! AXT retains its checked `private_smt.allocation_bytes` tree demand. The ordinary
+//! `quantity_ordinary_allocation_bytes` planner additionally covers each public
+//! preparation, retained root/port backing and both complete context invocations,
+//! including mandatory self-verification. Source materialization is a separate demand;
+//! codec charges, bounded proof/output buffers and process RSS are separate limits.
+//! Each route has its own fixed profile. Callers independently bind original source
+//! authority and enforce finality and replay policy at use.
 //!
 //! Callers select ordinary or AXT semantics; they do not choose circuits,
 //! transcripts, query counts or verifying keys. For an ordinary artifact:
 //!
 //! ```no_run
-//! use fastpq_prover::offline_compact::{
-//!     ExpectedStatement, ProvingLimits, VerificationLimits,
-//!     prove_quantity_ordinary_artifact, verify_quantity_ordinary_artifact,
-//! };
-//! use iroha_data_model::fastpq::FastpqPublicTransferStatementV1;
-//!
-//! fn prove_and_check(
-//!     authenticated_statement: &FastpqPublicTransferStatementV1,
-//! ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-//!     let expected = ExpectedStatement::from_statement(authenticated_statement)?;
-//!     let policy = VerificationLimits::default();
-//!     let bytes = prove_quantity_ordinary_artifact(
-//!         authenticated_statement, expected, ProvingLimits::default(), policy,
-//!     )?; // The producer also self-verifies before returning.
-//!     let verified = verify_quantity_ordinary_artifact(&bytes, expected, policy)?;
+//! use fastpq_prover::offline_compact::{ExpectedExecutionEffects, ExecutionEffectVerificationLimits,
+//!     ProvingLimits, prove_quantity_ordinary_artifact, verify_quantity_ordinary_artifact};
+//! use fastpq_prover::gadgets::public_transfer_statement::execution_effect::SourceExecutionEffectStatement;
+//! use iroha_allocation::{AllocationBudget, AllocationReservation};
+//! fn prove_and_check(statement: &SourceExecutionEffectStatement<'_>,
+//!     expected: ExpectedExecutionEffects<'_>, budget: &AllocationBudget,
+//!     prepaid: &mut AllocationReservation) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+//!     let policy = ExecutionEffectVerificationLimits::default();
+//!     let produced = prove_quantity_ordinary_artifact(statement, expected,
+//!         ProvingLimits::default(), policy, budget, prepaid)?;
+//!     let (bytes, producer_verified) = produced.into_parts();
+//!     assert!(producer_verified.segments() > 0);
+//!     // Independent verification also needs prepaid preparation credit.
+//!     let verified = verify_quantity_ordinary_artifact(&bytes, expected, policy, budget, prepaid)?;
 //!     assert!(verified.segments() > 0);
 //!     Ok(bytes)
 //! }
@@ -42,6 +47,8 @@
 //! retain the default bounds or impose stricter application limits, and handle
 //! [`ProvingError::Busy`] without an unbounded retry loop. Device execution is an
 //! explicit [`ProvingLimits`] choice and fails if the required device is unavailable.
+
+use iroha_allocation::{AllocationBudget, AllocationReservation};
 
 use iroha_data_model::{
     fastpq::FastpqCommitmentV1,
@@ -333,32 +340,6 @@ pub enum ProvingError {
     Verify(#[from] VerificationError),
 }
 
-/// Produce a canonical ordinary quantity bundle under independent expectations.
-///
-/// Even one segment uses the complete bundle relation. All original quantities,
-/// identities and occurrences are checked; derived private roots must equal the
-/// expected roots. Returned bytes have passed the public offline verifier below.
-/// Conservative output preflight requires room for every valid query set, so a
-/// budget may reject even if one particular proof would be smaller. Final decode
-/// checks retain any stricter enclosing Norito budget. This grants no finality.
-///
-/// # Errors
-/// Returns `Busy` for concurrent production, or rejects inconsistent public
-/// facts, exceeded work/output limits, invalid roots or final verification failure.
-#[allow(
-    clippy::large_types_passed_by_value,
-    reason = "stable public entry point: `VerificationLimits` is a `Copy` policy value that \
-              downstream crates and the documented example pass by value"
-)]
-pub fn prove_quantity_ordinary_artifact(
-    statement: &FastpqPublicTransferStatementV1,
-    expected: ExpectedStatement,
-    proving: ProvingLimits,
-    verification: VerificationLimits,
-) -> Result<Vec<u8>, ProvingError> {
-    super::compact_quantity_producer::prove(statement, expected, None, proving, &verification)
-}
-
 /// Produce a canonical AXT quantity bundle with complete independent AXT context.
 ///
 /// The complete original binding, metadata, mirrors and remote-spend claims are
@@ -367,6 +348,8 @@ pub fn prove_quantity_ordinary_artifact(
 /// Returned bytes have passed the same public AXT verifier exposed below.
 ///
 /// # Errors
+/// Rejects a foreign allocation reservation before preparation. The original
+/// pool funds only touched-tree backing; other proof/frame allocations are separate.
 /// Returns `Busy` for concurrent production, or rejects public/AXT mismatches,
 /// exceeded work/output limits, invalid roots or final verification failure.
 #[allow(
@@ -380,13 +363,17 @@ pub fn prove_quantity_axt_artifact(
     context: ExpectedAxtContext<'_>,
     proving: ProvingLimits,
     verification: VerificationLimits,
+    budget: &AllocationBudget,
+    reservation: &mut AllocationReservation,
 ) -> Result<Vec<u8>, ProvingError> {
     super::compact_quantity_producer::prove(
         statement,
         expected,
-        Some(context),
+        context,
         proving,
         &verification,
+        budget,
+        reservation,
     )
 }
 
@@ -472,7 +459,7 @@ impl VerifiedArtifact {
         self.inner.bundle().row_roots()
     }
 
-    /// Number of fully verified delta occurrences.
+    /// Number of fully verified effects (ordinary) or transfer occurrences (AXT).
     pub fn segments(&self) -> usize {
         self.inner.bundle().segments()
     }
@@ -503,41 +490,12 @@ impl VerifiedArtifact {
     }
 }
 
-/// Return the exact fixed DEEP quantity profile identifier.
+/// Return the exact unchanged AXT DEEP quantity profile identifier.
 ///
 /// A
 /// count-one quantity bundle retains its bundle schema and relation identity.
 pub fn quantity_profile_id() -> FastpqCompactProfileIdV1 {
     candidate_artifact::quantity_diagnostic_profile_id()
-}
-
-/// Verify a complete ordinary quantity artifact against independent caller inputs.
-///
-/// The entry point fixes the quantity value domain, ordinary semantics and the SHA3/SHAKE
-/// profile. It does not accept a generic AIR, profile selector or private witness.
-///
-/// # Errors
-/// Rejects canonical transport or policy failures, mismatched expected inputs,
-/// mismatched complete statement digest, invalid public facts, zero/malformed
-/// bundles, or any invalid child.
-#[allow(
-    clippy::large_types_passed_by_value,
-    reason = "stable public entry point: `VerificationLimits` is a `Copy` policy value that \
-              downstream crates and the documented example pass by value"
-)]
-pub fn verify_quantity_ordinary_artifact(
-    bytes: &[u8],
-    expected: ExpectedStatement,
-    limits: VerificationLimits,
-) -> Result<VerifiedArtifact, VerificationError> {
-    candidate_artifact::verify_bound_quantity_ordinary_artifact(
-        bytes,
-        &expected.internal(),
-        expected.public_statement_digest,
-        limits.internal(),
-    )
-    .map(|inner| VerifiedArtifact { inner })
-    .map_err(Into::into)
 }
 
 /// Verify a complete AXT quantity artifact against every independent expectation.
@@ -570,3 +528,12 @@ pub fn verify_quantity_axt_artifact(
     .map(|inner| VerifiedArtifact { inner })
     .map_err(Into::into)
 }
+
+#[path = "offline_compact/execution_effect.rs"]
+mod execution_effect;
+pub use execution_effect::{
+    ExecutionEffectVerificationLimits, ExpectedExecutionEffects, ProducedExecutionEffectArtifact,
+    execution_effect_profile_id, prove_quantity_ordinary_artifact,
+    quantity_ordinary_allocation_bytes, quantity_ordinary_verification_allocation_bytes,
+    verify_quantity_ordinary_artifact,
+};

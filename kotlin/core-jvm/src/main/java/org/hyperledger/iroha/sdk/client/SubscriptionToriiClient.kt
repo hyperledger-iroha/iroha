@@ -25,27 +25,15 @@ class SubscriptionToriiClient private constructor(builder: Builder) : AutoClosea
     private val defaultHeaders: Map<String, String> = Collections.unmodifiableMap(LinkedHashMap(builder.defaultHeaders))
     private val observers: List<ClientObserver> = builder.observers.toList()
 
-    fun listSubscriptionPlans(params: SubscriptionPlanListParams?): CompletableFuture<SubscriptionPlanListResponse> {
-        val request = buildGetRequest(PLANS_PATH, params?.toQueryParameters() ?: emptyMap())
-        notifyRequest(request)
-        return executeHttpRequest(request, SubscriptionJsonParser::parsePlanList)
-    }
-
     fun createSubscriptionPlan(request: SubscriptionPlanCreateRequest): CompletableFuture<SubscriptionPlanCreateResponse> {
         return unsupportedServerSideSigning("/v1/subscriptions/plans")
-    }
-
-    fun listSubscriptions(params: SubscriptionListParams?): CompletableFuture<SubscriptionListResponse> {
-        val request = buildGetRequest(SUBSCRIPTIONS_PATH, params?.toQueryParameters() ?: emptyMap())
-        notifyRequest(request)
-        return executeHttpRequest(request, SubscriptionJsonParser::parseSubscriptionList)
     }
 
     fun createSubscription(request: SubscriptionCreateRequest): CompletableFuture<SubscriptionCreateResponse> {
         return unsupportedServerSideSigning("/v1/subscriptions")
     }
 
-    fun getSubscription(subscriptionId: String): CompletableFuture<SubscriptionListResponse.SubscriptionRecord?> {
+    fun getSubscription(subscriptionId: String): CompletableFuture<SubscriptionRecord?> {
         val normalizedId = requireNonBlank(subscriptionId, "subscription_id")
         val path = "$SUBSCRIPTIONS_PATH/${urlEncode(normalizedId)}"
         val request = buildGetRequest(path, emptyMap())

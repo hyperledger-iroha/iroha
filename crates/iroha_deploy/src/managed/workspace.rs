@@ -34,8 +34,9 @@ impl InstalledRuntime {
 
     /// Resolve matching programs in a canonical package or an explicit loose development directory.
     ///
-    /// macOS applications use only their `.app/Contents/MacOS` directory; resources belong in
-    /// `Contents/Resources`. Loose developer binaries load profiles from their own directory.
+    /// macOS desktop applications use only `.app/Contents/MacOS` and `Contents/Resources`.
+    /// The native CLI package and explicit loose developer binaries load profiles beside their
+    /// two matching programs. A desktop UI is never a CLI runtime prerequisite.
     ///
     /// # Errors
     /// Missing binaries and indirect or nonregular program files are rejected.
@@ -481,7 +482,6 @@ chain = "00000000-0000-0000-0000-000000000000"
 network_id = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
 torii_url = "http://127.0.0.1:9/"
 [account]
-domain = "wonderland.universal"
 chain_discriminant = 753
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
 private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"

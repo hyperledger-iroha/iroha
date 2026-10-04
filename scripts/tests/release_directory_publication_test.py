@@ -43,6 +43,39 @@ def test_private_directory_is_published_without_copying_its_original_inode(held)
     assert (destination / "content").read_bytes() == b"qualified candidate bytes"
 
 
+def test_public_source_mode_requires_explicit_exact_admission(held):
+    parent, stage, descriptors = held
+    stage.chmod(0o755)
+    before = stage.stat()
+    destination = parent / "published"
+    with pytest.raises(contract.ReleaseArtifactError, match="custody changed"):
+        contract.publish_directory_noreplace(stage, destination, **descriptors)
+    assert stage.stat().st_ino == before.st_ino and not destination.exists()
+    contract.publish_directory_noreplace(stage, destination, stage_mode=0o755, **descriptors)
+    assert (destination.stat().st_dev, destination.stat().st_ino) == (before.st_dev, before.st_ino)
+    assert destination.stat().st_mode & 0o7777 == 0o755
+
+
+@pytest.mark.parametrize("mode", [0o750, 0o770, 0o777, 0o1700, 0o2700, 0o4700, True])
+def test_unreviewed_publication_mode_refuses_before_rename(held, mode):
+    parent, stage, descriptors = held
+    before = stage.stat()
+    destination = parent / "published"
+    with pytest.raises(contract.ReleaseArtifactError, match="mode must be exactly"):
+        contract.publish_directory_noreplace(stage, destination, stage_mode=mode, **descriptors)
+    assert stage.stat().st_ino == before.st_ino and not destination.exists()
+
+
+@pytest.mark.parametrize("admitted,actual", [(0o700, 0o755), (0o755, 0o700), (0o755, 0o775)])
+def test_exact_admitted_mode_cannot_be_substituted(held, admitted, actual):
+    parent, stage, descriptors = held
+    stage.chmod(actual)
+    destination = parent / "published"
+    with pytest.raises(contract.ReleaseArtifactError, match="custody changed"):
+        contract.publish_directory_noreplace(stage, destination, stage_mode=admitted, **descriptors)
+    assert stage.is_dir() and not destination.exists()
+
+
 @pytest.mark.parametrize("kind", ["empty", "populated", "symlink"])
 def test_destination_is_never_replaceable_even_if_empty(held, kind):
     parent, stage, descriptors = held
@@ -118,6 +151,18 @@ def test_taira_delegation_preserves_local_publication_contract(held, monkeypatch
     else:
         source._publish(stage, destination)
         assert destination.stat().st_ino == before
+
+
+def test_taira_public_source_delegation_retains_original_inode(held, monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]))
+    import taira_source_capture as source
+    parent, stage, _ = held
+    stage.chmod(0o755)
+    before = stage.stat().st_ino
+    destination = parent / "published"
+    source._publish(stage, destination, stage_mode=0o755)
+    assert destination.stat().st_ino == before
+    assert destination.stat().st_mode & 0o7777 == 0o755
 
 
 @pytest.mark.parametrize("depth", [1, 2])

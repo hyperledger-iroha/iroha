@@ -226,12 +226,14 @@ fn native_checkpoint_fifo_refuses_without_a_writer() {
     let store = Arc::new(checkpoint(temporary.path()));
     assert_eq!(store.load_latest().unwrap(), None);
     let fifo = store.root.join("checkpoint.to");
-    rustix::fs::mkfifoat(
-        rustix::fs::CWD,
-        &fifo,
-        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-    )
-    .unwrap();
+    assert!(
+        std::process::Command::new("mkfifo")
+            .args(["-m", "600"])
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
     let (sender, receiver) = mpsc::channel();
     let reader = Arc::clone(&store);
     let handle = std::thread::spawn(move || {

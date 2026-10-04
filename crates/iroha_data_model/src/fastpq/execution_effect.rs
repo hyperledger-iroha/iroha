@@ -2,8 +2,8 @@
 //!
 //! These DTOs preserve exact operation, scoped balance, lifecycle and authorization
 //! claims. Decoding or hashing them grants no authority. A verifier must obtain
-//! independent expected commitments from authenticated execution; no current
-//! ordinary/AXT artifact decoder accepts this candidate statement.
+//! independent expected commitments from authenticated execution; ordinary
+//! artifacts transport this statement, while AXT retains its transfer statement.
 
 use super::{
     FastpqPublicInputs, FastpqSourceExecutionEntryV1, FastpqSourceStatementContextV1,
@@ -17,6 +17,9 @@ use crate::{
 use iroha_crypto::Hash;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
+
+mod commitment;
+pub use commitment::*;
 
 /// Exact definition and externally authenticated registration/lifecycle identity.
 #[derive(
@@ -213,15 +216,16 @@ pub fn execution_quantity_key_v1(
 
 /// Commitment to complete original facts, not an authorization certificate.
 /// # Errors
-/// Returns the canonical encoding error without hashing partial facts.
+/// Returns the canonical encoding error, ordinal mismatch or count overflow without
+/// returning a partial or differently ordered commitment.
 pub fn execution_effects_digest_v1(
     effects: &FastpqExecutionEffectsV1,
 ) -> Result<Hash, norito::Error> {
-    let bytes = norito::encode_canonical(effects)?;
-    Ok(Hash::new_from_chunks(&[
-        b"fastpq:execution-effects:v1:source|",
-        &bytes,
-    ]))
+    let mut journal = FastpqExecutionEffectCommitmentV1::new(effects.context);
+    for effect in &effects.effects {
+        journal.append(FastpqExecutionEffectRefV1::from(effect))?;
+    }
+    journal.digest()
 }
 
 /// Commitment to the complete candidate statement under its distinct semantics domain.
@@ -230,11 +234,29 @@ pub fn execution_effects_digest_v1(
 pub fn execution_effect_statement_digest_v1(
     statement: &FastpqExecutionEffectStatementV1,
 ) -> Result<Hash, norito::Error> {
-    let bytes = norito::encode_canonical(statement)?;
-    Ok(Hash::new_from_chunks(&[
-        b"fastpq:execution-effects:v1:statement|",
-        &bytes,
-    ]))
+    canonical_effect_digest(b"fastpq:execution-effects:v1:statement|", statement)
+}
+
+/// Stream the exact canonical frame after its original semantics domain.
+/// No output-sized frame is retained. Serializer-internal scratch remains the
+/// serializer's responsibility. Preserve the original codec error and discard
+/// every partial hash, including second-pass framing/checksum failures.
+fn canonical_effect_digest<T: norito::NoritoSerialize>(
+    domain: &[u8],
+    value: &T,
+) -> Result<Hash, norito::Error> {
+    let mut encoding_error = None;
+    let digest = Hash::new_from_writer(|writer| {
+        writer.write_all(domain)?;
+        norito::core::write_canonical_to_writer(value, writer).map_err(|error| {
+            encoding_error = Some(error);
+            std::io::Error::other("complete effect canonical encoding failed")
+        })
+    });
+    match encoding_error {
+        Some(error) => Err(error),
+        None => digest.map_err(norito::Error::Io),
+    }
 }
 
 #[cfg(test)]

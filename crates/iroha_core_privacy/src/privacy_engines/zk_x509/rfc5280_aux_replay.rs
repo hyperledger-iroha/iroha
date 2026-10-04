@@ -257,7 +257,10 @@ impl ColumnStateV1 {
         let serial_gate = context.family_gate_v1(ZkX509Rfc5280StarkFamilyV1::SerialSource);
 
         let query_gate = if lookup.node {
-            serial_gate.add(output_source_node_query_gate_v1(&row, &fixed))
+            serial_gate
+                .add(output_source_node_query_gate_v1(&row, &fixed))
+                .add(path_len::node_query_gate(&row, &fixed))
+                .add(copy_census::node_query_gate(&row, &fixed))
         } else {
             row[BASE_SERIAL_BYTE_QUERY_ACTIVE]
         };
@@ -509,6 +512,352 @@ mod tests {
         context.base[BASE_DOCUMENT] = F(73);
         context
     }
+    #[test]
+    #[ignore = "complete RFC local-row and rebuilt auxiliary omission diagnostic"]
+    fn rfc_copy_census_omissions_are_rejected_after_complete_aux_replay() {
+        use crate::privacy_engines::zk_x509::{
+            der_air::build_zk_x509_rfc5280_trace_v1,
+            relation::release_fixture::{
+                build_zk_x509_copy_capacity_fixture_v1, build_zk_x509_reference_fixture_v1,
+            },
+            verifier_profile::rfc_statement_with_crl_number_v1,
+        };
+        use std::collections::BTreeMap;
+
+        // Rebuild every auxiliary state with the production scalar step kernel.
+        // Inactive rows have no events, so their exact repeated auxiliary row
+        // is cached until the next active row. Every physical local AIR row,
+        // including all inactive fixed roots and the wrap boundary, is checked.
+        fn replay(
+            material: &ZkX509Rfc5280StarkBaseMaterialV1,
+        ) -> (ZkX509Rfc5280StarkAuxRowV1, Vec<(usize, usize)>, Vec<usize>) {
+            let der = der_v1();
+            let challenges = challenges_v1();
+            let centers = ZkX509ShaUnionCentersV1::identity_fixture_v1();
+            let claims =
+                compile_zk_x509_rfc5280_stark_terminal_claims_v1(material, der, challenges)
+                    .unwrap();
+            let mut states: [ColumnStateV1; ZK_X509_RFC5280_STARK_AUX_WIDTH_V1] =
+                core::array::from_fn(|_| ColumnStateV1::new_v1());
+            let mut neutral = None;
+            let mut previous: Option<(usize, RowContextV1, ZkX509Rfc5280StarkAuxRowV1)> = None;
+            let mut first = None;
+            let mut failures = Vec::new();
+            let last = ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 - 1;
+            for index in 0..=last {
+                let context = RowContextV1 {
+                    base: material.base_row(index).unwrap(),
+                    fixed: material.fixed_row(index).unwrap(),
+                    family: material.schedule.family_and_ordinal(index).unwrap().0,
+                };
+                let inactive = context.base[BASE_ACTIVE] == F::ZERO;
+                if inactive {
+                    assert_eq!(context.base[BASE_D], F::ZERO);
+                    assert_eq!(context.base[BASE_NUMERIC_SOURCE], F::ZERO);
+                    assert_eq!(context.base[BASE_NUMERIC_QUERY], F::ZERO);
+                    assert_eq!(
+                        output_source_node_query_gate_v1(&context.base, &context.fixed),
+                        F::ZERO
+                    );
+                }
+                let aux = if inactive && index != last && neutral.is_some() {
+                    neutral.unwrap()
+                } else {
+                    // The same denominator occurs in six auxiliary column kinds.
+                    // Cache only this row's canonical inverses, preserving the
+                    // exact zero-safe kernel values rather than changing AIR.
+                    let mut inverses = [F::ZERO; 128];
+                    let mut used = 0;
+                    let mut inverse = |gate: F, denominator: F| {
+                        assert!(gate == F::ZERO || gate == F::ONE);
+                        if gate == F::ZERO {
+                            return (F::ZERO, F::ZERO);
+                        }
+                        if denominator == F::ZERO {
+                            return (F::ONE, F::ZERO);
+                        }
+                        for entry in 0..used {
+                            if inverses[2 * entry] == denominator {
+                                return (F::ZERO, inverses[2 * entry + 1]);
+                            }
+                        }
+                        assert!(used < 64);
+                        let value = denominator
+                            .inv()
+                            .expect("canonical nonzero field denominator");
+                        inverses[2 * used] = denominator;
+                        inverses[2 * used + 1] = value;
+                        used += 1;
+                        (F::ZERO, value)
+                    };
+                    let aux = core::array::from_fn(|column| {
+                        states[column]
+                            .step_with_inverse_v1(
+                                column,
+                                &context,
+                                index == last,
+                                der,
+                                challenges,
+                                &centers,
+                                &mut inverse,
+                            )
+                            .expect("native auxiliary row recurrence")
+                    });
+                    zeroize_fields_v1(&mut inverses);
+                    if inactive {
+                        neutral = Some(aux);
+                    } else {
+                        neutral = None;
+                    }
+                    aux
+                };
+                if index == 0 {
+                    first = Some((context.base, aux));
+                }
+                if let Some((before, prev, prev_aux)) = previous.take() {
+                    let residues = evaluate_zk_x509_rfc5280_stark_residues_v1(
+                        &prev.base,
+                        &context.base,
+                        &prev_aux,
+                        &aux,
+                        &prev.fixed,
+                        der,
+                        challenges,
+                        claims,
+                    )
+                    .unwrap();
+                    for (residue, value) in residues.into_iter().enumerate() {
+                        if value != F::ZERO && failures.len() < 16 {
+                            failures.push((before, residue));
+                        }
+                    }
+                }
+                previous = Some((index, context, aux));
+            }
+            let (_, context, aux) = previous.unwrap();
+            let (first_base, first_aux) = first.unwrap();
+            let residues = evaluate_zk_x509_rfc5280_stark_residues_v1(
+                &context.base,
+                &first_base,
+                &aux,
+                &first_aux,
+                &context.fixed,
+                der,
+                challenges,
+                claims,
+            )
+            .unwrap();
+            for (residue, value) in residues.into_iter().enumerate() {
+                if value != F::ZERO && failures.len() < 16 {
+                    failures.push((last, residue));
+                }
+            }
+            let rejected = states
+                .iter()
+                .enumerate()
+                .filter_map(|(column, state)| {
+                    state
+                        .finish_v1(column, aux[column])
+                        .is_err()
+                        .then_some(column)
+                })
+                .collect();
+            (aux, failures, rejected)
+        }
+
+        // These genuine signed fixtures exercise maximum copied Names/IDs,
+        // u32 pathLen, u64 CRL number and all leaf EKUs at both admitted depths.
+        // Rebuild every auxiliary state and check every physical AIR row before
+        // the independent balanced-erasure cases below.
+        for maximum in [false, true] {
+            let fixture = build_zk_x509_copy_capacity_fixture_v1(maximum).unwrap();
+            let trace = build_zk_x509_rfc5280_trace_v1(
+                &fixture.witness.certificate_chain_der,
+                &fixture.witness.crl_der,
+                rfc_statement_with_crl_number_v1(
+                    &fixture.statement,
+                    fixture.authoritative_state.crl_record().crl_number,
+                ),
+            )
+            .unwrap();
+            let material = build_zk_x509_rfc5280_stark_base_material_v1(&trace).unwrap();
+            let (terminal, local, lookup) = replay(&material);
+            let copy_equal = (0..ZK_X509_RFC5280_STARK_BUS_LANES_V1).all(|lane| {
+                terminal[AUX_SERIAL_SOURCE_AFTER + lane]
+                    == terminal[AUX_SERIAL_CONSUMER_AFTER + lane]
+                    && terminal[AUX_SERIAL_SOURCE_BEFORE + lane]
+                        == terminal[AUX_SERIAL_SOURCE_AFTER + lane]
+                    && terminal[AUX_SERIAL_CONSUMER_BEFORE + lane]
+                        == terminal[AUX_SERIAL_CONSUMER_AFTER + lane]
+            });
+            eprintln!(
+                "RFC_CAPACITY_REPLAY depth={} rows={} auxiliary_columns={} representative_local_failures={local:?} lookup_failures={lookup:?} copy_terminals_equal={copy_equal}",
+                fixture.witness.certificate_chain_der.len(),
+                ZK_X509_RFC5280_STARK_TRACE_SIZE_V1,
+                ZK_X509_RFC5280_STARK_AUX_WIDTH_V1,
+            );
+            assert!(
+                local.is_empty() && lookup.is_empty() && copy_equal,
+                "genuine capacity baseline must satisfy every RFC row and terminal at maximum={maximum}"
+            );
+        }
+
+        let fixture = build_zk_x509_reference_fixture_v1().unwrap();
+        let trace = build_zk_x509_rfc5280_trace_v1(
+            &fixture.witness.certificate_chain_der,
+            &fixture.witness.crl_der,
+            rfc_statement_with_crl_number_v1(
+                &fixture.statement,
+                fixture.authoritative_state.crl_record().crl_number,
+            ),
+        )
+        .unwrap();
+        let original = build_zk_x509_rfc5280_stark_base_material_v1(&trace).unwrap();
+        let (original_terminal, original_local, original_lookup) = replay(&original);
+        assert!(
+            original_local.is_empty() && original_lookup.is_empty(),
+            "genuine baseline must satisfy every RFC row and terminal"
+        );
+        let equal = ZkX509Rfc5280StarkFamilyV1::EqualByte as usize;
+        let embedded = ZkX509Rfc5280StarkFamilyV1::EmbeddedCopy as usize;
+        let consumer = ZkX509Rfc5280StarkFamilyV1::SemanticConsumer as usize;
+        let source = ZkX509Rfc5280StarkFamilyV1::SourceByte as usize;
+        let equal_count = original.family_rows[equal].len();
+        let embedded_count = original.family_rows[embedded].len();
+        assert!(equal_count > 0 && embedded_count > 0);
+        assert_eq!(
+            original.family_rows[consumer].len(),
+            equal_count + embedded_count
+        );
+        let mut undetected = Vec::new();
+        for (label, drop_equal, drop_embedded) in [
+            ("equal", true, false),
+            ("embedded", false, true),
+            ("both", true, true),
+        ] {
+            let mut changed = original.clone();
+            let mut removed = BTreeMap::<(u64, u64, u64), u64>::new();
+            let mut removed_nodes = BTreeMap::<(u64, u64), u64>::new();
+            let mut remove = |family: usize, offset: usize| {
+                let row = original
+                    .base_row(original.schedule.starts[family] + offset)
+                    .unwrap();
+                let gate = row[BASE_SERIAL_BYTE_QUERY_ACTIVE];
+                assert!(gate == F::ZERO || gate == F::ONE);
+                if row[BASE_IS_WRITE] == F::ONE {
+                    *removed_nodes
+                        .entry((row[BASE_DOCUMENT].0, row[BASE_NODE].0))
+                        .or_default() += 1;
+                }
+                if gate == F::ZERO {
+                    return;
+                }
+                *removed
+                    .entry((
+                        row[BASE_DOCUMENT].0,
+                        row[BASE_ADDRESS].0,
+                        row[BASE_SERIAL_BYTE_QUERY_VALUE].0,
+                    ))
+                    .or_default() += 1;
+            };
+            for (family, enabled) in [(equal, drop_equal), (embedded, drop_embedded)] {
+                if enabled {
+                    for offset in 0..original.family_rows[family].len() {
+                        remove(family, offset);
+                    }
+                    changed.family_rows[family].clear();
+                }
+            }
+            // Preserve verifier-fixed slot positions: erasure cannot relocate a
+            // mandatory CRL endpoint into an optional certificate-two hole.
+            for (offset, row) in changed.family_rows[consumer].iter_mut().enumerate() {
+                let dropping = if offset < equal_count {
+                    drop_equal
+                } else {
+                    drop_embedded
+                };
+                if dropping {
+                    remove(consumer, offset);
+                    zeroize_fields_v1(row);
+                }
+            }
+            let mut removed_node_events = 0;
+            for row in
+                changed.family_rows[ZkX509Rfc5280StarkFamilyV1::SourceNode as usize].iter_mut()
+            {
+                if let Some(count) = removed_nodes.remove(&(row[BASE_DOCUMENT].0, row[BASE_NODE].0))
+                {
+                    row[SERIAL_NODE_TABLE_MULTIPLICITY] = F(row[SERIAL_NODE_TABLE_MULTIPLICITY]
+                        .0
+                        .checked_sub(count)
+                        .unwrap());
+                    removed_node_events += count;
+                }
+            }
+            assert!(removed_nodes.is_empty() && removed_node_events > 0);
+            let mut removed_events = 0;
+            for row in changed.family_rows[source].iter_mut() {
+                if let Some(count) =
+                    removed.remove(&(row[BASE_DOCUMENT].0, row[BASE_ADDRESS].0, row[BASE_VALUE].0))
+                {
+                    row[SERIAL_BYTE_TABLE_MULTIPLICITY] = F(row[SERIAL_BYTE_TABLE_MULTIPLICITY]
+                        .0
+                        .checked_sub(count)
+                        .unwrap());
+                    removed_events += count;
+                }
+            }
+            assert!(removed.is_empty() && removed_events > 0);
+            let (terminal, local, lookup) = replay(&changed);
+            assert!(
+                lookup.is_empty(),
+                "rebuilt byte/node weights must close every lookup finish for {label}: {lookup:?}"
+            );
+            let copy_equal = (0..ZK_X509_RFC5280_STARK_BUS_LANES_V1).all(|lane| {
+                terminal[AUX_SERIAL_SOURCE_AFTER + lane]
+                    == terminal[AUX_SERIAL_CONSUMER_AFTER + lane]
+                    && terminal[AUX_SERIAL_SOURCE_BEFORE + lane]
+                        == terminal[AUX_SERIAL_SOURCE_AFTER + lane]
+                    && terminal[AUX_SERIAL_CONSUMER_BEFORE + lane]
+                        == terminal[AUX_SERIAL_CONSUMER_AFTER + lane]
+            });
+            assert!(
+                copy_equal,
+                "balanced endpoint deletion preserves all four actual copy-terminal equalities"
+            );
+            let other_terminals_unchanged = (0..ZK_X509_RFC5280_STARK_AUX_WIDTH_V1)
+                .filter(|column| {
+                    !(AUX_SERIAL_SOURCE_BEFORE
+                        ..AUX_SERIAL_CONSUMER_AFTER + ZK_X509_RFC5280_STARK_BUS_LANES_V1)
+                        .contains(column)
+                })
+                .all(|column| terminal[column] == original_terminal[column]);
+            assert!(
+                other_terminals_unchanged,
+                "all264 non-copy auxiliary terminal coordinates remain genuine"
+            );
+            // Product values themselves legitimately change when both endpoint
+            // multisets lose the same factors. Acceptance uses the actual AIR
+            // equalities and finish rules, not identity with those old values.
+            let accepted = local.is_empty() && lookup.is_empty() && copy_equal;
+            assert!(
+                !local.is_empty(),
+                "fixed copy census must reject {label} erasure even with rebuilt byte and node weights"
+            );
+            eprintln!(
+                "RFC_OMISSION label={label} removed_events={removed_events} removed_node_events={removed_node_events} representative_local_failures={local:?} lookup_failures={lookup:?} copy_terminals_equal={copy_equal} other_terminal_columns_unchanged={other_terminals_unchanged} accepted={accepted}"
+            );
+            if accepted {
+                undetected.push(label);
+            }
+        }
+        // This is an AIR omission diagnostic, not a generated credential proof.
+        assert!(
+            undetected.is_empty(),
+            "unforced RFC copy census omissions accepted after complete local/auxiliary checks: {undetected:?}"
+        );
+    }
+
     #[test]
     fn auxiliary_batch_geometry_fails_before_destination_mutation() {
         let centers = ZkX509ShaUnionCentersV1::identity_fixture_v1();

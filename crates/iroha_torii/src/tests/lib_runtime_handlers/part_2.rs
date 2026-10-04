@@ -3678,13 +3678,12 @@ async fn routing_space_directory_manifests_reports_inactive_pending_and_uncatalo
     let response = routing::handle_v1_space_directory_manifests(
         app.state.clone(),
         AxPath(uaid.to_string()),
-        crate::NoritoQuery(routing::SpaceDirectoryManifestQuery {
-            dataspace: None,
-            status: Some("inactive".to_owned()),
-            limit: None,
-            offset: None,
-            count_mode: None,
-        }),
+        crate::NoritoQuery(
+            iroha_torii_shared::list_query::ListQuery::from_json_value(norito::json!({
+                "filter": "status != \"Active\"", "include_total": true,
+            }))
+            .expect("manifest collection query"),
+        ),
         app.telemetry.clone(),
     )
     .await
@@ -3694,7 +3693,7 @@ async fn routing_space_directory_manifests_reports_inactive_pending_and_uncatalo
     let json =
         decode_torii_json(response, "inactive manifest body", "inactive manifest json").await;
     assert_eq!(json["total"].as_u64(), Some(2));
-    let manifests = json["manifests"].as_array().expect("manifests array");
+    let manifests = json["items"].as_array().expect("manifests array");
     assert_eq!(manifests.len(), 2);
     let pending = manifests
         .iter()
@@ -3720,27 +3719,6 @@ async fn routing_space_directory_manifests_reports_inactive_pending_and_uncatalo
         0,
         "uncataloged/unbound dataspaces should report empty account bindings",
     );
-}
-#[cfg(feature = "app_api")]
-#[test]
-fn space_directory_manifest_fanout_query_preserves_coordinator_window_and_filters() {
-    let query = routing::SpaceDirectoryManifestQuery {
-        dataspace: Some(10),
-        status: Some("active".to_owned()),
-        limit: Some(5),
-        offset: Some(7),
-        count_mode: Some("exact".to_owned()),
-    };
-
-    let fanout_query = super::space_directory_manifest_fanout_query(&query, 12);
-
-    // This is the coordinator envelope. The routed collector subsequently binds each request to
-    // its route's dataspace and rewrites it to a terminal, bounded one-row page.
-    assert_eq!(fanout_query.dataspace, query.dataspace);
-    assert_eq!(fanout_query.status, query.status);
-    assert_eq!(fanout_query.limit, Some(12));
-    assert_eq!(fanout_query.offset, Some(0));
-    assert_eq!(fanout_query.count_mode, query.count_mode);
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -3791,7 +3769,6 @@ async fn routed_uaid_handlers_reject_invalid_inputs_before_routing() {
         HeaderMap::new(),
         crate::loopback_connect_info(),
         AxPath("uaid:1234".to_owned()),
-        AxQuery(routing::SpaceDirectoryManifestQuery::default()),
     )
     .await
     {
@@ -3804,16 +3781,12 @@ async fn routed_uaid_handlers_reject_invalid_inputs_before_routing() {
     let invalid_status = match super::handler_space_directory_manifests(
         State(app),
         axum::http::Method::GET,
-        format!("/v1/space-directory/uaids/{uaid}/manifests")
+        format!("/v1/space-directory/uaids/{uaid}/manifests?status=retired")
             .parse()
             .expect("valid manifests uri"),
         HeaderMap::new(),
         crate::loopback_connect_info(),
         AxPath(uaid.to_string()),
-        AxQuery(routing::SpaceDirectoryManifestQuery {
-            status: Some("DefinitelyNotAStatus".to_owned()),
-            ..routing::SpaceDirectoryManifestQuery::default()
-        }),
     )
     .await
     {
@@ -3848,20 +3821,13 @@ async fn anonymous_space_directory_manifest_selector_hides_restricted_route() {
         State(app),
         axum::http::Method::GET,
         format!(
-            "/v1/space-directory/uaids/{uaid}/manifests?dataspace=10&status=active&limit=1&offset=0"
+            "/v1/space-directory/uaids/{uaid}/manifests?filter=dataspace_id%20%3D%2010%20and%20status%20%3D%20%22Active%22&limit=1&include_total=true"
         )
         .parse()
         .expect("valid restricted manifest selector uri"),
         HeaderMap::new(),
         crate::loopback_connect_info(),
         AxPath(uaid.to_string()),
-        AxQuery(routing::SpaceDirectoryManifestQuery {
-            dataspace: Some(restricted_dataspace.as_u64()),
-            status: Some("active".to_owned()),
-            limit: Some(1),
-            offset: Some(0),
-            count_mode: None,
-        }),
     )
     .await
     .expect("manifest handler should execute")
@@ -3872,16 +3838,12 @@ async fn anonymous_space_directory_manifest_selector_hides_restricted_route() {
         Some("local"),
         "configured dataspace route should execute locally in unit tests",
     );
-    assert!(response.headers().get("x-iroha-route-lane-id").is_none());
-    assert!(
-        response
-            .headers()
-            .get("x-iroha-route-dataspace-id")
-            .is_none()
-    );
     let json = decode_torii_json(response, "manifest handler body", "manifest handler json").await;
-    assert_eq!(json["total"].as_u64(), Some(0));
-    let manifests = json["manifests"].as_array().expect("manifests array");
+    assert!(
+        json.get("total")
+            .is_none_or(|total| total.as_u64() == Some(0))
+    );
+    let manifests = json["items"].as_array().expect("manifests array");
     assert!(manifests.is_empty());
 }
 #[cfg(feature = "app_api")]

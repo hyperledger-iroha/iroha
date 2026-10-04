@@ -104,9 +104,11 @@ fn publication_requires_the_original_nonempty_captured_witness() {
     let proposal = chain.proposal(Some(2000), Vec::new());
     let mut pending = chain.begin_proposal(proposal, Default::default()).unwrap();
     pending
-        .inspect(|original| {
+        .inspect(|mut original| {
             assert!(!original.witness.writes.is_empty());
-            *original.witness = Default::default();
+            original.witness.offer_reconstructed_tamper(|offered| {
+                *offered = Default::default();
+            });
         })
         .unwrap();
     let error = pending.prepare(Signers::Quorum).unwrap_err();

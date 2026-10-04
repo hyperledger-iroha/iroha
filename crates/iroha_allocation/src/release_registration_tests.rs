@@ -68,8 +68,8 @@ fn original_registration_rearms_cancels_and_releases_without_allocating() {
     let mut slot = registration(&budget);
     let source = ReleaseNotification::default();
     let foreign = ReleaseNotification::default();
-    let wakes = Arc::new(Count::default());
-    let waker = Waker::from(Arc::clone(&wakes));
+    let wake_count = Arc::new(Count::default());
+    let waker = Waker::from(Arc::clone(&wake_count));
     let mut context = Context::from_waker(&waker);
     let pointer = slot.pointer();
     for _ in 0..32 {
@@ -92,7 +92,7 @@ fn original_registration_rearms_cancels_and_releases_without_allocating() {
             ReleaseRegistration::allocation_layout().size()
         );
     }
-    assert_eq!(wakes.0.load(SeqCst), 32);
+    assert_eq!(wake_count.0.load(SeqCst), 32);
     without_allocations(|| drop(slot));
     assert_eq!(budget.reserved_bytes(), 0);
 }
@@ -103,10 +103,10 @@ fn source_replacement_and_old_releases_never_consume_new_callback() {
     let mut slot = registration(&budget);
     let old = ReleaseNotification::default();
     let new = ReleaseNotification::default();
-    let old_wakes = Arc::new(Count::default());
-    let new_wakes = Arc::new(Count::default());
-    let old_waker = Waker::from(Arc::clone(&old_wakes));
-    let new_waker = Waker::from(Arc::clone(&new_wakes));
+    let retired_calls = Arc::new(Count::default());
+    let replacement_calls = Arc::new(Count::default());
+    let old_waker = Waker::from(Arc::clone(&retired_calls));
+    let new_waker = Waker::from(Arc::clone(&replacement_calls));
     let observed_old = old.observe();
     let observed_new = new.observe();
     assert!(
@@ -119,14 +119,14 @@ fn source_replacement_and_old_releases_never_consume_new_callback() {
     );
     assert_eq!(old.state.lock().unwrap().waiters.count, 0);
     drop(old.guard(()));
-    assert_eq!(old_wakes.0.load(SeqCst), 0);
-    assert_eq!(new_wakes.0.load(SeqCst), 0);
+    assert_eq!(retired_calls.0.load(SeqCst), 0);
+    assert_eq!(replacement_calls.0.load(SeqCst), 0);
     assert!(
         slot.poll_wait(&observed_new, &mut Context::from_waker(&new_waker))
             .is_pending()
     );
     drop(new.guard(()));
-    assert_eq!(new_wakes.0.load(SeqCst), 1);
+    assert_eq!(replacement_calls.0.load(SeqCst), 1);
     assert!(
         slot.poll_wait(&observed_new, &mut Context::from_waker(&new_waker))
             .is_ready()

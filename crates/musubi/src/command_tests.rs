@@ -55,7 +55,6 @@ torii_url = "{torii_url}"
 torii_request_timeout_ms = 2000
 
 [account]
-domain = "packages.universal"
 chain_discriminant = {chain_discriminant}
 public_key = "{}"
 private_key = "{}"
@@ -593,7 +592,6 @@ fn write_poisoned_recovery_config(root: &Path) -> PathBuf {
 torii_request_timeout_ms = 1
 
 [account]
-domain = "packages.universal"
 chain_discriminant = 753
 public_key = "deliberately-not-a-key"
 private_key = "deliberately-not-a-key"
@@ -1989,7 +1987,7 @@ fn empty_cache_maintenance_is_signer_and_network_free() {
         cached_source: None,
         prepared_archive_fetch: None,
         platform_config_provenance: None,
-        account_chain_discriminant: 753,
+        account_chain_discriminant: Some(753),
     };
     assert!(
         ensure_graph_archives(&cache, &graph, GraphModeArgs::default())
@@ -2010,7 +2008,7 @@ fn cold_online_dependency_reports_missing_environment_capability_before_registry
         cached_source: None,
         prepared_archive_fetch: None,
         platform_config_provenance: None,
-        account_chain_discriminant: 753,
+        account_chain_discriminant: Some(753),
     };
     let error = ensure_graph_archives(&cache, &graph, GraphModeArgs::default())
         .expect_err("cold online dependency requires an admitted download capability");

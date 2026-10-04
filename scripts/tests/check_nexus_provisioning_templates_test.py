@@ -49,6 +49,7 @@ def _client() -> str:
 network_id = "{HASH_IDENTITY}"
 
 [account]
+chain_discriminant = 753
 public_key = "public"
 private_key_file = "/run/secrets/iroha/client-key"
 '''
@@ -79,6 +80,37 @@ def test_inline_validator_secret_fails(tmp_path: pathlib.Path) -> None:
     target.write_text(_server("private_key"), encoding="utf-8")
     with pytest.raises(guard.ProvisioningTemplateError, match="forbidden runtime secret"):
         guard.validate_repository(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("context", "message"),
+    [
+        ("", "no default network"),
+        ('profile = ""\n', "nonempty string"),
+        ("chain_discriminant = 0\n", "1..=65535"),
+        ('chain_discriminant = "753"\n', "1..=65535"),
+    ],
+)
+def test_client_template_requires_explicit_network_context(
+    tmp_path: pathlib.Path, context: str, message: str
+) -> None:
+    _write_repository(tmp_path)
+    client = tmp_path / guard.CLIENT_TEMPLATE
+    client.write_text(
+        _client().replace("chain_discriminant = 753\n", context), encoding="utf-8"
+    )
+    with pytest.raises(guard.ProvisioningTemplateError, match=message):
+        guard.validate_repository(tmp_path)
+
+
+def test_client_template_accepts_public_profile(tmp_path: pathlib.Path) -> None:
+    _write_repository(tmp_path)
+    client = tmp_path / guard.CLIENT_TEMPLATE
+    client.write_text(
+        _client().replace("chain_discriminant = 753\n", 'profile = "taira"\n'),
+        encoding="utf-8",
+    )
+    guard.validate_repository(tmp_path)
 
 
 def test_client_and_validator_identity_drift_fails(tmp_path: pathlib.Path) -> None:

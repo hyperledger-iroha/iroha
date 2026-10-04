@@ -329,7 +329,9 @@ mod tests {
         let working = maximum_working_set_bytes().unwrap();
         let aggregate =
             usize::try_from(defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES.get()).unwrap();
-        let query = query_memory_geometry(aggregate, 64_000_000, 1).unwrap();
+        let ceiling =
+            usize::try_from(defaults::torii::QUERY_FANOUT_MAX_WORKING_SET_BYTES.get()).unwrap();
+        let query = query_memory_geometry(aggregate, ceiling, 64_000_000, 1).unwrap();
         assert!(query.fanout_working_set_bytes < working);
         let pool =
             ByteWeightedMemoryPool::new(kagemusha_command_memory_pool_bytes(64_000_000).unwrap())

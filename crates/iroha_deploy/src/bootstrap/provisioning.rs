@@ -36,7 +36,7 @@ pub struct ReleaseFaucet {
     pub amount: Quantity,
     /// Maximum aggregate fees for one managed parent transaction.
     pub max_operation_fee: Quantity,
-    /// Maximum rent for the ordinary one-year SNS dataspace lease.
+    /// Maximum combined rent for the one-year SNS dataspace and owner account-alias leases.
     pub max_namespace_rent: Quantity,
 }
 

@@ -78,7 +78,7 @@ fn original_charge_layout_mismatch_precedes_allocation_and_never_refunds() {
         drop(returned);
         assert_eq!(
             budget.reserved_bytes(),
-            0 + ReleaseRegistration::allocation_layout().size()
+            ReleaseRegistration::allocation_layout().size()
         );
         assert!(released.as_mut().poll(&mut context).is_ready());
     }
@@ -135,7 +135,7 @@ fn equal_pool_limits_do_not_move_refusal_or_refund_to_a_foreign_pool() {
     assert!(original_wait.as_mut().poll(&mut context).is_ready());
     assert_eq!(
         original_pool.reserved_bytes(),
-        0 + ReleaseRegistration::allocation_layout().size()
+        ReleaseRegistration::allocation_layout().size()
     );
 }
 
@@ -211,7 +211,7 @@ fn aborting_a_refused_allocation_refunds_only_when_the_returned_charge_drops() {
     drop(returned);
     assert_eq!(
         budget.reserved_bytes(),
-        0 + ReleaseRegistration::allocation_layout().size()
+        ReleaseRegistration::allocation_layout().size()
     );
     assert!(released.as_mut().poll(&mut context).is_ready());
     assert!(!FREED.load(SeqCst), "a refused allocation never existed");
@@ -344,7 +344,7 @@ fn complete_buffer_and_header_demand_is_refused_before_either_allocation() {
     drop(published);
     assert_eq!(
         exact.reserved_bytes(),
-        0 + ReleaseRegistration::allocation_layout().size()
+        ReleaseRegistration::allocation_layout().size()
     );
 }
 
@@ -642,7 +642,7 @@ fn composed_last_reader_refunds_wait_until_outer_physical_guard_releases() {
         assert!(FREED.load(SeqCst));
         assert_eq!(
             budget.reserved_bytes(),
-            0 + ReleaseRegistration::allocation_layout().size()
+            ReleaseRegistration::allocation_layout().size()
         );
         assert_eq!(observer.wakes.load(SeqCst), 0);
         assert!(released.as_mut().poll(&mut context).is_pending());
@@ -702,7 +702,7 @@ fn partially_allocated_composition_unwind_defers_refunds_past_outer_guard() {
     assert!(physical.is_poisoned());
     assert_eq!(
         budget.reserved_bytes(),
-        0 + ReleaseRegistration::allocation_layout().size()
+        ReleaseRegistration::allocation_layout().size()
     );
     assert!(FREED.load(SeqCst));
     assert_eq!(observer.wakes.load(SeqCst), 1);

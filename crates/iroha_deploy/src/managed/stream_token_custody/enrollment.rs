@@ -359,14 +359,14 @@ impl ManagedStreamTokenCustody {
 
     /// Read the exact first body selection and its selected dispatch deadline without creating
     /// custody or querying current state. Full native inclusion is checked by retained enrollment.
-    pub(super) fn inspect_local_initial_interval(
+    pub(in crate::managed) fn inspect_local_initial_interval(
         &self,
         policy: &SignerCustodyPolicyV1,
     ) -> Result<ManagedCustodyEnrollmentInterval> {
         self.inspect_local_initial_interval_if_present(policy)?
             .ok_or_else(|| invalid("original initial enrollment dispatch is not selected"))
     }
-    pub(super) fn inspect_local_initial_interval_if_present(
+    pub(in crate::managed) fn inspect_local_initial_interval_if_present(
         &self,
         policy: &SignerCustodyPolicyV1,
     ) -> Result<Option<ManagedCustodyEnrollmentInterval>> {

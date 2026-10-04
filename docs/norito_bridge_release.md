@@ -110,6 +110,27 @@ that workflow for local release verification.
    with its embedded manifest and canonical public manifest symlink already in
    the first-release layout; the builder does not migrate an older layout.
 
+   `MOBILE_SDK_CARGO_HOME` optionally selects an existing owned, writable,
+   non-symbolic canonical Cargo cache outside the source tree. The default remains
+   the user's `.cargo` directory. Use a separate populated cache when personal
+   Cargo configuration contains compiler wrappers or environment overrides that
+   the authenticated build rejects; keep the reviewed configuration checks intact.
+   For `--local-integration`, the exact mode-0700
+   `target/norito-bridge-local/build/cargo-home` directory is also admitted.
+   The selected cache is reused through rustup, source seals, every hermetic Cargo
+   command and artifact verification; builds remain locked and offline.
+
+   Cargo also reads configuration from its working directory and every ancestor.
+   If the checkout is below a home directory containing rejected Cargo overrides,
+   select `MOBILE_SDK_CARGO_INVOCATION_DIR` as an existing owned, writable,
+   non-symbolic canonical mode-0700 directory outside that ancestry and disjoint
+   from source, for example `/private/tmp/iroha-native-cargo-invocation`.
+   Metadata and real Apple builds then run there with the explicit authenticated
+   root `--manifest-path`. The checker, pin owner and archive owner use the same
+   directory; its identity and every effective Cargo configuration are checked
+   before and after Cargo. Keep both explicit inputs selected during verification
+   and packaging. Neither input changes the pinned compiler, profile or graph.
+
    PQClean archive normalization binds the registry package identity and checksum
    from the selected Cargo lock to the exact successful build's JSON messages and
    native link outputs. It removes only byte-identical duplicate members from
@@ -296,6 +317,19 @@ artifact. All other input changes require a native rebuild. Ordinary `swift test
 then links the real binary target, and `NativeBridge` validates the symbols from
 the executable/`RTLD_DEFAULT`; no replacement loader or projected Swift package is
 used. Physical-device qualification remains separate from these host unit tests.
+
+## Local macOS unit prerequisite
+
+The explicit `MOBILE_SDK_LOCAL_UNIT_ARTIFACT_DIR` input selects only debug macOS
+unit-test artifacts with scope `local-unit`. Its producer consumes a separately
+retained static archive named by a genuine, source-guarded successful host Cargo
+invocation. It normalizes only the current locked, Cargo-proven PQClean duplicate
+members in a derived copy and records an actual complete-archive consumer link/run.
+The archive/header/source/tool/receipt hashes remain bound through Swift execution.
+No universal architecture or release environment is claimed. Every Swift test
+stays enabled, and native ABI/symbol admission is unchanged. Selecting the release
+corridor, targeting iOS, or compiling Release rejects this input. Canonical release,
+pin, archive, and CI handoff owners retain the five-triple/three-slice contract.
 
 ## Canonical Android output and runtime inventory
 

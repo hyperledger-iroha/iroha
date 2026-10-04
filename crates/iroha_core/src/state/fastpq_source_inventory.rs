@@ -2,15 +2,14 @@
 
 use std::{collections::BTreeSet, sync::Arc};
 
-use iroha_data_model::fastpq::{
-    FastpqOrdinarySourceStatementLeafV1, FastpqOrdinarySourceStatementManifestV1,
-    FastpqSourceStatementContextV1,
-};
+use iroha_data_model::fastpq::FastpqSourceStatementContextV1;
 
 use super::{BTreeMap, Hash, StateBlock, output_capacity::OwnedExecutionSources};
+use crate::fastpq::FastpqSourceExecutionEntryV1;
+#[cfg(test)]
 use crate::fastpq::{
-    FastpqSourceExecutionEntryV1, FastpqSourceStatementBuildLimits,
-    derive_fastpq_ordinary_source_manifest_v1,
+    FastpqSourceStatementBuildLimits, TransferArchiveDiagnostic, TransferEntryDiagnostic,
+    prepare_transfer_archive_diagnostic,
 };
 #[cfg(test)]
 use crate::queue::RoutingDecision;
@@ -19,15 +18,13 @@ use iroha_data_model::transaction::TransactionEntrypoint;
 use iroha_model_base::topology::DataSpaceId;
 
 mod content_verification;
-// Qualification support until authenticated policy and mandatory-work accounting own D7 capture.
+// Unanchored transfer preparation diagnostics have no shipping D7/wire surface.
 #[cfg(test)]
-mod owned_d7_capture;
+mod owned_transfer_diagnostic;
 mod public_seal;
+#[cfg(test)]
 mod statement_reservation;
 use public_seal::{SourceTranscriptSeal, seal_public_transcripts};
-pub use statement_reservation::{
-    FastpqSourceStatementAttemptV1, FastpqSourceStatementBudgetV1, FastpqSourceStatementUsageV1,
-};
 
 /// Complete local source projection captured by a validator's block execution.
 ///
@@ -47,7 +44,8 @@ pub use statement_reservation::{
 /// does not freeze unrelated ledger effects or authenticate source finality.
 /// Final raw and retained ordinary transcript contents must match this seal before
 /// capture, extraction or commit.
-/// TODO: bind the source manifest to the ordinary-write commitment and source finality.
+/// Mandatory D7 custody independently retains the complete effect journal and is joined
+/// to native finality by the move-only captured-source owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FastpqSourceInventoryV1 {
     source: FastpqSourceStatementContextV1,
@@ -116,31 +114,16 @@ impl FastpqSourceInventoryV1 {
         self.tx_set_hash
     }
 
-    /// Derive statements for the exact finalized public transcripts sealed by execution.
-    ///
-    /// Unlike the supplied-archive helper, removing an entry and its bundle cannot
-    /// shrink this inventory. Construction bounds and the exact ordered public
-    /// seal are checked before the strict producer. Supplied private paths are
-    /// bounded but excluded from the seal because the producer derives its own paths.
-    /// Callers must obtain slot and permission root from execution; this method
-    /// alone does not authenticate those inputs or source finality.
-    ///
-    /// # Errors
-    /// Rejects changed public occurrences, omitted or extra bundles, and every
-    /// strict producer or resource error.
-    pub fn derive_manifest(
+    /// Test-only preparation of the live transfer relation against the retained public seal.
+    /// This verifies original bundle ownership but returns no D7 value or native authority.
+    #[cfg(test)]
+    pub(crate) fn prepare_transfer_diagnostic(
         &self,
         slot: u64,
         perm_root: [u8; 32],
         transcripts: &BTreeMap<Hash, Vec<iroha_data_model::fastpq::TransferTranscript>>,
         limits: FastpqSourceStatementBuildLimits,
-    ) -> Result<
-        (
-            FastpqOrdinarySourceStatementManifestV1,
-            Vec<FastpqOrdinarySourceStatementLeafV1>,
-        ),
-        String,
-    > {
+    ) -> Result<(TransferArchiveDiagnostic, Vec<TransferEntryDiagnostic>), String> {
         if !self.transcript_entry_hashes.iter().eq(transcripts.keys()) {
             return Err("FASTPQ manifest transcript keys differ from the owned inventory".into());
         }
@@ -150,7 +133,7 @@ impl FastpqSourceInventoryV1 {
                 "FASTPQ manifest public transcripts differ from the owned inventory seal".into(),
             );
         }
-        derive_fastpq_ordinary_source_manifest_v1(
+        prepare_transfer_archive_diagnostic(
             self.source,
             &self.entries,
             slot,
@@ -173,7 +156,7 @@ impl StateBlock<'_> {
         &mut self,
         sources: &OwnedExecutionSources,
         pending: Option<crate::fastpq::PendingTransferTranscriptDigests>,
-    ) -> Result<(), String> {
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
         let result = self.finalize_fastpq_source_inventory_from(
             pending,
             |state| state.validate_owned_fastpq_sources(sources),
@@ -181,12 +164,21 @@ impl StateBlock<'_> {
         );
         // Only this original completed producer may retain the quantity census.
         // Diagnostic incompleteness never grants D7 authority or changes business results.
-        if result.is_ok() {
-            self.retain_quantity_source_census();
-        } else {
-            self.reject_quantity_source_census();
+        match result {
+            Ok(()) => {
+                // Mandatory original source commitment is admitted before optional
+                // archive retention; physical refusal leaves no consensus result.
+                self.retain_finalized_quantity_source()?;
+                self.retain_quantity_source_census();
+                Ok(())
+            }
+            Err(error) => {
+                self.reject_quantity_source_census();
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                    error,
+                ))
+            }
         }
-        result
     }
 
     fn validate_owned_fastpq_sources(&self, sources: &OwnedExecutionSources) -> Result<(), String> {
@@ -636,3 +628,6 @@ mod tests;
 
 #[cfg(test)]
 mod owned_sources_tests;
+
+#[cfg(test)]
+pub(crate) mod native_capture_fixture;

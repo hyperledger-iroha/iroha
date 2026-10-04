@@ -1519,7 +1519,7 @@ impl BrokerSession {
                 mutating,
                 deadline,
             },
-            ReceivedExchangeV1::regular,
+            |received| received.regular(),
         )
     }
     fn exchange_before_with_result<T>(

@@ -3,7 +3,7 @@
 //! This command performs no network requests or ledger writes. Its configured public identity is
 //! joined to the pinned request, while the original software-clock observations remain historical.
 //! Run with `--output-format json`, the selected native client configuration, and
-//! `bridge verify-retained-network --request <public-json> --request-sha256 <approved-digest>`.
+//! `ops bridge verify-retained-network --request <public-json> --request-sha256 <approved-digest>`.
 //! Request schema `iroha.bridge.retained-network-request.v1` contains the independently selected
 //! network, chain, discriminant and route; pinned signed/raw genesis and role manifest; a contiguous
 //! native JSON proof prefix; and four pinned original JSON attestations with original challenges

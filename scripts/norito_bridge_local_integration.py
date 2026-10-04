@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 from pathlib import Path
 import stat
@@ -56,15 +57,55 @@ def directory(root: Path, path: Path, role: str) -> Path:
     return path
 
 
+def cargo_home(root: Path, path: Path, *, local_integration: bool = False) -> Path:
+    """Admit an explicit owned Cargo cache without relaxing configuration seals."""
+    if root.resolve(strict=True) != root or not path.is_absolute() or path != Path(os.path.abspath(path)):
+        raise ValueError("MOBILE_SDK_CARGO_HOME must be an absolute canonical directory")
+    try:
+        metadata = path.lstat()
+        resolved = path.resolve(strict=True)
+    except OSError as error:
+        raise ValueError("MOBILE_SDK_CARGO_HOME must already exist") from error
+    if (resolved != path or not stat.S_ISDIR(metadata.st_mode)
+            or stat.S_ISLNK(metadata.st_mode) or metadata.st_uid != os.geteuid()
+            or not os.access(path, os.R_OK | os.W_OK | os.X_OK)):
+        raise ValueError("MOBILE_SDK_CARGO_HOME must be an owned writable non-symbolic canonical directory")
+    if path == root or root in path.parents:
+        build = root / LANE / "build"
+        if (not local_integration or path != build / "cargo-home"
+                or stat.S_IMODE(metadata.st_mode) != 0o700):
+            raise ValueError("MOBILE_SDK_CARGO_HOME inside source requires the local integration build/cargo-home mode-0700 lane")
+        directory(root, build, "build")
+    return path
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
-    parser.add_argument("--path", type=Path, required=True)
-    parser.add_argument("--role", choices=("cargo", "build", "artifact", "projection"), required=True)
+    parser.add_argument("--path", required=True)
+    parser.add_argument("--role", choices=("cargo", "build", "artifact", "projection", "cargo-home", "cargo-invocation"), required=True)
+    parser.add_argument("--local-integration", action="store_true")
     arguments = parser.parse_args()
     try:
-        print(directory(arguments.root, arguments.path, arguments.role))
-    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        path = Path(arguments.path)
+        if arguments.role == "cargo-home":
+            if arguments.path != str(path):
+                raise ValueError("MOBILE_SDK_CARGO_HOME must be an absolute canonical directory")
+            print(cargo_home(arguments.root, path, local_integration=arguments.local_integration))
+        elif arguments.role == "cargo-invocation":
+            if arguments.path != str(path):
+                raise ValueError("MOBILE_SDK_CARGO_INVOCATION_DIR must be an absolute canonical directory")
+            specification = importlib.util.spec_from_file_location(
+                "mobile_cargo_invocation_owner", Path(__file__).with_name("run_mobile_hermetic_command.py")
+            )
+            if specification is None or specification.loader is None:
+                raise ValueError("Cargo invocation directory owner is unavailable")
+            owner = importlib.util.module_from_spec(specification)
+            specification.loader.exec_module(owner)
+            print(owner.authenticate_cargo_invocation_directory(arguments.root, path)[0])
+        else:
+            print(directory(arguments.root, path, arguments.role))
+    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
         parser.exit(1, f"local integration: {error}\n")
     return 0
 

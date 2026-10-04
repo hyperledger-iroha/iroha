@@ -62,8 +62,8 @@ fn completion_signer_json_is_required_and_cannot_be_null() {
 }
 
 #[test]
-fn retired_owner_only_authority_frame_has_a_different_schema() {
-    #[derive(Encode, Decode, norito::NoritoSchema)]
+fn retired_owner_only_authority_frames_are_rejected() {
+    #[derive(Clone, Encode, Decode, norito::NoritoSchema)]
     #[norito_schema(
         name = "iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionAuthorityV1"
     )]
@@ -76,9 +76,35 @@ fn retired_owner_only_authority_frame_has_a_different_schema() {
         provider_owner: value.provider_owner,
         signer_policy: value.signer_policy,
     };
-    let wire = norito::to_bytes(&retired).unwrap();
-    assert!(matches!(
-        norito::decode_from_bytes::<ProviderIngestCompletionAuthorityV1>(&wire),
-        Err(norito::Error::SchemaMismatch)
-    ));
+    // Typed headers bind the declared nominal identity, rather than a structural
+    // field hash. The current decoder must reject the retired payload layout
+    // even when a sender advertises that same identity.
+    assert_eq!(
+        norito::schema::identity::frame_hash::<RetiredOwnerOnly>(),
+        norito::schema::identity::frame_hash::<ProviderIngestCompletionAuthorityV1>(),
+    );
+    assert!(
+        norito::decode_from_bytes::<ProviderIngestCompletionAuthorityV1>(
+            &norito::to_bytes(&retired).unwrap()
+        )
+        .is_err()
+    );
+    assert!(
+        norito::decode_from_bytes::<Vec<ProviderIngestCompletionAuthorityV1>>(
+            &norito::to_bytes(&vec![retired.clone()]).unwrap()
+        )
+        .is_err()
+    );
+    assert!(
+        norito::decode_from_bytes::<Option<ProviderIngestCompletionAuthorityV1>>(
+            &norito::to_bytes(&Some(retired.clone())).unwrap()
+        )
+        .is_err()
+    );
+    assert!(
+        norito::decode_from_bytes::<
+            std::collections::BTreeMap<u8, ProviderIngestCompletionAuthorityV1>,
+        >(&norito::to_bytes(&std::collections::BTreeMap::from([(7_u8, retired)])).unwrap())
+        .is_err()
+    );
 }

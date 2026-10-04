@@ -674,9 +674,18 @@ mod tests {
             let root: toml::Table = format!("[account]\n{body}").parse().unwrap();
             root["account"].as_table().unwrap().clone()
         };
-        assert_eq!(
-            resolve_deploy_chain_discriminant(&account("")).unwrap(),
-            iroha_config::parameters::defaults::common::chain_discriminant()
+        for missing in ["", "profile = ' '"] {
+            assert!(
+                resolve_deploy_chain_discriminant(&account(missing))
+                    .unwrap_err()
+                    .contains("no default network"),
+                "{missing:?}"
+            );
+        }
+        assert!(
+            resolve_deploy_chain_discriminant(&account("chain_discriminant = 0"))
+                .unwrap_err()
+                .contains("nonzero")
         );
         assert_eq!(
             resolve_deploy_chain_discriminant(&account("chain_discriminant = 777")).unwrap(),

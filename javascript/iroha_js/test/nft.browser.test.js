@@ -14,7 +14,7 @@ const owner = account(7), destination = account(9);
 const nftId = "sora_skin_01$sora_cars.universal";
 const networkId = NetworkId.fromBytes(new Uint8Array(32).fill(17));
 const row = (id = nftId, owned_by = owner, metadata = {}) => ({ id, owned_by, metadata });
-const page = (items, next = null, limit = 2) => ({ items, pagination: { limit, has_more: next !== null, next_cursor: next } });
+const page = (items, nextCursor = null) => ({ items, nextCursor });
 
 test("owned NFT transfer uses canonical native bytes, pins source to signer, and checks signature/network", () => {
   const input = { networkId, networkPrefix: 753, authority: owner, nftId, destinationAccountId: destination, feePayment: { payer: "authority", chargeLimits: [{ kind: "nexus", assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM", maxAmount: "0.1" }] }, creationTimeMs: 1, ttlMs: 100_000 };
@@ -34,21 +34,20 @@ test("owned NFT transfer uses canonical native bytes, pins source to signer, and
 
 test("owned inventory paginates with strict owner/domain checks and retains endpoint-reported status", async () => {
   const requests = [], pages = [page([row()], "YWJj"), page([row("sora_skin_02$sora_cars.universal")])];
-  const inventory = await readOwnedNftInventoryV1({ async listExplorerNfts(options) { requests.push(options); return pages.shift(); } }, { ownerAccountId: owner, domain: "sora_cars.universal", limit: 2, networkPrefix: 753 });
+  const inventory = await readOwnedNftInventoryV1({ explorerNfts: { async list(options) { requests.push(options); return pages.shift(); } } }, { ownerAccountId: owner, domain: "sora_cars.universal", limit: 2, networkPrefix: 753 });
   assert.equal(inventory.verification, "endpoint_reported");
   assert.equal(inventory.items.length, 2);
-  assert.equal(requests[0].ownedBy, owner);
+  assert.equal(requests[0].filter.toString(), `owned_by = "${owner}" and domain = "sora_cars.universal"`);
   assert.equal(requests[1].cursor, "YWJj");
-  assert.equal(requests[0].domain, "sora_cars.universal");
 });
 
 test("inventory refuses contradictory ownership, forged domain, duplicate items, stuck cursors and oversized metadata", async () => {
-  const read = (pages, extra = {}) => readOwnedNftInventoryV1({ async listExplorerNfts() { return pages.shift(); } }, { ownerAccountId: owner, domain: "sora_cars.universal", limit: 2, networkPrefix: 753, ...extra });
+  const read = (pages, extra = {}) => readOwnedNftInventoryV1({ explorerNfts: { async list() { return pages.shift(); } } }, { ownerAccountId: owner, domain: "sora_cars.universal", limit: 2, networkPrefix: 753, ...extra });
   await assert.rejects(read([page([row(nftId, destination)])]), /another owner's/);
   await assert.rejects(read([page([row("skin$forged.universal")])]), /another domain/);
   await assert.rejects(read([page([row()], "YWJj"), page([row()])]), /repeated an item/);
   await assert.rejects(read([page([row()], "YWJj"), page([row("b$sora_cars.universal")], "YWJj")]), /bounded progress/);
-  await assert.rejects(read([page([], "YWJj")]), /bounded progress/);
+  assert.deepEqual((await read([page([], "YWJj"), page([])])).items, []);
   await assert.rejects(read([page([row()], "YWJj")], { maxItems: 1 }), /bounded progress/);
   await assert.rejects(read([page([row(nftId, owner, { huge: "x".repeat(16 * 1024) })])]), /byte bound/);
   await assert.rejects(read([{ ...page([]), extra: true }]), /unsupported field/);
@@ -59,7 +58,7 @@ test("inventory refuses contradictory ownership, forged domain, duplicate items,
 
 test("inventory aborts before a query and never accepts options that alter the fixed owner filter", async () => {
   let calls = 0;
-  const client = { async listExplorerNfts() { calls++; return page([]); } };
+  const client = { explorerNfts: { async list() { calls++; return page([]); } } };
   const controller = new AbortController(); controller.abort();
   await assert.rejects(readOwnedNftInventoryV1(client, { ownerAccountId: owner, signal: controller.signal, networkPrefix: 753 }));
   await assert.rejects(readOwnedNftInventoryV1(client, { ownerAccountId: owner, ownedBy: destination, networkPrefix: 753 }), /unsupported field/);

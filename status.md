@@ -1,6 +1,6 @@
 # Status
 
-Reviewed 2026-10-03. Iroha 3 remains under implementation and qualification.
+Reviewed 2026-10-04. Iroha 3 remains under implementation and qualification.
 Component checks cover substantial portions of the system, but the combined
 source has not passed the complete workspace, SDK, hardware and release gates.
 The [roadmap](roadmap.md) lists outstanding outcomes; the linked specifications
@@ -18,7 +18,7 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 | Rust client | Immutable account contexts, owned async transport, explicit blocking capabilities and typed fee quoting are implemented. | Remaining capability/consumer migration, unified errors and network cancellation/finality/authorization coverage. |
 | Kotlin/JVM | Kotlin owns the SDK, HTTP/SSE/WebSocket, attestation tools and JNI API; Java consumers exercise that API. Host coverage includes native/confidential operations. | Remaining Java/publication retirement, signed packages, CUDA hardware and Android/device qualification. |
 | Other SDKs | Shared prepared-operation, signing, account and native checkpoint contracts are being migrated across Swift, JavaScript, Python and C#. | Same-source native artifacts, complete fixtures/consumers and release OS/architecture matrices. |
-| Torii collection queries | Domains, accounts, asset definitions, NFTs, RWA lots, balances, holders, transactions, account transactions and repo agreements share one [query language](specs/torii/collection_queries.md) and engine: text/JSON filters, sort, select, aggregates, keyset or block-coordinate cursors and optional totals, merged across dataspace routes. The Rust, Kotlin/Java, Swift, JavaScript, Python and C# SDKs and the CLI implement it against shared golden vectors. | Aggregates spanning several dataspace routes are rejected; explorer and history feeds keep their own paging; no live multi-peer qualification yet. |
+| Torii collection queries | Seventeen collections and eleven explorer feeds share the [query contract](specs/torii/collection_queries.md) across Rust, Kotlin/Java, Swift, JavaScript, Python, C#, CLI and MCP. Identity-ordered reads seek and stream; authenticated history checkpoints bound deep reads. Global-state collections execute once per read for exact totals and aggregates. History and explorer feeds explicitly reject unsupported controls. Signed query selectors have one feature-independent layout; client network context is explicit. | Current-candidate live multi-dataspace paging and full SDK/native delivery qualification remain open. Swift package tests require the missing NoritoBridge XCFramework; JS and Python native suites require matching authenticated artifacts. See the [completion goals](specs/torii/query_completion_goals.md). |
 | Norito | Declared identities own canonical frames; payload serialization/reconstruction and explicit JSON key contracts are integrated. | Consumer/feature closure, fallible allocation ownership, physical model extraction and workspace lint/runtime coverage. |
 | IVM/Kotodama | IVM is the sole VM with ABI V1 and program header 1.1; header 1.0 is rejected. Compiler separation and state-free proof owners reduce normal dependency graphs. Source bundles support declaration includes and explicit module exports; authenticated error-message catalogs preserve nominal schemas. | Lifecycle/custody closure, native execution proofs, anchored private invocation/AXT, coherent SDK regeneration and hardware validation. CUDA release builds lack the ten PTX artifacts and signed provenance; plain Cargo daemon defaults omit CUDA. |
 | SoraFS | Software signing, canonical manifests and storage/billing/publication ownership are implemented; the ordinary Node library tests pass. | Matched daemon/harness, provider resilience and L1/L2 promotion. |
@@ -72,15 +72,19 @@ See the [protocol](specs/private_settlement.md).
 
 ## Deployment state
 
-Taira's four validators run the a2a98f02 daemon build with fresh keys and signed
-genesis. The genesis beacon ceremony resolved to StateApplied at height 5.
-All four completed sequential C2 restarts with their keys and ledger retained.
-Latest direct checks verified each active process, current selector and C2
-binary, with height 8, three peers and readiness HTTP 200. Public TLS,
-readiness and status are healthy at a2a98f02, height 8, three peers, twenty-one
-approved transactions, zero rejected transactions and an empty queue. The
-same-revision native basic doctor passed all fifteen checks with no failures.
-The previous live ledger and twenty obsolete validator releases were deleted.
+Taira's four validators serve the e3766fdb daemon build and the fresh signed
+genesis `277902D32673C29F56D4AA104063347F290881909ECB838B5038E39ABE11C15F`.
+October 4 direct checks found height 9, three peers and an empty queue on every
+validator. Public status, text readiness and faucet policy return HTTP 200;
+twenty-two transactions are approved and none rejected. Idle chains create no
+empty blocks. Shared HTTP defaults are 1,000,000 requests per second,
+60,000,000 per minute and a 10,000,000-token burst. Native amendments applied
+26 explicit request-budget fields to each serving validator; installed-daemon
+config checks and service-unit checks passed before a serial restart. All four
+new process config bindings match the native amendment receipts. The live
+amendment excludes optional recipient lookup because the installed daemon's
+schema cannot accept its new source budget. The deployed native client's basic
+doctor passes all fifteen checks, including MCP server discovery and tools list.
 
 Current source initializes fresh safety records before first startup and retires
 completed execution after successful replay before strict native archive
@@ -89,14 +93,20 @@ authenticated build-only candidate without a full regression gate. On-chain
 governance owns deployment policy; no fixed 24-hour fault test is a prerequisite
 for testnet or production. Release qualification remains open.
 
-Fresh-account funding applied at height 6; ordinary paid public pings applied
-at heights 7 and 8, with exactly one C2 ping submission. Native read-only
-funding resume now returns Applied with exact committed-transaction readback
-at height 6. The live endpoint objective is achieved; broader native release
-qualification and original public-reset coordinator completion remain separate.
-Mac outbound-port exhaustion was recovered, with the ephemeral-port setting
-and scoped SYN guard persisted. The temporary artifact server was stopped.
-Physical DPN, paid `dpn`/`admin@dpn` and clean-client completion remain open.
+The previous 7c77fd3c network's public accounts regression completed 240
+requests with HTTP 200 and no HTTP 429, but sustained only 3.01 requests per
+second against the required 20.
+The deployed fanout admission reserves its entire 48 MB execution pool for each
+read; the current single-World collection redesign still requires bounded row
+allocation and encoding before it can use a smaller concurrent reservation.
+Current-candidate release qualification and authenticated deployment completion
+remain open.
+Private DPN, paid `dpn`/`admin@dpn` and clean-client completion remain open.
+The serving bundle lacks the standard `iroha3d` sibling and an installed native
+network profile. Source now prepares independently signed checkpoint/profile
+artifacts and provisions the dataspace and owner alias under one retained quote;
+component validation and a matching complete bundle remain required before
+those paths can qualify live deployment.
 Validators run in a Linux guest on MacStadium in Dublin; use the approved
 deployment tooling. Retained incident records describe the
 [previous readiness failure](docs/incidents/2026-09-30-taira-readiness.md).
@@ -110,11 +120,34 @@ require the explicitly approved OVH target.
 ## Build and release qualification
 
 The current `optimizations` checkout has merged HEAD
-`c0f2be96c6e15f773f23e916ab574a59c6806fb8`, subsequent repairs and concurrent
-Petal changes. The seventeen-target Core/Kagami build and stock Rust 1.93.1
-whole-workspace all-target check pass on their recorded inputs. They do not
-establish one unchanged release candidate. Exact component evidence and remaining
-criteria are maintained in the [ZK goals](specs/zk_first_release_goals.md).
+`68d8bb58ff4af339aba2229f18da3ed00d58d2e6` and subsequent reviewed repairs.
+The latest eighteen-target Core/Kagami build and all 262 selected native
+executions pass with unchanged source and artifacts. They account for all original
+247 obligations through genuine producer/consumer replacements and paired
+identical captures, plus the corrected chronology and FASTPQ context controls.
+The genuine producer reproduces all four canonical fixtures with actual genesis
+and sequential/parallel parity. Both Mac and Linux scalar-CALL, callable, frame
+and history selections pass all 61 ordinary controls on their recorded artifacts;
+two heavy frame controls remain unexecuted. The locked, offline workspace all-target check passes on the combined X509,
+fixture and arithmetic candidate. All 5,005 affected native tests pass: 35 artifact
+admission, 4,633 data-model, two allocation-observer and 335 Primitives controls.
+The original harness failure from 17 standard `should panic` annotations remains
+retained; independent reconciliation verifies the exact actual native events.
+The recorded strict Clippy run still fails on decoder visibility, unused CoreZK
+items and one test pattern. Reviewed visibility, projection and receipt-method
+repairs are now applied; fresh compiler and native validation remain required. These component
+results do not qualify the integrated release. Exact evidence and remaining criteria are in the
+[ZK goals](specs/zk_first_release_goals.md).
+
+The X509 padding, private-u32 path-length, mandatory copy-census and canonical
+EKU repairs are applied. Fresh Mac and Linux artifacts pass all 218 selected
+controls, including all 29 profile fields, signed capacity cases and copy-omission
+regressions, with unchanged measured source and artifacts. Authentic proof hashes
+match across platforms. The standalone DER proof is 1,527,952 bytes and takes
+268.12 seconds on Mac and 268.73 seconds on Linux; both verifier and mutation
+suites pass. Its test-only format exposes terminal products and does not
+establish complete-credential hiding. The complete maximum result below still
+misses the proving-time gate; integrated and cryptographic qualification remain open.
 
 The rebuilt Core artifact passes all five prior stack failures on the default
 stack, all 72 selected certified-chain controls and all 246 still-existing controls
@@ -129,8 +162,9 @@ audit refusal is retained; a supplemental audit validates the actual IVM sample
 inputs against every original compiler observation. The lifetime compile-fail test, Primitives 333, Norito derive
 59 unit and 17 strict-JSON controls, and 32 compiler cases pass.
 Complete Mint/Guard/receiver, genuine proof/export and full-State authority remain
-open. The current inventory preserves 105 codec owners and 1,555 nominal
-identities; publication and reduced-feature qualification remain required.
+open. The current inventory has 106 codec owners and 1,559 nominal identities,
+preserving every prior owner; publication and reduced-feature qualification
+remain required.
 
 The fresh Linux and Mac optimized privacy artifacts pass all 133 private-dispatch
 controls, including all eight direct-jump and eleven CALL descriptor/frame-work
@@ -141,22 +175,18 @@ native tests and compiled-caller review. Complete current ordinary privacy
 coverage, IVM execution, initialization and finalized-State binding remain open.
 RAM-LFE secure encryption, refresh and the full program relation remain unavailable.
 
-The latest Linux maximum X509 proof is 9,412,944 bytes. Producer and independent
-verification, wrong-genesis, corruption and all 32 nonce-byte substitutions pass;
-a separate fresh verifier passes in 8.674104 seconds. Conservative reported RSS
-is 7,147,257,856 bytes and sampled address space reaches 8,668,545,024 bytes,
-within the unchanged 12 GiB RSS and enforced 32 GiB address-space caps. These
-observations do not measure an exact physical or address-space peak. Proving
-takes 1,494.890315 seconds against 300, so the complete run fails qualification.
-The applied compact P-256, shared FFT, masked-coefficient and exact-capacity DEEP
-changes complete this proof. The repaired Metal maximum also produces and verifies the complete proof,
-including a fresh verifier and all nonce mutations. Its 1,061.052853-second
-proving time still exceeds 300; Darwin cannot enforce the 32 GiB address-space
-limit and its sampled literal address space exceeds it. The retained pre-CALL privacy artifact
-has 2,028 of 2,588 ordinary controls pending; those counts do not describe the
-current source's expanded census. Relation, adaptive transcript/hiding and
-whole-prover side-channel review remain open. Busy-host timings are not a
-quiet-host speedup claim; no cap or supported shape is relaxed.
+The latest Linux maximum X509 proof on the corrected profile is 9,412,944 bytes.
+Producer self-check, independent replay, wrong-genesis, corruption and all 32
+nonce-byte substitutions pass; a separate fresh public verifier takes 7.977963
+seconds. Conservative reported RSS is 7,163,871,232 bytes, within the unchanged
+12 GiB cap, and the kernel-enforced hard/soft 32 GiB address-space gate passes.
+These observations do not establish an exact physical or address-space peak.
+Proving takes 1,437.185689 seconds against 300, so the complete run fails its
+performance gate. The retained result and all 65 phase timers are source-bound;
+later changes require fresh validation. The preceding Metal maximum also verified
+the complete proof but failed its time and Darwin address-space gates. Relation,
+adaptive transcript/hiding and whole-prover side-channel review remain open.
+No maximum is qualified, and no cap or supported shape is relaxed.
 
 Maximum FASTPQ ordinary and AXT production and fresh verifier replays pass on
 their recorded candidate. Current hardware controls pass 57 tests, including all
@@ -165,6 +195,11 @@ transcript scenario passes after the exact authenticated query repair, preservin
 contiguous genesis-rooted finality, source substitutions and restart checks.
 This establishes transcript custody; complete q77/D7 source/spend admission,
 concrete cryptographic qualification and other hardware remain open.
+The complete-effect ordinary artifact, original-pool funding and move-only
+finalized-source lane are now integrated for compiler/native validation. The
+ordinary profile and canonical artifact layout changed; preceding transfer-only
+maximum results do not qualify this candidate. Durable completion publication,
+recovery and automatic dispatch remain unfinished.
 
 Recorded script, Kotlin/Android, Swift, JavaScript and native fixture controls
 provide component coverage. Fresh canonical generation, complete SDK consumers,
@@ -250,10 +285,11 @@ passes.
   RS16 availability at whole-node/network scope, DS-local State/AMX, E+2/beacon
   custody and [paid 4→7→4 transitions](specs/staking_validator_completion.md)
   with restart, rewards, exits and slashing.
-- **Privacy/crypto:** the current joint X509 maximum proof passes native and fresh
-  verification, proof size, conservative RSS and enforced address space. The
-  300-second limit fails. Complete relation, adaptive transcript/hiding and
-  side-channel qualification remain open. Maximum q77 ordinary/AXT proofs, local
+- **Privacy/crypto:** an earlier joint X509 maximum proof passes verification,
+  size, RSS and enforced address-space checks but fails the 300-second limit.
+  The corrected RFC profile and authentic component fixtures require a fresh
+  complete proof. Complete relation, adaptive transcript/hiding and side-channel
+  qualification remain open. Maximum q77 ordinary/AXT proofs, local
   M1 Ultra controls and four-validator transcript custody pass on their recorded
   candidates; complete source/spend admission and other hardware remain open.
   RAM-LFE secure encryption/full execution, IVM native

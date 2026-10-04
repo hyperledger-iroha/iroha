@@ -158,29 +158,21 @@ impl FixtureFinality {
     }
 }
 
-const PERMISSION_FIXTURE_LIMIT: u64 = 500;
+const PERMISSION_FIXTURE_LIMIT: u32 = 500;
 
 fn complete_permission_page(
     response: &iroha::http::Response<Vec<u8>>,
 ) -> Result<BTreeSet<Permission>> {
-    #[derive(norito::derive::JsonDeserialize)]
-    #[norito(deny_unknown_fields)]
-    struct Page {
-        items: Vec<Permission>,
-        total: u64,
-    }
-
     ensure!(
         response.status().as_u16() == 200,
-        "permission read failed at offset 0, limit {PERMISSION_FIXTURE_LIMIT}: {}; body: {}",
+        "permission first page read failed, limit {PERMISSION_FIXTURE_LIMIT}: {}; body: {}",
         response.status(),
         String::from_utf8_lossy(&response.body()[..response.body().len().min(2048)])
     );
     let header = |name: &str| {
-        response
-            .headers()
-            .get(name)
-            .and_then(|value| value.to_str().ok())
+        let mut values = response.headers().get_all(name).iter();
+        let value = values.next()?.to_str().ok()?;
+        values.next().is_none().then_some(value)
     };
     ensure!(
         header("content-type").is_some_and(|value| {
@@ -193,38 +185,20 @@ fn complete_permission_page(
         }) && header("x-iroha-account-permission-semantics") == Some("effective-v1"),
         "permission response omitted its canonical media type or effective semantics"
     );
-    let counter = |name: &str| -> Result<u64> {
-        header(name)
-            .and_then(|value| value.parse().ok())
-            .ok_or_else(|| eyre!("permission response omitted {name}"))
-    };
-    let attempted = counter("x-iroha-fanout-routes-attempted")?;
+    let page: iroha::collections::Page<Permission> = json::from_slice(response.body())?;
     ensure!(
-        attempted > 0
-            && counter("x-iroha-fanout-routes-succeeded")? == attempted
-            && counter("x-iroha-fanout-routes-failed")? == 0
-            && counter("x-iroha-fanout-routes-denied")? == 0
-            && counter("x-iroha-fanout-routes-unavailable")? == 0
-            && counter("x-iroha-fanout-routes-not-found")? == 0,
-        "permission read returned incomplete fanout"
+        !page.has_more(),
+        "permission fixture cannot prove exhaustion with a continuation cursor"
     );
-    let page: Page = json::from_slice(response.body())?;
     ensure!(
-        page.total == u64::try_from(page.items.len())?,
-        "permission page count mismatch"
+        page.items.len() <= PERMISSION_FIXTURE_LIMIT as usize,
+        "permission page exceeds requested bound"
     );
-    // Each route returns unique permissions, and fanout merges their union.
-    // A union smaller than the requested limit proves every route was short.
-    // `total` counts only this merged page; it is not a global row count.
-    // At the fetch-budget boundary there is no safe next-page exhaustion probe.
-    ensure!(
-        page.total < PERMISSION_FIXTURE_LIMIT,
-        "permission fixture cannot prove exhaustion within its {PERMISSION_FIXTURE_LIMIT}-row fetch budget"
-    );
+    let count = page.items.len();
     let permissions: BTreeSet<_> = page.items.into_iter().collect();
     ensure!(
-        u64::try_from(permissions.len())? == page.total,
-        "permission fanout returned duplicate items"
+        permissions.len() == count,
+        "permission collection returned duplicate items"
     );
     Ok(permissions)
 }
@@ -233,8 +207,10 @@ fn effective_permissions(
     client: &iroha::client::Client,
     account_id: &AccountId,
 ) -> Result<BTreeSet<Permission>> {
-    let response =
-        client.get_account_permissions_page_response(account_id, PERMISSION_FIXTURE_LIMIT, 0)?;
+    let response = client.query_account_permissions_response(
+        account_id,
+        &iroha::collections::ListQuery::new().limit(PERMISSION_FIXTURE_LIMIT),
+    )?;
     complete_permission_page(&response)
 }
 
@@ -260,24 +236,17 @@ mod permission_page_tests {
     }
 
     fn response(items: Vec<Permission>) -> Response<Vec<u8>> {
-        let total = items.len();
-        let body = json::to_vec(&norito::json!({"total": total, "items": items})).unwrap();
+        let body = json::to_vec(&iroha::collections::Page::last(items)).unwrap();
         Response::builder()
             .status(200)
             .header("content-type", "application/json; charset=utf-8")
             .header("x-iroha-account-permission-semantics", "effective-v1")
-            .header("x-iroha-fanout-routes-attempted", "4")
-            .header("x-iroha-fanout-routes-succeeded", "4")
-            .header("x-iroha-fanout-routes-failed", "0")
-            .header("x-iroha-fanout-routes-denied", "0")
-            .header("x-iroha-fanout-routes-unavailable", "0")
-            .header("x-iroha-fanout-routes-not-found", "0")
             .body(body)
             .unwrap()
     }
 
     #[test]
-    fn permission_page_requires_complete_short_fanout() {
+    fn permission_page_requires_cursor_exhaustion() {
         let items = vec![resolution_permission(), resolution_delegation_permission()];
         assert_eq!(
             complete_permission_page(&response(items.clone())).unwrap(),
@@ -288,41 +257,35 @@ mod permission_page_tests {
                 .unwrap()
                 .is_empty()
         );
-        for name in [
-            "x-iroha-fanout-routes-attempted",
-            "x-iroha-fanout-routes-succeeded",
-            "x-iroha-fanout-routes-failed",
-            "x-iroha-fanout-routes-denied",
-            "x-iroha-fanout-routes-unavailable",
-            "x-iroha-fanout-routes-not-found",
-        ] {
-            let mut page = response(vec![resolution_permission()]);
-            page.headers_mut().insert(name, "1".parse().unwrap());
-            assert!(
-                complete_permission_page(&page).is_err(),
-                "accepted changed {name}"
-            );
-            page.headers_mut().remove(name);
-            assert!(
-                complete_permission_page(&page).is_err(),
-                "accepted absent {name}"
-            );
-        }
+        let mut continued = response(vec![resolution_permission()]);
+        *continued.body_mut() = json::to_vec(&iroha::collections::Page {
+            items: vec![resolution_permission()],
+            next_cursor: Some("remaining-permissions".to_owned()),
+            total: None,
+        })
+        .unwrap();
+        assert!(complete_permission_page(&continued).is_err());
     }
 
     #[test]
-    fn permission_page_rejects_saturation_and_duplicate_items() {
-        for size in [500, 501] {
-            let items = (0..size)
+    fn permission_page_accepts_exhausted_limit_and_rejects_oversized_or_duplicate_items() {
+        let items = |size| {
+            (0..size)
                 .map(|value| Permission::new(format!("fixture{value}"), Json::default()))
-                .collect();
-            assert!(
-                complete_permission_page(&response(items))
-                    .unwrap_err()
-                    .to_string()
-                    .contains("cannot prove exhaustion")
-            );
-        }
+                .collect()
+        };
+        assert_eq!(
+            complete_permission_page(&response(items(500)))
+                .unwrap()
+                .len(),
+            500
+        );
+        assert!(
+            complete_permission_page(&response(items(501)))
+                .unwrap_err()
+                .to_string()
+                .contains("exceeds requested bound")
+        );
         let duplicate = response(vec![resolution_permission(), resolution_permission()]);
         assert!(
             complete_permission_page(&duplicate)
@@ -339,11 +302,14 @@ mod permission_page_tests {
             .body(b"invalid_pagination: fetch budget exceeded".to_vec())
             .unwrap();
         let error = complete_permission_page(&failed).unwrap_err().to_string();
-        assert!(error.contains("offset 0, limit 500"));
+        assert!(error.contains("first page read failed, limit 500"));
         assert!(error.contains("400 Bad Request"));
         assert!(error.contains("invalid_pagination"));
         for name in ["content-type", "x-iroha-account-permission-semantics"] {
             let mut page = response(Vec::new());
+            let value = page.headers().get(name).unwrap().clone();
+            page.headers_mut().append(name, value);
+            assert!(complete_permission_page(&page).is_err());
             page.headers_mut().remove(name);
             assert!(complete_permission_page(&page).is_err());
         }
@@ -353,7 +319,7 @@ mod permission_page_tests {
             complete_permission_page(&mismatch)
                 .unwrap_err()
                 .to_string()
-                .contains("count mismatch")
+                .contains("next_cursor")
         );
     }
 }

@@ -40,18 +40,20 @@ class Page<T>(
 
     companion object {
         /**
-         * Decode the page envelope; unknown members are ignored as the contract requires.
+         * Decode the exact page envelope; retired or unknown controls are rejected.
          *
          * @throws IllegalArgumentException when `items`, `next_cursor` or `total` is malformed
          */
         @JvmStatic
         fun fromJson(json: Json): Page<Json> {
             require(json is JsonObject) { "a page must be a JSON object" }
+            require(json.keys.all { it in setOf("items", "next_cursor", "total") }) { "a page contains unknown or retired members" }
+            require(json.containsKey("next_cursor")) { "a page must contain `next_cursor`" }
             val items = json["items"] as? JsonArray
                 ?: throw IllegalArgumentException("a page must contain an `items` array")
             val nextCursor = when (val cursor = json["next_cursor"]) {
                 null, JsonNull -> null
-                is JsonString -> cursor.value
+                is JsonString -> cursor.value.also { require(it.isNotEmpty()) { "`next_cursor` must be non-empty or null" } }
                 else -> throw IllegalArgumentException("`next_cursor` must be a string or null")
             }
             val total = when (val count = json["total"]) {
@@ -65,6 +67,7 @@ class Page<T>(
                 }
                 else -> throw IllegalArgumentException("`total` must be a non-negative integer")
             }
+            require(total == null || total >= items.items.size) { "`total` cannot be smaller than this page" }
             return Page(items.items, nextCursor, total)
         }
     }

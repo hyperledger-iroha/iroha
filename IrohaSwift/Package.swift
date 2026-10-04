@@ -1,6 +1,9 @@
 // swift-tools-version:5.9
 import Foundation
 import PackageDescription
+#if os(macOS)
+import CryptoKit
+#endif
 #if canImport(Darwin)
 import Darwin
 #elseif canImport(Glibc)
@@ -16,6 +19,11 @@ let localIntegrationArtifactDirectory = repositoryDirectory
 let configuredArtifactDirectory = ProcessInfo.processInfo.environment[
     "MOBILE_SDK_APPLE_ARTIFACT_DIR"
 ]
+// Explicit developer-only host unit input. The release selector remains separate.
+let configuredLocalUnitArtifactDirectory = ProcessInfo.processInfo.environment[
+    "MOBILE_SDK_LOCAL_UNIT_ARTIFACT_DIR"
+]
+let selectedArtifactDirectory = configuredLocalUnitArtifactDirectory ?? configuredArtifactDirectory
 let requireExternalArtifactInput = ProcessInfo.processInfo.environment[
     "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT"
 ]
@@ -28,6 +36,15 @@ else {
     )
 }
 let requireExternalArtifact = requireExternalArtifactInput == "1"
+if configuredLocalUnitArtifactDirectory != nil,
+    requireExternalArtifact || configuredArtifactDirectory != nil {
+    fatalError("error: local-unit artifacts cannot enter an external/release artifact corridor.")
+}
+#if !os(macOS)
+if configuredLocalUnitArtifactDirectory != nil {
+    fatalError("error: local-unit artifacts require a macOS host.")
+}
+#endif
 if requireExternalArtifact, configuredArtifactDirectory == nil {
     fatalError(
         """
@@ -68,7 +85,7 @@ func canonicalExistingFilesystemPath(_ path: String) -> String? {
 
 let bridgeAbsolutePath: URL
 let bridgeTargetPath: String
-if let configuredArtifactDirectory {
+if let configuredArtifactDirectory = selectedArtifactDirectory {
     guard configuredArtifactDirectory.hasPrefix("/") else {
         fatalError("error: MOBILE_SDK_APPLE_ARTIFACT_DIR must be an absolute path.")
     }
@@ -97,6 +114,17 @@ if let configuredArtifactDirectory {
             "error: MOBILE_SDK_APPLE_ARTIFACT_DIR must be outside the reviewed Iroha source tree."
         )
     }
+    if configuredLocalUnitArtifactDirectory != nil {
+        guard resolvedURL.path != repositoryDirectory.path,
+            !resolvedURL.path.hasPrefix(repositoryDirectory.path + "/"),
+            let attributes = try? FileManager.default.attributesOfItem(atPath: resolvedURL.path),
+            attributes[.type] as? FileAttributeType == .typeDirectory,
+            (attributes[.ownerAccountID] as? NSNumber)?.intValue == Int(geteuid()),
+            (attributes[.posixPermissions] as? NSNumber)?.intValue == 0o700
+        else {
+            fatalError("error: local-unit artifact directory must be external, owned, canonical and mode 0700.")
+        }
+    }
     bridgeAbsolutePath = resolvedURL
         .appendingPathComponent("NoritoBridge.xcframework", isDirectory: true)
     bridgeTargetPath = relativePath(
@@ -109,6 +137,141 @@ if let configuredArtifactDirectory {
         .standardizedFileURL
     bridgeTargetPath = bridgeRelativePath
 }
+
+#if os(macOS)
+func localUnitSHA256(_ url: URL) -> String? {
+    guard canonicalExistingFilesystemPath(url.path) == url.path,
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+        attributes[.type] as? FileAttributeType == .typeRegular,
+        let handle = try? FileHandle(forReadingFrom: url)
+    else { return nil }
+    defer { try? handle.close() }
+    var digest = SHA256()
+    do {
+        while let bytes = try handle.read(upToCount: 1024 * 1024), !bytes.isEmpty {
+            digest.update(data: bytes)
+        }
+    } catch { return nil }
+    return digest.finalize().map { String(format: "%02x", $0) }.joined()
+}
+
+func validateLocalUnitArtifact(
+    at artifactRoot: URL,
+    libraries: [[String: Any]],
+    manifest: [String: Any]
+) -> String? {
+    #if arch(arm64)
+    let architecture = "arm64"
+    let targetTriple = "aarch64-apple-darwin"
+    #elseif arch(x86_64)
+    let architecture = "x86_64"
+    let targetTriple = "x86_64-apple-darwin"
+    #else
+    return "error: local-unit artifact host architecture is unsupported."
+    #endif
+    let identifier = "macos-" + architecture
+    let fields: Set<String> = [
+        "schema", "artifact_scope", "purpose", "version", "native_bridge_abi_version",
+        "target_triple", "hashes", "source_inputs", "tool_inputs", "receipt_inputs",
+        "producer_record", "producer_record_sha256"
+    ]
+    guard Set(manifest.keys) == fields,
+        manifest["schema"] as? String == "iroha.norito-bridge-local-unit-artifact.v1",
+        manifest["artifact_scope"] as? String == "local-unit",
+        manifest["purpose"] as? String == "macos-swift-debug-unit-tests",
+        manifest["version"] as? String == "0.1.0",
+        manifest["native_bridge_abi_version"] as? Int == requiredBridgeAbiVersion,
+        manifest["target_triple"] as? String == targetTriple,
+        libraries.count == 1,
+        let library = libraries.first,
+        Set(library.keys).subtracting(["BinaryPath"]) == Set([
+            "LibraryIdentifier", "LibraryPath", "HeadersPath",
+            "SupportedArchitectures", "SupportedPlatform"
+        ]),
+        library["BinaryPath"] == nil || library["BinaryPath"] as? String == "libNoritoBridge.a",
+        library["LibraryIdentifier"] as? String == identifier,
+        library["LibraryPath"] as? String == "libNoritoBridge.a",
+        library["HeadersPath"] as? String == "Headers",
+        library["SupportedArchitectures"] as? [String] == [architecture],
+        library["SupportedPlatform"] as? String == "macos",
+        let hashes = manifest["hashes"] as? [String: String],
+        Set(hashes.keys) == Set([identifier]),
+        localUnitSHA256(artifactRoot.appendingPathComponent(identifier)
+            .appendingPathComponent("libNoritoBridge.a")) == hashes[identifier]
+    else { return "error: local-unit archive/host metadata is not exact." }
+
+    let headers = [
+        "NoritoBridge.h": "crates/connect_norito_bridge/include/NoritoBridge.h",
+        "connect_norito_bridge.h": "crates/connect_norito_bridge/include/connect_norito_bridge.h",
+        "module.modulemap": "crates/connect_norito_bridge/module.modulemap.template"
+    ]
+    for (name, source) in headers {
+        let expected = localUnitSHA256(repositoryDirectory.appendingPathComponent(source))
+        guard expected != nil,
+            localUnitSHA256(artifactRoot.appendingPathComponent(identifier)
+                .appendingPathComponent("Headers").appendingPathComponent(name)) == expected
+        else { return "error: local-unit headers differ from current source." }
+    }
+    // The repository-owned verifier rederives the full source/dep-info membership,
+    // immutable emitter/static/ABI relationships, exact five native children,
+    // original normalization and crypto consumer, and actual framework contents.
+    for key in ["source_inputs", "tool_inputs", "receipt_inputs"] {
+        guard let inputs = manifest[key] as? [String: String], !inputs.isEmpty else {
+            return "error: local-unit custody input inventory is missing."
+        }
+    }
+    let outputDirectory = artifactRoot.deletingLastPathComponent()
+    guard manifest["producer_record"] as? String
+            == outputDirectory.appendingPathComponent("producer-record.json").path,
+        let producerHash = manifest["producer_record_sha256"] as? String,
+        producerHash.count == 64,
+        producerHash.allSatisfy({ "0123456789abcdef".contains($0) }),
+        localUnitSHA256(outputDirectory.appendingPathComponent("producer-record.json")) == producerHash
+    else { return "error: local-unit producer record is missing or changed." }
+
+    let pythonCandidates: [String]
+    if let configuredPython = ProcessInfo.processInfo.environment["MOBILE_SDK_PYTHON_BINARY"] {
+        guard configuredPython.hasPrefix("/") else {
+            return "error: MOBILE_SDK_PYTHON_BINARY must be an absolute Python 3.12 path."
+        }
+        pythonCandidates = [configuredPython]
+    } else {
+        pythonCandidates = ["/opt/homebrew/opt/python@3.12/bin/python3.12",
+                            "/usr/local/opt/python@3.12/bin/python3.12"]
+    }
+    guard let python = pythonCandidates.compactMap(canonicalExistingFilesystemPath).first,
+        let producer = try? Data(contentsOf: outputDirectory.appendingPathComponent("producer-record.json")),
+        let record = try? JSONSerialization.jsonObject(with: producer) as? [String: Any],
+        let configuration = record["config"] as? [String: String],
+        let producerPython = configuration["python"],
+        canonicalExistingFilesystemPath(producerPython) == python
+    else { return "error: local-unit verifier requires the producer's guarded Python 3.12." }
+    let verifier = repositoryDirectory.appendingPathComponent("scripts/norito_bridge_local_unit.py")
+    guard canonicalExistingFilesystemPath(verifier.path) == verifier.path else {
+        return "error: local-unit repository verifier is missing or aliased."
+    }
+    let process = Process()
+    let diagnostic = Pipe()
+    process.executableURL = URL(fileURLWithPath: python)
+    process.arguments = ["-I", "-S", "-B", verifier.path, "verify", "--root", repositoryDirectory.path,
+                         "--output", outputDirectory.path, "--producer-sha256", producerHash]
+    process.currentDirectoryURL = repositoryDirectory
+    process.environment = ["PATH": "/usr/bin:/bin", "HOME": NSHomeDirectory(), "LANG": "C.UTF-8",
+                           "LC_ALL": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1"]
+    process.standardOutput = diagnostic
+    process.standardError = diagnostic
+    do {
+        try process.run()
+        let output = diagnostic.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationReason == .exit, process.terminationStatus == 0 else {
+            let detail = String(decoding: output.prefix(4096), as: UTF8.self)
+            return "error: local-unit current-input verification refused: \(detail)"
+        }
+    } catch { return "error: unable to execute the repository local-unit verifier: \(error)" }
+    return nil
+}
+#endif
 
 func validateBridgeArtifact(at artifactRoot: URL) -> String? {
     guard FileManager.default.fileExists(atPath: artifactRoot.path) else {
@@ -158,6 +321,18 @@ func validateBridgeArtifact(at artifactRoot: URL) -> String? {
     else {
         return "error: NoritoBridge.xcframework is missing readable ABI-bound artifact metadata."
     }
+    if configuredLocalUnitArtifactDirectory != nil {
+        #if os(macOS)
+        guard !requireExternalArtifact,
+            dictionary["CFBundlePackageType"] as? String == "XFWK",
+            dictionary["XCFrameworkFormatVersion"] as? String == "1.0",
+            canonicalExistingFilesystemPath(artifactRoot.path) == artifactRoot.path
+        else { return "error: local-unit artifact path is not canonical." }
+        return validateLocalUnitArtifact(at: artifactRoot, libraries: libraries, manifest: manifest)
+        #else
+        return "error: local-unit artifacts require a macOS host."
+        #endif
+    }
     let isLocalIntegration = artifactRoot.deletingLastPathComponent().path
         == localIntegrationArtifactDirectory
     if isLocalIntegration {
@@ -194,9 +369,19 @@ targets.append(
 let bridgeDependency: Target.Dependency = .target(name: "NoritoBridge", condition: .when(platforms: [.iOS, .macOS]))
 irohaSwiftDependencies.append(bridgeDependency)
 testDependencies.append(bridgeDependency)
-// Retain every native bridge export used by dlsym, without force-loading Swift's
-// unrelated compatibility archives twice in executable consumers.
-irohaSwiftLinkerSettings.append(.unsafeFlags(["-Xlinker", "-force-lNoritoBridge"], .when(platforms: [.iOS, .macOS])))
+// Ordinary C references retain the dlsym exports while keeping this product
+// eligible for use as a versioned dependency in another Swift package.
+targets.append(
+    .target(
+        name: "NoritoBridgeRetention",
+        dependencies: [bridgeDependency],
+        path: "Sources/NoritoBridgeRetention",
+        publicHeadersPath: "include"
+    )
+)
+irohaSwiftDependencies.append(
+    .target(name: "NoritoBridgeRetention", condition: .when(platforms: [.iOS, .macOS]))
+)
 // The retained Rust archive uses these Apple frameworks directly. Declare them
 // on the library so executable and test consumers inherit the native link inputs.
 irohaSwiftLinkerSettings.append(.linkedFramework("Foundation", .when(platforms: [.iOS, .macOS])))
@@ -215,6 +400,10 @@ var swiftSettings: [SwiftSetting] = [
     .define("IROHASWIFT_BRIDGE_REQUIRED"),
     .define("IROHASWIFT_BRIDGE_PRESENT")
 ]
+if configuredLocalUnitArtifactDirectory != nil {
+    swiftSettings.append(.define("IROHASWIFT_LOCAL_UNIT_ARTIFACT"))
+    swiftSettings.append(.define("IROHASWIFT_LOCAL_UNIT_DEBUG", .when(configuration: .debug)))
+}
 // Keep Google's Apple Nearby implementation deterministic for fresh Xcode
 // checkouts. Nearby's transitive Abseil branch is additionally locked by the
 // checked-in Package.resolved file.

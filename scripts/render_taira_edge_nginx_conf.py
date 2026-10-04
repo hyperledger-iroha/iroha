@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Render the shared-edge Taira nginx config from a validator roster."""
+"""Render Taira nginx routes from a canonical four-validator roster.
+
+The validator-only scope requires explicit interface addresses and existing TLS
+certificate paths. It does not install or reload nginx; check the candidate with
+the serving host's native nginx before activation.
+"""
 
 from __future__ import annotations
 
@@ -457,15 +462,17 @@ def load_edge_validators(roster_path: Path) -> list[EdgeValidator]:
     return validators
 
 
-def _render_proxy_headers(host_expr: str, *, forwarded_host_expr: str | None = None) -> list[str]:
-    # This TLS edge is the Torii trust boundary. Discard client-supplied XFF
-    # prefixes instead of appending them, so a malformed prefix cannot make
-    # Torii fall back to treating the loopback proxy as the public caller.
+def _render_proxy_headers(
+    host_expr: str, *, forwarded_host_expr: str | None = None, trusted_edge: bool = False,
+) -> list[str]:
+    # The TLS edge discards caller-supplied XFF rather than appending it. Only
+    # the private backend restricted to that exact edge retains those sanitized
+    # headers, so a second local hop does not replace the original public caller.
     lines = [
         f"    proxy_set_header Host {host_expr};",
-        "    proxy_set_header X-Real-IP $remote_addr;",
-        "    proxy_set_header X-Forwarded-For $remote_addr;",
-        "    proxy_set_header X-Forwarded-Proto $scheme;",
+        "    proxy_set_header X-Real-IP $http_x_real_ip;" if trusted_edge else "    proxy_set_header X-Real-IP $remote_addr;",
+        "    proxy_set_header X-Forwarded-For $http_x_forwarded_for;" if trusted_edge else "    proxy_set_header X-Forwarded-For $remote_addr;",
+        "    proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;" if trusted_edge else "    proxy_set_header X-Forwarded-Proto $scheme;",
     ]
     if forwarded_host_expr is not None:
         lines.insert(3, f"    proxy_set_header X-Forwarded-Host {forwarded_host_expr};")
@@ -509,6 +516,7 @@ def _render_exact_proxy_location(
     websocket: bool = False,
     retry_non_idempotent: bool = False,
     forwarded_host_expr: str | None = None,
+    trusted_edge: bool = False,
 ) -> list[str]:
     lines = [f"  location = {path} {{", f"    proxy_pass http://{upstream};", "    proxy_http_version 1.1;"]
     if websocket:
@@ -518,7 +526,7 @@ def _render_exact_proxy_location(
                 '    proxy_set_header Connection "upgrade";',
             ]
         )
-    lines.extend(_render_proxy_headers(host_expr, forwarded_host_expr=forwarded_host_expr))
+    lines.extend(_render_proxy_headers(host_expr, forwarded_host_expr=forwarded_host_expr, trusted_edge=trusted_edge))
     if retry_non_idempotent:
         lines.extend(
             [
@@ -544,9 +552,10 @@ def _render_prefix_proxy_location(
     host_expr: str,
     retry_non_idempotent: bool = False,
     forwarded_host_expr: str | None = None,
+    trusted_edge: bool = False,
 ) -> list[str]:
     lines = [f"  location ^~ {path} {{", f"    proxy_pass http://{upstream};", "    proxy_http_version 1.1;"]
-    lines.extend(_render_proxy_headers(host_expr, forwarded_host_expr=forwarded_host_expr))
+    lines.extend(_render_proxy_headers(host_expr, forwarded_host_expr=forwarded_host_expr, trusted_edge=trusted_edge))
     if retry_non_idempotent:
         lines.extend(
             [
@@ -648,6 +657,197 @@ def _render_connect_stateful_locations(
         lines.extend(location)
         lines.append("")
     return lines
+
+
+def _canonical_listen_addresses(values: list[str]) -> list[str]:
+    if not values:
+        raise ValueError("validator listener scope requires explicit listen addresses")
+    addresses: list[str] = []
+    for value in values:
+        try:
+            address = ipaddress.ip_address(value)
+        except ValueError as error:
+            raise ValueError("validator listen address must be a canonical IP literal") from error
+        if str(address) != value or "%" in value:
+            raise ValueError("validator listen address must use exact canonical IP spelling")
+        if address.is_unspecified or address.is_multicast:
+            raise ValueError("validator listen address must identify one unicast interface")
+        if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+            raise ValueError("validator listen address must not be IPv4-mapped IPv6")
+        if value in addresses:
+            raise ValueError("validator listen address is duplicated")
+        addresses.append(value)
+    return addresses
+
+
+def _canonical_tls_path(value: str, context: str) -> str:
+    if (
+        not re.fullmatch(r"/[A-Za-z0-9_./-]+", value)
+        or value.endswith("/")
+        or any(part in ("", ".", "..") for part in value.split("/")[1:])
+    ):
+        raise ValueError(f"{context} must be a canonical absolute nginx file path")
+    return value
+
+
+def _canonical_private_ipv4(value: str, context: str) -> str:
+    try:
+        address = ipaddress.IPv4Address(value)
+    except ipaddress.AddressValueError as error:
+        raise ValueError(f"{context} must be a canonical private IPv4 address") from error
+    if str(address) != value or not any(address in network for network in (
+        ipaddress.IPv4Network("10.0.0.0/8"),
+        ipaddress.IPv4Network("172.16.0.0/12"),
+        ipaddress.IPv4Network("192.168.0.0/16"),
+    )):
+        raise ValueError(f"{context} must identify one canonical RFC1918 IPv4 interface")
+    return value
+
+
+def _render_validator_proxy_locations(
+    validator: EdgeValidator, *, trusted_edge: bool = False,
+) -> list[str]:
+    upstream = f"{validator.upstream_name}_upstream"
+    lines = _render_exact_proxy_location(
+        "/v1/connect/ws", upstream, host_expr="$host", websocket=True, trusted_edge=trusted_edge,
+    )
+    lines.append("")
+    lines.extend(_render_exact_proxy_location(
+        "/v1/mcp", upstream, host_expr="$host", trusted_edge=trusted_edge,
+    ))
+    lines.append("")
+    lines.extend(_render_prefix_proxy_location(
+        "/", upstream, host_expr="$host", trusted_edge=trusted_edge,
+    ))
+    return lines
+
+
+def _render_validator_server(
+    validator: EdgeValidator,
+    *,
+    listens: list[str],
+    certificate: str,
+    certificate_key: str,
+    client_max_body_size: str,
+    tls_options: list[str],
+) -> list[str]:
+    lines = [
+        "server {",
+        *[f"  listen {listener} ssl;" for listener in listens],
+        "  http2 on;",
+        f"  server_name {validator.validator_host};",
+        f"  client_max_body_size {client_max_body_size};",
+        "",
+        f"  ssl_certificate {certificate};",
+        f"  ssl_certificate_key {certificate_key};",
+        *tls_options,
+        "",
+    ]
+    lines.extend(_render_validator_proxy_locations(validator))
+    lines.extend(["}", ""])
+    return lines
+
+
+def render_validator_listeners_conf(
+    validators: list[EdgeValidator],
+    *,
+    listen_addresses: list[str],
+    tls_certificate: str,
+    tls_certificate_key: str,
+    client_max_body_size: str = DEFAULT_CLIENT_MAX_BODY_SIZE,
+) -> str:
+    """Render only peer upstreams and interface-specific TLS servers.
+
+    Certificate paths are references, never read by this renderer. The caller
+    verifies assigned interfaces, current tunnel bindings and native nginx
+    admission before activating the result beside existing public routes.
+    """
+    if len(validators) != TAIRA_VALIDATOR_COUNT:
+        raise ValueError(f"exactly {TAIRA_VALIDATOR_COUNT} edge validators are required for Taira")
+    _require_canonical_render_inputs(validators, [], mon_host_suffix=DEFAULT_MON_HOST_SUFFIX)
+    addresses = _canonical_listen_addresses(listen_addresses)
+    certificate = _canonical_tls_path(tls_certificate, "TLS certificate")
+    certificate_key = _canonical_tls_path(tls_certificate_key, "TLS certificate key")
+    if certificate == certificate_key:
+        raise ValueError("TLS certificate and key paths must be distinct")
+    if not re.fullmatch(r"[1-9][0-9]*[kKmMgG]?", client_max_body_size):
+        raise ValueError("client maximum body size must be a positive nginx size")
+    lines = [
+        "# Generated by scripts/render_taira_edge_nginx_conf.py from the Taira validator roster.",
+        "# Validator TLS listeners only; existing public routes remain separately owned.",
+        "",
+    ]
+    for validator in validators:
+        lines.extend(_render_upstream(
+            f"{validator.upstream_name}_upstream",
+            [f"  server {validator.upstream_address};"], DEFAULT_UPSTREAM_KEEPALIVE,
+        ))
+        lines.append("")
+    for validator in validators:
+        listens = [
+            f"[{address}]:{validator.https_port}" if ":" in address
+            else f"{address}:{validator.https_port}"
+            for address in addresses
+        ]
+        lines.extend(_render_validator_server(
+            validator, listens=listens, certificate=certificate,
+            certificate_key=certificate_key, client_max_body_size=client_max_body_size,
+            tls_options=[],
+        ))
+    return "\n".join(lines)
+
+
+def render_private_backend_listeners_conf(
+    validators: list[EdgeValidator],
+    *,
+    listen_address: str,
+    port_base: int,
+    trusted_edge_address: str,
+    client_max_body_size: str = DEFAULT_CLIENT_MAX_BODY_SIZE,
+) -> str:
+    """Render four private HTTP sockets accepting only the explicitly selected TLS edge.
+
+    Assigned interfaces, free sockets and the selected edge's source address must
+    be verified on the actual hosts before activation. The backend retains only
+    the caller headers sanitized by that restricted edge and never rewrites URI.
+    """
+    if len(validators) != TAIRA_VALIDATOR_COUNT:
+        raise ValueError(f"exactly {TAIRA_VALIDATOR_COUNT} edge validators are required for Taira")
+    _require_canonical_render_inputs(validators, [], mon_host_suffix=DEFAULT_MON_HOST_SUFFIX)
+    address = _canonical_private_ipv4(listen_address, "backend listen address")
+    edge = _canonical_private_ipv4(trusted_edge_address, "trusted edge address")
+    if address == edge:
+        raise ValueError("backend and trusted edge must identify distinct interfaces")
+    if type(port_base) is not int or not 1024 <= port_base <= 65535 - TAIRA_VALIDATOR_COUNT + 1:
+        raise ValueError("backend base port must admit four contiguous unprivileged ports")
+    if not re.fullmatch(r"[1-9][0-9]*[kKmMgG]?", client_max_body_size):
+        raise ValueError("client maximum body size must be a positive nginx size")
+    for validator in validators:
+        host, _, _ = _split_canonical_host_port(validator.upstream_address, "backend Torii upstream")
+        if not ipaddress.ip_address(host).is_loopback:
+            raise ValueError("private backend upstream must be an exact loopback Torii socket")
+    lines = [
+        "# Generated by scripts/render_taira_edge_nginx_conf.py from the Taira validator roster.",
+        "# Private validator HTTP backends; only the selected TLS edge may forward callers.",
+        "",
+    ]
+    for validator in validators:
+        lines.extend(_render_upstream(
+            f"{validator.upstream_name}_upstream",
+            [f"  server {validator.upstream_address};"], DEFAULT_UPSTREAM_KEEPALIVE,
+        ))
+        lines.append("")
+    for index, validator in enumerate(validators):
+        lines.extend([
+            "server {", f"  listen {address}:{port_base + index};", "  server_name _;",
+            f"  client_max_body_size {client_max_body_size};", f"  allow {edge};", "  deny all;", "",
+            '  if ($http_x_real_ip = "") { return 400; }',
+            '  if ($http_x_forwarded_for != $http_x_real_ip) { return 400; }',
+            '  if ($http_x_forwarded_proto != "https") { return 400; }', "",
+        ])
+        lines.extend(_render_validator_proxy_locations(validator, trusted_edge=True))
+        lines.extend(["}", ""])
+    return "\n".join(lines)
 
 
 def _require_canonical_render_inputs(
@@ -1002,47 +1202,17 @@ def render_edge_nginx_conf(
     lines.extend(["}", ""])
 
     for validator in validators:
-        lines.extend(
-            [
-                "server {",
-                f"  listen {validator.https_port} ssl;",
-                f"  listen [::]:{validator.https_port} ssl;",
-                "  http2 on;",
-                f"  server_name {validator.validator_host};",
-                f"  client_max_body_size {client_max_body_size};",
-                "",
-                f"  ssl_certificate /etc/letsencrypt/live/{tls_lineage}/fullchain.pem;",
-                f"  ssl_certificate_key /etc/letsencrypt/live/{tls_lineage}/privkey.pem;",
+        lines.extend(_render_validator_server(
+            validator,
+            listens=[str(validator.https_port), f"[::]:{validator.https_port}"],
+            certificate=f"/etc/letsencrypt/live/{tls_lineage}/fullchain.pem",
+            certificate_key=f"/etc/letsencrypt/live/{tls_lineage}/privkey.pem",
+            client_max_body_size=client_max_body_size,
+            tls_options=[
                 "  include /etc/letsencrypt/options-ssl-nginx.conf;",
                 "  ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;",
-                "",
-            ]
-        )
-        lines.extend(
-            _render_exact_proxy_location(
-                "/v1/connect/ws",
-                f"{validator.upstream_name}_upstream",
-                host_expr="$host",
-                websocket=True,
-            )
-        )
-        lines.append("")
-        lines.extend(
-            _render_exact_proxy_location(
-                "/v1/mcp",
-                f"{validator.upstream_name}_upstream",
-                host_expr="$host",
-            )
-        )
-        lines.append("")
-        lines.extend(
-            _render_prefix_proxy_location(
-                "/",
-                f"{validator.upstream_name}_upstream",
-                host_expr="$host",
-            )
-        )
-        lines.extend(["}", ""])
+            ],
+        ))
 
     lines.extend(
         [
@@ -1077,6 +1247,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--roster", required=True, help="validator roster TOML")
     parser.add_argument("--output", required=True, help="nginx config output path")
+    scopes = parser.add_mutually_exclusive_group()
+    scopes.add_argument(
+        "--validator-listeners-only", action="store_true",
+        help="Render only peer TLS listeners beside separately managed public routes",
+    )
+    scopes.add_argument(
+        "--private-backend-listeners-only", action="store_true",
+        help="Render only private unchanged-URI HTTP backends restricted to one TLS edge",
+    )
+    parser.add_argument(
+        "--validator-listen-address", action="append", default=[], metavar="IP",
+        help="Exact assigned interface IP for validator-only scope; repeat for IPv4/IPv6",
+    )
+    parser.add_argument("--tls-certificate", help="Existing absolute certificate path for validator-only scope")
+    parser.add_argument("--tls-certificate-key", help="Existing absolute key path for validator-only scope")
+    parser.add_argument("--backend-listen-address", help="Exact assigned RFC1918 IPv4 interface for private backends")
+    parser.add_argument("--backend-port-base", type=int, help="First of four contiguous private backend ports")
+    parser.add_argument("--backend-trusted-edge-address", help="Exact authenticated TLS edge source IPv4; all other sources denied")
     parser.add_argument("--public-host", default=DEFAULT_PUBLIC_HOST)
     parser.add_argument(
         "--public-upstream-validator",
@@ -1119,19 +1307,56 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as error:
         parser.error(str(error))
 
-    rendered = render_edge_nginx_conf(
-        validators,
-        soracloud_alias_routes=soracloud_alias_routes,
-        public_host=args.public_host,
-        public_upstream_validator=args.public_upstream_validator,
-        explorer_host=args.explorer_host,
-        tls_lineage=args.tls_lineage,
-        certbot_root=args.certbot_root,
-        explorer_root=args.explorer_root,
-        cid_host_suffix=args.cid_host_suffix,
-        mon_host_suffix=args.mon_host_suffix,
-        client_max_body_size=args.client_max_body_size,
-    )
+    try:
+        backend_arguments = (
+            args.backend_listen_address, args.backend_port_base, args.backend_trusted_edge_address,
+        )
+        if args.validator_listeners_only:
+            if any(value is not None for value in backend_arguments):
+                raise ValueError("private backend arguments require private backend scope")
+            if not args.tls_certificate or not args.tls_certificate_key:
+                raise ValueError("validator listener scope requires both explicit TLS file paths")
+            if soracloud_alias_routes or args.public_upstream_validator:
+                raise ValueError("validator listener scope does not select public or alias routes")
+            rendered = render_validator_listeners_conf(
+                validators, listen_addresses=args.validator_listen_address,
+                tls_certificate=args.tls_certificate,
+                tls_certificate_key=args.tls_certificate_key,
+                client_max_body_size=args.client_max_body_size,
+            )
+        elif args.private_backend_listeners_only:
+            if any(value is None for value in backend_arguments):
+                raise ValueError("private backend scope requires explicit listen address, base port and trusted edge address")
+            if args.validator_listen_address or args.tls_certificate or args.tls_certificate_key:
+                raise ValueError("private backend scope does not select TLS listeners")
+            if soracloud_alias_routes or args.public_upstream_validator:
+                raise ValueError("private backend scope does not select public or alias routes")
+            rendered = render_private_backend_listeners_conf(
+                validators, listen_address=args.backend_listen_address,
+                port_base=args.backend_port_base,
+                trusted_edge_address=args.backend_trusted_edge_address,
+                client_max_body_size=args.client_max_body_size,
+            )
+        else:
+            if any(value is not None for value in backend_arguments):
+                raise ValueError("private backend arguments require private backend scope")
+            if args.validator_listen_address or args.tls_certificate or args.tls_certificate_key:
+                raise ValueError("explicit listener/TLS file arguments require validator listener scope")
+            rendered = render_edge_nginx_conf(
+                validators,
+                soracloud_alias_routes=soracloud_alias_routes,
+                public_host=args.public_host,
+                public_upstream_validator=args.public_upstream_validator,
+                explorer_host=args.explorer_host,
+                tls_lineage=args.tls_lineage,
+                certbot_root=args.certbot_root,
+                explorer_root=args.explorer_root,
+                cid_host_suffix=args.cid_host_suffix,
+                mon_host_suffix=args.mon_host_suffix,
+                client_max_body_size=args.client_max_body_size,
+            )
+    except ValueError as error:
+        parser.error(str(error))
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(rendered if rendered.endswith("\n") else f"{rendered}\n", encoding="utf-8")

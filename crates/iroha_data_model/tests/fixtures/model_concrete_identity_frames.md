@@ -1,14 +1,14 @@
 # Concrete model identity fixtures
 
 These files pin the current native concrete identities and frames. The capture
-configuration enables governance and HTTP and disables `ids_projection`;
-those fields describe the fixture provenance.
+configuration enables governance and HTTP; those fields describe the fixture
+provenance.
 
 | Fixture | Scope | SHA-256 |
 | --- | --- | --- |
-| `model_concrete_identity_frames.json` | 11 populated families, each as root, Vec, Some and BTreeMap: 44 frames | `b6d3930c4993338de7f58f259377877f739f557b82a9bc2527fb7274e07c9292` |
-| `block_message_send_identity_frame.json` | One encoding-only block-message adapter and its owned decoding projection | `dabcc4eeb99658dac1000f835a761d14a53ef50b0591284543a46fd1a8f7cd01` |
-| `reputation_event_id_identity_frames.json` | Two encoding-only reputation event-ID projections and their owned decoding material | `dda98fd79ef7371d004bb16c3d9d513004e45dc5ce1b243fc4ae853b6437432f` |
+| `model_concrete_identity_frames.json` | 11 populated families, each as root, Vec, Some and BTreeMap: 44 frames | `cecfe8d897913598c3ffa5eafad25e302c3a5d68cd5061b2891c6e24402cae7c` |
+| `block_message_send_identity_frame.json` | One encoding-only block-message adapter and its owned decoding projection | `617af6e7855eb75d115d3f72d92469cb4845e33bd15a3bd6058e96a4c00b4e23` |
+| `reputation_event_id_identity_frames.json` | Two encoding-only reputation event-ID projections and their owned decoding material | `cd77d568a81af2df4523521af263ebbcc8757a1ee0bd654edd39da863690627d` |
 
 The five concrete owners are Action, DataEvent, ExecutorContext,
 BlockSubscriptionRequest and BlockMessage.

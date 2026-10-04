@@ -52,6 +52,33 @@ pub struct ManagedParentReport {
     pub observation: ManagedParentObservation,
 }
 
+impl ManagedParentReport {
+    /// Concise historical evidence without inferring inclusion of a later local operation.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        match &self.observation {
+            ManagedParentObservation::NotConfigured => "Parent attachment is not configured".into(),
+            ManagedParentObservation::Unavailable { .. } => {
+                "Parent attachment observation is unavailable".into()
+            }
+            ManagedParentObservation::Observed { status } => match status.parent_confirmed {
+                Some(confirmed) => format!(
+                    "Historical parent receipt: child block #{} in parent block #{}",
+                    confirmed.child.height, confirmed.parent_height
+                ),
+                None => {
+                    let phase = if status.stage == ManagedAttachmentPhase::Attached {
+                        "awaiting verified receipt"
+                    } else {
+                        status.stage.as_str()
+                    };
+                    format!("Parent attachment: {phase}; no verified parent receipt")
+                }
+            },
+        }
+    }
+}
+
 /// Verified deployment result with local execution and parent evidence kept distinct.
 ///
 /// The canonical receipt is preserved verbatim. In particular, `receipt.commit.scope` is the
@@ -101,27 +128,7 @@ impl ManagedDeploymentReport {
     /// Concise historical parent evidence; no comparison of heights implies inclusion.
     #[must_use]
     pub fn parent_summary(&self) -> Option<String> {
-        let parent = self.parent.as_ref()?;
-        Some(match &parent.observation {
-            ManagedParentObservation::NotConfigured => "Parent attachment is not configured".into(),
-            ManagedParentObservation::Unavailable { .. } => {
-                "Parent attachment observation is unavailable".into()
-            }
-            ManagedParentObservation::Observed { status } => match status.parent_confirmed {
-                Some(confirmed) => format!(
-                    "Historical parent receipt: child block #{} in parent block #{}",
-                    confirmed.child.height, confirmed.parent_height
-                ),
-                None => {
-                    let phase = if status.stage == ManagedAttachmentPhase::Attached {
-                        "awaiting verified receipt"
-                    } else {
-                        status.stage.as_str()
-                    };
-                    format!("Parent attachment: {phase}; no verified parent receipt")
-                }
-            },
-        })
+        self.parent.as_ref().map(ManagedParentReport::summary)
     }
 }
 
@@ -135,7 +142,7 @@ pub struct ManagedDeploymentTarget {
     generation: PrivateDirectory,
     prepared: PreparedLocalnet,
     root_kind: RootKind,
-    execution: ManagedDeploymentExecution,
+    pub(super) execution: ManagedDeploymentExecution,
 }
 
 impl ManagedStore {
@@ -181,6 +188,14 @@ impl ManagedStore {
 }
 
 impl ManagedDeploymentTarget {
+    pub(super) fn fee_asset(&self) -> Result<iroha_data_model::asset::AssetDefinitionId> {
+        match &self.root_kind {
+            RootKind::Global => Ok(crate::localnet::localnet_xor_asset_definition_id()),
+            RootKind::Private { spec } => crate::localnet::private_fee_policy(spec)
+                .map(|policy| policy.asset_definition_id)
+                .map_err(|_| Error::Invalid("retained private fee policy is invalid".into())),
+        }
+    }
     /// Combine service-verified local success with a bounded independent parent observation.
     ///
     /// Parent failure or concurrent generation replacement produces `Unavailable`; it cannot
@@ -238,7 +253,7 @@ impl ManagedDeploymentTarget {
         })
     }
 
-    fn revalidate_generation(&self, store: &ManagedStore) -> Result<()> {
+    pub(super) fn revalidate_generation(&self, store: &ManagedStore) -> Result<()> {
         self.directory.revalidate()?;
         self.generation.revalidate()?;
         if store.root() != self.store_root {
@@ -269,6 +284,23 @@ impl ManagedDeploymentTarget {
                 Ok(status.attachment)
             })
             .transpose()
+    }
+
+    pub(super) fn parent_report(&self, store: &ManagedStore) -> Option<ManagedParentReport> {
+        match self.execution.root_scope {
+            SumeragiRootScope::Global => None,
+            SumeragiRootScope::Dataspace { parent_network_id, .. } => Some(ManagedParentReport {
+                parent_network_id,
+                child_network_id: self.execution.network_id,
+                observation: match self.observe_parent(store) {
+                    Ok(Some(status)) => ManagedParentObservation::Observed { status },
+                    Ok(None) => ManagedParentObservation::NotConfigured,
+                    Err(_) => ManagedParentObservation::Unavailable {
+                        reason: "could not observe parent attachment for the original contract execution generation".into(),
+                    },
+                },
+            }),
+        }
     }
 }
 

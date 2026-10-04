@@ -1131,13 +1131,22 @@ fn client_config_selects_the_generated_identity_file_only() {
         .get("account")
         .and_then(toml::Value::as_table)
         .expect("account table");
+    assert!(
+        !account.contains_key("domain"),
+        "client configurations carry no account domain"
+    );
     assert_eq!(
-        account.get("domain").and_then(toml::Value::as_str),
-        Some(CLIENT_ACCOUNT_DOMAIN)
+        account
+            .get("chain_discriminant")
+            .and_then(toml::Value::as_integer),
+        Some(i64::from(
+            iroha_config::parameters::defaults::common::chain_discriminant()
+        )),
+        "peers without an explicit prefix run with the node default, which the client states"
     );
     assert!(
-        !account.contains_key("chain_discriminant"),
-        "default localnet client config should not force an I105 prefix"
+        !account.contains_key("profile"),
+        "a local network must not claim a public network profile"
     );
 }
 #[test]

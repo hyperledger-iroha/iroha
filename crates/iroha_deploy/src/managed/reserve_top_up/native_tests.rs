@@ -151,7 +151,7 @@ pub(in crate::managed) fn native_requested_top_up(
     prepared: &PreparedLocalnet,
     provider: ProviderId,
 ) -> NativeRequestedTopUp {
-    let coordinator = ManagedReserveTopUpRequest::open(prepared, provider).unwrap();
+    let mut coordinator = ManagedReserveTopUpRequest::open(prepared, provider).unwrap();
     let manager = coordinator.authority.config.clone();
     let operator = coordinator.authority.issuer_operator_config().unwrap();
     assert_ne!(manager.account, operator.account);

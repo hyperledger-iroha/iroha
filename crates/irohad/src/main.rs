@@ -8545,6 +8545,7 @@ fn run_main_with_config_guard(
             let compatibility = compatibility_probe::config_compatibility_v1(
                 &config,
                 genesis.as_ref().zip(validated_genesis.as_ref()),
+                build,
             )?;
             let json = norito::json::to_json(&compatibility)
                 .map_err(|error| Report::new(MainError::Config).attach(error.to_string()))?;
@@ -9098,6 +9099,20 @@ fn validate_genesis_execution_offline(
             .attach("native genesis execution failed")
     })?;
     let executed = state.world_view();
+    let initial_configs = executed
+        .consensus_schedule()
+        .init_configs(iroha_core::sumeragi::startup::GENESIS_HEIGHT)
+        .map_err(|error| Report::new(MainError::Config).attach(error.to_string()))?;
+    let initial_committee_size = initial_configs
+        .iter()
+        .find_map(|(_, slot)| match slot {
+            iroha_sumeragi::types::ConfigSlot::Ready(config) => Some(config.committee.n()),
+            iroha_sumeragi::types::ConfigSlot::PendingBoundary { .. } => None,
+        })
+        .ok_or_else(|| {
+            Report::new(MainError::Config)
+                .attach("executed native genesis has no authenticated ready committee")
+        })?;
     if required_inrou_deployment_authority.is_some_and(|authority| {
         !iroha_core::smartcontracts::isi::soracloud::soracloud_management_authority_is_authorized(
             &executed, authority,
@@ -9124,6 +9139,7 @@ fn validate_genesis_execution_offline(
     let nexus_amx_context_hash = Hash::prehashed(metadata.sumeragi_context.nexus_amx_context_hash);
     Ok(crate::authenticated_genesis::AuthenticatedGenesis {
         network_id: epoch.network_id,
+        initial_committee_size,
         execution_policy_hash,
         nexus_amx_context_hash,
         kagemusha_mint_finality_authority: epoch.authority,
@@ -11894,16 +11910,27 @@ mod tests {
             let ready = compatibility_probe::config_compatibility_v1(
                 &fixture.config,
                 Some((&fixture.genesis, &bootstrap)),
+                test_build_metadata(),
             )
             .expect("ready compatibility values");
-            let pending = compatibility_probe::config_compatibility_v1(&fixture.config, None)
-                .expect("pending compatibility values");
+            let pending = compatibility_probe::config_compatibility_v1(
+                &fixture.config,
+                None,
+                test_build_metadata(),
+            )
+            .expect("pending compatibility values");
             let hex_hash = |hash: iroha_crypto::Hash| {
                 let bytes: &[u8; iroha_crypto::Hash::LENGTH] = hash.as_ref();
                 hex::encode(bytes)
             };
             assert_eq!(ready.status, "ready");
             assert_eq!(pending.status, "pending");
+            assert_eq!(pending.node_identity, None);
+            assert_eq!(ready.diagnostic_build, pending.diagnostic_build);
+            assert_eq!(
+                ready.node_identity.as_ref().unwrap().initial_committee_size,
+                bootstrap.initial_committee_size as u64
+            );
             assert_eq!(
                 ready.execution_policy_hash,
                 Some(hex::encode(fixture.parameters.execution_policy_hash))
@@ -11940,6 +11967,169 @@ mod tests {
             assert_eq!(ready.nexus_policy_digest, pending.nexus_policy_digest);
             assert_eq!(ready.gas_schedule_hash, pending.gas_schedule_hash);
         }
+
+
+        #[test]
+        fn check_config_node_identity_binds_resolved_local_settings_and_retired_keys() {
+            let _registry_guard = instruction_registry_test_guard();
+            iroha_genesis::init_instruction_registry();
+            let fixture = offline_semantic_genesis_fixture([]);
+            let bootstrap = validate_genesis_execution_offline(
+                &fixture.config,
+                &fixture.genesis,
+                &fixture.authority,
+                fixture.mode,
+                fixture.parameters,
+                fixture.cadence_ms,
+                None,
+            )
+            .expect("signed genesis executes offline");
+            let report = |config: &Config| {
+                compatibility_probe::config_compatibility_v1(
+                    config,
+                    Some((&fixture.genesis, &bootstrap)),
+                    test_build_metadata(),
+                )
+                .expect("native configuration projection")
+            };
+            let baseline = report(&fixture.config);
+            let identity = baseline
+                .node_identity
+                .as_ref()
+                .expect("executed genesis identity");
+            assert_eq!(bootstrap.initial_committee_size, 4);
+            assert_eq!(identity.initial_committee_size, 4);
+            assert_eq!(identity.network_id, bootstrap.network_id);
+            assert_eq!(
+                identity.node_id,
+                PeerId::new(fixture.config.common.key_pair.public_key().clone())
+            );
+            use norito::codec::Encode as _;
+            assert_eq!(
+                identity.node_fingerprint,
+                hex::encode(Hash::new(identity.node_id.encode()).as_ref())
+            );
+            assert_eq!(
+                identity.node_config_fingerprint,
+                hex::encode(
+                    iroha_core::sumeragi::node::configuration_fingerprint(
+                        bootstrap.initial_committee_size,
+                        &fixture.config.sumeragi.local,
+                        &iroha_core::sumeragi::driver::DriverConfig::default(),
+                        &fixture.config.sumeragi.retired_keys,
+                    )
+                    .as_ref(),
+                )
+            );
+            let mut changed = fixture.config.clone();
+            changed.sumeragi.local.sync_batch = Some(17);
+            let local = report(&changed);
+            assert_ne!(
+                local
+                    .node_identity
+                    .as_ref()
+                    .unwrap()
+                    .node_config_fingerprint,
+                identity.node_config_fingerprint
+            );
+            assert_eq!(local.config_fingerprint, baseline.config_fingerprint);
+            assert_eq!(local.diagnostic_build, baseline.diagnostic_build);
+            changed = fixture.config.clone();
+            changed.sumeragi.retired_keys = [0x61, 0x62]
+                .into_iter()
+                .map(|seed| {
+                    KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                        .expect("deterministic retired key")
+                        .public_key()
+                        .clone()
+                })
+                .collect();
+            let retired = report(&changed);
+            assert_ne!(
+                retired
+                    .node_identity
+                    .as_ref()
+                    .unwrap()
+                    .node_config_fingerprint,
+                identity.node_config_fingerprint
+            );
+            changed.sumeragi.retired_keys.reverse();
+            assert_eq!(report(&changed).node_identity, retired.node_identity);
+            changed = fixture.config.clone();
+            changed.sumeragi.records_dir = "unconsumed-diagnostic-records".into();
+            changed.sumeragi.installation_log = "unconsumed-diagnostic-installation".into();
+            assert_eq!(report(&changed).node_identity, baseline.node_identity);
+        }
+
+        #[test]
+        fn check_config_node_identity_separates_diagnostic_build_from_running_identity() {
+            let _registry_guard = instruction_registry_test_guard();
+            iroha_genesis::init_instruction_registry();
+            let fixture = offline_semantic_genesis_fixture([]);
+            let bootstrap = validate_genesis_execution_offline(
+                &fixture.config,
+                &fixture.genesis,
+                &fixture.authority,
+                fixture.mode,
+                fixture.parameters,
+                fixture.cadence_ms,
+                None,
+            )
+            .expect("signed genesis executes offline");
+            let build = |source| {
+                CompiledBuildMetadata::from_compiled_parts(
+                    env!("CARGO_PKG_VERSION"),
+                    Some(source),
+                    None,
+                    None,
+                    Some("test-diagnostic-features"),
+                    Some("test-diagnostic-target"),
+                )
+            };
+            let first = compatibility_probe::config_compatibility_v1(
+                &fixture.config,
+                Some((&fixture.genesis, &bootstrap)),
+                build("2222222222222222222222222222222222222222"),
+            )
+            .expect("first diagnostic identity");
+            let second = compatibility_probe::config_compatibility_v1(
+                &fixture.config,
+                Some((&fixture.genesis, &bootstrap)),
+                build("1111111111111111111111111111111111111111"),
+            )
+            .expect("second diagnostic identity");
+            assert_eq!(first.node_identity, second.node_identity);
+            assert_eq!(first.config_fingerprint, second.config_fingerprint);
+            assert_ne!(
+                first.diagnostic_build.build_fingerprint,
+                second.diagnostic_build.build_fingerprint
+            );
+            assert_eq!(
+                first.diagnostic_build.source_revision,
+                "2222222222222222222222222222222222222222"
+            );
+            assert_eq!(
+                second.diagnostic_build.source_revision,
+                "1111111111111111111111111111111111111111"
+            );
+            assert!(
+                compatibility_probe::config_compatibility_v1(
+                    &fixture.config,
+                    Some((&fixture.genesis, &bootstrap)),
+                    build("invalid-source"),
+                )
+                .is_err()
+            );
+            let pending = compatibility_probe::config_compatibility_v1(
+                &fixture.config,
+                None,
+                build("1111111111111111111111111111111111111111"),
+            )
+            .expect("pending report has only the diagnostic build identity");
+            assert_eq!(pending.node_identity, None);
+            assert_eq!(pending.diagnostic_build, second.diagnostic_build);
+        }
+
         #[test]
         fn check_config_offline_accepts_final_inrou_deployment_capability() {
             let _registry_guard = instruction_registry_test_guard();

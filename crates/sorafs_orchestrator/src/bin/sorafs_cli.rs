@@ -954,8 +954,9 @@ fn load_deploy_client_config(path: &Path) -> Result<DeployClientConfig, String> 
         chain_discriminant,
     })
 }
-/// Resolve the account discriminant exactly as the canonical client config does: an explicit
-/// `[account].chain_discriminant`, else the discriminant of `[account].profile`, else the default.
+/// Resolve the account discriminant exactly as the canonical client config does: the
+/// discriminant of `[account].profile`, or an explicit nonzero `[account].chain_discriminant`
+/// (which must match the profile when both are set). There is no default network.
 fn resolve_deploy_chain_discriminant(account: &toml::Table) -> Result<u16, String> {
     let explicit = account
         .get("chain_discriminant")
@@ -978,10 +979,15 @@ fn resolve_deploy_chain_discriminant(account: &toml::Table) -> Result<u16, Strin
         .transpose()?
         .map(str::trim)
         .filter(|name| !name.is_empty());
+    if explicit == Some(0) {
+        return Err("client config `[account].chain_discriminant` must be nonzero".to_string());
+    }
     let Some(profile_name) = profile_name else {
-        return Ok(
-            explicit.unwrap_or_else(iroha_config::parameters::defaults::common::chain_discriminant)
-        );
+        return explicit.ok_or_else(|| {
+            "client config `[account]` must set `profile` or `chain_discriminant`; \
+             there is no default network"
+                .to_string()
+        });
     };
     let profile = iroha_torii_shared::network_profile(profile_name).ok_or_else(|| {
         format!(

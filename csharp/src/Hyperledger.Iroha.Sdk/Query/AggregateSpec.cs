@@ -115,17 +115,23 @@ public sealed class AggregateMetric : IEquatable<AggregateMetric>
 /// <remarks><c>having</c> filters grouped rows and may reference group fields and metric aliases.</remarks>
 public sealed class AggregateSpec : IEquatable<AggregateSpec>
 {
+    /// <summary>Maximum number of <c>group_by</c> fields in one aggregate.</summary>
+    public const int MaxGroupBy = 8;
+
+    /// <summary>Maximum number of metrics in one aggregate.</summary>
+    public const int MaxMetrics = 16;
+
     private readonly ImmutableArray<FieldPath> groupBy;
     private readonly ImmutableArray<AggregateMetric> metrics;
 
-    /// <summary>Grouping dimensions.</summary>
+    /// <summary>Grouping dimensions; at most <see cref="MaxGroupBy"/>.</summary>
     public ImmutableArray<FieldPath> GroupBy
     {
         get => groupBy.IsDefault ? ImmutableArray<FieldPath>.Empty : groupBy;
         init => groupBy = value;
     }
 
-    /// <summary>Metrics computed per group; at least one is required.</summary>
+    /// <summary>Metrics computed per group; at least one and at most <see cref="MaxMetrics"/>.</summary>
     public ImmutableArray<AggregateMetric> Metrics
     {
         get => metrics.IsDefault ? ImmutableArray<AggregateMetric>.Empty : metrics;
@@ -154,6 +160,16 @@ public sealed class AggregateSpec : IEquatable<AggregateSpec>
         if (Metrics.IsEmpty)
         {
             return "`metrics` must list at least one metric";
+        }
+
+        if (GroupBy.Length > MaxGroupBy)
+        {
+            return $"`group_by` lists at most {MaxGroupBy} fields";
+        }
+
+        if (Metrics.Length > MaxMetrics)
+        {
+            return $"`metrics` lists at most {MaxMetrics} metrics";
         }
 
         foreach (var metric in Metrics)

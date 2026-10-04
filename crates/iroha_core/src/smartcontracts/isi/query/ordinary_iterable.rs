@@ -134,13 +134,19 @@ where
                 ));
             }
         }
-        // TODO: Route each of the remaining 33 world producers through a query-specific
-        // borrowed scan which preserves its synthetic-field predicate rules,
-        // owns only the requested prefix/top-K through fallible exact storage,
-        // and performs bounded selector projection. The three Kura producers
+        // Admission refuses every other shape before execution; this is the
+        // fail-closed backstop. Admitting another of the remaining 33 world
+        // producers requires a query-specific borrowed scan which preserves its
+        // synthetic-field predicate rules and owns only the requested
+        // prefix/top-K through fallible exact storage. The three Kura producers
         // additionally need an authenticated fixed projection in the reader.
-        return Err(Error::Conversion(
-            "ordinary iterable source adapters are not yet complete".to_owned(),
+        let query = std::any::type_name::<Q>()
+            .rsplit("::")
+            .next()
+            .unwrap_or("iterable query");
+        return Err(super::ordinary_memory::signed_query_shape_not_admitted(
+            query,
+            "has no bounded signed-query source for this predicate, offset, sorting or cursor mode",
         )
         .into());
     }

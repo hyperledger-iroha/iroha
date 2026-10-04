@@ -11,20 +11,16 @@ fn complete_headers() -> String {
     [
         "Content-Type: application/json",
         "x-iroha-account-permission-semantics: effective-v1",
-        "x-iroha-fanout-routes-attempted: 2",
-        "x-iroha-fanout-routes-succeeded: 2",
-        "x-iroha-fanout-routes-failed: 0",
-        "x-iroha-fanout-routes-denied: 0",
-        "x-iroha-fanout-routes-unavailable: 0",
-        "x-iroha-fanout-routes-not-found: 0",
     ]
     .join("\r\n")
 }
 
 fn page(items: &[Permission], has_more: bool) -> Result<Vec<u8>> {
-    norito::json::to_vec(
-        &norito::json!({ "total": (items.len()), "items": (items.to_vec()), "has_more": has_more }),
-    )
+    norito::json::to_vec(&iroha::collections::Page {
+        items: items.to_vec(),
+        total: None,
+        next_cursor: has_more.then(|| "next-permissions".to_owned()),
+    })
     .map_err(Into::into)
 }
 
@@ -65,6 +61,18 @@ fn read_scripted_permissions(
                     return Err(eyre!("permission request headers exceeded fixture bound"));
                 }
             }
+            let headers_text = String::from_utf8(request.clone())?;
+            let length = headers_text
+                .lines()
+                .find_map(|line| {
+                    let (key, value) = line.split_once(':')?;
+                    key.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap_or(0);
+            let mut body_bytes = vec![0; length];
+            stream.read_exact(&mut body_bytes)?;
+            request.extend(body_bytes);
             requests.push(String::from_utf8(request)?);
             write!(
                 stream,
@@ -99,7 +107,7 @@ fn public_permission_pages_follow_explicit_exhaustion_without_an_empty_probe() -
         scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
     }
     .into();
-    // The public merger reports the returned page count, even after route deduplication.
+    // Duplicate tokens across pages do not change the effective permission set.
     let second = [first[0].clone(), manage.clone()];
     let (result, requests) = read_scripted_permissions(vec![
         (complete_headers(), page(&first, true)?),
@@ -108,12 +116,18 @@ fn public_permission_pages_follow_explicit_exhaustion_without_an_empty_probe() -
     let authorization = result?;
     assert_eq!(authorization.manage_alias_permission, manage);
     assert_eq!(requests.len(), 2);
-    for (request, offset) in requests.iter().zip([0, 500]) {
+    for (index, request) in requests.iter().enumerate() {
         let first_line = request.lines().next().expect("request line");
-        assert!(first_line.starts_with("GET /v1/accounts/"));
-        assert!(first_line.ends_with(&format!(
-            "/permissions?limit=500&offset={offset}&count_mode=exact HTTP/1.1"
-        )));
+        assert!(first_line.starts_with("POST /v1/accounts/"));
+        assert!(first_line.ends_with("/permissions/query HTTP/1.1"));
+        let query = iroha::collections::ListQuery::from_json_value(norito::json::from_str(
+            request.split_once("\r\n\r\n").unwrap().1,
+        )?)?;
+        assert_eq!(query.limit, Some(500));
+        assert_eq!(
+            query.cursor.as_deref(),
+            (index > 0).then_some("next-permissions")
+        );
         let headers = request.to_ascii_lowercase();
         assert!(headers.contains("\r\nx-iroha-account:"));
         assert!(headers.contains("\r\nx-iroha-signature:"));
@@ -132,25 +146,17 @@ fn public_permission_pages_reject_incomplete_or_misrepresented_evidence() -> Res
             page(&[], false)?,
         ),
         (
-            headers.replace("routes-succeeded: 2", "routes-succeeded: 1"),
-            page(&[], false)?,
-        ),
-        (
-            headers.replace("routes-unavailable: 0", "routes-unavailable: 1"),
-            page(&[], false)?,
-        ),
-        (
             format!("{headers}\r\nx-iroha-account-permission-semantics: effective-v1"),
             page(&[], false)?,
         ),
         (
             headers.clone(),
-            br#"{"total": 501, "items": [], "has_more": false}"#.to_vec(),
+            br#"{"items": [], "next_cursor": null, "has_more": false}"#.to_vec(),
         ),
         (headers.clone(), br#"{"total": 0, "items": []}"#.to_vec()),
         (
             headers.clone(),
-            br#"{"total": 0, "items": [], "has_more": "false"}"#.to_vec(),
+            br#"{"items": [], "next_cursor": 7}"#.to_vec(),
         ),
         (headers.clone(), page(&[], true)?),
     ] {
@@ -187,14 +193,14 @@ fn complete_first_page_never_exceeds_the_default_fetch_budget() -> Result<()> {
         assert_eq!(
             requests.len(),
             1,
-            "complete route evidence must not probe offset500"
+            "an absent cursor must stop without an extra probe"
         );
     }
     Ok(())
 }
 
 #[test]
-fn short_merged_page_cannot_override_explicit_route_continuation() -> Result<()> {
+fn short_collection_page_cannot_override_explicit_cursor_continuation() -> Result<()> {
     let manage: Permission = CanManageAccountAlias {
         scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
     }
@@ -207,6 +213,29 @@ fn short_merged_page_cannot_override_explicit_route_continuation() -> Result<()>
         (complete_headers(), page(&[], false)?),
     ])?;
     assert_eq!(result?.manage_alias_permission, manage);
+    assert_eq!(requests.len(), 2);
+    Ok(())
+}
+
+#[test]
+fn permission_policy_read_rejects_repeated_continuation_cursors() -> Result<()> {
+    let token = Permission::new("UnrelatedPermission".to_owned(), Json::new(()));
+    let (result, requests) = read_scripted_permissions(vec![
+        (
+            complete_headers(),
+            page(std::slice::from_ref(&token), true)?,
+        ),
+        (
+            complete_headers(),
+            page(std::slice::from_ref(&token), true)?,
+        ),
+    ])?;
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("cursor did not advance")
+    );
     assert_eq!(requests.len(), 2);
     Ok(())
 }

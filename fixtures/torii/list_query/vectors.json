@@ -125,6 +125,12 @@
       "line": 2,
       "message": "unexpected character `~`",
       "text": "a = 1\nand b ~ 2"
+    },
+    {
+      "column": 9,
+      "line": 1,
+      "message": "control characters must be escaped inside string literals",
+      "text": "a = \"raw\u0001control\""
     }
   ],
   "filters": [
@@ -520,6 +526,76 @@
         "op": "and"
       },
       "text": "tx_hash = \"hash\" and tx_status in [\"Approved\", \"Rejected\"]"
+    },
+    {
+      "canonical": "note = \"del c1\"",
+      "json": {
+        "args": [
+          "note",
+          "del c1"
+        ],
+        "op": "eq"
+      },
+      "text": "note = \"del c1\""
+    }
+  ],
+  "json_filters": [
+    {
+      "canonical": "a = 1",
+      "json": {
+        "args": [
+          {
+            "args": [
+              "a",
+              1
+            ],
+            "op": "eq"
+          }
+        ],
+        "op": "and"
+      },
+      "normalized": {
+        "args": [
+          "a",
+          1
+        ],
+        "op": "eq"
+      }
+    },
+    {
+      "canonical": "b is not null",
+      "json": {
+        "args": [
+          {
+            "args": [
+              {
+                "args": [
+                  {
+                    "args": [
+                      "b"
+                    ],
+                    "op": "is_null"
+                  }
+                ],
+                "op": "or"
+              }
+            ],
+            "op": "not"
+          }
+        ],
+        "op": "or"
+      },
+      "normalized": {
+        "args": [
+          {
+            "args": [
+              "b"
+            ],
+            "op": "is_null"
+          }
+        ],
+        "op": "not"
+      }
     }
   ],
   "pages": [
@@ -706,6 +782,76 @@
       },
       "code": "invalid_include_total",
       "parameter": "include_total"
+    },
+    {
+      "body": {
+        "filter": {
+          "args": [
+            "a`b",
+            1
+          ],
+          "op": "eq"
+        }
+      },
+      "code": "invalid_filter",
+      "parameter": "filter"
+    },
+    {
+      "body": {
+        "aggregate": {
+          "groupby": [
+            "a"
+          ],
+          "metrics": [
+            {
+              "alias": "n",
+              "fn": "count"
+            }
+          ]
+        }
+      },
+      "code": "invalid_aggregate",
+      "parameter": "aggregate"
+    },
+    {
+      "body": {
+        "aggregate": {
+          "metrics": [
+            {
+              "alias": "n",
+              "feild": "a",
+              "fn": "count"
+            }
+          ]
+        }
+      },
+      "code": "invalid_aggregate",
+      "parameter": "aggregate"
+    },
+    {
+      "body": {
+        "aggregate": {
+          "group_by": [
+            "a",
+            "b",
+            "c",
+            "d",
+            "e",
+            "f",
+            "g",
+            "h",
+            "i"
+          ],
+          "metrics": [
+            {
+              "alias": "n",
+              "fn": "count"
+            }
+          ]
+        }
+      },
+      "code": "invalid_aggregate",
+      "parameter": "aggregate"
     },
     {
       "body": [],

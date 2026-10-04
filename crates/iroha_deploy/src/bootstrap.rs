@@ -34,7 +34,12 @@ pub use profile::{
 pub use transport::{CheckpointReadError, CheckpointTransport, MAX_DOWNLOADED_CHECKPOINT_BYTES};
 mod provisioning;
 pub use provisioning::{ReleaseBuildRegistry, ReleaseFaucet, ReleasePeer};
+mod publication;
 mod registry;
+pub use publication::{
+    NetworkPublicationPolicy, PinnedPublicationGenesis, PreparedNetworkPublication,
+    prepare_network_publication,
+};
 
 const RELEASE_DOMAIN: &[u8] = b"iroha.developer.network-checkpoint.v1\0";
 const MAX_MANIFEST_BYTES: usize = 16 * 1024;

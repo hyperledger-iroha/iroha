@@ -4,13 +4,15 @@
 //! execution. Each exact typed write consumes one permit, including repeated keys
 //! and unchanged quantities. Public callback state cannot reconstruct a permit.
 
+use super::fastpq_quantity_archive::{QuantityBalanceInput, QuantityKindInput};
+use super::fastpq_quantity_capture::QuantityCaptureIssue;
+use crate::execution_attempt::ExecutionDeferred;
 use iroha_allocation::{AllocationBudget, AllocationCharge, AllocationReservation, ChargedBuffer};
+#[cfg(test)]
+use iroha_data_model::fastpq::FastpqExecutionEffectV1;
 use iroha_data_model::{
     asset::{AssetDefinitionId, AssetId},
-    fastpq::{
-        FastpqExecutionAssetV1, FastpqExecutionBalanceV1, FastpqExecutionEffectKindV1,
-        FastpqExecutionEffectV1,
-    },
+    fastpq::FastpqExecutionAssetV1,
 };
 use iroha_primitives::numeric::Quantity;
 use std::alloc::Layout;
@@ -35,10 +37,12 @@ pub(super) struct ExpectedQuantityWrite<K, Q> {
 }
 
 /// Finite preparation failure; messages and caller-supplied evidence are not retained.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum QuantityWritePlanError {
     /// The operation exceeds the original finite write-port reservation.
     Capacity,
+    /// Original physical refusal, retained without inventing a retry observation.
+    Deferred(ExecutionDeferred),
     /// An exact key, preimage, postimage or ordered occurrence did not match.
     Mismatch,
     /// A consumed or interrupted plan cannot be reused to mint additional permits.
@@ -202,6 +206,11 @@ impl<K: Ord, Q: Eq> QuantityWritePlan<K, Q> {
         })
     }
 
+    /// Count only ports the original storage owner acknowledged after actual mutation.
+    pub(super) fn applied_count(&self) -> usize {
+        self.consumed
+    }
+
     /// Seal only after every occurrence was consumed without any failed probe.
     pub(super) fn finish(self) -> Result<(), QuantityWritePlanError> {
         if self.failed {
@@ -225,55 +234,76 @@ impl<K, Q> std::fmt::Debug for QuantityWritePlan<K, Q> {
 }
 
 enum PortKey<'a> {
-    Balance(&'a FastpqExecutionBalanceV1),
-    Supply(&'a FastpqExecutionAssetV1),
-    Retire(&'a FastpqExecutionAssetV1),
+    Balance(QuantityBalanceInput<'a>),
+    Supply(
+        &'a AssetDefinitionId,
+        iroha_data_model::nexus::AxtAssetIncarnationV1,
+    ),
+    Retire(
+        &'a AssetDefinitionId,
+        iroha_data_model::nexus::AxtAssetIncarnationV1,
+    ),
 }
 
-fn visit_ports(
-    effects: &[FastpqExecutionEffectV1],
+fn visit_ports<'a>(
+    kinds: impl Iterator<Item = Result<QuantityKindInput<'a>, QuantityCaptureIssue>>,
     mut visit: impl FnMut(PortKey<'_>, &Quantity, &Quantity) -> Result<(), QuantityWritePlanError>,
 ) -> Result<(), QuantityWritePlanError> {
-    for effect in effects {
-        match &effect.kind {
-            FastpqExecutionEffectKindV1::Retire(asset) => {
+    for kind in kinds {
+        match kind.map_err(|_| QuantityWritePlanError::Mismatch)? {
+            QuantityKindInput::Retire(definition, incarnation) => {
                 let zero = Quantity::zero();
-                visit(PortKey::Retire(asset), &zero, &zero)?;
+                visit(PortKey::Retire(definition, incarnation), &zero, &zero)?;
             }
-            FastpqExecutionEffectKindV1::Transfer(value) if value.source == value.destination => {
+            QuantityKindInput::Transfer(value) if value.source == value.destination => {
                 visit(
-                    PortKey::Balance(&value.source),
-                    &value.source_before,
-                    &value.destination_after,
-                )?;
-            }
-            FastpqExecutionEffectKindV1::Transfer(value) => {
-                visit(
-                    PortKey::Balance(&value.source),
-                    &value.source_before,
-                    &value.source_after,
-                )?;
-                visit(
-                    PortKey::Balance(&value.destination),
-                    &value.destination_before,
-                    &value.destination_after,
+                    PortKey::Balance(value.source),
+                    value.source_before,
+                    value.destination_after,
                 )?;
             }
-            FastpqExecutionEffectKindV1::Mint(value) | FastpqExecutionEffectKindV1::Burn(value) => {
+            QuantityKindInput::Transfer(value) => {
                 visit(
-                    PortKey::Balance(&value.balance),
-                    &value.balance_before,
-                    &value.balance_after,
+                    PortKey::Balance(value.source),
+                    value.source_before,
+                    value.source_after,
                 )?;
                 visit(
-                    PortKey::Supply(&value.balance.asset),
-                    &value.supply_before,
-                    &value.supply_after,
+                    PortKey::Balance(value.destination),
+                    value.destination_before,
+                    value.destination_after,
+                )?;
+            }
+            QuantityKindInput::Mint(value) | QuantityKindInput::Burn(value) => {
+                visit(
+                    PortKey::Balance(value.balance),
+                    value.balance_before,
+                    value.balance_after,
+                )?;
+                visit(
+                    PortKey::Supply(value.balance.definition, value.balance.incarnation),
+                    value.supply_before,
+                    value.supply_after,
                 )?;
             }
         }
     }
     Ok(())
+}
+
+fn prepaid_refusal(error: iroha_allocation::PrepaidBufferError) -> QuantityWritePlanError {
+    use iroha_allocation::{ChargedBufferError, PrepaidBufferError};
+    match error {
+        PrepaidBufferError::Allocation(ChargedBufferError::Admission(refusal)) => {
+            QuantityWritePlanError::Deferred(refusal.into())
+        }
+        PrepaidBufferError::Allocation(ChargedBufferError::Allocator { .. }) => {
+            QuantityWritePlanError::Deferred(
+                ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+            )
+        }
+        PrepaidBufferError::Reservation(_) => QuantityWritePlanError::Capacity,
+    }
 }
 
 impl QuantityWritePlan<QuantityWriteKey, Quantity> {
@@ -311,80 +341,130 @@ impl QuantityWritePlan<QuantityWriteKey, Quantity> {
 
     /// Reserve all port backing, ledger backing and exact nested clone layouts atomically
     /// from this transaction's original execution pool, before making any port clone.
+    #[cfg(test)]
     pub(super) fn from_effects(
         effects: &[FastpqExecutionEffectV1],
         max_ports: usize,
         budget: &AllocationBudget,
     ) -> Result<Self, QuantityWritePlanError> {
+        Self::from_inputs(
+            effects.iter().map(|effect| Ok((&effect.kind).into())),
+            max_ports,
+            budget,
+        )
+    }
+
+    /// Prepare the same original write permits directly from borrowed business facts.
+    /// No complete proof-tape allocation is required for mutation coverage.
+    pub(super) fn from_inputs<'a, I>(
+        kinds: I,
+        max_ports: usize,
+        budget: &AllocationBudget,
+    ) -> Result<Self, QuantityWritePlanError>
+    where
+        I: Clone + Iterator<Item = Result<QuantityKindInput<'a>, QuantityCaptureIssue>>,
+    {
         let mut ports = 0usize;
         let mut nested_count = 0usize;
         let mut nested_bytes = 0usize;
-        visit_ports(effects, |key, before, after| {
-            ports = ports
-                .checked_add(1)
-                .ok_or(QuantityWritePlanError::Capacity)?;
+        visit_ports(kinds.clone(), |key, before, after| {
+            ports = ports.checked_add(1).ok_or_else(|| {
+                QuantityWritePlanError::Deferred(
+                    iroha_allocation::AllocationRefusal::DemandOverflow.into(),
+                )
+            })?;
             if ports > max_ports {
                 return Err(QuantityWritePlanError::Capacity);
             }
             let mut add = |layout: Layout| -> Result<(), QuantityWritePlanError> {
-                nested_count = nested_count
-                    .checked_add(1)
-                    .ok_or(QuantityWritePlanError::Capacity)?;
-                nested_bytes = nested_bytes
-                    .checked_add(layout.size())
-                    .ok_or(QuantityWritePlanError::Capacity)?;
+                nested_count = nested_count.checked_add(1).ok_or_else(|| {
+                    QuantityWritePlanError::Deferred(
+                        iroha_allocation::AllocationRefusal::DemandOverflow.into(),
+                    )
+                })?;
+                nested_bytes = nested_bytes.checked_add(layout.size()).ok_or_else(|| {
+                    QuantityWritePlanError::Deferred(
+                        iroha_allocation::AllocationRefusal::DemandOverflow.into(),
+                    )
+                })?;
                 Ok(())
             };
             if let PortKey::Balance(balance) = key {
-                let mut failed = false;
+                let mut failure = None;
                 balance
                     .account
                     .for_each_admission_clone_layout(|layout| {
-                        if add(layout).is_err() {
-                            failed = true;
+                        if failure.is_none() {
+                            failure = add(layout).err();
                         }
                     })
-                    .map_err(|_| QuantityWritePlanError::Capacity)?;
-                if failed {
-                    return Err(QuantityWritePlanError::Capacity);
+                    .map_err(|_| {
+                        QuantityWritePlanError::Deferred(
+                            iroha_allocation::AllocationRefusal::DemandOverflow.into(),
+                        )
+                    })?;
+                if let Some(error) = failure {
+                    return Err(error);
                 }
             }
-            add(before
-                .admission_clone_layout()
-                .map_err(|_| QuantityWritePlanError::Capacity)?)?;
-            add(after
-                .admission_clone_layout()
-                .map_err(|_| QuantityWritePlanError::Capacity)?)
+            add(before.admission_clone_layout().map_err(|_| {
+                QuantityWritePlanError::Deferred(
+                    iroha_allocation::AllocationRefusal::DemandOverflow.into(),
+                )
+            })?)?;
+            add(after.admission_clone_layout().map_err(|_| {
+                QuantityWritePlanError::Deferred(
+                    iroha_allocation::AllocationRefusal::DemandOverflow.into(),
+                )
+            })?)
         })?;
         let backing = Layout::array::<ExpectedQuantityWrite<QuantityWriteKey, Quantity>>(ports)
-            .map_err(|_| QuantityWritePlanError::Capacity)?;
-        let key_order_layout =
-            Layout::array::<usize>(ports).map_err(|_| QuantityWritePlanError::Capacity)?;
+            .map_err(|_| {
+                QuantityWritePlanError::Deferred(
+                    iroha_allocation::AllocationRefusal::DemandOverflow.into(),
+                )
+            })?;
+        let key_order_layout = Layout::array::<usize>(ports).map_err(|_| {
+            QuantityWritePlanError::Deferred(
+                iroha_allocation::AllocationRefusal::DemandOverflow.into(),
+            )
+        })?;
         let lifecycle_layout = Layout::array::<(
             AssetDefinitionId,
             iroha_data_model::nexus::AxtAssetIncarnationV1,
         )>(ports)
-        .map_err(|_| QuantityWritePlanError::Capacity)?;
-        let ledger = Layout::array::<AllocationCharge>(nested_count)
-            .map_err(|_| QuantityWritePlanError::Capacity)?;
+        .map_err(|_| {
+            QuantityWritePlanError::Deferred(
+                iroha_allocation::AllocationRefusal::DemandOverflow.into(),
+            )
+        })?;
+        let ledger = Layout::array::<AllocationCharge>(nested_count).map_err(|_| {
+            QuantityWritePlanError::Deferred(
+                iroha_allocation::AllocationRefusal::DemandOverflow.into(),
+            )
+        })?;
         let bytes = nested_bytes
             .checked_add(backing.size())
             .and_then(|value| value.checked_add(ledger.size()))
             .and_then(|value| value.checked_add(key_order_layout.size()))
             .and_then(|value| value.checked_add(lifecycle_layout.size()))
-            .ok_or(QuantityWritePlanError::Capacity)?;
+            .ok_or_else(|| {
+                QuantityWritePlanError::Deferred(
+                    iroha_allocation::AllocationRefusal::DemandOverflow.into(),
+                )
+            })?;
         let mut reservation = budget
             .try_reserve_bytes(bytes)
-            .map_err(|_| QuantityWritePlanError::Capacity)?;
+            .map_err(|error| QuantityWritePlanError::Deferred(error.into()))?;
         // Local declaration order retains charges until every partially constructed port drops.
         let mut charges = ChargedBuffer::from_reservation(nested_count, &mut reservation)
-            .map_err(|_| QuantityWritePlanError::Capacity)?;
-        let mut writes = ChargedBuffer::from_reservation(ports, &mut reservation)
-            .map_err(|_| QuantityWritePlanError::Capacity)?;
-        let mut key_order = ChargedBuffer::from_reservation(ports, &mut reservation)
-            .map_err(|_| QuantityWritePlanError::Capacity)?;
-        let mut lifecycles = ChargedBuffer::from_reservation(ports, &mut reservation)
-            .map_err(|_| QuantityWritePlanError::Capacity)?;
+            .map_err(prepaid_refusal)?;
+        let mut writes =
+            ChargedBuffer::from_reservation(ports, &mut reservation).map_err(prepaid_refusal)?;
+        let mut key_order =
+            ChargedBuffer::from_reservation(ports, &mut reservation).map_err(prepaid_refusal)?;
+        let mut lifecycles =
+            ChargedBuffer::from_reservation(ports, &mut reservation).map_err(prepaid_refusal)?;
         fn retain(
             reservation: &mut AllocationReservation,
             charges: &mut ChargedBuffer<AllocationCharge>,
@@ -398,12 +478,13 @@ impl QuantityWritePlan<QuantityWriteKey, Quantity> {
                 QuantityWritePlanError::Capacity
             })
         }
-        visit_ports(effects, |key, before, after| {
-            let asset = match &key {
-                PortKey::Balance(balance) => &balance.asset,
-                PortKey::Supply(asset) | PortKey::Retire(asset) => *asset,
+        visit_ports(kinds, |key, before, after| {
+            let (definition, incarnation) = match &key {
+                PortKey::Balance(balance) => (balance.definition, balance.incarnation),
+                PortKey::Supply(definition, incarnation)
+                | PortKey::Retire(definition, incarnation) => (*definition, *incarnation),
             };
-            lifecycles.push_reserved((asset.definition.clone(), asset.incarnation));
+            lifecycles.push_reserved((definition.clone(), incarnation));
             let key = match key {
                 PortKey::Balance(balance) => {
                     let mut failed = false;
@@ -414,42 +495,60 @@ impl QuantityWritePlan<QuantityWriteKey, Quantity> {
                                 failed = true;
                             }
                         })
-                        .map_err(|_| QuantityWritePlanError::Capacity)?;
+                        .map_err(|_| {
+                            QuantityWritePlanError::Deferred(
+                                iroha_allocation::AllocationRefusal::DemandOverflow.into(),
+                            )
+                        })?;
                     if failed {
                         return Err(QuantityWritePlanError::Capacity);
                     }
                     QuantityWriteKey::Balance(AssetId::with_scope(
-                        balance.asset.definition.clone(),
-                        balance
-                            .account
-                            .try_clone_for_admission()
-                            .map_err(|_| QuantityWritePlanError::Capacity)?,
+                        balance.definition.clone(),
+                        balance.account.try_clone_for_admission().map_err(|_| {
+                            QuantityWritePlanError::Deferred(
+                                ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+                            )
+                        })?,
                         balance.scope,
                     ))
                 }
-                PortKey::Supply(asset) => QuantityWriteKey::Supply(asset.definition.clone()),
-                PortKey::Retire(asset) => QuantityWriteKey::Retire(asset.clone()),
+                PortKey::Supply(definition, _) => QuantityWriteKey::Supply(definition.clone()),
+                PortKey::Retire(definition, incarnation) => {
+                    QuantityWriteKey::Retire(FastpqExecutionAssetV1 {
+                        definition: definition.clone(),
+                        incarnation,
+                    })
+                }
             };
             retain(
                 &mut reservation,
                 &mut charges,
-                before
-                    .admission_clone_layout()
-                    .map_err(|_| QuantityWritePlanError::Capacity)?,
+                before.admission_clone_layout().map_err(|_| {
+                    QuantityWritePlanError::Deferred(
+                        iroha_allocation::AllocationRefusal::DemandOverflow.into(),
+                    )
+                })?,
             )?;
-            let before = before
-                .try_clone_for_admission()
-                .map_err(|_| QuantityWritePlanError::Capacity)?;
+            let before = before.try_clone_for_admission().map_err(|_| {
+                QuantityWritePlanError::Deferred(
+                    ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+                )
+            })?;
             retain(
                 &mut reservation,
                 &mut charges,
-                after
-                    .admission_clone_layout()
-                    .map_err(|_| QuantityWritePlanError::Capacity)?,
+                after.admission_clone_layout().map_err(|_| {
+                    QuantityWritePlanError::Deferred(
+                        iroha_allocation::AllocationRefusal::DemandOverflow.into(),
+                    )
+                })?,
             )?;
-            let after = after
-                .try_clone_for_admission()
-                .map_err(|_| QuantityWritePlanError::Capacity)?;
+            let after = after.try_clone_for_admission().map_err(|_| {
+                QuantityWritePlanError::Deferred(
+                    ivm::error::ExecutionDeferral::AllocationUnavailable.into(),
+                )
+            })?;
             writes
                 .try_push(ExpectedQuantityWrite { key, before, after })
                 .map_err(|value| {

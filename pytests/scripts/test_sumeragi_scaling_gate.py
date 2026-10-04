@@ -559,6 +559,20 @@ def test_account_lanes_split_the_workload_evenly():
     assert {gate.lane_of_account(index, 1) for index in range(8)} == {0}
 
 
+def test_generated_accounts_inherit_the_localnet_account_network_context():
+    client = (
+        'chain = "c"\nchain_discriminant = 1\n\n[transaction]\nnonce = false\n\n'
+        '[account]\nchain_discriminant = 753  # node default\nprivate_key = "secret"\n'
+        'public_key  = "ed0120AB"\n\n[basic_auth]\nweb_login = "w"\n'
+    )
+    assert gate.account_network_context(client) == "chain_discriminant = 753\n"
+    profiled = '[account]\nprofile = "taira"\nchain_discriminant = 369\n'
+    assert gate.account_network_context(profiled) == 'profile = "taira"\nchain_discriminant = 369\n'
+    for missing in ('chain_discriminant = 753\n[account]\npublic_key = "k"\n', ""):
+        with pytest.raises(gate.GateError):
+            gate.account_network_context(missing)
+
+
 # ---------------------------------------------------------------------------------------------
 # Verdict
 # ---------------------------------------------------------------------------------------------

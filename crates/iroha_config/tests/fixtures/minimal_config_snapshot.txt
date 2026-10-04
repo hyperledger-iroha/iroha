@@ -387,6 +387,12 @@ Root {
         receipt_signer: [REDACTED; 0 configured],
         query_max_inflight: 256,
         query_heavy_max_inflight: 64,
+        query_fanout_max_retained_bytes: Bytes(
+            512000000,
+        ),
+        query_fanout_max_working_set_bytes: Bytes(
+            48000000,
+        ),
         require_api_token: false,
         api_tokens: [REDACTED; 0 Torii API token(s)],
         peer_telemetry_urls: [REDACTED; 0 configured],
@@ -403,10 +409,10 @@ Root {
             ],
             tokens: [REDACTED; 0 configured],
             rate_per_minute: Some(
-                30,
+                60000000,
             ),
             burst: Some(
-                10,
+                10000000,
             ),
             ephemeral_state_capacity: 4096,
             credential_capacity: 64,
@@ -462,18 +468,18 @@ Root {
             allow_tool_prefixes: [],
             deny_tool_prefixes: [],
             rate_per_minute: Some(
-                600000,
+                60000000,
             ),
             burst: Some(
-                100000,
+                10000000,
             ),
         },
         proof_api: ProofApi {
             rate_per_minute: Some(
-                600000,
+                60000000,
             ),
             burst: Some(
-                100000,
+                10000000,
             ),
             max_body_bytes: Bytes(
                 8388608,
@@ -500,7 +506,7 @@ Root {
             policy_id: Name(
                 "cbuae_aed_sbp_pkr",
             ),
-            requests_per_minute: 30,
+            requests_per_minute: 60000000,
             request_timeout: 4s,
             routes: [],
         },
@@ -613,10 +619,10 @@ Root {
         push: Push {
             enabled: false,
             rate_per_minute: Some(
-                600000,
+                60000000,
             ),
             burst: Some(
-                100000,
+                10000000,
             ),
             connect_timeout: 5s,
             request_timeout: 10s,
@@ -1324,8 +1330,8 @@ Root {
         chunk_size_bytes: 65536,
         publish_allow_accounts: [],
         limits: ContentLimits {
-            max_requests_per_second: 10000,
-            request_burst: 100000,
+            max_requests_per_second: 1000000,
+            request_burst: 10000000,
             max_egress_bytes_per_second: 268435456,
             egress_burst_bytes: 1073741824,
         },

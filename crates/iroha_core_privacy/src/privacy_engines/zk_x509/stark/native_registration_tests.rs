@@ -444,6 +444,125 @@ fn native_log19_der_proof_roundtrips_and_rejects_cross_layer_mutations() {
         .expect("native log19 DER proof");
     let prove_elapsed = prove_started.elapsed();
     let digest: [u8; 32] = Sha256::digest(&proof).into();
+    eprintln!(
+        "native log19 DER pre-ceiling bytes={}, sha256={}, prove={prove_elapsed:?}",
+        proof.len(),
+        hex::encode(digest)
+    );
+    {
+        let (_, inner) =
+            decode_der_segmented_proof_envelope_v1(&proof).expect("DER size diagnostic envelope");
+        let layout = SegmentLayoutV1::for_der(shape.active_rows()).expect("DER size layout");
+        let layout =
+            AggregateProofLayoutV1::for_segments(&[layout]).expect("DER size aggregate layout");
+        let decoded = decode_zk_x509_segmented_stark_proof_v1(inner, &layout)
+            .expect("DER size diagnostic aggregate");
+        let hash_bytes = crate::privacy_engines::privacy_outer_hash::PRIVACY_OUTER_DIGEST_BYTES_V1;
+        let sum = |values: Vec<usize>| values.into_iter().sum::<usize>();
+        let roots = (decoded.trace_groups.len() * 2
+            + decoded.composition_roots.len()
+            + decoded.fri_mask_roots.len()
+            + sum(decoded
+                .fri_lanes
+                .iter()
+                .map(|lane| lane.roots.len())
+                .collect()))
+            * hash_bytes;
+        let terminal = sum(decoded
+            .fri_lanes
+            .iter()
+            .map(|lane| lane.terminal_values.len())
+            .collect())
+            * 32;
+        let mut query_trace = 0;
+        let mut query_composition = 0;
+        let mut query_mask = 0;
+        let mut query_fri = 0;
+        for query in &decoded.queries {
+            for group in &query.trace_groups {
+                query_trace += (group.base_current.len()
+                    + group.base_next.len()
+                    + group.aux_current.len()
+                    + group.aux_next.len())
+                    * 8;
+            }
+            query_composition += query.composition_values.iter().map(Vec::len).sum::<usize>() * 32;
+            query_mask += query.fri_mask_values.len() * 32;
+            query_fri += query
+                .fri_lanes
+                .iter()
+                .map(|lane| lane.rounds.len())
+                .sum::<usize>()
+                * 64;
+        }
+        let base_frontier = decoded
+            .trace_groups
+            .iter()
+            .map(|group| group.base_frontier.len())
+            .sum::<usize>()
+            * hash_bytes;
+        let aux_frontier = decoded
+            .trace_groups
+            .iter()
+            .map(|group| group.aux_frontier.len())
+            .sum::<usize>()
+            * hash_bytes;
+        let composition_frontier = decoded
+            .composition_frontiers
+            .iter()
+            .map(Vec::len)
+            .sum::<usize>()
+            * hash_bytes;
+        let mask_frontier = decoded
+            .fri_mask_frontiers
+            .iter()
+            .map(Vec::len)
+            .sum::<usize>()
+            * hash_bytes;
+        let fri_round_bytes = decoded
+            .fri_lanes
+            .iter()
+            .map(|lane| {
+                lane.round_frontiers
+                    .iter()
+                    .map(|frontier| frontier.len() * hash_bytes)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let fri_frontier = fri_round_bytes.iter().flatten().sum::<usize>();
+        let deep = aggregate::exact_deep_opening_bytes_v1(
+            layout.parameters_v1(),
+            &layout.as_shared().unwrap(),
+        )
+        .expect("DER exact DEEP size");
+        let sections = [
+            ("outer_envelope", proof.len() - inner.len()),
+            ("aggregate_header", 8),
+            ("roots", roots),
+            ("terminal_values", terminal),
+            ("grinding_nonce", 8),
+            ("query_indices", decoded.queries.len() * 4),
+            ("query_trace_values", query_trace),
+            ("query_composition_values", query_composition),
+            ("query_mask_values", query_mask),
+            ("query_fri_pairs", query_fri),
+            ("deep_values", deep),
+            ("base_frontier", base_frontier),
+            ("aux_frontier", aux_frontier),
+            ("composition_frontier", composition_frontier),
+            ("mask_frontier", mask_frontier),
+            ("fri_frontiers", fri_frontier),
+        ];
+        let occupied = sections.iter().map(|(_, bytes)| *bytes).sum::<usize>();
+        let padding = proof
+            .len()
+            .checked_sub(occupied)
+            .expect("DER canonical padding size");
+        eprintln!(
+            "native log19 DER size sections={sections:?}, fri_round_bytes={fri_round_bytes:?}, occupied={occupied}, canonical_padding={padding}, encoded={}",
+            proof.len()
+        );
+    }
     assert!(
         proof.len() <= 1_800_000,
         "reference log19 DER proof exceeded its 1.8 MB release ceiling"
@@ -528,7 +647,28 @@ fn native_log19_der_proof_roundtrips_and_rejects_cross_layer_mutations() {
     changed.queries[0].trace_groups[0].base_current[0] ^= 1;
     mutations.push(changed);
     changed = aggregate.clone();
-    changed.queries[0].trace_groups[0].aux_next[0] ^= 1;
+    changed.queries[0].trace_groups[0].aux_current[0] ^= 1;
+    mutations.push(changed);
+    for field in 0..4 {
+        changed = aggregate.clone();
+        changed.deep.trace_groups[0].base_current[0][field] ^= 1;
+        mutations.push(changed);
+        changed = aggregate.clone();
+        changed.deep.trace_groups[0].base_next[0][field] ^= 1;
+        mutations.push(changed);
+        changed = aggregate.clone();
+        changed.deep.trace_groups[0].aux_current[0][field] ^= 1;
+        mutations.push(changed);
+        changed = aggregate.clone();
+        changed.deep.trace_groups[0].aux_next[0][field] ^= 1;
+        mutations.push(changed);
+    }
+    // The sole wire refuses a reintroduced full-row next field at encoding.
+    let mut superfluous = aggregate.clone();
+    superfluous.queries[0].trace_groups[0].aux_next.push(1);
+    assert!(encode_zk_x509_segmented_stark_proof_v1(&superfluous, &aggregate_layout).is_err());
+    changed = aggregate.clone();
+    changed.deep.composition_values[0][0][0] ^= 1;
     mutations.push(changed);
     changed = aggregate.clone();
     changed.queries[0].composition_values[0][0][0] ^= 1;
@@ -558,12 +698,12 @@ fn native_log19_der_proof_roundtrips_and_rejects_cross_layer_mutations() {
     // deliberately rotated protocol pins or the unchanged performance limits.
     assert_eq!(
         proof.len(),
-        1_752_584,
+        1_527_952,
         "update only when the canonical log19 DER proof wire intentionally changes"
     );
     assert_eq!(
         hex::encode(digest),
-        "954900070c22680460d07bc35969e1e71c8cf9f7e089d7b3abf97406b3e3df15",
+        "10871b6e5f5e171a3b1bec80d3ed18f224b3ebdaa4fcf4ba4c2be80a2a5e456c",
         "update only when the canonical log19 DER proof protocol intentionally changes"
     );
     assert!(
@@ -1613,4 +1753,179 @@ fn retained_registration_plans_are_exact_for_all_49_and_reject_degree_domain_att
         ));
     }
     assert_eq!(group_counts, [11, 5, 1, 10, 1, 21]);
+}
+
+#[test]
+fn standalone_der_current_only_wire_fits_unchanged_ceiling() {
+    let layout = der_aggregate_layout();
+    let expected = aggregate::AggregateProofLayoutV1::new_with_trace_layout_v1(
+        layout.parameters_v1(),
+        layout
+            .trace_groups
+            .iter()
+            .copied()
+            .map(TraceGroupLayoutV1::as_shared)
+            .collect(),
+        aggregate::AggregateTraceLayoutV1::GroupedCurrent,
+    )
+    .unwrap();
+    assert_eq!(layout.as_shared().unwrap(), expected);
+    let maximum =
+        maximum_encoded_aggregate_proof_bytes_v1(&layout).unwrap() + DER_PROOF_ENVELOPE_BYTES_V1;
+    assert_eq!(maximum, 1_527_952);
+    assert!(maximum <= 1_800_000, "canonical DER bytes={maximum}");
+    assert_eq!(AGGREGATE_PARAMETERS_V1.query_count, 136);
+    assert_eq!(layout.trace_groups[0].base_width, 76);
+    assert_eq!(layout.trace_groups[0].aux_width, 196);
+}
+
+#[test]
+fn standalone_der_oods_checks_all_terminal_claims_against_independent_lagrange_formula() {
+    let _guard = proof_guard();
+    let layout = der_aggregate_layout();
+    let segment = der_layout();
+    let point = E::canonical([17, 19, 23, 29]).unwrap();
+    let native_root = goldilocks_primitive_root_v1(segment.trace_log2).unwrap();
+    let last = native_root.inv().unwrap();
+    // L_last(z)/(z^n-1) = last / (n * (z-last)), independently of
+    // the verifier's batch inverses, prefix tables, and complete AIR evaluator.
+    let last_quotient = E::from_base(last.mul(F(segment.trace_size() as u64).inv().unwrap()))
+        .mul(point.sub(E::from_base(last)).inv().unwrap());
+    let challenges = ZkX509DerStarkChallengesV1 {
+        tuple: core::array::from_fn(|lane| {
+            core::array::from_fn(|slot| F((100 + lane * 20 + slot) as u64))
+        }),
+        byte_lookup: [F(701), F(709), F(719), F(727)],
+    };
+    let claims = ZkX509DerStarkTerminalClaimsV1 {
+        input_byte: [F::ONE; 4],
+        node: [F::ONE; 4],
+    };
+    let zero = E::ZERO.coefficients().map(F::value);
+    let mut deep = aggregate::AggregateDeepProofV1 {
+        trace_groups: vec![aggregate::AggregateDeepTraceGroupOpeningV1 {
+            base_current: vec![zero; ZK_X509_DER_STARK_BASE_WIDTH_V1],
+            base_next: vec![zero; ZK_X509_DER_STARK_BASE_WIDTH_V1],
+            aux_current: vec![zero; ZK_X509_DER_STARK_AUX_WIDTH_V1],
+            aux_next: vec![zero; ZK_X509_DER_STARK_AUX_WIDTH_V1],
+        }],
+        composition_values: vec![vec![zero; COMPOSITION_DEGREE_CHUNKS]; SECURITY_LANES],
+    };
+    for column in super::super::der_stark::zk_x509_der_terminal_columns_v1() {
+        deep.trace_groups[0].aux_current[column] = E::from_base(F(2)).coefficients().map(F::value);
+    }
+    deep.composition_values[0][0] = last_quotient.coefficients().map(F::value);
+    for endpoint in 0..8 {
+        // A basis alpha isolates each final residue; production alphas remain
+        // transcript-derived. This is a relation unit test, not a proof forgery.
+        let mut alphas = vec![vec![E::ZERO; segment.constraint_count]; SECURITY_LANES];
+        alphas[0][segment.constraint_count - 8 + endpoint] = E::ONE;
+        main_aggregate::verify_standalone_der_oods_v1(
+            &layout,
+            &deep,
+            point,
+            challenges,
+            ZkX509DerStarkPublicTerminalsV1,
+            claims,
+            &alphas,
+        )
+        .expect("each independently derived terminal quotient must match");
+        let mut wrong_claims = claims;
+        if endpoint < 4 {
+            wrong_claims.input_byte[endpoint] = F(2);
+        } else {
+            wrong_claims.node[endpoint - 4] = F(2);
+        }
+        assert!(
+            main_aggregate::verify_standalone_der_oods_v1(
+                &layout,
+                &deep,
+                point,
+                challenges,
+                ZkX509DerStarkPublicTerminalsV1,
+                wrong_claims,
+                &alphas,
+            )
+            .is_err(),
+            "terminal endpoint {endpoint}"
+        );
+    }
+    let mut alphas = vec![vec![E::ZERO; segment.constraint_count]; SECURITY_LANES];
+    alphas[0][0] = E::ONE;
+    // Residue zero is the independent activity-bit equation a(a-1).
+    deep.trace_groups[0].base_current[64] = E::from_base(F(2)).coefficients().map(F::value);
+    deep.composition_values[0][0] = E::from_base(F(2))
+        .mul(
+            point
+                .pow(segment.trace_size() as u128)
+                .sub(E::ONE)
+                .inv()
+                .unwrap(),
+        )
+        .coefficients()
+        .map(F::value);
+    main_aggregate::verify_standalone_der_oods_v1(
+        &layout,
+        &deep,
+        point,
+        challenges,
+        ZkX509DerStarkPublicTerminalsV1,
+        claims,
+        &alphas,
+    )
+    .expect("complete local AIR must also be checked");
+    for chunk in 0..COMPOSITION_DEGREE_CHUNKS {
+        let mut changed = deep.clone();
+        let value = E::canonical(changed.composition_values[0][chunk])
+            .unwrap()
+            .add(E::ONE);
+        changed.composition_values[0][chunk] = value.coefficients().map(F::value);
+        assert!(
+            main_aggregate::verify_standalone_der_oods_v1(
+                &layout,
+                &changed,
+                point,
+                challenges,
+                ZkX509DerStarkPublicTerminalsV1,
+                claims,
+                &alphas,
+            )
+            .is_err(),
+            "composition chunk {chunk}"
+        );
+    }
+    // Zero alphas and zero chunks make the quotient equality identically
+    // true; these cases must fail the public admission predicate itself.
+    let zero_alphas = vec![vec![E::ZERO; segment.constraint_count]; SECURITY_LANES];
+    let mut zero_composition = deep.clone();
+    for lane in &mut zero_composition.composition_values {
+        lane.fill(zero);
+    }
+    for malformed in [E::ONE, E::ZERO, E::from_base(F(GOLDILOCKS_GENERATOR_V1))] {
+        assert!(
+            main_aggregate::verify_standalone_der_oods_v1(
+                &layout,
+                &zero_composition,
+                malformed,
+                challenges,
+                ZkX509DerStarkPublicTerminalsV1,
+                claims,
+                &zero_alphas,
+            )
+            .is_err()
+        );
+    }
+    alphas[0].pop();
+    assert!(
+        main_aggregate::verify_standalone_der_oods_v1(
+            &layout,
+            &deep,
+            point,
+            challenges,
+            ZkX509DerStarkPublicTerminalsV1,
+            claims,
+            &alphas,
+        )
+        .is_err()
+    );
 }

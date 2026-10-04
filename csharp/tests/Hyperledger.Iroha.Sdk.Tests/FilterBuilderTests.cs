@@ -143,6 +143,81 @@ public sealed class FilterBuilderTests
     }
 
     [Fact]
+    public void FieldPathsMustNotContainBackticks()
+    {
+        const string Message = "invalid field `metadata.a`b`: field paths must not contain backticks";
+        Assert.StartsWith(Message, Assert.Throws<ArgumentException>(() => new FieldPath("metadata.a`b")).Message, StringComparison.Ordinal);
+        Assert.Throws<ArgumentException>(() => Filter.Field("metadata.a`b"));
+        Assert.Throws<ArgumentException>(() => SortKey.Ascending("a`b"));
+        foreach (var json in new[]
+        {
+            """{"op":"eq","args":["metadata.a`b",1]}""",
+            """{"op":"in","args":["metadata.a`b",[1]]}""",
+            """{"op":"exists","args":["metadata.a`b"]}""",
+        })
+        {
+            var error = Assert.Throws<ListQueryException>(() => Filter.FromJson(json));
+            Assert.Equal(Message, error.Reason);
+            Assert.Equal("invalid_filter", error.Code);
+        }
+
+        var select = Assert.Throws<ListQueryException>(() => ListQuery.FromJson("""{"select":["a`b"]}"""));
+        Assert.Equal("invalid_select", select.Code);
+        // A backtick in the text form always opens or closes a quoted segment.
+        Assert.Equal(Filter.Field("a-b.c").Eq(1), Filter.Parse("`a-b`.c = 1"));
+    }
+
+    [Fact]
+    public void StringLiteralsKeepDelAndC1ButRejectC0Controls()
+    {
+        const string Raw = "x\u007fy\u0080\u0085\u009fz";
+        var parsed = Filter.Parse($"a = \"{Raw}\"");
+        Assert.Equal(Filter.Field("a").Eq(Raw), parsed);
+        Assert.Equal($"a = \"{Raw}\"", parsed.ToString());
+        Assert.Equal(parsed, Filter.Parse($"a = '{Raw}'"));
+        foreach (var control in new[] { "\u0000", "\u0001", "\t", "\n", "\u001f" })
+        {
+            var error = Assert.Throws<FilterSyntaxException>(() => Filter.Parse($"a = \"x{control}y\""));
+            Assert.Equal("control characters must be escaped inside string literals", error.SyntaxMessage);
+            Assert.Equal(7, error.Column);
+        }
+
+        // Only `"`, `\` and U+0000..U+001F are escaped, with JSON's short forms.
+        const string Value = "q\"b\\s\b\f\n\r\t\u0000\u001f\u007f\u0085/'";
+        var rendered = Filter.Field("a").Eq(Value).ToString();
+        Assert.Equal("a = \"q\\\"b\\\\s\\b\\f\\n\\r\\t\\u0000\\u001f\u007f\u0085/'\"", rendered);
+        Assert.Equal(Filter.Field("a").Eq(Value), Filter.Parse(rendered));
+    }
+
+    [Fact]
+    public void SingleOperandConnectivesDecodeToTheirOperand()
+    {
+        foreach (var op in new[] { "and", "or" })
+        {
+            var decoded = Filter.FromJson($$"""{"op":"{{op}}","args":[{"op":"eq","args":["a",1]}]}""");
+            Assert.Equal(Filter.Field("a").Eq(1), decoded);
+            Assert.Equal("a = 1", decoded.ToString());
+        }
+
+        var nested = Filter.FromJson(
+            """{"op":"and","args":[{"op":"or","args":[{"op":"and","args":[{"op":"eq","args":["a",1]},{"op":"is_null","args":["b"]}]}]},{"op":"or","args":[{"op":"eq","args":["a",1]}]}]}""");
+        Assert.Equal("(a = 1 and b is null) and a = 1", nested.ToString());
+        var and = Assert.IsType<AndFilter>(nested);
+        Assert.Equal(2, and.Operands.Length);
+        Assert.IsType<AndFilter>(and.Operands[0]);
+
+        // The collapsed connective still counts toward the depth limit.
+        var deep = """{"op":"eq","args":["a",1]}""";
+        for (var level = 0; level <= Filter.MaxDepth; level++)
+        {
+            deep = $$"""{"op":"or","args":[{{deep}}]}""";
+        }
+
+        var tooDeep = Assert.Throws<ListQueryException>(() => Filter.FromJson(deep));
+        Assert.Equal("filter exceeds the nesting depth limit of 10", tooDeep.Reason);
+    }
+
+    [Fact]
     public void StructuralLimitsAreEnforced()
     {
         Filter deep = Filter.Field("a").Eq(1);

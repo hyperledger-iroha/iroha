@@ -4,7 +4,10 @@ use super::*;
 use crate::managed::service_authority::ProviderPurpose;
 
 impl ManagedServiceBootstrap {
-    fn validate_dependency_inventory(&self, progress: &ServiceBootstrapProgress) -> Result<()> {
+    pub(super) fn validate_dependency_inventory(
+        &self,
+        progress: &ServiceBootstrapProgress,
+    ) -> Result<()> {
         let original = read_original(
             &self.authority.directory.open_child("initial")?,
             &self.authority,
@@ -15,7 +18,7 @@ impl ManagedServiceBootstrap {
 
     // None means no parent exists: all child purposes must be absent or exactly empty.
     // Presence only refuses publication; this never establishes native completion.
-    fn validate_child_inventory(
+    pub(super) fn validate_child_inventory(
         &self,
         policies: &GeneratedServicePolicies,
         progress: Option<&ServiceBootstrapProgress>,

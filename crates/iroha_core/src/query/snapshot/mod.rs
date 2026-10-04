@@ -716,7 +716,7 @@ mod tests {
             fetch_size: FetchSize::new(nonzero_ext::nonzero!(1_u64).into()),
         };
         let payload = norito::codec::Encode::encode(
-            &iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
+            &iroha_data_model::query::asset::prelude::FindAssetDefinitions,
         );
         let erased = iroha_data_model::query::ErasedIterQuery::<AssetDefinition>::new(
             iroha_data_model::query::dsl::CompoundPredicate::PASS,
@@ -792,7 +792,7 @@ mod tests {
             fetch_size: FetchSize::new(nonzero_ext::nonzero!(1_u64).into()),
         };
         let payload = norito::codec::Encode::encode(
-            &iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
+            &iroha_data_model::query::asset::prelude::FindAssetDefinitions,
         );
         let erased = iroha_data_model::query::ErasedIterQuery::<AssetDefinition>::new(
             iroha_data_model::query::dsl::CompoundPredicate::PASS,

@@ -10,13 +10,19 @@
 # torii_request_timeout_ms = 30_000
 
 [basic_auth]
-# login =
+# web_login =
 # password =
 
 [account]
-# domain =
+## Network context is required and has no default. Select a public network profile
+## (`taira` or `minamoto`), or set the I105 chain discriminant of any other network.
+## When both are set they must agree.
+# profile = "taira"
+# chain_discriminant = 753
 # public_key =
+## Configure exactly one private-key source.
 # private_key =
+# private_key_file =
 
 [transaction]
 # time_to_live_ms = 100_000

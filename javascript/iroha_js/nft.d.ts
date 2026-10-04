@@ -54,7 +54,7 @@ export function buildBrowserOwnedNftTransferPayloadV1(input: Omit<BrowserExecuta
   destinationAccountId: string;
 }): Uint8Array;
 export function normalizeNftInventoryItemV1(value: unknown, networkPrefix: number): NftInventoryItemV1;
-export function readOwnedNftInventoryV1(client: Pick<ToriiBrowserClient, "listExplorerNfts">, options: {
+export function readOwnedNftInventoryV1(client: Pick<ToriiBrowserClient, "explorerNfts">, options: {
   ownerAccountId: string;
   networkPrefix: number;
   domain?: string;

@@ -1139,11 +1139,30 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     }
     tools.push(iroha_account_transactions_tool());
     tools.push(iroha_account_history_tool());
+    tools.push(iroha_account_history_query_tool());
+    tools.push(iroha_contracts_activity_query_tool());
+    tools.push(iroha_contracts_events_query_tool());
+    tools.push(iroha_explorer_accounts_query_tool());
+    tools.push(iroha_explorer_domains_query_tool());
+    tools.push(iroha_explorer_asset_definitions_query_tool());
+    tools.push(iroha_explorer_assets_query_tool());
+    tools.push(iroha_explorer_nfts_query_tool());
+    tools.push(iroha_explorer_rwas_query_tool());
+    tools.push(iroha_explorer_blocks_query_tool());
+    tools.push(iroha_explorer_transactions_query_tool());
+    tools.push(iroha_explorer_transactions_latest_query_tool());
+    tools.push(iroha_explorer_instructions_query_tool());
+    tools.push(iroha_explorer_instructions_latest_query_tool());
     tools.push(iroha_account_transactions_query_tool());
     tools.push(iroha_transactions_query_tool());
     tools.push(iroha_account_assets_tool());
     tools.push(iroha_account_assets_query_tool());
     tools.push(iroha_account_permissions_tool());
+    tools.push(iroha_account_permissions_query_tool());
+    tools.push(iroha_subscriptions_plans_query_tool());
+    tools.push(iroha_subscriptions_query_tool());
+    tools.push(iroha_uaid_manifests_tool());
+    tools.push(iroha_uaid_manifests_query_tool());
     tools.push(iroha_account_portfolio_tool());
     tools.push(iroha_domains_list_tool());
     tools.push(iroha_domains_get_tool());
@@ -1554,6 +1573,9 @@ fn is_audited_manual_read_tool_name(name: &str) -> bool {
             | "iroha.gov.ballots.zk_v1.ballot_proof"
             | "iroha.gov.ballots.plain"
             | "iroha.transactions.query"
+            | "iroha.accounts.history.query"
+            | "iroha.contracts.activity.query"
+            | "iroha.contracts.events.query"
             | "iroha.queries.submit"
     )
 }
@@ -2649,6 +2671,15 @@ async fn handle_named_tool_call(
         "iroha.accounts.transactions.query" => {
             dispatch_iroha_account_transactions_query(&app, inbound_headers, arguments).await
         }
+        "iroha.accounts.history.query" => {
+            dispatch_iroha_account_history_query(&app, inbound_headers, arguments).await
+        }
+        "iroha.contracts.activity.query" => {
+            dispatch_iroha_contracts_activity_query(&app, inbound_headers, arguments).await
+        }
+        "iroha.contracts.events.query" => {
+            dispatch_iroha_contracts_events_query(&app, inbound_headers, arguments).await
+        }
         "iroha.transactions.query" => {
             dispatch_iroha_transactions_query(&app, inbound_headers, arguments).await
         }
@@ -2657,6 +2688,21 @@ async fn handle_named_tool_call(
         }
         "iroha.accounts.assets.query" => {
             dispatch_iroha_account_assets_query(&app, inbound_headers, arguments).await
+        }
+        "iroha.accounts.permissions.query" => {
+            dispatch_iroha_account_permissions_query(&app, inbound_headers, arguments).await
+        }
+        "iroha.subscriptions.plans.query" => {
+            dispatch_iroha_subscriptions_plans_query(&app, inbound_headers, arguments).await
+        }
+        "iroha.subscriptions.query" => {
+            dispatch_iroha_subscriptions_query(&app, inbound_headers, arguments).await
+        }
+        "iroha.space_directory.manifests" => {
+            dispatch_iroha_uaid_manifests(&app, inbound_headers, arguments).await
+        }
+        "iroha.space_directory.manifests.query" => {
+            dispatch_iroha_uaid_manifests_query(&app, inbound_headers, arguments).await
         }
         "iroha.accounts.permissions" => {
             dispatch_iroha_account_permissions(&app, inbound_headers, arguments).await
@@ -4952,13 +4998,13 @@ declare_mcp_dispatch_wrappers! {
     }
     list_query {
         dispatch_iroha_contracts_state_get => "/v1/contracts/state";
-        dispatch_iroha_subscriptions_plans_list => "/v1/subscriptions/plans";
-        dispatch_iroha_subscriptions_list => "/v1/subscriptions";
         dispatch_iroha_assets_list => "/v1/explorer/assets";
         dispatch_iroha_nfts_list => "/v1/explorer/nfts";
         dispatch_iroha_rwas_list => "/v1/explorer/rwas";
     }
     collection_get {
+        dispatch_iroha_subscriptions_list => "/v1/subscriptions";
+        dispatch_iroha_subscriptions_plans_list => "/v1/subscriptions/plans";
         dispatch_iroha_accounts_list => "/v1/accounts";
         dispatch_iroha_domains_list => "/v1/domains";
         dispatch_iroha_asset_definitions => "/v1/assets/definitions";
@@ -4966,12 +5012,16 @@ declare_mcp_dispatch_wrappers! {
         dispatch_iroha_rwas_chain_list => "/v1/rwas";
     }
     collection_post {
+        dispatch_iroha_subscriptions_plans_query => "/v1/subscriptions/plans/query";
+        dispatch_iroha_subscriptions_query => "/v1/subscriptions/query";
         dispatch_iroha_accounts_query => "/v1/accounts/query";
         dispatch_iroha_domains_query => "/v1/domains/query";
         dispatch_iroha_asset_definitions_query => "/v1/assets/definitions/query";
         dispatch_iroha_nfts_query => "/v1/nfts/query";
         dispatch_iroha_rwas_query => "/v1/rwas/query";
         dispatch_iroha_transactions_query => "/v1/transactions/query";
+        dispatch_iroha_contracts_activity_query => "/v1/contracts/activity/query";
+        dispatch_iroha_contracts_events_query => "/v1/contracts/events/query";
     }
     path_get {
         dispatch_iroha_bridge_finality_proof => (
@@ -5024,11 +5074,6 @@ declare_mcp_dispatch_wrappers! {
             |arguments| extract_account_id_argument(arguments),
             "/v1/explorer/accounts/{account_id}/qr"
         );
-        dispatch_iroha_account_permissions => (
-            "account_id",
-            |arguments| extract_account_id_argument(arguments),
-            "/v1/accounts/{account_id}/permissions"
-        );
         dispatch_iroha_domains_get => (
             "domain_id",
             |arguments| extract_domain_id_argument(arguments),
@@ -5066,11 +5111,6 @@ declare_mcp_dispatch_wrappers! {
         );
     }
     path_query_get {
-        dispatch_iroha_account_history => (
-            "account_id",
-            |arguments| extract_account_id_argument(arguments),
-            "/v1/accounts/{account_id}/history"
-        );
         dispatch_iroha_account_portfolio => (
             "uaid",
             |arguments| extract_uaid_argument(arguments),
@@ -5078,6 +5118,21 @@ declare_mcp_dispatch_wrappers! {
         );
     }
     path_collection_get {
+        dispatch_iroha_account_history => (
+            "account_id",
+            |arguments| extract_account_id_argument(arguments),
+            "/v1/accounts/{account_id}/history"
+        );
+
+        dispatch_iroha_account_permissions => (
+            "account_id",
+            |arguments| extract_account_id_argument(arguments),
+            "/v1/accounts/{account_id}/permissions"
+        );
+        dispatch_iroha_uaid_manifests => (
+            "uaid", |arguments| extract_uaid_argument(arguments),
+            "/v1/space-directory/uaids/{uaid}/manifests"
+        );
         dispatch_iroha_account_transactions => (
             "account_id",
             |arguments| extract_account_id_argument(arguments),
@@ -5095,6 +5150,20 @@ declare_mcp_dispatch_wrappers! {
         );
     }
     path_collection_post {
+        dispatch_iroha_account_history_query => (
+            "account_id",
+            |arguments| extract_account_id_argument(arguments),
+            "/v1/accounts/{account_id}/history/query"
+        );
+
+        dispatch_iroha_account_permissions_query => (
+            "account_id", |arguments| extract_account_id_argument(arguments),
+            "/v1/accounts/{account_id}/permissions/query"
+        );
+        dispatch_iroha_uaid_manifests_query => (
+            "uaid", |arguments| extract_uaid_argument(arguments),
+            "/v1/space-directory/uaids/{uaid}/manifests/query"
+        );
         dispatch_iroha_account_transactions_query => (
             "account_id",
             |arguments| extract_account_id_argument(arguments),
@@ -8355,7 +8424,7 @@ fn parse_node_url(raw: &str) -> Result<url::Url, String> {
     Ok(url)
 }
 const MANUAL_STATIC_TOOL_ASSET_VERSION: u64 = 1;
-const MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 60;
+const MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 79;
 // Includes the fully typed account-onboarding receipt schemas in the embedded catalog.
 const MANUAL_STATIC_TOOL_ASSET_MAX_BYTES: usize = 128 * 1024;
 const MANUAL_STATIC_TOOL_HISTORICAL_RUST_PREIMAGE_SHA256: &str =
@@ -8872,10 +8941,29 @@ manual_tool! {
     iroha_accounts_onboard_submit_tool => "iroha.accounts.onboard.submit";
     iroha_account_transactions_tool => "iroha.accounts.transactions";
     iroha_account_history_tool => "iroha.accounts.history";
+    iroha_account_history_query_tool => "iroha.accounts.history.query";
+    iroha_contracts_activity_query_tool => "iroha.contracts.activity.query";
+    iroha_contracts_events_query_tool => "iroha.contracts.events.query";
+    iroha_explorer_accounts_query_tool => "iroha.explorer.accounts.query";
+    iroha_explorer_domains_query_tool => "iroha.explorer.domains.query";
+    iroha_explorer_asset_definitions_query_tool => "iroha.explorer.asset_definitions.query";
+    iroha_explorer_assets_query_tool => "iroha.explorer.assets.query";
+    iroha_explorer_nfts_query_tool => "iroha.explorer.nfts.query";
+    iroha_explorer_rwas_query_tool => "iroha.explorer.rwas.query";
+    iroha_explorer_blocks_query_tool => "iroha.explorer.blocks.query";
+    iroha_explorer_transactions_query_tool => "iroha.explorer.transactions.query";
+    iroha_explorer_transactions_latest_query_tool => "iroha.explorer.transactions.latest.query";
+    iroha_explorer_instructions_query_tool => "iroha.explorer.instructions.query";
+    iroha_explorer_instructions_latest_query_tool => "iroha.explorer.instructions.latest.query";
     iroha_account_transactions_query_tool => "iroha.accounts.transactions.query";
     iroha_account_assets_tool => "iroha.accounts.assets";
     iroha_account_assets_query_tool => "iroha.accounts.assets.query";
     iroha_account_permissions_tool => "iroha.accounts.permissions";
+    iroha_account_permissions_query_tool => "iroha.accounts.permissions.query";
+    iroha_subscriptions_plans_query_tool => "iroha.subscriptions.plans.query";
+    iroha_subscriptions_query_tool => "iroha.subscriptions.query";
+    iroha_uaid_manifests_tool => "iroha.space_directory.manifests";
+    iroha_uaid_manifests_query_tool => "iroha.space_directory.manifests.query";
     iroha_account_portfolio_tool => "iroha.accounts.portfolio";
     iroha_domains_list_tool => "iroha.domains.list";
     iroha_domains_get_tool => "iroha.domains.get";

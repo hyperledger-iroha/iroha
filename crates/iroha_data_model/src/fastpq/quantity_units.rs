@@ -48,8 +48,10 @@ impl FastpqQuantityUnits {
             return None;
         }
         let mut limbs = [0_u32; FASTPQ_QUANTITY_UNIT_LIMBS];
-        for (index, byte) in quantity.mantissa().to_twos_bytes().into_iter().enumerate() {
-            *limbs.get_mut(index / 4)? |= u32::from(byte) << ((index % 4) * 8);
+        // Quantity's private invariant guarantees a nonnegative mantissa.
+        // Borrow magnitude digits directly; no encoded-byte Vec is materialized.
+        for (index, digit) in quantity.mantissa().magnitude_u32_digits().enumerate() {
+            *limbs.get_mut(index)? = digit;
         }
         for _ in quantity.scale()..scale {
             let mut carry = 0_u64;
@@ -66,6 +68,7 @@ impl FastpqQuantityUnits {
 
     /// Validate a fixed limb array at an explicit decimal scale.
     /// Returns `None` if the scale or exact decimal lies outside the ledger domain.
+    /// Domain validation uses bounded stack limbs without constructing a bigint.
     /// Canonical trailing-zero removal happens only when interpreting the decimal;
     /// the selected witness scale and integer limbs are retained exactly.
     #[must_use]
@@ -73,9 +76,7 @@ impl FastpqQuantityUnits {
         if scale > MAX_DECIMAL_SCALE {
             return None;
         }
-        let value = Self { limbs, scale };
-        value.to_quantity()?;
-        Some(value)
+        canonical_magnitude_fits(limbs, scale).then_some(Self { limbs, scale })
     }
 
     /// Exact common decimal scale used by these integer units.
@@ -102,6 +103,8 @@ impl FastpqQuantityUnits {
     }
 
     /// Reconstruct the canonical ledger quantity represented by these exact units.
+    /// This output conversion allocates owned bigint backing; normalization,
+    /// limb validation and checked unit arithmetic do not call it.
     /// Returns `None` if a private/internal value violates the construction invariant.
     #[must_use]
     pub fn to_quantity(&self) -> Option<Quantity> {
@@ -171,6 +174,40 @@ impl FastpqQuantityUnits {
         }
         Self::from_limbs(limbs, self.scale)
     }
+}
+
+// Numeric::try_new strips fractional trailing zeroes before testing the signed
+// 512-bit mantissa bound. For these unsigned units that means exactly < 2^511.
+// At most 28 divisions of 19 limbs are needed; scale-zero zero remains accepted.
+fn canonical_magnitude_fits(mut limbs: [u32; FASTPQ_QUANTITY_UNIT_LIMBS], scale: u32) -> bool {
+    for _ in 0..scale {
+        let (quotient, remainder) = divide_by_ten(limbs);
+        if remainder != 0 {
+            break;
+        }
+        limbs = quotient;
+    }
+    limbs[16..].iter().all(|limb| *limb == 0) && limbs[15] < (1_u32 << 31)
+}
+
+// Each numerator is at most 9 * 2^32 + (2^32 - 1), hence fits u64.
+// The quotient digit is below 2^32 and the remainder is below ten.
+fn divide_by_ten(
+    limbs: [u32; FASTPQ_QUANTITY_UNIT_LIMBS],
+) -> ([u32; FASTPQ_QUANTITY_UNIT_LIMBS], u32) {
+    let mut quotient = [0; FASTPQ_QUANTITY_UNIT_LIMBS];
+    let mut remainder = 0_u64;
+    for (output, digit) in quotient.iter_mut().zip(limbs).rev() {
+        let numerator = (remainder << 32) | u64::from(digit);
+        let (low, carry) = split_wide_limb(numerator / 10);
+        debug_assert_eq!(carry, 0);
+        *output = low;
+        remainder = numerator % 10;
+    }
+    (
+        quotient,
+        u32::try_from(remainder).expect("decimal remainder is below ten"),
+    )
 }
 
 // A wide multiplication result contributes its low word to this limb and

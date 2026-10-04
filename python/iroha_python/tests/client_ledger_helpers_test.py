@@ -3801,9 +3801,10 @@ def test_event_stream_filters_reject_object_and_array_literals_before_request() 
     assert session.calls == []
 
 
-def test_account_has_permission_uses_typed_permission_listing() -> None:
+def test_account_has_permission_follows_effective_permission_collection() -> None:
     session = FakeSession(
         [
+            response(200, {"items": [], "next_cursor": "more"}),
             response(
                 200,
                 {
@@ -3813,7 +3814,7 @@ def test_account_has_permission_uses_typed_permission_listing() -> None:
                             "payload": {"asset_definition_id": "ds#wonderland.is"},
                         }
                     ],
-                    "total": 1,
+                    "next_cursor": None,
                 },
             )
         ]
@@ -3829,7 +3830,7 @@ def test_account_has_permission_uses_typed_permission_listing() -> None:
 
 def test_account_permission_listing_accepts_configured_chain_discriminant() -> None:
     taira_account = account_address(5, 0x0171)
-    session = FakeSession([response(200, {"items": [], "total": 0})])
+    session = FakeSession([response(200, {"items": [], "next_cursor": None})])
     client = ToriiClient(
         "http://torii.example",
         session=session,
@@ -3837,14 +3838,14 @@ def test_account_permission_listing_accepts_configured_chain_discriminant() -> N
         chain_discriminant=0x0171,
     )
 
-    assert client.list_account_permissions(taira_account) == {"items": [], "total": 0}
+    assert client.accounts.permissions(taira_account).list().items == ()
     assert session.calls == [
         {
-            "method": "GET",
-            "path": f"/v1/accounts/{quote(taira_account, safe='')}/permissions",
+            "method": "POST",
+            "path": f"/v1/accounts/{quote(taira_account, safe='')}/permissions/query",
             "params": None,
-            "data": None,
-            "headers": {"Accept": "application/json"},
+            "data": b"{}",
+            "headers": {"Accept": "application/json", "Content-Type": "application/json"},
             "allow_redirects": False,
         }
     ]
@@ -3861,7 +3862,7 @@ def test_dataspace_visible_account_reads_use_configured_canonical_signer() -> No
             response(200, {"id": account}),
             _empty_page(),
             _empty_page(),
-            response(200, {"items": [], "total": 0}),
+            response(200, {"items": [], "next_cursor": None}),
         ]
     )
     client = authenticated_query_client(session)
@@ -3869,7 +3870,7 @@ def test_dataspace_visible_account_reads_use_configured_canonical_signer() -> No
     assert client.find_account(account) == {"id": account}
     assert client.accounts.assets(account).list(filter=F.asset_alias == "ds#boi.is2").items == ()
     assert client.accounts.transactions(account).list().items == ()
-    assert client.list_account_permissions(account) == {"items": [], "total": 0}
+    assert client.accounts.permissions(account).list().items == ()
 
     assert len(session.calls) == 4
     assert json.loads(session.calls[1]["data"]) == {
@@ -3895,7 +3896,7 @@ def test_dataspace_visible_account_reads_remain_anonymous_without_signer() -> No
             response(200, {"id": account}),
             _empty_page(),
             _empty_page(),
-            response(200, {"items": [], "total": 0}),
+            response(200, {"items": [], "next_cursor": None}),
         ]
     )
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
@@ -3903,7 +3904,7 @@ def test_dataspace_visible_account_reads_remain_anonymous_without_signer() -> No
     assert client.find_account(account) == {"id": account}
     assert client.accounts.assets(account).list().items == ()
     assert client.accounts.transactions(account).list().items == ()
-    assert client.list_account_permissions(account) == {"items": [], "total": 0}
+    assert client.accounts.permissions(account).list().items == ()
 
     assert len(session.calls) == 4
     for call in session.calls:
@@ -3928,7 +3929,7 @@ def test_account_permission_listing_rejects_foreign_chain_discriminant() -> None
         ValueError,
         match="account_id must be a canonical I105 account id or on-chain account alias",
     ):
-        client.list_account_permissions(taira_account)
+        client.accounts.permissions(taira_account).list()
     assert session.calls == []
 
 

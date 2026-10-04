@@ -1444,11 +1444,25 @@ fn tool_registry_honors_universal_kagemusha_mcp_projection() {
     cfg.expose_operator_routes = true;
     let tools = build_tool_specs(&cfg);
     assert!(
-        !route_catalog::kagemusha::AUTHORITY_STATE
+        route_catalog::kagemusha::AUTHORITY_STATE
             .projections()
             .mcp(),
-        "complete challenged World exports must remain outside the MCP projection"
+        "the challenged data-only World publication has the catalog's MCP projection"
     );
+    for route in [
+        route_catalog::kagemusha::RESOURCE_NAMES_STATE,
+        route_catalog::kagemusha::AUTHORITY_ORIGINALS,
+        route_catalog::kagemusha::ORDINARY_WALLET_CURRENT,
+        route_catalog::kagemusha::ORDINARY_MINT_ISSUER_PURPOSE,
+        route_catalog::kagemusha::ORDINARY_MINT_FINALIZED,
+        route_catalog::kagemusha::ORDINARY_MINT_CREDIT,
+    ] {
+        assert!(
+            !route.projections().mcp(),
+            "scoped native read authority must remain outside MCP: {}",
+            route.path()
+        );
+    }
     for route in route_catalog::kagemusha::ROUTES {
         let method = match route.method() {
             CatalogHttpMethod::Any => {

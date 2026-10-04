@@ -919,3 +919,162 @@ def test_main_selects_same_host_upstream_by_exact_validator_slug(tmp_path: Path)
         assert error.code == 2
     else:
         raise AssertionError("accepted removed ambiguous hostname selector")
+
+
+def test_scoped_validator_listeners_bind_explicit_interfaces_and_preserve_paths(tmp_path: Path) -> None:
+    roster = tmp_path / "roster.toml"
+    _shared_host_roster(roster)
+    validators = MODULE.load_edge_validators(roster)
+    rendered = MODULE.render_validator_listeners_conf(
+        validators,
+        listen_addresses=["203.0.113.10", "2001:db8::10"],
+        tls_certificate="/opt/homebrew/var/letsencrypt/config/live/test.example.org/fullchain.pem",
+        tls_certificate_key="/opt/homebrew/var/letsencrypt/config/live/test.example.org/privkey.pem",
+    )
+    assert rendered.count("server_name test.example.org;") == 4
+    assert "listen 443" not in rendered and "listen 80" not in rendered
+    assert "listen [::]:" not in rendered and "listen 8443" not in rendered
+    assert "ssl_dhparam" not in rendered and "include " not in rendered
+    assert "taira_public_edge" not in rendered and "explorer" not in rendered
+    assert "rewrite " not in rendered
+    assert "$proxy_add_x_forwarded_for" not in rendered
+    for index, port in enumerate(range(8443, 8447), start=1):
+        block = rendered.split(f"listen 203.0.113.10:{port} ssl;", 1)[1].split("\n}", 1)[0]
+        assert f"listen [2001:db8::10]:{port} ssl;" in block
+        assert f"server 127.0.0.1:{18079 + index};" in rendered
+        assert f"proxy_pass http://taira_validator_{index}_upstream;" in block
+        assert f"proxy_pass http://taira_validator_{index}_upstream/" not in block
+        assert "proxy_set_header Host $host;" in block
+        assert "proxy_set_header X-Forwarded-For $remote_addr;" in block
+        assert "location = /v1/mcp {" in block
+        assert "location = /v1/connect/ws {" in block
+
+
+def test_scoped_listener_rejects_ambiguous_bindings_and_tls_directive_injection(tmp_path: Path) -> None:
+    roster = tmp_path / "roster.toml"
+    _shared_host_roster(roster)
+    validators = MODULE.load_edge_validators(roster)
+    canonical = dict(
+        listen_addresses=["203.0.113.10"],
+        tls_certificate="/var/tls/fullchain.pem",
+        tls_certificate_key="/var/tls/privkey.pem",
+    )
+    for addresses in (
+        [], ["0.0.0.0"], ["::"], ["224.0.0.1"], ["ff02::1"],
+        ["203.000.113.10"], ["example.org"], ["203.0.113.10:8443"],
+        ["fe80::1%en0"], ["2001:0db8::10"], ["::ffff:cb00:710a"],
+        ["203.0.113.10", "203.0.113.10"],
+    ):
+        try:
+            MODULE.render_validator_listeners_conf(validators, **{**canonical, "listen_addresses": addresses})
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"accepted ambiguous listen bindings {addresses!r}")
+    for field, value in (
+        ("tls_certificate", "/var/tls/../fullchain.pem"),
+        ("tls_certificate", "/var//tls/fullchain.pem"),
+        ("tls_certificate", "/var/tls/fullchain.pem;include /tmp/bad"),
+        ("tls_certificate_key", "/var/tls/key\nlisten 443 ssl;"),
+        ("tls_certificate_key", "relative.key"),
+        ("tls_certificate_key", "/var/tls/fullchain.pem"),
+        ("client_max_body_size", "1g;include /tmp/bad"),
+    ):
+        try:
+            MODULE.render_validator_listeners_conf(validators, **{**canonical, field: value})
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"accepted unsafe scoped argument {field}={value!r}")
+
+
+def test_main_scoped_listeners_require_complete_explicit_inputs_before_output(tmp_path: Path) -> None:
+    roster = tmp_path / "roster.toml"
+    output = tmp_path / "peers.conf"
+    _shared_host_roster(roster)
+    base = ["--roster", str(roster), "--output", str(output)]
+    scoped = ["--validator-listeners-only", "--validator-listen-address", "203.0.113.10",
+              "--tls-certificate", "/var/tls/fullchain.pem", "--tls-certificate-key", "/var/tls/privkey.pem"]
+    for flags in (scoped[:-2], scoped[1:], scoped + ["--public-upstream-validator", "taira-validator-1"]):
+        try:
+            MODULE.main(base + flags)
+        except SystemExit as error:
+            assert error.code == 2
+        else:
+            raise AssertionError("accepted incomplete or mixed route scope")
+        assert not output.exists()
+    assert MODULE.main(base + scoped) == 0
+    rendered = output.read_text(encoding="utf-8")
+    assert "listen 203.0.113.10:8443 ssl;" in rendered
+    assert "listen 443 ssl;" not in rendered
+
+
+def test_private_backends_restrict_one_edge_and_preserve_sanitized_caller_headers(tmp_path: Path) -> None:
+    roster = tmp_path / "roster.toml"
+    _shared_host_roster(roster)
+    validators = MODULE.load_edge_validators(roster)
+    rendered = MODULE.render_private_backend_listeners_conf(
+        validators, listen_address="192.168.64.3", port_base=18080,
+        trusted_edge_address="192.168.64.1",
+    )
+    assert "ssl" not in rendered and "rewrite " not in rendered
+    assert rendered.count("allow 192.168.64.1;") == 4
+    assert rendered.count("deny all;") == 4
+    for index in range(4):
+        block = rendered.split(f"listen 192.168.64.3:{18080 + index};", 1)[1].split("\n}", 1)[0]
+        assert f"proxy_pass http://taira_validator_{index + 1}_upstream;" in block
+        assert f"proxy_pass http://taira_validator_{index + 1}_upstream/" not in block
+        assert "proxy_set_header X-Real-IP $http_x_real_ip;" in block
+        assert "proxy_set_header X-Forwarded-For $http_x_forwarded_for;" in block
+        assert "proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;" in block
+        assert 'if ($http_x_forwarded_for != $http_x_real_ip) { return 400; }' in block
+        assert 'if ($http_x_forwarded_proto != "https") { return 400; }' in block
+        assert 'if ($http_x_real_ip = "") { return 400; }' in block
+
+
+def test_private_backends_refuse_public_bindings_port_overflow_and_nonloopback_upstreams(tmp_path: Path) -> None:
+    from dataclasses import replace
+    roster = tmp_path / "roster.toml"
+    _shared_host_roster(roster)
+    validators = MODULE.load_edge_validators(roster)
+    canonical = dict(listen_address="192.168.64.3", port_base=18080, trusted_edge_address="192.168.64.1")
+    for field, value in (
+        ("listen_address", "208.83.1.62"), ("listen_address", "127.0.0.1"),
+        ("listen_address", "0.0.0.0"), ("listen_address", "192.168.064.3"),
+        ("trusted_edge_address", "192.168.64.3"), ("trusted_edge_address", "localhost"),
+        ("trusted_edge_address", "::1"), ("trusted_edge_address", "192.168.64.1;allow all"),
+        ("port_base", 1023), ("port_base", 65533), ("port_base", True),
+    ):
+        try:
+            MODULE.render_private_backend_listeners_conf(validators, **{**canonical, field: value})
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"accepted unsafe backend argument {field}={value!r}")
+    drifted = [replace(validators[0], upstream_address="192.168.64.3:10080"), *validators[1:]]
+    try:
+        MODULE.render_private_backend_listeners_conf(drifted, **canonical)
+    except ValueError as error:
+        assert "exact loopback" in str(error)
+    else:
+        raise AssertionError("accepted a nonloopback private Torii backend")
+
+
+def test_main_private_backend_scope_is_complete_and_disjoint_before_output(tmp_path: Path) -> None:
+    roster = tmp_path / "roster.toml"
+    output = tmp_path / "private-backends.conf"
+    _shared_host_roster(roster)
+    base = ["--roster", str(roster), "--output", str(output)]
+    scoped = ["--private-backend-listeners-only", "--backend-listen-address", "192.168.64.3",
+              "--backend-port-base", "18080", "--backend-trusted-edge-address", "192.168.64.1"]
+    for flags in (scoped[:-2], scoped[1:], scoped + ["--validator-listeners-only"],
+                  scoped + ["--tls-certificate", "/var/tls/fullchain.pem"]):
+        try:
+            MODULE.main(base + flags)
+        except SystemExit as error:
+            assert error.code == 2
+        else:
+            raise AssertionError("accepted incomplete or mixed private backend scope")
+        assert not output.exists()
+    assert MODULE.main(base + scoped) == 0
+    assert "listen 192.168.64.3:18083;" in output.read_text(encoding="utf-8")

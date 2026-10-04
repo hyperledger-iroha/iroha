@@ -11,7 +11,8 @@
 //! decoding a description does not derive or authenticate its advertised roots.
 
 use super::{
-    FastpqPublicInputs, FastpqStateTransition, TransferDeltaTranscript, TransferTranscript,
+    FastpqExecutionEffectStatementV1, FastpqOrdinarySourceStatementLeafV1, FastpqPublicInputs,
+    FastpqStateTransition, TransferDeltaTranscript, TransferTranscript,
 };
 use crate::{
     account::AccountId,
@@ -255,9 +256,12 @@ pub struct FastpqAxtPreProofMirrorsV1 {
 pub struct FastpqOrdinaryCompactArtifactV1 {
     /// Advertised exact compact profile identifier.
     pub profile_id: FastpqCompactProfileIdV1,
-    /// Complete original public transfer statement.
-    pub statement: FastpqPublicTransferStatementV1,
-    /// Advertised canonical ordinary bundle frame; this codec leaves it opaque.
+    /// Complete advertised D7 source leaf; the verifier supplies its independent
+    /// authenticated expectation and checks exact equality before preparation.
+    pub source: FastpqOrdinarySourceStatementLeafV1,
+    /// Complete ordered typed quantity effects and canonical public transitions.
+    pub statement: FastpqExecutionEffectStatementV1,
+    /// Advertised canonical ordinary effect bundle frame; this codec leaves it opaque.
     pub bundle_frame: Vec<u8>,
 }
 
@@ -313,7 +317,7 @@ pub enum FastpqProofKindV1 {
     /// Existing replay-based proof, whose commitment covers preprocessing rows.
     #[codec(index = 0)]
     LegacyReplay,
-    /// Ordinary compact transfer bundle, currently unqualified.
+    /// Ordinary compact complete-effect bundle, currently unqualified.
     #[codec(index = 1)]
     OrdinaryCompact,
     /// AXT compact transfer bundle, currently unqualified.
@@ -536,12 +540,21 @@ fn check_profile_and_bundle(
 mod tests {
     use super::*;
     use crate::{
-        fastpq::{FastpqOperationKind, TransferSmtWitness},
+        NetworkId,
+        asset::AssetBalanceScope,
+        fastpq::{
+            FastpqExecutionAssetV1, FastpqExecutionBalanceV1, FastpqExecutionEffectContextV1,
+            FastpqExecutionEffectKindV1, FastpqExecutionEffectV1, FastpqExecutionEffectsV1,
+            FastpqExecutionSupplyChangeV1, FastpqExecutionTransferV1, FastpqOperationKind,
+            FastpqSourceExecutionEntryV1, FastpqSourceExecutionKindV1, FastpqSourceRouteV1,
+            FastpqSourceStatementContextV1, TransferSmtWitness, execution_effects_digest_v1,
+        },
         nexus::{
-            AxtHandleIssuerContextV1, AxtHandleReplayKey, compute_remote_spend_claim_commitment_v1,
+            AxtAssetIncarnationV1, AxtHandleIssuerContextV1, AxtHandleReplayKey,
+            compute_remote_spend_claim_commitment_v1,
         },
     };
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::topology::LaneId;
     use iroha_primitives::numeric::Numeric;
@@ -596,35 +609,127 @@ mod tests {
         }
     }
 
-    fn ordinary() -> FastpqOrdinaryCompactArtifactV1 {
+    fn transfer_statement() -> FastpqPublicTransferStatementV1 {
         let public = FastpqPublicTransferTranscriptV1::from(&transcript());
+        FastpqPublicTransferStatementV1 {
+            public_inputs: FastpqPublicInputs {
+                dsid: [1; 16],
+                slot: 2,
+                old_root: [3; 32],
+                new_root: [4; 32],
+                perm_root: [5; 32],
+                tx_set_hash: [6; 32],
+            },
+            ordering_hash: [7; 32],
+            transitions: vec![FastpqStateTransition {
+                key: b"public balance key".to_vec(),
+                pre_value: vec![8],
+                post_value: vec![9],
+                operation: FastpqOperationKind::Transfer,
+            }],
+            transcripts: vec![public.clone(), public],
+        }
+    }
+
+    fn ordinary() -> FastpqOrdinaryCompactArtifactV1 {
+        // This transport fixture preserves untrusted full claims; only the backend
+        // checks complete arithmetic, transitions, source equality and proofs.
+        let transfer = transfer_statement();
+        let delta = &transfer.transcripts[0].deltas[0];
+        let asset = FastpqExecutionAssetV1 {
+            definition: delta.asset_definition.clone(),
+            incarnation: AxtAssetIncarnationV1::try_from_bytes(
+                Hash::new(b"artifact lifecycle").into(),
+            )
+            .unwrap(),
+        };
+        let balance = FastpqExecutionBalanceV1 {
+            asset: asset.clone(),
+            account: delta.from_account.clone(),
+            scope: AssetBalanceScope::Global,
+        };
+        let supply = FastpqExecutionSupplyChangeV1 {
+            balance: balance.clone(),
+            amount: quantity(5, 0),
+            balance_before: quantity(9, 0),
+            balance_after: quantity(14, 0),
+            supply_before: quantity(10, 0),
+            supply_after: quantity(15, 0),
+        };
+        let context = FastpqExecutionEffectContextV1 {
+            source: FastpqSourceStatementContextV1 {
+                network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+                    Hash::new(b"artifact network"),
+                )),
+                height: 9,
+            },
+            entry: FastpqSourceExecutionEntryV1 {
+                entry_hash: Hash::new(b"artifact original entry"),
+                execution_kind: FastpqSourceExecutionKindV1::ExecutionCall,
+                route: FastpqSourceRouteV1::Unrouted,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+            },
+        };
+        let kinds = [
+            FastpqExecutionEffectKindV1::Transfer(FastpqExecutionTransferV1 {
+                source: balance.clone(),
+                destination: FastpqExecutionBalanceV1 {
+                    account: delta.to_account.clone(),
+                    ..balance
+                },
+                amount: delta.amount.clone(),
+                source_before: delta.from_balance_before.clone(),
+                source_after: delta.from_balance_after.clone(),
+                destination_before: delta.to_balance_before.clone(),
+                destination_after: delta.to_balance_after.clone(),
+            }),
+            FastpqExecutionEffectKindV1::Mint(supply.clone()),
+            FastpqExecutionEffectKindV1::Burn(supply),
+            FastpqExecutionEffectKindV1::Retire(asset),
+        ];
+        let effects = FastpqExecutionEffectsV1 {
+            context,
+            effects: kinds
+                .into_iter()
+                .enumerate()
+                .map(|(ordinal, kind)| FastpqExecutionEffectV1 {
+                    ordinal: u32::try_from(ordinal).unwrap(),
+                    authority_digest: Hash::new(b"artifact authority"),
+                    authorization_context: Hash::new(b"artifact original authorization"),
+                    kind,
+                })
+                .collect(),
+        };
+        let source = FastpqOrdinarySourceStatementLeafV1 {
+            source: context.source,
+            statement_index: 2,
+            entry_index: 4,
+            effect_count: 4,
+            entry_hash: context.entry.entry_hash,
+            execution_kind: context.entry.execution_kind,
+            route: context.entry.route,
+            dataspace_id: context.entry.dataspace_id,
+            effects_digest: execution_effects_digest_v1(&effects).unwrap().into(),
+            slot: transfer.public_inputs.slot,
+            perm_root: transfer.public_inputs.perm_root,
+            tx_set_hash: transfer.public_inputs.tx_set_hash,
+        };
         FastpqOrdinaryCompactArtifactV1 {
             profile_id: PROFILE,
-            statement: FastpqPublicTransferStatementV1 {
-                public_inputs: FastpqPublicInputs {
-                    dsid: [1; 16],
-                    slot: 2,
-                    old_root: [3; 32],
-                    new_root: [4; 32],
-                    perm_root: [5; 32],
-                    tx_set_hash: [6; 32],
-                },
-                ordering_hash: [7; 32],
-                transitions: vec![FastpqStateTransition {
-                    key: b"public balance key".to_vec(),
-                    pre_value: vec![8],
-                    post_value: vec![9],
-                    operation: FastpqOperationKind::Transfer,
-                }],
-                transcripts: vec![public.clone(), public],
+            source,
+            statement: FastpqExecutionEffectStatementV1 {
+                public_inputs: transfer.public_inputs,
+                ordering_hash: transfer.ordering_hash,
+                transitions: transfer.transitions,
+                effects,
             },
             bundle_frame: norito::encode_canonical(&vec![0x31_u8; 4096]).unwrap(),
         }
     }
 
     fn axt() -> FastpqAxtCompactArtifactV1 {
-        let ordinary = ordinary();
-        let delta = &ordinary.statement.transcripts[0].deltas[0];
+        let statement = transfer_statement();
+        let delta = &statement.transcripts[0].deltas[0];
         let claim = AxtRemoteSpendClaimV1::new(
             AxtHandleReplayKey::from_parts(
                 DataSpaceId::new(7),
@@ -642,7 +747,7 @@ mod tests {
         );
         FastpqAxtCompactArtifactV1 {
             profile_id: PROFILE,
-            statement: ordinary.statement,
+            statement,
             binding: AxtFastpqBinding {
                 parameter: "fastpq-state-transition-stark-v1".into(),
                 source_dsid: 7,
@@ -680,7 +785,7 @@ mod tests {
                 expiry_slot: Some(456),
             },
             remote_spend_claims: Some(vec![claim]),
-            bundle_frame: ordinary.bundle_frame,
+            bundle_frame: norito::encode_canonical(&vec![0x31_u8; 4096]).unwrap(),
         }
     }
 
@@ -732,8 +837,8 @@ mod tests {
             FastpqOrdinaryCompactArtifactV1::decode_canonical_with_limits(&raw, PROFILE, limits())
                 .unwrap();
         assert_eq!(decoded, original);
-        assert_eq!(decoded.statement.transcripts.len(), 2);
-        assert_eq!(decoded.statement.transcripts[0].deltas.len(), 2);
+        assert_eq!(decoded.statement.effects.effects.len(), 4);
+        assert_eq!(decoded.source.effect_count, 4);
         assert_eq!(norito::core::effective_decode_flags(), Some(ambient));
         assert_eq!(norito::encode_canonical(&decoded).unwrap(), raw);
         for index in 0..7 {
@@ -757,9 +862,174 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_wire_preserves_full_source_effect_order_and_all_operation_kinds() {
+        let original = ordinary();
+        let raw = norito::encode_canonical(&original).unwrap();
+        for mutation in 0..24 {
+            let mut changed = original.clone();
+            match mutation {
+                0 => changed.source.source.height += 1,
+                1 => changed.source.statement_index += 1,
+                2 => changed.source.entry_index += 1,
+                3 => changed.source.effect_count += 1,
+                4 => changed.source.entry_hash = Hash::new(b"different source entry"),
+                5 => changed.source.execution_kind = FastpqSourceExecutionKindV1::ProtocolPurpose,
+                6 => changed.source.dataspace_id = DataSpaceId::new(8),
+                7 => changed.source.effects_digest[0] ^= 1,
+                8 => changed.source.slot += 1,
+                9 => changed.source.perm_root[0] ^= 1,
+                10 => changed.source.tx_set_hash[0] ^= 1,
+                11 => changed.statement.effects.context.source.height += 1,
+                12 => {
+                    changed.statement.effects.context.entry.entry_hash =
+                        Hash::new(b"different tape entry")
+                }
+                13 => {
+                    changed.statement.effects.effects[0].authority_digest =
+                        Hash::new(b"different authority")
+                }
+                14 => {
+                    changed.statement.effects.effects[0].authorization_context =
+                        Hash::new(b"different authorization")
+                }
+                15 => changed.statement.effects.effects.swap(0, 1),
+                16 => changed.statement.effects.effects[0].ordinal += 1,
+                17 => changed
+                    .statement
+                    .effects
+                    .effects
+                    .push(changed.statement.effects.effects[0].clone()),
+                18 => {
+                    changed.source.source.network_id = NetworkId::from_genesis_hash(
+                        HashOf::from_untyped_unchecked(Hash::new(b"different source network")),
+                    )
+                }
+                19 => {
+                    changed.source.route =
+                        super::super::FastpqSourceRouteV1::Lane(super::super::FastpqSourceLaneV1 {
+                            lane_id: LaneId::new(3),
+                            lane_incarnation: Hash::new(b"different source lane incarnation"),
+                        })
+                }
+                20 => {
+                    changed.statement.effects.context.source.network_id =
+                        NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+                            b"different tape network",
+                        )))
+                }
+                21 => changed.statement.effects.context.entry.dataspace_id = DataSpaceId::new(9),
+                22 => {
+                    let FastpqExecutionEffectKindV1::Transfer(value) =
+                        &mut changed.statement.effects.effects[0].kind
+                    else {
+                        unreachable!()
+                    };
+                    value.amount = quantity(124, 2);
+                }
+                23 => {
+                    let FastpqExecutionEffectKindV1::Retire(asset) =
+                        &mut changed.statement.effects.effects[3].kind
+                    else {
+                        unreachable!()
+                    };
+                    asset.incarnation = AxtAssetIncarnationV1::try_from_bytes(
+                        Hash::new(b"different lifecycle").into(),
+                    )
+                    .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let bytes = norito::encode_canonical(&changed).unwrap();
+            assert_ne!(bytes, raw, "mutation {mutation}");
+            assert_eq!(
+                FastpqOrdinaryCompactArtifactV1::decode_canonical_with_limits(
+                    &bytes,
+                    PROFILE,
+                    limits()
+                )
+                .unwrap(),
+                changed
+            );
+        }
+        assert!(matches!(
+            original.statement.effects.effects[0].kind,
+            FastpqExecutionEffectKindV1::Transfer(_)
+        ));
+        assert!(matches!(
+            original.statement.effects.effects[1].kind,
+            FastpqExecutionEffectKindV1::Mint(_)
+        ));
+        assert!(matches!(
+            original.statement.effects.effects[2].kind,
+            FastpqExecutionEffectKindV1::Burn(_)
+        ));
+        assert!(matches!(
+            original.statement.effects.effects[3].kind,
+            FastpqExecutionEffectKindV1::Retire(_)
+        ));
+    }
+
+    #[test]
+    fn retired_three_field_transfer_body_cannot_decode_as_complete_effect_artifact() {
+        // An adversarial historical body is test data, never an alternate decoder.
+        #[derive(NoritoSerialize, norito::NoritoSchema)]
+        #[norito_schema(
+            name = "test::RetiredOrdinaryTransferBody",
+            frame = "iroha_data_model::fastpq::FastpqOrdinaryCompactArtifactV1"
+        )]
+        struct RetiredBody {
+            profile_id: FastpqCompactProfileIdV1,
+            statement: FastpqPublicTransferStatementV1,
+            bundle_frame: Vec<u8>,
+        }
+        let retired = RetiredBody {
+            profile_id: PROFILE,
+            statement: transfer_statement(),
+            bundle_frame: ordinary().bundle_frame,
+        };
+        let raw = norito::encode_canonical(&retired).unwrap();
+        assert!(
+            FastpqOrdinaryCompactArtifactV1::decode_canonical_with_limits(&raw, PROFILE, limits())
+                .is_err()
+        );
+        // Even inserting an advertised source cannot relabel the transfer-only statement.
+        #[derive(NoritoSerialize, norito::NoritoSchema)]
+        #[norito_schema(
+            name = "test::RelabeledTransferBody",
+            frame = "iroha_data_model::fastpq::FastpqOrdinaryCompactArtifactV1"
+        )]
+        struct RelabeledBody {
+            profile_id: FastpqCompactProfileIdV1,
+            source: FastpqOrdinarySourceStatementLeafV1,
+            statement: FastpqPublicTransferStatementV1,
+            bundle_frame: Vec<u8>,
+        }
+        let relabeled = RelabeledBody {
+            profile_id: PROFILE,
+            source: ordinary().source,
+            statement: transfer_statement(),
+            bundle_frame: ordinary().bundle_frame,
+        };
+        assert!(
+            FastpqOrdinaryCompactArtifactV1::decode_canonical_with_limits(
+                &norito::encode_canonical(&relabeled).unwrap(),
+                PROFILE,
+                limits()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn axt_roundtrip_retains_every_preproof_field_and_absent_empty_distinctions() {
         let original = axt();
         let raw = norito::encode_canonical(&original).unwrap();
+        let decoded =
+            FastpqAxtCompactArtifactV1::decode_canonical_with_limits(&raw, PROFILE, limits())
+                .unwrap();
+        // Preserve the original transfer-fixture occurrence assertions on its retained AXT route.
+        assert_eq!(decoded.statement.transcripts.len(), 2);
+        assert_eq!(decoded.statement.transcripts[0].deltas.len(), 2);
         assert_eq!(
             FastpqAxtCompactArtifactV1::decode_canonical_with_limits(&raw, PROFILE, limits())
                 .unwrap(),
@@ -1039,7 +1309,7 @@ mod tests {
         let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         let (bare, flags) = norito::codec::encode_with_header_flags(&original);
         let mut offset = 0;
-        for _ in 0..2 {
+        for _ in 0..3 {
             let (length, prefix) =
                 norito::core::read_len_from_slice_with_flags(&bare[offset..], flags).unwrap();
             offset += prefix + length;

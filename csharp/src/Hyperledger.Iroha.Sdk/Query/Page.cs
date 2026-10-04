@@ -43,6 +43,7 @@ internal static class PageReader
 
     internal static Page<T> Read<T>(JsonElement root, CollectionRowReader<T> readRow, string context)
     {
+        if (root.ValueKind == JsonValueKind.Null) throw new JsonException($"{context} must not be null.");
         if (root.ValueKind != JsonValueKind.Object)
         {
             throw new JsonException($"{context} must be a JSON object.");
@@ -50,12 +51,14 @@ internal static class PageReader
 
         ImmutableArray<T>? items = null;
         string? nextCursor = null;
+        var hasCursor = false;
         ulong? total = null;
         foreach (var member in root.EnumerateObject())
         {
             switch (member.Name)
             {
                 case "items":
+                    if (member.Value.ValueKind == JsonValueKind.Null) throw new JsonException($"{context}.items must not be null.");
                     if (member.Value.ValueKind != JsonValueKind.Array)
                     {
                         throw new JsonException($"{context}.items must be an array.");
@@ -71,6 +74,7 @@ internal static class PageReader
                     items = builder.MoveToImmutable();
                     break;
                 case "next_cursor":
+                    hasCursor = true;
                     nextCursor = member.Value.ValueKind switch
                     {
                         JsonValueKind.Null => null,
@@ -81,13 +85,17 @@ internal static class PageReader
                 case "total":
                     total = member.Value.ValueKind switch
                     {
-                        JsonValueKind.Null => null,
                         JsonValueKind.Number when member.Value.TryGetUInt64(out var count) => count,
                         _ => throw new JsonException($"{context}.total must be a non-negative integer."),
                     };
                     break;
+                default:
+                    throw new JsonException($"{context} contains unknown or retired field `{member.Name}`.");
             }
         }
+        if (!hasCursor) throw new JsonException($"{context} must contain `next_cursor`.");
+        if (items is { } pageRows && total is { } pageTotal && pageTotal < (ulong)pageRows.Length)
+            throw new JsonException($"{context}.total cannot be smaller than this page.");
 
         return items is { } rows
             ? new Page<T>(rows, nextCursor, total)

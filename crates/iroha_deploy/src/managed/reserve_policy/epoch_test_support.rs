@@ -1,6 +1,6 @@
 //! Test-only generated selection using a real native cut, followed by the existing wallet/carrier owner.
 use super::*;
-use crate::managed::native_operation::test_support::native_fixture::NativeFixture;
+use crate::managed::native_operation::{Fees, test_support::native_fixture::NativeFixture};
 
 impl ManagedInitialReservePolicy {
     pub(in crate::managed) fn bootstrap_native_generated(

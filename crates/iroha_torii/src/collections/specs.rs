@@ -134,13 +134,15 @@ pub(crate) struct CollectionSpec {
     /// keyset positions are total.
     pub(crate) identity: &'static [&'static str],
     /// Rows come in history order (newest first) and cursors carry block
-    /// coordinates (`block_height`, `block_index`) instead of sort keys;
+    /// coordinates (`block_height`, `block_index`, optionally `movement_index`)
+    /// instead of sort keys; this is their count (zero for ordinary rows);
     /// `sort`, totals and aggregates would need a full history scan and are
     /// rejected.
-    pub(crate) positioned: bool,
-    /// Whether fan-out routes hold disjoint rows, so their totals add up.
-    /// Routes of other collections may return the same row.
-    pub(crate) disjoint_routes: bool,
+    pub(crate) positioned: usize,
+    /// Rows are stored by their `id` and can be streamed in canonical
+    /// identifier order from a cursor: the default order and `sort=id` /
+    /// `sort=-id` follow that order and seek instead of sorting.
+    pub(crate) ordered: bool,
 }
 
 impl CollectionSpec {
@@ -210,8 +212,8 @@ pub(crate) static DOMAINS: CollectionSpec = CollectionSpec {
     metadata: true,
     default_sort: &[("id", Order::Asc)],
     identity: &["id"],
-    positioned: false,
-    disjoint_routes: false,
+    positioned: 0,
+    ordered: true,
 };
 
 /// `/v1/accounts`
@@ -222,8 +224,8 @@ pub(crate) static ACCOUNTS: CollectionSpec = CollectionSpec {
     metadata: true,
     default_sort: &[("id", Order::Asc)],
     identity: &["id"],
-    positioned: false,
-    disjoint_routes: false,
+    positioned: 0,
+    ordered: true,
 };
 
 /// `/v1/assets/definitions`
@@ -246,8 +248,8 @@ pub(crate) static ASSET_DEFINITIONS: CollectionSpec = CollectionSpec {
     metadata: true,
     default_sort: &[("id", Order::Asc)],
     identity: &["id"],
-    positioned: false,
-    disjoint_routes: false,
+    positioned: 0,
+    ordered: true,
 };
 
 /// `/v1/nfts`
@@ -258,8 +260,8 @@ pub(crate) static NFTS: CollectionSpec = CollectionSpec {
     metadata: true,
     default_sort: &[("id", Order::Asc)],
     identity: &["id"],
-    positioned: false,
-    disjoint_routes: false,
+    positioned: 0,
+    ordered: true,
 };
 
 /// `/v1/rwas`
@@ -277,8 +279,8 @@ pub(crate) static RWAS: CollectionSpec = CollectionSpec {
     metadata: true,
     default_sort: &[("id", Order::Asc)],
     identity: &["id"],
-    positioned: false,
-    disjoint_routes: false,
+    positioned: 0,
+    ordered: true,
 };
 
 /// `/v1/accounts/{account_id}/assets`
@@ -296,8 +298,8 @@ pub(crate) static ACCOUNT_ASSETS: CollectionSpec = CollectionSpec {
     metadata: false,
     default_sort: &[("asset", Order::Asc), ("scope", Order::Asc)],
     identity: &["account_id", "asset", "scope"],
-    positioned: false,
-    disjoint_routes: true,
+    positioned: 0,
+    ordered: false,
 };
 
 /// `/v1/assets/{definition_id}/holders`
@@ -314,8 +316,8 @@ pub(crate) static ASSET_HOLDERS: CollectionSpec = CollectionSpec {
     metadata: false,
     default_sort: &[("account_id", Order::Asc), ("scope", Order::Asc)],
     identity: &["account_id", "asset", "scope"],
-    positioned: false,
-    disjoint_routes: true,
+    positioned: 0,
+    ordered: false,
 };
 
 /// Committed transaction rows, newest first.
@@ -340,8 +342,8 @@ pub(crate) static ACCOUNT_TRANSACTIONS: CollectionSpec = CollectionSpec {
     metadata: true,
     default_sort: &[],
     identity: &[],
-    positioned: true,
-    disjoint_routes: false,
+    positioned: 2,
+    ordered: false,
 };
 
 /// `/v1/transactions/query`
@@ -352,8 +354,8 @@ pub(crate) static TRANSACTIONS: CollectionSpec = CollectionSpec {
     metadata: true,
     default_sort: &[],
     identity: &[],
-    positioned: true,
-    disjoint_routes: false,
+    positioned: 2,
+    ordered: false,
 };
 
 /// `/v1/repo/agreements`
@@ -383,12 +385,179 @@ pub(crate) static REPO_AGREEMENTS: CollectionSpec = CollectionSpec {
     metadata: false,
     default_sort: &[("id", Order::Asc)],
     identity: &["id"],
-    positioned: false,
-    disjoint_routes: false,
+    positioned: 0,
+    ordered: true,
+};
+
+/// `/v1/accounts/{account_id}/permissions`: effective direct and role permissions.
+pub(crate) static ACCOUNT_PERMISSIONS: CollectionSpec = CollectionSpec {
+    id: "account_permissions",
+    tag: 11,
+    fields: &[text("name"), json("payload")],
+    metadata: false,
+    default_sort: &[("name", Order::Asc)],
+    identity: &["name", "payload"],
+    positioned: 0,
+    ordered: false,
+};
+
+/// `/v1/subscriptions/plans`
+pub(crate) static SUBSCRIPTION_PLANS: CollectionSpec = CollectionSpec {
+    id: "subscription_plans",
+    tag: 12,
+    fields: &[
+        text("id"),
+        account("provider"),
+        json("billing"),
+        json("pricing"),
+    ],
+    metadata: false,
+    default_sort: &[("id", Order::Asc)],
+    identity: &["id"],
+    positioned: 0,
+    ordered: true,
+};
+
+/// `/v1/subscriptions`
+pub(crate) static SUBSCRIPTIONS: CollectionSpec = CollectionSpec {
+    id: "subscriptions",
+    tag: 13,
+    fields: &[
+        text("id"),
+        account("owned_by"),
+        text("plan_id"),
+        account("provider"),
+        account("subscriber"),
+        text("status"),
+        number("current_period_start_ms"),
+        number("current_period_end_ms"),
+        number("next_charge_ms"),
+        boolean("cancel_at_period_end"),
+        number("cancel_at_ms"),
+        number("failure_count"),
+        json("usage_accumulated"),
+        text("billing_trigger_id"),
+        json("invoice"),
+        json("plan"),
+    ],
+    metadata: false,
+    default_sort: &[("id", Order::Asc)],
+    identity: &["id"],
+    positioned: 0,
+    ordered: true,
+};
+
+/// `/v1/space-directory/uaids/{uaid}/manifests`
+pub(crate) static UAID_MANIFESTS: CollectionSpec = CollectionSpec {
+    id: "uaid_manifests",
+    tag: 14,
+    fields: &[
+        number("dataspace_id"),
+        text("dataspace_alias"),
+        json("manifest"),
+        text("manifest_hash"),
+        text("status"),
+        json("lifecycle"),
+        text_list("accounts"),
+    ],
+    metadata: false,
+    default_sort: &[("dataspace_id", Order::Asc)],
+    identity: &["dataspace_id"],
+    positioned: 0,
+    ordered: false,
+};
+
+/// Account movements within committed transactions, in descending chain order.
+pub(crate) static ACCOUNT_HISTORY: CollectionSpec = CollectionSpec {
+    id: "account_history",
+    tag: 15,
+    fields: &[
+        text("id"),
+        text("source"),
+        text("type"),
+        number("timestamp_ms"),
+        text("status"),
+        boolean("result_ok"),
+        text("direction"),
+        account("account_id"),
+        account("counterparty_account_id"),
+        text("asset_id"),
+        text("asset_definition_id"),
+        number("amount"),
+        text("tx_hash"),
+        number("block_height"),
+        number("block_index"),
+        number("movement_index"),
+        text("operation_id"),
+        number("expires_at_ms"),
+        number("finalized_at_ms"),
+        text("requesting_fi_id"),
+    ],
+    metadata: false,
+    default_sort: &[],
+    identity: &["block_height", "block_index", "movement_index"],
+    positioned: 3,
+    ordered: false,
+};
+
+/// `/v1/contracts/activity`: newest-first committed contract calls.
+pub(crate) static CONTRACT_ACTIVITY: CollectionSpec = CollectionSpec {
+    id: "contract_activity",
+    tag: 16,
+    fields: &[
+        number("block_height"),
+        number("block_index"),
+        account("authority"),
+        number("timestamp_ms"),
+        text("entrypoint_hash"),
+        boolean("result_ok"),
+        text("contract_address"),
+        text("contract_alias"),
+        text("contract_entrypoint"),
+        json("contract_payload"),
+        json("fee_payment"),
+    ],
+    metadata: false,
+    default_sort: &[],
+    identity: &[],
+    positioned: 2,
+    ordered: false,
+};
+
+/// `/v1/contracts/events`: newest-first committed contract events.
+pub(crate) static CONTRACT_EVENTS: CollectionSpec = CollectionSpec {
+    id: "contract_events",
+    tag: 17,
+    fields: &[
+        number("block_height"),
+        number("block_index"),
+        text("event_id"),
+        number("schema_version"),
+        text("provenance"),
+        account("authority"),
+        number("timestamp_ms"),
+        text("tx_hash_hex"),
+        text("block_hash_hex"),
+        boolean("result_ok"),
+        text("contract_address"),
+        text("contract_alias"),
+        text("module"),
+        text("event_kind"),
+        text_list("participants"),
+        text_list("asset_ids"),
+        json("numeric_fields"),
+        json("payload"),
+        json("fee_payment"),
+    ],
+    metadata: false,
+    default_sort: &[],
+    identity: &[],
+    positioned: 2,
+    ordered: false,
 };
 
 /// Every collection, in cursor-tag order.
-pub(crate) const ALL: [&CollectionSpec; 10] = [
+pub(crate) const ALL: [&CollectionSpec; 17] = [
     &DOMAINS,
     &ACCOUNTS,
     &ASSET_DEFINITIONS,
@@ -399,6 +568,13 @@ pub(crate) const ALL: [&CollectionSpec; 10] = [
     &ACCOUNT_TRANSACTIONS,
     &REPO_AGREEMENTS,
     &TRANSACTIONS,
+    &ACCOUNT_PERMISSIONS,
+    &SUBSCRIPTION_PLANS,
+    &SUBSCRIPTIONS,
+    &UAID_MANIFESTS,
+    &ACCOUNT_HISTORY,
+    &CONTRACT_ACTIVITY,
+    &CONTRACT_EVENTS,
 ];
 
 #[cfg(test)]
@@ -416,8 +592,17 @@ mod tests {
                 "{} is out of tag order",
                 spec.id
             );
-            assert_eq!(spec.positioned, spec.default_sort.is_empty(), "{}", spec.id);
-            if spec.positioned {
+            assert_eq!(
+                spec.positioned > 0,
+                spec.default_sort.is_empty(),
+                "{}",
+                spec.id
+            );
+            if spec.ordered {
+                assert_eq!(spec.identity, &["id"], "{}", spec.id);
+                assert_eq!(spec.default_sort, &[("id", Order::Asc)], "{}", spec.id);
+            }
+            if spec.positioned > 0 {
                 for field in ["block_height", "block_index"] {
                     let field = spec
                         .field(field)

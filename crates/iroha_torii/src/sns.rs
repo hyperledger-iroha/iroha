@@ -56,7 +56,7 @@ impl From<CoreSnsError> for SnsError {
 }
 impl IntoResponse for SnsError {
     fn into_response(self) -> Response {
-        let (status, message) = match self {
+        let (status, code, message) = match self {
             Self::RegistrationNotFound(body) => {
                 let envelope = ErrorEnvelope::new(
                     SNS_REGISTRATION_NOT_FOUND_CODE,
@@ -68,13 +68,20 @@ impl IntoResponse for SnsError {
                 });
                 return (StatusCode::NOT_FOUND, JsonBody(envelope)).into_response();
             }
-            Self::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
-            Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
-            Self::Conflict(msg) => (StatusCode::CONFLICT, msg),
-            Self::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            Self::NotFound(msg) => (StatusCode::NOT_FOUND, "sns_resource_not_found", msg),
+            Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, "sns_request_invalid", msg),
+            Self::Conflict(msg) => (StatusCode::CONFLICT, "sns_state_conflict", msg),
+            Self::Internal(message) => {
+                iroha_logger::error!(%message, "SNS state read failed");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_server_error",
+                    "Torii could not complete the request.".to_owned(),
+                )
+            }
             Self::Access(error) => return error.into_response(),
         };
-        (status, message).into_response()
+        (status, JsonBody(ErrorEnvelope::new(code, message))).into_response()
     }
 }
 fn current_ledger_time_ms_from_latest_block(latest_block_ms: u64) -> u64 {
@@ -287,8 +294,7 @@ pub async fn handle_get_name(
         });
         let now_ms = current_ledger_time_ms_from_latest_block(latest_block_ms);
         let selector =
-            selector_for_namespace_literal(namespace, &literal, &view.nexus.dataspace_catalog)
-                .map_err(SnsError::from)?;
+            selector_for_namespace_literal(namespace, &literal).map_err(SnsError::from)?;
         let cache_key = SnsNameRecordCacheKey::from_selector(&selector);
         if let Some(cached) = cache.get(&cache_key, block_height, block_hash.as_deref(), now_ms) {
             iroha_logger::debug!(
@@ -440,6 +446,7 @@ mod tests {
                         async move { response }
                     }),
                 )
+                .layer(axum::middleware::from_fn(crate::capture_response_format))
                 .layer(axum::middleware::from_fn(
                     crate::enforce_typed_error_contract,
                 ))
@@ -501,6 +508,26 @@ mod tests {
             let envelope = through_contract(other.into_response(), accept).await;
             assert_ne!(envelope.code(), SNS_REGISTRATION_NOT_FOUND_CODE);
             assert!(envelope.details.is_none());
+
+            for (error, code) in [
+                (
+                    SnsError::BadRequest("invalid alias".to_owned()),
+                    "sns_request_invalid",
+                ),
+                (
+                    SnsError::Conflict("conflicting mapping".to_owned()),
+                    "sns_state_conflict",
+                ),
+                (
+                    SnsError::Internal("malformed record: private state diagnostic".to_owned()),
+                    "internal_server_error",
+                ),
+            ] {
+                let envelope = through_contract(error.into_response(), accept).await;
+                assert_eq!(envelope.code(), code);
+                assert!(envelope.details.is_none());
+                assert!(!envelope.message().contains("private state diagnostic"));
+            }
 
             let access = SnsError::Access(crate::Error::AppUnauthorized {
                 code: "sns_auth_required",

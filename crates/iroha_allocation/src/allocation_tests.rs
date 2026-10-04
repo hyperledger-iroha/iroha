@@ -149,7 +149,7 @@ fn peak_tracks_original_admissions_across_borrowers_and_limit_reload() {
 
 #[test]
 fn growing_original_limit_wakes_waiters_after_reload_scope() {
-    let budget = AllocationBudget::new(8 + 1 * ReleaseRegistration::allocation_layout().size());
+    let budget = AllocationBudget::new(8 + ReleaseRegistration::allocation_layout().size());
     let mut budget_registration_0 = registration(&budget);
     let held = budget.try_reserve_bytes(8).unwrap();
     let mut wait = capacity_wait(
@@ -174,7 +174,7 @@ fn growing_original_limit_wakes_waiters_after_reload_scope() {
     drop(extra);
     assert_eq!(
         budget.reserved_bytes(),
-        0 + 1 * ReleaseRegistration::allocation_layout().size()
+        ReleaseRegistration::allocation_layout().size()
     );
 }
 
@@ -248,7 +248,7 @@ fn component_partitions_use_original_full_pool_without_allocation_or_new_admissi
 
 #[test]
 fn refused_or_empty_partition_preserves_original_credits_and_release_observation() {
-    let budget = AllocationBudget::new(8 + 1 * ReleaseRegistration::allocation_layout().size());
+    let budget = AllocationBudget::new(8 + ReleaseRegistration::allocation_layout().size());
     let mut budget_registration_0 = registration(&budget);
     let other = AllocationBudget::new(8);
     let mut original = budget.try_reserve_bytes(8).unwrap();
@@ -270,7 +270,7 @@ fn refused_or_empty_partition_preserves_original_credits_and_release_observation
         assert_eq!(original.remaining_bytes(), 8);
         assert_eq!(
             budget.reserved_bytes(),
-            8 + 1 * ReleaseRegistration::allocation_layout().size()
+            8 + ReleaseRegistration::allocation_layout().size()
         );
         assert_eq!(wakes.0.load(SeqCst), 0);
     });
@@ -284,7 +284,7 @@ fn refused_or_empty_partition_preserves_original_credits_and_release_observation
     assert!(poll(&mut wait, &wakes).is_ready());
     assert_eq!(
         budget.reserved_bytes(),
-        0 + 1 * ReleaseRegistration::allocation_layout().size()
+        ReleaseRegistration::allocation_layout().size()
     );
 }
 
@@ -331,7 +331,7 @@ fn exact_pool_release_wakes_waiters_including_before_their_first_poll() {
     drop(owner);
     assert_eq!(
         budget.reserved_bytes(),
-        0 + 2 * ReleaseRegistration::allocation_layout().size()
+        2 * ReleaseRegistration::allocation_layout().size()
     );
     assert_eq!(wakes.0.load(SeqCst), 1);
     assert!(poll(&mut registered, &wakes).is_ready());
@@ -383,7 +383,7 @@ fn charge_keeps_original_pool_alive_after_budget_handle_is_dropped() {
 
 #[test]
 fn nested_original_pool_scopes_return_credits_immediately_and_coalesce_without_allocation() {
-    let budget = AllocationBudget::new(8 + 1 * ReleaseRegistration::allocation_layout().size());
+    let budget = AllocationBudget::new(8 + ReleaseRegistration::allocation_layout().size());
     let mut budget_registration_0 = registration(&budget);
     let same_pool = budget.clone();
     let owner = budget.try_reserve(layout(8)).unwrap();
@@ -402,7 +402,7 @@ fn nested_original_pool_scopes_return_credits_immediately_and_coalesce_without_a
                 drop(owner);
                 assert_eq!(
                     budget.reserved_bytes(),
-                    0 + 1 * ReleaseRegistration::allocation_layout().size()
+                    ReleaseRegistration::allocation_layout().size()
                 );
                 assert_eq!(wakes.0.load(SeqCst), 0);
             });
@@ -410,12 +410,12 @@ fn nested_original_pool_scopes_return_credits_immediately_and_coalesce_without_a
             let reused = budget.try_reserve(layout(8)).unwrap();
             assert_eq!(
                 budget.reserved_bytes(),
-                8 + 1 * ReleaseRegistration::allocation_layout().size()
+                8 + ReleaseRegistration::allocation_layout().size()
             );
             drop(reused);
             assert_eq!(
                 budget.reserved_bytes(),
-                0 + 1 * ReleaseRegistration::allocation_layout().size()
+                ReleaseRegistration::allocation_layout().size()
             );
             assert_eq!(wakes.0.load(SeqCst), 0);
         });
@@ -426,9 +426,9 @@ fn nested_original_pool_scopes_return_credits_immediately_and_coalesce_without_a
 
 #[test]
 fn nested_different_pool_scopes_flush_independently() {
-    let first = AllocationBudget::new(8 + 1 * ReleaseRegistration::allocation_layout().size());
+    let first = AllocationBudget::new(8 + ReleaseRegistration::allocation_layout().size());
     let mut first_registration_0 = registration(&first);
-    let second = AllocationBudget::new(8 + 1 * ReleaseRegistration::allocation_layout().size());
+    let second = AllocationBudget::new(8 + ReleaseRegistration::allocation_layout().size());
     let mut second_registration_0 = registration(&second);
     let first_owner = first.try_reserve(layout(8)).unwrap();
     let second_owner = second.try_reserve(layout(8)).unwrap();
@@ -452,11 +452,11 @@ fn nested_different_pool_scopes_flush_independently() {
             drop(second_owner);
             assert_eq!(
                 first.reserved_bytes(),
-                0 + 1 * ReleaseRegistration::allocation_layout().size()
+                ReleaseRegistration::allocation_layout().size()
             );
             assert_eq!(
                 second.reserved_bytes(),
-                0 + 1 * ReleaseRegistration::allocation_layout().size()
+                ReleaseRegistration::allocation_layout().size()
             );
             assert_eq!(first_wakes.0.load(SeqCst), 0);
             assert_eq!(second_wakes.0.load(SeqCst), 0);
@@ -471,7 +471,7 @@ fn nested_different_pool_scopes_flush_independently() {
 
 #[test]
 fn another_threads_refund_notifies_while_this_threads_scope_is_still_active() {
-    let budget = AllocationBudget::new(8 + 1 * ReleaseRegistration::allocation_layout().size());
+    let budget = AllocationBudget::new(8 + ReleaseRegistration::allocation_layout().size());
     let mut budget_registration_0 = registration(&budget);
     let local = budget.try_reserve(layout(4)).unwrap();
     let remote = budget.try_reserve(layout(4)).unwrap();
@@ -485,13 +485,13 @@ fn another_threads_refund_notifies_while_this_threads_scope_is_still_active() {
         drop(local);
         assert_eq!(
             budget.reserved_bytes(),
-            4 + 1 * ReleaseRegistration::allocation_layout().size()
+            4 + ReleaseRegistration::allocation_layout().size()
         );
         assert_eq!(wakes.0.load(SeqCst), 0);
         std::thread::spawn(move || drop(remote)).join().unwrap();
         assert_eq!(
             budget.reserved_bytes(),
-            0 + 1 * ReleaseRegistration::allocation_layout().size()
+            ReleaseRegistration::allocation_layout().size()
         );
         assert_eq!(wakes.0.load(SeqCst), 1);
         assert!(poll(&mut wait, &wakes).is_ready());
@@ -543,7 +543,7 @@ fn scope_unwind_notifies_after_its_physical_writer_has_unlocked() {
                 drop(owner);
                 assert_eq!(
                     budget.reserved_bytes(),
-                    0 + 2 * ReleaseRegistration::allocation_layout().size()
+                    2 * ReleaseRegistration::allocation_layout().size()
                 );
                 assert_eq!(wake.released.load(SeqCst), 0);
                 panic!("original operation failed while its writer was held");
@@ -572,7 +572,7 @@ fn scope_unwind_notifies_after_its_physical_writer_has_unlocked() {
 
 #[test]
 fn caught_inner_unwind_remains_deferred_until_the_original_outer_scope_exits() {
-    let budget = AllocationBudget::new(8 + 1 * ReleaseRegistration::allocation_layout().size());
+    let budget = AllocationBudget::new(8 + ReleaseRegistration::allocation_layout().size());
     let mut budget_registration_0 = registration(&budget);
     let owner = budget.try_reserve(layout(8)).unwrap();
     let mut wait = capacity_wait(
@@ -593,7 +593,7 @@ fn caught_inner_unwind_remains_deferred_until_the_original_outer_scope_exits() {
         );
         assert_eq!(
             budget.reserved_bytes(),
-            0 + 1 * ReleaseRegistration::allocation_layout().size()
+            ReleaseRegistration::allocation_layout().size()
         );
         assert_eq!(wakes.0.load(SeqCst), 0);
     });
@@ -644,7 +644,7 @@ fn refund_callback_can_reenter_scopes_and_its_panic_leaves_no_stale_tls_owner() 
     assert_eq!(wake.calls.load(SeqCst), 1);
     assert_eq!(
         budget.reserved_bytes(),
-        0 + 2 * ReleaseRegistration::allocation_layout().size()
+        2 * ReleaseRegistration::allocation_layout().size()
     );
     assert!(
         Pin::new(&mut wait)
@@ -724,7 +724,7 @@ fn deferred_flush_preserves_first_panic_and_wakes_the_remaining_cohort_after_unl
             drop(owner);
             assert_eq!(
                 budget.reserved_bytes(),
-                0 + 2 * ReleaseRegistration::allocation_layout().size()
+                2 * ReleaseRegistration::allocation_layout().size()
             );
             assert_eq!(first_wake.0.load(SeqCst), 0);
             assert_eq!(survivor.wakes.load(SeqCst), 0);
@@ -751,7 +751,7 @@ fn deferred_flush_preserves_first_panic_and_wakes_the_remaining_cohort_after_unl
     );
     assert_eq!(
         budget.reserved_bytes(),
-        0 + 2 * ReleaseRegistration::allocation_layout().size()
+        2 * ReleaseRegistration::allocation_layout().size()
     );
 }
 
@@ -782,7 +782,7 @@ fn checked_aggregate_bytes_need_no_fabricated_single_allocation_layout() {
 
 #[test]
 fn partition_retains_exact_original_pool_and_conserves_real_credits() {
-    let budget = AllocationBudget::new(64 + 1 * ReleaseRegistration::allocation_layout().size());
+    let budget = AllocationBudget::new(64 + ReleaseRegistration::allocation_layout().size());
     let mut budget_registration_0 = registration(&budget);
     let equal_but_foreign =
         AllocationBudget::new(64 + ReleaseRegistration::allocation_layout().size());
@@ -795,7 +795,7 @@ fn partition_retains_exact_original_pool_and_conserves_real_credits() {
     assert_eq!(part.remaining_bytes(), 24);
     assert_eq!(
         budget.reserved_bytes(),
-        64 + 1 * ReleaseRegistration::allocation_layout().size()
+        64 + ReleaseRegistration::allocation_layout().size()
     );
     let error = without_allocations(|| whole.try_partition_bytes(41).unwrap_err());
     assert_eq!(
@@ -825,13 +825,13 @@ fn partition_retains_exact_original_pool_and_conserves_real_credits() {
         without_allocations(|| drop(part));
         assert_eq!(
             budget.reserved_bytes(),
-            56 + 1 * ReleaseRegistration::allocation_layout().size()
+            56 + ReleaseRegistration::allocation_layout().size()
         );
         assert_eq!(wakes.0.load(SeqCst), 0);
         without_allocations(|| drop(whole));
         assert_eq!(
             budget.reserved_bytes(),
-            16 + 1 * ReleaseRegistration::allocation_layout().size()
+            16 + ReleaseRegistration::allocation_layout().size()
         );
     });
     assert_eq!(wakes.0.load(SeqCst), 1);
@@ -840,7 +840,7 @@ fn partition_retains_exact_original_pool_and_conserves_real_credits() {
     without_allocations(|| drop(charge));
     assert_eq!(
         budget.reserved_bytes(),
-        0 + 1 * ReleaseRegistration::allocation_layout().size()
+        ReleaseRegistration::allocation_layout().size()
     );
 }
 
@@ -910,13 +910,12 @@ fn owned_refund_scope_reserves_original_control_until_last_custodian() {
         Err(AllocationRefusal::ExceedsLimit { .. })
     ));
     assert_eq!(small.reserved_bytes(), 0);
-    let budget =
-        AllocationBudget::new(bytes + 1 + 1 * ReleaseRegistration::allocation_layout().size());
+    let budget = AllocationBudget::new(bytes + 1 + ReleaseRegistration::allocation_layout().size());
     let mut budget_registration_0 = registration(&budget);
     let scope = budget.try_owned_refund_scope().unwrap();
     assert_eq!(
         budget.reserved_bytes(),
-        bytes + 1 * ReleaseRegistration::allocation_layout().size()
+        bytes + ReleaseRegistration::allocation_layout().size()
     );
     let last = without_allocations(|| scope.clone());
     let held = budget.try_reserve_bytes(1).unwrap();
@@ -931,14 +930,14 @@ fn owned_refund_scope_reserves_original_control_until_last_custodian() {
     assert_eq!(wakes.0.load(SeqCst), 0);
     assert_eq!(
         budget.reserved_bytes(),
-        bytes + 1 * ReleaseRegistration::allocation_layout().size()
+        bytes + ReleaseRegistration::allocation_layout().size()
     );
     drop(last);
     assert!(wakes.0.load(SeqCst) > 0);
     assert!(poll(&mut wait, &wakes).is_ready());
     assert_eq!(
         budget.reserved_bytes(),
-        0 + 1 * ReleaseRegistration::allocation_layout().size()
+        ReleaseRegistration::allocation_layout().size()
     );
 }
 
@@ -946,7 +945,7 @@ fn owned_refund_scope_reserves_original_control_until_last_custodian() {
 fn owned_refund_scopes_unlink_out_of_order_across_lexical_and_foreign_scopes() {
     let bytes = OwnedAllocationScope::allocation_layout().size();
     let budget =
-        AllocationBudget::new(bytes * 3 + 1 + 1 * ReleaseRegistration::allocation_layout().size());
+        AllocationBudget::new(bytes * 3 + 1 + ReleaseRegistration::allocation_layout().size());
     let mut budget_registration_0 = registration(&budget);
     let other = AllocationBudget::new(bytes + 1);
     let outer = budget.try_owned_refund_scope().unwrap();
@@ -971,7 +970,7 @@ fn owned_refund_scopes_unlink_out_of_order_across_lexical_and_foreign_scopes() {
     assert!(wakes.0.load(SeqCst) > 0);
     assert_eq!(
         budget.reserved_bytes(),
-        0 + 1 * ReleaseRegistration::allocation_layout().size()
+        ReleaseRegistration::allocation_layout().size()
     );
     // The TLS chain must contain no pointer into any freed owned/lexical record.
     without_allocations(|| budget.with_deferred_refund_notifications(|_| {}));

@@ -35,8 +35,10 @@ with ToriiClient("https://taira.sora.org", timeout=10.0) as client:
 ```
 
 Collections: `domains`, `accounts`, `asset_definitions`, `nfts`, `rwas`,
-`transactions`, `repo_agreements`, `accounts.assets(id)`,
-`accounts.transactions(id)` and `asset_definitions.holders(id)`; each has
+`transactions`, `repo_agreements`, `subscription_plans`, `subscriptions`,
+`contract_activity`, `contract_events`, `accounts.assets(id)`,
+`accounts.permissions(id)`, `accounts.history(id)`, `accounts.transactions(id)`,
+`uaid_manifests(uaid)` and `asset_definitions.holders(id)`; each has
 `list`, `iter`, `pages`, `rows`, `iter_rows` and `count`. Every request uses
 `POST <collection>/query`, is signed when `canonical_request_auth` is
 configured and is anonymous otherwise. The client applies `timeout` (default
@@ -47,12 +49,24 @@ decode the fields that identify them strictly (`id`; `account_id`, `asset`,
 `block_index` for transactions); every other field may be null or absent and
 decodes as `None`.
 
-Aggregates (`rows(aggregate=AggregateSpec(...))`, `POST` only) are computed
-where the rows live: Torii rejects a read whose visible rows span several
-dataspace routes with `400 invalid_aggregate`, because overlapping routes
-cannot be summed exactly. Page through the rows without `aggregate` instead.
+Torii executes each collection query once over the caller-visible global state.
+For collections that support totals and aggregates
+(`rows(aggregate=AggregateSpec(...))`, `POST` only), visible rows contribute
+exactly once even when they span several dataspace routes.
 
-### Transaction history
+`subscription_plans` and `subscriptions` return flat rows keyed by `id`.
+Manifest pages contain the manifest records in `items`; projections use `rows`.
+Every page requires `next_cursor` (a nonempty token or null) and may include
+`total` only when requested. Unknown page envelope fields are rejected.
+
+Explorer feeds are exposed as `explorer_accounts`, `explorer_domains`,
+`explorer_asset_definitions`, `explorer_assets`, `explorer_nfts`, `explorer_rwas`,
+`explorer_blocks`, `explorer_transactions`, `explorer_latest_transactions`,
+`explorer_instructions` and `explorer_latest_instructions`. These use the same
+bounded query controls, with fixed server ordering and no totals or aggregates.
+Rows retain their wire fields; snapshots and continuations live in the opaque cursor.
+
+### History collections
 
 `client.transactions` (every committed transaction; `POST
 /v1/transactions/query` only) and `client.accounts.transactions(account_id)`
@@ -60,6 +74,11 @@ cannot be summed exactly. Page through the rows without `aggregate` instead.
 collections of `CommittedTransaction` rows: `entrypoint_hash`, `block_height`,
 `block_index`, `block_hash`, `authority`, `timestamp_ms`, `entrypoint_kind`,
 `result_ok`, `asset_ids`, `asset_definition_ids` and `metadata`.
+
+`contract_activity`, `contract_events` and `accounts.history(id)` use the same
+history controls with their respective row fields. Account movement rows also
+carry `movement_index`; filter by `asset_id` or `asset_definition_id` within
+`filter`.
 
 - Rows come newest first by (`block_height`, `block_index`), and each cursor
   holds block coordinates, so transactions committed while paging never shift

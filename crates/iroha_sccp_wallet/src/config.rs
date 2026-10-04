@@ -739,7 +739,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let client = write_config(
             dir.path(),
-            "chain = \"00000000-0000-0000-0000-000000000000\"\n[account]\ndomain = \"wonderland\"\n[sccp]\npoll_interval_ms = 500\n",
+            "chain = \"00000000-0000-0000-0000-000000000000\"\n[account]\nchain_discriminant = 753\n[sccp]\npoll_interval_ms = 500\n",
         );
         let Err(ConfigError::Read(report)) = SccpClientConfig::load(&client) else {
             panic!("the [sccp] file must not be the client config");

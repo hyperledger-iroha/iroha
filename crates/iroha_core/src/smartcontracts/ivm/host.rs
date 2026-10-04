@@ -8494,7 +8494,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             ),
             CoreQueryEntityTagV1::AssetDefinition => request_for!(
                 AssetDefinition,
-                iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
+                iroha_data_model::query::asset::prelude::FindAssetDefinitions,
                 AssetDefinition
             ),
             CoreQueryEntityTagV1::Domain => request_for!(

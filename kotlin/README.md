@@ -86,7 +86,8 @@ private standalone elections.
 Every Torii collection (`specs/torii/collection_queries.md`) is read with one
 query language and returns one page envelope. `HttpClientTransport` exposes the
 collections: `domains`, `accounts`, `assetDefinitions`, `nfts`, `rwas`,
-`repoAgreements`, `accountAssets(accountId)`, `assetHolders(definitionId)`,
+`subscriptionPlans`, `subscriptions`, `contractActivity`, `contractEvents`,
+`repoAgreements`, `accountAssets(accountId)`, `accountPermissions(accountId)`, `accountHistory(accountId)`, `uaidManifests(uaid)`, `assetHolders(definitionId)`,
 `transactions` and `accountTransactions(accountId)`. Each one has `page(query)` (one page),
 `iterate(query)` (a lazy iterator that follows `next_cursor`; `close()` cancels
 the request in flight), `pages(query)` and `fetchAll(query)` (every page,
@@ -150,6 +151,13 @@ Java uses the same API: `Filter.field("owned_by").eq(alice).and(...)`,
 `client.domains().page(query)`, and try-with-resources around
 `client.domains().iterate(query)`.
 
+Explorer feeds also use the shared collection contract through `explorerAccounts`,
+`explorerDomains`, `explorerAssetDefinitions`, `explorerAssets`, `explorerNfts`,
+`explorerRwas`, `explorerBlocks`, `explorerTransactions`, `explorerLatestTransactions`,
+`explorerInstructions`, and `explorerLatestInstructions`. Rows are `JsonObject` values.
+All eleven feeds follow opaque cursors in fixed bounded order; they reject sort,
+aggregate, and exact-total controls. Empty pages can still carry `nextCursor`.
+
 - `toString()` of a `Filter` is the canonical text (`owned_by = "alice" and
   quantity >= "10.5"`) and `toJson()` the JSON form; `Filter.parse(text)`
   validates text locally and reports the line and column like Torii. A string
@@ -160,10 +168,10 @@ Java uses the same API: `Filter.field("owned_by").eq(alice).and(...)`,
 - Typed rows keep the complete JSON in `row.json`; only the identity fields
   (`id`; `account_id`, `asset`, `scope` and `quantity` for balances) are
   non-null. Use `collection.json()` for `select` projections and aggregates
-  (`AggregateSpec`), whose items are plain JSON objects. Aggregates are
-  computed where the rows live: a read whose visible rows span several
-  dataspace routes is rejected with `invalid_aggregate`; page through the rows
-  instead.
+  (`AggregateSpec`), whose items are plain JSON objects. Torii executes each
+  collection query once over the caller-visible global state. For collections
+  that support totals and `POST` aggregates, visible rows contribute exactly once
+  even when they span several dataspace routes.
 - Object and array literals (only valid against `metadata.<key>`) exist only
   in the JSON form. `POST` bodies always carry tree filters as JSON; GET
   parameters (`toQueryPairs()`) and event-stream filters reject them.

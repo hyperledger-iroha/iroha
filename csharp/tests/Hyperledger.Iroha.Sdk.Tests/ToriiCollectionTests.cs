@@ -19,6 +19,17 @@ public sealed class ToriiCollectionTests
 
     public static IEnumerable<object[]> CollectionPaths()
     {
+        yield return ["explorer-accounts", "/v1/explorer/accounts/query"];
+        yield return ["explorer-domains", "/v1/explorer/domains/query"];
+        yield return ["explorer-asset-definitions", "/v1/explorer/asset-definitions/query"];
+        yield return ["explorer-assets", "/v1/explorer/assets/query"];
+        yield return ["explorer-nfts", "/v1/explorer/nfts/query"];
+        yield return ["explorer-rwas", "/v1/explorer/rwas/query"];
+        yield return ["explorer-blocks", "/v1/explorer/blocks/query"];
+        yield return ["explorer-transactions", "/v1/explorer/transactions/query"];
+        yield return ["explorer-transactions/latest", "/v1/explorer/transactions/latest/query"];
+        yield return ["explorer-instructions", "/v1/explorer/instructions/query"];
+        yield return ["explorer-instructions/latest", "/v1/explorer/instructions/latest/query"];
         yield return ["domains", "/v1/domains/query"];
         yield return ["accounts", "/v1/accounts/query"];
         yield return ["asset-definitions", "/v1/assets/definitions/query"];
@@ -27,6 +38,13 @@ public sealed class ToriiCollectionTests
         yield return ["repo-agreements", "/v1/repo/agreements/query"];
         yield return ["account-assets", "/v1/accounts/acc%231/assets/query"];
         yield return ["asset-holders", "/v1/assets/7ZepsJTHCVLKsrFFNZGSRGZgvBhv/holders/query"];
+        yield return ["permissions", $"/v1/accounts/{Uri.EscapeDataString(AccountId)}/permissions/query"];
+        yield return ["plans", "/v1/subscriptions/plans/query"];
+        yield return ["subscriptions", "/v1/subscriptions/query"];
+        yield return ["manifests", "/v1/space-directory/uaids/uaid%3A" + new string('a', 63) + "b/manifests/query"];
+        yield return ["activity", "/v1/contracts/activity/query"];
+        yield return ["events", "/v1/contracts/events/query"];
+        yield return ["history", $"/v1/accounts/{Uri.EscapeDataString(AccountId)}/history/query"];
         yield return ["transactions", "/v1/transactions/query"];
         yield return ["account-transactions", "/v1/accounts/acc%231/transactions/query"];
     }
@@ -41,6 +59,17 @@ public sealed class ToriiCollectionTests
 
         var page = collection switch
         {
+            "explorer-accounts" => (await client.ExplorerAccounts.GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
+            "explorer-domains" => (await client.ExplorerDomains.GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
+            "explorer-asset-definitions" => (await client.ExplorerAssetDefinitions.GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
+            "explorer-assets" => (await client.ExplorerAssets.GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
+            "explorer-nfts" => (await client.ExplorerNfts.GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
+            "explorer-rwas" => (await client.ExplorerRwas.GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
+            "explorer-blocks" => (await client.ExplorerBlocks.GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
+            "explorer-transactions" => (await client.ExplorerTransactions.GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
+            "explorer-transactions/latest" => (await client.ExplorerLatestTransactions.GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
+            "explorer-instructions" => (await client.ExplorerInstructions.GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
+            "explorer-instructions/latest" => (await client.ExplorerLatestInstructions.GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
             "domains" => (await client.Domains.Rows.GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
             "accounts" => (await client.Accounts.GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
             "asset-definitions" => (await client.AssetDefinitions.GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
@@ -49,6 +78,13 @@ public sealed class ToriiCollectionTests
             "repo-agreements" => (await client.RepoAgreements.GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
             "account-assets" => (await client.AccountAssets("acc#1").GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
             "asset-holders" => (await client.AssetHolders("7ZepsJTHCVLKsrFFNZGSRGZgvBhv").GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
+            "permissions" => (await client.AccountPermissions(AccountId).GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
+            "plans" => (await client.SubscriptionPlans.GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
+            "subscriptions" => (await client.Subscriptions.GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
+            "manifests" => (await client.UaidManifests("uaid:" + new string('a', 63) + "b").GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
+            "activity" => (await client.ContractActivity.GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
+            "events" => (await client.ContractEvents.GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
+            "history" => (await client.AccountHistory(AccountId).GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
             "transactions" => (await client.Transactions.GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
             _ => (await client.AccountTransactions("acc#1").GetPageAsync(query, TestContext.Current.CancellationToken)).Items.Length,
         };
@@ -61,6 +97,85 @@ public sealed class ToriiCollectionTests
         Assert.Equal("application/json", request.ContentType);
         Assert.Contains("application/json", request.Accept);
         Assert.Null(request.Account);
+    }
+
+    [Fact]
+    public async Task ExplorerCollectionsShareBoundedControlsAndFollowEmptyProjectedPages()
+    {
+        var bodies = new Queue<string>(["""{"items":[],"next_cursor":"next"}""", """{"items":[{"id":"kept"}],"next_cursor":null}"""]);
+        using var handler = new RecordingHandler(_ => Page(bodies.Dequeue()));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        ToriiCollection<JsonObject>[] collections = [
+            client.ExplorerAccounts.Rows,
+            client.ExplorerDomains.Rows,
+            client.ExplorerAssetDefinitions.Rows,
+            client.ExplorerAssets.Rows,
+            client.ExplorerNfts.Rows,
+            client.ExplorerRwas.Rows,
+            client.ExplorerBlocks.Rows,
+            client.ExplorerTransactions.Rows,
+            client.ExplorerLatestTransactions.Rows,
+            client.ExplorerInstructions.Rows,
+            client.ExplorerLatestInstructions.Rows,
+        ];
+        foreach (var collection in collections)
+        {
+            Assert.Equal("invalid_sort", (await Assert.ThrowsAsync<ListQueryException>(() =>
+                collection.GetPageAsync(new ListQuery { Sort = ["id"] }, TestContext.Current.CancellationToken))).Code);
+            Assert.Equal("invalid_include_total", (await Assert.ThrowsAsync<ListQueryException>(() =>
+                collection.GetPageAsync(new ListQuery { IncludeTotal = true }, TestContext.Current.CancellationToken))).Code);
+            Assert.Equal("invalid_aggregate", (await Assert.ThrowsAsync<ListQueryException>(() =>
+                collection.GetPageAsync(new ListQuery { Aggregate = new AggregateSpec { Metrics = [AggregateMetric.Count("n")] } }, TestContext.Current.CancellationToken))).Code);
+        }
+        Assert.Empty(handler.Requests);
+        var found = new List<JsonObject>();
+        await foreach (var row in client.ExplorerAccounts.Rows.EnumerateAsync(
+            new ListQuery { Select = ["id"], Filter = Filter.Field("domain").Eq("wonderland.universal"), Limit = 1 }, TestContext.Current.CancellationToken))
+            found.Add(row);
+        Assert.Equal("kept", Assert.Single(found)["id"]!.GetValue<string>());
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.Equal("next", ListQuery.FromJson(handler.Requests[1].Body!).Cursor);
+    }
+
+    [Theory]
+    [InlineData("{\"items\":[],\"next_cursor\":null,\"total\":0}")]
+    [InlineData("{\"items\":[],\"next_cursor\":null,\"total\":null}")]
+    [InlineData("{\"items\":[{},{}],\"next_cursor\":null}")]
+    public async Task ExplorerPagesRejectTotalsAndRowsBeyondRequestedLimit(string json)
+    {
+        using var handler = new RecordingHandler(_ => Page(json));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        await Assert.ThrowsAsync<JsonException>(() => client.ExplorerBlocks.Rows.GetPageAsync(new ListQuery { Limit = 1 }, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<JsonException>(async () =>
+        {
+            await foreach (var _ in client.ExplorerBlocks.Rows.EnumerateAsync(new ListQuery { Limit = 1 }, TestContext.Current.CancellationToken)) { }
+        });
+    }
+
+    [Fact]
+    public async Task SubscriptionRowsUseFlatIdsAndSharedPageBoundary()
+    {
+        using var handler = new RecordingHandler(request => Page(request.RequestUri!.AbsolutePath.Contains("plans", StringComparison.Ordinal)
+            ? """{"items":[{"id":"plan","provider":"alice","billing":{"period":7}}],"next_cursor":null}"""
+            : """{"items":[{"id":"subscription","plan_id":"plan","status":"active","invoice":null}],"next_cursor":null}"""));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        Assert.Equal("plan", (await client.SubscriptionPlans.GetPageAsync(cancellationToken: TestContext.Current.CancellationToken)).Items[0].Id);
+        var subscription = (await client.Subscriptions.GetPageAsync(cancellationToken: TestContext.Current.CancellationToken)).Items[0];
+        Assert.Equal("active", subscription.Status);
+        Assert.Equal("plan", subscription.PlanId);
+        Assert.Null(subscription.Invoice);
+    }
+
+    [Theory]
+    [InlineData("{\"items\":[]}")]
+    [InlineData("{\"items\":[],\"next_cursor\":\"\"}")]
+    [InlineData("{\"items\":[],\"next_cursor\":null,\"has_more\":false}")]
+    [InlineData("{\"items\":[{\"id\":\"a\"}],\"next_cursor\":null,\"total\":0}")]
+    public async Task SharedPagesRejectMissingCursorAndRetiredEnvelope(string json)
+    {
+        using var handler = new RecordingHandler(_ => Page(json));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        await Assert.ThrowsAsync<JsonException>(() => client.Subscriptions.GetPageAsync(cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -204,15 +319,15 @@ public sealed class ToriiCollectionTests
         Assert.Equal("invalid_sort", sort.Code);
         Assert.Equal("sort", sort.Parameter);
         Assert.Equal(
-            "invalid `sort`: `transactions` rows are returned newest first and cannot be re-sorted; omit `sort` and filter on `block_height` or `timestamp_ms` to select a range",
+            "invalid `sort`: `transactions` rows use fixed server order and cannot be re-sorted; omit `sort` and use `filter` to select rows",
             sort.Message);
         Assert.Equal("invalid_include_total", total.Code);
         Assert.Equal(
-            "invalid `include_total`: totals are not available for `account_transactions`: counting would scan the whole history",
+            "invalid `include_total`: totals are not available for `account_transactions`: counting would exceed the bounded scan",
             total.Message);
         Assert.Equal("invalid_aggregate", grouped.Code);
         Assert.Equal(
-            "invalid `aggregate`: aggregates are not available for `transactions`: they would scan the whole history",
+            "invalid `aggregate`: aggregates are not available for `transactions`: they would exceed the bounded scan",
             grouped.Message);
         Assert.Equal("invalid_sort", rawSort.Code);
         Assert.Contains("`account_transactions` rows", rawSort.Message, StringComparison.Ordinal);

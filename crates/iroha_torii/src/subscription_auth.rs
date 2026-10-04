@@ -9,23 +9,51 @@ fn require_subscription_draft_account(
 #[cfg(feature = "app_api")]
 async fn handler_subscription_plans_list(
     State(app): State<SharedAppState>,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(p): AxQuery<iroha_torii_shared::subscriptions::SubscriptionPlanListParams>,
-) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
-        return routing::handle_v1_subscription_plans(app.state.clone(), AxQuery(p)).await;
+) -> Result<Response, Error> {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote.ip()),
+            "/v1/subscriptions/plans",
+            enforce,
+        )
+        .await?;
     }
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(
+    execute_direct_collection_read(
         &app,
-        &headers,
-        Some(remote_ip),
-        "v1/subscriptions/plans",
-        enforce,
+        routing::collection_sources::CollectionTarget::SubscriptionPlans,
+        list_query_from_query_string(uri.query())?,
     )
-    .await?;
-    routing::handle_v1_subscription_plans(app.state.clone(), AxQuery(p)).await
+    .await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_subscription_plans_query(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    crate::JsonOnly(body): crate::JsonOnly<norito::json::Value>,
+) -> Result<Response, Error> {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote.ip()),
+            "/v1/subscriptions/plans/query",
+            true,
+        )
+        .await?;
+    }
+    execute_direct_collection_read(
+        &app,
+        routing::collection_sources::CollectionTarget::SubscriptionPlans,
+        list_query_from_json(body)?,
+    )
+    .await
 }

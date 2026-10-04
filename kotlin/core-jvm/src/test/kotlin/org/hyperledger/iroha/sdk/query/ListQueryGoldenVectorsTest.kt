@@ -66,7 +66,8 @@ class ListQueryGoldenVectorsTest {
             field("and") eq 1,
             field("metadata.null") eq 1,
             field("text") eq "quote \" backslash \\ newline \n unicode é",
-            (field("tx_hash") eq "hash") and field("tx_status").isIn("Applied", "Rejected"),
+            (field("tx_hash") eq "hash") and field("tx_status").isIn("Approved", "Rejected"),
+            field("note") eq "del\u007f c1\u0085",
         )
         val cases = array("filters")
         assertEquals(cases.size, built.size)
@@ -74,6 +75,25 @@ class ListQueryGoldenVectorsTest {
             case as JsonObject
             assertEquals(string(case, "canonical"), filter.toString())
             assertEquals(case["json"], filter.toJson())
+        }
+    }
+
+    @Test
+    fun jsonFiltersDecodeToTheNormalizedTree() {
+        val cases = array("json_filters")
+        assertTrue(cases.size > 0)
+        for (case in cases) {
+            case as JsonObject
+            val json = case["json"]!!
+            val canonical = string(case, "canonical")
+            val normalized = case["normalized"]!!
+            val decoded = Filter.fromJson(json)
+            assertEquals(canonical, decoded.toString(), "canonical text of $json")
+            assertEquals(normalized, decoded.toJson(), "normalized JSON of $json")
+            assertEquals(decoded, Filter.parse(canonical), "the canonical rendering of $json parses back")
+            assertEquals(decoded, Filter.fromJson(normalized))
+            val body = JsonObject(linkedMapOf("filter" to json))
+            assertEquals(JsonObject(linkedMapOf("filter" to normalized)), ListQuery.fromJson(body).toJson())
         }
     }
 

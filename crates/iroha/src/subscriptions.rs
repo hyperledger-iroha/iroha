@@ -1,7 +1,8 @@
 //! Public subscription reads and account-bound unsigned draft preparation.
 //!
-//! Obtain reads with [`crate::client::Client::subscriptions`] and prepare drafts
-//! with [`crate::client::AccountClient::subscriptions`]. Preparing a draft never
+//! Read one subscription with [`crate::client::Client::subscriptions`]; list plans and
+//! subscriptions through [`crate::collections::Collection`] and [`crate::collections::ListQuery`].
+//! Prepare drafts with [`crate::client::AccountClient::subscriptions`]. Preparing a draft never
 //! submits a transaction. Signing and submission are explicit account operations.
 
 pub use crate::client::subscriptions::{AccountSubscriptions, Subscriptions};

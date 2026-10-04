@@ -21,7 +21,6 @@ use crate::{
     backend::{
         compact_bundle::{
             BundleLimits, VerifiedBundle, verify_axt_transfer_bundle_with_allocation,
-            verify_transfer_bundle_with_allocation,
         },
         compact_public_api::AxtVerificationContext,
         compact_public_columns::{COMMITTED_COLUMN_COUNT, LAYOUT_ID},
@@ -123,6 +122,24 @@ fn finish_artifact<V: CompactTransferValue>(
     inner: &[u8],
     bundle: VerifiedBundle,
 ) -> crate::Result<VerifiedArtifact> {
+    finish_artifact_for_profile(
+        kind,
+        profile_id_for::<V>(),
+        statement_digest,
+        wrapper,
+        inner,
+        bundle,
+    )
+}
+
+fn finish_artifact_for_profile(
+    kind: FastpqProofKindV1,
+    profile_id: FastpqCompactProfileIdV1,
+    statement_digest: [u8; 32],
+    wrapper: &[u8],
+    inner: &[u8],
+    bundle: VerifiedBundle,
+) -> crate::Result<VerifiedArtifact> {
     // Both lengths are checked by the transport before any verification work;
     // checked conversion also preserves correctness on wider future usize hosts.
     let artifact_bytes =
@@ -131,7 +148,7 @@ fn finish_artifact<V: CompactTransferValue>(
         .map_err(|_| Error::Encode(norito::Error::LengthMismatch))?;
     let identity = FastpqArtifactIdentityDescriptionV1 {
         proof_kind: kind,
-        profile_id: profile_id_for::<V>(),
+        profile_id,
         public_statement_digest: statement_digest,
         artifact_digest: Hash::new(wrapper).into(),
         inner_bundle_digest: Hash::new(inner).into(),
@@ -278,104 +295,6 @@ fn profile_id_for<V: CompactTransferValue>() -> FastpqCompactProfileIdV1 {
         return FastpqCompactProfileIdV1(PREDECESSOR_U64_PROFILE);
     }
     quantity_diagnostic_profile_id()
-}
-
-/// Verify ordinary model bytes under the fixed candidate and caller-expected inputs.
-/// No artifact field selects proof semantics or a protocol implementation.
-#[cfg(test)]
-#[allow(
-    clippy::large_types_passed_by_value,
-    reason = "keeps the by-value `Copy` limits contract of its `tests` and `quantity_tests` callers"
-)]
-pub(in crate::backend) fn verify_ordinary_artifact(
-    bytes: &[u8],
-    expected: &PublicIO,
-    limits: ArtifactLimits,
-) -> Result<VerifiedArtifact, ArtifactError> {
-    verify_ordinary_artifact_for::<u64>(bytes, expected, None, &limits)
-}
-
-/// Verify a complete ordinary `QuantityValueV1` artifact under its fixed profile.
-/// The caller supplies expected inputs; advertised metadata cannot select a format.
-#[cfg(test)]
-#[allow(
-    clippy::large_types_passed_by_value,
-    reason = "keeps the by-value `Copy` limits contract of its `quantity_tests` callers"
-)]
-pub(in crate::backend) fn verify_quantity_ordinary_artifact(
-    bytes: &[u8],
-    expected: &PublicIO,
-    limits: ArtifactLimits,
-) -> Result<VerifiedArtifact, ArtifactError> {
-    verify_ordinary_artifact_for::<FastpqQuantityUnits>(bytes, expected, None, &limits)
-}
-
-/// Verify the fixed quantity route with an independently expected complete statement digest.
-/// This mandatory normal-library input is checked before carrier or child verification.
-#[allow(
-    clippy::large_types_passed_by_value,
-    reason = "keeps the by-value `Copy` limits contract of the offline facade and test callers"
-)]
-pub(in crate::backend) fn verify_bound_quantity_ordinary_artifact(
-    bytes: &[u8],
-    expected: &PublicIO,
-    expected_statement_digest: [u8; 32],
-    limits: ArtifactLimits,
-) -> Result<VerifiedArtifact, ArtifactError> {
-    verify_ordinary_artifact_for::<FastpqQuantityUnits>(
-        bytes,
-        expected,
-        Some(expected_statement_digest),
-        &limits,
-    )
-}
-
-fn verify_ordinary_artifact_for<V: CompactTransferValue>(
-    bytes: &[u8],
-    expected: &PublicIO,
-    expected_statement_digest: Option<[u8; 32]>,
-    limits: &ArtifactLimits,
-) -> Result<VerifiedArtifact, ArtifactError> {
-    norito::core::with_decode_limits_scope(limits.total_decode, || {
-        let artifact = FastpqOrdinaryCompactArtifactV1::decode_canonical_with_limits(
-            bytes,
-            profile_id_for::<V>(),
-            limits.transport,
-        )?;
-        let (bundle, digest) = super::with_prepared_statement_as::<V, _>(
-            &artifact.statement,
-            expected,
-            ProofSemantics::StateTransition,
-            limits.public_statement,
-            |prepared| {
-                let digest = statement_digest(
-                    &artifact.statement,
-                    limits.public_statement.max_public_bytes,
-                )?;
-                if expected_statement_digest.is_some_and(|expected| digest != expected) {
-                    return Err(Error::PublicIoMismatch {
-                        field: "compact_artifact_public_statement_digest",
-                    });
-                }
-                let bundle = verify_transfer_bundle_with_allocation(
-                    prepared,
-                    expected,
-                    &artifact.bundle_frame,
-                    limits.bundle,
-                    limits.max_segment_decode_allocation_charges,
-                )?;
-                Ok((bundle, digest))
-            },
-        )?;
-        finish_artifact::<V>(
-            FastpqProofKindV1::OrdinaryCompact,
-            digest,
-            bytes,
-            &artifact.bundle_frame,
-            bundle,
-        )
-        .map_err(ArtifactError::Verify)
-    })
 }
 
 /// Verify AXT model bytes against every independently supplied caller expectation.
@@ -571,3 +490,14 @@ mod tests;
 #[cfg(test)]
 #[path = "compact_quantity_artifact_tests.rs"]
 mod quantity_tests;
+
+#[path = "compact_artifact/execution_effect_profile.rs"]
+mod execution_effect_profile;
+pub(in crate::backend) use execution_effect_profile::execution_effect_profile_id;
+
+#[path = "compact_artifact/execution_effect.rs"]
+pub(in crate::backend) mod execution_effect;
+
+#[cfg(test)]
+#[path = "compact_effect_test_support.rs"]
+pub(in crate::backend) mod effect_test_support;

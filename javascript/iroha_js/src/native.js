@@ -16,6 +16,7 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -31,6 +32,8 @@ const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const PLATFORM_KEY_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)+$/u;
 const PE_DOS_HEADER_BYTES = 64;
 const NATIVE_BUILD_SOURCE_STATE_READER = "read-native-build-source-state.mjs";
+const LOCAL_UNIT_MANIFEST = "iroha_js_host.local-unit.json";
+const LOCAL_UNIT_SCHEMA = "iroha.js-native-local-unit.v1";
 
 let cachedBinding;
 let cachedBindingPath;
@@ -150,6 +153,66 @@ function assertLoadableSourceProvenance(verification, paths) {
   }
 }
 
+function verifyLocalUnitBinding(paths) {
+  try {
+    const output = paths.nativeDir;
+    const root = resolve(paths.jsRoot, "..", "..");
+    if (!paths.hasOverride || realpathSync(output) !== output ||
+        output === root || output.startsWith(root + "/") ||
+        !existsSync(join(root, "Cargo.toml"))) {
+      throw new Error("local-unit binding requires the current source checkout and external canonical directory");
+    }
+    const readOriginal = (path, limit) => {
+      const stat = lstatSync(path);
+      if (realpathSync(path) !== path || !stat.isFile() || stat.size < 1 || stat.size > limit) {
+        throw new Error("local-unit record is not a bounded original regular file");
+      }
+      return readFileSync(path);
+    };
+    const manifest = JSON.parse(readOriginal(join(output, LOCAL_UNIT_MANIFEST), 16 * 1024).toString("utf8"));
+    if (Object.keys(manifest).sort().join(",") !==
+        "artifact_scope,artifact_sha256,build_provenance_version,cargo_profile,platform,producer_record_sha256,schema,source_root" ||
+        manifest.schema !== LOCAL_UNIT_SCHEMA || manifest.artifact_scope !== "local-unit" ||
+        manifest.build_provenance_version !== 4 || manifest.cargo_profile !== "debug" ||
+        manifest.platform !== `${process.platform}-${process.arch}` || manifest.source_root !== root ||
+        !SHA256_PATTERN.test(manifest.producer_record_sha256) || !SHA256_PATTERN.test(manifest.artifact_sha256)) {
+      throw new Error("local-unit manifest scope/profile/platform/source is not exact");
+    }
+    const producerPath = join(output, "producer-record.json");
+    const producerBytes = readOriginal(producerPath, 64 * 1024 * 1024);
+    if (createHash("sha256").update(producerBytes).digest("hex") !== manifest.producer_record_sha256) {
+      throw new Error("local-unit producer record differs from its pin");
+    }
+    const producer = JSON.parse(producerBytes.toString("utf8"));
+    const candidates = ["/opt/homebrew/opt/python@3.12/bin/python3.12", "/usr/local/opt/python@3.12/bin/python3.12"];
+    const python = candidates.filter((path) => existsSync(path))
+      .map((path) => realpathSync(path)).find((path) => path === producer.config?.python);
+    const verifier = join(root, "scripts", "native_js_local_unit.py");
+    if (!python || producer.tools?.[python] !== createHash("sha256").update(readFileSync(python)).digest("hex") ||
+        producer.tools?.[verifier] !== createHash("sha256").update(readFileSync(verifier)).digest("hex")) {
+      throw new Error("local-unit Python/repository verifier differs from current fixed owners");
+    }
+    const result = JSON.parse(execFileSync(python, ["-I", "-S", "-B", verifier, "verify",
+      "--root", root, "--output", output, "--producer-sha256", manifest.producer_record_sha256], {
+      cwd: root,
+      env: { PATH: "/usr/bin:/bin", HOME: process.env.HOME, LANG: "C.UTF-8", LC_ALL: "C.UTF-8" },
+      encoding: "utf8", maxBuffer: 16 * 1024, timeout: 60_000,
+    }));
+    if (result.schema !== LOCAL_UNIT_SCHEMA || result.artifact_scope !== "local-unit" ||
+        result.build_provenance_version !== 4 || result.verified !== true ||
+        result.artifact_path !== paths.bindingPath || result.artifact_sha256 !== manifest.artifact_sha256) {
+      throw new Error("local-unit verifier returned a different binding or scope");
+    }
+    const hash = hashFile(paths.bindingPath, true);
+    if (!hash.ok || hash.sha256 !== result.artifact_sha256) {
+      throw new Error("local-unit verified native bytes changed before snapshot");
+    }
+    return { ok: true, sha256: hash.sha256, verifiedBytes: hash.bytes };
+  } catch (error) {
+    throw nativeBindingError(`local-unit custody verification failed: ${error?.message ?? error}.`, "local_unit_provenance_error");
+  }
+}
+
 /**
  * Load the required native `iroha_js_host` binding.
  */
@@ -164,15 +227,14 @@ export function getNativeBinding() {
     return cachedBinding;
   }
 
-  const verification = verifyNativeBindingInternal(
-    paths.bindingPath,
-    { manifestPath: paths.checksumPath },
-    true,
+  const localUnit = existsSync(join(paths.nativeDir, LOCAL_UNIT_MANIFEST));
+  const verification = localUnit ? verifyLocalUnitBinding(paths) : verifyNativeBindingInternal(
+    paths.bindingPath, { manifestPath: paths.checksumPath }, true,
   );
   if (!verification.ok) {
     throw formatForceNativeVerificationError(verification, paths);
   }
-  assertLoadableSourceProvenance(verification, paths);
+  if (!localUnit) assertLoadableSourceProvenance(verification, paths);
 
   let snapshot;
   try {

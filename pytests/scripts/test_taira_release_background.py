@@ -13,11 +13,35 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
+from collections.abc import Iterator
 
 import pytest
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
+
+
+@pytest.fixture
+def tmp_path() -> Iterator[Path]:
+    """Retain private ancestors for the unchanged detached-process custody tests.
+
+    Release directory custody rejects shared writable ancestors such as /tmp.
+    The worker and its descendants still use the original rendezvous, locks,
+    status and teardown. Preserve the ordinary body mask and restore the caller
+    mask even if setup, execution or cleanup fails.
+    """
+    original_umask = os.umask(0o077)
+    try:
+        parent = SCRIPTS.parent
+        for component in ("target", "unit-tests", "script-tests"):
+            parent /= component
+            parent.mkdir(mode=0o700, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="taira-background-", dir=parent) as directory:
+            os.umask(0o022)
+            yield Path(directory).resolve()
+    finally:
+        os.umask(original_umask)
 
 
 @pytest.fixture

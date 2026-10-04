@@ -20,7 +20,7 @@ fn retained_refunds_reuse_credits_without_allocating_or_waking_before_batch_drop
             clone.with_deferred_refund_notifications(|_| drop(owner));
             assert_eq!(
                 budget.reserved_bytes(),
-                0 + ReleaseRegistration::allocation_layout().size()
+                ReleaseRegistration::allocation_layout().size()
             );
             drop(clone.try_reserve(layout(8)).unwrap());
         });
@@ -161,7 +161,7 @@ fn caught_unwind_retains_wake_until_the_actual_outer_writer_is_released() {
     );
     assert_eq!(
         budget.reserved_bytes(),
-        0 + ReleaseRegistration::allocation_layout().size()
+        ReleaseRegistration::allocation_layout().size()
     );
     assert_eq!(probe.free.load(SeqCst), 0);
     assert_eq!(probe.busy.load(SeqCst), 0);
@@ -222,7 +222,7 @@ fn retained_batch_refunds_join_the_current_owned_scope_after_limit_shrink() {
     without_allocations(|| drop(scope));
     assert_eq!(
         budget.reserved_bytes(),
-        0 + ReleaseRegistration::allocation_layout().size()
+        ReleaseRegistration::allocation_layout().size()
     );
     assert!(wakes.0.load(SeqCst) > 0);
     assert!(poll(&mut wait, &wakes).is_ready());
@@ -253,7 +253,7 @@ fn owned_scope_outlives_its_batch_scope_without_a_stale_tls_link() {
     without_allocations(|| drop(scope));
     assert_eq!(
         budget.reserved_bytes(),
-        0 + ReleaseRegistration::allocation_layout().size()
+        ReleaseRegistration::allocation_layout().size()
     );
     assert!(wakes.0.load(SeqCst) > 0);
     assert!(poll(&mut wait, &wakes).is_ready());

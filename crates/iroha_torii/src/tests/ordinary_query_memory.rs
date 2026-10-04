@@ -11,6 +11,8 @@ mod ordinary_query_memory_tests {
         let geometry = query_memory_geometry(
             usize::try_from(defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES.get())
                 .expect("default pool fits usize"),
+            usize::try_from(defaults::torii::QUERY_FANOUT_MAX_WORKING_SET_BYTES.get())
+                .expect("default per-query ceiling fits usize"),
             usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
                 .expect("default content limit fits usize"),
             defaults::torii::QUERY_HEAVY_MAX_INFLIGHT.get(),
@@ -238,8 +240,10 @@ mod ordinary_query_memory_tests {
     #[test]
     fn exhausted_weighted_pool_rejects_start_without_pinning_ingress() {
         let app = mk_app_state_for_tests();
-        let _fanout = try_acquire_query_fanout_memory(&app)
-            .expect("default full fanout occupies the weighted pool");
+        let _fanout = app
+            .query_fanout_inflight
+            .try_acquire_parts([app.query_fanout_inflight.capacity_bytes()])
+            .expect("fixture occupies the entire weighted pool");
         let ingress_slots = app.query_ingress_inflight.available_permits();
         let ingress = (0..ingress_slots)
             .map(|_| {
@@ -487,7 +491,10 @@ mod ordinary_query_memory_tests {
     #[tokio::test]
     async fn proof_query_fails_fast_before_consuming_the_signed_nonce() {
         let (app, _, _, signed_query_b64) = proof_query_fixture(0xD2, 0);
-        let held = try_acquire_query_fanout_memory(&app).expect("occupy proof memory lane");
+        let held = app
+            .query_fanout_inflight
+            .try_acquire_parts([app.query_fanout_inflight.capacity_bytes()])
+            .expect("occupy the entire proof memory lane");
         let rejected = execute_bounded_proof_query(
             &app,
             proof_query_dto(&signed_query_b64),

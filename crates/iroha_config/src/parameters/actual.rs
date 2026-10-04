@@ -7108,6 +7108,8 @@ pub struct Torii {
     /// Four ingress slots each account five live representations; fanout receives
     /// the remainder after fixed metadata and overlapping phase reservations.
     pub query_fanout_max_retained_bytes: Bytes,
+    /// Maximum complete working set for one query, independent of aggregate capacity.
+    pub query_fanout_max_working_set_bytes: Bytes,
     /// Absolute deadline for one admitted App routed-read body.
     pub app_api_routed_read_body_read_timeout: Duration,
     /// Maximum time a query waits for execution capacity before Torii rejects it.
@@ -7316,6 +7318,14 @@ impl fmt::Debug for Torii {
             )
             .field("query_max_inflight", &self.query_max_inflight)
             .field("query_heavy_max_inflight", &self.query_heavy_max_inflight)
+            .field(
+                "query_fanout_max_retained_bytes",
+                &self.query_fanout_max_retained_bytes,
+            )
+            .field(
+                "query_fanout_max_working_set_bytes",
+                &self.query_fanout_max_working_set_bytes,
+            )
             .field("require_api_token", &self.require_api_token)
             .field("api_tokens", &self.api_tokens)
             .field(

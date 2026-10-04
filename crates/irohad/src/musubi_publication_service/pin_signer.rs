@@ -372,7 +372,15 @@ impl MusubiPublicationPinTransactionSignerV1 {
             observed,
             next_height,
             Some(route.route.dataspace_id),
-        )?;
+        )
+        .map_err(|error| match error {
+            iroha_core::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                eyre::Report::new(original)
+            }
+            iroha_core::execution_attempt::ExecutionAttemptError::Rejected(_) => {
+                eyre::eyre!("native control fee quote is unavailable")
+            }
+        })?;
         eyre::ensure!(
             quote.quote.debit_source == FeeDebitSource::Account(self.authority.clone()),
             "native control fee payer differs"
@@ -781,13 +789,14 @@ mod tests {
         let original = manifest.encode().unwrap();
         let zero = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 128);
         let result = norito::with_decode_limits_scope(zero, || {
-            // Decode exercises the real canonical codec's inherited allocation refusal; the
-            // same mapper is used by the exact prepare-time digest/frame producers.
-            sorafs_manifest::decode_manifest_v1_canonical(&original).map_err(pin_codec_refusal)
+            // The canonical decoder preserves the inherited allocation refusal through the
+            // manifest wrapper and the same mapper used by signed pin readback.
+            sorafs_manifest::decode_manifest_v1_canonical(&original)
+                .map_err(super::super::pin_registration::manifest_codec_refusal)
         });
         assert!(matches!(
             result,
-            Err(MusubiPublicationPinSigningErrorV1::Deferred(_))
+            Err(super::super::MusubiPublicationFinalizedPinRegistrationReadErrorV1::Deferred(_))
         ));
         assert_eq!(
             sorafs_manifest::decode_manifest_v1_canonical(&original).unwrap(),

@@ -33,7 +33,6 @@ use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use iroha_primitives::{const_vec::ConstVec, json::Json, time::TimeSource};
 use iroha_schema::IntoSchema;
-use iroha_version::Version;
 pub use ivm_proved_intent::{
     IVM_PROVED_TRANSACTION_INTENT_DIGEST_DOMAIN_V1, IvmProvedTransactionIntentDigestV1,
     IvmProvedTransactionIntentErrorV1,

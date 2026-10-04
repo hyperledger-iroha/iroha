@@ -1,5 +1,7 @@
 //! Canonical masked AXT artifacts with independently checked outer context.
 
+use iroha_allocation::{AllocationBudget, AllocationReservation};
+
 use super::*;
 use crate::{
     gadgets::public_transfer_statement::{
@@ -116,7 +118,15 @@ fn context(artifact: &FastpqAxtCompactArtifactV1) -> ExpectedAxtContext<'_> {
     }
 }
 
-pub(super) fn prove(batch: &TransitionBatch, binding: &AxtFastpqBinding) -> Result<Vec<u8>> {
+pub(super) fn prove(
+    batch: &TransitionBatch,
+    binding: &AxtFastpqBinding,
+    budget: &AllocationBudget,
+    reservation: &mut AllocationReservation,
+) -> Result<Vec<u8>> {
+    if !reservation.belongs_to(budget) {
+        return Err(Error::AllocationForeignPool);
+    }
     let artifact = prepare(batch, binding)?;
     offline_compact::prove_quantity_axt_artifact(
         &artifact.statement,
@@ -124,6 +134,8 @@ pub(super) fn prove(batch: &TransitionBatch, binding: &AxtFastpqBinding) -> Resu
         context(&artifact),
         ProvingLimits::default(),
         VerificationLimits::default(),
+        budget,
+        reservation,
     )
     .map_err(|error| match error {
         ProvingError::Prove(error) => error,

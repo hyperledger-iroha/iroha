@@ -1,7 +1,10 @@
 //! Original generated signer roles, native genesis grants and closed runtime-selection controls.
 
 use super::*;
-use iroha_core::{smartcontracts::ValidSingularQuery as _, state::WorldReadOnly as _};
+use iroha_core::{
+    smartcontracts::ValidSingularQuery as _,
+    state::{StorageReadOnly as _, WorldReadOnly as _},
+};
 use iroha_fs::{PrivateDirectory, PublishMode};
 
 fn fixture() -> (tempfile::TempDir, PreparedLocalnet) {

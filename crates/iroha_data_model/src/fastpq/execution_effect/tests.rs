@@ -25,7 +25,7 @@ fn balance() -> FastpqExecutionBalanceV1 {
         scope: AssetBalanceScope::Global,
     }
 }
-fn effects() -> FastpqExecutionEffectsV1 {
+pub(super) fn effects() -> FastpqExecutionEffectsV1 {
     FastpqExecutionEffectsV1 {
         context: FastpqExecutionEffectContextV1 {
             source: FastpqSourceStatementContextV1 {
@@ -141,7 +141,11 @@ fn original_order_operation_identity_and_full_source_are_committed() {
                 }
             }
         }
-        assert_ne!(digest, execution_effects_digest_v1(&changed).unwrap());
+        if matches!(change, 0 | 4) {
+            assert!(execution_effects_digest_v1(&changed).is_err());
+        } else {
+            assert_ne!(digest, execution_effects_digest_v1(&changed).unwrap());
+        }
     }
 }
 
@@ -189,4 +193,86 @@ fn retirement_codec_commits_exact_incarnation_and_distinct_lifecycle_presence_ke
     let mut trailing = bytes;
     trailing.push(0);
     assert!(norito::decode_canonical::<FastpqExecutionEffectKindV1>(&trailing).is_err());
+}
+
+#[test]
+fn streamed_effect_digests_match_ordered_source_and_complete_statement_in_every_layout() {
+    let mut tape = effects();
+    for empty in [false, true] {
+        if empty {
+            tape.effects.clear();
+        }
+        let expected = commitment::tests::owned_oracle(&tape);
+        let root = Hash::new(b"streamed statement root").into();
+        let statement = FastpqExecutionEffectStatementV1 {
+            public_inputs: FastpqPublicInputs {
+                dsid: [0; 16],
+                slot: 17,
+                old_root: root,
+                new_root: root,
+                perm_root: root,
+                tx_set_hash: root,
+            },
+            ordering_hash: root,
+            transitions: Vec::new(),
+            effects: tape.clone(),
+        };
+        let statement_expected = Hash::new_from_chunks(&[
+            b"fastpq:execution-effects:v1:statement|",
+            &norito::encode_canonical(&statement).unwrap(),
+        ]);
+        for flags in [0, norito::core::default_encode_flags()] {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(execution_effects_digest_v1(&tape).unwrap(), expected);
+            assert_eq!(
+                execution_effect_statement_digest_v1(&statement).unwrap(),
+                statement_expected
+            );
+            assert_ne!(
+                expected,
+                Hash::new(norito::encode_canonical(&tape).unwrap())
+            );
+        }
+    }
+}
+
+#[test]
+fn streamed_effect_digest_preserves_codec_error_and_rejects_partial_second_pass() {
+    use std::cell::Cell;
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model.test.fastpq.effect_digest.Unstable")]
+    struct Unstable {
+        calls: Cell<usize>,
+        mode: u8,
+    }
+    impl norito::SerializePayload for Unstable {
+        fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+            let call = self.calls.get();
+            self.calls.set(call + 1);
+            if self.mode == 0 || (self.mode == 1 && call != 0) {
+                return Err(norito::Error::NonCanonicalEncoding);
+            }
+            writer.write_all(if call == 0 {
+                &[1]
+            } else if self.mode == 2 {
+                &[2]
+            } else {
+                &[1, 2]
+            })?;
+            Ok(())
+        }
+    }
+    for mode in 0..4 {
+        let value = Unstable {
+            calls: Cell::new(0),
+            mode,
+        };
+        let error = canonical_effect_digest(b"exact domain|", &value).unwrap_err();
+        match mode {
+            0 | 1 => assert!(matches!(error, norito::Error::NonCanonicalEncoding)),
+            2 => assert!(matches!(error, norito::Error::ChecksumMismatch)),
+            _ => assert!(matches!(error, norito::Error::LengthMismatch)),
+        }
+        assert_eq!(value.calls.get(), if mode == 0 { 1 } else { 2 });
+    }
 }

@@ -107,8 +107,38 @@ Torii listener access controls still apply. `GET /v1/node/capabilities` is publi
 as well: `getNodeCapabilities()` reads it without credentials, and the
 transaction preflight caches only a successful, matching probe.
 
-From an Iroha source checkout, run the native build (wrapping
-`cargo build -p iroha_js_host`) before using native-backed APIs:
+Ordinary source-checkout unit tests can use a separate current Debug N-API
+producer. From the repository root, select the worktree's existing warm Cargo
+lane and an external artifact directory whose parent is owned mode `0700`:
+
+```bash
+python3.12 -I -S -B scripts/native_js_local_unit.py produce \
+  --root "$PWD" --target-dir "$PWD/target/cargo-fast/<existing-lane>" \
+  --output /absolute/owner-only-directory/js-native \
+  --config /absolute/local-native-tools.json --acknowledge-local-unit-recipe
+(cd javascript/iroha_js && IROHA_JS_NATIVE_DIR=/absolute/owner-only-directory/js-native \
+  node ./scripts/run-test-profile.mjs unit)
+```
+
+The tool configuration has exactly `python`, `cargo`, `rustc`, `rustdoc`,
+`node`, `clang`, `ld`, `codesign`, `sdk` and `developer_dir` paths. Use the
+current canonical Python 3.12 and Node executables, stock Rust 1.93.1 tools,
+and the selected Xcode's macOS SDK, clang and Apple linker. The producer uses
+locked, offline Cargo with its native jobserver and incremental compilation;
+it creates no additional Cargo target. It retains the actual compiler JSON,
+complete dep-info after Cargo's natural successful terminal, original source
+and native build inputs, exact tools, and independently copied emitted bytes.
+The real Node consumer checks the current ABI and required exports before the
+explicit local-unit manifest can be loaded. Loading rechecks current consumed
+inputs and code before making an immutable native snapshot. No test is skipped
+when source, receipt, native or export checks fail.
+
+This artifact has only host Debug local-unit scope. Package publication,
+`prepack`, Release/deploy and installed native qualification retain the strict
+V4 provenance path below and do not admit its local-unit manifest.
+
+From an Iroha source checkout, the provenance build for packaged native
+artifacts wraps `cargo build -p iroha_js_host`:
 
 ```bash
 npm install
@@ -1569,9 +1599,8 @@ if (recovery) {
 ### Iterating NFTs, RWAs, and account assets
 
 Torii collections iterate with opaque cursors (see
-[Collection queries](#collection-queries)); the Explorer NFT and RWA lists use
-their own seek cursors (`cursor` plus a `limit` from 1 through 100) and accept
-owner/domain filters.
+[Collection queries](#collection-queries)); Explorer feeds use the same `filter`, `select`, `limit`, and `cursor` controls.
+Their server order is fixed, so sorting, totals, and aggregation are unavailable.
 
 ```js
 const torii = new ToriiClient("https://torii.example");
@@ -1579,15 +1608,15 @@ const torii = new ToriiClient("https://torii.example");
 const nftPage = await torii.nfts.list({ sort: "id", limit: 3 });
 console.log("first nft page:", nftPage.items.map((nft) => nft.id));
 
-const rwaPage = await torii.listExplorerRwas({
-  ownedBy: authority,
+const rwaPage = await torii.explorerRwas.list({
+  filter: field("owned_by").eq(authority),
   limit: 2,
 });
 console.log("first RWA page:", rwaPage.items.map((it) => it.id));
 
-for await (const lot of torii.iterateAccountRwas(authority, {
+for await (const lot of torii.explorerRwas.iterate({
   limit: 2,
-  domainId: "commodities",
+  filter: field("owned_by").eq(authority).and(field("domain").eq("commodities")),
 })) {
   console.log(`${lot.id} => ${lot.quantity}`);
 }
@@ -2805,17 +2834,15 @@ bindings.dataspaces.forEach((entry) => {
   console.log(`${entry.dataspace_alias ?? entry.dataspace_id}: ${entry.accounts.join(", ")}`);
 });
 
-const manifests = await torii.getUaidManifests(uaidLiteral, {
-  dataspaceId: 11,
-  status: "active",
+const manifests = await torii.uaidManifests(uaidLiteral).list({
+  filter: 'dataspace_id = 11 and status = "Active"',
   limit: 50,
-  offset: 0,
-  countMode: "exact",
+  includeTotal: true,
 });
 console.log(
-  `matched=${manifests.total} more=${manifests.has_more} count=${manifests.count_mode}`,
+  `matched=${manifests.total} next=${manifests.nextCursor}`,
 );
-manifests.manifests.forEach((manifest) => {
+manifests.items.forEach((manifest) => {
   console.log(
     `manifest ${manifest.manifest_hash} status=${manifest.status} entries=${manifest.manifest.entries.length}`,
   );
@@ -2828,11 +2855,10 @@ Each helper validates the response payloads:
   sorted dataspace/account tree.
 - `getUaidBindings` mirrors the Space Directory bindings map so tooling can
   confirm which Torii account IDs are active per dataspace.
-- `getUaidManifests` requires the exact paginated response envelope, numeric
+- `uaidManifests(uaid).list()` requires the exact shared page envelope, numeric
   manifest version `1`, lifecycle metadata, lower-case hashes, canonical
-  accounts, and exact allow/deny entry shapes. Filters use `dataspaceId`,
-  `status`, `limit`, `offset`, and `countMode`; values are never trimmed,
-  case-folded, or numerically coerced.
+  accounts, and exact allow/deny entry shapes. Use the shared `filter`, `sort`,
+  `select`, `limit`, `cursor`, and `includeTotal` controls.
 
 The helpers require exact lower-case `uaid:<64-hex>` literals with LSB=1 and
 throw on whitespace, raw hashes, or case variants, ensuring automation scripts
@@ -4392,9 +4418,9 @@ console.log(JSON.stringify(active)); // {"op":"or","args":[...]}
 // (code `invalid_filter`) with `line` and `column`.
 const named = Filter.parse("metadata.`display-name` is not null");
 
-// Grouped metrics (POST only): items are aggregate rows. Torii computes them
-// where the rows live: a read whose visible rows span several dataspace routes
-// is rejected with 400 invalid_aggregate; page through the rows instead.
+// Grouped metrics (POST only): items are aggregate rows. Torii executes the query
+// once over the caller-visible global state, so supported totals and aggregates
+// count visible rows exactly once across dataspace routes.
 const supply = await torii.accountAssets("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB").list({
   filter: "quantity > 0",
   aggregate: {
@@ -4416,9 +4442,15 @@ such as `"10.5"` or `KotodamaQuantity` values. Fractional JavaScript numbers
 are rejected because they are not exact; object and array literals are allowed
 only for `metadata.*` fields and travel in the JSON form.
 
-Transactions and account transactions are history collections: rows come
+`subscriptionPlans` and `subscriptions` are collections of flat rows keyed by
+`id`. `uaidManifests(uaid)` and `accountPermissions(accountId)` use the same
+filter, projection, ordering and cursor controls. Pages require `next_cursor`
+on the wire (a nonempty token or null); unknown envelope fields are rejected.
+
+Transactions, account transactions, `contractActivity`, `contractEvents` and
+`accountHistory(accountId)` are history collections: rows come
 newest first by `block_height`, then `block_index` (the position within the
-block), and `sort`, `includeTotal` and `aggregate` are rejected. Each page has
+block; account movements also carry `movement_index`), and `sort`, `includeTotal` and `aggregate` are rejected. Each page has
 a bounded scan budget, so a page may hold fewer than `limit` items, even none,
 together with a `nextCursor`; `pages()` and `iterate()` keep following it until
 it is `null`, and stop with an error only if Torii returns the cursor it was
@@ -4464,13 +4496,13 @@ cryptographic proof verifier, software prover, or fallback for device authority.
 Peer-transfer keys and state transitions remain hardware-bound; applications
 must obtain and verify transition proofs through a qualified wallet implementation.
 
-Account permissions are a separate offset-paged route:
+Account permissions use the shared collection cursor:
 
 ```js
-const perms = await torii.listAccountPermissions("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", { limit: 5 });
+const perms = await torii.accountPermissions("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB").list({ limit: 5 });
 console.log("effective permissions", perms.items.map((item) => item.name));
 // The endpoint includes both direct grants and grants inherited from assigned roles.
-for await (const perm of torii.iterateAccountPermissions("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", { pageSize: 2 })) {
+for await (const perm of torii.accountPermissions("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB").iterate({ limit: 2 })) {
   console.log("paged permission", perm.name);
 }
 ```
@@ -4516,7 +4548,7 @@ const browserTorii = new ToriiBrowserClient("https://torii.example", {
   },
 });
 
-const visibleNfts = await browserTorii.listExplorerNfts({ limit: 25 });
+const visibleNfts = await browserTorii.explorerNfts.list({ limit: 25 });
 const visibleDomains = await browserTorii.domains.list({ limit: 25 }); // signed with the read identity
 ```
 
@@ -4555,13 +4587,13 @@ console.log(qr.svg); // inline SVG (192x192) ready to drop into your UI
 const block = await torii.getBlock(42);
 console.log(block?.height); // null when the block is missing
 
-const recentBlocks = await torii.listBlocks({ limit: 5 });
+const recentBlocks = await torii.explorerBlocks.list({ limit: 5 });
 console.log(
-  `returned ${recentBlocks.items.length} blocks from snapshot #${recentBlocks.pagination.snapshotHeight}`,
+  `returned ${recentBlocks.items.length} blocks`,
 );
-console.log(`more=${recentBlocks.pagination.hasMore}`);
+console.log(`next=${recentBlocks.nextCursor}`);
 for (const entry of recentBlocks.items) {
-  console.log(`${entry.hash} rejected=${entry.transactionsRejected}`);
+  console.log(`${entry.hash} rejected=${entry.transactions_rejected}`);
 }
 
 // With `canonicalRequestAuth` configured, Explorer, generic event SSE, and
@@ -4581,8 +4613,8 @@ for await (const holding of torii.accountAssets("sorauﾛ1PｸCｶrﾑhyﾜｴ�
 console.log("largest holdings", holdings);
 
 const ownedNfts = [];
-for await (const nft of torii.iterateAccountNfts("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
-  domainId: "wonderland",
+for await (const nft of torii.explorerNfts.iterate({
+  filter: field("owned_by").eq("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB").and(field("domain").eq("wonderland")),
   limit: 10,
 })) {
   ownedNfts.push(nft.id);

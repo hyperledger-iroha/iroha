@@ -2,7 +2,8 @@
 
 Every Torii collection (domains, accounts, asset definitions, NFTs, RWA lots,
 account assets, asset holders, transactions, account transactions, repo
-agreements) is read with one query language and returns one page envelope. The same language is
+agreements, effective account permissions, subscription plans, subscriptions,
+and UAID manifests) is read with one query language and returns one page envelope. The same language is
 used by the SDKs, the `iroha` CLI and the event-stream `filter` parameter.
 The Rust reference implementation is
 [`iroha_torii_shared::list_query`](../../crates/iroha_torii_shared/src/list_query/mod.rs);
@@ -35,10 +36,17 @@ Design rules:
 | transactions | — | `POST /v1/transactions/query` |
 | account transactions | `GET /v1/accounts/{account_id}/transactions` | `POST /v1/accounts/{account_id}/transactions/query` |
 | repo agreements | `GET /v1/repo/agreements` | `POST /v1/repo/agreements/query` |
+| account permissions | `GET /v1/accounts/{account_id}/permissions` | `POST /v1/accounts/{account_id}/permissions/query` |
+| subscription plans | `GET /v1/subscriptions/plans` | `POST /v1/subscriptions/plans/query` |
+| subscriptions | `GET /v1/subscriptions` | `POST /v1/subscriptions/query` |
+| UAID manifests | `GET /v1/space-directory/uaids/{uaid}/manifests` | `POST /v1/space-directory/uaids/{uaid}/manifests/query` |
+| account movements | `GET /v1/accounts/{account_id}/history` | `POST /v1/accounts/{account_id}/history/query` |
+| contract activity | `GET /v1/contracts/activity` | `POST /v1/contracts/activity/query` |
+| contract events | `GET /v1/contracts/events` | `POST /v1/contracts/events/query` |
 
 `GET` and `POST …/query` are equivalent; `POST` additionally supports
-`aggregate` and avoids URL length limits. Responses are JSON. Transaction
-collections are [history collections](#history-collections) with a few
+`aggregate` and avoids URL length limits. Responses are JSON. Transactions, account movements, contract activity and events
+are [history collections](#history-collections) with a few
 restrictions.
 
 ## Request controls
@@ -56,6 +64,41 @@ restrictions.
 Each control appears at most once. A `GET` with any other parameter, or a
 body with any other member, is rejected with `invalid_query`, listing the
 accepted names. `select` and `aggregate` are mutually exclusive.
+
+**Order and scan cost.** Domains, accounts, asset definitions, NFTs, RWA lots
+repo agreements, subscription plans and subscriptions are stored by `id`. Their default order, and `sort=id` or
+`sort=-id`, is canonical identifier order: the order Torii stores the
+identifiers in, which is not always the alphabetical order of their text.
+These reads seek to the cursor instead of sorting, and an exact `id = …` or
+`id in […]` filter reads only those identifiers, so a page costs the rows it
+examines, not the collection size. Each such page examines at most 65,536
+storage entries, including entries excluded by visibility checks. A selective
+filter can return a short (even empty) page with a `next_cursor`; keep following
+it until it is `null`. A cursor contains only a visible identifier. If a scan
+budget is exhausted without a visible continuation, the request fails with
+`query_scan_limit_exceeded`. Every other order sorts the whole match set.
+Aggregates and `include_total` scan the complete candidate set, including
+entries before the cursor, with a limit of 1,048,576 storage entries per request
+(`query_scan_limit_exceeded` beyond that).
+Rows with equal sort values are ordered by their identity.
+
+**Memory admission.** `torii.query_fanout_max_retained_bytes` bounds aggregate
+query memory (default 512,000,000 bytes), while
+`torii.query_fanout_max_working_set_bytes` bounds one complete query working set
+(default 48,000,000 bytes). One quarter of the aggregate belongs to independent
+signed-query ingress. With the default content limit, the remaining
+384,000,000 bytes admit eight complete query owners. Increasing aggregate
+capacity raises concurrency without increasing one query's decode, source or
+response ceilings. Smaller aggregate pools reduce the admitted owner and all
+its phase limits together.
+
+The same owner follows collection request decoding, local execution and the
+returned HTTP body. Compiled plans, decoded cursors and the next cursor share
+the scratch phase with runtime ordering and projection; cursor JSON, its frame
+and base64 output are charged for their actual overlap. Bodyless reads wait
+within the finite query admission queue before query decoding. Reads with a
+body fail admission before body polling when every complete owner is occupied.
+These memory-capacity failures are independent of request-rate limits.
 
 Query strings use ordinary RFC 3986 percent-encoding: any valid escape
 (upper- or lower-case hexadecimal) and literal sub-delimiters such as `:` `,`
@@ -153,11 +196,13 @@ entries, `group_by` and metric fields — it is the raw dotted path
   change between pages. A cursor holds the last row's sort values (at most
   4,096 bytes); a page whose last row has longer sort values fails with
   `invalid_sort` instead of returning a cursor the next request would refuse.
-- `total` is present only when `include_total` is true. Account assets and
-  asset holders add up the counts of every dataspace route, which serve
-  disjoint rows. Other collections reject `include_total` with
-  `invalid_include_total` when the read spans several routes, because a row
-  can appear on more than one.
+- `total` is present only when `include_total` is true; it is the exact count
+  for the complete query, including matches before the cursor.
+
+A read executes once, on one dataspace route: every route of the global root
+reads the same world state under the caller's visibility (dataspaces are
+routing labels over one global block), so one execution answers the whole
+read and totals and aggregates are exact.
 
 To read everything, repeat the request with `cursor = next_cursor` until it is
 `null`. Every SDK exposes this as an iterator.
@@ -182,7 +227,7 @@ Request problems return `400` with the standard error envelope:
 | `invalid_limit` | `limit` outside the accepted range |
 | `invalid_cursor` | malformed cursors or cursors from a different query |
 | `invalid_include_total` | non-boolean values |
-| `query_scan_limit_exceeded` | reads that would examine more rows, groups or distinct values than the node allows, and history pages that start beyond the scan budget's reach |
+| `query_scan_limit_exceeded` | reads that exceed the row, group, distinct-value or byte budget, and history pages that exhaust their budget without a caller-visible continuation |
 
 `details.field` names the control; when a data field is at fault,
 `details.actual` names it and `details.expected` lists the accepted fields as a
@@ -213,6 +258,18 @@ absent.
 | asset holders | `account_id`, `asset`, `asset_alias`, `scope` (strings, *sort*), `quantity` (decimal, *sort*) | `account_id`, `scope` |
 | transactions, account transactions | `entrypoint_hash`, `block_hash`, `authority` (string or null), `entrypoint_kind` (strings), `block_height`, `block_index`, `timestamp_ms` (number or null) (numbers), `result_ok` (bool), `asset_ids`, `asset_definition_ids` (lists of strings), `metadata.*` | newest first |
 | repo agreements | `id`, `initiator`, `counterparty`, `custodian`, `status`, `cash_source`, `cash_leg.asset_definition_id`, `collateral_leg.asset_definition_id`, `collateral_custody_asset` (strings, *sort*), `cash_leg.quantity`, `collateral_leg.quantity` (decimals, *sort*), `rate_bps`, `maturity_timestamp_ms`, `initiated_timestamp_ms`, `last_margin_check_timestamp_ms`, `settlement_timestamp_ms`, `governance.haircut_bps`, `governance.margin_frequency_secs` (numbers, *sort*) | `id` |
+| account permissions | `name` (string, *sort*), `payload` (JSON); effective grants include direct and role permissions, deduplicated by name and payload | `name`, `payload` |
+| subscription plans | `id`, `provider` (strings, *sort*), `billing`, `pricing` (JSON) | `id` |
+| subscriptions | `id`, `owned_by`, `plan_id`, `provider`, `subscriber`, `status`, `billing_trigger_id` (strings, *sort*), `current_period_start_ms`, `current_period_end_ms`, `next_charge_ms`, `cancel_at_ms`, `failure_count` (numbers, *sort*), `cancel_at_period_end` (bool), `usage_accumulated`, `invoice`, `plan` (JSON) | `id` |
+| UAID manifests | `dataspace_id` (number, *sort*), `dataspace_alias`, `manifest_hash`, `status` (strings, *sort*), `manifest`, `lifecycle` (JSON), `accounts` (list of strings) | `dataspace_id` |
+| account movements | `id`, `source`, `type`, `status`, `direction`, `account_id`, `counterparty_account_id`, `asset_id`, `asset_definition_id`, `tx_hash` (strings), `timestamp_ms`, `block_height`, `block_index`, `movement_index`, `expires_at_ms`, `finalized_at_ms` (numbers), `operation_id`, `requesting_fi_id` (strings), `amount` (decimal), `result_ok` (bool) | newest chain position first, then descending movement index |
+| contract activity | `authority`, `entrypoint_hash`, `contract_address`, `contract_alias`, `contract_entrypoint` (strings), `timestamp_ms`, `block_height`, `block_index` (numbers), `result_ok` (bool), `contract_payload`, `fee_payment` (JSON) | newest first |
+| contract events | `event_id`, `provenance`, `authority`, `tx_hash_hex`, `block_hash_hex`, `contract_address`, `contract_alias`, `module`, `event_kind` (strings), `schema_version`, `timestamp_ms`, `block_height`, `block_index` (numbers), `result_ok` (bool), `participants`, `asset_ids` (lists of strings), `numeric_fields`, `payload`, `fee_payment` (JSON) | newest first |
+
+Subscription status is a lower-case string (`active`, `paused`, `past_due`,
+`canceled`, `suspended`). Manifest status is `Pending`, `Active`, `Expired` or
+`Revoked`; use an ordinary filter such as `status != "Active"` for inactive
+manifests. The UAID scopes the path and cursor; manifest rows are in `items`.
 
 Asset definition items carry the complete definition record (including
 `description`, `spec`, `logo` and `balance_scope_policy`) and an
@@ -227,7 +284,13 @@ select rows where none does. Lists cannot be sorted or range-compared.
 Transactions are read in history order, newest first: by `block_height`
 descending, then `block_index` (the transaction's position in its block)
 descending. Account transactions are the committed transactions the account
-signed or that reference it.
+signed or that reference it. Contract activity and event pages project the
+committed transaction directly. Account movement pages add a descending
+`movement_index` within each transaction, so page boundaries never skip other
+movements from that transaction. History cursors contain only caller-visible
+candidates; exhausting a page budget before finding one returns an explicit
+`query_scan_limit_exceeded` error. Account movement expansion also consumes the
+raw-row budget. These pages do not build a full-history process cache.
 
 - The cursor holds the block coordinates of the last row and the next page
   starts strictly before them, so transactions committed while paging never
@@ -239,15 +302,15 @@ signed or that reference it.
   transaction examined) and a matching byte allowance. A selective filter can therefore return a page with
   fewer than `limit` items, even none, together with a `next_cursor`; keep
   following `next_cursor` until it is `null`.
-- History is authenticated downward from the newest block on every page, so
-  the budget also pays for each block above the page's starting position.
-  A page that would start deeper than the budget reaches is rejected with
-  `query_scan_limit_exceeded`; with the default budget of 500, transactions
-  roughly 500 blocks or more below the newest block are out of reach.
+- Every block a page reads is authenticated by walking parent links down
+  from a verified identity. Nodes keep such identities as checkpoints (every
+  64 blocks, recorded at startup and as blocks commit, plus the blocks recent
+  pages verified), so a page starts at most 64 blocks above its position and
+  all of history is reachable. A page whose blocks alone exceed the budget
+  is rejected with `query_scan_limit_exceeded`.
 - Bounds on `block_height` in the filter's top-level `and` bound the rows a
   page examines: `block_height >= 1200` ends the walk below height 1200, and
-  `block_height <= 1500` skips newer rows (their blocks are still read to
-  authenticate history). `filter=block_height >= 1200 and result_ok = true`
+  `block_height <= 1500` starts the walk just above height 1500. `filter=block_height >= 1200 and result_ok = true`
   examines only that range.
 
 ## Aggregates
@@ -271,11 +334,6 @@ fields and 16 metrics, and unknown members are rejected. A metric alias
 must not name the first segment of a group field (such as `metadata` beside
 `metadata.tier`). Values that compare equal group together, so `5` and `"5"`
 in a metadata field are one group.
-
-Aggregates are computed where the rows live. A read whose visible rows span
-several dataspace routes is rejected with `invalid_aggregate`, because routes
-may hold overlapping rows that cannot be summed exactly; page through the rows
-without `aggregate` instead.
 
 ## Event streams
 
@@ -304,3 +362,46 @@ transaction adds `rejection_code` (`account_does_not_exist`, `limit_check`,
 `trigger_execution`) and the fixed public `rejection_reason`; a rejected
 block adds `rejection_code` with the block rejection variant. A `summary`
 member, where present, is diagnostic text without a stable format.
+
+## Explorer feeds
+
+`GET /v1/explorer/{collection}` and `POST /v1/explorer/{collection}/query`
+accept shared `filter`, `select`, `limit` and `cursor`. Collections are
+`accounts`, `domains`, `asset-definitions`, `assets`, `nfts`, `rwas`, `blocks`,
+`transactions`, `transactions/latest`, `instructions` and `instructions/latest`.
+All return `Page` with `items` and `next_cursor`; there is no nested pagination
+object or sampling timestamp. The default limit is 25 and maximum 100.
+`sort`, `aggregate` and `include_total` are rejected because these feeds retain
+bounded scans in their existing canonical index or newest-history order.
+
+Existing DTO row fields and visibility-aware counters are retained. A filter
+runs over each bounded candidate page before projection; a page may be empty
+with a continuation. Follow every continuation until `next_cursor` is null.
+Cursors bind the collection, complete filter and current visibility scope.
+History continuations also retain the committed snapshot hash and height.
+Changing `select` or `limit` between pages is allowed.
+
+| Feed | Filterable/projectable DTO fields |
+| --- | --- |
+| accounts | `id`, `network_prefix`, `owned_domains`, `owned_assets`, `owned_nfts`, `metadata.*` |
+| domains | `id`, `logo`, `owned_by`, `accounts`, `assets`, `nfts`, `metadata.*` |
+| asset-definitions | `id`, `owning_domain`, `mintable`, `logo`, `owned_by`, `assets`, `total_quantity`, `locked_quantity`, `circulating_quantity`, `metadata.*` |
+| assets | `id`, `definition_id`, `account_id`, `value` |
+| nfts | `id`, `owned_by`, `metadata.*` |
+| rwas | `id`, `owned_by`, `quantity`, `held_quantity`, `primary_reference`, `status`, `is_frozen`, `parents`, `metadata.*` |
+| blocks | `hash`, `height`, `created_at`, `prev_block_hash`, `transactions_hash`, `transactions_rejected`, `transactions_total` |
+| transactions and latest | `authority`, `hash`, `block`, `created_at`, `executable`, `status` |
+| instructions and latest | `authority`, `created_at`, `kind`, `box`, `box.encoded`, `box.framed_sha256`, `box.json`, `transaction_hash`, `transaction_status`, `block`, `index` |
+
+DTO fields accept the complete shared filter AST. The following synthetic
+membership selectors are filter-only and accept one string equality in the
+outer conjunction: accounts `domain` and `with_asset`; NFTs/RWAs `domain`;
+transactions `asset_id`; instructions `account` and `asset_id`. For example,
+`domain = "wonderland.universal" and owned_assets > 0` queries accounts.
+Negation, disjunction, range tests and duplicate conjuncts on a synthetic
+selector are rejected explicitly. Resource selectors are never accepted as
+top-level request parameters or JSON members.
+
+The CLI exposes these feeds as `iroha explorer accounts`, `iroha explorer
+asset-definitions`, `iroha explorer transactions-latest`, etc., using the same
+list flags and `--all` traversal as other collections.

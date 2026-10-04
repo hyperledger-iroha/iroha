@@ -99,7 +99,8 @@ impl DeveloperWorkspace {
 
     /// Create or recover one owner-private dataspace using the installed parent profile.
     ///
-    /// The shared native worker owns all custody, funding, namespace and outbound relay work.
+    /// The shared native worker owns custody, funding, paid namespace and `admin@alias` leases,
+    /// and outbound relay work.
     /// A timeout retains exact work for retry; the complete foreground budget is sixty seconds.
     /// # Errors
     /// Invalid identity/profile, unsafe custody, failed private startup or unconfirmed attachment.
@@ -115,6 +116,7 @@ impl DeveloperWorkspace {
                 name: name.to_owned(),
                 network: network.to_owned(),
                 alias: alias.to_owned(),
+                account_alias: "admin".to_owned(),
                 timeout: Duration::from_secs(60),
             },
         )?)

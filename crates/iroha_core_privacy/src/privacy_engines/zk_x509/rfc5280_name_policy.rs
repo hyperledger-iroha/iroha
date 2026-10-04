@@ -13,7 +13,6 @@ const CLASS_ROLES: [u64; 5] = [
     ZkX509Rfc5280GrammarRoleV1::CrlIssuer as u64,
 ];
 const NODE_NONEMPTY_INVERSE: usize = NODE_CLASS + 2 * CLASS_ROLES.len();
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) const NODE_PREFIX_END: usize = NODE_NONEMPTY_INVERSE + 1;
 const NAME: usize = BASE_C;
 const NAME_INVERSE: usize = BASE_D;

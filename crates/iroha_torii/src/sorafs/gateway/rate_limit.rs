@@ -402,15 +402,24 @@ mod tests {
     #[test]
     fn rate_limiter_default_admits_large_solo_burst_with_one_fixed_bucket() {
         let limiter = GatewayRateLimiter::new_default();
-        assert_eq!(limiter.config.max_requests, Some(600_000));
+        assert_eq!(limiter.config.max_requests, Some(60_000_000));
         assert_eq!(limiter.config.window, Duration::from_secs(60));
         assert_eq!(limiter.config.ban_duration, Some(Duration::from_secs(30)));
         let client = ClientFingerprint::from_identifier("solo-public-client");
         let now = Instant::now();
-        for request in 0..600_000 {
+        for request in 0..10_000 {
             assert!(limiter.check(&client, now).is_ok(), "request {request}");
         }
         assert_eq!(limiter.buckets.len(), 1);
+        let request_cost = limiter.request_cost();
+        assert_eq!(
+            limiter.buckets.get(&client).unwrap().credits,
+            59_990_000 * request_cost
+        );
+        // Advance to the final token after the real request walk, keeping boundary
+        // coverage independent of a sixty-million-request test loop.
+        limiter.buckets.get_mut(&client).unwrap().credits = request_cost;
+        assert!(limiter.check(&client, now).is_ok());
         assert_eq!(limiter.buckets.get(&client).unwrap().credits, 0);
         assert!(matches!(
             limiter.check(&client, now),

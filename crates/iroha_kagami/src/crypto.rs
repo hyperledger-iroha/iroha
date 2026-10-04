@@ -17,7 +17,8 @@ pub struct Args {
     seed: Option<String>,
     /// Write the key pair into a new owner-only custody directory.
     ///
-    /// The directory must not contain any existing entries. Files are written
+    /// The directory must be fresh. The complete key pair publishes atomically.
+    /// Files are written
     /// as `public.key` and `private.key`; `--pop` also writes `pop.hex`. The
     /// private key never passes through standard output.
     #[clap(long, value_name = "DIR")]
@@ -104,24 +105,9 @@ fn write_key_custody<T: Write>(
     private_key: &ExposedPrivateKey,
     pop_hex: Option<&str>,
 ) -> Outcome {
-    let out_dir = crate::secure_fs::prepare_empty_private_directory(out_dir)
-        .wrap_err("prepare key custody directory")?;
-    let public_path = out_dir.join(PUBLIC_KEY_FILE);
     let mut public_record = public_key.to_string();
     public_record.push('\n');
-    crate::secure_fs::write_private_file_atomic(&public_path, public_record.as_bytes())
-        .wrap_err("write public-key custody file")?;
-    let pop_path = pop_hex
-        .map(|pop_hex| -> color_eyre::Result<_> {
-            let path = out_dir.join(POP_FILE);
-            let mut pop_record = pop_hex.to_owned();
-            pop_record.push('\n');
-            crate::secure_fs::write_private_file_atomic(&path, pop_record.as_bytes())
-                .wrap_err("write proof-of-possession custody file")?;
-            Ok(path)
-        })
-        .transpose()?;
-    let private_path = out_dir.join(PRIVATE_KEY_FILE);
+    let pop_record = pop_hex.map(|pop| format!("{pop}\n"));
     let canonical_private = Zeroizing::new(
         private_key
             .try_to_multihash_string()
@@ -130,11 +116,33 @@ fn write_key_custody<T: Write>(
     let mut private_record = Zeroizing::new(Vec::with_capacity(canonical_private.len() + 1));
     private_record.extend_from_slice(canonical_private.as_bytes());
     private_record.push(b'\n');
-    crate::secure_fs::write_private_file_atomic(&private_path, private_record.as_slice())
-        .wrap_err("write private-key custody file")?;
+    let out_dir = crate::atomic_output::resolve_output_file(out_dir)
+        .wrap_err("prepare key custody directory")?;
+    let parent = iroha_fs::OwnerDirectory::open(
+        out_dir
+            .parent()
+            .expect("resolved custody path has a parent"),
+    )
+    .wrap_err("prepare key custody directory")?;
+    let mut records = vec![
+        (PUBLIC_KEY_FILE, public_record.as_bytes()),
+        (PRIVATE_KEY_FILE, private_record.as_slice()),
+    ];
+    if let Some(pop_record) = &pop_record {
+        records.push((POP_FILE, pop_record.as_bytes()));
+    }
+    let custody = parent
+        .publish_private_child(
+            out_dir.file_name().expect("resolved custody path has a name"),
+            &records,
+        )
+        .wrap_err("publish complete key custody directory; reconcile the exact destination before retrying")?;
+    let public_path = custody.path().join(PUBLIC_KEY_FILE);
+    let private_path = custody.path().join(PRIVATE_KEY_FILE);
     writeln!(writer, "public_key_file: {}", public_path.display())?;
     writeln!(writer, "private_key_file: {}", private_path.display())?;
-    if let Some(pop_path) = pop_path {
+    if pop_record.is_some() {
+        let pop_path = custody.path().join(POP_FILE);
         writeln!(writer, "pop_file: {}", pop_path.display())?;
     }
     Ok(())
@@ -274,6 +282,92 @@ mod tests {
         .run(&mut BufWriter::new(Vec::new()))
         .expect_err("existing custody directory must never be reused");
         assert!(error.to_string().contains("prepare key custody directory"));
+    }
+    #[test]
+    fn key_custody_refuses_existing_empty_destination() {
+        let root = tempfile::tempdir().unwrap();
+        let custody = root.path().join("custody");
+        std::fs::create_dir(&custody).unwrap();
+        let mut writer = BufWriter::new(Vec::new());
+        assert!(
+            Args {
+                algorithm: AlgorithmArg(Algorithm::Ed25519),
+                seed: Some("42".repeat(32)),
+                out_dir: custody.clone(),
+                pop: false,
+            }
+            .run(&mut writer)
+            .is_err()
+        );
+        assert_eq!(std::fs::read_dir(custody).unwrap().count(), 0);
+        assert!(writer.into_inner().unwrap().is_empty());
+    }
+    #[test]
+    fn concurrent_key_generation_publishes_one_complete_original_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let custody = root.path().join("custody");
+        let gate = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let contenders = ["42", "43"].map(|seed| {
+            let gate = gate.clone();
+            let custody = custody.clone();
+            std::thread::spawn(move || {
+                gate.wait();
+                let mut writer = BufWriter::new(Vec::new());
+                let result = Args {
+                    algorithm: AlgorithmArg(Algorithm::Ed25519),
+                    seed: Some(seed.repeat(32)),
+                    out_dir: custody,
+                    pop: false,
+                }
+                .run(&mut writer);
+                (result.is_ok(), writer.into_inner().unwrap())
+            })
+        });
+        let results = contenders.map(|thread| thread.join().unwrap());
+        assert_eq!(results.iter().filter(|(success, _)| *success).count(), 1);
+        assert!(
+            results
+                .iter()
+                .all(|(success, output)| *success || output.is_empty())
+        );
+        let public = iroha_fs::read_regular(custody.join(super::PUBLIC_KEY_FILE), 4096).unwrap();
+        let private = iroha_fs::read_private(custody.join(super::PRIVATE_KEY_FILE), 4096).unwrap();
+        let exposed: ExposedPrivateKey = std::str::from_utf8(&private)
+            .unwrap()
+            .strip_suffix('\n')
+            .unwrap()
+            .parse()
+            .unwrap();
+        let key_pair = KeyPair::from_private_key(exposed.0).unwrap();
+        assert_eq!(
+            public.as_slice(),
+            format!("{}\n", key_pair.public_key()).as_bytes()
+        );
+        assert_eq!(std::fs::read_dir(custody).unwrap().count(), 2);
+    }
+    #[test]
+    fn validator_key_and_pop_publish_together_and_verify() {
+        let root = tempfile::tempdir().unwrap();
+        let custody = root.path().join("custody");
+        Args {
+            algorithm: AlgorithmArg(Algorithm::BlsNormal),
+            seed: Some("42".repeat(32)),
+            out_dir: custody.clone(),
+            pop: true,
+        }
+        .run(&mut BufWriter::new(Vec::new()))
+        .unwrap();
+        let public = iroha_fs::read_regular(custody.join(super::PUBLIC_KEY_FILE), 4096).unwrap();
+        let pop = iroha_fs::read_regular(custody.join(super::POP_FILE), 4096).unwrap();
+        let public = std::str::from_utf8(&public)
+            .unwrap()
+            .trim_end()
+            .parse()
+            .unwrap();
+        let pop = hex::decode(std::str::from_utf8(&pop).unwrap().trim_end()).unwrap();
+        iroha_crypto::bls_normal_pop_verify(&public, &pop).unwrap();
+        assert!(iroha_fs::read_private(custody.join(super::PRIVATE_KEY_FILE), 4096).is_ok());
+        assert_eq!(std::fs::read_dir(custody).unwrap().count(), 3);
     }
     #[test]
     fn key_pair_random_path_uses_checked_generation() {

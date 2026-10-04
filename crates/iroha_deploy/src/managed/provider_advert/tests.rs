@@ -205,7 +205,7 @@ fn publisher_partial_peers_reopen_repeats_exact_original_without_readiness_claim
         assert_eq!(request.method, "POST");
         assert_eq!(
             request.target.path(),
-            iroha_torii_shared::route_catalog::sorafs::PROVIDER_ADVERT.path
+            iroha_torii_shared::route_catalog::sorafs::PROVIDER_ADVERT.path()
         );
         assert_eq!(request.body, exact);
     }

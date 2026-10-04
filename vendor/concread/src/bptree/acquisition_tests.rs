@@ -12,7 +12,7 @@ use std::{
 #[test]
 fn acquired_map_validation_retains_stale_and_poisoned_physical_writers() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 
@@ -78,7 +78,7 @@ fn acquired_map_validation_retains_stale_and_poisoned_physical_writers() {
 #[test]
 fn acquired_map_foreign_busy_success_and_unwind_preserve_original_custody() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 

@@ -14,6 +14,16 @@ use super::{
 };
 use norito::json::Value;
 
+/// Capture the signed provider-bundle record with the current completion authority.
+pub(in crate::isi) fn provider_attestation_value() -> Value {
+    let value = fixture_values::generated_identity_values().register_provider_attestation;
+    value
+        .attestation
+        .verify(&value.attestation.payload.binding)
+        .expect("canonical signed provider-bundle fixture");
+    capture(value)
+}
+
 /// Build the missing Musubi generated-record capture rows from canonical typed fixtures.
 pub fn values() -> Vec<Value> {
     let document = fixture_values::instruction_document();
@@ -62,4 +72,28 @@ pub fn values() -> Vec<Value> {
         capture::<SetMusubiArtifactTakedownV1>(values.set_artifact_takedown),
         capture::<SetMusubiRegistryPolicyV1>(values.set_registry_policy),
     ]
+}
+
+#[test]
+fn provider_attestation_capture_retains_the_verified_completion_signer() {
+    let row = provider_attestation_value();
+    assert_eq!(
+        row.get("nominal").and_then(Value::as_str),
+        Some("iroha_data_model::isi::musubi::RegisterMusubiProviderBundleAttestationV1")
+    );
+    let frame = hex::decode(row.get("frame").and_then(Value::as_str).unwrap()).unwrap();
+    let value: super::RegisterMusubiProviderBundleAttestationV1 =
+        norito::decode_from_bytes(&frame).unwrap();
+    value
+        .attestation
+        .verify(&value.attestation.payload.binding)
+        .unwrap();
+    assert!(
+        value
+            .attestation
+            .payload
+            .binding
+            .completion_authority
+            .is_valid()
+    );
 }

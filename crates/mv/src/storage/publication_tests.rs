@@ -503,7 +503,7 @@ fn original_map_and_undo_survive_both_busy_writers_abort_and_publication_without
 #[test]
 fn changed_raw_map_generation_refuses_original_owner_before_any_installation() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 
@@ -564,7 +564,7 @@ fn changed_raw_map_generation_refuses_original_owner_before_any_installation() {
 #[test]
 fn changed_raw_undo_generation_refuses_original_pair_even_after_value_aba() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 
@@ -640,7 +640,7 @@ fn changed_raw_undo_generation_refuses_original_pair_even_after_value_aba() {
 #[test]
 fn pair_release_wake_observes_both_roots_and_rotated_identity_without_held_writers() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 
@@ -1263,7 +1263,7 @@ fn map_abort_retains_original_notifications_until_the_entire_aggregate_unlocks()
 #[test]
 fn acquired_map_refusal_never_fabricates_foreign_or_busy_release() {
     let release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 

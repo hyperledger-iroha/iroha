@@ -148,6 +148,23 @@ async fn fetch_page(
         .replace_header(http::header::CONTENT_TYPE, APPLICATION_JSON)
         .max_response_bytes(MAX_PAGE_RESPONSE_BYTES);
     let response = dispatch::send(client, operation, builder, APPLICATION_JSON).await?;
+    if matches!(collection, Collection::AccountPermissions(_))
+        && response.status() == StatusCode::OK
+    {
+        let mut semantics = response
+            .headers()
+            .get_all("x-iroha-account-permission-semantics")
+            .iter();
+        if semantics.next().and_then(|value| value.to_str().ok()) != Some("effective-v1")
+            || semantics.next().is_some()
+        {
+            return Err(Error::Decode {
+                operation,
+                details: "permission page must advertise exactly one effective-v1 semantics header"
+                    .to_owned(),
+            });
+        }
+    }
     decode_page(operation, response)
 }
 

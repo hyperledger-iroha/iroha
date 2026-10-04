@@ -15,6 +15,8 @@ public sealed class ListQueryVectorTests
 
     public static IEnumerable<object[]> FilterErrorCases() => Cases("filter_errors");
 
+    public static IEnumerable<object[]> JsonFilterCases() => Cases("json_filters");
+
     public static IEnumerable<object[]> SortCases() => Cases("sorts");
 
     public static IEnumerable<object[]> SortErrorCases() => Cases("sort_errors");
@@ -51,6 +53,27 @@ public sealed class ListQueryVectorTests
         Assert.Equal(canonical, decoded.ToString());
 
         Assert.Equal(parsed, Filter.Parse(canonical));
+    }
+
+    [Theory]
+    [MemberData(nameof(JsonFilterCases))]
+    public void JsonFiltersDecodeToTheNormalizedTree(int index)
+    {
+        var vector = Case("json_filters", index);
+        var json = vector["json"]!;
+        var canonical = vector["canonical"]!.GetValue<string>();
+        var normalized = vector["normalized"]!;
+
+        var decoded = Filter.FromJson(json.ToJsonString());
+        Assert.Equal(canonical, decoded.ToString());
+        AssertJsonEqual(normalized, JsonNode.Parse(decoded.ToJson()));
+        Assert.Equal(decoded, Filter.Parse(canonical));
+        Assert.Equal(decoded, Filter.FromJson(normalized.ToJsonString()));
+
+        var body = new JsonObject { ["filter"] = json.DeepClone() };
+        AssertJsonEqual(
+            new JsonObject { ["filter"] = normalized.DeepClone() },
+            JsonNode.Parse(ListQuery.FromJson(body.ToJsonString()).ToJson()));
     }
 
     [Theory]
@@ -179,6 +202,49 @@ public sealed class ListQueryVectorTests
             "invalid_aggregate",
             Assert.Throws<ListQueryException>(() => ListQuery.FromJson("""{"aggregate":{"metrics":[]}}""")).Code);
         Assert.Equal("invalid_aggregate", Assert.Throws<ListQueryException>(() => query.ToQueryPairs()).Code);
+    }
+
+    [Fact]
+    public void AggregatesAreBoundedAndTheirPathsValidated()
+    {
+        static AggregateSpec Spec(int groups, int metrics) => new()
+        {
+            GroupBy = [.. Enumerable.Range(0, groups).Select(static index => new FieldPath($"metadata.k{index}"))],
+            Metrics = [.. Enumerable.Range(0, metrics).Select(static index => AggregateMetric.Count($"m{index}"))],
+        };
+
+        var widest = new ListQuery { Aggregate = Spec(AggregateSpec.MaxGroupBy, AggregateSpec.MaxMetrics) };
+        widest.Validate();
+        Assert.Equal(widest, ListQuery.FromJson(widest.ToJson()));
+
+        var groups = Assert.Throws<ListQueryException>(
+            () => new ListQuery { Aggregate = Spec(AggregateSpec.MaxGroupBy + 1, 1) }.Validate());
+        Assert.Equal("`group_by` lists at most 8 fields", groups.Reason);
+        Assert.Equal("invalid_aggregate", groups.Code);
+        var metrics = Assert.Throws<ListQueryException>(
+            () => new ListQuery { Aggregate = Spec(0, AggregateSpec.MaxMetrics + 1) }.Validate());
+        Assert.Equal("`metrics` lists at most 16 metrics", metrics.Reason);
+        Assert.Equal("aggregate", metrics.Parameter);
+
+        var manyMetrics = "{\"aggregate\":{\"metrics\":["
+            + string.Join(",", Enumerable.Range(0, 17).Select(static index => $$"""{"alias":"m{{index}}","fn":"count"}"""))
+            + "]}}";
+        foreach (var (body, needle) in new[]
+        {
+            ("""{"aggregate":{"groupby":["a"],"metrics":[{"alias":"n","fn":"count"}]}}""", "unknown member `groupby`"),
+            ("""{"aggregate":{"metrics":[{"alias":"n","fn":"count","feild":"a"}]}}""", "invalid metric member `feild`"),
+            ("""{"aggregate":{"group_by":["a","b","c","d","e","f","g","h","i"],"metrics":[{"alias":"n","fn":"count"}]}}""", "at most 8 fields"),
+            (manyMetrics, "at most 16 metrics"),
+            ("""{"aggregate":{"group_by":["a..b"],"metrics":[{"alias":"n","fn":"count"}]}}""", "segments must not be empty"),
+            ("""{"aggregate":{"group_by":["a`b"],"metrics":[{"alias":"n","fn":"count"}]}}""", "must not contain backticks"),
+            ("""{"aggregate":{"metrics":[{"alias":"s","fn":"sum","field":"a b"}]}}""", "whitespace or control characters"),
+        })
+        {
+            var error = Assert.Throws<ListQueryException>(() => ListQuery.FromJson(body));
+            Assert.Equal("invalid_aggregate", error.Code);
+            Assert.Equal("aggregate", error.Parameter);
+            Assert.Contains(needle, error.Reason, StringComparison.Ordinal);
+        }
     }
 
     [Theory]

@@ -9,7 +9,7 @@ use super::{
 };
 use ivm_abi::metadata::{LiteralDirectory, ValidatedLiteral};
 
-pub(super) fn validate_literal_table(
+pub fn validate_literal_table(
     artifact: &[u8],
     parsed: &ParsedProgramMetadata,
     decoded: &[DecodedOp],
@@ -77,7 +77,7 @@ where
         norito::core::DecodeAttemptErrorKind::Invalid => VMError::InvalidMetadata,
     })
 }
-pub(super) fn validate_literal_payload(
+pub fn validate_literal_payload(
     type_id: ivm_abi::pointer_abi::PointerType,
     payload: &[u8],
 ) -> Result<(), VMError> {

@@ -572,14 +572,6 @@ fn prepare_fresh(
         "api_token".into(),
         toml::Value::String(api_token.as_str().into()),
     );
-    table
-        .get_mut("account")
-        .and_then(toml::Value::as_table_mut)
-        .ok_or_else(|| eyre!("private-root client account is absent"))?
-        .insert(
-            "domain".into(),
-            toml::Value::String(format!("app.{}", spec.dataspace_alias)),
-        );
     custody::replace(
         &client_path,
         Zeroizing::new(toml::to_string(&*table)?).as_bytes(),
@@ -694,7 +686,7 @@ fn private_peer_config(
     Ok(Zeroizing::new(toml::to_string(&*root)?))
 }
 
-fn private_fee_policy(spec: &PrivateRootSpec) -> Result<PrivateRootFeePolicy> {
+pub(crate) fn private_fee_policy(spec: &PrivateRootSpec) -> Result<PrivateRootFeePolicy> {
     let policy = PrivateRootFeePolicy {
         asset_definition_id: AssetDefinitionId::derive_from_components(
             DomainId::parse_fully_qualified(&format!("app.{}", spec.dataspace_alias))?,

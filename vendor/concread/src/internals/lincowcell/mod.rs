@@ -2011,7 +2011,7 @@ mod identity_preparation_tests {
     #[test]
     fn retained_predecessor_observation_defers_only_the_original_acquired_reader() {
         let release_budget = iroha_allocation::AllocationBudget::new(
-            1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+            iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
         );
         let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 
@@ -2203,7 +2203,7 @@ mod identity_preparation_tests {
     #[test]
     fn reader_abort_retains_notification_until_the_original_writer_releases() {
         let release_budget = iroha_allocation::AllocationBudget::new(
-            1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+            iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
         );
         let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 
@@ -2252,7 +2252,7 @@ mod identity_preparation_tests {
     #[test]
     fn reader_wake_unwind_preserves_physical_poison_and_original_commit() {
         let release_budget = iroha_allocation::AllocationBudget::new(
-            1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+            iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
         );
         let mut release_registration_1 = crate::release_test_support::registration(&release_budget);
 

@@ -354,21 +354,27 @@ mod universal_kagemusha_readiness_tests {
 
 #[cfg(all(test, feature = "app_api"))]
 mod explorer_asset_definitions_query_tests {
-    use super::ExplorerAssetDefinitionsQuery;
+    use iroha_torii_shared::list_query::{ListQuery, field};
     #[test]
-    fn owning_domain_is_the_only_asset_definition_domain_filter() {
-        let query: ExplorerAssetDefinitionsQuery =
-            norito::json::from_str(r#"{"owning_domain":"treasury.universal","limit":7}"#)
-                .expect("current ownership filter");
-        assert_eq!(query.owning_domain.as_deref(), Some("treasury.universal"));
-        assert_eq!(query.pagination.limit, 7);
-        assert!(
-            norito::json::from_str::<ExplorerAssetDefinitionsQuery>(
-                r#"{"domain":"treasury.universal"}"#,
-            )
-            .is_err(),
-            "legacy ?domain= input must be rejected, not silently ignored",
+    fn explorer_asset_definition_ownership_uses_shared_filter() {
+        let query: ListQuery = norito::json::from_str(
+            r#"{"filter":"owning_domain = \"treasury.universal\"","limit":7}"#,
+        )
+        .expect("shared ownership filter");
+        assert_eq!(
+            query.filter,
+            Some(field("owning_domain").eq("treasury.universal"))
         );
+        assert_eq!(query.limit, Some(7));
+        for retired in [
+            r#"{"domain":"treasury.universal"}"#,
+            r#"{"owning_domain":"treasury.universal"}"#,
+        ] {
+            assert!(
+                norito::json::from_str::<ListQuery>(retired).is_err(),
+                "top-level resource selectors must be rejected"
+            );
+        }
     }
 }
 

@@ -90,6 +90,13 @@ impl JsonSerialize for SortKey {
     fn json_serialize(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_display_to(self, out)
+    }
 }
 
 impl JsonDeserialize for SortKey {

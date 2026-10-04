@@ -328,7 +328,7 @@ fn detached_slots_retain_late_admission_refusal_and_caught_panic_cleanup() {
 #[test]
 fn detached_slots_current_busy_retains_acquired_undo_until_original_retry() {
     let helper_release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut helper_release_registration_1 =
         crate::release_test_support::registration(&helper_release_budget);
@@ -388,7 +388,7 @@ fn detached_slots_current_busy_retains_acquired_undo_until_original_retry() {
 #[test]
 fn detached_slots_late_identity_refusal_retains_native_reader_and_writer_cleanup() {
     let helper_release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut helper_release_registration_1 =
         crate::release_test_support::registration(&helper_release_budget);
@@ -529,7 +529,7 @@ fn detached_slots_known_native_poison_is_retained_without_early_notification() {
 #[test]
 fn detached_slots_outer_unwind_releases_siblings_before_original_poison_wakes() {
     let helper_release_budget = iroha_allocation::AllocationBudget::new(
-        1 * iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
+        iroha_allocation::release::ReleaseRegistration::allocation_layout().size(),
     );
     let mut helper_release_registration_1 =
         crate::release_test_support::registration(&helper_release_budget);

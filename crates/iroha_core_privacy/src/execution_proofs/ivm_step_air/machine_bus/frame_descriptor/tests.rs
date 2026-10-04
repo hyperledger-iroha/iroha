@@ -629,3 +629,29 @@ pub(in crate::execution_proofs::ivm_step_air::machine_bus) fn callable_lookup_wi
     let fixture = Fixture::new(shape);
     (fixture.row, fixture.packets)
 }
+
+/// Reuse the descriptor equations with actual prepared-CALL stack/table observations.
+pub(in super::super) fn child_for_original_tables(
+    selected: (u64, u64, u64, u64),
+    stack_top: u64,
+    parent_bounds: [u64; 2],
+    argument: u64,
+    result: u64,
+) -> ([F; WIDTH], [[F; packet::WIDTH]; PORTS]) {
+    let mut shape = Shape::child();
+    shape.generation = 11;
+    shape.stack_top = stack_top;
+    shape.parent_bounds = parent_bounds;
+    shape.sp = parent_bounds[0];
+    shape.argument = argument;
+    shape.result = result;
+    (
+        shape.entry,
+        shape.frame,
+        shape.argument_words,
+        shape.result_words,
+    ) = selected;
+    let fixture = Fixture::new(shape);
+    assert!(fixture.accepts());
+    (fixture.row, fixture.packets)
+}

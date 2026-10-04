@@ -347,6 +347,8 @@ impl MainProverBufferPlanV1 {
             // Reserve all public columns before the first source or entropy draw.
             super::main_retained_rfc::MainRetainedRfcV1::forecast_all_v1(layout)?,
             P256MainBaseSourceV1::allocation_forecast_v1()?,
+            ZkX509ShaBatchSegmentAuxSourceV1::native_aux_cache_forecast_all_v1()
+                .map_err(map_main_sha_source_error_v1)?,
             ZkX509ShaBatchFixedProviderV1::allocation_forecast_v1(shape)
                 .map_err(map_main_sha_source_error_v1)?,
         ])?;
